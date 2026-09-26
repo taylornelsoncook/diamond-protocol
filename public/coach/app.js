@@ -64,7 +64,7 @@ function shell(current) {
       <div class="nav-foot">
         ${settings?.payments_mode === 'test' ? html`<div class="test-mode">Test mode: cards are simulated and emails go to the outbox.</div>` : ''}
         <div><span class="strong" style="color:var(--steel)">${me.name}</span><br>${ROLE_LABEL[me.role]}</div>
-        <button class="btn btn-sm" id="signout">Sign out</button>
+        <div class="btn-row"><a class="btn btn-sm" href="/app/account">Password</a><button class="btn btn-sm" id="signout">Sign out</button></div>
       </div>
     </nav>
     <main class="main" id="main" tabindex="-1"></main>

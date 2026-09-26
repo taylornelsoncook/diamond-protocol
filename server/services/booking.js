@@ -35,7 +35,12 @@ function generateEvents() {
       const eid = insert('events', { class_id: c.id, type: c.type, name: c.name, starts_at, duration_min: c.duration_min, capacity: c.capacity, price_cents: c.price_cents, location_id: c.location_id, team_id: c.team_id, coach_id: c.coach_id });
       made++;
       // Standing weekly spots and camp registrations carry into new sessions.
-      for (const s of all('SELECT athlete_id FROM standing_spots WHERE class_id=?', c.id)) { try { book(eid, s.athlete_id, { source: 'standing', quiet: true }); } catch { /* full or not covered */ } }
+      // Standing spots ride on the membership only: never spend pack credits or book unpaid.
+      for (const s of all('SELECT athlete_id FROM standing_spots WHERE class_id=?', c.id)) {
+        const a = get('SELECT * FROM athletes WHERE id=?', s.athlete_id);
+        if (cover(eventWithCounts(eid), a, { dryRun: true }).coverage !== 'member') continue;
+        try { book(eid, s.athlete_id, { source: 'standing', quiet: true, requireCovered: true }); } catch { /* full */ }
+      }
       if (c.type === 'camp' || c.type === 'clinic') {
         for (const r of all(`SELECT DISTINCT b.athlete_id FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.coverage='registered' AND b.status='booked'`, c.id)) {
           if (!get('SELECT 1 FROM bookings WHERE event_id=? AND athlete_id=?', eid, r.athlete_id)) insert('bookings', { event_id: eid, athlete_id: r.athlete_id, status: 'booked', coverage: 'registered', source: 'registration' });
@@ -70,7 +75,10 @@ function cover(event, athlete, { payWith = null, dryRun = false } = {}) {
   if (!event.price_cents) return { coverage: 'paid' };
   if (payWith === 'card' && !dryRun) {
     const r = billing.charge({ family_id: athlete.family_id, athlete_id: athlete.id, amount_cents: event.price_cents, description: `${event.name}, ${event.starts_at.replace('T', ' ')}`, method: 'card' });
-    if (!r.ok) throw bad(r.error || 'The card was declined.');
+    if (!r.ok) {
+      run("UPDATE invoices SET status='void', next_retry=NULL WHERE id=?", r.invoice_id); // booking refused, so never retry it
+      throw bad(r.error || 'The card was declined.');
+    }
     return { coverage: 'paid', paid_cents: event.price_cents };
   }
   return { coverage: 'unpaid' };
@@ -215,7 +223,10 @@ function registerCamp(classId, athleteId, { method = 'card', source = 'parent' }
   const a = get('SELECT * FROM athletes WHERE id=?', athleteId);
   if (get(`SELECT 1 FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'`, classId, athleteId)) throw bad(`${a.first_name} is already registered.`);
   const r = billing.charge({ family_id: a.family_id, athlete_id: a.id, amount_cents: c.reg_price_cents, description: `${c.name} registration`, method });
-  if (!r.ok) throw bad(r.error || 'The card was declined.');
+  if (!r.ok) {
+    run("UPDATE invoices SET status='void', next_retry=NULL WHERE id=?", r.invoice_id); // nothing was delivered, so never retry it
+    throw bad(r.error || 'The card was declined.');
+  }
   const events = all("SELECT id FROM events WHERE class_id=? AND cancelled=0 AND starts_at>=?", classId, nowLocal());
   tx(() => {
     for (const e of events) {

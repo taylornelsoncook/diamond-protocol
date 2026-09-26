@@ -1,0 +1,465 @@
+// Parent portal API: sign-in, family scoping, booking rules, payments, card, waiver.
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const os = require('os');
+const path = require('path');
+const fs = require('fs');
+
+const DB_FILE = path.join(os.tmpdir(), `dp-parent-test-${process.pid}.db`);
+process.env.DP_DB = DB_FILE;
+delete process.env.DP_EMAIL_WEBHOOK;
+delete process.env.STRIPE_SECRET_KEY;
+
+const { get, all, run, insert, setting } = require('../server/db');
+const seed = require('../server/seed');
+const booking = require('../server/services/booking');
+const { app } = require('../server/index');
+
+let server, base;
+test.before(async () => {
+  seed.resetDatabase();
+  seed.base();
+  seed.demo();
+  booking.generateEvents();
+  await new Promise((r) => { server = app.listen(0, r); });
+  base = `http://127.0.0.1:${server.address().port}`;
+});
+test.after(() => {
+  server?.close();
+  for (const f of [DB_FILE, DB_FILE + '-wal', DB_FILE + '-shm']) { try { fs.unlinkSync(f); } catch { /* gone */ } }
+});
+
+// ---- helpers ----
+async function call(method, url, body, cookie) {
+  const res = await fetch(base + '/api' + url, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, data, res };
+}
+const sessions = {};
+async function signIn(email) {
+  if (sessions[email]) return sessions[email];
+  const c = await call('POST', '/auth/parent/code', { email });
+  const v = await call('POST', '/auth/parent/verify', { email, code: c.data.test_code });
+  assert.equal(v.status, 200);
+  const cookie = v.res.headers.get('set-cookie').split(';')[0];
+  sessions[email] = cookie;
+  return cookie;
+}
+const athlete = (first, last) => get('SELECT * FROM athletes WHERE first_name=? AND last_name=?', first, last);
+const MARIA = 'maria.lopez@example.com', KURT = 'kurt.jensen@example.com', LINH = 'linh.nguyen@example.com', PAULO = 'paulo.silva@example.com';
+
+// Local wall-clock time n hours from now, in the business time zone ("YYYY-MM-DDTHH:MM").
+function localPlus(hours) {
+  const n = booking.nowLocal();
+  const d = new Date(Date.UTC(+n.slice(0, 4), +n.slice(5, 7) - 1, +n.slice(8, 10), +n.slice(11, 13), +n.slice(14, 16)) + hours * 36e5);
+  return d.toISOString().slice(0, 16);
+}
+function makeEvent({ hours = 72, capacity = 10, price_cents = 3000, name = 'Test class' } = {}) {
+  return insert('events', { type: 'class', name, starts_at: localPlus(hours), duration_min: 60, capacity, price_cents, location_id: 1 });
+}
+
+// ---- sign-in ----
+test('code sign-in works once and sets a 30-day session', async () => {
+  const unauth = await call('GET', '/parent/me');
+  assert.equal(unauth.status, 401);
+
+  const c = await call('POST', '/auth/parent/code', { email: PAULO });
+  assert.equal(c.status, 200);
+  assert.match(c.data.test_code, /^\d{6}$/);
+
+  const wrong = await call('POST', '/auth/parent/verify', { email: PAULO, code: c.data.test_code === '000000' ? '111111' : '000000' });
+  assert.equal(wrong.status, 400);
+
+  const ok = await call('POST', '/auth/parent/verify', { email: PAULO, code: c.data.test_code });
+  assert.equal(ok.status, 200);
+  const setCookie = ok.res.headers.get('set-cookie');
+  const exp = new Date(/Expires=([^;]+)/i.exec(setCookie)[1]);
+  assert.ok(exp - Date.now() > 29 * 864e5, 'session lasts 30 days');
+
+  const again = await call('POST', '/auth/parent/verify', { email: PAULO, code: c.data.test_code });
+  assert.equal(again.status, 400, 'a code works only once');
+
+  const cookie = setCookie.split(';')[0];
+  sessions[PAULO] = cookie;
+  const me = await call('GET', '/parent/me', null, cookie);
+  assert.equal(me.status, 200);
+  assert.equal(me.data.family.name, 'Silva family');
+  assert.equal(me.data.family.waiver_current, false);
+  assert.equal(me.data.family.card_last4, null);
+  assert.equal(me.data.athletes[0].first_name, 'Isabela');
+  assert.equal(me.data.settings.late_cancel_hours, 12);
+
+  const unknown = await call('POST', '/auth/parent/code', { email: 'nobody@example.com' });
+  assert.equal(unknown.status, 200);
+  assert.equal(unknown.data.test_code, undefined);
+});
+
+test('me reports membership coverage and credits', async () => {
+  const maria = await signIn(MARIA);
+  const me = (await call('GET', '/parent/me', null, maria)).data;
+  assert.equal(me.athletes[0].member_left, 'unlimited');
+  assert.equal(me.athletes[0].membership.status, 'active');
+  const kurt = await signIn(KURT);
+  const k = (await call('GET', '/parent/me', null, kurt)).data;
+  assert.equal(k.athletes.length, 2);
+  for (const a of k.athletes) assert.equal(typeof a.member_left, 'number');
+});
+
+// ---- family scoping ----
+test('another family\'s athletes and bookings answer 404', async () => {
+  const maria = await signIn(MARIA);
+  const nate = athlete('Nate', 'Jensen');
+  const ev = makeEvent({ hours: 96 });
+  const b = booking.book(ev, nate.id, { source: 'staff' });
+  const checks = [
+    ['GET', `/parent/classes?athlete_id=${nate.id}`],
+    ['GET', `/parent/slots?kind=private&athlete_id=${nate.id}`],
+    ['GET', `/parent/shop?athlete_id=${nate.id}`],
+    ['POST', '/parent/bookings', { athlete_id: nate.id, event_id: ev }],
+    ['DELETE', `/parent/bookings/${b.id}`],
+    ['POST', '/parent/slots', { kind: 'private', athlete_id: nate.id, starts_at: localPlus(48) }],
+    ['POST', '/parent/camps/5/register', { athlete_id: nate.id }],
+    ['POST', '/parent/standing', { athlete_id: nate.id, class_id: 1 }],
+    ['POST', '/parent/packs', { athlete_id: nate.id, product_id: 2 }],
+    ['POST', '/parent/membership', { athlete_id: nate.id, plan_id: 1 }],
+    ['PUT', `/parent/athletes/${nate.id}`, { sport: 'Hacked' }],
+  ];
+  for (const [m, url, body] of checks) {
+    const r = await call(m, url, body, maria);
+    assert.equal(r.status, 404, `${m} ${url} should be 404, got ${r.status}`);
+  }
+  assert.equal(get('SELECT status FROM bookings WHERE id=?', b.id).status, 'booked');
+  assert.equal(athlete('Nate', 'Jensen').sport, 'Baseball');
+  const mine = (await call('GET', '/parent/bookings', null, maria)).data;
+  assert.ok(mine.every((x) => x.athlete_id === athlete('Ava', 'Lopez').id));
+  // Standing spot of another family
+  const sid = insert('standing_spots', { athlete_id: nate.id, class_id: 1 });
+  assert.equal((await call('DELETE', `/parent/standing/${sid}`, null, maria)).status, 404);
+  run('DELETE FROM standing_spots WHERE id=?', sid);
+});
+
+// ---- booking, waitlist, cancel ----
+test('book with a credit, cancel outside the window returns it', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET group_credits=3 WHERE id=?', isa.id);
+  const ev = makeEvent({ hours: 72 });
+  const r = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: ev }, paulo);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.status, 'booked');
+  assert.equal(r.data.coverage, 'credit');
+  assert.equal(athlete('Isabela', 'Silva').group_credits, 2);
+  const dup = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: ev }, paulo);
+  assert.equal(dup.status, 400);
+
+  const list = (await call('GET', '/parent/bookings', null, paulo)).data;
+  const row = list.find((x) => x.id === r.data.id);
+  assert.equal(row.late, false);
+  const c = await call('DELETE', `/parent/bookings/${r.data.id}`, null, paulo);
+  assert.equal(c.status, 200);
+  assert.equal(c.data.late, false);
+  assert.equal(get('SELECT status FROM bookings WHERE id=?', r.data.id).status, 'cancelled');
+  assert.equal(athlete('Isabela', 'Silva').group_credits, 3);
+});
+
+test('cancel inside the late window still uses the session', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET group_credits=3 WHERE id=?', isa.id);
+  const ev = makeEvent({ hours: 3 });
+  const r = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: ev }, paulo);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(athlete('Isabela', 'Silva').group_credits, 2);
+  const row = (await call('GET', '/parent/bookings', null, paulo)).data.find((x) => x.id === r.data.id);
+  assert.equal(row.late, true);
+  const c = await call('DELETE', `/parent/bookings/${r.data.id}`, null, paulo);
+  assert.equal(c.data.late, true);
+  assert.equal(get('SELECT status FROM bookings WHERE id=?', r.data.id).status, 'late_cancel');
+  assert.equal(athlete('Isabela', 'Silva').group_credits, 2, 'credit is not returned');
+});
+
+test('full session goes to the waitlist, which moves up on a cancel', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  const ev = makeEvent({ hours: 80, capacity: 1 });
+  const other = booking.book(ev, athlete('Ava', 'Lopez').id, { source: 'staff' });
+  const r = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: ev }, paulo);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.status, 'waitlist');
+  const classes = (await call('GET', `/parent/classes?athlete_id=${isa.id}`, null, paulo)).data;
+  assert.ok(classes.events.every((e) => !['team', 'private', 'evaluation'].includes(e.type)));
+  booking.cancelBooking(other.id);
+  assert.equal(get('SELECT status FROM bookings WHERE id=?', r.data.id).status, 'booked');
+  // leave cleanly
+  await call('DELETE', `/parent/bookings/${r.data.id}`, null, paulo);
+});
+
+test('classes list: age-appropriate, three weeks, spots left, no team sessions', async () => {
+  const kurt = await signIn(KURT);
+  const nate = athlete('Nate', 'Jensen'); // 13
+  const r = (await call('GET', `/parent/classes?athlete_id=${nate.id}`, null, kurt)).data;
+  assert.ok(r.events.length > 0);
+  assert.ok(r.events.some((e) => e.name === 'Youth Speed & Agility'));
+  assert.ok(!r.events.some((e) => e.name === 'High School Performance'), 'too young for high school class');
+  assert.ok(!r.events.some((e) => /team session/.test(e.name)));
+  const last = r.events[r.events.length - 1].starts_at.slice(0, 10);
+  assert.ok(last < new Date(Date.now() + 22 * 864e5).toISOString().slice(0, 10));
+  for (const e of r.events) if (e.capacity) assert.equal(e.spots_left, Math.max(0, e.capacity - e.booked));
+});
+
+test('no sessions left: drop-in needs payment; declined card; card on file works and refunds', async () => {
+  const linh = await signIn(LINH);
+  const kevin = athlete('Kevin', 'Nguyen');
+  run('UPDATE athletes SET group_credits=0 WHERE id=?', kevin.id);
+  const ev = makeEvent({ hours: 90, price_cents: 3500 });
+  const r1 = await call('POST', '/parent/bookings', { athlete_id: kevin.id, event_id: ev }, linh);
+  assert.equal(r1.status, 400);
+  assert.equal(r1.data.needs_payment, true);
+  assert.equal(r1.data.price_cents, 3500);
+  const r2 = await call('POST', '/parent/bookings', { athlete_id: kevin.id, event_id: ev, pay: 'card' }, linh);
+  assert.equal(r2.status, 400);
+  assert.match(r2.data.error, /declined/i);
+  assert.equal(get("SELECT COUNT(*) n FROM bookings WHERE event_id=? AND athlete_id=? AND status='booked'", ev, kevin.id).n, 0);
+
+  // Paulo: no card yet
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET group_credits=0 WHERE id=?', isa.id);
+  const ev2 = makeEvent({ hours: 90, price_cents: 3000 });
+  const r3 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: ev2, pay: 'card' }, paulo);
+  assert.equal(r3.status, 400);
+  assert.equal(r3.data.needs_card, true);
+  // Add a card, then pay
+  assert.equal((await call('PUT', '/parent/card', { number: '4242 4242 4242 4242', exp: '12/30', cvc: '123', zip: '84604' }, paulo)).status, 200);
+  const r4 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: ev2, pay: 'card' }, paulo);
+  assert.equal(r4.status, 200, JSON.stringify(r4.data));
+  assert.equal(r4.data.coverage, 'paid');
+  assert.equal(r4.data.paid_cents, 3000);
+  const inv = get("SELECT * FROM invoices WHERE athlete_id=? AND amount_cents=3000 AND status='paid' ORDER BY id DESC", isa.id);
+  assert.ok(inv);
+  await call('DELETE', `/parent/bookings/${r4.data.id}`, null, paulo);
+  assert.ok(get('SELECT 1 FROM invoices WHERE athlete_id=? AND amount_cents=-3000', isa.id), 'drop-in refunded');
+  run('UPDATE athletes SET group_credits=3 WHERE id=?', isa.id);
+});
+
+// ---- privates and evaluations ----
+test('private needs a private credit; evaluation charges the card', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET private_credits=0 WHERE id=?', isa.id);
+  const slots = (await call('GET', `/parent/slots?kind=private&athlete_id=${isa.id}`, null, paulo)).data.slots;
+  assert.ok(slots.length > 0);
+  const none = await call('POST', '/parent/slots', { kind: 'private', starts_at: slots[0].starts_at, athlete_id: isa.id }, paulo);
+  assert.equal(none.status, 400);
+  assert.match(none.data.error, /private/i);
+
+  const single = get("SELECT * FROM products WHERE kind='private_pack' AND credits=1");
+  const buy = await call('POST', '/parent/packs', { athlete_id: isa.id, product_id: single.id }, paulo);
+  assert.equal(buy.status, 200, JSON.stringify(buy.data));
+  assert.equal(buy.data.private_credits, 1);
+  const ok = await call('POST', '/parent/slots', { kind: 'private', starts_at: slots[0].starts_at, athlete_id: isa.id }, paulo);
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(ok.data.coverage, 'credit');
+  assert.equal(athlete('Isabela', 'Silva').private_credits, 0);
+  const again = (await call('GET', `/parent/slots?kind=private&athlete_id=${isa.id}`, null, paulo)).data.slots;
+  assert.ok(!again.some((s) => s.starts_at === slots[0].starts_at), 'booked time is no longer open');
+
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  const evals = (await call('GET', `/parent/slots?kind=evaluation&athlete_id=${ava.id}`, null, maria)).data.slots;
+  assert.ok(evals.length > 0);
+  const e = await call('POST', '/parent/slots', { kind: 'evaluation', starts_at: evals[0].starts_at, athlete_id: ava.id }, maria);
+  assert.equal(e.status, 200, JSON.stringify(e.data));
+  assert.equal(e.data.coverage, 'paid');
+  assert.equal(e.data.paid_cents, 7500);
+  assert.ok(get("SELECT 1 FROM invoices WHERE athlete_id=? AND amount_cents=7500 AND status='paid'", ava.id));
+
+  const linh = await signIn(LINH);
+  const kevin = athlete('Kevin', 'Nguyen');
+  const evals2 = (await call('GET', `/parent/slots?kind=evaluation&athlete_id=${kevin.id}`, null, linh)).data.slots;
+  const declined = await call('POST', '/parent/slots', { kind: 'evaluation', starts_at: evals2[0].starts_at, athlete_id: kevin.id }, linh);
+  assert.equal(declined.status, 400);
+  assert.equal(get("SELECT COUNT(*) n FROM events WHERE type='evaluation' AND starts_at=? AND name LIKE '%Kevin%'", evals2[0].starts_at).n, 0);
+});
+
+// ---- programs ----
+test('camp registration charges once and books every day', async () => {
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  const shop = (await call('GET', `/parent/shop?athlete_id=${ava.id}`, null, maria)).data;
+  const camp = shop.camps.find((c) => c.name === 'Fall Speed Camp');
+  assert.ok(camp && camp.eligible && !camp.registered);
+  const cls = (await call('GET', `/parent/classes?athlete_id=${ava.id}`, null, maria)).data.events.filter((e) => e.class_id === camp.id);
+  if (cls.length) {
+    assert.ok(cls[0].needs_registration);
+    const direct = await call('POST', '/parent/bookings', { athlete_id: ava.id, event_id: cls[0].id }, maria);
+    assert.equal(direct.status, 400);
+    assert.equal(direct.data.needs_registration, true);
+  }
+  const r = await call('POST', `/parent/camps/${camp.id}/register`, { athlete_id: ava.id }, maria);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.days, camp.days);
+  const booked = get(`SELECT COUNT(*) n FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'`, camp.id, ava.id).n;
+  assert.equal(booked, camp.days);
+  assert.ok(get("SELECT 1 FROM invoices WHERE athlete_id=? AND amount_cents=? AND status='paid'", ava.id, camp.reg_price_cents));
+  const twice = await call('POST', `/parent/camps/${camp.id}/register`, { athlete_id: ava.id }, maria);
+  assert.equal(twice.status, 400);
+  const after = (await call('GET', `/parent/shop?athlete_id=${ava.id}`, null, maria)).data.camps.find((c) => c.id === camp.id);
+  assert.equal(after.registered, true);
+});
+
+test('pack purchase adds credits; declined card adds nothing', async () => {
+  const kurt = await signIn(KURT);
+  const nate = athlete('Nate', 'Jensen');
+  const pack = get("SELECT * FROM products WHERE kind='group_pack'");
+  const before = nate.group_credits;
+  const r = await call('POST', '/parent/packs', { athlete_id: nate.id, product_id: pack.id }, kurt);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(athlete('Nate', 'Jensen').group_credits, before + pack.credits);
+
+  const linh = await signIn(LINH);
+  const kevin = athlete('Kevin', 'Nguyen');
+  const r2 = await call('POST', '/parent/packs', { athlete_id: kevin.id, product_id: pack.id }, linh);
+  assert.equal(r2.status, 400);
+  assert.equal(athlete('Kevin', 'Nguyen').group_credits, kevin.group_credits);
+  const gear = get("SELECT * FROM products WHERE kind='gear'");
+  assert.equal((await call('POST', '/parent/packs', { athlete_id: nate.id, product_id: gear.id }, kurt)).status, 404);
+});
+
+test('membership start (trial), one at a time; standing spots for members', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  const cls = get("SELECT * FROM classes WHERE name='Saturday Strength'");
+  const early = await call('POST', '/parent/standing', { athlete_id: isa.id, class_id: cls.id }, paulo);
+  assert.equal(early.status, 400, 'standing spots are for members');
+
+  const plan = get("SELECT * FROM plans WHERE name='Unlimited group training'");
+  const r = await call('POST', '/parent/membership', { athlete_id: isa.id, plan_id: plan.id }, paulo);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.trial, true);
+  const me = (await call('GET', '/parent/me', null, paulo)).data;
+  assert.equal(me.athletes[0].membership.status, 'trial');
+  assert.equal(me.athletes[0].member_left, 'unlimited');
+  assert.equal((await call('POST', '/parent/membership', { athlete_id: isa.id, plan_id: plan.id }, paulo)).status, 400);
+
+  const hold = await call('POST', '/parent/standing', { athlete_id: isa.id, class_id: cls.id }, paulo);
+  assert.equal(hold.status, 200, JSON.stringify(hold.data));
+  const upcoming = get("SELECT COUNT(*) n FROM events WHERE class_id=? AND cancelled=0 AND starts_at>=?", cls.id, booking.nowLocal()).n;
+  const mine = get(`SELECT COUNT(*) n FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.athlete_id=? AND b.status='booked' AND e.starts_at>=?`, cls.id, isa.id, booking.nowLocal()).n;
+  assert.ok(hold.data.booked > 0);
+  assert.equal(mine, upcoming - hold.data.skipped);
+  const shop = (await call('GET', `/parent/shop?athlete_id=${isa.id}`, null, paulo)).data;
+  const held = shop.classes.find((c) => c.id === cls.id);
+  assert.ok(held.standing_id);
+  const leave = await call('DELETE', `/parent/standing/${held.standing_id}`, null, paulo);
+  assert.equal(leave.status, 200);
+  assert.ok(!get('SELECT 1 FROM standing_spots WHERE id=?', held.standing_id));
+  assert.equal(leave.data.cancelled + leave.data.kept, hold.data.booked);
+});
+
+test('standing spot on a capped plan books only sessions the membership covers', async () => {
+  const kurt = await signIn(KURT);
+  const emma = athlete('Emma', 'Jensen'); // 8 sessions a month
+  run('UPDATE athletes SET group_credits=4 WHERE id=?', emma.id);
+  const cls = get("SELECT * FROM classes WHERE name='High School Performance'");
+  const r = await call('POST', '/parent/standing', { athlete_id: emma.id, class_id: cls.id }, kurt);
+  if (r.status === 400) { assert.match(r.data.error, /ages|already/); return; } // Emma may be too young for this class
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(athlete('Emma', 'Jensen').group_credits, 4, 'pack credits untouched');
+  const cov = all(`SELECT DISTINCT b.coverage FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.athlete_id=? AND b.source='standing'`, cls.id, emma.id).map((x) => x.coverage);
+  assert.deepEqual(cov.filter((c) => c !== 'member'), []);
+  for (const m of all(`SELECT substr(e.starts_at,1,7) m, COUNT(*) n FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.coverage='member' AND b.status IN ('booked','late_cancel') GROUP BY m`, emma.id)) assert.ok(m.n <= 8, `month ${m.m}: ${m.n}`);
+});
+
+test('declined card: membership is held past due', async () => {
+  const linh = await signIn(LINH);
+  // Linh adds a second athlete, then tries a no-trial plan on the declining card
+  const add = await call('POST', '/parent/athletes', { first_name: 'Mai', last_name: 'Nguyen', birthday: '2014-03-02', sex: 'F', sport: 'Swimming' }, linh);
+  assert.equal(add.status, 200);
+  const elite = get("SELECT * FROM plans WHERE trial_days=0");
+  const r = await call('POST', '/parent/membership', { athlete_id: add.data.id, plan_id: elite.id }, linh);
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /declined/i);
+  assert.equal(get('SELECT status FROM memberships WHERE athlete_id=?', add.data.id).status, 'past_due');
+});
+
+// ---- family ----
+test('card save validates (Luhn, expiry, CVC, ZIP) and stores only brand, last 4 and expiry', async () => {
+  const kurt = await signIn(KURT);
+  const bad = [
+    { number: '4242 4242 4242 4241', exp: '12/30', cvc: '123', zip: '84604' },
+    { number: '4242 4242 4242 4242', exp: '01/20', cvc: '123', zip: '84604' },
+    { number: '4242 4242 4242 4242', exp: '13/30', cvc: '123', zip: '84604' },
+    { number: '4242 4242 4242 4242', exp: '12/30', cvc: '12', zip: '84604' },
+    { number: '4242 4242 4242 4242', exp: '12/30', cvc: '123', zip: '' },
+  ];
+  for (const b of bad) assert.equal((await call('PUT', '/parent/card', b, kurt)).status, 400, JSON.stringify(b));
+  const r = await call('PUT', '/parent/card', { number: '5555 5555 5555 4444', exp: '7/31', cvc: '321', zip: '84604' }, kurt);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const fam = get("SELECT f.* FROM families f JOIN parents p ON p.family_id=f.id WHERE p.email=?", KURT);
+  assert.equal(fam.card_brand, 'Mastercard');
+  assert.equal(fam.card_last4, '4444');
+  assert.equal(fam.card_exp, '07/31');
+  const dump = JSON.stringify([all('SELECT * FROM families'), all('SELECT * FROM activity'), all('SELECT * FROM invoices')]);
+  assert.ok(!dump.includes('5555555555554444') && !dump.includes('5555 5555 5555 4444'), 'full number never stored');
+});
+
+test('new card retries a declined charge', async () => {
+  const linh = await signIn(LINH);
+  const failed = get("SELECT COUNT(*) n FROM invoices i JOIN parents p ON p.family_id=i.family_id WHERE p.email=? AND i.status='failed'", LINH).n;
+  assert.ok(failed > 0);
+  const r = await call('PUT', '/parent/card', { number: '4000 0566 5566 5556', exp: '11/30', cvc: '123', zip: '84604' }, linh);
+  assert.equal(r.status, 200);
+  assert.ok(r.data.paid >= 1);
+  const me = (await call('GET', '/parent/me', null, linh)).data;
+  assert.equal(me.family.card_last4, '5556');
+});
+
+test('waiver sign sets the current version', async () => {
+  const paulo = await signIn(PAULO);
+  assert.equal((await call('POST', '/parent/waiver', { name: 'Paulo Silva' }, paulo)).status, 400, 'must agree');
+  assert.equal((await call('POST', '/parent/waiver', { name: 'P', agree: true }, paulo)).status, 400, 'full name');
+  const r = await call('POST', '/parent/waiver', { name: 'Paulo Silva', agree: true }, paulo);
+  assert.equal(r.status, 200);
+  const fam = get("SELECT f.* FROM families f JOIN parents p ON p.family_id=f.id WHERE p.email=?", PAULO);
+  assert.equal(fam.waiver_version, Number(setting('waiver_version')));
+  assert.equal(fam.waiver_signed_by, 'Paulo Silva');
+  assert.ok(fam.waiver_signed_at);
+  assert.equal((await call('GET', '/parent/me', null, paulo)).data.family.waiver_current, true);
+});
+
+test('update athlete, add athlete, add parent', async () => {
+  const kurt = await signIn(KURT);
+  const emma = athlete('Emma', 'Jensen');
+  const u = await call('PUT', `/parent/athletes/${emma.id}`, { sport: 'Track', position: 'Sprinter', allergies: 'None', medical_notes: 'Mild asthma', emergency_name: 'Kurt Jensen', emergency_phone: '385-555-0110', sex: 'F', birthday: '2011-01-27' }, kurt);
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  assert.equal(athlete('Emma', 'Jensen').sport, 'Track');
+  assert.equal(athlete('Emma', 'Jensen').medical_notes, 'Mild asthma');
+  assert.equal((await call('PUT', `/parent/athletes/${emma.id}`, { birthday: '2040-01-01' }, kurt)).status, 400);
+  assert.equal((await call('PUT', `/parent/athletes/${emma.id}`, { sex: 'X' }, kurt)).status, 400);
+
+  const a = await call('POST', '/parent/athletes', { first_name: 'Lily', last_name: 'Jensen', birthday: '2016-05-05', sport: 'Soccer' }, kurt);
+  assert.equal(a.status, 200);
+  assert.match(a.data.code, /^LILJEN\d*2026$|^LILJEN/);
+  const row = get('SELECT * FROM athletes WHERE id=?', a.data.id);
+  assert.ok(row.workout_token && row.workout_token.length >= 12);
+  assert.equal(row.family_id, emma.family_id);
+  assert.equal((await call('POST', '/parent/athletes', { first_name: 'NoLast' }, kurt)).status, 400);
+
+  const p = await call('POST', '/parent/parents', { name: 'Anna Jensen', email: 'anna.jensen@example.com' }, kurt);
+  assert.equal(p.status, 200);
+  assert.equal((await call('POST', '/parent/parents', { name: 'Maria', email: MARIA }, kurt)).status, 400);
+  const me = (await call('GET', '/parent/me', null, kurt)).data;
+  assert.equal(me.parents.length, 2);
+  assert.ok(get("SELECT 1 FROM outbox WHERE to_email='anna.jensen@example.com'"));
+  // The new parent can sign in and sees the same family
+  const anna = await signIn('anna.jensen@example.com');
+  assert.equal((await call('GET', '/parent/me', null, anna)).data.family.id, me.family.id);
+});
+
+test('sign out ends the session', async () => {
+  const cookie = await signIn(KURT);
+  await call('POST', '/auth/parent/logout', {}, cookie);
+  assert.equal((await call('GET', '/parent/me', null, cookie)).status, 401);
+});

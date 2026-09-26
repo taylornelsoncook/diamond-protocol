@@ -97,6 +97,7 @@ function nextInvoiceNumber(prefix = 'DP') {
   return `${prefix}-${y}-${String(n).padStart(4, '0')}`;
 }
 const businessName = () => setting('business_name', 'Diamond Protocol');
-const appUrl = () => (process.env.DP_APP_URL || 'http://localhost:' + (process.env.PORT || 3000)).replace(/\/$/, '');
+// Render sets RENDER_EXTERNAL_URL automatically, so email links work without extra setup.
+const appUrl = () => (process.env.DP_APP_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + (process.env.PORT || 3000)).replace(/\/$/, '');
 
 module.exports = { randomToken, sha256, HttpError, bad, notFound, h, makeAthleteCode, sendEmail, log, emit, WEBHOOK_EVENTS, payments, money, today, localDate, addDays, addMonths, ageOn, nextInvoiceNumber, businessName, appUrl };

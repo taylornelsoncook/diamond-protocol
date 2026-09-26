@@ -1,0 +1,43 @@
+# Render Blueprint: two copies of the app, each with its own disk for the database and backups.
+# In Render: New > Blueprint > pick this repo. See docs/DEPLOY.md.
+services:
+  # Staging: demo data, test-mode payments. Try every change here first.
+  - type: web
+    name: diamond-protocol-staging
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DP_DATA_DIR
+        value: /data
+      - key: DP_DEMO
+        value: "1"
+
+  # Production: real families. Starts empty and asks you to create the owner account.
+  # Deploys only when you press Manual Deploy, so nothing reaches families untested.
+  - type: web
+    name: diamond-protocol
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /healthz
+    autoDeploy: false
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DP_DATA_DIR
+        value: /data

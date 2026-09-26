@@ -49,6 +49,8 @@ app.get('/report/:code', page('shared/report.html'));
 app.get('/invoice/:token', page('shared/invoice.html'));
 app.get('/docs/api', page('shared/api-docs.html'));
 app.get(['/', '/app', '/app/*splat'], page('coach/index.html'));
+// Health check for the host: answers only when the database is reachable.
+app.get('/healthz', (_req, res) => { require('./db').get('SELECT 1'); res.json({ ok: true }); });
 
 // ---- errors ----
 app.use((err, req, res, _next) => {

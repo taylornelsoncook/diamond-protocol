@@ -48,4 +48,4 @@ Out of the box, payments and email run in **test mode**: cards are simulated (a 
 
 ## Deploy
 
-The included `Dockerfile` runs anywhere that supports containers with a persistent volume (Render, Railway, Fly.io). Mount a disk at `/data`. Download a backup from Staff & security regularly and keep it off the server.
+Step-by-step for Render (staging + production): `docs/DEPLOY.md`. The included `Dockerfile` runs anywhere that supports containers with a persistent volume (Render, Railway, Fly.io). Mount a disk at `/data`. Download a backup from Staff & security regularly and keep it off the server.

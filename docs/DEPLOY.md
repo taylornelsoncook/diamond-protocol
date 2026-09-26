@@ -28,7 +28,7 @@ If a deploy goes wrong: in Render, open the service → **Events** → pick the 
 
 ## Your own address (optional)
 
-In the production service: **Settings → Custom Domains → Add**, e.g. `app.diamondprotocol.com`. Render shows one DNS record to add at your domain registrar; HTTPS is automatic. Then add an environment variable `DP_APP_URL` = `https://app.diamondprotocol.com` so email links use it.
+In the production service: **Settings → Custom Domains → Add**, e.g. `app.diamondprotocol.org`. Render shows one DNS record to add at your domain registrar; HTTPS is automatic. Then add an environment variable `DP_APP_URL` = `https://app.diamondprotocol.org` so email links use it.
 
 ## Before real families use production
 
@@ -39,13 +39,13 @@ In the production service: **Settings → Custom Domains → Add**, e.g. `app.di
 ## Connect email (Resend)
 
 1. Sign up at https://resend.com (free for 3,000 emails a month).
-2. **Domains → Add domain** (e.g. `diamondprotocol.com`) and add the DNS records it shows at your domain registrar. Wait until it says **Verified**.
+2. **Domains → Add domain** (e.g. `diamondprotocol.org`) and add the DNS records it shows at your domain registrar. Wait until it says **Verified**.
    No domain yet? Skip this: Resend's test sender (`onboarding@resend.dev`) works, but only delivers to the email you signed up with.
 3. **API Keys → Create API key** (permission: Sending access). Copy it; it starts with `re_`.
 4. In Render, open **diamond-protocol-staging → Environment** and add:
    - `RESEND_API_KEY` = the key
    - `DP_EMAIL_ONLY_TO` = your own email address (so demo families never get real email)
-   - `DP_EMAIL_FROM` = `Diamond Protocol <hello@yourdomain.com>` (leave out if you skipped step 2)
+   - `DP_EMAIL_FROM` = `Diamond Protocol <hello@diamondprotocol.org>` (leave out if you skipped step 2)
    Save; Render restarts the service.
 5. Sign in to staging as the owner → **API & integrations → Email outbox → Send test email**. It should arrive within a minute.
 6. When it works, add `RESEND_API_KEY` and `DP_EMAIL_FROM` to **diamond-protocol** (production) too, without `DP_EMAIL_ONLY_TO`, and send a test email there.

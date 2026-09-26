@@ -209,7 +209,9 @@ function demo() {
 
   // Area-specific demo data (results, invoices, sales, bookings…)
   const dir = path.join(__dirname, 'seeds');
-  if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort()) require(path.join(dir, f)).seed();
+  if (fs.existsSync(dir)) for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort()) {
+    try { require(path.join(dir, f)).seed(); } catch (e) { console.error(`[seed] ${f} failed:`, e.message); }
+  }
 }
 
 function seed({ withDemo = true } = {}) {

@@ -27,9 +27,14 @@ api.use('/auth', auth.router);
 const jobs = [];
 const routeDir = path.join(__dirname, 'routes');
 for (const f of fs.readdirSync(routeDir).filter((f) => f.endsWith('.js')).sort()) {
-  const mod = require(path.join(routeDir, f));
-  mod.routes(api);
-  if (mod.jobs) jobs.push(...mod.jobs);
+  try {
+    const mod = require(path.join(routeDir, f));
+    mod.routes(api);
+    if (mod.jobs) jobs.push(...mod.jobs);
+  } catch (e) {
+    if (process.env.NODE_ENV === 'production') throw e;
+    console.error(`[routes] skipped ${f}:`, e.message);
+  }
 }
 api.use((_req, _res, next) => next(new HttpError(404, 'No such API endpoint.')));
 app.use('/api', api);

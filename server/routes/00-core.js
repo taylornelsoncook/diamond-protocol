@@ -54,10 +54,11 @@ function routes(api) {
     res.json(all(`SELECT * FROM activity ${where} ORDER BY id DESC LIMIT ?`, limit));
   });
 
-  api.get('/lookups', requireStaff(), (_req, res) => {
+  api.get('/lookups', requireStaff(), (req, res) => {
+    const plans = all('SELECT id,name,price_cents,trial_days,group_per_month,private_per_month FROM plans WHERE active=1 ORDER BY price_cents');
     res.json({
       locations: all('SELECT * FROM locations WHERE archived=0 ORDER BY id'),
-      plans: all('SELECT id,name,price_cents,trial_days,group_per_month,private_per_month FROM plans WHERE active=1 ORDER BY price_cents'),
+      plans: req.staff.role === 'owner' ? plans : plans.map(({ price_cents, ...p }) => p), // coaches never see money
       programs: all('SELECT id,name,weeks,level FROM programs WHERE archived=0 ORDER BY name'),
       teams: all("SELECT t.id, t.team_name, s.name AS school FROM team_contracts t JOIN schools s ON s.id=t.school_id WHERE t.status='active' ORDER BY t.team_name"),
       coaches: all("SELECT id,name,role FROM staff WHERE active=1 AND role IN ('owner','coach') ORDER BY name"),

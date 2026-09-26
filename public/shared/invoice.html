@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="robots" content="noindex">
+<title>Invoice · Diamond Protocol</title>
+<link rel="icon" href="/img/mark-64.png">
+<link rel="stylesheet" href="/css/dp.css">
+<style>
+.iv-page{max-width:688px;margin:0 auto;padding:20px 16px 64px;display:flex;flex-direction:column;gap:var(--space-4)}
+.iv{position:relative;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:28px;display:flex;flex-direction:column;gap:28px}
+.iv-top{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;flex-wrap:wrap}
+.iv-logo{width:126px;height:126px;background:#000;display:block;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.iv-title{font:700 30px/1 var(--font-display);letter-spacing:.08em;text-transform:uppercase;text-align:right;margin-bottom:12px}
+.iv-meta{display:grid;grid-template-columns:auto auto;gap:4px 22px;margin:0;font-size:13px}
+.iv-meta dt{color:var(--steel-muted)} .iv-meta dd{margin:0;text-align:right;font-family:var(--font-mono);font-size:13px}
+.iv-parties{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.iv-parties .k{font-size:13px;color:var(--steel);margin-bottom:2px}
+.iv-parties .name{font-weight:600}
+.iv-parties .addr{color:var(--steel-muted);white-space:pre-line}
+.iv-lines{width:100%;border-collapse:collapse}
+.iv-lines th{font:500 11px/16px var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--steel-muted);text-align:left;padding:0 0 8px;border-bottom:1px solid var(--line)}
+.iv-lines td{padding:14px 0;border-bottom:1px solid var(--line)}
+.iv-lines .amt{text-align:right;font-family:var(--font-mono);font-size:13px;white-space:nowrap;padding-left:16px}
+.iv-due{display:flex;justify-content:flex-end;align-items:baseline;gap:18px}
+.iv-due .k{color:var(--steel-muted)} .iv-due .v{font:700 30px/1 var(--font-display)}
+.iv-how .k{font-size:13px;margin-bottom:2px}.iv-how p{margin:0;color:var(--steel-muted)}
+.iv-stamp{position:absolute;top:52px;left:50%;transform:translateX(-50%) rotate(-12deg);border:3px solid var(--green-bright);color:var(--green-bright);padding:6px 16px;border-radius:6px;text-align:center;font:700 34px/1 var(--font-display);letter-spacing:.14em;pointer-events:none;opacity:.9}
+.iv-stamp small{display:block;font:600 11px/1.4 var(--font-sans);letter-spacing:.06em;margin-top:4px}
+.iv-stamp.void{border-color:var(--steel-muted);color:var(--steel-muted)}
+.iv-actions{display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center}
+.iv-note{font-size:13px;color:var(--steel-muted)}
+@media (max-width:560px){.iv{padding:20px}.iv-parties{grid-template-columns:1fr}.iv-title{text-align:left}.iv-top{flex-direction:column}.iv-stamp{top:64px;left:auto;right:18px;transform:rotate(-12deg);font-size:24px;padding:6px 10px}.iv-meta dd{text-align:left}}
+@media print{
+  body{background:#fff}
+  .iv-page{padding:0;max-width:none}
+  .iv{border:0;padding:0;background:#fff;color:#111}
+  .iv-stamp{color:#2F6B34;border-color:#2F6B34}
+  .iv-stamp.void{color:#666;border-color:#666}
+  .iv-parties .addr,.iv-how p,.iv-meta dt,.iv-due .k,.iv-lines th{color:#444}
+  .iv-lines th,.iv-lines td{border-color:#bbb}
+}
+</style>
+</head>
+<body>
+<main class="iv-page" id="root" aria-live="polite"><div class="muted" aria-busy="true">Loading invoice…</div></main>
+<script type="module" src="/shared/invoice.js"></script>
+</body>
+</html>

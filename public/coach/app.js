@@ -62,7 +62,7 @@ function shell(current) {
       <a class="nav-brand" href="/app/today"><img src="/img/logo-320.png" alt="Diamond Protocol, built under pressure"></a>
       <div class="nav-list">${items.map((n) => html`<a class="nav-item" href="${n.path}" ${n.id === current ? raw('aria-current="page"') : ''}>${icon(ICON[n.id])}${n.label}</a>`)}</div>
       <div class="nav-foot">
-        ${settings?.payments_mode === 'test' ? html`<div class="test-mode">Test mode: cards are simulated and emails go to the outbox.</div>` : ''}
+        ${settings?.payments_mode === 'test' || settings?.email_mode === 'test' ? html`<div class="test-mode">Test mode: ${[settings.payments_mode === 'test' && 'cards are simulated', settings.email_mode === 'test' && 'emails go to the outbox'].filter(Boolean).join(' and ')}.</div>` : ''}
         <div><span class="strong" style="color:var(--steel)">${me.name}</span><br>${ROLE_LABEL[me.role]}</div>
         <div class="btn-row"><a class="btn btn-sm" href="/app/account">Password</a><button class="btn btn-sm" id="signout">Sign out</button></div>
       </div>

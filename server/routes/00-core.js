@@ -8,7 +8,7 @@ const PUBLIC_SETTINGS = ['business_name', 'timezone', 'late_cancel_hours', 'resu
 
 function routes(api) {
   // First run: no staff yet, so the sign-in page offers to create the owner.
-  api.get('/setup', (_req, res) => res.json({ needs_setup: !get('SELECT 1 FROM staff LIMIT 1'), payments_mode: payments.mode() }));
+  api.get('/setup', (_req, res) => res.json({ needs_setup: !get('SELECT 1 FROM staff LIMIT 1'), payments_mode: payments.mode(), email_mode: require('../email').mode() }));
   api.post('/setup', h(async (req, res) => {
     if (get('SELECT 1 FROM staff LIMIT 1')) throw new HttpError(409, 'Setup is already done.');
     const { name, email, password, business_name } = req.body;
@@ -25,6 +25,7 @@ function routes(api) {
     out.waiver_text = setting('waiver_text');
     out.presets = setting('presets');
     out.payments_mode = payments.mode();
+    out.email_mode = require('../email').mode();
     res.json(out);
   });
 

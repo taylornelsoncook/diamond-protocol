@@ -21,6 +21,14 @@ services:
         value: /data
       - key: DP_DEMO
         value: "1"
+      # Email (optional on staging): set in the Render dashboard, never in this file.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DP_EMAIL_FROM
+        sync: false
+      # Staging only delivers to these addresses (e.g. your own); demo families never get real email.
+      - key: DP_EMAIL_ONLY_TO
+        sync: false
 
   # Production: real families. Starts empty and asks you to create the owner account.
   # Deploys only when you press Manual Deploy, so nothing reaches families untested.
@@ -41,3 +49,7 @@ services:
         value: production
       - key: DP_DATA_DIR
         value: /data
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DP_EMAIL_FROM
+        sync: false

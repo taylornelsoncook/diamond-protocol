@@ -1,8 +1,9 @@
 // API & integrations: API keys, webhooks and deliveries, the email outbox, and the open API's read endpoints (/api/v1/*).
 'use strict';
+const email = require('../email');
 const crypto = require('crypto');
 const { get, all, run, insert, update } = require('../db');
-const { h, bad, notFound, log, sha256, WEBHOOK_EVENTS, addDays } = require('../lib');
+const { h, bad, notFound, log, sha256, WEBHOOK_EVENTS, addDays, businessName, appUrl } = require('../lib');
 const { requireStaff, requireApiKey } = require('../auth');
 const hooks = require('../services/ops-webhooks');
 const { nowLocal } = require('../services/booking');
@@ -108,8 +109,19 @@ function routes(api) {
     res.json({
       total: get(`SELECT COUNT(*) AS n FROM outbox ${where}`, ...args).n,
       items: all(`SELECT * FROM outbox ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, ...args, limit, offset),
+      mode: email.mode(), provider: email.provider(), from: process.env.DP_EMAIL_FROM || null, only_to: process.env.DP_EMAIL_ONLY_TO || null,
     });
   });
+
+  // Send a test email and wait for the provider's answer.
+  api.post('/outbox/test', OWNER, h(async (req, res) => {
+    const to = String(req.body.to || req.staff.email).trim();
+    if (!/^\S+@\S+\.\S+$/.test(to)) throw bad('Enter an email address.');
+    const r = await email.sendEmailNow(to, `Test email from ${businessName()}`, `This is a test from your Diamond Protocol server at ${appUrl()}.\n\nIf you're reading this, email is working: sign-in codes, invoices and receipts will arrive like this one.`);
+    log(req, 'Sent a test email', `${to}: ${r.ok ? 'delivered to the provider' : r.error}`);
+    if (!r.ok) throw bad(r.error);
+    res.json({ ok: true });
+  }));
 
   // ---- open API (Authorization: Bearer dp_live_…) ----
   const athleteSql = `SELECT a.code, a.first_name, a.last_name, a.sport, a.position, a.school, a.birthday, a.created_at,

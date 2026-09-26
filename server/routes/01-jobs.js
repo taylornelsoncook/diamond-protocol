@@ -9,5 +9,6 @@ module.exports = {
     { name: 'generate-sessions', everyMin: 60, run: () => booking.generateEvents() },
     { name: 'renew-memberships', everyMin: 60, run: () => billing.renewDue() },
     { name: 'retry-declined', everyMin: 60, run: () => billing.retryFailed() },
+    { name: 'retry-email', everyMin: 10, run: () => require('../email').retryFailed() },
   ],
 };

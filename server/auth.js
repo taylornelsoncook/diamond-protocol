@@ -140,8 +140,8 @@ router.post('/parent/code', h(async (req, res) => {
     run('UPDATE parent_codes SET used=1 WHERE email=?', email);
     insert('parent_codes', { email, code_hash: sha256(code), expires_at: new Date(Date.now() + 10 * 6e4).toISOString() });
     sendEmail(email, `Your ${businessName()} sign-in code: ${code}`, `Your sign-in code is ${code}. It works once, for 10 minutes.\n\nIf you didn't ask for it, you can ignore this email.`);
-    // Test mode: no email provider, so show the code on screen.
-    if (!process.env.DP_EMAIL_WEBHOOK) out.test_code = code;
+    // Test mode (or a restricted staging server): the email won't arrive, so show the code on screen.
+    if (!require('./email').willDeliver(email)) out.test_code = code;
   }
   res.json(out); // same answer either way, so emails can't be probed
 }));

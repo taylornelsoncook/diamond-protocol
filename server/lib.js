@@ -26,17 +26,8 @@ function makeAthleteCode(first, last) {
   return code;
 }
 
-// ---- Email: every message lands in the outbox. Set DP_EMAIL_WEBHOOK to relay them to a real sender. ----
-function sendEmail(to, subject, body) {
-  if (!to) return null;
-  const id = insert('outbox', { to_email: to, subject, body, status: process.env.DP_EMAIL_WEBHOOK ? 'queued' : 'logged' });
-  if (process.env.DP_EMAIL_WEBHOOK) {
-    fetch(process.env.DP_EMAIL_WEBHOOK, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ to, subject, body }) })
-      .then((r) => run('UPDATE outbox SET status=? WHERE id=?', r.ok ? 'sent' : 'failed', id))
-      .catch(() => run("UPDATE outbox SET status='failed' WHERE id=?", id));
-  }
-  return id;
-}
+// ---- Email: saved to the outbox, then sent by the configured provider (see server/email.js). ----
+function sendEmail(to, subject, body) { return require('./email').sendEmail(to, subject, body); }
 
 // ---- Activity log ----
 function log(req, action, detail, kind = 'change') {

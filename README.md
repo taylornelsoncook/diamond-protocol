@@ -42,7 +42,11 @@ Out of the box, payments and email run in **test mode**: cards are simulated (a 
 | `PORT` | Port to listen on (default 3000) |
 | `DP_DATA_DIR` | Where the database and backups live (default `./data`). Use a persistent disk in production. |
 | `DP_APP_URL` | Public address used in email links, e.g. `https://app.yourdomain.com` |
-| `DP_EMAIL_WEBHOOK` | URL that receives `{to, subject, body}` for each email (e.g. a Postmark/Resend relay). When set, sign-in codes stop showing on screen. |
+| `RESEND_API_KEY` | Sends email through [Resend](https://resend.com). When set, parents' sign-in codes stop showing on screen. |
+| `DP_EMAIL_FROM` | Sender, e.g. `Diamond Protocol <hello@yourdomain.com>` (the domain must be verified in Resend) |
+| `DP_EMAIL_REPLY_TO` | Where replies go, e.g. your own inbox |
+| `DP_EMAIL_ONLY_TO` | Only deliver to these addresses or `@domains` (for staging); everything else is held in the outbox |
+| `DP_EMAIL_WEBHOOK` | Alternative to Resend: URL that receives `{to, subject, body, html}` for each email |
 | `STRIPE_SECRET_KEY` | Switches payments to live mode. The Stripe calls go in `lib.payments` in `server/lib.js` (charge and refund) and the parent card page; this is the one piece of wiring left before taking real cards. |
 | `NODE_ENV=production` | Secure cookies, caching, strict startup |
 

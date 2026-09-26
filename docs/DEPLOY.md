@@ -32,6 +32,22 @@ In the production service: **Settings → Custom Domains → Add**, e.g. `app.di
 
 ## Before real families use production
 
-- **Email:** until an email sender is connected, sign-in codes show on screen and every email only lands in the outbox (API & integrations → Email outbox). Connect a sender (set `DP_EMAIL_WEBHOOK`) before inviting parents.
+- **Email:** until email is connected, sign-in codes show on screen and every email only lands in the outbox. See "Connect email" below.
 - **Payments:** production still runs test-mode payments until the Stripe wiring is added and `STRIPE_SECRET_KEY` is set. Don't take real payments before then.
 - **Backups:** the app copies the database daily onto the same disk. Also download a copy weekly from Staff & security, and turn on Render's disk snapshots.
+
+## Connect email (Resend)
+
+1. Sign up at https://resend.com (free for 3,000 emails a month).
+2. **Domains → Add domain** (e.g. `diamondprotocol.com`) and add the DNS records it shows at your domain registrar. Wait until it says **Verified**.
+   No domain yet? Skip this: Resend's test sender (`onboarding@resend.dev`) works, but only delivers to the email you signed up with.
+3. **API Keys → Create API key** (permission: Sending access). Copy it; it starts with `re_`.
+4. In Render, open **diamond-protocol-staging → Environment** and add:
+   - `RESEND_API_KEY` = the key
+   - `DP_EMAIL_ONLY_TO` = your own email address (so demo families never get real email)
+   - `DP_EMAIL_FROM` = `Diamond Protocol <hello@yourdomain.com>` (leave out if you skipped step 2)
+   Save; Render restarts the service.
+5. Sign in to staging as the owner → **API & integrations → Email outbox → Send test email**. It should arrive within a minute.
+6. When it works, add `RESEND_API_KEY` and `DP_EMAIL_FROM` to **diamond-protocol** (production) too, without `DP_EMAIL_ONLY_TO`, and send a test email there.
+
+Every email is still kept in the outbox with its status (Sent, Failed, Held, Not sent). Failed sends are retried automatically up to three times.

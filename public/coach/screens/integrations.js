@@ -98,8 +98,13 @@ curl -X POST ${origin}/api/v1/results \\
 
   <section class="panel" aria-labelledby="out-t">
     <div class="panel-head"><div><h2 class="panel-title" id="out-t">Email outbox</h2>
-      <p class="panel-sub">Sign-in codes, welcome emails, booking confirmations and invoices. Until an email service is connected, messages are logged here instead of sent.</p></div>
+      <p class="panel-sub">Every email the platform sends: sign-in codes, welcome emails, booking changes, invoices and receipts.</p></div>
       <input class="input" type="search" id="oq" placeholder="Search by email or subject" aria-label="Search the outbox" style="max-width:280px"></div>
+    <div id="mail-mode"></div>
+    <form class="row" id="mail-test" style="align-items:flex-end">
+      <div class="field" style="flex:1;min-width:220px"><label class="label" for="mt-to">Send a test email to</label><input class="input" id="mt-to" name="to" type="email" value="${ctx.me.email}" required></div>
+      <button class="btn">Send test email</button>
+    </form>
     <div id="outbox"></div>
   </section>`);
 
@@ -156,15 +161,35 @@ curl -X POST ${origin}/api/v1/results \\
     const q = el.querySelector('#oq').value.trim();
     const r = await api.get(`/outbox?limit=25&offset=${reset ? 0 : items.length}${q ? '&q=' + encodeURIComponent(q) : ''}`);
     items = reset ? r.items : items.concat(r.items); total = r.total;
+    const modeText = {
+      test: html`<div class="banner">No email service is connected, so messages stay here and are not sent. Parents see their sign-in code on screen. Add RESEND_API_KEY on the server to start sending.</div>`,
+      restricted: html`<div class="banner info">Sending through ${r.provider === 'resend' ? 'Resend' : 'your relay'}, but only to ${r.only_to}. Everything else is held here.</div>`,
+      live: html`<div class="banner info">Sending through ${r.provider === 'resend' ? 'Resend' : 'your relay'}${r.from ? html` as ${r.from}` : ''}.</div>`,
+    };
+    mount(el.querySelector('#mail-mode'), modeText[r.mode]);
     mount(box, items.length ? html`<div>${items.map((m) => html`<details class="dpi-mail">
-        <summary><span class="muted">${relTime(m.created_at)}</span> · ${m.to_email} · <span class="strong">${m.subject}</span> <span class="muted">(${m.status})</span></summary>
+        <summary><span class="muted">${relTime(m.created_at)}</span> · ${m.to_email} · <span class="strong">${m.subject}</span> ${mailBadge(m.status)}</summary>
+        ${m.error ? html`<p class="error" style="margin:8px 0 0">${m.error}</p>` : ''}
         <pre>${m.body}</pre></details>`)}</div>
       ${items.length < total ? html`<div><button class="btn btn-sm" id="more">Show more (${total - items.length} older)</button></div>` : ''}`
       : html`<p class="muted" style="margin:0">${q ? 'No emails match.' : 'No emails yet.'}</p>`);
     box.querySelector('#more')?.addEventListener('click', () => load(false).catch(toastError));
   };
+  el.querySelector('#mail-test').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const b = e.target.querySelector('button'); b.disabled = true;
+    try { await api.post('/outbox/test', { to: e.target.to.value }); toast('Test email sent. Check the inbox.'); await load(true); }
+    catch (err) { toastError(err); await load(true); }
+    finally { b.disabled = false; }
+  });
   el.querySelector('#oq').addEventListener('input', debounce(() => load(true).catch(toastError), 250));
   await load(true);
+}
+
+function mailBadge(status) {
+  const map = { sent: ['Sent', 'good'], queued: ['Sending', 'neutral'], failed: ['Failed', 'warn'], held: ['Held', 'muted'], logged: ['Not sent', 'muted'] };
+  const [t, tone] = map[status] || [status, 'muted'];
+  return html` <span class="badge badge-${tone}">${t}</span>`;
 }
 
 export const routes = [{ path: '/integrations', nav: 'api', title: 'API & integrations', roles: ['owner'], render }];

@@ -7,7 +7,7 @@
     "start": "node server/index.js",
     "demo": "node server/seed.js --reset --demo && DP_DEMO=1 node server/index.js",
     "seed": "node server/seed.js --reset --demo",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "license": "UNLICENSED",
   "dependencies": {

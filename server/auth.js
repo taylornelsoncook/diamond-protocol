@@ -68,7 +68,7 @@ function loadUser(req, _res, next) {
 function requireStaff(...roles) {
   return (req, _res, next) => {
     if (!req.staff) return next(new HttpError(401, 'Please sign in.'));
-    if (req.staff.must_change && !req.path.startsWith('/auth')) return next(new HttpError(403, 'Choose a new password first.', { must_change: true }));
+    if (req.staff.must_change && !req.originalUrl.startsWith('/api/auth/')) return next(new HttpError(403, 'Choose a new password first.', { must_change: true }));
     if (roles.length && !roles.includes(req.staff.role)) {
       log(req, 'Refused', `${req.method} ${req.originalUrl}`, 'refused');
       return next(new HttpError(403, "Your role can't do that. Ask an owner."));

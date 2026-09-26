@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B0C0C">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="DP Workout">
+<title>Workout · Diamond Protocol</title>
+<link rel="icon" href="/img/mark-64.png">
+<link rel="apple-touch-icon" href="/img/mark-180.png">
+<link rel="stylesheet" href="/css/dp.css">
+<style>
+.wo{max-width:560px;margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:var(--space-4)}
+.wo-mark{width:56px;height:56px;display:block}
+.wo-hi{margin:0;color:var(--steel-muted);font-size:15px;line-height:22px}
+.wo-title{font:700 40px/1.02 var(--font-display);letter-spacing:.06em;text-transform:uppercase;color:var(--steel);margin:0;overflow-wrap:anywhere}
+.wo-prog .bar{height:6px;margin-bottom:6px}
+.wo-video{position:relative;aspect-ratio:16/10;background:var(--black);border-radius:var(--radius-md);overflow:hidden;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--steel-muted);padding:24px 32px;font-size:16px;line-height:24px}
+.wo-video iframe,.wo-video video{position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--black)}
+.wo-cue{margin:0;color:var(--steel-muted);line-height:24px}
+.wo-cue b{color:var(--steel)}
+.wo-list{display:flex;flex-direction:column;gap:var(--space-3)}
+.wo-ex{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
+.wo-ex[aria-current="true"]{border:2px solid var(--green-mid);padding:calc(var(--space-3) - 1px) calc(var(--space-4) - 1px)}
+.wo-ex.done .wo-name{color:var(--steel-muted)}
+.wo-thumb{width:56px;height:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--black);border-radius:var(--radius-sm);color:var(--steel)}
+.wo-ex.done .wo-thumb{color:var(--green-bright)}
+.wo-ex .grow{flex:1;min-width:0;background:none;border:0;padding:0;text-align:left;cursor:pointer}
+.wo-name{font:600 18px/24px var(--font-sans);color:var(--steel);display:block}
+.wo-sr{color:var(--steel-muted);font-size:15px;line-height:22px}
+.wo-log{min-width:84px;min-height:52px;border-radius:var(--radius-sm);font:600 16px/1 var(--font-sans);background:var(--surface);color:var(--steel);border:1px solid var(--control-border);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.wo-log[aria-pressed="true"]{background:var(--green);border-color:var(--green-mid);color:var(--on-green)}
+.wo-finish{min-height:56px;font-size:17px}
+.wo-done{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6);background:var(--surface);border:1px solid var(--green-mid);border-radius:var(--radius-md)}
+.wo-done .icon{width:48px;height:48px;border-radius:50%;background:var(--green-deep);color:var(--green-soft);display:flex;align-items:center;justify-content:center}
+.wo-done p{margin:0;font-size:17px;line-height:26px}
+.wo-h2{font:700 18px/1.2 var(--font-display);letter-spacing:.06em;text-transform:uppercase;color:var(--steel);margin:var(--space-4) 0 0}
+.wo-hist{display:flex;flex-direction:column}
+.wo-hist>div{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line-subtle);font-size:15px}
+.wo-hist>div:first-child{border-top:0}
+.wo-foot{margin-top:var(--space-6);text-align:center;font:500 10px/14px var(--font-sans);letter-spacing:.18em;text-transform:uppercase;color:var(--steel-muted)}
+@media (min-width:600px){.wo-title{font-size:48px}}
+</style>
+</head>
+<body>
+<main class="wo" id="root" aria-live="polite"><p class="muted">Loading your workout…</p></main>
+<script type="module" src="/workout/app.js"></script>
+</body>
+</html>

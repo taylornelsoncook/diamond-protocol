@@ -2,7 +2,7 @@
 // past check-ins so "gone quiet" means something, and this month's sales across locations.
 'use strict';
 const { get, all, run, insert, update, tx } = require('../db');
-const { addDays } = require('../lib');
+const { addDays, ageOn } = require('../lib');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
 
@@ -16,7 +16,17 @@ function seed() {
   const loc = Object.fromEntries(all('SELECT id, kind FROM locations WHERE archived=0 ORDER BY id').map((l) => [l.kind, l.id]));
   const ath = Object.fromEntries(all('SELECT * FROM athletes').map((a) => [`${a.first_name} ${a.last_name}`, a]));
   const A = (n) => ath[n];
-  const tryBook = (eid, name, opts = {}) => { const a = A(name); if (!a) return null; try { return booking.book(eid, a.id, { quiet: true, ...opts }); } catch { return null; } };
+  // Demo bookings respect each class's age range, as a parent's booking would.
+  const fits = (a, classId, day) => {
+    const c = classId && get('SELECT min_age, max_age FROM classes WHERE id=?', classId);
+    const age = ageOn(a.birthday, day);
+    return !c || age == null || !((c.min_age && age < c.min_age) || (c.max_age && age > c.max_age));
+  };
+  const tryBook = (eid, name, opts = {}) => {
+    const a = A(name); if (!a) return null;
+    const e = get('SELECT class_id, starts_at FROM events WHERE id=?', eid);
+    if (e && !fits(a, e.class_id, e.starts_at.slice(0, 10))) return null;
+    try { return booking.book(eid, a.id, { quiet: true, ...opts }); } catch { return null; } };
 
   tx(() => {
     // Something on the floor today, whatever day it is.
@@ -63,7 +73,7 @@ function seed() {
         for (const [n, ago] of Object.entries(lastSeen)) {
           if (d < ago || (d - ago) % 5 !== 0) continue; // attended on their last-seen day and every so often before it
           const a = A(n);
-          if (!a) continue;
+          if (!a || !fits(a, c.id, day)) continue;
           insert('bookings', { event_id: eid, athlete_id: a.id, status: 'booked', coverage: a.group_credits > 0 ? 'credit' : 'member', source: 'staff', checked_in_at: `${day}T${c.start_time}:00.000Z` });
         }
       }

@@ -79,6 +79,7 @@ const BADGES = {
   active: ['Active', 'good'], paid: ['Paid', 'good'], complete: ['Complete', 'good'], member: ['Member', 'good'], registered: ['Registered', 'good'], signed: ['Signed', 'good'],
   past_due: ['Past due', 'warn'], failed: ['Failed', 'warn'], overdue: ['Overdue', 'warn'], unpaid: ['Unpaid', 'warn'], at_risk: ['At risk', 'warn'], locked: ['Locked', 'warn'],
   trial: ['Trial', 'neutral'], open: ['Open', 'neutral'], credit: ['Credit', 'neutral'], team: ['Team', 'neutral'], waitlist: ['Waitlist', 'neutral'],
+  shared: ['Shared', 'good'], warn: ['Check', 'warn'],
   paused: ['Paused', 'muted'], cancelled: ['Cancelled', 'muted'], void: ['Void', 'muted'], draft: ['Draft', 'muted'], ended: ['Ended', 'muted'], off: ['Off', 'muted'],
 };
 export function badge(status, label) {

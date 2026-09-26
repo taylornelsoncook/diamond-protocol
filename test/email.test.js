@@ -129,3 +129,21 @@ test('owners can send a test email and see the result; coaches cannot', async ()
   const coach = (await call('POST', '/auth/staff/login', { email: 'coach@demo.test', password: 'demo-coach-2026' })).res.headers.get('set-cookie').split(';')[0];
   assert.equal((await call('POST', '/outbox/test', { to: 'x@y.test' }, coach)).status, 403);
 });
+
+test('a key pasted with curly quotes or invisible characters still works; a broken key explains itself', async () => {
+  const cookie = await owner();
+  process.env.RESEND_API_KEY = '“re_test_123​” ';
+  process.env.DP_EMAIL_FROM = ' Diamond Protocol <hello@diamondprotocol.test> ';
+  const n = received.length;
+  let r = await call('POST', '/outbox/test', { to: 'owner@demo.test' }, cookie);
+  assert.equal(r.status, 200);
+  assert.equal(received[n].auth, 'Bearer re_test_123');
+  assert.equal(received[n].body.from, 'Diamond Protocol <hello@diamondprotocol.test>');
+  process.env.RESEND_API_KEY = 're_test_12é3';
+  r = await call('POST', '/outbox/test', { to: 'owner@demo.test' }, cookie);
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /character that isn't part of the key/);
+  process.env.RESEND_API_KEY = 'abc123';
+  r = await call('POST', '/outbox/test', { to: 'owner@demo.test' }, cookie);
+  assert.match(r.data.error, /start with re_/);
+});

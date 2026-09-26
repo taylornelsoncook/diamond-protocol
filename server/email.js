@@ -16,6 +16,17 @@ if (!cols.includes('provider_id')) db.exec('ALTER TABLE outbox ADD COLUMN provid
 
 const MAX_ATTEMPTS = 3;
 
+// Settings pasted on a phone can pick up curly quotes, spaces or invisible characters. Strip them.
+function clean(v) {
+  return String(v || '').replace(/[\u200B-\u200D\u2060\uFEFF\u00A0]/g, '').trim().replace(/^["'\u201C\u201D\u2018\u2019]+|["'\u201C\u201D\u2018\u2019]+$/g, '').trim();
+}
+function resendKey() {
+  const key = clean(process.env.RESEND_API_KEY).replace(/\s+/g, '');
+  if (/[^\x21-\x7E]/.test(key)) throw new Error("The RESEND_API_KEY setting has a character that isn't part of the key. In Render, delete the value, copy the key again from Resend and paste it with nothing around it.");
+  if (!key.startsWith('re_')) throw new Error("The RESEND_API_KEY setting doesn't look like a Resend key (they start with re_). Copy it again from Resend.");
+  return key;
+}
+
 function provider() {
   if (process.env.RESEND_API_KEY) return 'resend';
   if (process.env.DP_EMAIL_WEBHOOK) return 'webhook';
@@ -65,10 +76,10 @@ async function deliver(row) {
   try {
     let providerId = null;
     if (p === 'resend') {
-      const from = process.env.DP_EMAIL_FROM || `${require('./lib').businessName()} <onboarding@resend.dev>`;
+      const from = clean(process.env.DP_EMAIL_FROM).replace(/[\u201C\u201D]/g, '"') || `${require('./lib').businessName()} <onboarding@resend.dev>`;
       const r = await fetch(process.env.RESEND_API_URL || 'https://api.resend.com/emails', {
         method: 'POST', signal: AbortSignal.timeout(15000),
-        headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json', 'idempotency-key': `dp-outbox-${row.id}` },
+        headers: { authorization: `Bearer ${resendKey()}`, 'content-type': 'application/json', 'idempotency-key': `dp-outbox-${row.id}` },
         body: JSON.stringify({ from, to: [row.to_email], subject: row.subject, text: row.body, html, ...(process.env.DP_EMAIL_REPLY_TO ? { reply_to: process.env.DP_EMAIL_REPLY_TO } : {}) }),
       });
       const data = await r.json().catch(() => ({}));

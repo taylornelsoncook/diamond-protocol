@@ -35,6 +35,7 @@ function routes(api) {
       if (![...PUBLIC_SETTINGS, 'waiver_text'].includes(k) || k === 'waiver_version') continue;
       if (ownerOnly.includes(k) && req.staff.role !== 'owner') throw new HttpError(403, 'Only owners can change policies.');
       if (k === 'late_cancel_hours' && !(Number(v) >= 0 && Number(v) <= 72)) throw bad('Late-cancel window must be 0–72 hours.');
+      if (k === 'timezone') { try { new Intl.DateTimeFormat('en-US', { timeZone: v }); } catch { throw bad("That time zone isn't recognized. Use a name like America/Denver."); } }
       if (k === 'results_visibility' && !['shared', 'immediate'].includes(v)) throw bad('Choose when parents see results.');
       if (k === 'waiver_text' && v !== setting('waiver_text')) {
         setSetting('waiver_version', Number(setting('waiver_version', 1)) + 1); // every family is asked to sign again

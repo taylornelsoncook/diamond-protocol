@@ -29,11 +29,24 @@ async function boot() {
   NAV = state.user ? ALL_NAV.filter(([k]) => !NAV_FOR[state.user.role] || NAV_FOR[state.user.role].includes(k)) : ALL_NAV;
   render();
 }
-window.addEventListener('hashchange', render);
+// A page with unsaved changes (a client's profile) sets leaveGuard; moving to another page asks first.
+let leaveGuard = null, lastHash = location.hash, returning = false;
+window.addEventListener('hashchange', () => {
+  if (returning) { returning = false; return; }
+  const msg = leaveGuard?.check(location.hash);
+  if (msg) {
+    if (!confirm(msg)) { returning = true; location.hash = lastHash; return; }
+    leaveGuard.discard();
+  }
+  lastHash = location.hash;
+  render();
+});
+window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { e.preventDefault(); e.returnValue = ''; } });
 
 function render() {
   if (!state.user) return renderLogin();
   if (state.user.must_change_password) return renderPasswordChange(true);
+  leaveGuard = null;                                  // the view sets it again if it has unsaved changes
   const [section, id] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const current = NAV.some(([k]) => k === section) ? section : 'today';
   const main = h('main', { class: 'main', id: 'main' });
@@ -476,51 +489,113 @@ async function viewCampaigns(main) {
 // ---------- Clients ----------
 // "Active" means the same as the Today tile: not archived, paid up or on a free trial. Archived clients only show
 // under the Archived filter (or as a hint when a search only finds archived ones).
-const CLIENT_VIEWS = [['', 'All clients'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['archived', 'Archived']];
-const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status) : c.status === view)));
+// Views over the client list, the same as the server's ?status= (clients.js#inView). Archived clients are their own view.
+const CLIENT_VIEWS = [['', 'All'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['team', 'Team only'], ['no_waiver', 'No waiver'], ['archived', 'Archived']];
+const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status)
+  : view === 'team' ? c.teams?.length > 0 && ['none', 'canceled'].includes(c.status) : view === 'no_waiver' ? !!c.flags?.no_waiver : c.status === view)));
+// Search: name, Athlete ID, email, family, school, parents; phone numbers on their digits too (clients.js#matches).
+const digitsOf = (x) => String(x ?? '').replace(/\D/g, '');
+const clientMatches = (c, q) => {
+  const s = q.trim().toLowerCase();
+  if (!s) return true;
+  if ([c.name, c.email, c.athlete_id, c.family?.name, c.school, c.phone, ...(c.parents ?? []).flatMap((p) => [p.name, p.email, p.phone])].filter(Boolean).join(' ').toLowerCase().includes(s)) return true;
+  const d = digitsOf(s);
+  return /^[\d\s().+-]+$/.test(s) && d.length >= 4 && [c.phone, ...(c.parents ?? []).map((p) => p.phone)].some((p) => digitsOf(p).includes(d));
+};
+const CLIENT_SORTS = [['name', 'Name'], ['last_seen', 'Longest since seen'], ['newest', 'Newest']];
+const clientsUi = { q: '', view: null, sort: 'name', shown: 100 };
+const clientFlags = (c) => [
+  c.flags?.medical ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Medical') : null,
+  c.flags?.no_waiver ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'No waiver') : null,
+  c.flags?.no_card && c.family ? h('span', { class: 'dp-badge dp-badge--muted' }, 'No card') : null,
+  c.pinned_notes ? h('span', { class: 'dp-badge dp-badge--good' }, c.pinned_notes === 1 ? 'Pinned note' : `${c.pinned_notes} pinned notes`) : null];
+
 async function viewClients(main) {
-  const { data } = await get('/v1/clients?archived=all');
-  const q = input({ type: 'search', placeholder: 'Name, athlete ID, email or family', id: 'client-search', 'aria-label': 'Search clients' });
-  const start = hashQuery().get('status') ?? '';
-  const status = select(CLIENT_VIEWS.map(([k, label]) => [k, `${label} (${data.filter((c) => inClientView(c, k)).length})`]), { 'aria-label': 'Which clients', style: 'width:auto;min-width:180px', value: CLIENT_VIEWS.some(([k]) => k === start) ? start : '' });
+  let data;
+  try { ({ data } = await get('/v1/clients?archived=all')); }
+  catch (e) {
+    return fill(main, header('Clients', null, addClientBtn()),
+      panel('The client list didn\'t load', { subtitle: e.message }, h('div', { class: 'row' }, btn('Try again', (ev) => busy(ev.currentTarget, () => viewClients(main)), 'secondary'))));
+  }
+  const start = hashQuery().get('status');
+  if (start != null && CLIENT_VIEWS.some(([k]) => k === start)) clientsUi.view = start;
+  if (clientsUi.view == null) clientsUi.view = '';
+  const count = (k) => data.filter((c) => inClientView(c, k)).length;
+  const q = input({ type: 'search', placeholder: 'Name, athlete ID, email, family or phone', id: 'client-search', 'aria-label': 'Search clients', value: clientsUi.q, autocomplete: 'off' });
+  const sort = select(CLIENT_SORTS, { 'aria-label': 'Sort clients', style: 'width:auto;min-width:170px', value: clientsUi.sort });
+  const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Which clients' });
   const body = h('tbody');
   const hint = h('p', { class: 'small muted', style: 'margin:0' });
-  const matches = (c, s) => !s || c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.athlete_id ?? '').toLowerCase().includes(s) || (c.family?.name ?? '').toLowerCase().includes(s);
-  const draw = () => {
-    const s = q.value.trim().toLowerCase();
-    const rows = data.filter((c) => matches(c, s) && inClientView(c, status.value));
-    const hidden = status.value === 'archived' ? 0 : data.filter((c) => c.archived_at && matches(c, s)).length;
-    fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); status.value = 'archived'; draw(); } }, 'Show archived')] : null);
-    fill(body, ...(rows.length ? rows.map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => (location.hash = `#/clients/${c.id}`), onKeydown: (e) => { if (e.key === 'Enter') location.hash = `#/clients/${c.id}`; } },
-      h('td', null, h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, c.name), h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), ` · ${c.family ? c.family.name : c.email ?? ''}`))),
-      h('td', null, c.subscription?.plan_name ?? '—'),
-      h('td', null, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status)),
-      h('td', null, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
-      h('td', { class: 'muted' }, ago(c.last_workout_at))))
-      : [h('tr', null, h('td', { colspan: '5', class: 'muted' }, data.length ? (status.value === 'archived' && !s ? 'No archived clients.' : 'No clients match. Clear the search or filter.') : 'No clients yet. Add your first one.'))]));
+  const more = h('div', { class: 'row' });
+  const shownRows = () => {
+    const rows = data.filter((c) => clientMatches(c, clientsUi.q) && inClientView(c, clientsUi.view));
+    if (clientsUi.sort === 'last_seen') rows.sort((a, b) => (a.last_seen_at ?? '').localeCompare(b.last_seen_at ?? '') || a.name.localeCompare(b.name));
+    else if (clientsUi.sort === 'newest') rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return rows;
   };
-  q.addEventListener('input', draw); status.addEventListener('change', draw); draw();
-  const current = data.filter((c) => inClientView(c, 'current')).length, archived = data.filter((c) => c.archived_at).length;
-  fill(main, 
-    header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import from a spreadsheet') : null, addClientBtn())),
-    panel(null, {}, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), status), hint,
+  const open = (c) => { location.hash = `#/clients/${c.id}`; };
+  const draw = () => {
+    const rows = shownRows(), s = clientsUi.q.trim();
+    // Always offer All, Active and Archived; the other views only when someone is in them.
+    fill(views, CLIENT_VIEWS.filter(([k]) => ['', 'current', 'archived'].includes(k) || count(k) || clientsUi.view === k).map(([k, label]) =>
+      h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(clientsUi.view === k), onClick: () => { clientsUi.view = k; clientsUi.shown = 100; draw(); } }, label, h('span', { class: 'muted' }, String(count(k))))));
+    const hidden = clientsUi.view === 'archived' ? 0 : data.filter((c) => c.archived_at && clientMatches(c, s)).length;
+    fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); clientsUi.view = 'archived'; draw(); } }, 'Show archived')] : null);
+    fill(body, ...(rows.length ? rows.slice(0, clientsUi.shown).map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => open(c), onKeydown: (e) => { if (e.key === 'Enter') open(c); } },
+      h('td', null, h('div', { class: 'stack-tight' },
+        h('span', { class: 'row wrap', style: 'gap:6px' }, h('span', { class: 'strong' }, c.name), ...clientFlags(c)),
+        h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), [c.family ? c.family.name : c.email, c.grad_year ? `Class of ${c.grad_year}` : null, c.teams?.length ? c.teams.map((t) => t.name).join(', ') : null].filter(Boolean).map((x) => ` · ${x}`).join('')))),
+      h('td', null, h('div', { class: 'stack-tight', style: 'align-items:flex-start' }, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status), c.subscription?.plan_name ? h('span', { class: 'small muted' }, c.subscription.plan_name) : null)),
+      h('td', { class: 'cl-program' }, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
+      h('td', { class: 'muted' }, ago(c.last_seen_at))))
+      : [h('tr', null, h('td', { colspan: '4', class: 'muted' }, data.length ? (clientsUi.view === 'archived' && !s ? 'No archived clients.' : s ? `No clients match "${s}". Check the spelling, or clear the search.` : 'Nobody in this view.') : 'No clients yet. Add your first one.'))]));
+    fill(more, rows.length > clientsUi.shown ? [h('span', { class: 'small muted grow' }, `Showing ${clientsUi.shown} of ${rows.length}.`), btn('Show 100 more', () => { clientsUi.shown += 100; draw(); }, 'secondary')] : null);
+  };
+  q.addEventListener('input', () => { clientsUi.q = q.value; clientsUi.shown = 100; draw(); });
+  // Enter opens the only match of what's typed; Escape clears the search.
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && q.value) { e.preventDefault(); q.value = clientsUi.q = ''; draw(); }
+    if (e.key === 'Enter') { const rows = shownRows(); if (rows.length === 1) open(rows[0]); else if (rows.length) toast(`${rows.length} clients match. Keep typing, or pick one.`, 'warn'); }
+  });
+  sort.addEventListener('change', () => { clientsUi.sort = sort.value; draw(); });
+  draw();
+  const current = count('current'), archived = count('archived');
+  const csv = isOwner() ? btn('Download CSV', (e) => busy(e.currentTarget, async () => {
+    const p = new URLSearchParams({ sort: clientsUi.sort });
+    if (clientsUi.q.trim()) p.set('q', clientsUi.q.trim());
+    if (clientsUi.view === 'archived') p.set('archived', 'true'); else if (clientsUi.view) p.set('status', clientsUi.view);
+    await download(`/v1/client-export?${p}`);
+  }), 'secondary', { title: 'The clients in this view, with contact details. No amounts.' }) : null;
+  fill(main,
+    header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row wrap' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import') : null, csv, addClientBtn())),
+    panel(null, {}, views, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), sort), hint,
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
-        h('thead', null, h('tr', null, ['Client', 'Plan', 'Status', 'Program', 'Last workout'].map((t) => h('th', null, t)))), body))));
+        h('thead', null, h('tr', null, ['Client', 'Membership', 'Program', 'Last seen'].map((t) => h('th', { class: t === 'Program' ? 'cl-program' : null }, t)))), body)), more));
+  if (clientsUi.q) q.focus();
 }
+
+// Unsaved profile edits, kept per client while other actions on the page redraw it, and asked about before leaving.
+const profileDrafts = new Map();
+const telHref = (p) => `tel:${String(p ?? '').replace(/[^\d+]/g, '')}`;
+const smsHref = (p) => `sms:${String(p ?? '').replace(/[^\d+]/g, '')}`;
+const OUTCOME = { attended: ['Came', 'good'], walk_in: ['Walk-in', 'good'], no_show: ['No-show', 'warn'], late_cancel: ['Late cancel', 'neutral'], in_progress: ['Happening now', 'muted'] };
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
-  const [en, testLib, owed, products, badgeLib, notesList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`)]);
+  const [en, testLib, owed, products, badgeLib, notesList, att] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`)]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
   const first = c.name.split(' ')[0];
+  const role = state.user.role;
   const act = (path, msg, body) => (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/${path}`, body); toast(msg); render(); });
+  const sectionId = (el, key) => { if (el) el.id = `cl-${key}`; return el; };
 
-  const planSel = select(plans.data.map((p) => [p.id, `${p.name}, ${money(p.price_cents)}/mo`]), { value: sub?.plan_id, 'aria-label': 'Plan' });
+  const planSel = select(plans.data.map((p) => [p.id, `${p.name}${p.price_cents == null ? '' : `, ${money(p.price_cents)}/mo`}`]), { value: sub?.plan_id, 'aria-label': 'Plan' });
   const membership = panel('Membership', { subtitle: sub ? null : 'No active plan.' },
     sub ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Status'), h('dd', null, badge(sub.status))),
@@ -530,9 +605,9 @@ async function viewClient(main, id) {
     sub && sub.status !== 'canceled' ? h('div', { class: 'stack' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Change plan', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/plan`, { plan_id: planSel.value }); toast('Plan changed. New price applies from the next charge.'); render(); }), 'secondary')),
       h('div', { class: 'row wrap' },
-        sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.')) : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
+        sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.'), 'secondary') : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
         btn('Cancel subscription', (e) => { if (confirm(`Cancel ${first}'s subscription now? Open invoices will be voided.`)) act('cancel', 'Subscription canceled.')(e); }, 'ghost')))
-      : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }))));
+      : c.archived_at ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }), 'secondary')));
 
   const payments = panel('Payments', {}, inv.data.length ? inv.data.map((i) => h('div', { class: 'list-item' },
     h('div', { class: 'grow stack-tight' }, h('span', null, `${i.amount_cents == null ? '' : `${money(i.amount_cents)} · `}${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
@@ -544,40 +619,76 @@ async function viewClient(main, id) {
 
   const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { value: c.program?.id ?? '', 'aria-label': 'Program' });
   const appUrl = location.origin + c.app_link;
-  const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${c.workouts_completed} ${c.workouts_completed === 1 ? 'workout' : 'workouts'} logged.` : 'No program assigned yet.' },
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
+  const appTo = [c.email, ...(fam?.guardians ?? []).map((g) => g.email)].filter(Boolean);
+  const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${plural(c.workouts_completed, 'workout')} logged.` : 'No program assigned yet.' },
+    role === 'front_desk' ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
       if (!progSel.value) throw new Error('Choose a program first.');
       await post(`/v1/programs/${progSel.value}/assign`, { client_id: id }); toast(`Program assigned to ${first}.`); render();
     }), 'secondary')),
-    h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `Send this to ${first}. Anyone with the link can see their workouts.`)),
+    h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),
     h('div', { class: 'row wrap' },
+      !c.archived_at && appTo.length ? btn('Email app link', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/app-link/email`); toast(`App link emailed to ${r.sent_to.join(' and ')}.`); }), 'secondary', { title: `Sends it to ${appTo.join(', ')}` }) : null,
       btn('Copy app link', async () => { await navigator.clipboard.writeText(appUrl); toast('App link copied.'); }, 'outline'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
-      btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
+      role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
     logs.data.length ? h('div', null, logs.data.slice(0, 5).map((l) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${l.workout_title} · week ${l.week}, day ${l.day}`), h('span', { class: 'muted' }, ago(l.completed_at))))) : null);
 
-  const name = input({ value: c.name }), email = input({ type: 'email', value: c.email ?? '' }), phone = input({ value: c.phone ?? '' });
-  const pf = { sex: select([['', 'Not set'], ['M', 'Male'], ['F', 'Female']], { value: c.sex ?? '' }), athlete_id: input({ value: c.athlete_id ?? '', style: 'font-family:var(--font-mono);text-transform:uppercase' }), birth_date: input({ type: 'date', value: c.birth_date ?? '' }), sport: input({ value: c.sport ?? '' }), position: input({ value: c.position ?? '' }), school: input({ value: c.school ?? '' }), grad_year: input({ type: 'number', value: c.grad_year ?? '' }),
-    emergency_name: input({ value: c.emergency_name ?? '' }), emergency_phone: input({ value: c.emergency_phone ?? '' }) };
-  const medical = h('textarea', { class: 'dp-input' }); medical.value = c.medical_notes ?? '';
-  const notes = h('textarea', { class: 'dp-input' }); notes.value = c.notes ?? '';
+  // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
+  // leaving the page asks first.
+  const draft = profileDrafts.get(id) ?? {};
+  const orig = { name: c.name, email: c.email ?? '', phone: c.phone ?? '', sex: c.sex ?? '', athlete_id: c.athlete_id ?? '', birth_date: c.birth_date ?? '', sport: c.sport ?? '', position: c.position ?? '', school: c.school ?? '', grad_year: c.grad_year == null ? '' : String(c.grad_year),
+    emergency_name: c.emergency_name ?? '', emergency_phone: c.emergency_phone ?? '', medical_notes: c.medical_notes ?? '', notes: c.notes ?? '' };
+  const val = (k) => draft[k] ?? orig[k];
+  const f = {
+    name: input({ value: val('name'), autocomplete: 'off' }), email: input({ type: 'email', value: val('email'), autocomplete: 'off' }), phone: input({ type: 'tel', value: val('phone'), autocomplete: 'off' }),
+    sex: select([['', 'Not set'], ['M', 'Male'], ['F', 'Female']], { value: val('sex') }), athlete_id: input({ value: val('athlete_id'), style: 'font-family:var(--font-mono);text-transform:uppercase', autocomplete: 'off' }),
+    birth_date: input({ type: 'date', value: val('birth_date'), max: bizDate() }), sport: input({ value: val('sport') }), position: input({ value: val('position') }), school: input({ value: val('school') }),
+    grad_year: input({ type: 'number', inputmode: 'numeric', min: '2000', max: '2060', value: val('grad_year') }),
+    emergency_name: input({ value: val('emergency_name') }), emergency_phone: input({ type: 'tel', value: val('emergency_phone') }),
+    medical_notes: h('textarea', { class: 'dp-input' }), notes: h('textarea', { class: 'dp-input' })
+  };
+  f.medical_notes.value = val('medical_notes'); f.notes.value = val('notes');
+  const unsaved = h('span', { class: 'dp-badge dp-badge--warn', role: 'status', style: 'display:none' }, 'Unsaved changes');
+  const saveBtn = btn('Save changes', null, 'secondary');
+  const discardBtn = btn('Discard changes', () => { profileDrafts.delete(id); render(); }, 'ghost', { style: 'display:none' });
+  const guard = { check: (next) => (profileDrafts.has(id) && !String(next ?? '').startsWith(`#/clients/${id}`) ? `You have unsaved changes to ${first}'s profile. Leave without saving?` : null), discard: () => profileDrafts.delete(id) };
+  leaveGuard = guard;
+  const isDirty = () => Object.entries(f).some(([k, el]) => el.value !== orig[k]);
+  const syncDirty = () => {
+    if (leaveGuard !== guard) return;                 // a late change event from a page that was just left
+    const d = Object.fromEntries(Object.entries(f).filter(([k, el]) => el.value !== orig[k]).map(([k, el]) => [k, el.value]));
+    if (Object.keys(d).length) profileDrafts.set(id, d); else profileDrafts.delete(id);
+    const dirty = !!Object.keys(d).length;
+    unsaved.style.display = discardBtn.style.display = dirty ? '' : 'none';
+    saveBtn.className = `dp-btn dp-btn--${dirty ? 'primary' : 'secondary'}`;
+  };
+  for (const el of Object.values(f)) { el.addEventListener('input', syncDirty); el.addEventListener('change', syncDirty); }
+  saveBtn.addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    if (!isDirty()) return toast('Nothing to save. Change a field first.', 'warn');
+    const body = {};
+    for (const [k, el] of Object.entries(f)) {
+      if (el.value === orig[k]) continue;
+      body[k] = k === 'grad_year' ? (el.value ? Number(el.value) : null) : k === 'name' ? el.value : el.value.trim() === '' ? null : el.value;
+    }
+    await patch(`/v1/clients/${id}`, body);
+    profileDrafts.delete(id);
+    toast('Changes saved.'); render();
+  }));
   const account = panel('Profile', {},
-    h('div', { class: 'form-grid' }, field('Full name', name), field(fam ? 'Athlete email (optional)' : 'Email', email), field('Phone', phone), field('Birthday', pf.birth_date)),
-    h('div', { class: 'form-grid' }, field('Athlete ID', pf.athlete_id, 'Connects every result, file and device to this athlete.'), field('Sex', pf.sex, 'Only used for growth-spurt estimates.')),
-    h('div', { class: 'form-grid' }, field('Sport', pf.sport), field('Position', pf.position), field('School', pf.school), field('Grad year', pf.grad_year)),
-    field('Medical notes', medical, 'Parents can update these in the portal.'),
-    h('div', { class: 'form-grid' }, field('Emergency contact', pf.emergency_name), field('Emergency phone', pf.emergency_phone)),
-    field('Profile note', notes, 'One short note every staff member sees here. For dated notes, use Staff notes.'),
-    h('div', { class: 'row' }, btn('Save changes', (e) => busy(e.currentTarget, async () => {
-      await patch(`/v1/clients/${id}`, { name: name.value, email: email.value || null, phone: phone.value, notes: notes.value, medical_notes: medical.value, ...Object.fromEntries(Object.entries(pf).filter(([k, el]) => k !== 'athlete_id' || el.value.toUpperCase() !== c.athlete_id).map(([k, el]) => [k, k === 'grad_year' ? (el.value ? Number(el.value) : null) : el.value || null])) });
-      toast('Changes saved.'); render();
-    }))),
+    h('div', { class: 'form-grid' }, field('Full name', f.name), field(fam ? 'Athlete email (optional)' : 'Email', f.email), field(fam ? 'Athlete phone (optional)' : 'Phone', f.phone), field('Birthday', f.birth_date)),
+    h('div', { class: 'form-grid' }, field('Athlete ID', f.athlete_id, 'Connects every result, file and device to this athlete.'), field('Sex', f.sex, 'Only used for growth-spurt estimates.')),
+    h('div', { class: 'form-grid' }, field('Sport', f.sport), field('Position', f.position), field('School', f.school), field('Grad year', f.grad_year)),
+    field('Medical notes', f.medical_notes, 'Allergies, injuries, conditions. Parents can update these in the portal.'),
+    h('div', { class: 'form-grid' }, field('Emergency contact', f.emergency_name), field('Emergency phone', f.emergency_phone)),
+    field('Profile note', f.notes, 'One short note every staff member sees here. For dated notes, use Staff notes.'),
+    h('div', { class: 'row wrap' }, saveBtn, discardBtn, unsaved),
     state.testMode ? h('div', { class: 'row wrap small' }, h('span', { class: 'grow muted' }, `Test card: ${c.card_status === 'declining' ? 'declines every charge' : 'charges succeed'}.`),
       btn(c.card_status === 'declining' ? 'Make card succeed' : 'Make card decline', (e) => busy(e.currentTarget, async () => { await patch(`/v1/clients/${id}`, { card_status: c.card_status === 'declining' ? 'ok' : 'declining' }); render(); }), 'ghost')) : null);
+  syncDirty();
 
   const card = c.card.on_file
     ? h('div', { class: 'row wrap' }, h('span', { class: 'grow' }, `${(c.card.brand || 'Card').replace(/^./, (x) => x.toUpperCase())} ending ${c.card.last4 ?? '••••'}`),
-        btn('Remove card', (e) => { if (confirm('Remove the saved card? Membership renewals will fail until a new card is added.')) busy(e.currentTarget, async () => { await del(`/v1/clients/${id}/card`); toast('Card removed.'); render(); }); }, 'ghost'))
+        role === 'front_desk' ? null : btn('Remove card', (e) => { if (confirm('Remove the saved card? Membership renewals will fail until a new card is added.')) busy(e.currentTarget, async () => { await del(`/v1/clients/${id}/card`); toast('Card removed.'); render(); }); }, 'ghost'))
     : h('p', { class: 'muted' }, `No card saved. Save one when ${first} taps to pay, or send a secure link.`);
   const cardActions = h('div', { class: 'row wrap' },
     state.payments.provider === 'stripe' ? btn(c.card.on_file ? 'Send link to update card' : 'Copy card link for client', (e) => busy(e.currentTarget, async () => {
@@ -588,26 +699,74 @@ async function viewClient(main, id) {
     state.payments.can_simulate && !c.card.on_file ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/card/test`); toast('Test card added.'); render(); }), 'ghost') : null);
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { 'aria-label': 'Check-in location', value: (() => { try { return localStorage.getItem('dp_location'); } catch { return null; } })() || locs.data[0]?.id });
   const member = ['active', 'trialing', 'past_due'].includes(c.status);
-  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${c.credits.private} private ${c.credits.private === 1 ? 'session' : 'sessions'} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
+  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${plural(c.credits.private, 'private session')} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
     card, cardActions,
-    locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
+    c.archived_at ? null : locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
       // Members and athletes with group credits use a group session; otherwise a private credit.
       const r = await post(`/v1/clients/${id}/check-ins`, { location_id: locSel.value, credit_type: member || c.credits.group > 0 ? 'group' : 'private' });
       toast(r.covered_by === 'membership' ? `${first} checked in.` : `${first} checked in. ${r.credits_left} ${r.credit_type} ${r.credits_left === 1 ? 'session' : 'sessions'} left.`); render();
     }), 'secondary')) : h('p', { class: 'small muted' }, 'Add a location in Point of sale setup to check clients in.'),
-    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--primary', href: `#/sell?client=${id}` }, 'Sell to ' + first),
-      btn('Adjust sessions', (e) => {
+    h('div', { class: 'row wrap' }, h('a', { class: `dp-btn dp-btn--${c.archived_at ? 'secondary' : 'primary'}`, href: `#/sell?client=${id}` }, 'Sell to ' + first),
+      role === 'front_desk' ? null : btn('Adjust sessions', (e) => {
         const t = prompt('Which kind? Type "group" or "private".', 'group'); if (!t) return;
         const type = t.trim().toLowerCase(); if (!['group', 'private'].includes(type)) return toast('Type group or private.', 'warn');
         const a = prompt(`Add or remove ${type} sessions (e.g. 2 or -1):`, '1'); if (!a) return;
         busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/credits`, { delta: Number(a), credit_type: type, note: 'Coach adjustment' }); toast(`${r.balance} ${type} sessions left.`); render(); });
       }, 'ghost')),
     sales.data.length || visits.data.length ? h('div', null,
-      ...sales.data.slice(0, 4).map((x) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${x.description ?? 'Sale'} · ${x.location_name}`), badge(x.status), h('span', { class: 'muted' }, money(x.amount_cents)))),
+      ...sales.data.slice(0, 4).map((x) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${x.description ?? 'Sale'} · ${x.location_name}`), badge(x.status), x.amount_cents == null ? null : h('span', { class: 'muted' }, money(x.amount_cents)))),
       ...visits.data.slice(0, 4).map((k) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `Checked in at ${k.location_name}`), h('span', { class: 'muted' }, ago(k.created_at))))) : null);
 
-  const gName = input(), gEmail = input({ type: 'email' }), gPhone = input({ type: 'tel' });
-  const sibName = input(), sibBirth = input({ type: 'date' });
+  // Family: parents with call, text and email, fix their details, re-send the sign-in email, remove a second parent,
+  // record a paper waiver, add a sibling or a parent.
+  const guardianRow = (g) => {
+    const wrap = h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' });
+    const view = () => fill(wrap,
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('span', { class: 'strong' }, g.name, g.is_primary ? h('span', { class: 'small muted' }, ' (primary)') : null, g.relationship ? h('span', { class: 'small muted' }, ` · ${g.relationship}`) : null),
+        h('span', { class: 'small muted' }, [g.email, g.phone ? phoneText(g.phone) : null, { on: 'Gets texts', stopped: 'Replied STOP to texts' }[g.texts]].filter(Boolean).join(' · '))),
+      h('div', { class: 'row wrap', style: 'gap:4px' },
+        g.phone ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(g.phone) }, 'Call') : null,
+        g.phone ? h('a', { class: 'dp-btn dp-btn--ghost', href: smsHref(g.phone) }, 'Text') : null,
+        h('a', { class: 'dp-btn dp-btn--ghost', href: `mailto:${g.email}` }, 'Email'),
+        btn('Edit', edit, 'ghost'),
+        btn('Send sign-in email', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/families/${fam.id}/guardians/${g.id}/welcome`); toast(`Sign-in email sent to ${r.sent_to}.`); }), 'ghost'),
+        role !== 'front_desk' && fam.guardians.length > 1 ? btn('Remove', (e) => { if (confirm(`Remove ${g.name} from the ${fam.name}? Their portal sign-in stops working now.`)) busy(e.currentTarget, async () => { await del(`/v1/families/${fam.id}/guardians/${g.id}`); toast(`${g.name} removed.`); render(); }); }, 'ghost') : null));
+    const edit = () => {
+      const ef = { name: input({ value: g.name, autocomplete: 'off' }), email: input({ type: 'email', value: g.email, autocomplete: 'off' }), phone: input({ type: 'tel', value: g.phone ? phoneText(g.phone) : '', autocomplete: 'off' }) };
+      const err = h('div', { class: 'dp-error', role: 'alert' });
+      fill(wrap, h('form', { class: 'grow stack', style: 'min-width:200px', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+        const body = {};
+        if (ef.name.value.trim() !== g.name) body.name = ef.name.value;
+        if (ef.email.value.trim().toLowerCase() !== g.email.toLowerCase()) body.email = ef.email.value;
+        if (ef.phone.value.replace(/\D/g, '').slice(-10) !== String(g.phone ?? '').replace(/\D/g, '').slice(-10)) body.phone = ef.phone.value.trim() || null;
+        if (!Object.keys(body).length) return view();
+        try {
+          const r = await patch(`/v1/families/${fam.id}/guardians/${g.id}`, body);
+          toast(`${ef.name.value.trim().split(' ')[0]}'s details saved.${body.email ? ' Send the sign-in email so they know the new address.' : ''}${r.texts_turned_off ? ' Texts are off for the new number until they turn them on in the portal.' : ''}`);
+          render();
+        } catch (x) { err.textContent = x.message; }
+      }); } },
+        h('div', { class: 'form-grid cols-3' }, field('Name', ef.name), field('Email (they sign in with it)', ef.email), field('Phone', ef.phone)), err,
+        h('div', { class: 'row' }, btn('Save parent', null, 'secondary', { type: 'submit' }), btn('Cancel', view, 'ghost'))));
+      ef.name.focus();
+    };
+    view();
+    return wrap;
+  };
+  const gName = input({ autocomplete: 'off' }), gEmail = input({ type: 'email', autocomplete: 'off' }), gPhone = input({ type: 'tel', autocomplete: 'off' });
+  const sibName = input({ autocomplete: 'off' }), sibBirth = input({ type: 'date', max: bizDate() });
+  const addSibling = async (checked = true) => {
+    try {
+      const x = await post(`/v1/families/${fam.id}/athletes`, { name: sibName.value, birth_date: sibBirth.value || undefined, check_duplicates: checked });
+      toast(`${x.name} added to ${fam.name}.`); location.hash = `#/clients/${x.id}`;
+    } catch (err) {
+      if (err.code !== 'possible_duplicate') throw err;
+      const d = err.details.duplicates;
+      if (confirm(`${err.message}\n\n${d.map((x) => `${x.name} (${x.athlete_id}${x.archived ? ', archived' : ''})`).join('\n')}\n\nAdd ${sibName.value.trim()} as a new athlete anyway?`)) await addSibling(false);
+    }
+  };
+  const paperBy = input({ autocomplete: 'off', value: fam?.guardians[0]?.name ?? '', 'aria-label': 'Parent who signed' });
   const famData = fam && isOwner() ? h('div', { class: 'row wrap small', style: 'gap:8px' },
     btn('Download family data', (e) => busy(e.currentTarget, () => download(`/v1/families/${fam.id}/export`)), 'ghost'),
     btn('Delete family data', (e) => {
@@ -615,21 +774,86 @@ async function viewClient(main, id) {
       if (!typed) return;
       busy(e.currentTarget, async () => { await del(`/v1/families/${fam.id}`, { confirm: typed }); toast('Family data deleted.'); location.hash = '#/clients'; });
     }, 'ghost')) : null;
+  const openAdd = hashQuery().get('add') === 'sibling';
   const familyPanel = fam ? panel(fam.name, { subtitle: fam.waiver.signed ? `Waiver signed ${date(fam.waiver.signed_at)} by ${fam.waiver.signed_by?.split(' <')[0]}` : 'Waiver not signed yet. Parents sign it in the portal before booking.' },
-      ...fam.guardians.map((g) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, g.name, g.is_primary ? h('span', { class: 'small muted' }, ' (primary)') : null), h('span', { class: 'small muted' }, [g.email, g.phone, { on: 'Gets texts', stopped: 'Replied STOP to texts' }[g.texts]].filter(Boolean).join(' · '))),
-        btn('Copy portal link', async () => { await navigator.clipboard.writeText(`${location.origin}/parent`).catch(() => {}); toast(`Portal link copied. ${g.name.split(' ')[0]} signs in with ${g.email}.`); }, 'ghost'))),
+      ...fam.guardians.map(guardianRow),
+      fam.waiver.signed ? null : h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        if (!paperBy.value.trim()) throw new Error('Enter the name of the parent who signed.');
+        if (!confirm(`Record that ${paperBy.value.trim()} signed the current waiver on paper today? Keep the paper copy.`)) return;
+        await post(`/v1/families/${fam.id}/waiver`, { signed_by: paperBy.value }); toast('Paper waiver recorded.'); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('Signed on paper at the desk by', paperBy)), btn('Record paper waiver', null, 'secondary', { type: 'submit' })),
       fam.siblings.length ? h('p', { class: 'small' }, 'Siblings: ', ...fam.siblings.map((x, i) => [i ? ', ' : '', h('a', { href: `#/clients/${x.id}` }, x.name)])) : null,
       famData,
-      h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'Add sibling or parent'),
-        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const x = await post(`/v1/families/${fam.id}/athletes`, { name: sibName.value, birth_date: sibBirth.value || undefined }); toast(`${x.name} added to ${fam.name}.`); location.hash = `#/clients/${x.id}`; }); } },
+      h('details', { open: openAdd }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add sibling or parent'),
+        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { if (!sibName.value.trim()) throw new Error('Enter the sibling\'s full name.'); await addSibling(); }); } },
           h('div', { class: 'grow' }, field('Sibling name', sibName)), field('Birthday', sibBirth), h('div', { style: 'align-self:flex-end' }, btn('Add sibling', null, 'secondary', { type: 'submit' }))),
-        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { await post(`/v1/families/${fam.id}/guardians`, { name: gName.value, email: gEmail.value, phone: gPhone.value || undefined }); toast('Parent added.'); render(); }); } },
+        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { await post(`/v1/families/${fam.id}/guardians`, { name: gName.value, email: gEmail.value, phone: gPhone.value || undefined }); toast(`Parent added. ${gName.value.trim().split(' ')[0]} signs in with ${gEmail.value.trim()}.`); render(); }); } },
           h('div', { class: 'grow' }, field('Parent name', gName)), field('Email', gEmail), field('Phone', gPhone), h('div', { style: 'align-self:flex-end' }, btn('Add parent', null, 'secondary', { type: 'submit' })))))
     : null;
-  const bookingsPanel = panel('Upcoming sessions', { action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
-    upcoming.data.length ? upcoming.data.slice(0, 8).map((b) => h('a', { class: 'list-item small', href: `#/schedule/${b.session_id}`, style: 'text-decoration:none;color:inherit' },
-      h('span', { class: 'grow' }, `${tzFmt(b.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${timeOf(b.starts_at)} · ${b.session_name}`), b.status === 'waitlisted' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Waitlist') : coverBadge(b.coverage)))
-      : h('p', { class: 'muted small' }, 'Nothing booked.'));
+
+  // Upcoming sessions: book one from here (next two weeks) and cancel (credits back, card payments refunded, waitlist moves up).
+  const lateHours = Number(settings.late_cancel_hours ?? 12);
+  const cancelBooking = (b) => {
+    const late = b.status === 'booked' && Date.parse(b.starts_at) - Date.now() < lateHours * 3600000;
+    const done = (r) => { toast(r.late ? r.message : `Canceled.${b.coverage === 'credit' ? ` ${first}'s session credit is back.` : b.coverage === 'paid' ? ' The card payment is refunded.' : ''}`); render(); };
+    teamDialog(`Cancel ${first}'s ${b.status === 'waitlisted' ? 'waitlist spot' : 'booking'}?`,
+      h('p', null, `${b.session_name}, ${tzFmt(b.starts_at, { weekday: 'long', month: 'short', day: 'numeric' })} at ${timeOf(b.starts_at)}.`,
+        late ? ` It starts in less than ${lateHours} hours: a late cancel keeps the session used (credit or payment). You can give it back instead.` : b.coverage === 'credit' ? ' The session credit goes back.' : b.coverage === 'paid' ? ' The card payment is refunded.' : ''),
+      late ? [{ label: 'Give the session back', variant: 'secondary', onClick: async () => done(await post(`/v1/bookings/${b.id}/cancel`, { waive: true })) },
+        { label: 'Late cancel', variant: 'ghost', onClick: async () => done(await post(`/v1/bookings/${b.id}/cancel`, { waive: false })) }, { label: 'Keep it', variant: 'ghost' }]
+        : [{ label: `Cancel ${b.status === 'waitlisted' ? 'waitlist spot' : 'booking'}`, variant: 'secondary', onClick: async () => done(await post(`/v1/bookings/${b.id}/cancel`, { waive: false })) }, { label: 'Keep it', variant: 'ghost' }]);
+  };
+  const bookDialog = async () => {
+    const sched = (await get('/v1/schedule')).data;
+    const mine = new Set(upcoming.data.map((b) => b.session_id));
+    const options = sched.filter((s) => ['group', 'clinic', 'camp', 'evaluation'].includes(s.kind) && !mine.has(s.id) && Date.parse(s.starts_at) > Date.now());
+    const search = input({ type: 'search', placeholder: 'Class, coach or place', 'aria-label': 'Find a session', autocomplete: 'off' });
+    const pay = select([['', member || c.credits.group || c.credits.private ? 'Use the membership or a session left, otherwise pay at the session' : 'Pay at the session'], ...(c.card.on_file ? [['card_on_file', 'Charge the card on file for the drop-in']] : [])], { 'aria-label': 'How it\'s paid for' });
+    const box = h('div', { class: 'stack-tight', style: 'max-height:50vh;overflow:auto' });
+    const book = async (s, e, overrideAge = false) => {
+      const b = e.currentTarget; b.disabled = true;
+      try {
+        const r = await post(`/v1/sessions/${s.id}/bookings`, { client_id: id, pay: pay.value || undefined, override_age: overrideAge || undefined });
+        document.getElementById('dialog').close();
+        toast(r.status === 'waitlisted' ? `${first} is on the waitlist for ${s.name}. The family is emailed if a spot opens.` : `${first} is booked for ${s.name}.${r.coverage === 'unpaid' ? ' Payment is due at the session.' : ''}`);
+        render();
+      } catch (x) {
+        if (/This session is for ages/.test(x.message) && !overrideAge && confirm(`${x.message}\n\nBook anyway?`)) { b.disabled = false; return book(s, { currentTarget: b }, true); }
+        toast(x.message, 'warn');
+      } finally { b.disabled = false; }
+    };
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      const rows = options.filter((s) => !q || `${s.name} ${s.coach_name ?? ''} ${s.location_name}`.toLowerCase().includes(q));
+      fill(box, rows.length ? rows.slice(0, 60).map((s) => {
+        const full = s.booked_count >= s.capacity;
+        return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+          h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, s.name),
+            h('span', { class: 'small muted' }, `${tzFmt(s.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${timeOf(s.starts_at)} · ${s.location_name}${s.coach_name ? ` · ${s.coach_name}` : ''} · ${full ? `full${s.waitlist_count ? `, ${s.waitlist_count} waiting` : ''}` : `${s.capacity - s.booked_count} ${s.capacity - s.booked_count === 1 ? 'spot' : 'spots'} left`}`)),
+          btn(full ? 'Join waitlist' : 'Book', (e) => book(s, e), 'secondary'));
+      }) : h('p', { class: 'muted' }, options.length ? `No sessions match "${search.value.trim()}".` : 'No classes, clinics, camps or evaluations with room in the next two weeks. Privates are booked from open hours in Schedule.'));
+    };
+    search.addEventListener('input', draw); draw();
+    teamDialog(`Book a session for ${first}`, h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, 'The next two weeks. When a session is full, the booking joins the waitlist.'), search, field('How it\'s paid for', pay), box), [{ label: 'Close', variant: 'ghost' }]);
+    search.focus();
+  };
+  const bookingsPanel = panel('Upcoming sessions', { action: c.archived_at ? null : btn('Book a session', (e) => busy(e.currentTarget, bookDialog), 'secondary') },
+    upcoming.data.length ? upcoming.data.slice(0, 10).map((b) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+      h('a', { class: 'grow', href: `#/schedule/${b.session_id}`, style: 'color:inherit;min-width:180px' }, `${tzFmt(b.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${timeOf(b.starts_at)} · ${b.session_name}`),
+      b.status === 'waitlisted' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Waitlist') : coverBadge(b.coverage),
+      btn('Cancel', () => cancelBooking(b), 'ghost', { 'aria-label': `Cancel ${b.session_name}` })))
+      : h('p', { class: 'muted small' }, 'Nothing booked.'),
+    upcoming.data.length > 10 ? h('p', { class: 'small muted' }, `And ${upcoming.data.length - 10} more. See Schedule.`) : null);
+
+  const sum = att.summary;
+  const attendancePanel = panel('Attendance', { subtitle: sum.last_visit_at ? `Last here ${ago(sum.last_visit_at).toLowerCase()}.` : 'Not checked in yet.' },
+    h('div', { class: 'pulse' },
+      pulseTile('Visits', sum.visits_30, 'Last 30 days'), pulseTile('No-shows', sum.no_shows_30, 'Last 30 days', { tone: sum.no_shows_30 ? 'warn' : null }),
+      pulseTile('Late cancels', sum.late_cancels_30, 'Last 30 days'), pulseTile('Visits', sum.visits_90, 'Last 90 days')),
+    att.recent.length ? h('div', null, att.recent.slice(0, 8).map((r) => h('div', { class: 'list-item small' },
+      h('span', { class: 'grow' }, `${tzFmt(r.at, { weekday: 'short', month: 'short', day: 'numeric' })} · ${r.session_name ?? `Checked in at ${r.location_name}`}`),
+      h('span', { class: `dp-badge dp-badge--${OUTCOME[r.outcome][1]}` }, OUTCOME[r.outcome][0])))) : null);
+
   const headline = perfData.data.filter((p) => p.headline && p.better !== 'none');
   const perfPanel = panel('Testing', { subtitle: headline.length ? 'Best result and change since the first test.' : null, action: headline.length ? h('a', { class: 'dp-btn dp-btn--secondary', href: `/report.html?client=${id}`, target: '_blank' }, 'Progress report') : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing days') },
     headline.length ? headline.slice(0, 12).map((p) => h('div', { class: 'list-item small' },
@@ -641,7 +865,7 @@ async function viewClient(main, id) {
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
   // Archive: owners and coaches. Refused with a membership; upcoming bookings are canceled only after a second yes.
-  const canArchive = state.user.role !== 'front_desk';
+  const canArchive = role !== 'front_desk';
   const archive = (e) => {
     if (!confirm(`Archive ${first}? They leave the client list, search and pickers, and get no automatic emails or texts. Nothing is deleted and you can bring them back any time.`)) return;
     busy(e.currentTarget, async () => {
@@ -652,13 +876,28 @@ async function viewClient(main, id) {
   };
   const restore = (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/restore`); toast(`${first} is back on the client list.`); render(); });
   const pinned = notesList.data.filter((n) => n.pinned);
+  // Who to call: the primary parent, or the client themselves.
+  const contact = fam?.guardians[0] ?? (c.phone || c.email ? { name: c.name, phone: c.phone, email: c.email } : null);
+  const contactRow = contact ? h('div', { class: 'row wrap', style: 'gap:8px' },
+    h('span', { class: 'small muted' }, fam ? `${contact.name.split(' ')[0]} (parent):` : 'Contact:'),
+    contact.phone ? h('a', { class: 'dp-btn dp-btn--secondary', href: telHref(contact.phone) }, 'Call') : null,
+    contact.phone ? h('a', { class: 'dp-btn dp-btn--secondary', href: smsHref(contact.phone) }, 'Text') : null,
+    contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
+    c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
+  const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
+  const left = [[sectionId(familyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks]];
+  const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
+  const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
-    header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
+    header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
       h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
     c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
-    c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
+    c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}`, c.emergency_name || c.emergency_phone ? [' · Emergency: ', c.emergency_name ?? '', ' ', c.emergency_phone ? h('a', { href: telHref(c.emergency_phone), style: 'color:inherit;text-decoration:underline' }, c.emergency_phone) : null] : null) : null,
     pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, staffNotesPanel(id, notesList.data), bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
+    contactRow || teamsLine ? h('div', { class: 'stack-tight' }, contactRow, teamsLine) : null,
+    h('nav', { class: 'tm-jump', 'aria-label': 'Sections' }, jumps.map(([el, label]) => h('button', { type: 'button', onClick: () => el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, left.map(([el]) => el)), h('div', { class: 'stack', style: 'gap:24px' }, right.map(([el]) => el))));
+  if (openAdd) sibName.focus();
 }
 
 // Staff notes: dated, with the author. Anyone on staff adds; authors change their own; owners delete any and pin any.
@@ -702,42 +941,71 @@ function staffNotesPanel(clientId, notes) {
 
 async function viewNewClient(main) {
   const [plans, progs] = await Promise.all([get('/v1/plans'), get('/v1/programs')]);
+  const canProgram = state.user.role !== 'front_desk';         // assigning programs is for coaches
   const isAthlete = h('input', { type: 'checkbox', checked: true, id: 'is-athlete' });
-  const name = input({ autocomplete: 'off', required: true }), email = input({ type: 'email', autocomplete: 'off' }), phone = input();
-  const birth = input({ type: 'date' }), sport = input(), school = input();
-  const pName = input(), pEmail = input({ type: 'email' }), pPhone = input({ type: 'tel' });
-  const plan = select([['', 'No subscription yet'], ...plans.data.map((p) => [p.id, `${p.name}, ${money(p.price_cents)}/mo${p.trial_days ? `, ${p.trial_days}-day trial` : ''}`])], { value: '' });
+  const f = {
+    name: input({ autocomplete: 'off', required: true }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }),
+    birth_date: input({ type: 'date', max: bizDate(), min: '1900-01-01' }), sport: input(), position: input(), school: input(), grad_year: input({ type: 'number', inputmode: 'numeric', min: '2000', max: '2060', placeholder: 'e.g. 2030' }),
+    athlete_phone: input({ type: 'tel', autocomplete: 'off' }),
+    medical_notes: h('textarea', { class: 'dp-input', style: 'min-height:64px', placeholder: 'Allergies, injuries, conditions' }), emergency_name: input({ autocomplete: 'off' }), emergency_phone: input({ type: 'tel', autocomplete: 'off' }),
+    pName: input({ autocomplete: 'off' }), pEmail: input({ type: 'email', autocomplete: 'off' }), pPhone: input({ type: 'tel', autocomplete: 'off' })
+  };
+  const plan = select([['', 'No subscription yet'], ...plans.data.map((p) => [p.id, `${p.name}${p.price_cents == null ? '' : `, ${money(p.price_cents)}/mo`}${p.trial_days ? `, ${p.trial_days}-day trial` : ''}`])], { value: '' });
   const prog = select([['', 'Assign later'], ...progs.data.map((p) => [p.id, p.name])], { value: '' });
   const err = h('div', { class: 'dp-error', role: 'alert' });
+  const dupBox = h('div', { 'aria-live': 'polite' });
   const submit = btn('Create account', null, 'primary', { type: 'submit' });
   const parentBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Parent or guardian (pays and signs in to the parent portal)'),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Parent name', pName), field('Parent email', pEmail), field('Parent phone', pPhone)));
-  const athleteBox = h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Birthday', birth), field('Sport', sport), field('School', school));
-  const emailField = field('Email', email), phoneField = field('Phone (optional)', phone);
+    h('div', { class: 'form-grid cols-3' }, field('Parent name', f.pName), field('Parent email', f.pEmail), field('Parent phone', f.pPhone)));
+  const athleteBox = h('div', { class: 'stack' },
+    h('div', { class: 'form-grid cols-4' }, field('Birthday', f.birth_date), field('Sport', f.sport), field('Position (optional)', f.position), field('Grad year (optional)', f.grad_year)),
+    h('div', { class: 'form-grid cols-3' }, field('School', f.school), field('Athlete phone (optional)', f.athlete_phone)));
+  const emailField = field('Email', f.email), phoneField = field('Phone (optional)', f.phone);
+  const health = h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Medical notes and emergency contact (optional)'),
+    h('div', { class: 'stack', style: 'margin-top:8px' }, field('Medical notes', f.medical_notes, 'Shown to coaches at the top of the profile and on rosters.'),
+      h('div', { class: 'form-grid cols-3' }, field('Emergency contact', f.emergency_name), field('Emergency phone', f.emergency_phone))));
   const sync = () => { parentBox.style.display = athleteBox.style.display = isAthlete.checked ? '' : 'none'; emailField.style.display = phoneField.style.display = isAthlete.checked ? 'none' : ''; };
-  isAthlete.addEventListener('change', sync);
+  isAthlete.addEventListener('change', () => { sync(); fill(dupBox); });
+  const val = (el) => el.value.trim() || undefined;
+  // Only the fields on screen are sent: switching between athlete and adult never leaks the hidden ones.
+  const athleteBody = () => ({ name: f.name.value, birth_date: val(f.birth_date), sport: val(f.sport), position: val(f.position), school: val(f.school), grad_year: f.grad_year.value ? Number(f.grad_year.value) : undefined, phone: val(f.athlete_phone) });
+  const common = () => ({ plan_id: plan.value || undefined, program_id: canProgram ? prog.value || undefined : undefined, medical_notes: val(f.medical_notes), emergency_name: val(f.emergency_name), emergency_phone: val(f.emergency_phone) });
+  const body = () => (isAthlete.checked ? { ...athleteBody(), ...common(), parent: { name: f.pName.value, email: f.pEmail.value, phone: val(f.pPhone) } } : { name: f.name.value, email: f.email.value, phone: val(f.phone), ...common() });
+  const done = (c) => {
+    toast(c.family && isAthlete.checked ? `${c.name.split(' ')[0]} added. ${f.pName.value.split(' ')[0] || 'The parent'} can sign in at ${location.origin}/parent with ${f.pEmail.value.trim()}.` : `Account created for ${c.name.split(' ')[0]}.`);
+    location.hash = `#/clients/${c.id}`;
+  };
+  const dupLink = (d) => h('a', { href: `#/clients/${d.id}` }, `${d.name} (${d.athlete_id}${d.archived ? ', archived' : ''}${d.family_name ? `, ${d.family_name}` : ''}${d.birth_date ? `, born ${date(`${d.birth_date}T12:00:00`)}` : ''})`);
+  const create = async (checked) => {
+    err.textContent = ''; fill(dupBox);
+    try { done(await post('/v1/clients', { ...body(), check_duplicates: checked })); }
+    catch (x) {
+      const d = x.details?.duplicates ?? [];
+      if (x.code === 'possible_duplicate') {
+        const anyway = btn('Create a new account anyway', (e) => busy(e.currentTarget, () => create(false)), 'ghost');
+        fill(dupBox, h('div', { class: 'dp-panel stack-tight', role: 'alert', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong' }, x.message), ...d.map((y) => h('div', null, dupLink(y), y.reason === 'phone' ? h('span', { class: 'small muted' }, ' · same phone number') : null)), h('div', { class: 'row' }, anyway)));
+      } else if (x.code === 'parent_exists') {
+        const fam = x.details.family, kid = d[0];
+        const addHere = btn(`Add ${f.name.value.trim().split(' ')[0] || 'the athlete'} to the ${fam.name}`, (e) => busy(e.currentTarget, async () => {
+          done(await post(`/v1/families/${fam.id}/athletes`, { ...athleteBody(), ...common(), check_duplicates: true }));
+        }), 'secondary');
+        fill(dupBox, h('div', { class: 'dp-panel stack-tight', role: 'alert', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong' }, x.message),
+          kid ? h('div', null, 'Open ', h('a', { href: `#/clients/${kid.id}?add=sibling` }, `${kid.name} (${kid.athlete_id})`), ' and use Add sibling, or add them here.') : null, h('div', { class: 'row' }, isAthlete.checked ? addHere : null)));
+      } else if (x.code === 'duplicate_email') {
+        fill(dupBox, h('div', { class: 'dp-panel stack-tight', role: 'alert', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong' }, x.message), ...d.map((y) => h('div', null, 'Open ', dupLink(y)))));
+      } else err.textContent = x.message;
+    }
+  };
   fill(main,
     header('New client', 'Creates the account, the parent login, the plan and the program in one step.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'Cancel')),
-    h('form', { class: 'dp-panel', style: 'max-width:760px', onSubmit: (e) => {
-      e.preventDefault(); err.textContent = '';
-      busy(submit, async () => {
-        try {
-          const body = { name: name.value, plan_id: plan.value || undefined, program_id: prog.value || undefined };
-          if (isAthlete.checked) Object.assign(body, { birth_date: birth.value || undefined, sport: sport.value || undefined, school: school.value || undefined, parent: { name: pName.value, email: pEmail.value, phone: pPhone.value || undefined } });
-          else Object.assign(body, { email: email.value, phone: phone.value || undefined });
-          const c = await post('/v1/clients', body);
-          toast(isAthlete.checked ? `${c.name.split(' ')[0]} added. ${pName.value.split(' ')[0]} can sign in at ${location.origin}/parent with ${pEmail.value}.` : `Account created for ${c.name.split(' ')[0]}.`);
-          location.hash = `#/clients/${c.id}`;
-        } catch (x) { err.textContent = x.message; }
-      });
-    } },
+    h('form', { class: 'dp-panel stack', style: 'max-width:820px', onSubmit: (e) => { e.preventDefault(); busy(submit, () => create(true)); } },
       h('label', { class: 'row', style: 'gap:10px;min-height:44px' }, isAthlete, h('span', null, 'Athlete with a parent who pays')),
-      h('div', { class: 'form-grid' }, field('Full name', name), emailField, phoneField),
-      athleteBox, parentBox,
-      h('div', { class: 'form-grid' }, field('Subscription plan', plan, 'With a trial, the first charge happens when it ends.'), field('Starting program', prog)),
+      h('div', { class: 'form-grid' }, field('Full name', f.name), emailField, phoneField),
+      athleteBox, parentBox, health,
+      h('div', { class: 'form-grid' }, field('Subscription plan', plan, 'With a trial, the first charge happens when it ends.'), canProgram ? field('Starting program', prog) : null),
       h('p', { class: 'small muted' }, 'Adding a sibling? Open the brother or sister and use "Add sibling" instead, so the family shares one login and card.'),
-      err, h('div', { class: 'row' }, submit)));
-  sync(); name.focus();
+      dupBox, err, h('div', { class: 'row' }, submit)));
+  sync(); f.name.focus();
 }
 
 // ---------- Billing ----------

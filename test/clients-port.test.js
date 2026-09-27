@@ -74,7 +74,7 @@ test('client list: team and no-waiver views with counts, flags, pinned notes by 
   assert.ok(all[med.id].last_seen_at, 'the walk-in check-in counts as seen');
   assert.equal(all[teamOnly.id].last_seen_at, null);
   assert.deepEqual(all[teamOnly.id].teams.map((t) => t.name), ['Lincoln HS Varsity']);
-  assert.equal(all[med.id].primary_parent.email, med.family.guardians[0].email);
+  assert.equal(all[med.id].parents[0].email, med.family.guardians[0].email);
   noCents((await coach('GET', '/v1/clients')).body, 'coach client list');
   assert.equal(byId((await desk('GET', '/v1/clients')).body.data)[med.id].pinned_notes, 1, 'front desk never counts coach-only notes');
   assert.equal((await desk('GET', `/v1/clients/${med.id}`)).body.pinned_notes, 1);

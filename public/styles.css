@@ -168,3 +168,10 @@ a.pulse-tile:hover,a.pulse-tile:focus-visible{background:var(--surface-raised)}
   .lib-toolbar{grid-template-columns:1fr 1fr}.lib-toolbar>:first-child{grid-column:1/-1}
   .lib-grid-metric,.lib-grid-2,.lib-grid-name,.lib-grid-add{grid-template-columns:1fr}
 }
+
+/* Clients */
+#cl-family,#cl-membership,#cl-sessions,#cl-payments,#cl-notes,#cl-upcoming,#cl-attendance,#cl-testing,#cl-training,#cl-profile{scroll-margin-top:56px}
+/* Touch screens: the Athlete ID chip and checkbox rows are 44px tall like every other control */
+@media (pointer: coarse){ button.dp-badge{min-height:44px;padding:0 12px} .dp-panel label.row{min-height:44px} }
+td .dp-badge{white-space:nowrap}
+@media (max-width: 560px){ .cl-program{display:none} }

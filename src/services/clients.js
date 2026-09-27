@@ -10,8 +10,7 @@ import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
 const LIST_SQL = `
   SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
     c.school, c.grad_year, TRIM(COALESCE(c.medical_notes, '')) != '' AS medical, f.waiver_version,
-    pg.name AS parent_name, pg.email AS parent_email, pg.phone AS parent_phone,
-    (SELECT GROUP_CONCAT(g.name || ' ' || g.email || ' ' || COALESCE(g.phone, ''), ' ') FROM guardians g WHERE g.family_id = c.family_id) AS guardian_text,
+    (SELECT GROUP_CONCAT(x, char(30)) FROM (SELECT g.name || char(31) || g.email || char(31) || COALESCE(g.phone, '') AS x FROM guardians g WHERE g.family_id = c.family_id ORDER BY g.is_primary DESC, g.created_at)) AS parent_list,
     (SELECT MAX(k.created_at) FROM check_ins k WHERE k.client_id = c.id) AS last_check_in_at,
     (SELECT MAX(x.starts_at) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE b.client_id = c.id AND b.status = 'attended') AS last_attended_at,
     (SELECT GROUP_CONCAT(tc.id || '|' || o.name || ' ' || tc.name, char(10)) FROM team_roster t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = tc.org_id
@@ -30,8 +29,7 @@ const LIST_SQL = `
   LEFT JOIN plans p ON p.id = s.plan_id
   LEFT JOIN assignments a ON a.client_id = c.id AND a.active = 1
   LEFT JOIN programs pr ON pr.id = a.program_id
-  LEFT JOIN families f ON f.id = c.family_id
-  LEFT JOIN guardians pg ON pg.id = (SELECT id FROM guardians WHERE family_id = c.family_id ORDER BY is_primary DESC, created_at LIMIT 1)`;
+  LEFT JOIN families f ON f.id = c.family_id`;
 
 const shape = (r, waiverVersion = 1, role = 'owner') => ({
   id: r.id, athlete_id: r.athlete_id, name: r.name, email: r.email ?? null, phone: r.phone ?? null, created_at: r.created_at,
@@ -49,7 +47,8 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
   has_card: !!r.has_card,
   archived_at: r.archived_at ?? null, archived_by: r.archived_by ?? null,
   school: r.school ?? null, grad_year: r.grad_year ?? null,
-  primary_parent: r.parent_email ? { name: r.parent_name, email: r.parent_email, phone: r.parent_phone ?? null } : null,
+  // Parents (primary first) with their contact details, so the list can search and call them.
+  parents: r.parent_list ? r.parent_list.split('\x1e').map((x) => { const [name, email, phone] = x.split('\x1f'); return { name, email, phone: phone || null }; }) : [],
   teams: r.team_list ? r.team_list.split('\n').map((x) => { const [id, ...name] = x.split('|'); return { id, name: name.join('|') }; }) : [],
   // Flags for the list: medical notes on file, the family's waiver isn't signed (current version), no saved card.
   flags: { medical: !!r.medical, no_waiver: !!r.family_id && Number(r.waiver_version ?? 0) !== waiverVersion, no_card: !r.has_card },
@@ -58,10 +57,8 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
   // Last seen: the latest check-in (desk, door, kiosk or roster) or logged workout.
   last_visit_at: [r.last_check_in_at, r.last_attended_at].filter(Boolean).sort().pop() ?? null,
   last_seen_at: [r.last_check_in_at, r.last_attended_at, r.last_workout_at].filter(Boolean).sort().pop() ?? null,
-  _search: r.guardian_text ?? ''
 });
 const shapeAll = (ctx, rows, role) => { const wv = Number(getSetting(ctx, 'waiver_version')); return rows.map((r) => shape(r, wv, role)); };
-const strip = ({ _search, ...c }) => c;
 
 // "Active client" means one thing everywhere (the Today metric, the client list's Active filter, the owner summary):
 // not archived, with a membership that is paid up or on a free trial.
@@ -73,10 +70,10 @@ const digitsOf = (x) => String(x ?? '').replace(/\D/g, '');
 export function matches(c, q) {
   const s = String(q ?? '').trim().toLowerCase();
   if (!s) return true;
-  const text = [c.name, c.email, c.athlete_id, c.family?.name, c.school, c.phone, c._search].filter(Boolean).join(' ').toLowerCase();
+  const text = [c.name, c.email, c.athlete_id, c.family?.name, c.school, c.phone, ...c.parents.flatMap((p) => [p.name, p.email, p.phone])].filter(Boolean).join(' ').toLowerCase();
   if (text.includes(s)) return true;
   const d = digitsOf(s);
-  return /^[\d\s().+-]+$/.test(s) && d.length >= 4 && [c.phone, ...String(c._search ?? '').split(' ')].some((p) => digitsOf(p).includes(d));
+  return /^[\d\s().+-]+$/.test(s) && d.length >= 4 && [c.phone, ...c.parents.map((p) => p.phone)].some((p) => digitsOf(p).includes(d));
 }
 
 // Views on top of the membership statuses: team (on a school or club team roster, no membership) and no_waiver
@@ -107,7 +104,7 @@ export function listClients(ctx, { q, status, archived, sort, role } = {}) {
   else if (archived !== 'all') rows = rows.filter((c) => !c.archived_at);
   if (status) rows = rows.filter((c) => !c.archived_at && inView(c, status));
   if (sorters[sort]) rows.sort(sorters[sort]);
-  return rows.map(strip);
+  return rows;
 }
 // How many archived clients a search would have found, so the list can say where to look.
 export const archivedMatches = (ctx, q) => shapeAll(ctx, ctx.db.all(`${LIST_SQL} WHERE c.archived_at IS NOT NULL`)).filter((c) => !q || matches(c, q)).length;
@@ -135,7 +132,7 @@ export function exportClients(ctx, query = {}) {
   const zone = getSetting(ctx, 'timezone');
   const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: zone }) : '');
   const head = ['Athlete ID', 'Name', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Email', 'Phone', 'Birthday', 'Grad year', 'Sport', 'School', 'Status', 'Plan', 'Program', 'Teams', 'Waiver signed', 'Card on file', 'Medical notes on file', 'Last seen', 'Client since', 'Archived'];
-  const lines = rows.map((c) => [c.athlete_id, c.name, c.family?.name, c.primary_parent?.name, c.primary_parent?.email, phoneText(c.primary_parent?.phone), c.email, phoneText(c.phone), c.birth_date, c.grad_year, c.sport, c.school,
+  const lines = rows.map((c) => [c.athlete_id, c.name, c.family?.name, c.parents[0]?.name, c.parents[0]?.email, phoneText(c.parents[0]?.phone), c.email, phoneText(c.phone), c.birth_date, c.grad_year, c.sport, c.school,
     STATUS_LABEL[c.status] ?? c.status, c.subscription?.plan_name, c.program?.name, c.teams.map((t) => t.name).join('; '), c.family ? (c.flags.no_waiver ? 'No' : 'Yes') : '', c.has_card ? 'Yes' : 'No', c.flags.medical ? 'Yes' : 'No',
     day(c.last_seen_at), day(c.created_at), day(c.archived_at)]);
   const body = [head, ...lines].map((r) => r.map(csvCell).join(',')).join('\r\n');
@@ -145,7 +142,7 @@ export function exportClients(ctx, query = {}) {
 export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {}) {
   const r = ctx.db.get(`${LIST_SQL} WHERE c.id = ?`, id);
   if (!r) throw notFound('Client');
-  const c = strip(shapeAll(ctx, [r], role)[0]);
+  const c = shapeAll(ctx, [r], role)[0];
   const extra = ctx.db.get('SELECT * FROM clients WHERE id = ?', id);
   const payer = payerFor(ctx, id);
   c.notes = extra.notes ?? null;

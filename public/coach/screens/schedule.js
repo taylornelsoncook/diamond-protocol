@@ -492,7 +492,7 @@ async function renderRoster(ctx) {
     const inIt = new Set([...all, ...(d.guests || [])].map((x) => x.athlete.id));
     const add = async (id, btn) => {
       if (btn) btn.disabled = true;
-      try { const r = await api.post(`/events/${e.id}/bookings`, { athlete_id: id }); toast(r.message); await refresh(); ctx.el.querySelector('#add-q')?.focus(); }
+      try { const r = await api.post(`/events/${e.id}/bookings`, { athlete_id: id }); toast(r.message, r.clash ? 'warn' : undefined); await refresh(); ctx.el.querySelector('#add-q')?.focus(); }
       catch (err) { toastError(err); if (btn) btn.disabled = false; }
     };
     const lookup = async (term) => {

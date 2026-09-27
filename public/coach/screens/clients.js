@@ -507,7 +507,7 @@ async function bookDialog(ctx, a, d) {
     },
     actions: [{ label: 'Close', value: null }],
   });
-  if (r && chosen) toast(chosen.message || `${a.first_name} is booked.`, chosen.booking?.status === 'waitlist' ? 'warn' : 'good');
+  if (r && chosen) toast(chosen.message || `${a.first_name} is booked.`, chosen.booking?.status === 'waitlist' || chosen.clash ? 'warn' : 'good');
   return !!r;
 }
 
@@ -718,7 +718,7 @@ async function renderProfile(ctx) {
       ${canProgram ? html`<div class="inline"><select class="input" id="pg-sel" aria-label="Program">${options(lookups.programs, a.program_id, { blank: d.program ? 'No program' : 'Choose a program' })}</select>
         <button class="btn" data-act="program">${d.program ? 'Change program' : 'Assign program'}</button></div>` : ''}
       ${d.workout_url ? html`<div><div class="label">Private app link</div><p class="hint" style="margin:2px 0 8px">Send this to ${a.first_name}. Anyone with the link can see their workouts.</p>
-        <div class="btn-row"><button class="btn btn-outline" data-act="copy-app">Copy app link</button><a class="btn btn-ghost" href="${d.workout_url}" target="_blank" rel="noopener">Open app</a>
+        <div class="btn-row"><button class="btn btn-outline" data-act="copy-app">Copy app link</button>${d.program ? html`<button class="btn btn-outline" data-act="email-app">Email app link</button>` : ''}<a class="btn btn-ghost" href="${d.workout_url}" target="_blank" rel="noopener">Open app</a>
         ${canProgram ? html`<button class="btn btn-ghost" data-act="reset-link">Reset link</button>` : ''}</div></div>` : ''}
     </section>`;
 
@@ -804,6 +804,8 @@ async function renderProfile(ctx) {
       switch (b.dataset.act) {
         case 'copy-portal': return copy(d.portal_url, 'Portal link');
         case 'copy-app': return copy(d.workout_url, 'App link');
+        // The same email as Send link on Programs (front desk can send it too).
+        case 'email-app': return act(() => api.post(`/programs/${d.program.id}/send-link`, { athlete_id: a.id }), (r) => `App link emailed to ${r.sent_to.join(', ')}.`);
         case 'copy-code': return copy(a.code, 'Athlete ID');
         case 'reset-link':
           if (await confirmDialog('Reset the app link?', `The old link stops working. Send ${a.first_name} the new one.`, 'Reset link')) act(() => api.post(`/athletes/${a.id}/workout-link`), 'New app link ready. Copy it and send it.');

@@ -217,9 +217,14 @@ function routes(api) {
     if (!e) throw notFound('That session');
     const a = get('SELECT * FROM athletes WHERE id=? AND archived=0', Number(req.body.athlete_id));
     if (!a) throw bad('Choose an athlete to add.');
+    // Staff can book over a clash (a parent can't), but they hear about it, like the portal's rule.
+    const pb = require('../services/parent-book');
+    const clash = pb.clashIn(pb.bookedBetween(a.id, e.starts_at, pb.endAt(e.starts_at, e.duration_min)), e.starts_at, e.duration_min, e.id);
     const b = booking.book(e.id, a.id, { source: 'staff' });
     log(req, b.status === 'waitlist' ? 'Added to waitlist' : 'Booked', `${fullName(a)} · ${e.name} · ${when(e)}`);
-    res.json({ ok: true, booking: b, message: b.status === 'waitlist' ? `The session is full. ${a.first_name} is on the waitlist.` : `${a.first_name} is booked.` });
+    const also = clash ? ` ${a.first_name} is also ${pb.clashText(clash)} at that time (${pb.whenText(clash.starts_at)}).` : '';
+    res.json({ ok: true, booking: b, clash: clash ? { event_id: clash.id, name: clash.name, starts_at: clash.starts_at, status: clash.status } : null,
+      message: (b.status === 'waitlist' ? `The session is full. ${a.first_name} is on the waitlist.` : `${a.first_name} is booked.`) + also });
   }));
 
   // Remove a booking: credits go back, drop-ins are refunded, the waitlist moves up.

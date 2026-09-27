@@ -152,8 +152,10 @@ function attention(role, T, sessions, snoozed) {
   if (pend.n) {
     out.push({
       kind: 'pending_results', title: `${pend.n} test result${pend.n === 1 ? ' is' : 's are'} waiting to be linked`,
-      detail: `From ${pend.senders} unrecognized athlete${pend.senders === 1 ? '' : 's'}. They stay out of every profile until you link them.`,
-      action: { label: 'Link them', href: '/app/testing/queue' },
+      // Linking is for owners and coaches (as on Testing); the front desk just hears that it's waiting.
+      ...(role === 'frontdesk'
+        ? { detail: `From ${pend.senders} unrecognized athlete${pend.senders === 1 ? '' : 's'}. A coach links them in Testing; until then they stay out of every profile.` }
+        : { detail: `From ${pend.senders} unrecognized athlete${pend.senders === 1 ? '' : 's'}. They stay out of every profile until you link them.`, action: { label: 'Link them', href: '/app/testing/queue' } }),
     });
   }
   // Trials ending in the next few days.

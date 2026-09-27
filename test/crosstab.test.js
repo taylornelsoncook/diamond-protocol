@@ -231,3 +231,33 @@ test('Billing and Today agree on what day it is even when the server runs in ano
     assert.equal(b.month.start, t.date.slice(0, 7) + '-01');
   } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
 });
+
+test('Today never sends the front desk to a screen their role can\'t open', async () => {
+  const d = await desk(), c = await coach();
+  const pend = (await d.get('/api/today')).data.attention.find((a) => a.kind === 'pending_results');
+  assert.ok(pend, 'the demo has results waiting to be linked');
+  assert.equal(pend.action, undefined);
+  assert.match(pend.detail, /A coach links them/);
+  assert.equal((await c.get('/api/today')).data.attention.find((a) => a.kind === 'pending_results').action.href, '/app/testing/queue');
+});
+
+test('staff booking over a clash goes through but says so, the same rule the portal enforces for parents', async () => {
+  const o = await owner(), d = await desk();
+  const T = booking.todayLocal();
+  const b = get(`SELECT b.athlete_id, e.starts_at, e.duration_min, e.name FROM bookings b JOIN events e ON e.id=b.event_id
+    WHERE b.status='booked' AND e.cancelled=0 AND e.starts_at>? AND e.type='class' ORDER BY e.starts_at LIMIT 1`, `${T}T23:59`);
+  const extra = await o.post('/api/events', { name: 'Clash check clinic', type: 'clinic', date: b.starts_at.slice(0, 10), start_time: b.starts_at.slice(11, 16), duration_min: 30, capacity: 5, price_cents: 0 });
+  assert.equal(extra.status, 200, JSON.stringify(extra.data));
+  const r = await d.post(`/api/events/${extra.data.id}/bookings`, { athlete_id: b.athlete_id });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.clash.name, b.name);
+  assert.match(r.data.message, /is also booked for/);
+  const a = get('SELECT * FROM athletes WHERE id=?', b.athlete_id);
+  const pe = get('SELECT email FROM parents WHERE family_id=?', a.family_id)?.email;
+  if (pe) {
+    await d.del(`/api/bookings/${r.data.booking.id}`);
+    const p = await parent(pe);
+    const pr = await p.post('/api/parent/bookings', { athlete_id: a.id, event_id: extra.data.id });
+    assert.equal(pr.status, 400, 'a parent is refused the same booking');
+  }
+});

@@ -59,6 +59,8 @@ export function buildDigest(ctx, asOf = ctx.now()) {
   const members = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE status IN ('active','trialing','past_due')`).n;
   const joined = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE created_at >= ?`, iso(-7)).n;
   const left = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE status = 'canceled' AND canceled_at >= ?`, iso(-7)).n;
+  const leads = ctx.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN status IN ('signed_up','evaluation','member') THEN 1 ELSE 0 END) AS won FROM leads WHERE created_at >= ?`, iso(-7));
+  const untouched = ctx.db.get(`SELECT COUNT(*) AS n FROM leads WHERE status = 'new' AND created_at < ?`, iso(-1)).n;   // nobody has reached out yet
   const failed = ctx.db.all(`SELECT c.name, i.amount_cents FROM invoices i JOIN clients c ON c.id = i.client_id JOIN subscriptions s ON s.id = i.subscription_id WHERE i.status = 'failed' AND s.status = 'past_due'`);
   const overdue = teamSummary(ctx).overdue;
   const risk = atRisk(ctx, { asOf, limit: 5 });
@@ -84,13 +86,14 @@ export function buildDigest(ctx, asOf = ctx.now()) {
     const why = risk[0].reasons.find((x) => !/payment/i.test(x)) ?? risk[0].reasons[0];   // payments already have their own line
     actions.push(`Check in with ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]} (${first(risk[0].name)}: ${why.charAt(0).toLowerCase()}${why.slice(1)}).`);
   }
+  if (untouched) actions.push(`Reach out to ${untouched === 1 ? 'a family' : `${untouched} families`} who asked about training (Leads).`);
   if (emptiest.length && emptiest[0].open / emptiest[0].capacity >= 0.5) actions.push(`Fill ${emptiest[0].name} on ${when(emptiest[0].starts_at)}: ${emptiest[0].open} of ${emptiest[0].capacity} spots open.`);
   if (waiting) actions.push(`Link ${waiting} test ${waiting === 1 ? 'result' : 'results'} waiting in Testing.`);
 
   return {
     week_ending: localDate(asOf, zone), takings: week, prior_takings: prior,
     change_pct: prior.total ? Math.round(((week.total - prior.total) / prior.total) * 100) : null,
-    members, joined, left, failed_payments: failed.length, overdue_school_invoices: overdue.length,
+    members, joined, left, inquiries: leads.n, inquiries_signed_up: leads.won ?? 0, failed_payments: failed.length, overdue_school_invoices: overdue.length,
     at_risk: risk, open_spots: openSpots, emptiest: emptiest.map((s) => ({ id: s.id, name: s.name, starts_at: s.starts_at, open: s.open, capacity: s.capacity })),
     results_waiting: waiting, deletion_requests: deletions, workouts_logged: workouts, actions: actions.slice(0, 3)
   };
@@ -106,6 +109,7 @@ export function digestText(ctx, d) {
     `Money in: ${money(d.takings.total)}${change}. In person ${money(d.takings.sales)}, memberships ${money(d.takings.memberships)}, schools ${money(d.takings.schools)}.`,
     `Members: ${d.members} (${d.joined} joined, ${d.left} left this week).`,
     `Athletes logged ${d.workouts_logged} workouts.`,
+    ...(d.inquiries ? [`New inquiries: ${d.inquiries} (${d.inquiries_signed_up} signed up so far).`] : []),
     '',
     d.actions.length ? 'This week:' : 'Nothing needs you this week.',
     ...d.actions.map((a, i) => `${i + 1}. ${a}`),

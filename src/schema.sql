@@ -390,6 +390,33 @@ CREATE TABLE IF NOT EXISTS texts (
 );
 CREATE INDEX IF NOT EXISTS texts_family ON texts(family_id);
 
+-- Leads: families who asked about training (public form, unfinished sign-up, or added by staff) but haven't joined yet.
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  parent_name TEXT NOT NULL,
+  email TEXT COLLATE NOCASE,
+  phone TEXT,
+  athlete_name TEXT,
+  athlete_age INTEGER,
+  sport TEXT,
+  message TEXT,
+  source TEXT NOT NULL CHECK (source IN ('inquiry','signup_unfinished','manual','phone','walk_in','event','referral')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','signed_up','evaluation','member','lost')),
+  texts_ok INTEGER NOT NULL DEFAULT 0,       -- they ticked "text me about this" on the form
+  follow_up_step INTEGER NOT NULL DEFAULT 0, -- 0: thank-you, 1: 2-day nudge, 2: 7-day last note, 3: done
+  next_follow_up_at TEXT,                    -- NULL when follow-up has stopped
+  last_contacted_at TEXT,
+  notes TEXT,
+  lost_reason TEXT,
+  family_id TEXT REFERENCES families(id) ON DELETE SET NULL,
+  converted_at TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS leads_status ON leads(status, next_follow_up_at);
+CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
+
 -- ---- Team contracts: schools and clubs pay a monthly fee; athletes are on a roster ----
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,

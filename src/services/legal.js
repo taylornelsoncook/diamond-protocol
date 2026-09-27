@@ -49,6 +49,7 @@ export function exportFamily(ctx, familyId) {
     family: { ...f, card: f.card_last4 ? `${f.card_brand} ending ${f.card_last4}` : null, card_brand: undefined, card_last4: undefined },
     parents: ctx.db.all('SELECT name, email, phone, relationship, sms_opt_in_at AS texts_turned_on_at, sms_opt_out_at AS texts_stopped_at, created_at FROM guardians WHERE family_id = ?', familyId),
     texts: ctx.db.all('SELECT direction, phone, body, status, created_at FROM texts WHERE family_id = ? ORDER BY created_at', familyId),
+    inquiries: ctx.db.all(`SELECT parent_name, email, phone, athlete_name, athlete_age, sport, message, source, status, created_at FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId),
     agreements: familyConsents(ctx, familyId),
     athletes: kids.map((k) => ({
       ...k,
@@ -102,6 +103,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
         medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
     }
     ctx.db.run('DELETE FROM texts WHERE family_id = ?', familyId);
+    ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);
     const note = `Deleted by ${actor?.name ?? 'an owner'} on ${ctx.now().slice(0, 10)}`;

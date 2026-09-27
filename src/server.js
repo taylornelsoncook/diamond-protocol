@@ -21,10 +21,11 @@ import { createTestProvider } from './payments/test-provider.js';
 import { handleStripeEvent } from './services/commerce.js';
 import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
 import { weeklyDigest } from './services/insights.js';
+import { runFollowUps } from './services/leads.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
@@ -71,6 +72,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
+      if (route.path === '/portal/api/public/inquiry') rateLimit(`inquiry:${ip}`, 10, 60 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
       catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
@@ -128,6 +130,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     timers.push(setInterval(() => extendSchedule(ctx).catch((e) => console.error('schedule', e)), 6 * 60 * 60 * 1000));
     timers.push(setInterval(() => sendReminders(ctx).catch((e) => console.error('reminders', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => weeklyDigest(ctx).catch((e) => console.error('weekly digest', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runFollowUps(ctx).catch((e) => console.error('lead follow-up', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }

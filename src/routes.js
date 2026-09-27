@@ -20,6 +20,7 @@ import * as engage from './services/engage.js';
 import { listOutbox, sendEmail, mailMode } from './services/mail.js';
 import * as sms from './services/sms.js';
 import * as insights from './services/insights.js';
+import * as leads from './services/leads.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -158,6 +159,13 @@ export const routes = [
     if (out.status !== 'sent') throw badRequest(out.error || 'The email service refused the message.');
     return { ok: true };
   }],
+
+  // Leads
+  ['GET', '/v1/leads', 'any', 'Leads', 'Families who asked about training, newest first, with counts by stage. Filter with ?status= (new, contacted, signed_up, evaluation, member, lost).', (ctx, r) => leads.listLeads(ctx, { status: r.query.status ? v.oneOf(r.query.status, 'status', leads.STAGES) : undefined })],
+  ['POST', '/v1/leads', 'any', 'Leads', 'Add a lead: parent_name, email and/or phone, athlete_name, athlete_age, sport, message, source (manual, phone, walk_in, event, referral), texts_ok, follow_up=false to skip the automatic emails.', (ctx, r) => leads.addLead(ctx, r.body, r.user ?? r.apiKey), 201],
+  ['GET', '/v1/leads/:id', 'any', 'Leads', 'A lead.', (ctx, r) => leads.getLead(ctx, r.params.id)],
+  ['PATCH', '/v1/leads/:id', 'any', 'Leads', 'Update a lead: status, notes, lost_reason, contacted=true (you reached out), follow_up=false (stop automatic follow-up).', (ctx, r) => leads.updateLead(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/leads/:id', 'session', 'Leads', 'Delete a lead and its details (owner only).', (ctx, r) => leads.deleteLead(ctx, r.params.id)],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
   ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind= and ?location_id=.', (ctx, r) => {

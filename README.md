@@ -14,7 +14,7 @@ You need **Node.js 22.13 or newer** (check with `node -v`; download from nodejs.
 cp .env.example .env      # then change ADMIN_PASSWORD
 npm run seed              # creates your login plus sample plans, programs and clients
 npm start                 # open http://localhost:3000
-npm test                  # runs the full test suite (119 tests)
+npm test                  # runs the full test suite (128 tests)
 ```
 
 The seed prints your login and a sample client app link. To start over, delete the `data` folder and seed again.
@@ -54,6 +54,8 @@ The seed prints your login and a sample client app link. To start over, delete t
 **Email:** sign-in codes, booking confirmations, waitlist moves and cancellations. With `RESEND_API_KEY` set they're sent through Resend; without it they're logged to API & integrations → Email outbox, and in test mode the sign-in code is shown on screen.
 
 **Athletes to check on and the weekly summary:** the app scores every active athlete for signs they're drifting away (no sessions in two weeks after coming regularly, coming less than half as often, nothing booked, repeated no-shows, stopped daily check-ins, and for owners only a failed payment or a trial with no visits) and lists the ones at risk on Today with the reasons. Every Monday at 7 am the owners get a summary email: money in against the week before, members joined and left, athletes to check on, open spots in the coming week, and up to three suggested actions. Preview it, send it now or turn it off in Hours & settings.
+
+**Leads and follow-up:** put the "Ask about training" link (`/start`) on your website and social pages. Every inquiry lands on the Leads tab, the owners get an email, and the family gets a thank-you right away with the sign-up link and the next step (a free evaluation). If they don't sign up, a short nudge goes out after 2 days and a last note after 7, then it stops. Parents who tick "text me" also get the first two as texts, and replying STOP ends them. Sign-ups that were started but never finished show up as leads after an hour and get the same follow-up. A lead moves to Signed up, Evaluation and Member on its own as the family creates an account, books an evaluation and buys a membership or pack, and follow-up stops the moment they sign up. Front desk can add walk-ins and phone calls, and anyone can mark a lead lost or turn off its follow-up. The Monday summary counts new inquiries and flags any nobody has reached out to.
 
 **Text messages:** parents turn texts on in the parent portal (Family tab) with their mobile number and get a confirmation text. Then they get a reminder the day before each booked session (one per family, skipped for bookings made less than a day ahead), a text when an athlete moves off the waitlist, when you cancel a session, and when a membership payment doesn't go through. Replying STOP turns texts off, START turns them back on, HELP gets a short answer, and any other reply is emailed to the owners. Each kind can be turned off in Hours & settings. With `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM` set they're sent through Twilio; without them they're only logged under API & integrations → Texts. `SMS_ONLY_TO` limits real texts on a staging copy.
 

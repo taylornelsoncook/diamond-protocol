@@ -12,11 +12,12 @@ async function api(method, path, body) {
 const metric = (label, value, note, tone) => h('div', { class: 'dp-metric' }, h('div', { class: 'dp-metric-label' }, label), h('div', { class: `dp-metric-value${tone ? ' dp-metric-value--' + tone : ''}` }, value), h('div', { class: 'dp-metric-note' }, note));
 const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch = (p, b) => api('PATCH', p, b), del = (p, b) => api('DELETE', p, b);
 
+const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
 const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
-const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
+const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'testing', 'education'] };
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'education'] };
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
@@ -49,7 +50,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : viewSell, clients: id ? viewClient : viewClients, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : viewSell, clients: id ? viewClient : viewClients, leads: viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -142,6 +143,9 @@ async function viewToday(main) {
     if (a.kind === 'deletion_request') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.family_name} asked for their data to be deleted`), h('span', { class: 'small muted' }, `Requested by ${a.requested_by.split(' <')[0]} ${ago(a.created_at)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/staff' }, 'Review'));
+    if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
     if (a.kind === 'results_waiting') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until you link them.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
@@ -178,6 +182,56 @@ async function viewToday(main) {
         h('div', { class: 'small muted', style: 'width:92px;flex-shrink:0' }, ago(ev.created_at)),
         h('div', { class: 'grow' }, (EVENT_TEXT[ev.type] || (() => ev.type))(ev.data)))) : h('p', { class: 'muted' }, 'Activity shows up here as clients join, pay and train.'))),
     revPanel);
+}
+
+// ---------- Leads ----------
+const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['signed_up', 'Signed up'], ['evaluation', 'Evaluation booked'], ['member', 'Member'], ['lost', 'Not now']];
+const LEAD_SOURCE = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event', referral: 'Referral' };
+async function viewLeads(main) {
+  const filter = new URLSearchParams(location.hash.split('?')[1] ?? '').get('status') ?? '';
+  const [res, settings] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings')]);
+  const chips = h('div', { class: 'row wrap', style: 'gap:8px' }, [['', 'All open'], ...LEAD_STAGES].map(([k, label]) => h('a', { class: `dp-btn dp-btn--${filter === k ? 'secondary' : 'ghost'}`, href: `#/leads${k ? `?status=${k}` : ''}` }, k ? `${label} (${res.counts[k] ?? 0})` : label)));
+  const rows = (filter ? res.data : res.data.filter((l) => !['member', 'lost'].includes(l.status))).map((l) => {
+    const stage = select(LEAD_STAGES, { value: l.status, 'aria-label': 'Stage' });
+    const notes = h('textarea', { class: 'dp-input', placeholder: 'Notes: when you called, what they need, best times' }); notes.value = l.notes ?? '';
+    const save = (body, msg) => (e) => busy(e.currentTarget, async () => { await patch(`/v1/leads/${l.id}`, body); toast(msg); render(); });
+    return h('details', { class: 'list-item', style: 'display:block' },
+      h('summary', { style: 'cursor:pointer;list-style:none' }, h('div', { class: 'row wrap', style: 'gap:12px' },
+        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.parent_name, l.athlete_name ? h('span', { class: 'muted' }, ` for ${l.athlete_name}${l.athlete_age ? `, ${l.athlete_age}` : ''}`) : null),
+          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null].filter(Boolean).join(' · '))),
+        h('span', { class: `dp-badge dp-badge--${{ new: 'warn', contacted: 'neutral', signed_up: 'good', evaluation: 'good', member: 'good', lost: 'muted' }[l.status]}` }, LEAD_STAGES.find(([k]) => k === l.status)?.[1] ?? l.status))),
+      h('div', { class: 'stack', style: 'margin-top:12px' },
+        h('p', { class: 'small', style: 'margin:0' }, [l.email, phoneText(l.phone), l.texts_ok ? 'OK to text' : null].filter(Boolean).join(' · ')),
+        l.message ? h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, `"${l.message}"`) : null,
+        l.family_id ? h('p', { class: 'small', style: 'margin:0' }, `Signed up as the ${l.family_name ?? 'family'}.`) : null,
+        field('Notes', notes),
+        h('div', { class: 'row wrap', style: 'gap:8px' }, stage,
+          btn('Save', save({ status: stage.value, notes: notes.value }, 'Saved.'), 'primary'),
+          ['new', 'contacted'].includes(l.status) ? btn('I reached out', save({ contacted: true, notes: notes.value }, 'Marked as contacted.'), 'outline') : null,
+          l.follow_up === 'on' ? btn('Stop automatic follow-up', save({ follow_up: false }, 'Automatic follow-up stopped.'), 'ghost') : null,
+          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null)));
+  });
+  const f = { parent_name: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), athlete_name: input(), athlete_age: input({ type: 'number', inputmode: 'numeric' }), sport: input(), message: h('textarea', { class: 'dp-input' }) };
+  const source = select([['phone', 'Phone call'], ['walk_in', 'Walk-in'], ['event', 'Event'], ['referral', 'Referral'], ['manual', 'Other']]);
+  const followUp = h('input', { type: 'checkbox', checked: true });
+  const addPanel = h('details', { class: 'dp-panel' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:32px' }, '+ Add a lead'),
+    h('form', { class: 'stack', style: 'margin-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      await post('/v1/leads', { ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value || undefined])), athlete_age: f.athlete_age.value ? Number(f.athlete_age.value) : undefined, source: source.value, follow_up: followUp.checked });
+      toast('Lead added.'); render();
+    }); } },
+      h('div', { class: 'form-grid' }, field('Parent name', f.parent_name), field('How they found you', source)),
+      h('div', { class: 'form-grid' }, field('Email', f.email), field('Phone', f.phone)),
+      h('div', { class: 'form-grid' }, field('Athlete name', f.athlete_name), field('Athlete age', f.athlete_age)),
+      field('Sport', f.sport), field('What they\'re looking for', f.message),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, followUp, h('span', null, 'Send the automatic follow-up emails')),
+      h('div', null, btn('Add lead', null, 'primary', { type: 'submit' }))));
+  const followToggle = h('input', { type: 'checkbox', checked: settings.lead_follow_up !== 'off' });
+  const howPanel = panel('How follow-up works', { subtitle: 'Every lead with an email gets a thank-you with your sign-up link right away, a nudge after 2 days and a last note after 7. It stops as soon as they sign up, you mark them, or they reply STOP to a text.' },
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/start`),
+      btn('Copy inquiry form link', async () => { await navigator.clipboard?.writeText(`${location.origin}/start`).catch(() => {}); toast('Link copied. Put it on your website and Instagram.'); }, 'secondary')),
+    isOwner() ? h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, followToggle, h('span', null, 'Send automatic follow-up'), btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { lead_follow_up: followToggle.checked ? 'on' : 'off' }); toast('Saved.'); }), 'ghost')) : null);
+  fill(main, header('Leads', `${res.last_30_days.leads} ${res.last_30_days.leads === 1 ? 'family' : 'families'} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.`),
+    chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel);
 }
 
 // ---------- Clients ----------
@@ -574,7 +628,6 @@ async function viewIntegrations(main) {
     }, 'outline')),
     outbox.data.length ? outbox.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.to_email} · ${m.subject}${statusText[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No emails yet.'));
   const texts = await get('/v1/texts');
-  const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
   const textMode = { test: 'No text service is connected, so texts stay here and are not sent. Add your Twilio settings on the server to start sending.',
     restricted: `Sending through Twilio, but only to ${texts.only_to}. Everything else is held here.`, live: 'Sending through Twilio.' };
   const textStatus = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '', received: '' };
@@ -978,6 +1031,10 @@ async function viewScheduleSetup(main) {
       btn('Copy link', async () => { await navigator.clipboard?.writeText(joinUrl).catch(() => {}); toast('Sign-up link copied. Put it on your website, Instagram and a QR code at the facility.'); }, 'secondary'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: '/join', target: '_blank' }, 'Open')),
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, signupToggle, h('span', null, 'Sign-up is open')),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'Not ready to sign up? The "Ask about training" form collects their details as a lead and follows up automatically (Leads).'),
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/start`),
+      btn('Copy link', async () => { await navigator.clipboard?.writeText(`${location.origin}/start`).catch(() => {}); toast('Inquiry form link copied.'); }, 'secondary'),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '/start', target: '_blank' }, 'Open')),
     h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_signup: signupToggle.checked ? 'on' : 'off' }); toast(signupToggle.checked ? 'Sign-up is open.' : 'Sign-up is closed.'); render(); }), 'primary')));
   const terms = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); terms.value = settings.terms_text;
   const privacy = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); privacy.value = settings.privacy_text;

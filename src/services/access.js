@@ -113,6 +113,8 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   const overdueTeams = teams.overdue.map((r) => ({ kind: 'team_invoice_overdue', ...r }));
   const q = queueCount(ctx);
   const waiting = q.n ? [{ kind: 'results_waiting', count: q.n, groups: q.groups }] : [];
+  const fresh = db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ?`, weekAgo);
+  if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
   if (role !== 'owner') {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
     return { today_sales: null, metrics: { paying_clients: active.n, trialing_clients: trialing, workouts_last_7_days: workouts }, teams: null,

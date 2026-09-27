@@ -151,6 +151,7 @@ export async function handleInbound(ctx, params) {
   const biz = getSetting(ctx, 'business_name');
   if (STOP_WORDS.includes(word)) {
     for (const g of parents) ctx.db.run('UPDATE guardians SET sms_opt_out_at = ? WHERE id = ?', ctx.now(), g.id);
+    for (const l of ctx.db.all('SELECT id, phone FROM leads WHERE texts_ok = 1')) if (normalizePhone(l.phone) === phone) ctx.db.run('UPDATE leads SET texts_ok = 0 WHERE id = ?', l.id);   // leads who asked about training
     return null;                                           // Twilio sends the carrier's standard "unsubscribed" reply
   }
   if (START_WORDS.includes(word)) {

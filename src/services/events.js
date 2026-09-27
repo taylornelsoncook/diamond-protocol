@@ -11,7 +11,8 @@ export const EVENT_TYPES = [
   'enrollment.created', 'family.waiver_signed',
   'team_contract.created', 'team_invoice.created', 'team_invoice.paid', 'team_invoice.overdue', 'team_invoice.voided', 'team_invoice.payment_failed',
   'results.recorded', 'performance.pr', 'integration.synced', 'queue.linked', 'testing.shared',
-  'family.signed_up', 'family.deletion_requested', 'family.deleted', 'clients.imported'
+  'family.signed_up', 'family.deletion_requested', 'family.deleted', 'clients.imported',
+  'lead.created', 'lead.updated'
 ];
 
 // Record an event and queue a delivery for every active endpoint subscribed to it.

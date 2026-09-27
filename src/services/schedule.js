@@ -251,6 +251,10 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor }) {
   ].filter(Boolean);
   throw new HttpError(402, 'payment_required', `${first(client.name)} has no ${type ?? ''} sessions left for this. Book with ${options.join(', or ') || 'help from your coach'}.`.replace('  ', ' '));
 }
+async function undoCover(ctx, clientId, r) {
+  if (r.coverage === 'credit') ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, 1, 'cancel', 'Booking not made', ?)`, newId('cr'), clientId, r.credit_type, ctx.now());
+  if (r.sale_id) await commerce.refundSale(ctx, r.sale_id, {});
+}
 const commerceMoney = (c) => `$${(c / 100).toFixed(c % 100 ? 2 : 0)}`;
 
 async function releaseBooking(ctx, b, status) {
@@ -283,6 +287,11 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
   const full = s.booked_count >= s.capacity;
   let result = { coverage: 'none' }, status = 'waitlisted';
   if (!full) { result = await cover(ctx, s, c, { pay, allowUnpaid: isCoach, actor }); status = 'booked'; }
+  // Archived while the card was being charged: give the credit or payment back rather than book an archived client.
+  if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) {
+    await undoCover(ctx, clientId, result);
+    notArchived({ ...c, archived_at: true }, isCoach);
+  }
   const id = existing?.id ?? newId('bkg');
   ctx.db.tx(() => {
     if (existing) ctx.db.run('UPDATE bookings SET status = ?, coverage = ?, credit_type = ?, sale_id = ?, booked_by = ?, created_at = ?, updated_at = ? WHERE id = ?', status, result.coverage, result.credit_type ?? null, result.sale_id ?? null, actor ?? null, ctx.now(), ctx.now(), id);
@@ -418,6 +427,7 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
     const sale = await commerce.createSale(ctx, { location_id: s.location_id, method: 'card_on_file', client_id: clientId, custom: { description: `${s.name} registration`, amount_cents: s.registration_cents } }, actor);
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
     saleId = sale.id;
+    if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) { await undoCover(ctx, clientId, { sale_id: saleId }); notArchived({ ...c, archived_at: true }, isCoach); }
   } else if (s.registration_cents > 0 && !isCoach) {
     throw new HttpError(402, 'payment_required', 'Add a card to your family account to register.');
   }
@@ -432,8 +442,8 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
 
 // ---------- Private and evaluation availability ----------
 export function listAvailability(ctx) {
-  return ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name, u.active AS coach_active FROM availability a JOIN locations l ON l.id = a.location_id
-    LEFT JOIN users u ON u.id = a.coach_id ORDER BY a.kind, a.weekday, a.start_time`).map((a) => ({ ...a, coach_active: a.coach_id ? !!a.coach_active : null }));
+  return ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name, u.active AS coach_active, u.role AS coach_role FROM availability a JOIN locations l ON l.id = a.location_id
+    LEFT JOIN users u ON u.id = a.coach_id ORDER BY a.kind, a.weekday, a.start_time`).map(({ coach_role, ...a }) => ({ ...a, coach_active: a.coach_id ? !!a.coach_active && coach_role !== 'front_desk' : null }));
 }
 export function addAvailability(ctx, body) {
   const kind = v.oneOf(body.kind ?? 'private', 'kind', ['private', 'evaluation']);
@@ -510,7 +520,7 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
   const blocks = ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name FROM availability a JOIN locations l ON l.id = a.location_id
-    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR u.active = 1)`, kind);
+    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach')))`, kind);   // a coach moved to front desk no longer leads
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
   const busy = ctx.db.all(`SELECT s.location_id, s.coach_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
     AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)

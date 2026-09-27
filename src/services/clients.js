@@ -100,16 +100,28 @@ export async function archiveClient(ctx, id, body = {}, actor) {
   const sub = ctx.db.get(`SELECT status FROM subscriptions WHERE client_id = ? AND status != 'canceled' ORDER BY created_at DESC LIMIT 1`, id);
   if (sub) throw conflict(`${first} has a membership (${sub.status.replace('_', ' ')}). Cancel it first, then archive.`);
   const upcoming = clientBookings(ctx, id, { upcoming: true, limit: 500 });
-  const standing = ctx.db.all(`SELECT e.series_id, s.name FROM enrollments e JOIN class_series s ON s.id = e.series_id WHERE e.client_id = ? AND e.status = 'active'`, id);
-  if ((upcoming.length || standing.length) && body.confirm !== true) {
-    const parts = [upcoming.length ? `${upcoming.length} upcoming ${upcoming.length === 1 ? 'booking' : 'bookings'}` : null, standing.length ? `a standing spot in ${standing.map((x) => x.name).join(', ')}` : null].filter(Boolean);
-    const e = new HttpError(409, 'confirm_required', `${first} has ${parts.join(' and ')}. Archiving cancels ${upcoming.length + standing.length === 1 ? 'it' : 'them'} (credits go back, payments are refunded).`);
-    e.details = { bookings: upcoming.map((b) => ({ id: b.id, session_name: b.session_name, starts_at: b.starts_at, status: b.status })), standing: standing.map((x) => x.name) };
+  // Every open enrollment is ended; only ones with days still to come are worth asking about (a camp from last summer isn't).
+  const enrolled = ctx.db.all(`SELECT e.series_id, e.kind, e.sale_id, s.name,
+      EXISTS (SELECT 1 FROM class_sessions x WHERE x.series_id = s.id AND x.status = 'scheduled' AND x.starts_at > ?) AS upcoming
+    FROM enrollments e JOIN class_series s ON s.id = e.series_id WHERE e.client_id = ? AND e.status = 'active'`, ctx.now(), id);
+  const standing = enrolled.filter((x) => x.upcoming && x.kind !== 'registration'), camps = enrolled.filter((x) => x.upcoming && x.kind === 'registration');
+  if ((upcoming.length || standing.length || camps.length) && body.confirm !== true) {
+    const names = (xs) => xs.map((x) => x.name).join(', ');
+    const parts = [upcoming.length ? `${upcoming.length} upcoming ${upcoming.length === 1 ? 'booking' : 'bookings'}` : null, standing.length ? `a standing spot in ${names(standing)}` : null, camps.length ? `a registration for ${names(camps)}` : null].filter(Boolean);
+    const paidCamps = camps.filter((x) => x.sale_id);
+    const e = new HttpError(409, 'confirm_required', `${first} has ${parts.join(' and ')}. Archiving cancels ${upcoming.length + standing.length + camps.length === 1 ? 'it' : 'them'} (credits go back, paid single sessions are refunded).${paidCamps.length ? ` The ${names(paidCamps)} registration fee isn't refunded automatically: the owner can refund it from the sale.` : ''}`);
+    e.details = { bookings: upcoming.map((b) => ({ id: b.id, session_name: b.session_name, starts_at: b.starts_at, status: b.status })), standing: standing.map((x) => x.name), registrations: camps.map((x) => x.name) };
     throw e;
   }
-  for (const e of standing) await endEnrollment(ctx, e.series_id, id);
-  for (const b of clientBookings(ctx, id, { upcoming: true, limit: 500 })) await cancelBooking(ctx, b.id, { isCoach: true, waive: true });
+  // Cancel, mark archived, then sweep once more: a booking a parent finished while refunds were going through is caught
+  // here, and one that finishes after archived_at is set undoes itself (schedule.js#bookNow).
+  const cancelAll = async () => {
+    for (const e of ctx.db.all(`SELECT series_id FROM enrollments WHERE client_id = ? AND status = 'active'`, id)) await endEnrollment(ctx, e.series_id, id);
+    for (const b of clientBookings(ctx, id, { upcoming: true, limit: 500 })) await cancelBooking(ctx, b.id, { isCoach: true, waive: true });
+  };
+  await cancelAll();
   ctx.db.run('UPDATE clients SET archived_at = ?, archived_by = ? WHERE id = ?', ctx.now(), actor?.name ?? 'API', id);
+  await cancelAll();
   emit(ctx, 'client.archived', { client_id: id, client_name: c.name, bookings_canceled: upcoming.length, by: actor?.name ?? null });
   return getClient(ctx, id, { withSecrets: true });
 }

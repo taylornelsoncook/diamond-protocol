@@ -187,3 +187,20 @@ test('coach assignment responses keep amounts away from coaches and front desk',
   assert.deepEqual(moneyKeys((await desk('GET', '/v1/coaches')).body), []);
   assert.equal((await owner('PATCH', `/v1/availability/${av.id}`, { coach_id: null })).body.price_cents, 6000);
 });
+
+test('Book now shows a time once when two coaches are free then; a coach moved to front desk stops being offered', async () => {
+  const d = day(12), wd = weekdayOf(d);
+  const a1 = (await owner('POST', '/v1/availability', { kind: 'evaluation', location_id: park.id, weekday: wd, start_time: '07:00', end_time: '08:00', coach_id: coachId })).body;
+  const a2 = (await owner('POST', '/v1/availability', { kind: 'evaluation', location_id: park.id, weekday: wd, start_time: '07:00', end_time: '08:00', coach_id: otherCoachId })).body;
+  const at = zonedToUtc(d, '07:00', TZ);
+  assert.equal(openSlots(app.ctx, { kind: 'evaluation', days: 13 }).filter((x) => x.starts_at === at).length, 2, 'the portal offers both coaches');
+  const evs = publicSchedule(app.ctx).evaluations;
+  assert.ok(evs.some((x) => x.starts_at === at) || evs.length === 12, 'the time is on the Book now page (unless earlier times filled it)');
+  assert.equal(new Set(evs.map((x) => `${x.starts_at} ${x.location_name}`)).size, evs.length, 'each time shows once');
+  await owner('PATCH', `/v1/staff/${otherCoachId}`, { role: 'front_desk' });
+  try {
+    assert.ok(!openSlots(app.ctx, { kind: 'evaluation', days: 13 }).some((x) => x.availability_id === a2.id));
+    assert.equal((await owner('GET', '/v1/availability')).body.data.find((a) => a.id === a2.id).coach_active, false);
+  } finally { await owner('PATCH', `/v1/staff/${otherCoachId}`, { role: 'coach' }); }
+  for (const a of [a1, a2]) await owner('DELETE', `/v1/availability/${a.id}`);
+});

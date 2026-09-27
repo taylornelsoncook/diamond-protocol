@@ -197,3 +197,64 @@ test('staff notes: anyone adds, authors edit their own, owners delete any and pi
   await owner('DELETE', `/v1/families/${c.family.id}`, { confirm: c.family.name });
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM client_notes WHERE client_id = ?', c.id).n, 0);
 });
+
+test('archiving: camp registrations are named and the fee isn\'t claimed as refunded; past camps don\'t need a yes', async () => {
+  const cam = await kid('Cam Camper');
+  await owner('POST', `/v1/clients/${cam.id}/card/test`);
+  const camp = (await owner('POST', '/v1/class-series', { name: 'Fall Camp', kind: 'camp', location_id: facility.id, weekdays: [weekdayOf(day(5))], start_time: '09:00', duration_min: 120, capacity: 10, start_date: day(5), end_date: day(12), registration_cents: 20000 })).body;
+  assert.equal((await owner('POST', `/v1/class-series/${camp.id}/register`, { client_id: cam.id, pay: 'card_on_file' })).status, 200);
+  const ask = await coach('POST', `/v1/clients/${cam.id}/archive`);
+  assert.equal(ask.body.error.code, 'confirm_required');
+  assert.match(ask.body.error.message, /a registration for Fall Camp/);
+  assert.match(ask.body.error.message, /Fall Camp registration fee isn't refunded automatically/);
+  assert.deepEqual(ask.body.error.details.registrations, ['Fall Camp']);
+  assert.ok(!/_cents/.test(JSON.stringify(ask.body)));
+  const done = await coach('POST', `/v1/clients/${cam.id}/archive`, { confirm: true });
+  assert.equal(done.status, 200);
+  assert.ok(!/_cents/.test(JSON.stringify(done.body)), 'coaches get no amounts back');
+  assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM enrollments WHERE client_id = ? AND status = 'active'`, cam.id).n, 0);
+
+  // A registration for a camp that is over is ended quietly: nothing to confirm.
+  const old = await kid('Olly Oldcamp');
+  const past = (await owner('POST', '/v1/class-series', { name: 'Summer Camp', kind: 'camp', location_id: facility.id, weekdays: [weekdayOf(day(6))], start_time: '09:00', duration_min: 60, capacity: 10, start_date: day(6), end_date: day(6), registration_cents: 0 })).body;
+  await owner('POST', `/v1/class-series/${past.id}/register`, { client_id: old.id });
+  app.ctx.db.run(`UPDATE class_sessions SET starts_at = '2026-01-01T15:00:00.000Z', ends_at = '2026-01-01T16:00:00.000Z' WHERE series_id = ?`, past.id);
+  const quiet = await coach('POST', `/v1/clients/${old.id}/archive`);
+  assert.equal(quiet.status, 200);
+  assert.ok(quiet.body.archived_at);
+});
+
+test('a booking that was paying while the client was archived is refunded instead of left on an archived client', async () => {
+  const { archiveClient } = await import('../src/services/clients.js');
+  const { book } = await import('../src/services/schedule.js');
+  const rae = await kid('Rae Race');
+  await owner('POST', `/v1/clients/${rae.id}/card/test`);
+  const s1 = (await owner('POST', '/v1/sessions', { name: 'Early', kind: 'group', location_id: facility.id, date: day(2), start_time: '06:00', capacity: 5, drop_in_cents: 2000 })).body;
+  const s2 = (await owner('POST', '/v1/sessions', { name: 'Later', kind: 'group', location_id: facility.id, date: day(2), start_time: '07:00', capacity: 5, drop_in_cents: 2000 })).body;
+  await book(app.ctx, { sessionId: s1.id, clientId: rae.id, pay: 'card_on_file', isCoach: true });
+  const parent = book(app.ctx, { sessionId: s2.id, clientId: rae.id, pay: 'card_on_file' });   // a parent paying in the portal
+  const [b, a] = await Promise.allSettled([parent, archiveClient(app.ctx, rae.id, { confirm: true }, { name: 'Carl Coach' })]);
+  assert.equal(a.status, 'fulfilled');
+  assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, rae.id).n, 0, 'no live booking on an archived client');
+  const sales = app.ctx.db.all(`SELECT amount_cents, refunded_cents FROM sales WHERE client_id = ? AND status IN ('succeeded','partially_refunded','refunded')`, rae.id);
+  assert.ok(sales.every((x) => x.refunded_cents === x.amount_cents), `every charge refunded: ${JSON.stringify(sales)}`);
+  if (b.status === 'rejected') assert.match(b.reason.message, /archived/);
+
+  // Nothing to cancel, so archiving is instant: the booking already past its checks undoes itself when it sees the archive.
+  const ty = await kid('Ty Tardy');
+  await owner('POST', `/v1/clients/${ty.id}/card/test`);
+  const late = book(app.ctx, { sessionId: s2.id, clientId: ty.id, pay: 'card_on_file' });
+  let waits = 0;
+  while (!app.ctx.db.get('SELECT 1 FROM sales WHERE client_id = ?', ty.id) && waits++ < 50) await Promise.resolve();
+  await archiveClient(app.ctx, ty.id, { confirm: true }, null);
+  await assert.rejects(late, /archived/);
+  assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM bookings WHERE client_id = ?`, ty.id).n, 0);
+  const sale = app.ctx.db.get('SELECT amount_cents, refunded_cents FROM sales WHERE client_id = ?', ty.id);
+  assert.equal(sale.refunded_cents, sale.amount_cents, 'the charge went back');
+});
+
+test('front desk can read the client counts', async () => {
+  const r = await desk('GET', '/v1/client-counts');
+  assert.equal(r.status, 200);
+  assert.equal(typeof r.body.current, 'number');
+});

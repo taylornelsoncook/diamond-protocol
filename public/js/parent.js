@@ -294,7 +294,8 @@ async function viewProgress(main) {
   const g = r.growth;
   fill(main, top('Progress'), athleteChips(() => render()),
     !r.tests.length ? h('div', { class: 'empty' }, `No results shared for ${a.first_name} yet. Your coach will let you know when testing results are ready.`) : [
-      r.latest_session?.parent_note ? panel(`From your coach`, { subtitle: `${r.latest_session.name} · ${fmtDay(r.latest_session.date)}` }, h('p', { style: 'white-space:pre-wrap;margin:0' }, r.latest_session.parent_note)) : null,
+      r.latest_session?.athlete_note || r.latest_session?.parent_note ? panel(`From your coach`, { subtitle: `${r.latest_session.name} · ${fmtDay(r.latest_session.date)}` },
+        [r.latest_session.athlete_note, r.latest_session.parent_note].filter(Boolean).map((t) => h('p', { style: 'white-space:pre-wrap;margin:0' }, t))) : null,
       r.highlights.length ? panel('Biggest improvements', {}, h('div', { class: 'p-stats' }, r.highlights.map((t) => h('div', { class: 'p-stat' }, h('b', { style: 'color:var(--green-bright)' }, `+${t.improvement_pct}%`), h('span', null, t.test_name.replace(/\s*\(.*\)$/, '')))))) : null,
       r.new_prs.length ? h('p', { class: 'small' }, h('strong', null, 'New PRs: '), r.new_prs.join(', ')) : null,
       panel('Every test', { subtitle: 'Best result and change since the first test.' }, r.tests.map((t) => h('div', { class: 'p-row' },

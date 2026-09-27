@@ -82,3 +82,6 @@ services:
         sync: false
       - key: TWILIO_FROM
         sync: false
+      # Optional: Claude rewords progress notes for parents (coaches still approve each one).
+      - key: ANTHROPIC_API_KEY
+        sync: false

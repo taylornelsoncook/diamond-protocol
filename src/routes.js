@@ -29,6 +29,7 @@ import * as reviews from './services/reviews.js';
 import * as campaigns from './services/campaigns.js';
 import * as shop from './services/shop.js';
 import * as spots from './services/spots.js';
+import * as notes from './services/notes.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -291,6 +292,10 @@ export const routes = [
   ['GET', '/v1/testing-sessions/:id', 'any', 'Performance', 'A testing day with every athlete\'s results.', (ctx, r) => perf.getSession(ctx, r.params.id)],
   ['PATCH', '/v1/testing-sessions/:id', 'any', 'Performance', 'Change the name, date, tests or athletes.', (ctx, r) => perf.updateSession(ctx, r.params.id, r.body)],
   ['POST', '/v1/testing-sessions/:id/share', 'any', 'Performance', 'Share a testing day with families: results appear in the parent portal and parents are emailed. Optional parent_note; notify=false to skip emails.', (ctx, r) => reports.shareSession(ctx, r.params.id, r.body, r.baseUrl)],
+  ['GET', '/v1/testing-sessions/:id/notes', 'any', 'Performance', 'Progress notes for parents on this testing day: one per athlete with results, drafted or approved.', (ctx, r) => notes.sessionNotes(ctx, r.params.id)],
+  ['POST', '/v1/testing-sessions/:id/notes/draft', 'any', 'Performance', 'Draft a plain-English note for each athlete without one, from their results. client_ids redoes those drafts. Approved notes are never replaced.', (ctx, r) => notes.draftNotes(ctx, r.params.id, r.body)],
+  ['POST', '/v1/testing-sessions/:id/notes/approve', 'any', 'Performance', 'Approve every draft on this testing day. Parents see approved notes once the day is shared.', (ctx, r) => notes.approveAll(ctx, r.params.id, r.user)],
+  ['PATCH', '/v1/progress-notes/:id', 'any', 'Performance', 'Edit a progress note (body) or approve it (approved: true; false takes it back).', (ctx, r) => notes.updateNote(ctx, r.params.id, r.body, r.user)],
   ['DELETE', '/v1/testing-sessions/:id/share', 'any', 'Performance', 'Hide a testing day from families again.', (ctx, r) => reports.unshareSession(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/report', 'any', 'Performance', 'Progress report: best, first and latest for every test, top improvements, growth and growth-spurt estimate. ?parent_view=true shows exactly what the family sees.', (ctx, r) => reports.athleteReport(ctx, r.params.id, { parentView: r.query.parent_view === 'true' })],
   ['GET', '/v1/athlete-links', 'any', 'Performance', 'Device IDs and names you\'ve linked to athletes (?provider=, ?client_id=, ?roster_id=).', (ctx, r) => list(perf.listLinks(ctx, r.query))],

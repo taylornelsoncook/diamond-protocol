@@ -1562,7 +1562,7 @@ async function viewNewTesting(main) {
 let testingState = { testKey: null, athleteIdx: 0 };
 let stopwatchRunning = false;
 async function viewTestingDay(main, id) {
-  const [day, clientsList] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients')]);
+  const [day, clientsList, notes] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients'), get(`/v1/testing-sessions/${id}/notes`).catch(() => null)]);
   if (!day.tests.length) return fill(main, header(day.name, ymd(day.date)), h('div', { class: 'empty' }, 'No tests on this day.'));
   if (!day.tests.some((t) => t.key === testingState.testKey)) testingState = { testKey: day.tests[0].key, athleteIdx: 0 };
   const test = day.tests.find((t) => t.key === testingState.testKey);
@@ -1640,7 +1640,35 @@ async function viewTestingDay(main, id) {
       action: h('div', { class: 'row' }, test.timed ? h('label', { class: 'row small', style: 'gap:6px' }, hand, 'Hand-timed') : null, h('div', { style: 'width:110px' }, unitSel)) },
       test.description ? h('p', { class: 'small muted' }, test.description) : null,
       athletes.length ? rows : h('p', { class: 'muted' }, 'No athletes yet.'),
-      h('div', { style: 'max-width:360px;margin-top:8px' }, add)));
+      h('div', { style: 'max-width:360px;margin-top:8px' }, add)),
+    notes?.data.length ? notesPanel(id, notes) : null);
+}
+
+// A short note per athlete for parents: drafted from the results, read and approved by a coach.
+function notesPanel(id, notes) {
+  const manage = state.user.role !== 'front_desk';
+  const missing = notes.data.filter((x) => !x.note).length, drafts = notes.data.filter((x) => x.note && !x.note.approved).length;
+  const redraw = () => { const y = window.scrollY; render(); setTimeout(() => window.scrollTo(0, y), 300); };
+  const edit = (x) => {
+    const d = document.getElementById('dialog'), text = textarea(x.note.body, { rows: '8', style: 'min-height:180px', 'aria-label': `Note for ${x.name}` });
+    const save = (approved) => (e) => busy(e.currentTarget, async () => { await patch(`/v1/progress-notes/${x.note.id}`, { body: text.value, ...(approved ? { approved: true } : {}) }); d.close(); toast(approved ? 'Approved.' : 'Saved.'); redraw(); });
+    fill(d, h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, `Note for ${x.name.split(' ')[0]}'s parents`),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Check every number against the results, and add anything only you know.'), text,
+      h('div', { class: 'row wrap' }, x.note.approved ? null : btn('Save and approve', save(true), 'primary'), btn('Save', save(false), x.note.approved ? 'primary' : 'secondary'), btn('Cancel', () => d.close(), 'ghost'))));
+    d.addEventListener('close', () => fill(d), { once: true });
+    d.showModal();
+  };
+  return panel('Notes for parents', { subtitle: `A few sentences per athlete on what improved and what's next, drafted from the results${notes.ai ? ' and worded by Claude' : ''}. Read and approve each one; parents see approved notes ${notes.shared ? 'on their report now' : 'once you share this day'}.`,
+    action: manage ? h('div', { class: 'row wrap' },
+      missing ? btn(`Draft ${missing === notes.data.length ? 'notes' : `${missing} more`}`, (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/testing-sessions/${id}/notes/draft`); toast(`Drafted ${r.drafted} ${r.drafted === 1 ? 'note' : 'notes'}. Read each one before approving.`); redraw(); }), 'secondary') : null,
+      drafts ? btn(drafts === 1 ? 'Approve draft' : 'Approve all', (e) => { if (confirm(`Approve ${drafts} ${drafts === 1 ? 'note' : 'notes'}? Only do this after reading them.`)) busy(e.currentTarget, async () => { await post(`/v1/testing-sessions/${id}/notes/approve`); toast('Approved.'); redraw(); }); }, 'outline') : null) : null },
+    notes.data.map((x) => h('div', { class: 'list-item', style: 'align-items:flex-start' },
+      h('div', { class: 'grow stack-tight' },
+        h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'strong' }, x.name), x.note ? h('span', { class: `dp-badge dp-badge--${x.note.approved ? 'good' : 'warn'}` }, x.note.approved ? 'Approved' : 'Draft') : h('span', { class: 'small muted' }, 'No note yet')),
+        x.note ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, x.note.body) : null),
+      manage && x.note ? h('div', { class: 'row' }, btn('Edit', () => edit(x), 'ghost'),
+        !x.note.approved ? btn('Redo', (e) => busy(e.currentTarget, async () => { await post(`/v1/testing-sessions/${id}/notes/draft`, { client_ids: [x.client_id] }); redraw(); }), 'ghost') : null,
+        !x.note.approved ? btn('Approve', (e) => busy(e.currentTarget, async () => { await patch(`/v1/progress-notes/${x.note.id}`, { approved: true }); redraw(); }), 'secondary') : null) : null)));
 }
 
 async function viewLibrary(main) {

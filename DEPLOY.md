@@ -70,4 +70,5 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CURRENCY` | Payments. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Email. |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | Text messages (see section 4). Without them texts are only logged. |
+| `ANTHROPIC_API_KEY` | Optional. Claude rewords the drafted progress notes for parents; coaches still read and approve each one. Without it the plain drafts are used. `DP_AI_MODEL` picks the model. |
 | `SMS_ONLY_TO` | Staging: only these phone numbers (comma list) are really texted; the rest are held in the log. |

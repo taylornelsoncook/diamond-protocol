@@ -929,6 +929,19 @@ CREATE TABLE IF NOT EXISTS spot_offers (
   booked_at TEXT,
   UNIQUE (session_id, family_id)
 );
+-- Progress notes for parents (version 28): one per athlete per testing day, drafted by the app, approved by a coach.
+CREATE TABLE IF NOT EXISTS progress_notes (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  perf_session_id TEXT NOT NULL REFERENCES perf_sessions(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'draft' CHECK (source IN ('draft','ai','edited')),
+  approved_at TEXT,
+  approved_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (client_id, perf_session_id)
+);
 -- What each parent has read of the parent courses (version 25).
 CREATE TABLE IF NOT EXISTS guardian_lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,

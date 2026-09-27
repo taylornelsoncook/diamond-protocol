@@ -149,3 +149,29 @@ details.panel:not([open]){gap:0}
   .p-mini > .btn, .p-mini .btn-row{width:100%}
   .p-mini > .btn{justify-content:center}
 }
+
+/* ---- Book (classes, privates and evaluations) ---- */
+.bk-filter{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center}
+.bk-filter .label{margin:0}
+.bk-filter .input{min-height:44px}
+.bk-count{font-size:14px;white-space:nowrap}
+.bk-body .s-row{grid-template-columns:72px minmax(0,1fr) auto}
+.bk-body .s-name{overflow-wrap:anywhere}
+.bk-body .s-meta{overflow-wrap:anywhere}
+.bk-day[hidden]{display:none}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px}
+.slot{min-height:48px;flex-direction:column;gap:2px;line-height:1.15;padding:6px 10px}
+.slot-sub{display:block;font:500 12px/16px var(--font-sans);color:var(--steel-muted)}
+.bk-later{align-self:stretch}
+.bk-note-text{white-space:pre-line;overflow-wrap:anywhere}
+.modal textarea.input{min-height:88px;resize:vertical;font:inherit}
+[autofocus][tabindex="-1"]:focus{outline:none}
+@media (max-width:380px){
+  .bk-body .s-row{grid-template-columns:60px minmax(0,1fr) auto;gap:10px}
+}
+.p-body .modal > .spread{flex-wrap:nowrap;align-items:flex-start}
+.p-body .modal > .spread .modal-title{min-width:0;overflow-wrap:anywhere}
+.p-body .modal > .spread [data-close]{flex-shrink:0;margin:-6px -8px 0 0}
+.bk-body .bk-booked .s-row{grid-template-columns:92px minmax(0,1fr) auto}
+.bk-body .s-when{overflow-wrap:anywhere}
+@media (max-width:380px){ .bk-body .bk-booked .s-row{grid-template-columns:80px minmax(0,1fr) auto} }

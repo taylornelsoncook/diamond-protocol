@@ -512,20 +512,28 @@ Each athlete at a glance, with Overview, Accountability, Performance and Educati
 
 _Where: Book tab_
 
-Every class and clinic the athlete is old enough for, three weeks ahead.
+Every class, clinic and camp the athlete is old enough for, three weeks ahead.
 
-- Pick the athlete, then Classes.
-- Tap Book, or Waitlist if it's full. A waitlist spot moves up automatically and the family is emailed.
-- With no sessions left, they can pay the drop-in price with the card on file, or buy a pack.
+- Pick the athlete, then Classes. Switching athlete, Classes, Private or Evaluation redraws in place; Show narrows the list to one class (remembered while the app is open) with a count of sessions.
+- Each row shows the time, place, coach, spots left (or Full and how many are waiting) and the drop-in price when no session covers it. Today and Tomorrow are labelled.
+- Tap Book, or Waitlist if it's full. A waitlist spot moves up automatically and the family is emailed. Rows then show Booked, or Waitlist with the place in line, and a Cancel or Leave button. Cancel asks first, says what comes back (the pack session, the drop-in refund) and warns inside the late-cancel window that the session still counts as used. The list stays where you were after booking or cancelling.
+- Tap a class for details: time range, address with Directions, coach, ages, spots, how it's paid (or would be), the late-cancel note, Add to calendar once booked, and Book, Join waitlist, Register or Cancel.
+- With no sessions left, they can pay the drop-in price with the card on file, or buy a pack. A missing or declined card opens Add a card or Update card, and saving the card comes straight back to Book.
+- A camp they haven't registered for shows once, with its days, price and Register. Register charges the card once and books every day, right from Book; camp days show Registered. A camp past its registration deadline says Registration closed.
+- An athlete can't be booked in two places at once: a class that overlaps something already booked says so and has no Book button, and the server refuses it (waitlist spots too, since they book themselves).
+- Until the waiver is signed, a banner asks for it (booking still works).
 
 ### Book: privates and evaluations
 
 _Where: Book tab, Private or Evaluation_
 
-Open times from your hours.
+Open times from your hours, each with its coach.
 
-- Pick Private or Evaluation, then a time.
-- Privates use a private session from their pack; evaluations charge the card on file.
+- Pick Private or Evaluation. When more than one coach has hours, pick Any coach or one coach; each time shows the coach's name. The first six days show, with Show later dates. Times the athlete is already booked elsewhere are left out.
+- Pick a time, add an optional note for the coach (up to 500 characters), and confirm. The coach is emailed with the note, and the note shows in the session details on Home and Book.
+- Privates use one of the athlete's private sessions (from a pack or the membership). With none left and a card on file, Pay and book buys a single private and books the time in one step; otherwise See packs.
+- Evaluations charge the card on file. No card opens Add a card, which comes back here; a declined card says nothing was booked or charged.
+- Booked for (athlete) lists upcoming privates or evaluations with the coach and note; tap one for details and Add to calendar, or Cancel. Cancelling returns the private session or refunds the evaluation (outside the late-cancel window), tells the coach, and opens the time for other families.
 
 ### Progress
 

@@ -16,6 +16,8 @@ export async function render(ctx) {
   const { me } = ctx;
   const fam = me.family;
   const live = me.settings.payments_mode === 'live';
+  // Where to go after saving: back to the screen that asked for a card (only pages inside the portal).
+  const back = /^\/parent(\/[a-z]+)?(\?[\w=&%-]*)?$/.test(ctx.query.back || '') ? ctx.query.back : '/parent/family';
   mount(ctx.el, html`<div class="p-auth"><form class="auth-card panel" id="cf" novalidate autocomplete="on">
     <div class="spread"><div class="row" style="gap:10px"><img src="/img/mark-64.png" alt="" width="32" height="32"><span class="strong">${me.settings.business_name}</span></div>
       <span class="secure-head">${lockIcon}Secure card entry</span></div>
@@ -31,7 +33,7 @@ export async function render(ctx) {
     </div>
     <div class="error" id="err" role="alert"></div>
     <button class="btn btn-primary btn-lg" id="save">Save card</button>`}
-    <a class="btn btn-ghost" href="/parent/family">Cancel</a>
+    <a class="btn btn-ghost" href="${back}">Cancel</a>
     <div class="test-code small" role="note">Test mode: no real card is charged. Try 4242 4242 4242 4242; a card ending 0002 is declined. In live mode this page is Stripe Checkout and the card goes straight to Stripe.</div>
     <p class="small muted" style="margin:0">We keep only the card brand, last 4 digits and expiry. The full number and security code are never stored.</p>
   </form></div>`);
@@ -68,7 +70,7 @@ export async function render(ctx) {
       const r = await api.put('/parent/card', { number: n, exp: exp.value, cvc: f.cvc.value, zip: f.zip.value.trim() });
       f.reset();
       toast(r.paid ? `${r.card_label} saved. ${r.paid} past-due ${r.paid === 1 ? 'charge was' : 'charges were'} paid.` : r.retried ? `${r.card_label} saved. A past-due charge was declined again.` : `${r.card_label} saved.`, r.retried && !r.paid ? 'warn' : 'good');
-      ctx.go('/parent/family', { replace: true });
+      ctx.go(back, { replace: true });
     } catch (x) { err.textContent = x.message; }
     finally { btn.disabled = false; }
   };

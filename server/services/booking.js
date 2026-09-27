@@ -203,8 +203,8 @@ function openSlots(kind, fromDate, days = 21) {
 }
 
 // Book a private or evaluation into an open slot: creates the session, then the booking.
-function bookSlot(kind, starts_at, athleteId, { source = 'parent' } = {}) {
-  const slot = openSlots(kind, starts_at.slice(0, 10), 1).find((s) => s.starts_at === starts_at);
+function bookSlot(kind, starts_at, athleteId, { source = 'parent', coachId = null } = {}) {
+  const slot = openSlots(kind, starts_at.slice(0, 10), 1).find((s) => s.starts_at === starts_at && (!coachId || s.coach_id === coachId));
   if (!slot) throw bad('That time was just taken. Pick another.');
   const a = get('SELECT * FROM athletes WHERE id=?', athleteId);
   if (kind === 'private' && a.private_credits < 1) throw bad('No private sessions left. Buy a private pack first.');

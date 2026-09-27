@@ -285,6 +285,7 @@ async function overview(ctx, el) {
           <dt>When</dt><dd>${dayLong(b.starts_at)}<br>${timeRange(b)}</dd>
           ${b.location ? html`<dt>Where</dt><dd>${b.location}${b.address ? html`<br><span class="muted">${b.address}</span>` : ''}</dd>` : ''}
           ${b.coach ? html`<dt>Coach</dt><dd>${b.coach}</dd>` : ''}
+          ${b.note ? html`<dt>Your note</dt><dd style="white-space:pre-line;overflow-wrap:anywhere">${b.note}</dd>` : ''}
           ${b.status === 'waitlist' ? html`<dt>Status</dt><dd>On the waitlist${b.waitlist_pos ? `, ${ordinal(b.waitlist_pos)} in line` : ''}. If a spot opens, ${a.first_name} is booked automatically and you get an email.</dd>` : ''}
           ${cov ? html`<dt>Payment</dt><dd>${cov}</dd>` : ''}
         </dl>

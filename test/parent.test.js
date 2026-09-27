@@ -637,3 +637,168 @@ test('checking a code answers the same for an email that is not on file', async 
   const row = get("SELECT * FROM activity WHERE action='Sign-in failed' AND detail LIKE 'nobody.probe@example.com%' ORDER BY id DESC LIMIT 1");
   assert.ok(row && row.ip, 'failed sign-in is logged with the network address');
 });
+
+// ---- Book tab: details, clashes, coaches, notes, freeing a cancelled private ----
+const outboxTop = () => get('SELECT MAX(id) m FROM outbox').m || 0;
+const outboxSince = (id) => all('SELECT * FROM outbox WHERE id>? ORDER BY id', id);
+// An earlier test signs Kurt out, so these sign in again.
+const freshSignIn = (email) => { delete sessions[email]; return signIn(email); };
+
+test('classes list carries coach, late window, waitlist place, camp days and the waiver state', async () => {
+  const kurt = await freshSignIn(KURT);
+  const nate = athlete('Nate', 'Jensen');
+  const r = (await call('GET', `/parent/classes?athlete_id=${nate.id}`, null, kurt)).data;
+  assert.equal(typeof r.late_cancel_hours, 'number');
+  assert.equal(r.waiver_current, true);
+  const cls = r.events.find((e) => e.type === 'class' && e.coach);
+  assert.ok(cls, 'classes name their coach');
+  assert.equal(cls.coach, 'Chris', 'first name only');
+  for (const e of r.events) assert.equal(typeof e.late, 'boolean');
+  const wl = r.events.find((e) => e.my_status === 'waitlist');
+  assert.ok(wl && wl.waitlist_pos >= 1, 'waitlist spot shows its place in line');
+  const booked = r.events.find((e) => e.my_status === 'booked');
+  assert.ok(booked.my_booking_id && booked.my_coverage, 'booked sessions say how they are paid');
+  const emma = athlete('Emma', 'Jensen');
+  const camp = get("SELECT * FROM classes WHERE name='Fall Speed Camp'");
+  const e2 = (await call('GET', `/parent/classes?athlete_id=${emma.id}`, null, kurt)).data.events.filter((e) => e.class_id === camp.id);
+  if (e2.length) {
+    const days = get('SELECT COUNT(*) n FROM events WHERE class_id=? AND cancelled=0 AND starts_at>=?', camp.id, booking.nowLocal()).n;
+    assert.equal(e2[0].reg_days, days);
+    assert.equal(e2[0].reg_closed, false);
+    run('UPDATE classes SET reg_deadline=? WHERE id=?', '2000-01-01', camp.id);
+    const closed = (await call('GET', `/parent/classes?athlete_id=${emma.id}`, null, kurt)).data.events.find((e) => e.class_id === camp.id);
+    assert.equal(closed.reg_closed, true, 'registration closed is flagged');
+    run('UPDATE classes SET reg_deadline=? WHERE id=?', camp.reg_deadline, camp.id);
+  }
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  // A new waiver version means every family has to sign again.
+  const v = Number(setting('waiver_version', 1));
+  run("UPDATE settings SET value=? WHERE key='waiver_version'", String(v + 1));
+  const p = (await call('GET', `/parent/classes?athlete_id=${isa.id}`, null, paulo)).data;
+  run("UPDATE settings SET value=? WHERE key='waiver_version'", String(v));
+  assert.equal(p.waiver_current, false, 'the waiver changed since they signed');
+});
+
+test('an athlete cannot be booked into two sessions at once, not even on a waitlist', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET group_credits=5 WHERE id=?', isa.id);
+  const a = makeEvent({ hours: 120, name: 'Clash A' });
+  const b = makeEvent({ hours: 120.5, name: 'Clash B' });
+  const c = makeEvent({ hours: 120.5, capacity: 1, name: 'Clash C' });
+  booking.book(c, athlete('Ava', 'Lopez').id, { source: 'staff' }); // full
+  const r1 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: a }, paulo);
+  assert.equal(r1.status, 200, JSON.stringify(r1.data));
+  const r2 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: b }, paulo);
+  assert.equal(r2.status, 400);
+  assert.equal(r2.data.clash_event_id, a);
+  assert.match(r2.data.error, /Clash A/);
+  const r3 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: c }, paulo);
+  assert.equal(r3.status, 400, 'no waitlist spot that would double-book');
+  const list = (await call('GET', `/parent/classes?athlete_id=${isa.id}`, null, paulo)).data.events;
+  assert.equal(list.find((e) => e.id === b).clash.name, 'Clash A');
+  assert.equal(list.find((e) => e.id === a).clash, null, 'your own booking is not a clash');
+  await call('DELETE', `/parent/bookings/${r1.data.id}`, null, paulo);
+  const r4 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: b }, paulo);
+  assert.equal(r4.status, 200, 'books once the other is cancelled');
+  await call('DELETE', `/parent/bookings/${r4.data.id}`, null, paulo);
+  run('UPDATE athletes SET group_credits=3 WHERE id=?', isa.id);
+});
+
+test('private times name the coach; booking a coach with a note tells them; cancelling frees the time', async () => {
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  run('UPDATE athletes SET private_credits=2 WHERE id=?', ava.id);
+  const owner = get("SELECT * FROM staff WHERE role='owner'");
+  const d = (await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, maria)).data;
+  assert.equal(d.coaches.length, 2, 'two coaches take privates in the demo');
+  assert.ok(d.slots.every((s) => s.coach && s.coach_id));
+  assert.ok(d.single_private && d.single_private.price_cents > 0);
+  assert.ok(d.booked.some((b) => /first-step/.test(b.note || '')), 'the seeded private shows as booked, with its note');
+  const slot = d.slots.find((s) => s.coach_id === owner.id);
+  assert.ok(slot, 'the owner has private hours');
+  assert.equal(slot.coach, 'Jordan');
+
+  // validation
+  const long = await call('POST', '/parent/slots', { kind: 'private', starts_at: slot.starts_at, athlete_id: ava.id, coach_id: owner.id, note: 'x'.repeat(501) }, maria);
+  assert.equal(long.status, 400);
+  assert.match(long.data.error, /500/);
+  const badCoach = await call('POST', '/parent/slots', { kind: 'private', starts_at: slot.starts_at, athlete_id: ava.id, coach_id: 'abc' }, maria);
+  assert.equal(badCoach.status, 400);
+  const wrongCoach = await call('POST', '/parent/slots', { kind: 'private', starts_at: slot.starts_at, athlete_id: ava.id, coach_id: 999 }, maria);
+  assert.equal(wrongCoach.status, 400, 'no such coach at that time');
+  assert.equal(athlete('Ava', 'Lopez').private_credits, 2, 'nothing was used');
+
+  const before = outboxTop();
+  const ok = await call('POST', '/parent/slots', { kind: 'private', starts_at: slot.starts_at, athlete_id: ava.id, coach_id: owner.id, note: '  Focus on hip turn.  ' }, maria);
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal(get('SELECT note FROM bookings WHERE id=?', ok.data.id).note, 'Focus on hip turn.');
+  const ev = get('SELECT * FROM events WHERE id=?', ok.data.event_id);
+  assert.equal(ev.coach_id, owner.id, 'booked with the coach picked');
+  const mail = outboxSince(before).find((m) => m.to_email === owner.email);
+  assert.ok(mail && /New private/.test(mail.subject) && /Focus on hip turn/.test(mail.body), 'the coach is emailed with the note');
+  assert.equal(athlete('Ava', 'Lopez').private_credits, 1);
+  const after = (await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, maria)).data;
+  assert.ok(!after.slots.some((s) => s.starts_at === slot.starts_at && s.coach_id === owner.id));
+  assert.ok(after.booked.some((b) => b.id === ok.data.id && b.coach === 'Jordan'));
+  assert.ok(get("SELECT 1 FROM activity WHERE action='Booked private' AND detail LIKE '%note for the coach%'"));
+
+  const before2 = outboxTop();
+  const c = await call('DELETE', `/parent/bookings/${ok.data.id}`, null, maria);
+  assert.equal(c.status, 200);
+  assert.equal(c.data.freed, true);
+  assert.equal(get('SELECT cancelled FROM events WHERE id=?', ok.data.event_id).cancelled, 1, 'the private session is cancelled');
+  assert.equal(athlete('Ava', 'Lopez').private_credits, 2, 'credit back outside the window');
+  assert.ok(outboxSince(before2).some((m) => m.to_email === owner.email && /Cancelled/.test(m.subject)), 'the coach is told');
+  const again = (await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, maria)).data;
+  assert.ok(again.slots.some((s) => s.starts_at === slot.starts_at && s.coach_id === owner.id), 'the time is open again');
+});
+
+test('open times leave out times the athlete is already booked, and booking one anyway is refused', async () => {
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  run('UPDATE athletes SET private_credits=2 WHERE id=?', ava.id);
+  const coach = get("SELECT * FROM staff WHERE role='coach'");
+  const desk = get("SELECT * FROM staff WHERE role='frontdesk'");
+  const d = (await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, maria)).data;
+  const slot = d.slots.find((s) => s.coach_id === coach.id && s.starts_at.slice(0, 10) > booking.todayLocal());
+  // Another session at that time with a different staff member, so the coach's hours stay open.
+  const ev = insert('events', { type: 'class', name: 'Busy block', starts_at: slot.starts_at, duration_min: 60, capacity: 5, price_cents: 0, location_id: 1, coach_id: desk.id });
+  const b = booking.book(ev, ava.id, { source: 'staff' });
+  const after = (await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, maria)).data;
+  assert.ok(!after.slots.some((s) => s.starts_at === slot.starts_at), 'busy time left out');
+  const r = await call('POST', '/parent/slots', { kind: 'private', starts_at: slot.starts_at, athlete_id: ava.id, coach_id: coach.id }, maria);
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /already booked for Busy block/);
+  assert.equal(athlete('Ava', 'Lopez').private_credits, 2);
+  booking.cancelBooking(b.id);
+  run('UPDATE events SET cancelled=1 WHERE id=?', ev);
+});
+
+test('cancelling a paid evaluation refunds it and opens the time again', async () => {
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  const d = (await call('GET', `/parent/slots?kind=evaluation&athlete_id=${ava.id}`, null, maria)).data;
+  const s = d.slots[d.slots.length - 1];
+  const r = await call('POST', '/parent/slots', { kind: 'evaluation', starts_at: s.starts_at, athlete_id: ava.id, coach_id: s.coach_id }, maria);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.paid_cents, 7500);
+  const booked = (await call('GET', `/parent/slots?kind=evaluation&athlete_id=${ava.id}`, null, maria)).data.booked;
+  assert.ok(booked.some((b) => b.id === r.data.id && b.coverage === 'paid'));
+  const c = await call('DELETE', `/parent/bookings/${r.data.id}`, null, maria);
+  assert.equal(c.data.freed, true);
+  assert.ok(get('SELECT 1 FROM invoices WHERE athlete_id=? AND amount_cents=-7500', ava.id), 'refunded');
+  const again = (await call('GET', `/parent/slots?kind=evaluation&athlete_id=${ava.id}`, null, maria)).data.slots;
+  assert.ok(again.some((x) => x.starts_at === s.starts_at));
+});
+
+test('book tab endpoints stay family-scoped and parent-only', async () => {
+  const kurt = await freshSignIn(KURT);
+  const ava = athlete('Ava', 'Lopez');
+  assert.equal((await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, kurt)).status, 404);
+  assert.equal((await call('GET', `/parent/classes?athlete_id=${ava.id}`, null, kurt)).status, 404);
+  assert.equal((await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`)).status, 401);
+  const avaBooking = get("SELECT b.id FROM bookings b WHERE b.athlete_id=? AND b.status='booked' LIMIT 1", ava.id);
+  assert.equal((await call('DELETE', `/parent/bookings/${avaBooking.id}`, null, kurt)).status, 404);
+});

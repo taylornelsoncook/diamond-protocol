@@ -39,8 +39,22 @@ test('the owner pulse counts today\'s in-person money in today and in the month'
   assert.equal(p.money.today_sales, 1);
   assert.equal(p.money.month.total, before.money.month.total + 4200);
   assert.equal(p.money.month.sales, before.money.month.sales + 4200);
-  for (const k of ['clients', 'today', 'attendance', 'workouts', 'leads']) assert.ok(p[k], k);
+  for (const k of ['clients', 'today', 'attendance', 'workouts', 'leads', 'new_members', 'most_active']) assert.ok(p[k], k);
+  const here = p.money.locations.find((l) => l.id === facility.id);
+  assert.equal(here.cents, 4200);
+  assert.equal(here.sales, 1);
+  assert.equal(p.money.avg_spend_cents, 0);   // a walk-in sale isn't a client's spend
   assert.equal(typeof p.bookings_next_7_days, 'number');
+});
+
+test('average spend counts what each paying client spent this month', async () => {
+  const a = (await owner('POST', '/v1/clients', { name: 'Ava Lopez', email: 'ava.pulse@example.com' })).body;
+  const b = (await owner('POST', '/v1/clients', { name: 'Ben Ortiz', email: 'ben.pulse@example.com' })).body;
+  await owner('POST', '/v1/sales', { location_id: facility.id, method: 'cash', client_id: a.id, custom: { description: 'Pack', amount_cents: 10000 } });
+  await owner('POST', '/v1/sales', { location_id: facility.id, method: 'cash', client_id: b.id, custom: { description: 'Drop-in', amount_cents: 3000 } });
+  const p = (await owner('GET', '/v1/dashboard')).body.pulse;
+  assert.equal(p.money.paying_clients_this_month, 2);
+  assert.equal(p.money.avg_spend_cents, 6500);
 });
 
 test('coaches and front desk get the pulse without any money', async () => {

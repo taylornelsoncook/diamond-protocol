@@ -116,9 +116,21 @@ export function pulse(ctx, { role = 'owner' } = {}) {
   const upcoming = db.get(`SELECT COUNT(*) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id
     WHERE s.status = 'scheduled' AND b.status = 'booked' AND s.starts_at >= ? AND s.starts_at < ?`, now, weekAhead).n;
   const workouts = db.get('SELECT COUNT(*) AS n, COUNT(DISTINCT client_id) AS athletes FROM workout_logs WHERE completed_at >= ?', weekAgo);
+  const newMembers = db.get(`SELECT COUNT(DISTINCT s.client_id) AS n, SUM(s.status = 'trialing') AS trialing FROM subscriptions s JOIN clients c ON c.id = s.client_id
+    WHERE c.archived_at IS NULL AND s.status IN ('active','trialing') AND s.created_at >= ?
+      AND NOT EXISTS (SELECT 1 FROM subscriptions o WHERE o.client_id = s.client_id AND o.id <> s.id AND o.created_at < ?)`, thisStart, thisStart);
+  // Most active members: sessions attended plus workouts logged in the last 30 days.
+  const monthAgo = addDays(now, -30);
+  const mostActive = db.all(`SELECT c.id AS client_id, c.name,
+      (SELECT COUNT(*) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE b.client_id = c.id AND b.status = 'attended' AND x.starts_at >= ?) AS sessions,
+      (SELECT COUNT(*) FROM workout_logs l WHERE l.client_id = c.id AND l.completed_at >= ?) AS workouts
+    FROM clients c WHERE c.archived_at IS NULL AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.client_id = c.id AND s.status IN ('active','trialing','past_due'))
+    ORDER BY sessions + workouts DESC, c.name LIMIT 3`, monthAgo, monthAgo).filter((r) => r.sessions + r.workouts > 0);
   const leads = db.get(`SELECT COUNT(*) AS n, SUM(converted_at IS NOT NULL) AS won, SUM(status IN ('new','contacted','evaluation')) AS open FROM leads WHERE created_at >= ?`, thisStart);
   const out = {
     clients: { active: counts.current, trialing: counts.trialing, new_this_month: newClients, canceled_this_month: canceled },
+    new_members: { this_month: newMembers.n, trialing: newMembers.trialing ?? 0 },
+    most_active: mostActive,
     today: { sessions: today.sessions, booked: today.booked, capacity: today.capacity },
     attendance: { came: att.came ?? 0, missed: att.missed ?? 0 },
     bookings_next_7_days: upcoming,
@@ -130,12 +142,22 @@ export function pulse(ctx, { role = 'owner' } = {}) {
   const teams = teamSummary(ctx);
   const risk = db.get(`SELECT COALESCE(SUM(i.amount_cents), 0) AS c, COUNT(*) AS n FROM invoices i WHERE i.status = 'failed'`);
   const todaySales = db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, dayStart);
+  // Average spend: what clients paid this month (their own sales plus membership payments) per client who paid anything.
+  const spend = db.get(`SELECT COALESCE(SUM(c), 0) AS cents, COUNT(*) AS clients FROM (
+      SELECT client_id, SUM(c) AS c FROM (
+        SELECT client_id, amount_cents - refunded_cents AS c FROM sales WHERE client_id IS NOT NULL AND status IN ('succeeded','partially_refunded') AND completed_at >= ?
+        UNION ALL SELECT client_id, amount_cents FROM invoices WHERE status = 'paid' AND paid_at >= ?) GROUP BY client_id HAVING SUM(c) > 0)`, thisStart, thisStart);
+  const locations = db.all(`SELECT l.id, l.name, COALESCE(SUM(s.amount_cents - s.refunded_cents), 0) AS cents, COUNT(s.id) AS sales
+    FROM locations l LEFT JOIN sales s ON s.location_id = l.id AND s.status IN ('succeeded','partially_refunded') AND s.completed_at >= ?
+    WHERE l.active = 1 OR s.id IS NOT NULL GROUP BY l.id ORDER BY cents DESC, l.name`, thisStart);
   return { ...out,
     money: {
       month: collected(db, thisStart, now), same_point_last_month: collected(db, prevStart, sameDayLastMonth).total,
       today_cents: todaySales.c, today_sales: todaySales.n,
       mrr_cents: mrr.c + teams.monthly_cents, member_mrr_cents: mrr.c, team_mrr_cents: teams.monthly_cents, paying_members: mrr.n,
       failed_cents: risk.c, failed_invoices: risk.n,
+      avg_spend_cents: spend.clients ? Math.round(spend.cents / spend.clients) : 0, paying_clients_this_month: spend.clients,
+      locations,
       team_open_cents: teams.open_cents, team_overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0), team_overdue: teams.overdue.length
     } };
 }

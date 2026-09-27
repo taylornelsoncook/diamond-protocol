@@ -203,11 +203,14 @@ function pulseBlock(p) {
     tiles.push(
       pulseTile('Collected this month', money(mo.month.total), mo.same_point_last_month || mo.month.total ? `${diff >= 0 ? '+' : '−'}${money(Math.abs(diff))} vs this point last month` : 'Nothing collected yet', { href: '#/billing' }),
       pulseTile('In person today', money(mo.today_cents), `${mo.today_sales} ${mo.today_sales === 1 ? 'sale' : 'sales'}`, { href: '#/sell' }),
+      ...mo.locations.slice(0, 4).map((l) => pulseTile(`At ${l.name}`, money(l.cents), `This month · ${l.sales} ${l.sales === 1 ? 'sale' : 'sales'} in person`, { href: '#/sell' })),
       pulseTile('Monthly recurring', money(mo.mrr_cents), `${money(mo.member_mrr_cents)} members · ${money(mo.team_mrr_cents)} teams`, { href: '#/billing' }),
-      pulseTile('Average per member', mo.paying_members ? money(Math.round(mo.member_mrr_cents / mo.paying_members)) : '–', `${mo.paying_members} paying ${mo.paying_members === 1 ? 'member' : 'members'}`, { href: '#/clients?status=current' }));
+      pulseTile('Average per member', mo.paying_members ? money(Math.round(mo.member_mrr_cents / mo.paying_members)) : '–', `${mo.paying_members} paying ${mo.paying_members === 1 ? 'member' : 'members'}`, { href: '#/clients?status=current' }),
+      pulseTile('Average spend per client', money(mo.avg_spend_cents), `This month · ${mo.paying_clients_this_month} ${mo.paying_clients_this_month === 1 ? 'client' : 'clients'} paid`, { href: '#/billing' }));
   }
   tiles.push(
     pulseTile('Active clients', c.active, `${c.trialing} on trial · ${c.new_this_month} added this month`, { href: '#/clients?status=current' }),
+    pulseTile('New members', p.new_members.this_month, p.new_members.this_month ? `This month${p.new_members.trialing ? ` · ${p.new_members.trialing} on trial` : ''}` : 'None yet this month', { tone: p.new_members.this_month ? 'good' : null, href: '#/clients?status=current' }),
     pulseTile('Cancellations', c.canceled_this_month, c.canceled_this_month ? `This month · ${pct(c.canceled_this_month, c.active + c.canceled_this_month)} of members` : 'None this month', { tone: c.canceled_this_month ? 'warn' : null, href: '#/clients' }));
   if (p.money) {
     const mo = p.money;
@@ -220,6 +223,7 @@ function pulseBlock(p) {
     pulseTile('Attendance, 7 days', pct(p.attendance.came, att), att ? `${p.attendance.came} came · ${p.attendance.missed} no-shows` : 'No sessions checked in yet', { tone: att && p.attendance.came / att < 0.8 ? 'warn' : null }),
     pulseTile('Booked, next 7 days', p.bookings_next_7_days, 'Spots booked on the schedule', { href: '#/schedule' }),
     pulseTile('Workouts logged', p.workouts.last_7_days, `Last 7 days · ${p.workouts.athletes} ${p.workouts.athletes === 1 ? 'athlete' : 'athletes'}`, { tone: p.workouts.last_7_days ? 'good' : null, href: '#/programs' }),
+    pulseTile('Most active members', p.most_active.length ? p.most_active[0].name.split(' ')[0] : '–', p.most_active.length ? `30 days · ${p.most_active.map((a) => `${a.name.split(' ')[0]} ${a.sessions + a.workouts}`).join(' · ')}` : 'No sessions or workouts in 30 days', { href: p.most_active.length ? `#/clients/${p.most_active[0].client_id}` : '#/clients' }),
     pulseTile('Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
   return h('section', { class: 'pulse', 'aria-label': 'How the business is doing' }, ...tiles);
 }

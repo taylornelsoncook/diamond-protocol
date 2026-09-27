@@ -77,7 +77,20 @@ function seed() {
         if (t) e.setTarget({ athlete_id: ava.id, test_id: t.id, target, due_date: addDays(T, 60) }, coach.id);
       }
     }
-    if (chidi) insert('coach_messages', { athlete_id: chidi.id, staff_id: coach.id, body: 'Saw your check-in: short on sleep this week. Lights out by 10 before Friday.' });
+    if (chidi) {
+      const m = insert('coach_messages', { athlete_id: chidi.id, staff_id: coach.id, body: 'Saw your check-in: short on sleep this week. Lights out by 10 before Friday.' });
+      insert('message_replies', { message_id: m, athlete_id: chidi.id, body: 'Got it. Finals week, it should be better after Wednesday.', created_at: ago(0, 1) });
+    }
+    // Ava's mobility goal has run for a few weeks, so she can see last week's result and a streak.
+    if (ava) {
+      const ws = e.weekStart(T);
+      const mobility = get("SELECT id FROM goals WHERE athlete_id=? AND kind='custom'", ava.id);
+      if (mobility) {
+        run('UPDATE goals SET created_at=? WHERE id=?', `${addDays(ws, -21)} 15:00:00`, mobility.id);
+        for (const w of [-21, -14, -7]) for (const d of [0, 2, 3, 5]) run('INSERT OR IGNORE INTO goal_checks (goal_id, athlete_id, date) VALUES (?,?,?)', mobility.id, ava.id, addDays(ws, w + d));
+        for (let d = 0; d < 7 && addDays(ws, d) < T; d += 2) run('INSERT OR IGNORE INTO goal_checks (goal_id, athlete_id, date) VALUES (?,?,?)', mobility.id, ava.id, addDays(ws, d));
+      }
+    }
   }
   void all;
 }

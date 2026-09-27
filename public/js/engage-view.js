@@ -91,6 +91,10 @@ const bar = (pct, label) => html`<div class="bar eg-bar" role="progressbar" aria
 const dot = (label) => html`<span class="eg-dot" aria-hidden="true"></span><span class="sr-only">${label}</span>`;
 const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const dayIdx = (d) => (new Date(d + 'T12:00:00').getDay() + 6) % 7;
+// YYYY-MM-DD plus n days (dates only, no time zone drift).
+const addDay = (d, n) => { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+const MSG_SHOWN = 5; // messages shown before "Show older"
+const SEARCH_AT = 6; // lessons before the Education tab offers search
 
 // ---- the view ----
 // createEngage({ base, audience: 'athlete' | 'parent', name, onData })
@@ -103,8 +107,17 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
   const openCourses = new Set();
   const fresh = new Set();    // message ids that were unread when this view first showed them
   let readPosted = false;
+  let replyTo = null;         // message id with the reply box open
+  const replyDrafts = new Map();
+  let allMessages = false;    // "Show older" pressed
+  let dayOpen = null;         // calendar day with its details showing
+  const openTests = new Set();
+  let showDone = false;       // finished assignments listed
+  let lessonQuery = '';
   const you = () => (audience === 'parent' ? data?.athlete?.first_name || 'your athlete' : 'you');
   const parent = audience === 'parent';
+  const first = () => data?.athlete?.first_name || 'your athlete';
+  const coachWord = () => (parent ? `${first()}'s coach` : 'your coach');
 
   async function load() {
     data = await api.get(`${base}/engage`, { noRedirect: audience === 'athlete' });
@@ -133,8 +146,13 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
       <div class="eg-streak"><div class="eg-big ${s.active_weeks ? 'good' : ''}">${s.active_weeks}</div>
         <div class="eg-big-l">${s.active_weeks === 1 ? 'active week' : 'active weeks'} in a row</div><div class="eg-big-n">2 or more training days a week</div></div>
       <div class="eg-streak"><div class="eg-big ${s.checkin_days ? 'good' : ''}">${s.checkin_days}</div>
-        <div class="eg-big-l">${s.checkin_days === 1 ? 'check-in day' : 'check-in days'} in a row</div><div class="eg-big-n">${a.checkin_today ? 'Checked in today' : 'Check in today to keep it going'}</div></div>
+        <div class="eg-big-l">${s.checkin_days === 1 ? 'check-in day' : 'check-in days'} in a row</div><div class="eg-big-n">${a.checkin_today ? 'Checked in today' : 'Check in today to keep it going'}${s.checkin_best > s.checkin_days ? html`<br>Best: ${plural(s.checkin_best, 'day')}` : s.checkin_best > 1 ? html`<br>Best yet` : ''}</div></div>
     </section>`;
+  }
+  function unreadBanner(a) {
+    const n = (a.messages || []).filter((m) => !m.read).length;
+    if (!n) return '';
+    return html`<button type="button" class="eg-newmsg" data-jump-msg>${tabIcon('accountability', 18)}<span>${n === 1 ? `New message from ${coachWord()}` : `${n} new messages from ${coachWord()}`}</span>${icon('chevron', 16)}</button>`;
   }
   function countsTable(a) {
     const rows = [['Workouts', 'workouts'], ['Sessions', 'sessions'], ['Check-ins', 'checkins']];
@@ -151,10 +169,10 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
       const n = Number(d.date.slice(8));
       const what = [d.trained ? 'trained' : null, d.checked_in ? 'checked in' : null].filter(Boolean).join(', ') || 'no activity';
       const isToday = d.date === a.today;
-      return html`<div class="eg-day ${d.trained ? 'trained' : ''} ${isToday ? 'today' : ''}" role="listitem">
+      return html`<div role="listitem"><button type="button" class="eg-day ${d.trained ? 'trained' : ''} ${isToday ? 'today' : ''}" data-day="${d.date}" aria-pressed="${String(dayOpen === d.date)}" aria-controls="eg-day-info">
         <span class="eg-day-n" aria-hidden="true">${n}</span>
         <span class="eg-day-m" aria-hidden="true">${d.trained ? html`<span class="eg-mark-t">${icon('check', 12)}</span>` : ''}${d.checked_in ? html`<span class="eg-mark-c"></span>` : ''}</span>
-        <span class="sr-only">${fmtDate(d.date, { year: false, weekday: true })}${isToday ? ' (today)' : ''}: ${what}</span></div>`;
+        <span class="sr-only">${fmtDate(d.date, { year: false, weekday: true })}${isToday ? ' (today)' : ''}: ${what}</span></button></div>`;
     };
     return html`<section class="panel panel-tight"><div class="spread"><h2 class="panel-title">Last 4 weeks</h2>
       <span class="muted small">${fmtDate(days[0].date, { year: false })} to today</span></div>
@@ -164,12 +182,37 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
         <span><span class="eg-day trained eg-key" aria-hidden="true"><span class="eg-mark-t">${icon('check', 12)}</span></span>Trained</span>
         <span><span class="eg-day eg-key" aria-hidden="true"><span class="eg-mark-c"></span></span>Checked in</span>
         <span><span class="eg-day eg-key" aria-hidden="true"></span>Neither</span>
-      </div></section>`;
+      </div>
+      <div id="eg-day-info" aria-live="polite">${dayOpen ? dayInfo(days.find((d) => d.date === dayOpen), a.today) : html`<p class="muted small" style="margin:0">Tap a day to see what ${parent ? `${first()} did` : 'you did'}.</p>`}</div></section>`;
+  }
+  function dayInfo(d, today) {
+    if (!d) return '';
+    const c = d.checkin;
+    const lines = [
+      ...(d.workouts || []).map((w) => html`<li>${tabIcon('workout', 16)}<span>Workout: ${w}</span></li>`),
+      ...(d.sessions || []).map((x) => html`<li>${icon('check', 16)}<span>Session: ${x}</span></li>`),
+      c ? html`<li><span class="eg-mark-c" aria-hidden="true"></span><span>Check-in: ${[c.sleep_hours != null ? `slept ${sleepText(c.sleep_hours)}` : null, ...SCALES.filter((s) => c[s.key] != null).map((s) => `${s.label.toLowerCase()} ${c[s.key]}`)].filter(Boolean).join(', ')}</span></li>` : '',
+    ].filter(Boolean);
+    return html`<div class="eg-dayinfo"><div class="strong">${d.date === today ? 'Today' : fmtDate(d.date, { year: false, weekday: true })}</div>
+      ${lines.length ? html`<ul>${lines}</ul>` : html`<p class="muted small" style="margin:0">No training or check-in that day.</p>`}
+      ${c?.flags?.length ? html`<p class="warn-text small" style="margin:0">${c.flags.join(' · ')}</p>` : ''}</div>`;
+  }
+  // The last week of check-ins, newest first, so a trend is easy to spot.
+  function recentCheckins(a) {
+    const list = (a.recent_checkins || []).slice(0, 7);
+    if (list.length < 2) return '';
+    const cell = (c, k) => (c[k] == null ? html`<td class="muted">—</td>` : html`<td class="${(k === 'soreness' ? c[k] >= 4 : c[k] <= 2) ? 'warn-text' : ''}">${c[k]}</td>`);
+    return html`<section class="panel panel-tight" aria-labelledby="eg-rc-h"><div><h2 class="panel-title" id="eg-rc-h">Recent check-ins</h2>
+      <p class="panel-sub">Scores out of 5. Soreness: lower is better. Amber needs a look.</p></div>
+      <div class="eg-rc-wrap"><table class="eg-rc"><thead><tr><th scope="col">Day</th><th scope="col">Sleep</th>${SCALES.map((s) => html`<th scope="col">${s.label === 'Hydration' ? html`<abbr title="Hydration">Water</abbr>` : s.label === 'Soreness' ? html`<abbr title="Soreness">Sore</abbr>` : s.label}</th>`)}</tr></thead>
+      <tbody>${list.map((c) => html`<tr><th scope="row">${c.date === a.today ? 'Today' : fmtDate(c.date, { year: false, weekday: true }).replace(/,.*/, '')}<span class="muted small eg-rc-d">${c.date === a.today ? '' : fmtDate(c.date, { year: false })}</span></th>
+        <td class="${c.sleep_hours != null && c.sleep_hours < 6 ? 'warn-text' : ''}">${sleepText(c.sleep_hours)}</td>${SCALES.map((s) => cell(c, s.key))}</tr>`)}</tbody></table></div>
+    </section>`;
   }
   function checkinSummary(c) {
     const tips = advice(c);
     return html`<section class="panel" id="eg-checkin" aria-labelledby="eg-ci-h">
-      <div class="spread eg-ci-head"><div><h2 class="panel-title" id="eg-ci-h">Today's check-in</h2><p class="panel-sub">${icon('check', 14)} Saved${parent ? ` for ${data.athlete.first_name}` : ''}. Your coach can see it.</p></div>
+      <div class="spread eg-ci-head"><div><h2 class="panel-title" id="eg-ci-h">Today's check-in</h2><p class="panel-sub">${icon('check', 14)} Saved${parent ? ` for ${data.athlete.first_name}` : ''}. ${parent ? 'The coach' : 'Your coach'} can see it.</p></div>
         <button class="btn btn-sm" data-edit-checkin>Edit</button></div>
       <dl class="eg-ci-sum">
         <div><dt>Sleep</dt><dd>${sleepText(c.sleep_hours)}</dd></div>
@@ -183,9 +226,12 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
     const c = draft || { ...(a.checkin_today || {}) };
     draft = c;
     const who = parent ? data.athlete.first_name : null;
+    const y = (a.recent_checkins || []).find((x) => x.date === addDay(a.today, -1));
+    const blank = [c.sleep_hours, ...SCALES.map((s) => c[s.key])].every((v) => v == null);
     return html`<form class="panel" id="eg-checkin" aria-labelledby="eg-ci-h" novalidate>
-      <div><h2 class="panel-title" id="eg-ci-h">Today's check-in</h2>
+      <div class="spread eg-ci-head"><div><h2 class="panel-title" id="eg-ci-h">Today's check-in</h2>
         <p class="panel-sub">${parent ? `Filling it in for ${who}? Ask how ${who} feels and enter the answers.` : 'Takes 20 seconds. Answer what you can.'}</p></div>
+        ${y && blank ? html`<button type="button" class="btn btn-sm" data-same-yesterday>Same as yesterday</button>` : ''}</div>
       <div class="field"><label class="label" for="eg-sleep">Hours of sleep last night</label>
         <div class="eg-stepper">
           <button type="button" class="btn" data-step="-0.5" aria-label="Half an hour less">−</button>
@@ -195,8 +241,8 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
       ${SCALES.map((s) => html`<div class="field" role="group" aria-labelledby="eg-l-${s.key}">
         <span class="label" id="eg-l-${s.key}">${s.label} <span class="muted" style="font-weight:400">· ${s.q}</span></span>
         <div class="eg-scale">${s.words.map((w, i) => html`<button type="button" data-scale="${s.key}" data-v="${i + 1}" aria-pressed="${String(c[s.key] === i + 1)}"><b>${i + 1}</b><span>${w}</span></button>`)}</div></div>`)}
-      <div class="field"><label class="label" for="eg-note">Note for your coach <span class="muted" style="font-weight:400">(optional)</span></label>
-        <textarea class="input" id="eg-note" name="note" rows="2" maxlength="500" placeholder="Anything your coach should know?">${c.note || ''}</textarea></div>
+      <div class="field"><label class="label" for="eg-note">Note for ${parent ? 'the coach' : 'your coach'} <span class="muted" style="font-weight:400">(optional)</span></label>
+        <textarea class="input" id="eg-note" name="note" rows="2" maxlength="500" placeholder="${parent ? `Anything the coach should know about ${who}?` : 'Anything your coach should know?'}">${c.note || ''}</textarea></div>
       <div class="error" id="eg-ci-err" role="alert"></div>
       <div class="btn-row"><button class="btn btn-primary" type="submit">Save check-in</button>
         ${a.checkin_today ? html`<button class="btn btn-ghost" type="button" data-cancel-checkin>Cancel</button>` : ''}</div>
@@ -213,33 +259,68 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
             <span class="${g.done ? 'good-text strong' : 'muted'}">${g.done ? html`${icon('check', 14)} ` : ''}${g.progress} of ${g.target}</span></div>
           ${bar(pct, `${g.title}: ${g.progress} of ${g.target}`)}
           ${g.kind === 'custom'
-            ? html`<div class="spread"><span class="muted small">${g.team ? 'Team goal. ' : ''}Tick it off each day you do it.</span>
-                <button class="toggle" data-goal="${g.id}" aria-pressed="${String(!!g.checked_today)}">${g.checked_today ? html`${icon('check', 14)} Done today` : 'Done today'}</button></div>`
+            ? html`<div class="spread"><span class="muted small">${g.team ? 'Team goal. ' : ''}Tick it off each day ${parent ? `${first()} does it` : 'you do it'}.</span>
+                <button class="toggle" data-goal="${g.id}" aria-pressed="${String(!!g.checked_today)}">${g.checked_today ? html`${icon('check', 14)} Done today` : 'Done today'}</button></div>
+              ${weekStrip(g, a.today)}`
             : html`<span class="muted small">${g.team ? 'Team goal. ' : ''}Counts itself from ${g.kind === 'checkins' ? 'daily check-ins' : g.kind === 'sessions' ? 'sessions attended' : 'finished workouts'}.</span>`}
+          ${goalHistory(g)}
         </div>`;
-      })}</div>` : html`<p class="muted" style="margin:0">No goals set this week. Your coach can add some.</p>`}
+      })}</div>` : html`<p class="muted" style="margin:0">No goals set this week. ${parent ? 'The coach' : 'Your coach'} can add some.</p>`}
     </section>`;
+  }
+  // Monday to Sunday: tap an earlier day this week to tick off a day that was missed.
+  function weekStrip(g, today) {
+    const done = new Set(g.checked_days || []);
+    return html`<div class="eg-week" role="group" aria-label="${g.title}: days this week">${WD.map((w, i) => {
+      const d = addDay(g.week_start, i);
+      const future = d > today;
+      const on = done.has(d);
+      return html`<button type="button" class="eg-wd ${d === today ? 'is-today' : ''}" data-goal-day="${g.id}" data-date="${d}" aria-pressed="${String(on)}" ${future ? raw('disabled') : ''}
+        aria-label="${fmtDate(d, { year: false, weekday: true })}${d === today ? ' (today)' : ''}${on ? ', done' : ''}"><span aria-hidden="true">${w.slice(0, 1)}</span>${on ? html`<span class="eg-wd-c" aria-hidden="true">${icon('check', 12)}</span>` : ''}</button>`;
+    })}</div>`;
+  }
+  function goalHistory(g) {
+    const bits = [];
+    if (g.streak > 1) bits.push(html`<span class="good-text">Met ${g.streak} weeks in a row</span>`);
+    if (g.last_week) bits.push(html`<span>Last week: ${g.last_week.progress} of ${g.last_week.target}${g.last_week.met ? ', met' : ''}</span>`);
+    return bits.length ? html`<div class="small muted eg-ghist">${bits.map((b, i) => html`${i ? ' · ' : ''}${b}`)}</div>` : '';
   }
   function messages(a) {
     const list = a.messages || [];
-    return html`<section class="panel" aria-labelledby="eg-msg-h"><h2 class="panel-title" id="eg-msg-h">From your coach</h2>
-      ${list.length ? html`<div class="list">${list.map((m) => {
+    const shown = allMessages ? list : list.slice(0, MSG_SHOWN);
+    const replyBy = (r) => (r.from === 'parent' ? (r.parent || 'Parent') : parent ? first() : 'You');
+    return html`<section class="panel" id="eg-msgs" aria-labelledby="eg-msg-h" tabindex="-1"><div><h2 class="panel-title" id="eg-msg-h">From ${coachWord()}</h2>
+      ${list.length ? html`<p class="panel-sub">Reply and ${parent ? 'the coach' : 'your coach'} gets it by email.</p>` : ''}</div>
+      ${list.length ? html`<div class="list">${shown.map((m) => {
         const isNew = fresh.has(m.id) || !m.read;
-        return html`<article class="eg-msg ${isNew ? 'unread' : ''}">
+        const open = replyTo === m.id;
+        return html`<article class="eg-msg ${isNew ? 'unread' : ''}" aria-label="Message from ${m.coach || 'your coach'}">
           <div class="spread"><span class="strong">${m.coach || 'Your coach'}${m.team ? html` <span class="muted" style="font-weight:400">· to the team</span>` : ''}</span>
             <span class="muted small">${isNew ? html`<span class="badge badge-good">New</span> ` : ''}${relTime(m.created_at)}</span></div>
-          <p class="eg-note">${m.body}</p></article>`;
-      })}</div>` : html`<p class="muted" style="margin:0">No messages yet.</p>`}
+          <p class="eg-note">${m.body}</p>
+          ${(m.replies || []).map((r) => html`<div class="eg-reply"><div class="small"><span class="strong">${replyBy(r)}</span> <span class="muted">· ${relTime(r.created_at)}</span></div><p class="eg-note">${r.body}</p></div>`)}
+          ${open ? html`<form class="eg-reply-form" data-reply-form="${m.id}" novalidate>
+              <label class="sr-only" for="eg-r-${m.id}">Reply to ${m.coach || 'your coach'}</label>
+              <textarea class="input" id="eg-r-${m.id}" rows="3" maxlength="1000" placeholder="${parent ? `Write to ${m.coach ? m.coach.split(' ')[0] : 'the coach'} about ${first()}` : `Write back to ${m.coach ? m.coach.split(' ')[0] : 'your coach'}`}">${replyDrafts.get(m.id) || ''}</textarea>
+              <div class="error" role="alert" id="eg-r-err-${m.id}"></div>
+              <div class="btn-row"><button class="btn" type="submit">Send reply</button><button class="btn btn-ghost" type="button" data-reply-cancel>Cancel</button></div></form>`
+            : html`<div><button type="button" class="btn btn-ghost btn-sm eg-reply-btn" data-reply="${m.id}">${icon('back', 14)} Reply</button></div>`}
+        </article>`;
+      })}</div>
+      ${list.length > MSG_SHOWN && !allMessages ? html`<button type="button" class="btn btn-ghost btn-block" data-older>Show ${plural(list.length - MSG_SHOWN, 'older message')}</button>` : ''}`
+      : html`<p class="muted" style="margin:0">No messages yet.</p>`}
     </section>`;
   }
   function renderAccountability() {
     const a = data.accountability;
     const showForm = !a.checkin_today || editing;
-    mount(el, html`${streaks(a)}
+    mount(el, html`${unreadBanner(a)}
+      ${streaks(a)}
       ${showForm ? checkinForm(a) : checkinSummary(a.checkin_today)}
       ${goals(a)}
       ${messages(a)}
       ${calendar(a)}
+      ${recentCheckins(a)}
       ${countsTable(a)}`);
     bindAccountability();
     markRead();
@@ -265,6 +346,15 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
         form.querySelectorAll(`[data-scale="${k}"]`).forEach((x) => x.setAttribute('aria-pressed', String(Number(x.dataset.v) === draft[k])));
       }));
       form.querySelector('[data-cancel-checkin]')?.addEventListener('click', () => { editing = false; draft = null; rerender(); });
+      form.querySelector('[data-same-yesterday]')?.addEventListener('click', () => {
+        const y = (data.accountability.recent_checkins || []).find((x) => x.date === addDay(data.accountability.today, -1));
+        if (!y) return;
+        draft = { ...draft, sleep_hours: y.sleep_hours };
+        for (const k of SCALES) draft[k.key] = y[k.key];
+        rerender();
+        toast("Yesterday's answers are filled in. Change anything that's different, then save.");
+        el.querySelector('#eg-checkin [type=submit]')?.focus();
+      });
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const err = form.querySelector('#eg-ci-err');
@@ -285,19 +375,69 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
         } catch (x) { err.textContent = x.message; btn.disabled = false; }
       });
     }
-    el.querySelectorAll('[data-goal]').forEach((b) => b.addEventListener('click', async () => {
-      const id = Number(b.dataset.goal);
+    async function tick(b, id, date, done, focusSel) {
       const g = data.accountability.goals.find((x) => x.id === id);
-      const done = !g.checked_today;
+      const wasDone = g.done;
       b.disabled = true;
       try {
-        const r = await api.post(`${base}/goals/${id}/check`, { done });
+        const r = await api.post(`${base}/goals/${id}/check`, { done, date });
         Object.assign(g, r);
         rerender();
-        el.querySelector(`[data-goal="${id}"]`)?.focus();
-        if (done && r.done) toast(`${r.title}: met for this week.`);
+        el.querySelector(focusSel)?.focus();
+        if (done && r.done && !wasDone) toast(`${r.title}: met for this week.`);
       } catch (x) { toastError(x); b.disabled = false; }
+    }
+    el.querySelectorAll('[data-goal]').forEach((b) => b.addEventListener('click', () => {
+      const id = Number(b.dataset.goal);
+      const g = data.accountability.goals.find((x) => x.id === id);
+      tick(b, id, data.accountability.today, !g.checked_today, `[data-goal="${id}"]`);
     }));
+    el.querySelectorAll('[data-goal-day]').forEach((b) => b.addEventListener('click', () => {
+      const id = Number(b.dataset.goalDay), date = b.dataset.date;
+      tick(b, id, date, b.getAttribute('aria-pressed') !== 'true', `[data-goal-day="${id}"][data-date="${date}"]`);
+    }));
+    el.querySelector('[data-jump-msg]')?.addEventListener('click', () => {
+      const m = el.querySelector('#eg-msgs');
+      m?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      m?.focus({ preventScroll: true });
+    });
+    el.querySelectorAll('[data-day]').forEach((b) => b.addEventListener('click', () => {
+      dayOpen = dayOpen === b.dataset.day ? null : b.dataset.day;
+      el.querySelectorAll('[data-day]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.day === dayOpen)));
+      const info = el.querySelector('#eg-day-info');
+      const days = data.accountability.calendar || [];
+      mount(info, dayOpen ? dayInfo(days.find((d) => d.date === dayOpen), data.accountability.today) : html`<p class="muted small" style="margin:0">Tap a day to see what ${parent ? `${first()} did` : 'you did'}.</p>`);
+    }));
+    el.querySelector('[data-older]')?.addEventListener('click', () => { allMessages = true; rerender(); el.querySelectorAll('.eg-msg')[MSG_SHOWN]?.querySelector('button')?.focus(); });
+    el.querySelectorAll('[data-reply]').forEach((b) => b.addEventListener('click', () => {
+      replyTo = Number(b.dataset.reply); rerender();
+      el.querySelector(`#eg-r-${replyTo}`)?.focus();
+    }));
+    const rf = el.querySelector('[data-reply-form]');
+    if (rf) {
+      const id = Number(rf.dataset.replyForm);
+      const ta = rf.querySelector('textarea');
+      ta.addEventListener('input', () => replyDrafts.set(id, ta.value));
+      rf.querySelector('[data-reply-cancel]').addEventListener('click', () => {
+        replyTo = null; replyDrafts.delete(id); rerender(); el.querySelector(`[data-reply="${id}"]`)?.focus();
+      });
+      rf.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = rf.querySelector('.error'); err.textContent = '';
+        const text = ta.value.trim();
+        if (!text) { err.textContent = 'Write a reply first.'; ta.focus(); return; }
+        const btn = rf.querySelector('[type=submit]'); btn.disabled = true;
+        try {
+          const r = await api.post(`${base}/messages/${id}/reply`, { body: text });
+          const keepRead = new Map(data.accountability.messages.map((m) => [m.id, m.read]));
+          data.accountability.messages = r.messages.map((m) => ({ ...m, read: keepRead.has(m.id) ? keepRead.get(m.id) : m.read }));
+          replyTo = null; replyDrafts.delete(id);
+          toast(r.emailed ? `Reply sent. ${r.coach ? r.coach.split(' ')[0] : 'The coach'} gets it by email.` : 'Reply saved. The coach sees it next time they look.');
+          rerender();
+          el.querySelector(`[data-reply="${id}"]`)?.focus();
+        } catch (x) { err.textContent = x.message; btn.disabled = false; }
+      });
+    }
   }
   // Opening the tab marks messages read; they keep their "New" label until the next load.
   function markRead() {
@@ -334,12 +474,13 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
         <p class="panel-sub">${[p.note.day_name, p.note.date ? fmtDate(p.note.date) : null].filter(Boolean).join(' · ')}</p></div>
         <p class="eg-note">${p.note.text}</p></section>` : ''}
       ${targets.length ? html`<section class="panel" aria-labelledby="eg-tg-h"><div><h2 class="panel-title" id="eg-tg-h">Targets</h2>
-        <p class="panel-sub">Set by your coach. Best result so far, then the target.</p></div>
+        <p class="panel-sub">Set by ${parent ? 'the coach' : 'your coach'}. Best result so far, then the target.</p></div>
         <div class="list">${targets.map((t) => html`<div class="eg-goal">
           <div class="spread"><span class="strong">${t.test}</span>${t.reached ? html`<span class="badge badge-good">${icon('check', 12)} Reached</span>` : html`<span class="muted">${t.pct}%</span>`}</div>
           <div class="eg-tg-vals"><span>${t.best_text || 'Not tested yet'}</span><span class="muted" aria-hidden="true">→</span><span class="sr-only">target</span><span class="strong">${t.target_text}</span>
-            ${t.due_date && !t.reached ? html`<span class="muted small">by ${fmtDate(t.due_date, { year: false })}</span>` : ''}</div>
+            ${t.due_date && !t.reached ? html`<span class="${t.overdue ? 'warn-text' : 'muted'} small">${t.overdue ? 'was due' : 'by'} ${fmtDate(t.due_date, { year: false })}</span>` : ''}</div>
           ${bar(t.pct, `${t.test}: ${t.pct}% of the way to the target`)}
+          ${t.to_go_text ? html`<span class="muted small">${t.to_go_text}${t.lower_better ? ' · lower is better' : ''}</span>` : t.reached ? '' : html`<span class="muted small">Progress counts from the first test.</span>`}
         </div>`)}</div></section>` : ''}
       ${ranks ? html`<section class="panel" aria-labelledby="eg-rk-h"><div><h2 class="panel-title" id="eg-rk-h">How ${parent ? data.athlete.first_name : 'you'} compare${parent ? 's' : ''}</h2>
         <p class="panel-sub">Rankings only compare best results. No names are shown to anyone.</p></div>
@@ -349,17 +490,41 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
         })}</div></section>` : ''}
       ${prs.length ? html`<section class="panel" aria-labelledby="eg-pr-h"><h2 class="panel-title" id="eg-pr-h">New PRs</h2>
         <div class="eg-prs">${prs.map((r) => html`<div class="eg-pr"><span class="eg-pr-v">${fmtValue(r.value, r.unit)}</span><span class="eg-pr-l">${r.test}</span><span class="muted small">${fmtDate(r.date, { year: false })}</span></div>`)}</div></section>` : ''}
-      ${tests.length ? html`<section class="panel" aria-labelledby="eg-all-h"><div><h2 class="panel-title" id="eg-all-h">Every test</h2><p class="panel-sub">Best result and change since the first test.</p></div>
+      ${tests.length ? html`<section class="panel" aria-labelledby="eg-all-h"><div><h2 class="panel-title" id="eg-all-h">Every test</h2><p class="panel-sub">Best result and change since the first test. Tap a test to see every result.</p></div>
         <div class="list">${catOrder.map((cat) => html`${catOrder.length > 1 ? html`<div class="eg-cat">${cat}</div>` : ''}${tests.filter((t) => (t.category || 'Other') === cat).map((t) => {
           const good = t.category !== 'Body' && t.change != null && t.change !== 0 && (t.lower_better ? t.change < 0 : t.change > 0);
-          return html`<div class="eg-trow">
-            <div><div class="strong">${t.name}</div><div class="muted small">${t.count > 1 ? `${fmtValue(t.first, t.unit)} → ${fmtValue(t.latest, t.unit)}` : `Tested once${t.history?.[0]?.date ? `, ${fmtDate(t.history[0].date)}` : ''}`}${t.lower_better ? ' · lower is better' : ''}</div></div>
-            <div>${raw(trendSvg(t.history, t.lower_better, { w: 84, h: 28 }))}</div>
-            <div class="eg-tbest">${fmtValue(t.best, t.unit)}${t.count > 1 && t.change != null ? html`<span class="${good ? 'good-text' : 'muted'}">${fmtChange(t.change, t.unit)}</span>` : ''}</div>
-          </div>`;
+          const open = openTests.has(t.test_id);
+          const isPr = prs.some((r) => r.test === t.name);
+          return html`<div class="eg-tblock"><button type="button" class="eg-trow" data-test="${t.test_id}" aria-expanded="${String(open)}" aria-controls="eg-th-${t.test_id}">
+            <span><span class="strong eg-tname">${t.name}${isPr ? html` <span class="badge badge-good">PR</span>` : ''}</span><span class="muted small">${t.count > 1 ? `${fmtValue(t.first, t.unit)} → ${fmtValue(t.latest, t.unit)}` : `Tested once${t.history?.[0]?.date ? `, ${fmtDate(t.history[0].date)}` : ''}`}${t.lower_better ? ' · lower is better' : ''}</span></span>
+            <span>${raw(trendSvg(t.history, t.lower_better, { w: 84, h: 28 }))}</span>
+            <span class="eg-tbest">${fmtValue(t.best, t.unit)}${t.count > 1 && t.change != null ? html`<span class="${good ? 'good-text' : 'muted'}">${fmtChange(t.change, t.unit)}</span>` : ''}</span>
+          </button>
+          <div id="eg-th-${t.test_id}" class="eg-thist" ${open ? '' : raw('hidden')}>${testHistory(t)}</div></div>`;
         })}`)}</div></section>` : html`<div class="empty">No test results yet. After ${parent ? `${data.athlete.first_name}'s` : 'your'} next testing day, results show up here.</div>`}
       ${code && tests.length ? html`<a class="btn btn-block" href="/report/${encodeURIComponent(code)}" target="_blank" rel="noopener">${icon('print', 18)} Printable report</a>` : ''}
     `);
+    el.querySelectorAll('[data-test]').forEach((b) => b.addEventListener('click', () => {
+      const id = Number(b.dataset.test);
+      const open = !openTests.has(id);
+      if (open) openTests.add(id); else openTests.delete(id);
+      b.setAttribute('aria-expanded', String(open));
+      el.querySelector(`#eg-th-${id}`).hidden = !open;
+    }));
+  }
+
+  // Every testing date for one test, newest first, with the best marked.
+  function testHistory(t) {
+    const h = [...(t.history || [])].reverse();
+    return html`<table class="eg-hist"><caption class="sr-only">${t.name}, every result</caption>
+      <thead><tr><th scope="col">Date</th><th scope="col">Result</th><th scope="col"><span class="sr-only">Change from the one before</span></th></tr></thead>
+      <tbody>${h.map((x, i) => {
+        const prev = h[i + 1];
+        const diff = prev ? Math.round((x.value - prev.value) * 1000) / 1000 : null;
+        const better = diff != null && diff !== 0 && (t.lower_better ? diff < 0 : diff > 0);
+        return html`<tr><td>${fmtDate(x.date)}</td><td class="strong">${fmtValue(x.value, t.unit)}${x.value === t.best && t.count > 1 ? html` <span class="good-text small">Best</span>` : ''}</td>
+          <td class="small ${better && t.category !== 'Body' ? 'good-text' : 'muted'}">${diff != null && diff !== 0 ? fmtChange(diff, t.unit) : diff === 0 ? 'Same' : ''}</td></tr>`;
+      })}</tbody></table>`;
   }
 
   // ======== Education ========
@@ -377,10 +542,18 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
     const assigned = e.assigned || [];
     for (const x of assigned) if (x.type === 'course' && !x.done && !openCourses.has(`init${x.course_id}`)) { openCourses.add(x.course_id); openCourses.add(`init${x.course_id}`); }
     const empty = !assigned.length && !e.courses.length && !e.lessons.length;
+    // Open work first (overdue, then by due date); finished work folds away once there's something still to do.
+    const todo = assigned.filter((x) => !x.done), finished = assigned.filter((x) => x.done);
+    const listed = todo.length && !showDone ? todo : [...todo, ...finished];
+    const lessonCount = e.courses.reduce((n, c) => n + c.total, 0) + e.lessons.length;
+    const q = lessonQuery.trim().toLowerCase();
+    const hit = (l) => !q || `${l.title} ${l.summary || ''}`.toLowerCase().includes(q);
+    const courses = e.courses.map((c) => ({ ...c, shown: q && c.title.toLowerCase().includes(q) ? c.lessons : c.lessons.filter(hit) })).filter((c) => !q || c.shown.length);
+    const library = e.lessons.filter(hit);
     mount(el, html`
       ${assigned.length ? html`<section class="panel" aria-labelledby="eg-as-h"><div><h2 class="panel-title" id="eg-as-h">Assigned</h2>
-        <p class="panel-sub">From your coach. ${assigned.filter((x) => x.done).length} of ${assigned.length} done.</p></div>
-        <div class="list">${assigned.map((x) => {
+        <p class="panel-sub">From ${coachWord()}. ${todo.length ? `${finished.length} of ${assigned.length} done.` : `All ${assigned.length} done. Nice work.`}</p></div>
+        <div class="list">${listed.map((x) => {
           const c = x.type === 'course' ? courseById(x.course_id) : null;
           const pct = c && c.total ? Math.round((c.done / c.total) * 100) : x.done ? 100 : 0;
           return html`<div class="eg-assign ${x.overdue ? 'overdue' : ''}">
@@ -389,12 +562,39 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
               ${x.done ? html`<span class="badge badge-good">${icon('check', 12)} Done</span>` : ''}</div>
             ${x.note ? html`<p class="eg-note small muted" style="margin:0">${x.note}</p>` : ''}
             ${c ? bar(pct, `${x.title}: ${x.progress} lessons done`) : ''}
-            ${x.done ? '' : html`<div><button class="btn btn-sm ${x.overdue ? 'btn-warn' : 'btn-outline'}" data-open-assign="${x.id}">${x.type === 'course' ? (c && c.done ? 'Continue' : 'Start') : 'Read'}</button></div>`}
+            ${x.done ? '' : html`<div><button class="btn btn-sm ${x.overdue ? 'btn-warn' : 'btn-outline'}" data-open-assign="${x.id}">${x.type === 'course' ? (c && c.done ? `Continue: ${c.lessons.find((l) => !l.done)?.title || 'next lesson'}` : 'Start course') : 'Read lesson'}</button></div>`}
           </div>`;
-        })}</div></section>` : ''}
-      ${e.courses.length ? html`<section class="stack" aria-labelledby="eg-co-h"><h2 class="eg-h2" id="eg-co-h">Courses</h2>
-        ${e.courses.map((c) => {
-          const open = openCourses.has(c.id);
+        })}</div>
+        ${todo.length && finished.length ? html`<button type="button" class="btn btn-ghost btn-block" data-show-done aria-expanded="${String(showDone)}">${showDone ? 'Hide finished' : `Show ${finished.length} finished`}</button>` : ''}
+      </section>` : ''}
+      ${lessonCount >= SEARCH_AT ? html`<div class="field eg-search"><label class="sr-only" for="eg-lq">Search lessons</label>
+        <input class="input" id="eg-lq" type="search" placeholder="Search lessons" autocomplete="off" value="${lessonQuery}"></div>` : ''}
+      <div id="eg-lessons">${lessonLists(courses, library, q)}</div>
+      ${empty ? html`<div class="empty">No lessons yet. When ${parent ? 'the coach' : 'your coach'} posts one, it shows up here.</div>` : ''}
+    `);
+    bindLessonLists();
+    el.querySelector('[data-show-done]')?.addEventListener('click', () => { showDone = !showDone; rerender(); el.querySelector('[data-show-done]')?.focus(); });
+    el.querySelector('#eg-lq')?.addEventListener('input', (ev) => {
+      lessonQuery = ev.target.value;
+      const qq = lessonQuery.trim().toLowerCase();
+      const h2 = (l) => !qq || `${l.title} ${l.summary || ''}`.toLowerCase().includes(qq);
+      const cs = e.courses.map((c) => ({ ...c, shown: qq && c.title.toLowerCase().includes(qq) ? c.lessons : c.lessons.filter(h2) })).filter((c) => !qq || c.shown.length);
+      mount(el.querySelector('#eg-lessons'), lessonLists(cs, e.lessons.filter(h2), qq));
+      bindLessonLists();
+    });
+    el.querySelectorAll('[data-open-assign]').forEach((b) => b.addEventListener('click', () => {
+      const x = assigned.find((y) => y.id === Number(b.dataset.openAssign));
+      if (x.type === 'lesson') return openLesson(x.lesson_id);
+      const c = courseById(x.course_id);
+      const next = c?.lessons.find((l) => !l.done) || c?.lessons[0];
+      if (next) openLesson(next.id);
+    }));
+  }
+  function lessonLists(courses, library, q) {
+    return html`
+      ${courses.length ? html`<section class="stack" aria-labelledby="eg-co-h"><h2 class="eg-h2" id="eg-co-h">Courses</h2>
+        ${courses.map((c) => {
+          const open = q ? true : openCourses.has(c.id);
           return html`<div class="panel panel-tight eg-course">
             <button class="eg-course-h" data-course="${c.id}" aria-expanded="${String(open)}" aria-controls="eg-c-${c.id}">
               <span class="grow"><span class="strong eg-lesson-t">${c.title}</span>
@@ -403,13 +603,14 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
             ${bar(c.total ? Math.round((c.done / c.total) * 100) : 0, `${c.title}: ${c.done} of ${c.total} done`)}
             <div id="eg-c-${c.id}" ${open ? '' : raw('hidden')}>
               ${c.description ? html`<p class="muted small" style="margin:4px 0 8px">${c.description}</p>` : ''}
-              <div class="list">${c.lessons.map((l) => lessonRowHtml(l))}</div></div>
+              <div class="list">${c.shown.map((l) => lessonRowHtml(l))}</div></div>
           </div>`;
         })}</section>` : ''}
-      ${e.lessons.length ? html`<section class="panel panel-tight" aria-labelledby="eg-lib-h"><h2 class="panel-title" id="eg-lib-h">Lessons library</h2>
-        <div class="list">${e.lessons.map((l) => lessonRowHtml(l))}</div></section>` : ''}
-      ${empty ? html`<div class="empty">No lessons yet. When your coach posts one, it shows up here.</div>` : ''}
-    `);
+      ${library.length ? html`<section class="panel panel-tight" aria-labelledby="eg-lib-h"><h2 class="panel-title" id="eg-lib-h">Lessons library</h2>
+        <div class="list">${library.map((l) => lessonRowHtml(l))}</div></section>` : ''}
+      ${q && !courses.length && !library.length ? html`<p class="muted" role="status" style="margin:0">No lessons match "${q}".</p>` : ''}`;
+  }
+  function bindLessonLists() {
     el.querySelectorAll('[data-course]').forEach((b) => b.addEventListener('click', () => {
       const id = Number(b.dataset.course);
       const open = !openCourses.has(id);
@@ -418,13 +619,6 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
       el.querySelector(`#eg-c-${id}`).hidden = !open;
     }));
     el.querySelectorAll('[data-lesson]').forEach((b) => b.addEventListener('click', () => openLesson(Number(b.dataset.lesson))));
-    el.querySelectorAll('[data-open-assign]').forEach((b) => b.addEventListener('click', () => {
-      const x = assigned.find((y) => y.id === Number(b.dataset.openAssign));
-      if (x.type === 'lesson') return openLesson(x.lesson_id);
-      const c = courseById(x.course_id);
-      const next = c?.lessons.find((l) => !l.done) || c?.lessons[0];
-      if (next) openLesson(next.id);
-    }));
   }
 
   // ---- lesson reader (in-page) ----
@@ -447,22 +641,26 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
       <div class="eg-body">${l.body ? paragraphs(l.body) : l.summary ? html`<p>${l.summary}</p>` : html`<p class="muted">This lesson has no text yet.</p>`}</div>
       <div class="eg-reader-foot">
         <button class="btn ${l.done ? 'btn-outline' : 'btn-primary'}" data-done aria-pressed="${String(!!l.done)}">${l.done ? html`${icon('check', 16)} Done` : 'Mark as done'}</button>
-        ${l.next ? html`<button class="btn ${l.done ? 'btn-primary' : ''}" data-next="${l.next.id}">Next lesson ${icon('chevron', 16)}</button>` : ''}
+        ${l.next ? html`<button class="btn ${l.done ? 'btn-primary' : ''}" data-next="${l.next.id}">Next lesson ${icon('chevron', 16)}</button>`
+          : l.done ? html`<button class="btn btn-primary" data-back-foot>Back to Education</button>` : ''}
       </div>
       ${l.next ? html`<p class="muted small" style="margin:0">Up next: ${l.next.title}</p>` : l.course ? html`<p class="muted small" style="margin:0">That's the last lesson in ${l.course.title}.</p>` : ''}
     </article>`);
-    el.querySelector('[data-back]').addEventListener('click', () => {
+    const back = () => {
       const id = l.id;
       reader = null; rerender();
       el.querySelector(`[data-lesson="${id}"]`)?.focus();
-    });
+    };
+    el.querySelector('[data-back]').addEventListener('click', back);
+    el.querySelector('[data-back-foot]')?.addEventListener('click', back);
     el.querySelector('[data-done]').addEventListener('click', async (e) => {
       const b = e.currentTarget; b.disabled = true;
       try {
         const r = await api.post(`${base}/lessons/${l.id}/complete`, { done: !l.done });
         reader = r;
-        if (r.done) toast(parent ? `Marked done for ${data.athlete.first_name}.` : 'Lesson done. Your coach can see it.');
         await load().catch(() => {});
+        const courseDone = r.done && r.course && data.education?.courses?.find((c) => c.id === r.course.id)?.complete;
+        if (r.done) toast(courseDone ? `Lesson done. That finishes ${r.course.title}.` : parent ? `Marked done for ${data.athlete.first_name}.` : 'Lesson done. Your coach can see it.');
         rerender();
         el.querySelector('[data-done]')?.focus();
       } catch (x) { toastError(x); b.disabled = false; }
@@ -476,7 +674,10 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
     set data(d) { data = d; readPosted = false; onData(d); },
     get tab() { return tab; },
     // True while someone is reading a lesson or has typed into the check-in form.
-    busy() { return !!reader || !!(draft && Object.values(draft).some((v) => v != null && v !== '')) && (editing || !data?.accountability?.checkin_today); },
+    busy() {
+      if (reader || replyTo != null) return true;
+      return !!(draft && Object.values(draft).some((v) => v != null && v !== '')) && (editing || !data?.accountability?.checkin_today);
+    },
     closeReader() { reader = null; },
     you,
   };

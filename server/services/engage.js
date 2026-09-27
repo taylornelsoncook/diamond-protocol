@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS lesson_views (lesson_id INTEGER NOT NULL REFERENCES l
 `);
 // Added after launch: when a coach last sent a reminder for an assignment.
 if (!all('PRAGMA table_info(assignments)').some((c) => c.name === 'reminded_at')) run('ALTER TABLE assignments ADD COLUMN reminded_at TEXT');
+// Added later: athletes (or their parents) reply to a coach's message, and parents' reads are kept apart from the athlete's,
+// so a parent opening the tab doesn't clear the athlete's "New" messages.
+db.exec(`
+CREATE TABLE IF NOT EXISTS message_replies (
+  id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES coach_messages(id) ON DELETE CASCADE, athlete_id INTEGER NOT NULL REFERENCES athletes(id),
+  parent_id INTEGER REFERENCES parents(id), body TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')));
+CREATE INDEX IF NOT EXISTS message_replies_msg ON message_replies(message_id);
+CREATE TABLE IF NOT EXISTS parent_message_reads (message_id INTEGER NOT NULL REFERENCES coach_messages(id) ON DELETE CASCADE, parent_id INTEGER NOT NULL, athlete_id INTEGER NOT NULL,
+  read_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (message_id, parent_id, athlete_id));
+`);
 
 const SCALE = ['hydration', 'soreness', 'energy', 'mood']; // 1–5
 const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
@@ -104,6 +114,13 @@ function checkinStreak(athleteId) {
   while (dates.has(d)) { n++; d = addDays(d, -1); }
   return n;
 }
+// Longest run of check-in days in a row over the last year.
+function bestCheckinStreak(athleteId) {
+  const dates = all('SELECT date FROM checkins WHERE athlete_id=? AND date>=? ORDER BY date', athleteId, addDays(todayLocal(), -400)).map((r) => r.date);
+  let best = 0, run_ = 0, prev = null;
+  for (const d of dates) { run_ = prev && addDays(prev, 1) === d ? run_ + 1 : 1; best = Math.max(best, run_); prev = d; }
+  return best;
+}
 // Weeks in a row (ending this week or last) with at least 2 training days.
 function activeWeekStreak(athleteId) {
   const thisWeek = weekStart();
@@ -116,24 +133,45 @@ function activeWeekStreak(athleteId) {
 }
 
 // ---- goals ----
+// How far a goal got in one week (Monday start).
+function goalProgress(g, athleteId, ws, weekCounts) {
+  if (g.kind === 'custom') return get('SELECT COUNT(*) n FROM goal_checks WHERE goal_id=? AND athlete_id=? AND date BETWEEN ? AND ?', g.id, athleteId, ws, addDays(ws, 6)).n;
+  return (weekCounts(ws))[g.kind];
+}
 function goalsFor(athleteId) {
   const a = athleteRow(athleteId);
   const list = all(`SELECT * FROM goals WHERE active=1 AND (athlete_id=? OR (team_id IS NOT NULL AND team_id=?)) ORDER BY id`, athleteId, a?.team_id ?? -1);
-  const ws = weekStart(), we = addDays(ws, 6);
-  const c = counts(athleteId, ws, we);
+  const T = todayLocal();
+  const ws = weekStart(T), we = addDays(ws, 6);
+  const cache = new Map();
+  const weekCounts = (w) => { if (!cache.has(w)) cache.set(w, counts(athleteId, w, addDays(w, 6))); return cache.get(w); };
   return list.map((g) => {
     const checks = g.kind === 'custom' ? all('SELECT date FROM goal_checks WHERE goal_id=? AND athlete_id=? AND date BETWEEN ? AND ?', g.id, athleteId, ws, we).map((r) => r.date) : [];
-    const progress = g.kind === 'custom' ? checks.length : c[g.kind];
+    const progress = g.kind === 'custom' ? checks.length : weekCounts(ws)[g.kind];
+    // Earlier weeks since the goal was set: last week's result and how many weeks in a row it was met.
+    const since = weekStart(String(g.created_at || T).slice(0, 10));
+    let last_week = null, streak = 0;
+    for (let w = addDays(ws, -7), i = 0; w >= since && i < 26; w = addDays(w, -7), i++) {
+      const p = goalProgress(g, athleteId, w, weekCounts);
+      if (i === 0) last_week = { progress: p, target: g.target, met: p >= g.target };
+      if (p >= g.target) streak++; else break;
+    }
+    if (progress >= g.target) streak++;
     return { id: g.id, title: g.title, kind: g.kind, kind_label: GOAL_KINDS[g.kind], target: g.target, progress, done: progress >= g.target,
-      team: !!g.team_id, checked_today: checks.includes(todayLocal()), week_start: ws, week_end: we };
+      team: !!g.team_id, checked_today: checks.includes(T), checked_days: checks.sort(), week_start: ws, week_end: we, last_week, streak };
   });
 }
-function checkGoal(athleteId, goalId, done) {
+// Tick a custom goal for today, or for an earlier day this week that was missed.
+function checkGoal(athleteId, goalId, done, date) {
   const g = get('SELECT * FROM goals WHERE id=? AND active=1', goalId);
   const a = athleteRow(athleteId);
   if (!g || !a || !(g.athlete_id === a.id || (g.team_id && g.team_id === a.team_id))) throw notFound('That goal');
   if (g.kind !== 'custom') throw bad('This goal counts itself from your training.');
-  const d = todayLocal();
+  const T = todayLocal();
+  const d = date == null || date === '' ? T : String(date);
+  if (!isDate(d)) throw bad('Pick a day this week.');
+  if (d > T) throw bad("You can't tick off a day that hasn't happened yet.");
+  if (d < weekStart(T)) throw bad('Only days this week can be ticked off. Last week is done.');
   if (done) run('INSERT OR IGNORE INTO goal_checks (goal_id, athlete_id, date) VALUES (?,?,?)', g.id, a.id, d);
   else run('DELETE FROM goal_checks WHERE goal_id=? AND athlete_id=? AND date=?', g.id, a.id, d);
   return goalsFor(a.id).find((x) => x.id === g.id);
@@ -148,15 +186,52 @@ function createGoal({ athlete_id = null, team_id = null, title, kind, target }, 
 }
 
 // ---- messages ----
-function messagesFor(athleteId, limit = 30) {
+// Messages to an athlete (and their team), newest first, each with this athlete's replies.
+// `read` is the athlete's own read; a parent (parentId) gets their own read state instead.
+function messagesFor(athleteId, limit = 30, { parentId = null } = {}) {
   const a = athleteRow(athleteId);
-  return all(`SELECT m.id, m.body, m.created_at, m.team_id, s.name AS coach, (r.read_at IS NOT NULL) AS read
-    FROM coach_messages m LEFT JOIN staff s ON s.id=m.staff_id LEFT JOIN message_reads r ON r.message_id=m.id AND r.athlete_id=?
-    WHERE m.athlete_id=? OR (m.team_id IS NOT NULL AND m.team_id=?) ORDER BY m.id DESC LIMIT ?`, athleteId, athleteId, a?.team_id ?? -1, limit)
-    .map((m) => ({ ...m, read: !!m.read, team: !!m.team_id }));
+  const readJoin = parentId
+    ? 'LEFT JOIN parent_message_reads r ON r.message_id=m.id AND r.athlete_id=? AND r.parent_id=?'
+    : 'LEFT JOIN message_reads r ON r.message_id=m.id AND r.athlete_id=?';
+  const list = all(`SELECT m.id, m.body, m.created_at, m.team_id, s.name AS coach, (r.read_at IS NOT NULL) AS read
+    FROM coach_messages m LEFT JOIN staff s ON s.id=m.staff_id ${readJoin}
+    WHERE m.athlete_id=? OR (m.team_id IS NOT NULL AND m.team_id=?) ORDER BY m.id DESC LIMIT ?`, ...(parentId ? [athleteId, parentId] : [athleteId]), athleteId, a?.team_id ?? -1, limit)
+    .map((m) => ({ ...m, read: !!m.read, team: !!m.team_id, replies: [] }));
+  if (list.length) {
+    const byId = new Map(list.map((m) => [m.id, m]));
+    const rows = all(`SELECT x.id, x.message_id, x.body, x.created_at, x.parent_id, p.name AS parent FROM message_replies x LEFT JOIN parents p ON p.id=x.parent_id
+      WHERE x.athlete_id=? AND x.message_id IN (${list.map(() => '?').join(',')}) ORDER BY x.id`, athleteId, ...list.map((m) => m.id));
+    for (const r of rows) byId.get(r.message_id)?.replies.push({ id: r.id, body: r.body, created_at: r.created_at, from: r.parent_id ? 'parent' : 'athlete', parent: r.parent || null });
+  }
+  return list;
 }
-function markRead(athleteId) {
-  for (const m of messagesFor(athleteId, 200).filter((x) => !x.read)) run('INSERT OR IGNORE INTO message_reads (message_id, athlete_id) VALUES (?,?)', m.id, athleteId);
+function markRead(athleteId, { parentId = null } = {}) {
+  for (const m of messagesFor(athleteId, 200, { parentId }).filter((x) => !x.read)) {
+    if (parentId) run('INSERT OR IGNORE INTO parent_message_reads (message_id, parent_id, athlete_id) VALUES (?,?,?)', m.id, parentId, athleteId);
+    else run('INSERT OR IGNORE INTO message_reads (message_id, athlete_id) VALUES (?,?)', m.id, athleteId);
+  }
+}
+// The athlete (or a parent, on their behalf) answers a coach's message. The coach who wrote it gets an email.
+const REPLY_DAILY_LIMIT = 20;
+function replyToMessage(athleteId, messageId, body, { parent = null } = {}) {
+  const a = athleteRow(athleteId);
+  if (!a) throw notFound('That athlete');
+  const m = get('SELECT m.*, s.name AS coach, s.email AS coach_email, s.active AS coach_active FROM coach_messages m LEFT JOIN staff s ON s.id=m.staff_id WHERE m.id=?', messageId);
+  if (!m || !(m.athlete_id === a.id || (m.team_id && m.team_id === a.team_id))) throw notFound('That message');
+  const text = String(body || '').trim();
+  if (!text) throw bad('Write a reply first.');
+  if (text.length > 1000) throw bad('Keep replies under 1,000 characters.');
+  if (get("SELECT COUNT(*) n FROM message_replies WHERE athlete_id=? AND created_at >= datetime('now','-1 day')", a.id).n >= REPLY_DAILY_LIMIT) {
+    throw bad('That is a lot of replies for one day. Talk to your coach at your next session.');
+  }
+  const id = insert('message_replies', { message_id: m.id, athlete_id: a.id, parent_id: parent?.id || null, body: text });
+  const who = parent ? `${parent.name} (${a.first_name} ${a.last_name}'s parent)` : `${a.first_name} ${a.last_name}`;
+  const to = m.coach_email && m.coach_active ? m.coach_email : null;
+  if (to) {
+    const quoted = m.body.length > 300 ? `${m.body.slice(0, 300)}…` : m.body;
+    sendEmail(to, `Reply from ${who}`, `${who} replied to your message:\n\n${text}\n\nYour message:\n${quoted}\n\nOpen their profile: ${appUrl()}/app/clients/${a.id}\n\n${businessName()}`);
+  }
+  return { id, who, emailed: !!to, coach: m.coach || null };
 }
 function recipients(a) {
   const parents = a.family_id ? all('SELECT email FROM parents WHERE family_id=?', a.family_id).map((p) => p.email) : [];
@@ -221,6 +296,16 @@ function rankings(a, tests, onlyShared) {
   }
   return out;
 }
+// How far a best result is from the target, in the test's unit ("3 in to go", "0.13 s to go").
+function gapText(best, target, unit, lowerBetter) {
+  if (best == null) return null;
+  const gap = lowerBetter ? best - target : target - best;
+  if (gap <= 0) return null;
+  const n = Math.round(gap * 100) / 100;
+  if (unit === 'in' && n >= 12) { const ft = Math.floor(n / 12), inch = Math.round((n - ft * 12) * 10) / 10; return `${ft} ft ${inch} in to go`; }
+  const u = unit === 's' ? 's' : unit === '%' ? '%' : unit === 'ratio' ? '' : unit;
+  return `${Number.isInteger(n) ? n : n.toFixed(unit === 's' ? 2 : n < 1 ? 2 : 1)}${u ? (u === '%' ? '%' : ` ${u}`) : ''} to go`;
+}
 function targetsFor(athleteId, tests) {
   return all('SELECT tt.*, t.name, t.unit, t.lower_better FROM test_targets tt JOIN tests t ON t.id=tt.test_id WHERE tt.athlete_id=? ORDER BY t.name', athleteId).map((x) => {
     const r = tests.find((t) => t.test_id === x.test_id);
@@ -231,8 +316,10 @@ function targetsFor(athleteId, tests) {
       if (reached) pct = 100;
       else if (first != null && first !== x.target) pct = Math.max(0, Math.min(99, Math.round(((x.lower_better ? first - best : best - first) / Math.abs(x.target - first)) * 100)));
     }
-    return { id: x.id, test_id: x.test_id, test: x.name, unit: x.unit, lower_better: !!x.lower_better, target: x.target, due_date: x.due_date, best, first, pct, reached: pct === 100,
-      best_text: best != null ? core.fmtValue(best, x.unit) : null, target_text: core.fmtValue(x.target, x.unit) };
+    const reached = pct === 100;
+    return { id: x.id, test_id: x.test_id, test: x.name, unit: x.unit, lower_better: !!x.lower_better, target: x.target, due_date: x.due_date, best, first, pct, reached,
+      best_text: best != null ? core.fmtValue(best, x.unit) : null, target_text: core.fmtValue(x.target, x.unit),
+      to_go_text: reached ? null : gapText(best, x.target, x.unit, x.lower_better), overdue: !reached && !!x.due_date && x.due_date < todayLocal() };
   });
 }
 function setTarget({ athlete_id, test_id, target, due_date }, staffId) {
@@ -240,6 +327,7 @@ function setTarget({ athlete_id, test_id, target, due_date }, staffId) {
   if (!t || !athleteRow(athlete_id)) throw bad('Choose an athlete and a test.');
   const v = core.parseEntry(String(target), t.unit); // accepts 6'5" for inches and 1:05 for seconds
   if (!Number.isFinite(v) || v <= 0) throw bad(`Enter the target in ${t.unit}.`);
+  if (due_date != null && due_date !== '' && !isDate(due_date)) throw bad('Pick a date for the target, or leave it blank.');
   run(`INSERT INTO test_targets (athlete_id, test_id, target, due_date, created_by) VALUES (?,?,?,?,?)
     ON CONFLICT(athlete_id, test_id) DO UPDATE SET target=excluded.target, due_date=excluded.due_date`, athlete_id, t.id, v, due_date || null, staffId);
   return get('SELECT id FROM test_targets WHERE athlete_id=? AND test_id=?', athlete_id, t.id).id;
@@ -294,7 +382,7 @@ function completeLesson(athleteId, lessonId, done = true) {
   return lessonFor(athleteId, lessonId);
 }
 // A real calendar date in YYYY-MM-DD form.
-const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')) && new Date(`${d}T12:00:00Z`).toISOString().slice(0, 10) === d;
+const isDate = (d) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d || ''))) return false; const x = new Date(`${d}T12:00:00Z`); return !Number.isNaN(x.getTime()) && x.toISOString().slice(0, 10) === d; };
 const shortDate = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const firstName = (staff) => String(staff?.name || 'Your coach').split(' ')[0];
 
@@ -378,22 +466,37 @@ function duplicateLesson(id) {
 }
 
 // ---- the three tabs, as the athlete (or their parent) sees them ----
-function accountability(athleteId) {
+// What happened on each day of a date range: finished workouts and attended sessions, by name.
+function dayDetails(athleteId, from, to) {
+  const out = new Map();
+  const add = (d, k, v) => { if (!out.has(d)) out.set(d, { workouts: [], sessions: [] }); out.get(d)[k].push(v); };
+  for (const r of all(`SELECT substr(w.finished_at,1,10) AS d, COALESCE(NULLIF(pd.title,''), 'Week ' || pd.week || ', day ' || pd.day) AS name FROM workout_logs w
+    LEFT JOIN program_days pd ON pd.id=w.day_id WHERE w.athlete_id=? AND w.finished_at IS NOT NULL AND substr(w.finished_at,1,10) BETWEEN ? AND ? ORDER BY w.finished_at`, athleteId, from, to)) add(r.d, 'workouts', r.name || 'Workout');
+  for (const r of all(`SELECT substr(e.starts_at,1,10) AS d, e.name FROM bookings b JOIN events e ON e.id=b.event_id
+    WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND substr(e.starts_at,1,10) BETWEEN ? AND ? ORDER BY e.starts_at`, athleteId, from, to)) add(r.d, 'sessions', r.name);
+  return out;
+}
+function accountability(athleteId, { parentId = null } = {}) {
   const a = athleteRow(athleteId);
   if (!a) throw notFound('That athlete');
   const T = todayLocal();
   const ws = weekStart(T);
   const from = addDays(T, -27);
   const days = activeDays(a.id, from, T);
-  const checkinDates = new Set(all('SELECT date FROM checkins WHERE athlete_id=? AND date BETWEEN ? AND ?', a.id, from, T).map((r) => r.date));
-  const calendar = [...Array(28).keys()].map((i) => { const d = addDays(from, i); return { date: d, trained: days.has(d), checked_in: checkinDates.has(d) }; });
+  const details = dayDetails(a.id, from, T);
+  const checkinRows = new Map(all('SELECT * FROM checkins WHERE athlete_id=? AND date BETWEEN ? AND ?', a.id, from, T).map((r) => [r.date, r]));
+  const calendar = [...Array(28).keys()].map((i) => {
+    const d = addDays(from, i); const c = checkinRows.get(d); const x = details.get(d) || { workouts: [], sessions: [] };
+    return { date: d, trained: days.has(d), checked_in: !!c, workouts: x.workouts, sessions: x.sessions,
+      checkin: c ? { sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, flags: flagsOf(c) } : null };
+  });
   const today = get('SELECT * FROM checkins WHERE athlete_id=? AND date=?', a.id, T);
   const recent = all('SELECT * FROM checkins WHERE athlete_id=? ORDER BY date DESC LIMIT 7', a.id).map((c) => ({ ...c, flags: flagsOf(c) }));
   const monthStart = T.slice(0, 8) + '01';
-  const messages = messagesFor(a.id);
+  const messages = messagesFor(a.id, 30, { parentId });
   return {
     today: T, week_start: ws,
-    streaks: { active_weeks: activeWeekStreak(a.id), checkin_days: checkinStreak(a.id) },
+    streaks: { active_weeks: activeWeekStreak(a.id), checkin_days: checkinStreak(a.id), checkin_best: bestCheckinStreak(a.id) },
     this_week: counts(a.id, ws, addDays(ws, 6)), this_month: counts(a.id, monthStart, T),
     calendar, checkin_today: today ? { ...today, flags: flagsOf(today) } : null, recent_checkins: recent,
     goals: goalsFor(a.id), messages, unread: messages.filter((m) => !m.read).length,
@@ -545,6 +648,6 @@ function remindOverdue(staff) {
 
 module.exports = {
   GOAL_KINDS, weekStart, flagsOf, saveCheckin, checkinStreak, activeWeekStreak, goalsFor, checkGoal, createGoal, messagesFor, markRead, sendMessage,
-  performance, targetsFor, setTarget, rankings, education, lessonFor, completeLesson, assign, accountability, staffOverview, recentFlags, educationReport, athleteRow,
+  performance, targetsFor, setTarget, replyToMessage, bestCheckinStreak, gapText, rankings, education, lessonFor, completeLesson, assign, accountability, staffOverview, recentFlags, educationReport, athleteRow,
   assignMany, updateAssignment, recordView, duplicateLesson, lessonProgress, remindAssignment, remindOverdue, isDate,
 };

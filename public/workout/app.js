@@ -622,6 +622,12 @@ tabbar.addEventListener('click', (e) => {
   // Pick up anything that changed since (a finished workout, a new message) without losing a half-filled form.
   if (tab !== 'workout') { const t = tab; view.load().then(() => { if (tab === t && !view.busy()) showTab(); }).catch(() => {}); }
 });
+// A link to another tab (e.g. /w/<token>#education) while the app is open switches to it.
+window.addEventListener('hashchange', () => {
+  const t = tabFromHash();
+  if (t === tab) return;
+  tab = t; view.closeReader(); showTab(); window.scrollTo(0, 0);
+});
 async function loadEngage() {
   try { await view.load(); showTab(); } catch { /* link not found or offline: the workout screen explains */ }
 }

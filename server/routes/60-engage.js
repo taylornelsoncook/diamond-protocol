@@ -20,10 +20,11 @@ function familyAthlete(req) {
   if (!a) throw notFound('That athlete');
   return a;
 }
-const everything = (a, view) => ({
+const everything = (a, view, parentId = null) => ({
   athlete: { id: a.id, first_name: a.first_name, last_name: a.last_name, code: a.code },
-  accountability: e.accountability(a.id), performance: e.performance(a.id, { view }), education: e.education(a.id),
+  accountability: e.accountability(a.id, { parentId }), performance: e.performance(a.id, { view }), education: e.education(a.id),
 });
+const replyLog = (req, a, r, text) => log(req, `${r.who} replied to ${r.coach ? r.coach.split(' ')[0] : 'a coach'}`, text.length > 120 ? `${text.slice(0, 120)}…` : text);
 const toInt = (v) => (v == null || v === '' ? null : Number(v));
 
 function lessonBody(b) {
@@ -55,16 +56,29 @@ function routes(api) {
   // ---- athlete app (private link) ----
   api.get('/w/:token/engage', (req, res) => { noStore(res); res.json(everything(byToken(req.params.token), 'athlete')); });
   api.post('/w/:token/checkin', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.saveCheckin(a.id, req.body)); }));
-  api.post('/w/:token/goals/:gid/check', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.checkGoal(a.id, Number(req.params.gid), req.body.done !== false)); }));
+  api.post('/w/:token/goals/:gid/check', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.checkGoal(a.id, Number(req.params.gid), req.body.done !== false, req.body.date)); }));
   api.post('/w/:token/messages/read', h(async (req, res) => { const a = byToken(req.params.token); e.markRead(a.id); res.json({ ok: true }); }));
+  api.post('/w/:token/messages/:mid/reply', h(async (req, res) => {
+    const a = byToken(req.params.token);
+    const r = e.replyToMessage(a.id, Number(req.params.mid), req.body.body);
+    replyLog({ ip: req.ip }, a, r, String(req.body.body).trim());
+    res.status(201).json({ ...r, messages: e.messagesFor(a.id) });
+  }));
   api.get('/w/:token/lessons/:lid', (req, res) => { noStore(res); const a = byToken(req.params.token); const l = e.lessonFor(a.id, Number(req.params.lid)); e.recordView(a.id, l.id); res.json(l); });
   api.post('/w/:token/lessons/:lid/complete', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.completeLesson(a.id, Number(req.params.lid), req.body.done !== false)); }));
 
   // ---- parent portal (a parent sees and helps their own athletes) ----
-  api.get('/parent/athletes/:id/engage', requireParent, (req, res) => { noStore(res); res.json(everything(familyAthlete(req), 'parent')); });
+  api.get('/parent/athletes/:id/engage', requireParent, (req, res) => { noStore(res); res.json(everything(familyAthlete(req), 'parent', req.parent.id)); });
   api.post('/parent/athletes/:id/checkin', requireParent, h(async (req, res) => { res.json(e.saveCheckin(familyAthlete(req).id, req.body)); }));
-  api.post('/parent/athletes/:id/goals/:gid/check', requireParent, h(async (req, res) => { res.json(e.checkGoal(familyAthlete(req).id, Number(req.params.gid), req.body.done !== false)); }));
-  api.post('/parent/athletes/:id/messages/read', requireParent, h(async (req, res) => { e.markRead(familyAthlete(req).id); res.json({ ok: true }); }));
+  api.post('/parent/athletes/:id/goals/:gid/check', requireParent, h(async (req, res) => { res.json(e.checkGoal(familyAthlete(req).id, Number(req.params.gid), req.body.done !== false, req.body.date)); }));
+  // A parent reading messages marks them read for that parent only; the athlete still sees them as new.
+  api.post('/parent/athletes/:id/messages/read', requireParent, h(async (req, res) => { e.markRead(familyAthlete(req).id, { parentId: req.parent.id }); res.json({ ok: true }); }));
+  api.post('/parent/athletes/:id/messages/:mid/reply', requireParent, h(async (req, res) => {
+    const a = familyAthlete(req);
+    const r = e.replyToMessage(a.id, Number(req.params.mid), req.body.body, { parent: req.parent });
+    replyLog(req, a, r, String(req.body.body).trim());
+    res.status(201).json({ ...r, messages: e.messagesFor(a.id, 30, { parentId: req.parent.id }) });
+  }));
   api.get('/parent/athletes/:id/lessons/:lid', requireParent, (req, res) => { noStore(res); const a = familyAthlete(req); const l = e.lessonFor(a.id, Number(req.params.lid)); e.recordView(a.id, l.id); res.json(l); });
   api.post('/parent/athletes/:id/lessons/:lid/complete', requireParent, h(async (req, res) => { res.json(e.completeLesson(familyAthlete(req).id, Number(req.params.lid), req.body.done !== false)); }));
 
@@ -88,7 +102,13 @@ function routes(api) {
     log(req, 'Set a test target', `${a.first_name} ${a.last_name}`);
     res.status(201).json({ id });
   }));
-  api.delete('/targets/:id', COACH, h(async (req, res) => { run('DELETE FROM test_targets WHERE id=?', Number(req.params.id)); log(req, 'Removed a test target'); res.json({ ok: true }); }));
+  api.delete('/targets/:id', COACH, h(async (req, res) => {
+    const t = get(`SELECT tt.id, t.name, a.first_name, a.last_name FROM test_targets tt JOIN tests t ON t.id=tt.test_id JOIN athletes a ON a.id=tt.athlete_id WHERE tt.id=?`, Number(req.params.id));
+    if (!t) throw notFound('That target');
+    run('DELETE FROM test_targets WHERE id=?', t.id);
+    log(req, 'Removed a test target', `${t.first_name} ${t.last_name}: ${t.name}`);
+    res.json({ ok: true });
+  }));
 
   // ---- coach side: a whole team ----
   const team = (req) => { const t = get('SELECT * FROM team_contracts WHERE id=?', Number(req.params.id)); if (!t) throw notFound('That team'); return t; };

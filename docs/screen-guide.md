@@ -599,6 +599,39 @@ Where athletes do their program, on their phone.
 - Coming up lists the next three workouts. Finished workouts open to show every exercise, the sets logged, effort and the note.
 - The coach sees each finished workout in Recent activity with effort, sets and new bests; the workout.completed webhook carries the sets too.
 
+### Athlete app: Accountability
+
+_Where: each athlete's private link, Accountability tab. Parents see the same view in Home, Accountability, with an athlete switcher._
+
+Streaks, the daily check-in, weekly goals and messages from the coach.
+
+- New messages show a banner at the top; tap it to jump to them. Opening the tab marks them read for whoever is looking: a parent reading them doesn't clear them for the athlete, and the coach's "Read" means the athlete read them.
+- Streaks: active weeks in a row (2 or more training days a week) and check-in days in a row, with the best check-in run.
+- Today's check-in: hours of sleep and 1 to 5 for hydration, soreness, energy and mood, plus a note for the coach. Same as yesterday fills in yesterday's answers to change and save. Short sleep, high soreness or low scores show calm advice and flag the athlete on the coach's Today.
+- This week's goals, Monday to Sunday: workouts, sessions and check-ins count themselves; custom goals are ticked off with Done today, or on the day strip for an earlier day this week that was missed (never a future day or last week). Each goal shows last week's result and how many weeks in a row it was met.
+- From the coach: newest first, five at a time with Show older. Reply to any message; the coach who wrote it gets the reply by email, it shows under the message and on the client profile data, and it's in Recent activity. Up to 20 replies a day.
+- Last 4 weeks: a calendar of training days and check-ins. Tap a day to see the workouts finished, sessions attended and that day's check-in.
+- Recent check-ins: the last week of answers side by side, with anything that needs a look in amber. Counts for this week and this month.
+
+### Athlete app: Performance
+
+_Where: each athlete's private link, Performance tab (also in the parent Home). Parents only see results from shared testing days._
+
+- Tests, new PRs and the last testing date across the top, then the coach's note from the latest testing day.
+- Targets set by the coach: best result, target and date, progress from the first test, and how far there is to go ("0.13 s to go"). A target past its date shows in amber.
+- How they compare, when rankings are on: rank or percentile among their age group and sex, team and everyone at the facility, from best results only. No names are shown.
+- Every test grouped by category with best result, change and a trend line; PR marks the tests with a new best. Tap a test to see every result by date, with the change from the one before and the best marked.
+- Open the printable report.
+
+### Athlete app: Education
+
+_Where: each athlete's private link, Education tab (also in the parent Home)._
+
+- Assigned: open work first, with due dates and anything overdue in amber, the coach's note, and course progress. Buttons say what happens: Read lesson, Start course, or Continue with the name of the next lesson. Finished work folds away behind Show finished.
+- Search lessons (when there are 6 or more) across courses and the library.
+- Courses open to show their lessons in order with what's done; the lessons library lists the rest.
+- The reader shows the video (YouTube, Vimeo or a video file) and text, Mark as done, and Next lesson inside a course. Once a lesson with nothing after it is done, Back to Education takes its place, and finishing every lesson in a course says so. The coach sees who opened and finished each lesson.
+
 ## iPhone app: DP Coach
 
 For you and your staff on the field. The app is written but hasn't been built yet (that needs a Mac and your Apple developer account), so there are no screenshots. Its five tabs:

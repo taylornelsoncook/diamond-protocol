@@ -44,9 +44,9 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { e.preventDefault(); e.returnValue = ''; } });
 
 function render() {
-  if (!state.user) return renderLogin();
-  if (state.user.must_change_password) return renderPasswordChange(true);
   leaveGuard = null;                                  // the view sets it again if it has unsaved changes
+  if (!state.user) { profileDrafts.clear(); return renderLogin(); }   // signed out: the next person never sees these edits
+  if (state.user.must_change_password) return renderPasswordChange(true);
   const [section, id] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const current = NAV.some(([k]) => k === section) ? section : 'today';
   const main = h('main', { class: 'main', id: 'main' });

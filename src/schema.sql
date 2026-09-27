@@ -1041,6 +1041,9 @@ CREATE TABLE IF NOT EXISTS client_notes (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS client_notes_client ON client_notes(client_id, created_at);
+-- The client list looks up each client's parents and team rosters.
+CREATE INDEX IF NOT EXISTS guardians_family ON guardians(family_id);
+CREATE INDEX IF NOT EXISTS team_roster_client ON team_roster(client_id);
 
 -- ---------- Version 33: test library presets and progress report share links (batch B10) ----------
 -- A named set of tests to start a testing day from (Combine, Force plate...). test_keys: ordered perf_tests keys.

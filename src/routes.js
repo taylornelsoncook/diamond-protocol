@@ -224,7 +224,7 @@ export const routes = [
   // Families and parents
   ['GET', '/v1/families', 'any', 'Families', 'Every family with parents, athletes, card and waiver status.', (ctx) => list(families.listFamilies(ctx))],
   ['POST', '/v1/families', 'any', 'Families', 'Create a family with its first parent: parent {name, email, phone, relationship}, optional name.', (ctx, r) => families.getFamily(ctx, families.createFamilyWithGuardian(ctx, r.body.parent, r.body.name)), 201],
-  ['GET', '/v1/families/:id', 'any', 'Families', 'A family with parents, athletes, card and waiver.', (ctx, r) => { const f = families.getFamily(ctx, r.params.id); return { ...f, athletes: f.athlete_ids.map((id) => clients.getClient(ctx, id)) }; }],
+  ['GET', '/v1/families/:id', 'any', 'Families', 'A family with parents, athletes, card and waiver.', (ctx, r) => { const f = families.getFamily(ctx, r.params.id); return { ...f, athletes: f.athlete_ids.map((id) => clients.getClient(ctx, id, { role: r.user?.role })) }; }],
   ['PATCH', '/v1/families/:id', 'any', 'Families', 'Rename a family.', (ctx, r) => families.updateFamily(ctx, r.params.id, r.body)],
   ['POST', '/v1/families/:id/guardians', 'any', 'Families', 'Add a parent or guardian who can sign in to the portal.', (ctx, r) => families.addGuardian(ctx, r.params.id, r.body), 201],
   ['PATCH', '/v1/families/:id/guardians/:gid', 'any', 'Families', 'Fix a parent\'s name, email, phone or relationship. An athlete in the family with the same email keeps it in step. A new phone number turns texts off until the parent turns them on again.', (ctx, r) => families.updateGuardian(ctx, r.params.id, r.params.gid, r.body)],

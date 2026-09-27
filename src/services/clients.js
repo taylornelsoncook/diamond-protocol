@@ -12,7 +12,8 @@ const LIST_SQL = `
     c.school, c.grad_year, TRIM(COALESCE(c.medical_notes, '')) != '' AS medical, f.waiver_version,
     (SELECT GROUP_CONCAT(x, char(30)) FROM (SELECT g.name || char(31) || g.email || char(31) || COALESCE(g.phone, '') AS x FROM guardians g WHERE g.family_id = c.family_id ORDER BY g.is_primary DESC, g.created_at)) AS parent_list,
     (SELECT MAX(k.created_at) FROM check_ins k WHERE k.client_id = c.id) AS last_check_in_at,
-    (SELECT MAX(x.starts_at) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE b.client_id = c.id AND b.status = 'attended') AS last_attended_at,
+    MAX(COALESCE((SELECT MAX(x.starts_at) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE b.client_id = c.id AND b.status = 'attended'), ''),
+      COALESCE((SELECT MAX(x.starts_at) FROM team_attendance ta JOIN team_roster t ON t.id = ta.roster_id JOIN class_sessions x ON x.id = ta.session_id WHERE t.client_id = c.id), '')) AS last_attended_at,
     (SELECT GROUP_CONCAT(tc.id || '|' || o.name || ' ' || tc.name, char(10)) FROM team_roster t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = tc.org_id
       WHERE t.client_id = c.id AND t.active = 1 AND tc.status = 'active') AS team_list,
     (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1) AS pinned_all,
@@ -277,7 +278,8 @@ function checkDuplicates(ctx, { name, email, phone, birthDate, parent, familyId,
   }
   if (skipSoft) return;
   const found = new Map();
-  for (const c of ctx.db.all('SELECT id, name, birth_date FROM clients WHERE lower(trim(name)) = ?', normName(name))) {
+  // Compared here rather than in SQL: SQLite's lower() only knows A-Z, and extra spaces inside a name shouldn't hide a match.
+  for (const c of ctx.db.all('SELECT id, name, birth_date FROM clients')) {
     if (normName(c.name) === normName(name) && (!birthDate || !c.birth_date || c.birth_date === birthDate)) found.set(c.id, 'name');
   }
   // Phones: the athlete's own, and (for a new family) the parent's. A sibling shares the family's phone, so it's not checked.
@@ -395,10 +397,16 @@ export function attendance(ctx, id) {
     .filter((b) => b.outcome && (b.outcome === 'late_cancel' || b.at <= now));
   const walkIns = ctx.db.all(`SELECT k.id, k.created_at, l.name AS location_name FROM check_ins k JOIN locations l ON l.id = k.location_id WHERE k.client_id = ? AND k.created_at >= ?`, id, since90)
     .map((k) => ({ id: k.id, outcome: 'walk_in', at: k.created_at, session_id: null, session_name: null, kind: null, location_name: k.location_name }));
-  const all = [...sessions, ...walkIns];
+  // Team sessions: the coach ticks the team roster (team_attendance) instead of booking each athlete.
+  const team = ctx.db.all(`SELECT ta.session_id, s.name AS session_name, s.kind, s.starts_at, l.name AS location_name
+      FROM team_attendance ta JOIN team_roster t ON t.id = ta.roster_id JOIN class_sessions s ON s.id = ta.session_id JOIN locations l ON l.id = s.location_id
+      WHERE t.client_id = ? AND s.status = 'scheduled' AND s.starts_at >= ? AND s.starts_at <= ?`, id, since90, now)
+    .map((t) => ({ id: `team:${t.session_id}`, outcome: 'attended', at: t.starts_at, session_id: t.session_id, session_name: t.session_name, kind: t.kind, location_name: t.location_name }));
+  const all = [...sessions, ...walkIns, ...team];
   const count = (since, ...outcomes) => all.filter((x) => outcomes.includes(x.outcome) && x.at >= since).length;
   const lastVisit = [ctx.db.get(`SELECT MAX(s.starts_at) AS t FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended'`, id).t,
-    ctx.db.get('SELECT MAX(created_at) AS t FROM check_ins WHERE client_id = ?', id).t].filter(Boolean).sort().pop() ?? null;
+    ctx.db.get('SELECT MAX(created_at) AS t FROM check_ins WHERE client_id = ?', id).t,
+    ctx.db.get('SELECT MAX(s.starts_at) AS t FROM team_attendance ta JOIN team_roster t ON t.id = ta.roster_id JOIN class_sessions s ON s.id = ta.session_id WHERE t.client_id = ?', id).t].filter(Boolean).sort().pop() ?? null;
   return {
     summary: { visits_30: count(since30, 'attended', 'walk_in'), no_shows_30: count(since30, 'no_show'), late_cancels_30: count(since30, 'late_cancel'), visits_90: count(since90, 'attended', 'walk_in'), last_visit_at: lastVisit },
     recent: all.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12)

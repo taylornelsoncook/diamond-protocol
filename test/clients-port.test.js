@@ -314,3 +314,61 @@ test('roles: a walk-in check-in gives coaches no price; profile reads keep amoun
   }
   assert.equal((await owner('GET', `/v1/clients/${c.id}`)).body.subscription.price_cents, 9900, 'the owner sees the price');
 });
+
+// ---------- Review fixes ----------
+test('review: an impossible birthday is refused at the first step of sign-up and in an import, never halfway through', async () => {
+  await owner('PATCH', '/v1/settings', { public_signup: 'on' });
+  const r = await req('POST', '/portal/api/signup', { accept_terms: true, parent: { name: 'Feb Parent', email: 'feb.parent@example.com' }, athletes: [{ name: 'Ok Kid', birth_date: '2013-02-28' }, { name: 'Feb Kid', birth_date: '2013-02-30' }] });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.equal(app.ctx.db.get('SELECT id FROM guardians WHERE email = ?', 'feb.parent@example.com'), undefined);
+  const csv = 'Athlete first name,Athlete last name,Birthday (YYYY-MM-DD),Parent name,Parent email\nApril,Kid,2013-04-31,Ap Parent,ap.parent@example.com\n';
+  const p = (await owner('POST', '/v1/client-import/preview', { csv })).body;
+  assert.equal(p.ok, false);
+  assert.ok(p.errors.some((e) => /"2013-04-31" isn't a birthday/.test(e.message)), JSON.stringify(p.errors));
+});
+
+test('review: team roster attendance counts as a visit and as last seen', async () => {
+  const c = await kid('Tia Teamvisit');
+  const school = (await owner('POST', '/v1/team-contracts', { organization: { name: 'Roosevelt HS', contact_email: 'ad@roosevelt.example' }, name: 'JV', monthly_cents: 50000 })).body;
+  assert.equal((await owner('POST', `/v1/team-contracts/${school.id}/roster/existing`, { client_id: c.id })).status, 201);
+  const roster = app.ctx.db.get('SELECT id FROM team_roster WHERE client_id = ?', c.id);
+  const s = new Date(Date.now() - 26 * 3600000).toISOString(), e = new Date(Date.now() - 25 * 3600000).toISOString();
+  app.ctx.db.run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, status, created_at) VALUES ('cls_team_visit', 'JV lift', 'team', ?, ?, ?, 30, 'scheduled', ?)`, facility.id, s, e, s);
+  assert.equal((await coach('GET', `/v1/clients/${c.id}/attendance`)).body.summary.visits_30, 0);
+  app.ctx.db.run('INSERT INTO team_attendance (session_id, roster_id, created_at) VALUES (?, ?, ?)', 'cls_team_visit', roster.id, e);
+  const a = (await coach('GET', `/v1/clients/${c.id}/attendance`)).body;
+  assert.equal(a.summary.visits_30, 1);
+  assert.equal(a.summary.last_visit_at, s);
+  assert.equal(a.recent[0].session_name, 'JV lift');
+  assert.equal(a.recent[0].outcome, 'attended');
+  const listed = (await coach('GET', '/v1/clients')).body.data.find((x) => x.id === c.id);
+  assert.equal(listed.last_seen_at, s);
+});
+
+test('review: front desk never counts coach-only pinned notes on a family page either', async () => {
+  const c = await kid('Pip Pinned');
+  await coach('POST', `/v1/clients/${c.id}/notes`, { body: 'Coach only', pinned: true, coach_only: true });
+  const fam = (await desk('GET', `/v1/families/${c.family.id}`)).body;
+  assert.equal(fam.athletes.find((x) => x.id === c.id).pinned_notes, 0);
+  assert.equal((await coach('GET', `/v1/families/${c.family.id}`)).body.athletes.find((x) => x.id === c.id).pinned_notes, 1);
+});
+
+test('review: a new sign-in email signs out whoever signed in with the old one', async () => {
+  const c = await kid('Tay Typo');
+  const g = c.family.guardians[0];
+  const code = (await req('POST', '/portal/api/login', { email: g.email })).body.dev_code;
+  const parent = as((await req('POST', '/portal/api/verify', { email: g.email, code })).cookie);
+  assert.equal((await parent('GET', '/portal/api/me')).status, 200);
+  assert.equal((await desk('PATCH', `/v1/families/${c.family.id}/guardians/${g.id}`, { name: 'Tay Parent' })).status, 200);
+  assert.equal((await parent('GET', '/portal/api/me')).status, 200, 'a name fix keeps them signed in');
+  assert.equal((await desk('PATCH', `/v1/families/${c.family.id}/guardians/${g.id}`, { email: 'tay.fixed@example.com' })).status, 200);
+  assert.equal((await parent('GET', '/portal/api/me')).status, 401);
+});
+
+test('review: the same name with different capitals or extra spaces is still a possible duplicate', async () => {
+  const first = await kid('Zoë Ángel', { birth_date: '2011-07-07' });
+  const r = await owner('POST', '/v1/clients', { name: '  ZOË   ÁNGEL ', birth_date: '2011-07-07', check_duplicates: true, parent: { name: 'Other Parent', email: `zz${++n}@example.com` } });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.error.code, 'possible_duplicate');
+  assert.deepEqual(r.body.error.details.duplicates.map((d) => d.id), [first.id]);
+});

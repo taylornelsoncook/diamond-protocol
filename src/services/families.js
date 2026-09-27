@@ -164,6 +164,8 @@ export function updateGuardian(ctx, familyId, guardianId, body) {
   ctx.db.tx(() => {
     ctx.db.run(`UPDATE guardians SET name = ?, email = ?, phone = ?, relationship = ?, sms_opt_in_at = CASE WHEN ? THEN NULL ELSE sms_opt_in_at END WHERE id = ?`, name, email, phone, relationship, phoneChanged ? 1 : 0, guardianId);
     for (const id of sameEmailKids) ctx.db.run('UPDATE clients SET email = ? WHERE id = ?', email, id);
+    // A new sign-in address: whoever signed in or got a code through the old one (often a typo, someone else's inbox) is signed out.
+    if (emailChanged) { ctx.db.run('DELETE FROM portal_sessions WHERE guardian_id = ?', guardianId); ctx.db.run('DELETE FROM login_codes WHERE guardian_id = ?', guardianId); }
   });
   return { ...getFamily(ctx, familyId), texts_turned_off: phoneChanged && !!g.sms_opt_in_at && !g.sms_opt_out_at };
 }

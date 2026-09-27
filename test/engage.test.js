@@ -264,7 +264,7 @@ test('athletes and parents reply to a coach message; the coach is emailed and it
   const msg = r.data.messages.find((m) => m.id === mid);
   assert.deepEqual(msg.replies.map((x) => [x.body, x.from]), [['Much better, no blisters.', 'athlete']]);
   assert.equal(get('SELECT COUNT(*) n FROM outbox WHERE to_email=?', coachRow.email).n, before + 1);
-  assert.ok(get("SELECT * FROM activity WHERE action LIKE 'Ava Lopez replied%' ORDER BY id DESC LIMIT 1"));
+  assert.ok(get("SELECT * FROM activity WHERE actor='Ava Lopez (athlete)' AND action LIKE 'Replied to%' ORDER BY id DESC LIMIT 1"));
 
   const pr = await call('POST', `/parent/athletes/${ava.id}/messages/${mid}/reply`, { body: 'She wants a second pair.' }, maria);
   assert.equal(pr.status, 201);
@@ -329,4 +329,73 @@ test('targets say how far there is to go; due dates are checked; removing one ch
   assert.equal((await call('DELETE', `/targets/${t.id}`, null, coach)).status, 200);
   assert.equal((await call('DELETE', `/targets/${t.id}`, null, coach)).status, 404);
   assert.ok(get("SELECT * FROM activity WHERE action='Removed a test target' ORDER BY id DESC LIMIT 1").detail.includes('20-yard sprint'));
+});
+
+// ---- review fixes ----
+test('a workout finished in the evening counts on the local day, not the next UTC day', async () => {
+  const chidi = A('Chidi');
+  const T = todayLocal();
+  const tz = setting('timezone', 'America/Denver');
+  const localOf = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  // An hour that is still today in the business zone but already tomorrow in UTC (evening in Provo).
+  let when = null;
+  for (let h = 0; h < 48 && !when; h++) { const d = new Date(Date.parse(`${T}T00:00:00Z`) + h * 3600e3); if (localOf(d) === T && d.toISOString().slice(0, 10) > T) when = d; }
+  assert.ok(when, 'the business zone is behind UTC');
+  const day = get('SELECT pd.id, pd.title FROM program_days pd LIMIT 1');
+  const utc = when.toISOString().slice(0, 19).replace('T', ' ');
+  const before = (await call('GET', `/w/${chidi.workout_token}/engage`)).data.accountability;
+  const id = require('../server/db').insert('workout_logs', { athlete_id: chidi.id, day_id: day.id, finished_at: utc });
+  const acc = (await call('GET', `/w/${chidi.workout_token}/engage`)).data.accountability;
+  const today = acc.calendar.find((d) => d.date === T);
+  assert.equal(today.trained, true);
+  assert.equal(today.workouts.length, before.calendar.find((d) => d.date === T).workouts.length + 1);
+  assert.equal(acc.this_week.workouts, before.this_week.workouts + 1);
+  run('DELETE FROM workout_logs WHERE id=?', id);
+});
+
+test('replies are logged under the athlete or parent who wrote them', async () => {
+  const coach = await staff('coach@demo.test', 'demo-coach-2026');
+  const maria = await parent('maria.lopez@example.com');
+  const ava = A('Ava');
+  const mid = (await call('POST', `/athletes/${ava.id}/messages`, { body: 'Bring your glove Thursday.' }, coach)).data.id;
+  assert.equal((await call('POST', `/w/${ava.workout_token}/messages/${mid}/reply`, { body: 'Will do.' })).status, 201);
+  const a1 = get('SELECT * FROM activity ORDER BY id DESC LIMIT 1');
+  assert.equal(a1.actor, 'Ava Lopez (athlete)');
+  assert.equal(a1.action, 'Replied to Chris');
+  assert.equal(a1.detail, 'Will do.');
+  assert.equal((await call('POST', `/parent/athletes/${ava.id}/messages/${mid}/reply`, { body: 'She will.' }, maria)).status, 201);
+  const a2 = get('SELECT * FROM activity ORDER BY id DESC LIMIT 1');
+  assert.match(a2.actor, /\(parent\)$/);
+  assert.equal(a2.action, 'Replied to Chris about Ava Lopez');
+  // A reply must be text.
+  assert.equal((await call('POST', `/w/${ava.workout_token}/messages/${mid}/reply`, { body: { nope: 1 } })).status, 400);
+  run('DELETE FROM message_replies WHERE athlete_id=?', ava.id);
+});
+
+test('targets never say "12 in" when the gap rounds up to a whole foot', () => {
+  assert.equal(eng.gapText(56.04, 80, 'in', false), '2 ft to go');
+  assert.equal(eng.gapText(60, 80, 'in', false), '1 ft 8 in to go');
+  assert.equal(eng.gapText(67.5, 80, 'in', false), '1 ft 0.5 in to go');
+});
+
+test('on upgrade, messages already read stay read for the family\'s parents', async () => {
+  const coach = await staff('coach@demo.test', 'demo-coach-2026');
+  const maria = await parent('maria.lopez@example.com');
+  const ava = A('Ava');
+  await call('POST', `/athletes/${ava.id}/messages`, { body: 'Old message, read before parents had their own reads.' }, coach);
+  await call('POST', `/w/${ava.workout_token}/messages/read`, {});
+  run('DELETE FROM parent_message_reads');
+  assert.ok((await call('GET', `/parent/athletes/${ava.id}/engage`, null, maria)).data.accountability.unread > 0);
+  eng.backfillParentReads();
+  assert.equal((await call('GET', `/parent/athletes/${ava.id}/engage`, null, maria)).data.accountability.unread, 0);
+  eng.backfillParentReads(); // safe to run twice
+});
+
+test('athlete-link posts with no body get an answer, not a server error', async () => {
+  const ava = A('Ava');
+  const mid = get('SELECT id FROM coach_messages WHERE athlete_id=? ORDER BY id DESC LIMIT 1', ava.id).id;
+  const post = (url) => fetch(`${base}/api${url}`, { method: 'POST' }).then((r) => r.status);
+  assert.equal(await post(`/w/${ava.workout_token}/messages/${mid}/reply`), 400);
+  assert.equal(await post(`/w/${ava.workout_token}/checkin`), 400);
+  assert.equal(await post(`/w/nope/messages/${mid}/reply`), 404);
 });

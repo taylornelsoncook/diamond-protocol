@@ -199,7 +199,7 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
   }
   // The last week of check-ins, newest first, so a trend is easy to spot.
   function recentCheckins(a) {
-    const list = (a.recent_checkins || []).slice(0, 7);
+    const list = (a.recent_checkins || []).filter((c) => c.date >= addDay(a.today, -6)).slice(0, 7);
     if (list.length < 2) return '';
     const cell = (c, k) => (c[k] == null ? html`<td class="muted">—</td>` : html`<td class="${(k === 'soreness' ? c[k] >= 4 : c[k] <= 2) ? 'warn-text' : ''}">${c[k]}</td>`);
     return html`<section class="panel panel-tight" aria-labelledby="eg-rc-h"><div><h2 class="panel-title" id="eg-rc-h">Recent check-ins</h2>
@@ -432,7 +432,7 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
           const keepRead = new Map(data.accountability.messages.map((m) => [m.id, m.read]));
           data.accountability.messages = r.messages.map((m) => ({ ...m, read: keepRead.has(m.id) ? keepRead.get(m.id) : m.read }));
           replyTo = null; replyDrafts.delete(id);
-          toast(r.emailed ? `Reply sent. ${r.coach ? r.coach.split(' ')[0] : 'The coach'} gets it by email.` : 'Reply saved. The coach sees it next time they look.');
+          toast(r.emailed ? `Reply sent. ${r.coach ? r.coach.split(' ')[0] : 'The coach'} gets it by email.` : 'Reply saved.');
           rerender();
           el.querySelector(`[data-reply="${id}"]`)?.focus();
         } catch (x) { err.textContent = x.message; btn.disabled = false; }
@@ -552,7 +552,7 @@ export function createEngage({ base, audience = 'athlete', onData = () => {} }) 
     const library = e.lessons.filter(hit);
     mount(el, html`
       ${assigned.length ? html`<section class="panel" aria-labelledby="eg-as-h"><div><h2 class="panel-title" id="eg-as-h">Assigned</h2>
-        <p class="panel-sub">From ${coachWord()}. ${todo.length ? `${finished.length} of ${assigned.length} done.` : `All ${assigned.length} done. Nice work.`}</p></div>
+        <p class="panel-sub">From ${coachWord()}. ${todo.length ? `${finished.length} of ${assigned.length} done.` : `${assigned.length === 1 ? 'Done' : `All ${assigned.length} done`}. Nice work.`}</p></div>
         <div class="list">${listed.map((x) => {
           const c = x.type === 'course' ? courseById(x.course_id) : null;
           const pct = c && c.total ? Math.round((c.done / c.total) * 100) : x.done ? 100 : 0;

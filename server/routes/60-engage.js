@@ -8,6 +8,8 @@ const e = require('../services/engage');
 const STAFF = requireStaff();
 const COACH = requireStaff('owner', 'coach');
 const noStore = (res) => res.set('Cache-Control', 'no-store');
+// A POST with no JSON body leaves req.body undefined in Express 5; treat it as empty so it gets a 400, not a 500.
+const body = (req) => req.body || {};
 
 function byToken(token) {
   if (!/^[\w-]{8,64}$/.test(String(token || ''))) throw notFound('That link');
@@ -24,7 +26,13 @@ const everything = (a, view, parentId = null) => ({
   athlete: { id: a.id, first_name: a.first_name, last_name: a.last_name, code: a.code },
   accountability: e.accountability(a.id, { parentId }), performance: e.performance(a.id, { view }), education: e.education(a.id),
 });
-const replyLog = (req, a, r, text) => log(req, `${r.who} replied to ${r.coach ? r.coach.split(' ')[0] : 'a coach'}`, text.length > 120 ? `${text.slice(0, 120)}…` : text);
+// Replies show in Recent activity under whoever wrote them: the athlete (from their link) or the signed-in parent.
+function replyLog(req, a, r, text, parent = null) {
+  const coach = r.coach ? r.coach.split(' ')[0] : 'a coach';
+  const detail = text.length > 120 ? `${text.slice(0, 120)}…` : text;
+  if (parent) return log({ parent, ip: req.ip }, `Replied to ${coach} about ${a.first_name} ${a.last_name}`, detail);
+  insert('activity', { actor: `${a.first_name} ${a.last_name} (athlete)`, action: `Replied to ${coach}`, detail, ip: req.ip || null, kind: 'change' });
+}
 const toInt = (v) => (v == null || v === '' ? null : Number(v));
 
 function lessonBody(b) {
@@ -55,32 +63,32 @@ function lessonBody(b) {
 function routes(api) {
   // ---- athlete app (private link) ----
   api.get('/w/:token/engage', (req, res) => { noStore(res); res.json(everything(byToken(req.params.token), 'athlete')); });
-  api.post('/w/:token/checkin', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.saveCheckin(a.id, req.body)); }));
-  api.post('/w/:token/goals/:gid/check', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.checkGoal(a.id, Number(req.params.gid), req.body.done !== false, req.body.date)); }));
+  api.post('/w/:token/checkin', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.saveCheckin(a.id, body(req))); }));
+  api.post('/w/:token/goals/:gid/check', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.checkGoal(a.id, Number(req.params.gid), body(req).done !== false, body(req).date)); }));
   api.post('/w/:token/messages/read', h(async (req, res) => { const a = byToken(req.params.token); e.markRead(a.id); res.json({ ok: true }); }));
   api.post('/w/:token/messages/:mid/reply', h(async (req, res) => {
     const a = byToken(req.params.token);
-    const r = e.replyToMessage(a.id, Number(req.params.mid), req.body.body);
-    replyLog({ ip: req.ip }, a, r, String(req.body.body).trim());
+    const r = e.replyToMessage(a.id, Number(req.params.mid), body(req).body);
+    replyLog(req, a, r, String(body(req).body).trim());
     res.status(201).json({ ...r, messages: e.messagesFor(a.id) });
   }));
   api.get('/w/:token/lessons/:lid', (req, res) => { noStore(res); const a = byToken(req.params.token); const l = e.lessonFor(a.id, Number(req.params.lid)); e.recordView(a.id, l.id); res.json(l); });
-  api.post('/w/:token/lessons/:lid/complete', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.completeLesson(a.id, Number(req.params.lid), req.body.done !== false)); }));
+  api.post('/w/:token/lessons/:lid/complete', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.completeLesson(a.id, Number(req.params.lid), body(req).done !== false)); }));
 
   // ---- parent portal (a parent sees and helps their own athletes) ----
   api.get('/parent/athletes/:id/engage', requireParent, (req, res) => { noStore(res); res.json(everything(familyAthlete(req), 'parent', req.parent.id)); });
-  api.post('/parent/athletes/:id/checkin', requireParent, h(async (req, res) => { res.json(e.saveCheckin(familyAthlete(req).id, req.body)); }));
-  api.post('/parent/athletes/:id/goals/:gid/check', requireParent, h(async (req, res) => { res.json(e.checkGoal(familyAthlete(req).id, Number(req.params.gid), req.body.done !== false, req.body.date)); }));
+  api.post('/parent/athletes/:id/checkin', requireParent, h(async (req, res) => { res.json(e.saveCheckin(familyAthlete(req).id, body(req))); }));
+  api.post('/parent/athletes/:id/goals/:gid/check', requireParent, h(async (req, res) => { res.json(e.checkGoal(familyAthlete(req).id, Number(req.params.gid), body(req).done !== false, body(req).date)); }));
   // A parent reading messages marks them read for that parent only; the athlete still sees them as new.
   api.post('/parent/athletes/:id/messages/read', requireParent, h(async (req, res) => { e.markRead(familyAthlete(req).id, { parentId: req.parent.id }); res.json({ ok: true }); }));
   api.post('/parent/athletes/:id/messages/:mid/reply', requireParent, h(async (req, res) => {
     const a = familyAthlete(req);
-    const r = e.replyToMessage(a.id, Number(req.params.mid), req.body.body, { parent: req.parent });
-    replyLog(req, a, r, String(req.body.body).trim());
+    const r = e.replyToMessage(a.id, Number(req.params.mid), body(req).body, { parent: req.parent });
+    replyLog(req, a, r, String(body(req).body).trim(), req.parent);
     res.status(201).json({ ...r, messages: e.messagesFor(a.id, 30, { parentId: req.parent.id }) });
   }));
   api.get('/parent/athletes/:id/lessons/:lid', requireParent, (req, res) => { noStore(res); const a = familyAthlete(req); const l = e.lessonFor(a.id, Number(req.params.lid)); e.recordView(a.id, l.id); res.json(l); });
-  api.post('/parent/athletes/:id/lessons/:lid/complete', requireParent, h(async (req, res) => { res.json(e.completeLesson(familyAthlete(req).id, Number(req.params.lid), req.body.done !== false)); }));
+  api.post('/parent/athletes/:id/lessons/:lid/complete', requireParent, h(async (req, res) => { res.json(e.completeLesson(familyAthlete(req).id, Number(req.params.lid), body(req).done !== false)); }));
 
   // ---- coach side: one athlete ----
   api.get('/athletes/:id/engage', STAFF, (req, res) => res.json(e.staffOverview(Number(req.params.id))));

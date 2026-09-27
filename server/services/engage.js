@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS lesson_views (lesson_id INTEGER NOT NULL REFERENCES l
 if (!all('PRAGMA table_info(assignments)').some((c) => c.name === 'reminded_at')) run('ALTER TABLE assignments ADD COLUMN reminded_at TEXT');
 // Added later: athletes (or their parents) reply to a coach's message, and parents' reads are kept apart from the athlete's,
 // so a parent opening the tab doesn't clear the athlete's "New" messages.
+const hadParentReads = !!get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='parent_message_reads'");
 db.exec(`
 CREATE TABLE IF NOT EXISTS message_replies (
   id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES coach_messages(id) ON DELETE CASCADE, athlete_id INTEGER NOT NULL REFERENCES athletes(id),
@@ -46,6 +47,13 @@ CREATE INDEX IF NOT EXISTS message_replies_msg ON message_replies(message_id);
 CREATE TABLE IF NOT EXISTS parent_message_reads (message_id INTEGER NOT NULL REFERENCES coach_messages(id) ON DELETE CASCADE, parent_id INTEGER NOT NULL, athlete_id INTEGER NOT NULL,
   read_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (message_id, parent_id, athlete_id));
 `);
+// Before parents had their own reads, a parent opening the tab wrote to message_reads. On upgrade, anything already read
+// stays read for the family's parents, so they don't see every old message as new.
+function backfillParentReads() {
+  run(`INSERT OR IGNORE INTO parent_message_reads (message_id, parent_id, athlete_id, read_at)
+    SELECT r.message_id, p.id, r.athlete_id, r.read_at FROM message_reads r JOIN athletes a ON a.id=r.athlete_id JOIN parents p ON p.family_id=a.family_id`);
+}
+if (!hadParentReads) backfillParentReads();
 
 const SCALE = ['hydration', 'soreness', 'energy', 'mood']; // 1–5
 const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
@@ -58,16 +66,29 @@ function weekStart(date = todayLocal()) {
 }
 const athleteRow = (id) => get('SELECT * FROM athletes WHERE id=? AND archived=0', id);
 
+// Finished workouts between two local dates. finished_at is UTC, so each one is dated in the business time zone
+// (a workout finished at 8pm in Provo belongs to that day, not to the next UTC day).
+function localDater() {
+  let fmt;
+  try { fmt = new Intl.DateTimeFormat('en-CA', { timeZone: setting('timezone', 'America/Denver'), year: 'numeric', month: '2-digit', day: '2-digit' }); }
+  catch { fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' }); }
+  return (ts) => { const s = String(ts); const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(' ', 'T') + 'Z'); return Number.isNaN(d.getTime()) ? s.slice(0, 10) : fmt.format(d); };
+}
+function finishedWorkouts(athleteId, from, to) {
+  const dateOf = localDater();
+  return all(`SELECT w.finished_at, COALESCE(NULLIF(pd.title,''), 'Week ' || pd.week || ', day ' || pd.day) AS name FROM workout_logs w
+    LEFT JOIN program_days pd ON pd.id=w.day_id WHERE w.athlete_id=? AND w.finished_at IS NOT NULL AND w.finished_at >= ? AND w.finished_at < ? ORDER BY w.finished_at`,
+  athleteId, addDays(from, -1), addDays(to, 2)).map((r) => ({ d: dateOf(r.finished_at), name: r.name || 'Workout' })).filter((r) => r.d >= from && r.d <= to);
+}
 // Days the athlete trained: a finished workout or a checked-in session.
 function activeDays(athleteId, from, to) {
-  const rows = all(`SELECT substr(finished_at,1,10) AS d FROM workout_logs WHERE athlete_id=? AND finished_at IS NOT NULL AND substr(finished_at,1,10) BETWEEN ? AND ?
-    UNION SELECT substr(e.starts_at,1,10) FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND substr(e.starts_at,1,10) BETWEEN ? AND ?`,
-  athleteId, from, to, athleteId, from, to);
-  return new Set(rows.map((r) => r.d));
+  const rows = all('SELECT substr(e.starts_at,1,10) AS d FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND substr(e.starts_at,1,10) BETWEEN ? AND ?',
+    athleteId, from, to);
+  return new Set([...rows.map((r) => r.d), ...finishedWorkouts(athleteId, from, to).map((w) => w.d)]);
 }
 function counts(athleteId, from, to) {
   return {
-    workouts: get("SELECT COUNT(*) n FROM workout_logs WHERE athlete_id=? AND finished_at IS NOT NULL AND substr(finished_at,1,10) BETWEEN ? AND ?", athleteId, from, to).n,
+    workouts: finishedWorkouts(athleteId, from, to).length,
     sessions: get('SELECT COUNT(*) n FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND substr(e.starts_at,1,10) BETWEEN ? AND ?', athleteId, from, to).n,
     checkins: get('SELECT COUNT(*) n FROM checkins WHERE athlete_id=? AND date BETWEEN ? AND ?', athleteId, from, to).n,
   };
@@ -218,6 +239,7 @@ function replyToMessage(athleteId, messageId, body, { parent = null } = {}) {
   if (!a) throw notFound('That athlete');
   const m = get('SELECT m.*, s.name AS coach, s.email AS coach_email, s.active AS coach_active FROM coach_messages m LEFT JOIN staff s ON s.id=m.staff_id WHERE m.id=?', messageId);
   if (!m || !(m.athlete_id === a.id || (m.team_id && m.team_id === a.team_id))) throw notFound('That message');
+  if (body != null && typeof body !== 'string') throw bad('Write a reply first.');
   const text = String(body || '').trim();
   if (!text) throw bad('Write a reply first.');
   if (text.length > 1000) throw bad('Keep replies under 1,000 characters.');
@@ -302,7 +324,7 @@ function gapText(best, target, unit, lowerBetter) {
   const gap = lowerBetter ? best - target : target - best;
   if (gap <= 0) return null;
   const n = Math.round(gap * 100) / 100;
-  if (unit === 'in' && n >= 12) { const ft = Math.floor(n / 12), inch = Math.round((n - ft * 12) * 10) / 10; return `${ft} ft ${inch} in to go`; }
+  if (unit === 'in' && n >= 12) { const tenths = Math.round(n * 10), ft = Math.floor(tenths / 120), inch = (tenths - ft * 120) / 10; return inch ? `${ft} ft ${inch} in to go` : `${ft} ft to go`; }
   const u = unit === 's' ? 's' : unit === '%' ? '%' : unit === 'ratio' ? '' : unit;
   return `${Number.isInteger(n) ? n : n.toFixed(unit === 's' ? 2 : n < 1 ? 2 : 1)}${u ? (u === '%' ? '%' : ` ${u}`) : ''} to go`;
 }
@@ -470,8 +492,7 @@ function duplicateLesson(id) {
 function dayDetails(athleteId, from, to) {
   const out = new Map();
   const add = (d, k, v) => { if (!out.has(d)) out.set(d, { workouts: [], sessions: [] }); out.get(d)[k].push(v); };
-  for (const r of all(`SELECT substr(w.finished_at,1,10) AS d, COALESCE(NULLIF(pd.title,''), 'Week ' || pd.week || ', day ' || pd.day) AS name FROM workout_logs w
-    LEFT JOIN program_days pd ON pd.id=w.day_id WHERE w.athlete_id=? AND w.finished_at IS NOT NULL AND substr(w.finished_at,1,10) BETWEEN ? AND ? ORDER BY w.finished_at`, athleteId, from, to)) add(r.d, 'workouts', r.name || 'Workout');
+  for (const w of finishedWorkouts(athleteId, from, to)) add(w.d, 'workouts', w.name);
   for (const r of all(`SELECT substr(e.starts_at,1,10) AS d, e.name FROM bookings b JOIN events e ON e.id=b.event_id
     WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND substr(e.starts_at,1,10) BETWEEN ? AND ? ORDER BY e.starts_at`, athleteId, from, to)) add(r.d, 'sessions', r.name);
   return out;
@@ -649,5 +670,5 @@ function remindOverdue(staff) {
 module.exports = {
   GOAL_KINDS, weekStart, flagsOf, saveCheckin, checkinStreak, activeWeekStreak, goalsFor, checkGoal, createGoal, messagesFor, markRead, sendMessage,
   performance, targetsFor, setTarget, replyToMessage, bestCheckinStreak, gapText, rankings, education, lessonFor, completeLesson, assign, accountability, staffOverview, recentFlags, educationReport, athleteRow,
-  assignMany, updateAssignment, recordView, duplicateLesson, lessonProgress, remindAssignment, remindOverdue, isDate,
+  assignMany, updateAssignment, recordView, duplicateLesson, lessonProgress, remindAssignment, remindOverdue, isDate, backfillParentReads,
 };

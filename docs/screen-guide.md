@@ -609,7 +609,7 @@ Streaks, the daily check-in, weekly goals and messages from the coach.
 - Streaks: active weeks in a row (2 or more training days a week) and check-in days in a row, with the best check-in run.
 - Today's check-in: hours of sleep and 1 to 5 for hydration, soreness, energy and mood, plus a note for the coach. Same as yesterday fills in yesterday's answers to change and save. Short sleep, high soreness or low scores show calm advice and flag the athlete on the coach's Today.
 - This week's goals, Monday to Sunday: workouts, sessions and check-ins count themselves; custom goals are ticked off with Done today, or on the day strip for an earlier day this week that was missed (never a future day or last week). Each goal shows last week's result and how many weeks in a row it was met.
-- From the coach: newest first, five at a time with Show older. Reply to any message; the coach who wrote it gets the reply by email, it shows under the message and on the client profile data, and it's in Recent activity. Up to 20 replies a day.
+- From the coach: newest first, five at a time with Show older. Reply to any message; the reply shows under the message, the coach who wrote it gets it by email, and it's in Recent activity under the athlete or parent who wrote it. Up to 20 replies a day. Replies aren't shown on the coach's client profile yet.
 - Last 4 weeks: a calendar of training days and check-ins. Tap a day to see the workouts finished, sessions attended and that day's check-in.
 - Recent check-ins: the last week of answers side by side, with anything that needs a look in amber. Counts for this week and this month.
 

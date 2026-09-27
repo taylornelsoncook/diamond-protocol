@@ -1,11 +1,42 @@
-// Demo data for programs and integrations: finished workouts over the last week, one API key, one paused webhook.
+// Demo data for programs and integrations: exercise categories, a throwers' arm-care program, finished workouts over the
+// last week, one API key, one paused webhook.
 'use strict';
 const crypto = require('crypto');
-const { get, all, insert, tx } = require('../db');
+const { get, all, run, insert, tx } = require('../db');
+require('../routes/40-programs'); // adds exercises.category on older databases
 const { sha256 } = require('../lib');
+
+const CATEGORY = {
+  'A-skip': 'Speed', 'Wall drive march': 'Speed', 'Sled push': 'Speed', 'Box jump': 'Power', 'Broad jump': 'Power', 'Med ball rotational throw': 'Power',
+  'Kettlebell swing': 'Power', 'Goblet squat': 'Lower body', 'Romanian deadlift': 'Lower body', 'Walking lunge': 'Lower body', 'Split squat': 'Lower body',
+  'Trap bar deadlift': 'Lower body', 'Nordic hamstring curl': 'Lower body', 'Push-up': 'Upper body', 'One-arm dumbbell row': 'Upper body',
+  'Half-kneeling press': 'Upper body', 'Front plank': 'Core', 'Copenhagen plank': 'Core',
+};
+const ARM_CARE = [
+  ['Band external rotation', 'Elbow pinned to your side, rotate out slowly, two-second return.'],
+  ['Prone Y-T-W raise', 'Thumbs up, squeeze shoulder blades down and back.'],
+  ['Sleeper stretch', 'Gentle pressure only. Stop before pain.'],
+  ['Scap push-up', 'Arms stay straight; spread and pinch the shoulder blades.'],
+  ['Wrist flexion and extension', 'Light weight, full range, slow.'],
+];
 
 function seed() {
   tx(() => {
+    for (const [name, category] of Object.entries(CATEGORY)) run('UPDATE exercises SET category=? WHERE name=?', category, name);
+    const ex = {};
+    for (const [name, cues] of ARM_CARE) ex[name] = insert('exercises', { name, cues, video_url: '', category: 'Arm care' });
+    const exId = (name) => ex[name] || get('SELECT id FROM exercises WHERE name=?', name).id;
+    // A program nobody is on yet, ready to assign to pitchers and position players.
+    const arm = insert('programs', { name: 'Throwers Arm Care', weeks: 4, level: 'Ages 15–18', description: 'Two short days a week to keep shoulders and elbows healthy through the season.' });
+    const armDays = [
+      { title: 'Shoulder care', items: [['Band external rotation', 3, '15'], ['Prone Y-T-W raise', 2, '8 each'], ['Scap push-up', 2, '12'], ['Sleeper stretch', 2, '30 sec each side']] },
+      { title: 'Forearm and trunk', items: [['Wrist flexion and extension', 2, '15 each'], ['Med ball rotational throw', 3, '5 each side'], ['Copenhagen plank', 2, '20 sec each side']] },
+    ];
+    for (let w = 1; w <= 4; w++) armDays.forEach((d, i) => {
+      const did = insert('program_days', { program_id: arm, week: w, day: i + 1, title: d.title });
+      d.items.forEach(([e, sets, reps], ord) => insert('program_items', { day_id: did, exercise_id: exId(e), sets: String(sets), reps, ord }));
+    });
+
     const athletes = all('SELECT id, first_name, last_name, program_id FROM athletes WHERE program_id IS NOT NULL ORDER BY id');
     const notes = ['Felt strong today.', 'Left knee a little sore on the lunges.', 'Went up a weight on the goblet squats.', '', ''];
     // UTC timestamp n days ago at a given hour, in SQLite's format.

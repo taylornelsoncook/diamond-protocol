@@ -435,12 +435,15 @@ _Where: Programs_
 
 [Owner] [Coach] 
 
-Training programs and your exercise library.
+Training programs, how athletes are doing on them, and your exercise library.
 
-- Open a program to build it, or create a new one.
-- Add exercises to the library with coaching cues and a demo video link (YouTube, Vimeo or a video file).
+- At the top: workouts logged in the last 7 days, clients on a program, who needs a check-in and who has finished their program.
+- New program starts blank or as a copy of an existing program (it copies every workout in the weeks you keep). Search programs by name and filter by level. Each card shows weeks, level, days a week, clients and workouts logged this week.
+- Need a check-in: clients on a program with no workout logged in 7 days or more, with how long it's been and their next workout. Finished their program: clients who logged every workout and need what comes next.
+- Recent workouts: what athletes logged in the workout app in the last 14 days, how many exercises they did, and their notes to the coach. Tap a name for the client, or the program to open that week.
+- Exercise library: search by name or cue, and filter by category (speed, power, lower body, upper body, core, arm care, mobility, conditioning), missing a video or not in a program. Each exercise shows its category, how many workouts use it and its video. Add or edit an exercise with a category, coaching cues and a demo video link (YouTube, Vimeo or a video file); the edit form lists the programs that use it. Exercises in use can't be deleted.
 
-> Note: Front desk can view programs but not change them.
+> Note: Front desk can view programs and the library but not change them.
 
 ### Program builder
 
@@ -448,10 +451,18 @@ _Where: Programs, then a program_
 
 [Owner] [Coach] 
 
-Build a program week by week, day by day.
+Build a program week by week, day by day, and follow the clients on it.
 
-- Add days to each week and exercises to each day with sets, reps and cues.
-- Assign the program to a client. It appears in their workout app immediately.
+- One week at a time: tap a week tab (each shows how many days it has; empty weeks show 0 in amber) or use the arrows. Left and right arrow keys move between weeks. The week stays in the address, so a reload or a shared link opens the same week. Add week adds one to the end.
+- Add day (up to 7 a week) with a title and day number. Copy week copies every workout into another week or a run of weeks (for example weeks 2 through 4); if those weeks already have workouts it asks before replacing them. An empty week offers to copy the week before. Delete week removes its workouts; the last week also comes off the program length.
+- Add exercise: search the library, pick one (sets and reps start from the last time it was used in this program), set sets, reps and an optional cue, and use Add and add another to keep going. An exercise that isn't in the library yet can be added from the same search.
+- Tap an exercise to change its sets, reps and cue, or swap in a different exercise in the same place. Move exercises up and down. Remove shows Undo for a few seconds. The play button shows the demo video, cues and this workout's sets and reps.
+- Copy a workout to another week and day, rename it by tapping its title, or delete it (it says how many athlete logs go with it).
+- Assign program: search clients by name, Athlete ID or family. Each result shows the program they're on now; moving someone says so before you confirm, and clients already on this program can't be picked twice. It appears in their workout app immediately and the link is emailed to them or their parents.
+- Clients on this program: workouts done out of the total, the next workout, when they last logged one (amber after 7 days), a progress bar, and buttons to open their workout app, send the link again, or remove them. Recent workouts shows the last 14 days on this program with notes.
+- Edit details (name, weeks, level, description), Duplicate program (copies every week; clients stay on the original) and Delete program (only once nobody is on it).
+
+> Note: Front desk can view programs and send a client their workout link again, but not change programs.
 
 ### API & integrations
 

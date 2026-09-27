@@ -91,6 +91,7 @@ export function badge(status, label) {
 const P = {
   today: 'M3 4h14v13H3zM3 8h14M7 2v4M13 2v4', schedule: 'M3 4h14v13H3zM3 8h14M7 11h2M11 11h2M7 14h2', pos: 'M3 5h14v10H3zM3 9h14M6 13h3',
   clients: 'M7 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 17c0-3 2.2-5 5-5s5 2 5 5M13 4a3 3 0 0 1 0 5M15 12c1.8.6 3 2.3 3 5',
+  crm: 'M2 4h16l-6 7v5l-4 2v-7z',
   teams: 'M10 2l7 3v5c0 4-3 6.5-7 8-4-1.5-7-4-7-8V5z', testing: 'M10 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM10 7v4l2.5 1.5M8 2h4',
   billing: 'M4 2h12v16l-3-2-3 2-3-2-3 2zM7 7h6M7 10h6M7 13h4', programs: 'M2 8v4M5 6v8M15 6v8M18 8v4M5 10h10',
   api: 'M7 6l-4 4 4 4M13 6l4 4-4 4M11 4l-2 12', staff: 'M10 2l7 3v5c0 4-3 6.5-7 8-4-1.5-7-4-7-8V5zM7 10l2 2 4-4',

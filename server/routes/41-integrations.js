@@ -114,6 +114,9 @@ function routes(api) {
       email: { mode: email.mode(), provider: email.provider(), counts: mailCounts(),
         failed_7d: get("SELECT COUNT(*) AS n FROM outbox WHERE status='failed' AND created_at >= datetime('now','-7 days')").n },
       video: videoCoverage(),
+      sms: { mode: require('../messaging').mode(), provider: require('../messaging').provider(),
+        failed_7d: get("SELECT COUNT(*) AS n FROM sms_messages WHERE status='failed' AND created_at >= datetime('now','-7 days')").n,
+        total: get('SELECT COUNT(*) AS n FROM sms_messages').n },
       retry_after_min: hooks.RETRY_AFTER_MIN,
     });
   });

@@ -11,6 +11,7 @@ const NAV = [
   { id: 'schedule', label: 'Schedule', path: '/app/schedule', roles: ['owner', 'coach', 'frontdesk'] },
   { id: 'pos', label: 'Point of sale', path: '/app/pos', roles: ['owner', 'coach', 'frontdesk'] },
   { id: 'clients', label: 'Clients', path: '/app/clients', roles: ['owner', 'coach', 'frontdesk'] },
+  { id: 'crm', label: 'CRM', path: '/app/crm', roles: ['owner', 'frontdesk'] },
   { id: 'teams', label: 'Teams', path: '/app/teams', roles: ['owner'] },
   { id: 'testing', label: 'Testing', path: '/app/testing', roles: ['owner', 'coach', 'frontdesk'] },
   { id: 'billing', label: 'Billing', path: '/app/billing', roles: ['owner'] },
@@ -19,7 +20,8 @@ const NAV = [
   { id: 'api', label: 'API & integrations', path: '/app/integrations', roles: ['owner'] },
   { id: 'staff', label: 'Staff & security', path: '/app/staff', roles: ['owner'] },
 ];
-const ICON = { today: 'today', schedule: 'schedule', pos: 'pos', clients: 'clients', teams: 'teams', testing: 'testing', billing: 'billing', programs: 'programs', education: 'lesson', api: 'api', staff: 'staff' };
+const ICON = { today: 'today', schedule: 'schedule', pos: 'pos', clients: 'clients', crm: 'crm', teams: 'teams', testing: 'testing', billing: 'billing', programs: 'programs', education: 'lesson', api: 'api', staff: 'staff' };
+const listJoin = (a) => (a.length < 2 ? a.join('') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
 const ROLE_LABEL = { owner: 'Owner', coach: 'Coach', frontdesk: 'Front desk' };
 
 // ---- routing ----
@@ -63,7 +65,7 @@ function shell(current) {
       <a class="nav-brand" href="/app/today"><img src="/img/logo-320.png" alt="Diamond Protocol, built under pressure"></a>
       <div class="nav-list">${items.map((n) => html`<a class="nav-item" href="${n.path}" ${n.id === current ? raw('aria-current="page"') : ''}>${icon(ICON[n.id])}${n.label}</a>`)}</div>
       <div class="nav-foot">
-        ${settings?.payments_mode === 'test' || settings?.email_mode === 'test' ? html`<div class="test-mode">Test mode: ${[settings.payments_mode === 'test' && 'cards are simulated', settings.email_mode === 'test' && 'emails go to the outbox'].filter(Boolean).join(' and ')}.</div>` : ''}
+        ${settings?.payments_mode === 'test' || settings?.email_mode === 'test' || settings?.sms_mode === 'test' ? html`<div class="test-mode">Test mode: ${listJoin([settings.payments_mode === 'test' && 'cards are simulated', settings.email_mode === 'test' && 'emails go to the outbox', settings.sms_mode === 'test' && 'texts are saved to the outbox'].filter(Boolean))}.</div>` : ''}
         <div><span class="strong" style="color:var(--steel)">${me.name}</span><br>${ROLE_LABEL[me.role]}</div>
         <div class="btn-row"><a class="btn btn-sm" href="/app/account">Account</a><button class="btn btn-sm" id="signout">Sign out</button></div>
       </div>

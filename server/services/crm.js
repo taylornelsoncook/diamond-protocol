@@ -303,7 +303,7 @@ function createLead(b, { staff = null, source = null, by = null, allowDuplicate 
       ...(consent ? { sms_opt_in: 1, sms_opt_in_at: nowUtc(), sms_opt_in_source: consent.source } : {}),
     });
     insert('crm_stage_changes', { lead_id: leadId, from_stage: null, to_stage: stage, auto: staff ? 0 : 1, staff_name: staff?.name || by || 'System' });
-    activity({ leadId, kind: 'created', body: `Lead added${by && !staff ? ` from ${by}` : ''} · ${label(SOURCES, data.source)}${data.source_detail ? ` (${data.source_detail})` : ''}`, staff });
+    activity({ leadId, kind: 'created', body: by && !staff ? `Lead added from ${by}` : `Lead added · ${label(SOURCES, data.source)}${data.source_detail ? ` (${data.source_detail})` : ''}`, staff });
     return leadId;
   });
   const l = leadRow(id);
@@ -327,7 +327,7 @@ function moveStage(lead, stage, { staff = null, auto = false, lostReason = null,
   tx(() => {
     update('crm_leads', lead.id, { stage, stage_changed_at: nowUtc(), lost_reason: stage === 'lost' ? lostReason : null, lost_note: stage === 'lost' ? clean(lostNote, 300) : null });
     insert('crm_stage_changes', { lead_id: lead.id, from_stage: from, to_stage: stage, auto: auto ? 1 : 0, staff_name: auto ? 'System' : staff?.name || null });
-    activity({ leadId: lead.id, kind: 'stage', body: `${label(STAGES, from)} → ${label(STAGES, stage)}${stage === 'lost' ? `: ${label(LOST_REASONS, lostReason)}${lostNote ? ` (${clean(lostNote, 300)})` : ''}` : ''}${why ? ` · ${why}` : ''}`,
+    activity({ leadId: lead.id, kind: 'stage', body: `${label(STAGES, from)} → ${label(STAGES, stage)}${stage === 'lost' ? `: ${label(LOST_REASONS, lostReason)}${lostNote ? ` (${clean(lostNote, 300)})` : ''}` : ''}${why ? `: ${why}` : ''}`,
       meta: { from, to: stage, auto }, staff: auto ? null : staff });
   });
   emit('lead.stage_changed', { id: lead.id, parent_name: lead.parent_name, from, to: stage, lost_reason: stage === 'lost' ? lostReason : null, auto, family_id: lead.family_id });
@@ -341,12 +341,12 @@ function autoStageFor(l) {
   if (l.family_id) {
     const m = get(`SELECT MAX(CASE WHEN m.status IN ('active','past_due') THEN 2 WHEN m.status='trial' THEN 1 ELSE 0 END) r FROM memberships m JOIN athletes a ON a.id=m.athlete_id
       WHERE a.family_id=? AND m.started_at>=?`, l.family_id, since)?.r || 0;
-    if (m === 2) return ['member', 'Membership started'];
-    if (m === 1) return ['trial', 'Free trial started'];
+    if (m === 2) return ['member', 'a membership started'];
+    if (m === 1) return ['trial', 'a free trial started'];
     if (get(`SELECT 1 FROM bookings b JOIN events e ON e.id=b.event_id JOIN athletes a ON a.id=b.athlete_id WHERE a.family_id=? AND e.type='evaluation'
-      AND e.cancelled=0 AND b.status='booked' AND substr(e.starts_at,1,10)>=?`, l.family_id, since)) return ['evaluation', 'Evaluation booked'];
+      AND e.cancelled=0 AND b.status='booked' AND substr(e.starts_at,1,10)>=?`, l.family_id, since)) return ['evaluation', 'an evaluation is on the schedule'];
   }
-  if (get("SELECT 1 FROM events WHERE lead_id=? AND type='evaluation' AND cancelled=0", l.id)) return ['evaluation', 'Evaluation booked'];
+  if (get("SELECT 1 FROM events WHERE lead_id=? AND type='evaluation' AND cancelled=0", l.id)) return ['evaluation', 'an evaluation is on the schedule'];
   return null;
 }
 function syncLead(l) {
@@ -367,7 +367,7 @@ function syncStages(ids = null) {
 
 // A New lead that staff reach (call, email or text) is Contacted.
 function touch(l, staff) {
-  if (l.stage === 'new') moveStage(l, 'contacted', { staff, auto: true, why: 'First contact logged' });
+  if (l.stage === 'new') moveStage(l, 'contacted', { staff, auto: true, why: 'first contact logged' });
 }
 
 // ---- listing and filtering ----
@@ -469,8 +469,8 @@ function familyItems(familyId, staff, { compact = false } = {}) {
   for (const m of all(`SELECT m.*, p.name AS plan FROM memberships m JOIN plans p ON p.id=m.plan_id WHERE m.athlete_id IN ${IN} ORDER BY m.id DESC LIMIT 20`, ...ids)) {
     const who = byId[m.athlete_id].first_name;
     const trialStart = m.status === 'trial' || (m.status === 'cancelled' && !get("SELECT 1 FROM invoices WHERE membership_id=? AND status='paid'", m.id) && m.next_charge > m.started_at && daysBetween(m.started_at, m.next_charge) < 28);
-    items.push({ kind: 'membership', at: atOf(m.started_at), title: trialStart ? 'Free trial started' : 'Membership started', body: `${who}: ${m.plan}`, id: `m${m.id}` });
-    if (m.cancelled_at) items.push({ kind: 'membership', at: atOf(m.cancelled_at), title: trialStart ? 'Trial ended without joining' : 'Membership cancelled', body: `${who}: ${m.plan}`, id: `mc${m.id}` });
+    items.push({ kind: 'membership', at: atOf(m.started_at), day: m.started_at, title: trialStart ? 'Free trial started' : 'Membership started', body: `${who}: ${m.plan}`, id: `m${m.id}` });
+    if (m.cancelled_at) items.push({ kind: 'membership', at: atOf(m.cancelled_at), day: m.cancelled_at, title: trialStart ? 'Trial ended without joining' : 'Membership cancelled', body: `${who}: ${m.plan}`, id: `mc${m.id}` });
   }
   if (staff?.role === 'owner') {
     for (const i of all(`SELECT id, number, description, amount_cents, status, created_at FROM invoices WHERE family_id=? AND status IN ('paid','failed') ORDER BY id DESC LIMIT ${compact ? 5 : 20}`, familyId)) {
@@ -490,7 +490,7 @@ function leadTimeline(l, staff) {
   const items = [
     ...activityItems(`lead_id=?${l.family_id ? ' OR (family_id=? AND lead_id IS NULL)' : ''}`, [l.id, ...(l.family_id ? [l.family_id] : [])]),
     ...smsItems(`lead_id=?${l.family_id ? ' OR family_id=?' : ''}`, [l.id, ...(l.family_id ? [l.family_id] : [])]),
-    ...all("SELECT id, name, starts_at, cancelled FROM events WHERE lead_id=? ORDER BY id DESC", l.id).map((e) => ({ kind: 'booking', at: atOf(e.starts_at), title: e.cancelled ? 'Evaluation cancelled' : 'Evaluation', body: `${e.name}`, id: `e${e.id}` })),
+    ...all("SELECT id, name, starts_at, cancelled FROM events WHERE lead_id=? ORDER BY id DESC", l.id).map((e) => ({ kind: 'booking', at: atOf(e.starts_at), when: require('../lib').whenLocal(e.starts_at), title: e.cancelled ? 'Evaluation cancelled' : 'Evaluation', body: e.name, id: `e${e.id}` })),
     ...(l.family_id ? familyItems(l.family_id, staff) : []),
   ];
   return items.sort(byNewest);

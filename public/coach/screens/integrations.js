@@ -52,7 +52,8 @@ const STYLE = html`<style>
 }
 </style>`;
 
-const TABS = [['keys', 'API keys'], ['webhooks', 'Webhooks'], ['email', 'Email outbox'], ['video', 'Exercise video']];
+const TABS = [['keys', 'API keys'], ['webhooks', 'Webhooks'], ['email', 'Email outbox'], ['sms', 'Text outbox'], ['video', 'Exercise video']];
+const SMS = { sent: ['Sent', 'good'], queued: ['Sending', 'neutral'], failed: ['Failed', 'warn'], held: ['Held', 'muted'], logged: ['Not sent', 'muted'], received: ['Received', 'neutral'] };
 const MAIL = { sent: ['Sent', 'good'], queued: ['Sending', 'neutral'], failed: ['Failed', 'warn'], held: ['Held', 'muted'], logged: ['Not sent', 'muted'] };
 const PROVIDER = (p) => (p === 'resend' ? 'Resend' : 'your relay');
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
@@ -128,6 +129,7 @@ async function render(ctx) {
       ${tile('keys', 'API keys', live.length ? `${live.length} active` : 'None', live.length ? (keyErrors ? `${plural(keyErrors, 'error')} in 30 days` : lastUsed ? `Last used ${relTime(lastUsed)}` : 'Not used yet') : 'Create one to connect a system', keyErrors > 0 && 'note')}
       ${tile('webhooks', 'Webhooks', failing.length ? `${failing.length} failing` : data.webhooks.length ? `${active.length} active` : 'None', failing.length ? 'Deliveries are not getting through' : paused ? `${paused} paused` : data.webhooks.length ? 'All delivering' : 'Get events as they happen', failing.length > 0 && 'value')}
       ${tile('email', 'Email', em.mode === 'test' ? 'Not connected' : em.mode === 'restricted' ? 'Restricted' : 'Sending', em.failed_7d ? `${plural(em.failed_7d, 'failed email')} this week` : em.mode === 'test' ? 'Emails stay in the outbox' : `Through ${PROVIDER(em.provider)}`, em.failed_7d > 0 ? 'value' : em.mode === 'test' && 'note')}
+      ${tile('sms', 'Texts', data.sms.mode === 'test' ? 'Not connected' : data.sms.mode === 'restricted' ? 'Restricted' : 'Sending', data.sms.failed_7d ? `${plural(data.sms.failed_7d, 'failed text')} this week` : data.sms.mode === 'test' ? 'Texts stay in the outbox' : 'Through Twilio', data.sms.failed_7d > 0 ? 'value' : data.sms.mode === 'test' && 'note')}
       ${tile('video', 'Exercise video', `${v.with_video} of ${v.total}`, v.in_use_missing ? `${plural(v.in_use_missing, 'exercise')} in programs need one` : 'Exercises with a demo video', v.in_use_missing > 0 && 'note')}`);
   }
 
@@ -152,7 +154,7 @@ async function render(ctx) {
   function drawPane() {
     el.querySelectorAll('[role=tab]').forEach((b) => { const on = b.dataset.tab === tab; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
     pane.setAttribute('aria-labelledby', `tab-${tab}`);
-    ({ keys: drawKeys, webhooks: drawHooks, email: drawEmail, video: drawVideo })[tab]();
+    ({ keys: drawKeys, webhooks: drawHooks, email: drawEmail, sms: drawSms, video: drawVideo })[tab]();
   }
 
   // ================================================================ API keys
@@ -484,6 +486,55 @@ async function render(ctx) {
     });
     pane.querySelectorAll('[data-mf]').forEach((b) => b.addEventListener('click', () => { mailFilter = b.dataset.mf; drawEmail(); }));
     pane.querySelector('#oq').addEventListener('input', debounce((e) => { mailQ = e.target.value.trim(); load(true).catch(toastError); }, 250));
+    load(true).catch((err) => { mount(box, html`<p class="error" style="margin:0">${err.message}</p>`); });
+  }
+
+  // ================================================================ text outbox
+  let smsFilter = '', smsQ = '';
+  function drawSms() {
+    mount(pane, html`<section class="panel" aria-labelledby="sms-t">
+      <div><h2 class="panel-title" id="sms-t">Text outbox</h2>
+        <p class="panel-sub">Every text the platform sends from the CRM, the automatic STOP and HELP replies, and texts people send back.</p></div>
+      <div id="sms-mode"></div>
+      <div class="dpi-filters">
+        <div class="seg" role="group" aria-label="Show" id="sms-f"></div>
+        <div style="flex:1;min-width:200px;max-width:320px"><label class="sr-only" for="sq">Search texts</label><input class="input" type="search" id="sq" placeholder="Search number or text" value="${smsQ}" autocomplete="off"></div>
+      </div>
+      <div id="sms-list" aria-live="polite"><p class="muted" style="margin:0">Loading…</p></div>
+      ${data.sms.mode === 'test' ? html`<form class="stack-sm" id="sms-sim" novalidate style="border-top:1px solid var(--line-subtle);padding-top:var(--space-4)">
+        <div class="label">Simulate a reply</div><p class="hint" style="margin:0">Test mode only: pretend a number texted in, to try STOP, START and HELP.</p>
+        <div class="row" style="align-items:flex-end;flex-wrap:wrap"><div class="field" style="flex:1;min-width:160px"><label class="label small" for="ss-f">From number</label><input class="input" id="ss-f" name="from" type="tel" placeholder="(801) 555-0188"></div>
+          <div class="field" style="flex:2;min-width:180px"><label class="label small" for="ss-b">Message</label><input class="input" id="ss-b" name="body" value="STOP"></div>
+          <button class="btn">Simulate reply</button></div></form>` : ''}
+    </section>`);
+    const box = pane.querySelector('#sms-list');
+    let items = [], total = 0, seq = 0;
+    const load = async (reset) => {
+      const my = ++seq;
+      const r = await api.get(`/sms/outbox?limit=25&offset=${reset ? 0 : items.length}${smsQ ? '&q=' + encodeURIComponent(smsQ) : ''}${smsFilter === 'in' ? '&direction=in' : smsFilter ? '&status=' + smsFilter : ''}`);
+      if (my !== seq || !box.isConnected) return;
+      items = reset ? r.items : items.concat(r.items); total = r.total;
+      const c = r.counts, everything = Object.values(c).reduce((a, b) => a + b, 0);
+      mount(pane.querySelector('#sms-f'), html`${[['', 'All', everything], ['failed', 'Failed', c.failed || 0], ['held', 'Held', c.held || 0], ['logged', 'Not sent', c.logged || 0], ['sent', 'Sent', c.sent || 0], ['in', 'Received', c.received || 0]]
+        .filter(([v, , n]) => v === '' || n > 0 || v === smsFilter).map(([v, l, n]) => html`<button type="button" data-sf="${v}" aria-pressed="${v === smsFilter}">${l} (${n})</button>`)}`);
+      mount(pane.querySelector('#sms-mode'), r.mode === 'test'
+        ? html`<div class="banner">No texting service is connected, so texts are saved here and not sent. Set DP_SMS_PROVIDER=twilio with TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM on the server to start sending.</div>`
+        : html`<div class="banner info">Sending through Twilio${r.mode === 'restricted' ? html`, but only to ${r.only_to}. Everything else is held here` : ''}.</div>`);
+      mount(box, items.length ? html`<div>${items.map((m) => { const [t, tone] = SMS[m.status] || [m.status, 'muted']; return html`<details class="dpi-mail">
+          <summary><span class="muted" title="${fmtDateTime(m.created_at)}">${relTime(m.created_at)}</span> · ${m.direction === 'in' ? `From ${m.from_display}` : `To ${m.to_display}`}${m.lead_name || m.parent_name ? ` (${m.lead_name || m.parent_name})` : ''} · <span class="strong">${m.body.length > 60 ? m.body.slice(0, 60) + '…' : m.body}</span> ${tag(t, tone)}</summary>
+          <div class="body">${m.error ? html`<p class="error" style="margin:0">${m.error}</p>` : ''}<pre>${m.body}</pre>
+            <p class="small muted" style="margin:0">${[m.direction === 'out' ? plural(m.segments, 'text') : null, m.sent_by ? `by ${m.sent_by}` : null, m.kind === 'group' ? 'group message' : m.kind === 'auto' ? 'automatic reply' : null].filter(Boolean).join(' · ')}</p></div></details>`; })}</div>
+        ${items.length < total ? html`<div><button type="button" class="btn btn-sm" id="sms-more">Show more (${total - items.length} older)</button></div>` : ''}`
+        : html`<p class="muted" style="margin:0">${smsQ || smsFilter ? 'No texts match.' : 'No texts yet. Text a lead from the CRM.'}</p>`);
+      box.querySelector('#sms-more')?.addEventListener('click', () => load(false).catch(toastError));
+    };
+    pane.querySelector('#sms-f').addEventListener('click', (e) => { const b = e.target.closest('[data-sf]'); if (b) { smsFilter = b.dataset.sf; load(true).catch(toastError); } });
+    pane.querySelector('#sq').addEventListener('input', debounce((e) => { smsQ = e.target.value.trim(); load(true).catch(toastError); }, 250));
+    pane.querySelector('#sms-sim')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try { const r = await api.post('/sms/inbound', formData(e.target)); toast(r.action ? `Handled as ${r.action.toUpperCase()}.` : 'Reply recorded.'); load(true); }
+      catch (err) { toastError(err); }
+    });
     load(true).catch((err) => { mount(box, html`<p class="error" style="margin:0">${err.message}</p>`); });
   }
 

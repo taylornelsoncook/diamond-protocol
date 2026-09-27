@@ -2,6 +2,7 @@
 import { html, raw, mount, api, money, fmtDate, fmtTime, fmtDateTime, relTime, badge, toast, toastError, modal, confirmDialog, formData, debounce, options, age, fullName, icon, sparkline, plural, localISO } from '/js/ui.js';
 import { parseEntry, fmtValue } from '/js/testing-format.js';
 import { assignDialog } from './education.js';
+import { emailDialog, textDialog, timelineList, taskDialog } from './crm.js';
 
 const STYLE = html`<style>
 .cl-list .cl-tools{display:flex;gap:var(--space-3);flex-wrap:wrap}
@@ -570,6 +571,9 @@ async function renderProfile(ctx) {
   async function draw() {
     const [d, lookups, plans, , en, library] = await Promise.all([api.get(`/athletes/${id}`), lookupsP, plansP, progressP, api.get(`/athletes/${id}/engage`, { noRedirect: true }).catch(() => null), libraryP]);
     if (!ctx.isCurrent()) return;
+    // Enquiry and contact history from the CRM (owners and front desk; coaches have no CRM).
+    d.crm = d.family && ctx.me.role !== 'coach' ? await api.get(`/crm/families/${d.family.id}/timeline?compact=1`, { noRedirect: true }).catch(() => null) : null;
+    if (!ctx.isCurrent()) return;
     const a = d.athlete, fam = d.family, m = d.membership, owner = isOwner(ctx), role = ctx.me.role;
     document.title = `${fullName(a)} · Diamond Protocol`;
     const yrs = age(a.birthday);
@@ -702,6 +706,19 @@ async function renderProfile(ctx) {
         : html`<p class="panel-sub">No notes yet.</p>`}
     </section>`;
 
+    const cr = d.crm;
+    const crmParent = cr?.family?.parents?.[0];
+    const crmPanel = cr ? html`<section class="panel" id="cl-crm">
+      <div class="panel-head"><div><h2 class="panel-title">Contact history</h2><p class="panel-sub">${cr.leads.length ? html`From the CRM: ${cr.leads.map((l, i) => html`${i ? ', ' : ''}<a href="/app/crm/leads/${l.id}">${l.source_label} lead</a> (${l.stage_label})`)}.` : 'Emails, texts, calls and bookings with this family.'}</p></div>
+        <div class="btn-row">${crmParent && !crmParent.email_opt_out ? html`<button class="btn btn-sm" data-act="crm-email">Email</button>` : ''}
+          <button class="btn btn-sm" data-act="crm-text" ${crmParent?.can_text ? '' : raw('disabled')} title="${crmParent?.text_block ? `Can't text: ${crmParent.text_block}` : ''}">Text</button>
+          <button class="btn btn-sm btn-ghost" data-act="crm-task">Add task</button></div></div>
+      ${cr.can_reengage ? html`<div class="banner info" role="note"><span>Their trial ended without joining.</span><button class="btn btn-sm" data-act="crm-reengage">Put back in pipeline</button></div>` : ''}
+      ${cr.open_lead ? html`<p class="small" style="margin:0">In the pipeline: <a href="/app/crm/leads/${cr.open_lead.id}">${cr.open_lead.stage_label}</a>, ${cr.open_lead.days_in_stage === 1 ? '1 day' : `${cr.open_lead.days_in_stage} days`} in stage.</p>` : ''}
+      ${timelineList(cr.timeline, 'Nothing yet.')}
+      ${cr.sms_mode === 'test' ? html`<p class="hint" style="margin:0">Test mode: texts are saved to the outbox until a texting service is connected.</p>` : ''}
+    </section>` : '';
+
     const tests = progress?.tests || [];
     const testingPanel = html`<section class="panel" id="cl-test">
       <div class="panel-head"><div><h2 class="panel-title">Testing</h2><p class="panel-sub">Best result and change since the first test.</p></div>
@@ -750,7 +767,7 @@ async function renderProfile(ctx) {
       </form></section>`;
 
     const eng = engagePanels(ctx, a, en, library);
-    const jumps = [['cl-fam', fam ? 'Family' : 'Team'], ['cl-card', 'Sessions'], ['cl-visits', 'Attendance'], ['cl-up', 'Upcoming'], ['cl-notes', `Notes${d.notes.length ? ` (${d.notes.length})` : ''}`],
+    const jumps = [['cl-fam', fam ? 'Family' : 'Team'], ['cl-card', 'Sessions'], ['cl-visits', 'Attendance'], ['cl-up', 'Upcoming'], ['cl-notes', `Notes${d.notes.length ? ` (${d.notes.length})` : ''}`], d.crm ? ['cl-crm', 'Contact history'] : null,
       en ? ['cl-msgs', 'Messages'] : null, ['cl-test', 'Testing'], en ? ['cl-goals', 'Goals'] : null, ['cl-train', 'Training'], owner && d.payments ? ['cl-pay', 'Payments'] : null, ['cl-prof', 'Profile']].filter(Boolean);
     const snap = first ? null : snapshot(ctx.el.querySelector('.cl-pro'));
     mount(ctx.el, html`${STYLE}<div class="stack cl-pro">
@@ -767,7 +784,7 @@ async function renderProfile(ctx) {
       <nav class="cl-jump no-print" aria-label="Sections">${jumps.map(([t, label]) => html`<button type="button" data-jump="${t}">${label}</button>`)}</nav>
       <div class="cl-cols">
         <div class="cl-col">${familyPanel}${membershipPanel}${cardPanel}${visitsPanel}${eng.accountability}${eng.goals}${paymentsPanel}</div>
-        <div class="cl-col">${upcomingPanel}${notesPanel}${eng.messages}${testingPanel}${eng.targets}${eng.education}${trainingPanel}${profilePanel}</div>
+        <div class="cl-col">${upcomingPanel}${notesPanel}${crmPanel}${eng.messages}${testingPanel}${eng.targets}${eng.education}${trainingPanel}${profilePanel}</div>
       </div></div>`);
     const root = ctx.el.querySelector('.cl-pro');
     restore(root, snap);
@@ -803,6 +820,10 @@ async function renderProfile(ctx) {
       const q = (s) => root.querySelector(s);
       switch (b.dataset.act) {
         case 'copy-portal': return copy(d.portal_url, 'Portal link');
+        case 'crm-email': { const p = d.crm.family.parents[0]; return emailDialog({ to: p.email, name: p.name, athletes: d.crm.family.athletes.map((x) => x.first_name), post: `/crm/families/${fam.id}/email`, me: ctx.me, business: ctx.settings?.business_name || 'Diamond Protocol', emailMode: d.crm.email_mode, onSent: () => draw() }); }
+        case 'crm-text': { const p = d.crm.family.parents[0]; return textDialog({ to: p.phone, name: p.name, athletes: d.crm.family.athletes.map((x) => x.first_name), post: `/crm/families/${fam.id}/text`, me: ctx.me, business: ctx.settings?.business_name || 'Diamond Protocol', smsMode: d.crm.sms_mode, onSent: () => draw() }); }
+        case 'crm-task': return taskDialog(ctx, { familyId: fam.id, about: fam.name, onDone: () => draw() });
+        case 'crm-reengage': return act(() => api.post('/crm/reengage', { family_id: fam.id }), (r) => `${r.lead.parent_name} is back in the pipeline, in Contacted.`);
         case 'copy-app': return copy(d.workout_url, 'App link');
         // The same email as Send link on Programs (front desk can send it too).
         case 'email-app': return act(() => api.post(`/programs/${d.program.id}/send-link`, { athlete_id: a.id }), (r) => `App link emailed to ${r.sent_to.join(', ')}.`);

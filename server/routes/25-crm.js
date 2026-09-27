@@ -97,6 +97,13 @@ function routes(api) {
     res.json({ columns, counts: crm.stageCounts() });
   }));
 
+  api.get('/crm/duplicates', CRM, h(async (req, res) => {
+    const d = crm.cleanLead({ email: req.query.email || '', phone: req.query.phone || '' }, { partial: true });
+    const except = Number(req.query.except) || 0;
+    const fam = except ? get('SELECT family_id FROM crm_leads WHERE id=?', except)?.family_id : null;
+    res.json({ duplicates: crm.duplicates(d, except).filter((x) => !(x.kind === 'family' && x.id === fam)) });
+  }));
+
   api.post('/crm/leads', CRM, h(async (req, res) => {
     const b = parseBody(req.body);
     const l = crm.createLead(b, { staff: req.staff, allowDuplicate: b.allow_duplicate === true });
@@ -197,7 +204,7 @@ function routes(api) {
     const { whenLocal } = require('../lib');
     crm.activity({ leadId: l.id, familyId: l.family_id, kind: 'booking', body: `Evaluation booked for ${whenLocal(e.starts_at)}`, staff: req.staff });
     const fresh = crm.leadRow(l.id);
-    if (fresh.stage === 'lost' || ['new', 'contacted'].includes(fresh.stage)) crm.moveStage(fresh, 'evaluation', { staff: req.staff, auto: true, why: 'Evaluation booked' });
+    if (fresh.stage === 'lost' || ['new', 'contacted'].includes(fresh.stage)) crm.moveStage(fresh, 'evaluation', { staff: req.staff, auto: true, why: 'an evaluation is on the schedule' });
     log(req, 'Booked an evaluation', `${l.parent_name}: ${whenLocal(e.starts_at)}`);
     res.status(201).json({ event_id: e.id, starts_at: e.starts_at, lead: crm.leadView(crm.leadRow(l.id), req.staff) });
   }));
@@ -287,7 +294,7 @@ function routes(api) {
     const data = crm.cleanTask(parseBody(req.body));
     const { insert } = require('../db');
     const id = insert('crm_tasks', { ...data, created_by: req.staff.name });
-    if (data.lead_id) crm.activity({ leadId: data.lead_id, familyId: data.family_id, kind: 'task_added', body: `Task for ${get('SELECT name FROM staff WHERE id=?', data.assignee_id).name}: ${data.title} (due ${data.due_date})`, staff: req.staff });
+    if (data.lead_id) crm.activity({ leadId: data.lead_id, familyId: data.family_id, kind: 'task_added', body: `For ${get('SELECT name FROM staff WHERE id=?', data.assignee_id).name}: ${data.title}, due ${new Date(data.due_date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })}`, staff: req.staff });
     log(req, 'Added a task', data.title);
     res.status(201).json({ task: crm.taskView(get('SELECT * FROM crm_tasks WHERE id=?', id)) });
   }));
@@ -365,7 +372,7 @@ function routes(api) {
     const { recipients } = crm.segment(spec, channel);
     if (Number(req.body?.expected_count) !== recipients.length) throw new HttpError(409, `The group changed since the preview: it has ${recipients.length} ${recipients.length === 1 ? 'person' : 'people'} now. Check the list again before sending.`, { count: recipients.length });
     const r = crm.sendGroup(spec, channel, { subject: req.body?.subject, body: req.body?.body }, req.staff);
-    log(req, channel === 'text' ? 'Sent a group text' : 'Sent a group email', `${crm.describeSegment(spec)}: ${r.sent} sent${r.failed.length ? `, ${r.failed.length} not sent` : ''}${channel === 'email' ? ` · ${crm.clean(req.body?.subject, 150)}` : ''}`);
+    log(req, channel === 'text' ? 'Sent a group text' : 'Sent a group email', `${crm.describeSegment(spec)}: ${r.sent} sent${r.failed.length ? `, ${r.failed.length} not sent` : ''}${channel === 'email' ? ` · ${String(crm.clean(req.body?.subject, 150) || '').replace(/\{business\}/g, businessName())}` : ''}`);
     res.json(r);
   }));
 

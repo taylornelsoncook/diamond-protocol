@@ -123,6 +123,11 @@ test('new lead: validation, E.164 phone, duplicate check against leads and famil
   assert.equal(fam.name, 'Maria Lopez'); assert.match(fam.href, /^\/app\/clients\/\d+$/); assert.equal(fam.match, 'phone');
   d = await desk.post('/crm/leads', { ...newLead(), email: 'maria.lopez@example.com' });
   assert.equal(d.status, 409); assert.ok(d.data.duplicates.some((x) => x.kind === 'family' && x.match === 'email'));
+  // The form asks first (a 200 answer) so it can warn before saving
+  const pre = (await desk.get('/crm/duplicates?email=&phone=801-555-0142')).data.duplicates;
+  assert.ok(pre.some((x) => x.kind === 'family' && x.name === 'Maria Lopez'));
+  assert.deepEqual((await desk.get('/crm/duplicates?email=nobody.here@example.com&phone=')).data.duplicates, []);
+  assert.equal((await coach.get('/crm/duplicates?email=a@b.co')).status, 403);
   const anyway = await desk.post('/crm/leads', { ...newLead(), phone: '801.555.0142', allow_duplicate: true });
   assert.equal(anyway.status, 201);
   // Edits: a changed phone clears its OK to text, and edits are checked for duplicates too

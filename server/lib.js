@@ -42,12 +42,8 @@ function emit(event, payload) {
   for (const w of hooks) {
     const events = JSON.parse(w.events || '[]');
     if (!events.includes(event)) continue;
-    const body = JSON.stringify({ event, created_at: new Date().toISOString(), data: payload });
-    const sig = crypto.createHmac('sha256', w.secret || '').update(body).digest('hex');
-    const did = insert('webhook_deliveries', { webhook_id: w.id, event, payload: body, status: null });
-    fetch(w.url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-dp-signature': sig }, body, signal: AbortSignal.timeout(8000) })
-      .then((r) => run('UPDATE webhook_deliveries SET status=? WHERE id=?', r.status, did))
-      .catch((e) => run('UPDATE webhook_deliveries SET status=0, error=? WHERE id=?', String(e.message || e), did));
+    // Signed, recorded and retried by services/ops-webhooks (delivery id and event in headers too).
+    require('./services/ops-webhooks').deliver(w, event, payload);
   }
 }
 

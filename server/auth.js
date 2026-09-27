@@ -88,6 +88,12 @@ function requireApiKey(req, _res, next) {
   if (!k) return next(new HttpError(401, 'That API key is not valid or was revoked.'));
   run("UPDATE api_keys SET last_used=datetime('now') WHERE id=?", k.id);
   req.apiKey = k;
+  // Every request with a key is logged for API & integrations; read-only keys can't send data.
+  const apiOps = require('./services/ops-api');
+  apiOps.track(req, _res, k);
+  if (apiOps.scopeOf(k) === 'read' && !['GET', 'HEAD'].includes(req.method)) {
+    return next(new HttpError(403, 'This API key is read-only. Create a key with "Read and send results" to send data.'));
+  }
   next();
 }
 

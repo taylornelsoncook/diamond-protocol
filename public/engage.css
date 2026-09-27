@@ -131,3 +131,5 @@
 .eg-badge-icon{font-size:22px;line-height:1;color:var(--green-bright)}
 .cl-badges{display:flex;flex-direction:column}
 .cl-badge{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-subtle)}
+.eg-badge--milestone{background:var(--surface);border-color:var(--line)}
+.eg-badge--milestone .eg-badge-icon{color:var(--amber)}

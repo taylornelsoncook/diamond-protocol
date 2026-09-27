@@ -368,7 +368,8 @@ export function performance(ctx, clientId, { parentView = false } = {}) {
     targets: targetsFor(ctx, c.id, tests),
     rankings: rankings(ctx, c, tests, parentView),
     rankings_enabled: rankingsOn(ctx),
-    skill_badges: badgesFor(ctx, c.id)
+    skill_badges: badgesFor(ctx, c.id),
+    milestones: milestonesFor(ctx, c.id, tests)
   };
 }
 
@@ -433,6 +434,21 @@ export function awardBadge(ctx, badgeId, body = {}, actor) {
 export function removeAward(ctx, id) {
   if (!ctx.db.run('DELETE FROM badge_awards WHERE id = ?', id).changes) throw notFound('Badge award');
   return { id, deleted: true };
+}
+// Milestones the app works out on its own: sessions and workouts done, a check-in streak, and PRs.
+const STEPS = [10, 25, 50, 100, 250, 500];
+export function milestonesFor(ctx, clientId, tests) {
+  const t = training(ctx, clientId, '2000-01-01', today(ctx));
+  const top = (n) => [...STEPS].reverse().find((x) => n >= x);
+  const out = [];
+  const sessions = top(t.filter((r) => r.kind === 'sessions').length), workouts = top(t.filter((r) => r.kind === 'workouts').length);
+  if (sessions) out.push({ key: `sessions_${sessions}`, name: `${sessions} sessions`, detail: `Showed up for ${sessions} sessions.` });
+  if (workouts) out.push({ key: `workouts_${workouts}`, name: `${workouts} workouts`, detail: `Finished ${workouts} app workouts.` });
+  const streak = checkinStreak(ctx, clientId), s = [30, 14, 7].find((x) => streak >= x);
+  if (s) out.push({ key: `checkins_${s}`, name: `${s}-day check-in streak`, detail: `Checked in ${streak} days in a row.` });
+  const improved = tests.filter((x) => x.tests_count > 1 && x.best_date !== x.first.date).length;
+  if (improved) out.push({ key: 'prs', name: improved === 1 ? 'First PR' : `PRs in ${improved} tests`, detail: improved === 1 ? 'Beat a first test result.' : `Beat the first result in ${improved} different tests.` });
+  return out;
 }
 export function badgesFor(ctx, clientId) {
   return ctx.db.all(`SELECT a.id, a.badge_id, b.name, b.description, b.category, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/server.js';
 import { createUser } from '../src/services/access.js';
 import { resetRateLimits } from '../src/services/security.js';
+import { today } from '../src/services/engage.js';
+import { addDaysToDate, newId } from '../src/util.js';
 
 let app, base, coach, desk, ava, cal, sprint;
 
@@ -66,4 +68,12 @@ test('a removed badge stays earned but leaves the list; front desk only looks', 
   assert.equal((await desk('GET', '/v1/skill-badges')).status, 200);
   assert.equal((await desk('POST', '/v1/skill-badges', { name: 'Desk badge' })).status, 403);
   assert.equal((await desk('POST', `/v1/skill-badges/${sprint.id}/awards`, { client_id: ava.id })).status, 403);
+});
+
+test('milestones appear on their own, like a 7-day check-in streak', async () => {
+  assert.deepEqual((await athleteApp(ava)).body.performance.milestones, []);
+  const t = today(app.ctx);
+  for (let i = 0; i < 7; i++) app.ctx.db.run('INSERT INTO daily_checkins (id, client_id, date, sleep_hours, created_at, updated_at) VALUES (?, ?, ?, 8, ?, ?)', newId('chk'), ava.id, addDaysToDate(t, -i), app.ctx.now(), app.ctx.now());
+  const [m] = (await athleteApp(ava)).body.performance.milestones;
+  assert.deepEqual([m.name, m.detail], ['7-day check-in streak', 'Checked in 7 days in a row.']);
 });

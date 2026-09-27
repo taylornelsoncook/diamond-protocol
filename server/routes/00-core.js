@@ -11,11 +11,16 @@ function routes(api) {
   api.get('/setup', (_req, res) => res.json({ needs_setup: !get('SELECT 1 FROM staff LIMIT 1'), payments_mode: payments.mode(), email_mode: require('../email').mode() }));
   api.post('/setup', h(async (req, res) => {
     if (get('SELECT 1 FROM staff LIMIT 1')) throw new HttpError(409, 'Setup is already done.');
-    const { name, email, password, business_name } = req.body;
-    if (!name || !/^\S+@\S+\.\S+$/.test(email || '')) throw bad('Enter your name and email.');
+    const { password } = req.body;
+    const name = String(req.body.name || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const business_name = String(req.body.business_name || '').trim().slice(0, 80);
+    if (!name) throw bad('Enter your name.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw bad('Enter a valid email address.');
     if (String(password || '').length < 10) throw bad('Use a password of at least 10 characters.');
     insert('staff', { name, email, role: 'owner', pw_hash: hashPassword(password), must_change: 0 });
     if (business_name) setSetting('business_name', business_name);
+    log(req, 'Created owner account', `${name}, ${email}${business_name ? ` for ${business_name}` : ''}`);
     res.json({ ok: true });
   }));
 

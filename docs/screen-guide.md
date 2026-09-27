@@ -68,9 +68,10 @@ The jobs you'll do most, step by step. Each step links to its screen.
 
 ### Adding staff
 
-- Staff & securityAdd them with a role: Coach or Front desk.
-- Sign inThey sign in with the one-time password from their email and choose their own.
+- Staff & securityAdd staff member: name, email and a role (Coach, Front desk or Owner), with what each role can do shown as you choose. They get a one-time password by email.
+- Sign inThey sign in with the one-time password from their email and choose their own (it must be different from the one-time password). If it never arrived, Manage → Resend invite.
 - TodayThey see only what their role allows; everything they do appears in the activity log.
+- Staff & securityWhen someone leaves, Manage → Turn off account signs them out everywhere and hands their upcoming sessions, weekly classes and private hours to another coach (or leaves them unassigned).
 
 ## Coach dashboard
 
@@ -84,9 +85,12 @@ _Where: app address_
 
 Every staff member signs in with their own email and password.
 
-- Enter your email and password.
-- New staff sign in with the one-time password from their welcome email, then choose their own.
-- After five wrong passwords the account locks for 15 minutes. An owner can unlock it sooner in Staff & security.
+- Enter your email and password. Show reveals what you typed; a warning appears if Caps Lock is on.
+- New staff sign in with the one-time password from their welcome email, then choose their own (at least 10 characters, not the one-time password). Not them? Sign out from that screen.
+- Forgot your password? Enter your email and we send a link to choose a new one. It works once, for 30 minutes, then signs you in and signs you out everywhere else. The answer is the same whether or not the email has an account, and at most three links an hour are sent.
+- After five wrong passwords the account locks for 15 minutes. An owner can unlock it sooner in Staff & security, or a reset link clears it.
+- First run: with no staff yet, the page asks for the business name and creates the owner account (password typed twice).
+- Account (bottom of the menu, every role): change your password (needs your current one; your other devices are signed out and you get an email), see every device you're signed in on and sign any of them out, and check your recent sign-ins.
 
 ### Today
 
@@ -490,10 +494,13 @@ _Where: Staff & security_
 
 Who can sign in, what they can do, what happened, and your backups.
 
-- Add a staff member with a role: Owner, Coach or Front desk. They get a one-time password by email.
-- Change a role, reset a password, unlock a locked account, or turn an account off (signed out everywhere at once).
-- Backups: a full copy every day. Back up now and download copies to keep off the server.
-- Activity log: every change, refused attempt and sign-in, with who, when and from where.
+- Summary tiles: staff who can sign in (and who hasn't signed in yet), locked accounts, failed sign-ins in the last 24 hours with refused attempts this week, and when the last backup ran. Amber means look at it; tap a tile to jump to it.
+- Add staff member: name, email and role (Owner, Coach or Front desk). They get a one-time password by email. An email that belongs to a turned-off account says so, so you turn them back on instead.
+- Each person shows their role, status (invited, locked, turned off) and last sign-in. Manage opens their details: edit name and email, change role (making someone an owner asks first), the devices they're signed in on with sign out everywhere, their recent activity, reset password or resend invite, unlock, and turn off.
+- Turning off an account, or moving a coach to front desk, offers to hand their upcoming sessions, weekly classes and private hours to another coach or owner, or to leave them unassigned. Past sessions keep their coach. Turned-off accounts sit under a fold; one still leading sessions is flagged with Hand over their sessions.
+- What each role can do: a table of the jobs each role can and can't do.
+- Backups: a full copy every day, the last 30 kept. Back up now, download any copy to keep off the server (every download is logged). Amber if the daily backup hasn't run in over a day.
+- Activity log: every change, refused attempt and sign-in, newest first, with who, when and from where. Filter by type, who (staff, parents, athletes, API keys, system), staff member and dates, search, and download what you see as CSV. Failed sign-ins show the email that was typed.
 
 ## Parent portal
 

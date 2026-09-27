@@ -30,6 +30,7 @@ import * as campaigns from './services/campaigns.js';
 import * as shop from './services/shop.js';
 import * as spots from './services/spots.js';
 import * as notes from './services/notes.js';
+import * as moneychecks from './services/moneychecks.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -78,6 +79,9 @@ export const routes = [
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
   ['GET', '/v1/invoices', 'any', 'Billing', 'List invoices. Filter with ?status= (open, paid, failed, void).', (ctx, r) => list(billing.listInvoices(ctx, { status: r.query.status }))],
   ['POST', '/v1/invoices/:id/retry', 'any', 'Billing', 'Charge a failed invoice again now.', (ctx, r) => billing.retryInvoice(ctx, r.params.id)],
+  ['GET', '/v1/money-checks', 'any', 'Billing', 'Daily money checks, newest first (?limit=, default 14): possible double charges, refund spikes, stuck payments and, with Stripe connected, card payments matched one by one.', (ctx, r) => moneychecks.listChecks(ctx, { limit: r.query.limit })],
+  ['POST', '/v1/money-checks/run', 'any', 'Billing', 'Check a day now: date (YYYY-MM-DD, default yesterday). Replaces that day\'s check.', (ctx, r) => moneychecks.runCheck(ctx, r.body, r.user)],
+  ['PATCH', '/v1/money-checks/:id', 'any', 'Billing', 'Mark a day\'s findings as looked at (reviewed: true; false undoes it).', (ctx, r) => moneychecks.markReviewed(ctx, r.params.id, r.body, r.user)],
   ['GET', '/v1/pay-links', 'any', 'Billing', 'Pay links, newest first. Filter with ?status= (open, paid, settled, canceled) or ?client_id=.', (ctx, r) => paylinks.listPayLinks(ctx, { status: r.query.status, clientId: r.query.client_id })],
   ['POST', '/v1/pay-links', 'any', 'Billing', 'Make a pay link: kind (invoice with invoice_id, booking with booking_id, product with client_id and product_id, custom with client_id, description and amount_cents); send=true emails parents and texts those who turned texts on.', (ctx, r) => paylinks.createPayLink(ctx, r.body, r.user?.name ?? 'API'), 201],
   ['GET', '/v1/pay-links/:id', 'any', 'Billing', 'A pay link and its public URL.', (ctx, r) => paylinks.getPayLink(ctx, r.params.id)],

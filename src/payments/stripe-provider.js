@@ -96,6 +96,19 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       } catch (e) { return { ok: false, error: e.message }; }
     },
 
+    // Every payment created in [from, to), for the daily money check (services/moneychecks.js).
+    async listPayments({ from, to }) {
+      const out = [];
+      let after;
+      for (let page = 0; page < 50; page++) {
+        const r = await call('GET', '/v1/payment_intents', { created: { gte: Math.floor(Date.parse(from) / 1000), lt: Math.floor(Date.parse(to) / 1000) }, limit: 100, starting_after: after });
+        for (const pi of r.data ?? []) out.push({ ref: pi.id, status: pi.status, amount_cents: pi.amount_received || pi.amount, created_at: new Date(pi.created * 1000).toISOString(), description: pi.description ?? null });
+        if (!r.has_more || !r.data?.length) break;
+        after = r.data[r.data.length - 1].id;
+      }
+      return out;
+    },
+
     async connectionToken(locationId) {
       const t = await call('POST', '/v1/terminal/connection_tokens', locationId ? { location: locationId } : {});
       return t.secret;

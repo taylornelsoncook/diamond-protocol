@@ -24,6 +24,7 @@ import { weeklyDigest } from './services/insights.js';
 import { runFollowUps } from './services/leads.js';
 import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
+import { runMoneyChecks } from './services/moneychecks.js';
 import { followCampaignLink } from './services/campaigns.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
@@ -160,6 +161,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     timers.push(setInterval(() => runFollowUps(ctx).catch((e) => console.error('lead follow-up', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => runReviewRequests(ctx).catch((e) => console.error('review requests', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => runSlotFilling(ctx).catch((e) => console.error('open spots', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runMoneyChecks(ctx).catch((e) => console.error('money checks', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }

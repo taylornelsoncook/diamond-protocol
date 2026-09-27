@@ -942,6 +942,22 @@ CREATE TABLE IF NOT EXISTS progress_notes (
   updated_at TEXT NOT NULL,
   UNIQUE (client_id, perf_session_id)
 );
+-- Daily money checks (version 29): one row per business day checked. Findings hold ids and amounts, never names.
+CREATE TABLE IF NOT EXISTS money_checks (
+  id TEXT PRIMARY KEY,
+  check_date TEXT NOT NULL UNIQUE,                -- YYYY-MM-DD, business time
+  status TEXT NOT NULL CHECK (status IN ('ok','problems','error')),
+  findings TEXT NOT NULL,                         -- JSON list
+  totals TEXT NOT NULL,                           -- JSON {card_payments, recorded_cents, stripe_cents}
+  stripe_checked INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 1,
+  ran_at TEXT NOT NULL,
+  ran_by TEXT,
+  alerted_at TEXT,
+  reviewed_at TEXT,
+  reviewed_by TEXT
+);
 -- What each parent has read of the parent courses (version 25).
 CREATE TABLE IF NOT EXISTS guardian_lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,

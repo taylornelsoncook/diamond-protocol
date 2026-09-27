@@ -5,7 +5,7 @@ export const EVENT_TYPES = [
   'subscription.created', 'subscription.updated',
   'invoice.paid', 'invoice.payment_failed',
   'program.assigned', 'workout.completed',
-  'sale.completed', 'sale.failed', 'sale.refunded',
+  'sale.completed', 'sale.failed', 'sale.refunded', 'money_check.problems',
   'session.checked_in', 'client.card_updated',
   'booking.created', 'booking.waitlisted', 'booking.canceled', 'session.canceled',
   'enrollment.created', 'family.waiver_signed',

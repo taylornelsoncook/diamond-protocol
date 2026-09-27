@@ -156,6 +156,31 @@ test('messages: coach writes, athlete sees them unread, opening marks them read;
   assert.equal((await maria('POST', `/portal/api/athletes/${ava.id}/messages/read`)).body.read, 1);
 });
 
+test('athletes and parents write back; the coach who wrote last is emailed and sees it on Today', async () => {
+  const mail = () => app.ctx.db.all(`SELECT to_email, subject, body FROM outbox WHERE subject LIKE '%replied' ORDER BY rowid`);
+  const r = await athlete(ava)('POST', 'messages', { body: 'Thanks! Can I come Friday instead?' });
+  assert.equal(r.status, 201);
+  const p = await maria('POST', `/portal/api/athletes/${ava.id}/messages`, { body: 'She has a game Thursday.' });
+  assert.equal(p.status, 201);
+  assert.deepEqual(mail().map((m) => [m.to_email, m.subject]), [['coach@test.dev', 'Ava Lopez replied'], ['coach@test.dev', 'Maria Lopez (Ava\'s parent) replied']]);
+  assert.match(mail()[1].body, /\/#\/clients\//);
+
+  // Both sides see the whole conversation; replies never count as unread for the family.
+  const acc = (await athlete(ava)('GET', 'engage')).body.accountability;
+  assert.deepEqual(acc.messages.slice(0, 2).map((m) => [m.from, m.author]), [['parent', 'Maria Lopez'], ['athlete', 'Ava Lopez']]);
+  assert.equal(acc.unread, 0);
+  assert.equal((await maria('POST', `/portal/api/athletes/${cole.id}/messages`, { body: 'hi' })).status, 404, 'only your own athletes');
+
+  // Today lists it for coaches and front desk until a coach opens the page.
+  const today = (await desk('GET', '/v1/dashboard')).body.attention.find((a) => a.kind === 'replies');
+  assert.deepEqual([today.count, today.items[0].name, today.items[0].count, today.items[0].author], [1, 'Ava Lopez', 2, 'Maria Lopez']);
+  assert.equal((await desk('POST', `/v1/clients/${ava.id}/messages/seen`)).status, 403);
+  assert.equal((await coach('POST', `/v1/clients/${ava.id}/messages/seen`)).body.seen, 2);
+  assert.equal((await coach('GET', '/v1/dashboard')).body.attention.some((a) => a.kind === 'replies'), false);
+  assert.equal((await athlete(ava)('GET', 'engage')).body.accountability.messages[0].seen_by_coach, true);
+  assert.equal((await athlete(ava)('POST', 'messages', { body: ' ' })).status, 400);
+});
+
 test('front desk can view accountability and education but not change anything; coaches manage', async () => {
   assert.equal((await desk('GET', `/v1/clients/${ava.id}/engagement`)).status, 200);
   assert.equal((await desk('GET', '/v1/education')).status, 200);
@@ -187,7 +212,7 @@ test('targets accept feet and inches, and rankings follow the setting without na
   let perf = (await athlete(ava)('GET', 'engage')).body.performance;
   assert.equal(perf.rankings, null, 'rankings are off until a coach turns them on');
   assert.ok(perf.targets.find((x) => x.test === 'broad_jump' && x.reached));
-  assert.deepEqual((await coach('PATCH', '/v1/engagement/settings', { rankings: 'on' })).body, { rankings: 'on' });
+  assert.equal((await coach('PATCH', '/v1/engagement/settings', { rankings: 'on' })).body.rankings, 'on');
   perf = (await athlete(ava)('GET', 'engage')).body.performance;
   const broad = perf.rankings.find((x) => x.test === 'broad_jump');
   const girls = broad.ranks.find((x) => x.group === 'Girls 12–13');

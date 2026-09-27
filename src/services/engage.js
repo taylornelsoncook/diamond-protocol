@@ -2,10 +2,11 @@
 // performance (test targets and opt-in rankings, on top of the testing results) and education
 // (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
 // team goals, messages and reading reach the roster athletes who are also clients.
-import { newId, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate } from '../util.js';
+import { newId, token, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
+import { emit } from './events.js';
 
 const SCALES = ['hydration', 'soreness', 'energy', 'mood'];           // 1 to 5
 export const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
@@ -69,7 +70,24 @@ export function flagsOf(c) {
   if (c.hydration != null && c.hydration <= 2) f.push(`Hydration ${c.hydration} of 5`);
   return f;
 }
-const shapeCheckin = (c) => (c ? { id: c.id, date: c.date, sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, note: c.note, updated_at: c.updated_at, flags: flagsOf(c) } : null);
+// Readiness from a check-in: train as written, go a little lighter, or take it easy. Weights set from a tested
+// max drop by 10 or 20 percentage points; the athlete and coach see why.
+export function readinessOf(c) {
+  if (!c) return null;
+  const reasons = flagsOf(c);
+  const red = reasons.length >= 2 || (c.sleep_hours != null && c.sleep_hours < 5) || c.soreness === 5;
+  if (red) return { level: 'red', drop: 20, reasons, headline: 'Take it easy today', advice: 'Weights from your max come down 20 points (75% becomes 55%). Do one set less of each exercise, and stop and tell your coach if anything hurts.' };
+  if (reasons.length) return { level: 'yellow', drop: 10, reasons, headline: 'Go a little lighter today', advice: 'Weights from your max come down 10 points (75% becomes 65%). Keep your form sharp.' };
+  return { level: 'green', drop: 0, reasons, headline: 'Ready to go', advice: 'Train as written.' };
+}
+export const readinessOn = (ctx) => getSetting(ctx, 'readiness_adjust') !== 'off';
+// Today's readiness for one athlete, or a nudge to check in first. Null when coaches turned it off.
+export function readinessToday(ctx, clientId) {
+  if (!readinessOn(ctx)) return null;
+  const c = ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, today(ctx));
+  return c ? readinessOf(c) : { level: null, drop: 0, reasons: [], headline: 'Check in first', advice: 'Answer today\'s check-in to see if your workout should be lighter.' };
+}
+const shapeCheckin = (c) => (c ? { id: c.id, date: c.date, sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, note: c.note, updated_at: c.updated_at, flags: flagsOf(c), readiness: readinessOf(c)?.level ?? null } : null);
 const blank = (x) => x === undefined || x === null || x === '';
 
 // Today's check-in. Saving again the same day updates it.
@@ -165,10 +183,11 @@ export function updateGoal(ctx, id, body = {}) {
 // ---------- Coach messages ----------
 export function messagesFor(ctx, clientId, limit = 30) {
   const teams = teamsOf(ctx, clientId);
-  return ctx.db.all(`SELECT m.id, m.body, m.created_at, m.contract_id, m.staff_name AS coach, r.read_at FROM coach_messages m
+  return ctx.db.all(`SELECT m.id, m.body, m.created_at, m.contract_id, m.staff_name AS coach, m.from_kind, m.author_name, m.staff_read_at, r.read_at FROM coach_messages m
       LEFT JOIN message_reads r ON r.message_id = m.id AND r.client_id = ?
     WHERE m.client_id = ? OR m.contract_id IN (${inList(teams)}) ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`, clientId, clientId, ...teams, limit)
-    .map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, coach: m.coach, team: !!m.contract_id, read: !!m.read_at }));
+    .map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, from: m.from_kind, coach: m.from_kind === 'coach' ? m.coach : null, author: m.from_kind === 'coach' ? m.coach : m.author_name,
+      team: !!m.contract_id, read: m.from_kind !== 'coach' || !!m.read_at, ...(m.from_kind !== 'coach' ? { seen_by_coach: !!m.staff_read_at } : {}) }));
 }
 export function markRead(ctx, clientId) {
   const unread = messagesFor(ctx, clientId, 500).filter((m) => !m.read);
@@ -191,6 +210,34 @@ export function sendMessage(ctx, { clientId = null, contractId = null }, body = 
   const from = staffName(actor).split(' ')[0];
   for (const c of who) notifyAthlete(ctx, c, `A note from ${from} at ${getSetting(ctx, 'business_name')}`, `${from} wrote to ${firstName(c)}:\n\n${text}`);
   return { id, body: text, created_at: ctx.now(), coach: staffName(actor), team: !!contractId, recipients: who.length };
+}
+
+// Replies from the athlete (in their app) or a parent (in the portal). The coach who last wrote to the athlete is
+// emailed, or the owners when no coach has written yet. Replies never go to other families.
+const REPLIES_PER_DAY = 20;
+export function replyMessage(ctx, clientId, body = {}, { from, name, guardianId = null }) {
+  const c = clientRow(ctx, clientId);
+  const text = v.str(body.body, 'Message', { max: 2000 });
+  const today = ctx.db.get(`SELECT COUNT(*) AS n FROM coach_messages WHERE client_id = ? AND from_kind != 'coach' AND created_at >= ?`, clientId, new Date(Date.now() - 86400000).toISOString()).n;
+  if (today >= REPLIES_PER_DAY) throw new HttpError(429, 'too_many_messages', 'That\'s a lot of messages today. Call or text your coach if it\'s urgent.');
+  const id = newId('cmsg');
+  ctx.db.run('INSERT INTO coach_messages (id, client_id, contract_id, staff_id, staff_name, body, created_at, from_kind, author_name, guardian_id) VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)',
+    id, clientId, text, ctx.now(), from, name, guardianId);
+  const last = ctx.db.get(`SELECT u.email FROM coach_messages m JOIN users u ON u.id = m.staff_id WHERE m.client_id = ? AND m.from_kind = 'coach' AND u.active = 1 ORDER BY m.created_at DESC LIMIT 1`, clientId);
+  const to = last ? [last.email] : ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`).map((u) => u.email);
+  const who = from === 'parent' ? `${name} (${firstName(c)}'s parent)` : name;
+  for (const email of to) sendEmail(ctx, { to: email, subject: `${who} replied`, text: `${who} wrote:\n\n${text}\n\nReply on ${firstName(c)}'s page: ${ctx.publicUrl ?? ''}/#/clients/${c.id}` }).catch(() => {});
+  return { id, body: text, created_at: ctx.now(), from, author: name };
+}
+// Replies no coach has seen yet, one row per athlete, for Today.
+export function unreadReplies(ctx) {
+  return ctx.db.all(`SELECT m.client_id, c.name, COUNT(*) AS count, MAX(m.created_at) AS last_at,
+      (SELECT author_name FROM coach_messages x WHERE x.client_id = m.client_id AND x.from_kind != 'coach' AND x.staff_read_at IS NULL ORDER BY x.created_at DESC LIMIT 1) AS author
+    FROM coach_messages m JOIN clients c ON c.id = m.client_id WHERE m.from_kind != 'coach' AND m.staff_read_at IS NULL GROUP BY m.client_id ORDER BY last_at DESC`);
+}
+export function markRepliesSeen(ctx, clientId) {
+  clientRow(ctx, clientId);
+  return { seen: ctx.db.run(`UPDATE coach_messages SET staff_read_at = ? WHERE client_id = ? AND from_kind != 'coach' AND staff_read_at IS NULL`, ctx.now(), clientId).changes };
 }
 
 // ---------- Performance: targets and rankings ----------
@@ -320,25 +367,160 @@ export function performance(ctx, clientId, { parentView = false } = {}) {
     last_tested: lastDate || null,
     targets: targetsFor(ctx, c.id, tests),
     rankings: rankings(ctx, c, tests, parentView),
-    rankings_enabled: rankingsOn(ctx)
+    rankings_enabled: rankingsOn(ctx),
+    skill_badges: badgesFor(ctx, c.id),
+    milestones: milestonesFor(ctx, c.id, tests)
   };
+}
+
+// ---------- Skill badges ----------
+// Coaches award these by hand when an athlete shows a skill ("Sprint start", "Hinge pattern"). Athletes and parents
+// see them on the Performance tab, and the family gets an email. Removing a badge from the list hides it from new
+// awards but keeps the ones already earned.
+export const BADGE_CATEGORIES = ['Speed', 'Strength', 'Power', 'Mobility', 'Skill', 'Mindset'];
+function badgeRow(ctx, id) {
+  const b = ctx.db.get('SELECT * FROM skill_badges WHERE id = ?', id);
+  if (!b) throw notFound('Skill badge');
+  return b;
+}
+const shapeBadge = (ctx, b) => ({ id: b.id, name: b.name, description: b.description, category: b.category, archived: !!b.archived, created_at: b.created_at,
+  awarded: ctx.db.get('SELECT COUNT(*) AS n FROM badge_awards WHERE badge_id = ?', b.id).n });
+export function listBadges(ctx, { all = false } = {}) {
+  return ctx.db.all(`SELECT * FROM skill_badges ${all ? '' : 'WHERE archived = 0'} ORDER BY category, name`).map((b) => shapeBadge(ctx, b));
+}
+function badgeInput(body, cur = {}) {
+  const name = v.str(body.name ?? cur.name, 'name', { max: 60 });
+  const description = body.description === undefined ? cur.description ?? null : v.str(body.description, 'description', { max: 300, optional: true }) ?? null;
+  const category = body.category === undefined ? cur.category ?? null : body.category === null || body.category === '' ? null : v.oneOf(body.category, 'category', BADGE_CATEGORIES);
+  return { name, description, category };
+}
+export function createBadge(ctx, body = {}) {
+  const b = badgeInput(body), id = newId('bdg');
+  if (ctx.db.get('SELECT id FROM skill_badges WHERE name = ?', b.name)) throw conflict(`There's already a badge called "${b.name}". Pick it from the list or use another name.`);
+  ctx.db.run('INSERT INTO skill_badges (id, name, description, category, created_at) VALUES (?, ?, ?, ?, ?)', id, b.name, b.description, b.category, ctx.now());
+  return shapeBadge(ctx, badgeRow(ctx, id));
+}
+export function updateBadge(ctx, id, body = {}) {
+  const cur = badgeRow(ctx, id), b = badgeInput(body, cur);
+  if (ctx.db.get('SELECT id FROM skill_badges WHERE name = ? AND id != ?', b.name, id)) throw conflict(`There's already a badge called "${b.name}".`);
+  const archived = body.archived === undefined ? cur.archived : body.archived ? 1 : 0;
+  ctx.db.run('UPDATE skill_badges SET name = ?, description = ?, category = ?, archived = ? WHERE id = ?', b.name, b.description, b.category, archived, id);
+  return shapeBadge(ctx, badgeRow(ctx, id));
+}
+// Award one badge to one or more athletes (after a clinic, say). Athletes who already have it are skipped.
+export function awardBadge(ctx, badgeId, body = {}, actor) {
+  const b = badgeRow(ctx, badgeId);
+  if (b.archived) throw conflict('This badge was removed from the list. Put it back to award it.');
+  const ids = Array.isArray(body.client_ids) ? [...new Set(body.client_ids.map(String))] : body.client_id ? [String(body.client_id)] : [];
+  if (!ids.length) throw badRequest('Choose at least one athlete.');
+  if (ids.length > 200) throw badRequest('Award to 200 athletes or fewer at a time.');
+  const who = ids.map((id) => clientRow(ctx, id));
+  const note = v.str(body.note, 'note', { max: 300, optional: true }) ?? null;
+  const by = staffName(actor);
+  const awarded = [];
+  ctx.db.tx(() => {
+    for (const c of who) {
+      const r = ctx.db.run('INSERT INTO badge_awards (id, badge_id, client_id, note, awarded_by, awarded_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(badge_id, client_id) DO NOTHING', newId('bda'), b.id, c.id, note, by, ctx.now());
+      if (r.changes) awarded.push(c);
+    }
+  });
+  const coach = by.split(' ')[0];
+  for (const c of awarded) {
+    emit(ctx, 'badge.awarded', { client_id: c.id, client_name: c.name, badge_id: b.id, badge_name: b.name, awarded_by: by });
+    notifyAthlete(ctx, c, `${firstName(c)} earned a skill badge: ${b.name}`, `${firstName(c)} earned the "${b.name}" skill badge from ${coach}.${b.description ? `\n\n${b.description}` : ''}${note ? `\n\n${coach}: "${note}"` : ''}`);
+  }
+  return { badge: shapeBadge(ctx, b), awarded: awarded.length, already_had: who.length - awarded.length };
+}
+export function removeAward(ctx, id) {
+  if (!ctx.db.run('DELETE FROM badge_awards WHERE id = ?', id).changes) throw notFound('Badge award');
+  return { id, deleted: true };
+}
+// Milestones the app works out on its own: sessions and workouts done, a check-in streak, and PRs.
+const STEPS = [10, 25, 50, 100, 250, 500];
+export function milestonesFor(ctx, clientId, tests) {
+  const t = training(ctx, clientId, '2000-01-01', today(ctx));
+  const top = (n) => [...STEPS].reverse().find((x) => n >= x);
+  const out = [];
+  const sessions = top(t.filter((r) => r.kind === 'sessions').length), workouts = top(t.filter((r) => r.kind === 'workouts').length);
+  if (sessions) out.push({ key: `sessions_${sessions}`, name: `${sessions} sessions`, detail: `Showed up for ${sessions} sessions.` });
+  if (workouts) out.push({ key: `workouts_${workouts}`, name: `${workouts} workouts`, detail: `Finished ${workouts} app workouts.` });
+  const streak = checkinStreak(ctx, clientId), s = [30, 14, 7].find((x) => streak >= x);
+  if (s) out.push({ key: `checkins_${s}`, name: `${s}-day check-in streak`, detail: `Checked in ${streak} days in a row.` });
+  const improved = tests.filter((x) => x.tests_count > 1 && x.best_date !== x.first.date).length;
+  if (improved) out.push({ key: 'prs', name: improved === 1 ? 'First PR' : `PRs in ${improved} tests`, detail: improved === 1 ? 'Beat a first test result.' : `Beat the first result in ${improved} different tests.` });
+  return out;
+}
+export function badgesFor(ctx, clientId) {
+  return ctx.db.all(`SELECT a.id, a.badge_id, b.name, b.description, b.category, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id
+    WHERE a.client_id = ? ORDER BY a.awarded_at DESC`, clientId);
 }
 
 // ---------- Education ----------
 const doneSet = (ctx, clientId) => new Set(ctx.db.all('SELECT lesson_id FROM lesson_progress WHERE client_id = ?', clientId).map((r) => r.lesson_id));
-const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, course_id: l.course_id, done: done.has(l.id) });
+const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, done: done.has(l.id) });
+
+// ---------- Quizzes ----------
+// Coaches write a quiz as plain text: a question on one line, then its choices on the lines below, each starting with
+// "-", and the right one with "*". A blank line between questions. Athletes need 80% to finish the lesson.
+export const QUIZ_PASS_PCT = 80;
+export function parseQuiz(text) {
+  const blocks = String(text ?? '').replace(/\r/g, '').split(/\n\s*\n/).map((b) => b.split('\n').map((l) => l.trim()).filter(Boolean)).filter((b) => b.length);
+  if (!blocks.length) return null;
+  if (blocks.length > 10) throw badRequest('A quiz can have up to 10 questions.');
+  const problems = [];
+  const questions = blocks.map((lines, i) => {
+    const n = i + 1;
+    const [q, ...rest] = lines;
+    if (/^[-*]/.test(q)) problems.push(`Question ${n} starts with a choice. Put the question on the first line.`);
+    const choices = [], extra = [];
+    let answer = -1;
+    for (const l of rest) {
+      const m = l.match(/^([-*])\s*(.+)$/);
+      if (!m) { extra.push(l); continue; }
+      if (m[1] === '*') { if (answer >= 0) problems.push(`Question ${n} has more than one right answer. Mark only one with *.`); answer = choices.length; }
+      choices.push(m[2].slice(0, 200));
+    }
+    if (extra.length) problems.push(`Question ${n}: start each choice with - (or * for the right one): "${extra[0].slice(0, 40)}".`);
+    if (choices.length < 2 || choices.length > 6) problems.push(`Question ${n} needs 2 to 6 choices.`);
+    if (answer < 0) problems.push(`Question ${n} needs a right answer: start it with * instead of -.`);
+    return { q: q.replace(/^\d+[.)]\s*/, '').slice(0, 300), choices, answer };
+  });
+  if (problems.length) throw badRequest(problems.join(' '));
+  return questions;
+}
+export const quizText = (quiz) => (quiz ?? []).map((x) => [x.q, ...x.choices.map((c, i) => `${i === x.answer ? '*' : '-'} ${c}`)].join('\n')).join('\n\n');
+const quizOf = (l) => (l?.quiz ? JSON.parse(l.quiz) : null);
+const passedQuiz = (ctx, lessonId, clientId) => !!ctx.db.get('SELECT 1 FROM quiz_attempts WHERE lesson_id = ? AND client_id = ? AND passed = 1', lessonId, clientId);
 function assignmentRows(ctx, clientId) {
   const teams = teamsOf(ctx, clientId);
   return ctx.db.all(`SELECT * FROM lesson_assignments WHERE client_id = ? OR contract_id IN (${inList(teams)}) ORDER BY COALESCE(due_date, '9999-12-31'), created_at`, clientId, ...teams);
+}
+// Lessons in parent courses never show to athletes.
+const ATHLETE_LESSON = `(course_id IS NULL OR course_id NOT IN (SELECT id FROM courses WHERE audience = 'parents'))`;
+// A course sold online is locked for an athlete until it's bought, a coach assigns it (to them or their team), or they
+// had already started it before it went on sale.
+function lockedCourses(ctx, clientId) {
+  const paid = ctx.db.all(`SELECT id FROM courses WHERE for_sale = 1 AND price_cents > 0 AND audience = 'athletes'`).map((r) => r.id);
+  if (!paid.length) return new Set();
+  const open = new Set([
+    ...ctx.db.all(`SELECT item_id FROM purchases WHERE client_id = ? AND item_kind = 'course' AND status = 'active'`, clientId).map((r) => r.item_id),
+    ...assignmentRows(ctx, clientId).map((x) => x.course_id ?? (x.lesson_id && ctx.db.get('SELECT course_id FROM lessons WHERE id = ?', x.lesson_id)?.course_id)).filter(Boolean),
+    ...ctx.db.all('SELECT DISTINCT l.course_id FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? AND l.course_id IS NOT NULL', clientId).map((r) => r.course_id)]);
+  return new Set(paid.filter((id) => !open.has(id)));
+}
+function requireOpen(ctx, clientId, l) {
+  if (l.course_id && lockedCourses(ctx, clientId).has(l.course_id)) throw conflict('This lesson is part of a course for sale. A parent can buy it on the Programs tab of the parent portal.');
 }
 // What the athlete (or their parent) sees: assigned reading first, then courses and the library. Unpublished lessons never show.
 export function education(ctx, clientId) {
   clientRow(ctx, clientId);
   const done = doneSet(ctx, clientId), t = today(ctx);
-  const lessons = ctx.db.all('SELECT * FROM lessons WHERE published = 1 ORDER BY position, created_at');
-  const courses = ctx.db.all('SELECT * FROM courses WHERE published = 1 ORDER BY created_at').map((c) => {
-    const ls = lessons.filter((l) => l.course_id === c.id).map((l) => lessonItem(l, done));
-    return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
+  const lessons = ctx.db.all(`SELECT * FROM lessons WHERE published = 1 AND ${ATHLETE_LESSON} ORDER BY position, created_at`);
+  const locked = lockedCourses(ctx, clientId);
+  const courses = ctx.db.all(`SELECT * FROM courses WHERE published = 1 AND audience = 'athletes' ORDER BY created_at`).map((c) => {
+    const ls = lessons.filter((l) => l.course_id === c.id).map((l) => (locked.has(c.id) ? { ...lessonItem(l, done), locked: true } : lessonItem(l, done)));
+    return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done),
+      ...(locked.has(c.id) ? { locked: true, price_cents: c.price_cents } : {}) };
   }).filter((c) => c.total > 0);
   const assigned = assignmentRows(ctx, clientId).map((x) => {
     if (x.lesson_id) {
@@ -350,24 +532,75 @@ export function education(ctx, clientId) {
     if (!c) return null;
     return { id: x.id, type: 'course', course_id: c.id, title: c.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: c.complete, progress: `${c.done} of ${c.total}`, overdue: !c.complete && !!x.due_date && x.due_date < t };
   }).filter(Boolean);
-  return { assigned, courses, lessons: lessons.filter((l) => !l.course_id || !courses.some((c) => c.id === l.course_id)).map((l) => lessonItem(l, done)), completed: done.size };
+  return { assigned, courses, lessons: lessons.filter((l) => !l.course_id || !courses.some((c) => c.id === l.course_id)).map((l) => lessonItem(l, done)), completed: done.size, certificates: certificatesFor(ctx, clientId) };
 }
 export function lessonFor(ctx, clientId, lessonId) {
   clientRow(ctx, clientId);
-  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ? AND published = 1', lessonId);
+  const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
   if (!l) throw notFound('Lesson');
+  requireOpen(ctx, clientId, l);
   const course = l.course_id ? ctx.db.get('SELECT id, title FROM courses WHERE id = ? AND published = 1', l.course_id) : null;
   const siblings = course ? ctx.db.all('SELECT id, title FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', course.id) : [];
   const i = siblings.findIndex((s) => s.id === l.id);
+  const quiz = quizOf(l), last = quiz && ctx.db.get('SELECT score, total, passed, created_at FROM quiz_attempts WHERE lesson_id = ? AND client_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', l.id, clientId);
   return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: course ?? null,
+    quiz: quiz ? { questions: quiz.map((x) => ({ q: x.q, choices: x.choices })), pass_pct: QUIZ_PASS_PCT, passed: passedQuiz(ctx, l.id, clientId), last: last ? { ...last, passed: !!last.passed } : null } : null,
     done: !!ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId),
     next: i >= 0 ? siblings[i + 1] ?? null : null, position: i >= 0 ? { n: i + 1, of: siblings.length } : null };
 }
 export function completeLesson(ctx, clientId, lessonId, done = true) {
   const l = lessonFor(ctx, clientId, lessonId);
-  if (done) ctx.db.run('INSERT OR IGNORE INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', l.id, clientId, ctx.now());
-  else ctx.db.run('DELETE FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId);
+  if (done && l.quiz && !l.quiz.passed) throw conflict(`Pass the quiz at the end to finish this lesson (${QUIZ_PASS_PCT}% or more).`);
+  if (done) {
+    ctx.db.run('INSERT OR IGNORE INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', l.id, clientId, ctx.now());
+    if (l.course) issueCertificate(ctx, clientId, l.course.id);
+  } else ctx.db.run('DELETE FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId);
   return lessonFor(ctx, clientId, lessonId);
+}
+
+// Check the answers (the choice number for each question, from 0). Passing finishes the lesson. Tries are unlimited,
+// up to 20 a day, and the right answers are never sent: only which questions were wrong.
+export function takeQuiz(ctx, clientId, lessonId, body = {}) {
+  const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
+  if (!l) throw notFound('Lesson');
+  requireOpen(ctx, clientId, l);
+  const quiz = quizOf(l);
+  if (!quiz) throw conflict('This lesson has no quiz.');
+  const since = new Date(Date.parse(ctx.now()) - 86400000).toISOString();
+  if (ctx.db.get('SELECT COUNT(*) AS n FROM quiz_attempts WHERE lesson_id = ? AND client_id = ? AND created_at >= ?', l.id, clientId, since).n >= 20) throw new HttpError(429, 'too_many_tries', 'That\'s 20 tries today. Reread the lesson and try again tomorrow.');
+  const answers = Array.isArray(body.answers) ? body.answers : [];
+  if (answers.length !== quiz.length) throw badRequest(`Answer all ${quiz.length} questions.`);
+  const results = quiz.map((x, i) => ({ correct: Number(answers[i]) === x.answer }));
+  const score = results.filter((r) => r.correct).length;
+  const passed = score * 100 >= quiz.length * QUIZ_PASS_PCT;
+  ctx.db.run('INSERT INTO quiz_attempts (id, lesson_id, client_id, score, total, passed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', newId('qz'), l.id, clientId, score, quiz.length, passed ? 1 : 0, ctx.now());
+  const lesson = passed ? completeLesson(ctx, clientId, l.id, true) : lessonFor(ctx, clientId, l.id);
+  return { score, total: quiz.length, passed, results, lesson };
+}
+
+// ---------- Course certificates ----------
+// Finishing every published lesson in a course issues a certificate once, and emails the family its link.
+function issueCertificate(ctx, clientId, courseId) {
+  const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
+  const done = doneSet(ctx, clientId);
+  if (!ids.length || !ids.every((x) => done.has(x))) return null;
+  const tok = token(16);
+  if (!ctx.db.run('INSERT INTO course_certificates (id, course_id, client_id, token, issued_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(course_id, client_id) DO NOTHING', newId('cert'), courseId, clientId, tok, ctx.now()).changes) return null;
+  const c = clientRow(ctx, clientId), course = ctx.db.get('SELECT title FROM courses WHERE id = ?', courseId);
+  emit(ctx, 'course.completed', { client_id: c.id, client_name: c.name, course_id: courseId, course_title: course.title });
+  notifyAthlete(ctx, c, `${firstName(c)} finished ${course.title}`, `${firstName(c)} finished every lesson in "${course.title}". Here's the certificate to print or share: ${ctx.publicUrl ?? ''}/certificate#${tok}`);
+  return tok;
+}
+export function certificatesFor(ctx, clientId) {
+  return ctx.db.all('SELECT x.course_id, c.title, x.token, x.issued_at FROM course_certificates x JOIN courses c ON c.id = x.course_id WHERE x.client_id = ? ORDER BY x.issued_at DESC', clientId)
+    .map((x) => ({ course_id: x.course_id, title: x.title, issued_at: x.issued_at, url: `/certificate#${x.token}` }));
+}
+// The shareable certificate page: name, course and date only.
+export function publicCertificate(ctx, tok) {
+  const x = ctx.db.get(`SELECT x.issued_at, c.title, c.description, cl.name, (SELECT COUNT(*) FROM lessons l WHERE l.course_id = c.id AND l.published = 1) AS lessons
+    FROM course_certificates x JOIN courses c ON c.id = x.course_id JOIN clients cl ON cl.id = x.client_id WHERE x.token = ?`, String(tok ?? ''));
+  if (!x) throw notFound('Certificate');
+  return { name: x.name, course: x.title, description: x.description, lessons: x.lessons, issued_on: localDate(x.issued_at, zone(ctx)), business_name: getSetting(ctx, 'business_name') };
 }
 
 // Coach side: lessons and courses.
@@ -380,7 +613,8 @@ function lessonFields(ctx, body, cur = {}) {
     video_url: has('video_url') ? v.url(body.video_url, 'video_url', { optional: true }) : cur.video_url ?? null,
     minutes: has('minutes') ? v.int(body.minutes, 'minutes', { min: 1, max: 240, optional: true }) : cur.minutes ?? null,
     course_id: has('course_id') ? (blank(body.course_id) ? null : String(body.course_id)) : cur.course_id ?? null,
-    published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1
+    published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1,
+    quiz: has('quiz_text') ? (blank(body.quiz_text) ? null : JSON.stringify(parseQuiz(v.str(body.quiz_text, 'quiz_text', { max: 20000 })))) : cur.quiz ?? null
   };
   if (!out.title) throw badRequest('Give the lesson a title.');
   if (out.course_id && !ctx.db.get('SELECT id FROM courses WHERE id = ?', out.course_id)) throw notFound('Course');
@@ -389,22 +623,23 @@ function lessonFields(ctx, body, cur = {}) {
 export function getLesson(ctx, id) {
   const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', id);
   if (!l) throw notFound('Lesson');
-  return { ...l, published: !!l.published };
+  const quiz = quizOf(l);
+  return { ...l, published: !!l.published, quiz, quiz_text: quiz ? quizText(quiz) : '' };
 }
 export function createLesson(ctx, body = {}) {
   const f = lessonFields(ctx, body);
   const position = f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : 0;
   const id = newId('les');
-  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, ctx.now(), ctx.now());
+  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, quiz, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, ctx.now(), ctx.now());
   return getLesson(ctx, id);
 }
 export function updateLesson(ctx, id, body = {}) {
   const cur = getLesson(ctx, id);
-  const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0 });
+  const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0, quiz: cur.quiz ? JSON.stringify(cur.quiz) : null });
   const position = f.course_id !== cur.course_id && f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : cur.position;
-  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, updated_at = ? WHERE id = ?',
-    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, ctx.now(), id);
+  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, updated_at = ? WHERE id = ?',
+    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, ctx.now(), id);
   return getLesson(ctx, id);
 }
 export function deleteLesson(ctx, id) {
@@ -412,10 +647,17 @@ export function deleteLesson(ctx, id) {
   ctx.db.run('DELETE FROM lessons WHERE id = ?', id);
   return { id, deleted: true };
 }
+function courseAudience(body, cur = {}) {
+  const audience = body.audience === undefined ? cur.audience ?? 'athletes' : v.oneOf(body.audience, 'audience', ['athletes', 'parents']);
+  const age = (k) => (body[k] === undefined ? cur[k] ?? null : blank(body[k]) ? null : v.int(body[k], k, { min: 3, max: 25 }));
+  const ageMin = age('age_min'), ageMax = age('age_max');
+  if (ageMin != null && ageMax != null && ageMin > ageMax) throw badRequest('The youngest age is higher than the oldest. Swap them.');
+  return { audience, age_min: audience === 'parents' ? ageMin : null, age_max: audience === 'parents' ? ageMax : null };
+}
 export function createCourse(ctx, body = {}) {
-  const id = newId('crs');
-  ctx.db.run('INSERT INTO courses (id, title, description, published, created_at) VALUES (?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
-    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, ctx.now());
+  const id = newId('crs'), a = courseAudience(body);
+  ctx.db.run('INSERT INTO courses (id, title, description, published, audience, age_min, age_max, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
+    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, a.audience, a.age_min, a.age_max, ctx.now());
   return getCourse(ctx, id);
 }
 export function getCourse(ctx, id) {
@@ -425,8 +667,9 @@ export function getCourse(ctx, id) {
 }
 export function updateCourse(ctx, id, body = {}) {
   const c = getCourse(ctx, id);
-  ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
-    body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), id);
+  const a = courseAudience(body, c);
+  ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ?, audience = ?, age_min = ?, age_max = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
+    body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), a.audience, a.age_min, a.age_max, id);
   return getCourse(ctx, id);
 }
 // Deleting a course keeps its lessons in the library.
@@ -454,6 +697,8 @@ export function assign(ctx, body = {}, actor) {
   if (blank(body.client_id) === blank(body.contract_id)) throw badRequest('Choose an athlete or a team.');
   const item = body.lesson_id ? getLesson(ctx, String(body.lesson_id)) : getCourse(ctx, String(body.course_id));
   if (!item.published) throw conflict(`Publish "${item.title}" before assigning it.`);
+  const forParents = body.course_id ? item.audience === 'parents' : !!item.course_id && ctx.db.get(`SELECT 1 FROM courses WHERE id = ? AND audience = 'parents'`, item.course_id);
+  if (forParents) throw conflict(`"${item.title}" is for parents. It shows in the parent portal on its own, so there's nothing to assign.`);
   const who = body.client_id ? [clientRow(ctx, String(body.client_id))] : (teamRow(ctx, String(body.contract_id)), rosterClients(ctx, String(body.contract_id)));
   const due = blank(body.due_date) ? null : body.due_date;
   if (due && !isDate(due)) throw badRequest('due_date must be a date like 2026-12-01.');
@@ -473,8 +718,10 @@ export function unassign(ctx, id) {
 // The Education screen: every course and lesson with completions, and each assignment with who has finished.
 export function educationReport(ctx) {
   const lessons = ctx.db.all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id = l.id) AS completions FROM lessons l ORDER BY l.position, l.created_at')
-    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
-  const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id) }));
+    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
+  const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
+    certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, for_sale: !!c.for_sale && c.price_cents > 0, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
+    parents_reading: c.audience === 'parents' ? ctx.db.get('SELECT COUNT(DISTINCT p.guardian_id) AS n FROM guardian_lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE l.course_id = ?', c.id).n : undefined }));
   const finishedCourse = (courseId, clientId) => {
     const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
     return ids.length > 0 && ids.every((lid) => ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', lid, clientId));
@@ -490,6 +737,61 @@ export function educationReport(ctx) {
       finished: finished.length, total: who.length, not_finished: who.filter((c) => !finished.includes(c)).map((c) => ({ id: c.id, name: c.name })).slice(0, 50) };
   });
   return { courses, lessons: lessons.filter((l) => !l.course_id), assignments };
+}
+
+// ---------- Parent education ----------
+// Courses for parents (recruiting, nutrition, recovery, growth spurts) show in the parent portal under Home → For
+// parents. A course with an age range shows to parents with an athlete that age; without one, to every parent.
+// Each parent's reading is their own.
+export function parentCourses(ctx, guardian) {
+  const ages = ctx.db.all('SELECT birth_date FROM clients WHERE family_id = ?', guardian.family_id).map((c) => ageOn(c.birth_date, ctx.now())).filter((a) => a != null);
+  const fits = (c) => (c.age_min == null && c.age_max == null) || ages.some((a) => (c.age_min == null || a >= c.age_min) && (c.age_max == null || a <= c.age_max));
+  const done = new Set(ctx.db.all('SELECT lesson_id FROM guardian_lesson_progress WHERE guardian_id = ?', guardian.id).map((r) => r.lesson_id));
+  return ctx.db.all(`SELECT * FROM courses WHERE audience = 'parents' AND published = 1 ORDER BY created_at`).filter(fits).map((c) => {
+    const ls = ctx.db.all('SELECT * FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', c.id).map((l) => lessonItem(l, done));
+    return { id: c.id, title: c.title, description: c.description, age_min: c.age_min, age_max: c.age_max, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
+  }).filter((c) => c.total > 0);
+}
+export function parentLesson(ctx, guardian, lessonId) {
+  const course = parentCourses(ctx, guardian).find((c) => c.lessons.some((l) => l.id === lessonId));
+  if (!course) throw notFound('Lesson');
+  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', lessonId), i = course.lessons.findIndex((x) => x.id === lessonId);
+  return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: { id: course.id, title: course.title }, quiz: null,
+    done: course.lessons[i].done, next: course.lessons[i + 1] ? { id: course.lessons[i + 1].id, title: course.lessons[i + 1].title } : null, position: { n: i + 1, of: course.lessons.length } };
+}
+export function completeParentLesson(ctx, guardian, lessonId, done = true) {
+  parentLesson(ctx, guardian, lessonId);
+  if (done) ctx.db.run('INSERT OR IGNORE INTO guardian_lesson_progress (lesson_id, guardian_id, completed_at) VALUES (?, ?, ?)', lessonId, guardian.id, ctx.now());
+  else ctx.db.run('DELETE FROM guardian_lesson_progress WHERE lesson_id = ? AND guardian_id = ?', lessonId, guardian.id);
+  return parentLesson(ctx, guardian, lessonId);
+}
+
+// Starter parent courses, saved as drafts for the owner to read, edit and publish. General guidance only.
+const STARTER_PARENT_COURSES = [
+  { title: 'Growth spurts and training', description: 'What changes when your athlete grows fast, and how we adjust.', age_min: 10, age_max: 15, lessons: [
+    ['What a growth spurt does', 'Bones grow first; muscles and tendons catch up.', 'During a growth spurt, bones get longer before muscles and tendons catch up. For a while your athlete may feel tight, look clumsy, or lose some speed. That is normal and it passes.\n\nMost girls have their fastest growth around 10 to 14 and most boys around 12 to 16, but every child is different.', 4],
+    ['Knee and heel pain', 'Why it happens and when to see a doctor.', 'Pain just below the kneecap or at the back of the heel is common in growing athletes. It usually comes from growth plates being pulled on by tight muscles during a busy season.\n\nTell your coach about it so we can adjust training. See a doctor if pain lasts more than two weeks, wakes them at night, causes limping, or comes with swelling.', 4],
+    ['How we adjust training', 'Less jumping volume, more mobility, same effort.', 'When an athlete is growing fast we lower jumping and sprinting volume, add mobility work, and keep strength training light and technical. The goal is to keep them moving well so the gains show up when growth slows down.\n\nThe daily check-in in the app helps: soreness and sleep answers tell us when to back off.', 3]] },
+  { title: 'Fueling a young athlete', description: 'Everyday eating, game days and water, without the fads.', age_min: null, age_max: null, lessons: [
+    ['Everyday eating', 'Three meals, two snacks, and a plate that is half color.', 'Young athletes need more food than you might think. Aim for three meals and two snacks a day, each with a carbohydrate (bread, rice, pasta, fruit), a protein (eggs, dairy, meat, beans) and something colorful.\n\nSkipping breakfast is the most common reason for a flat afternoon practice.', 4],
+    ['Game day', 'What to eat 3 hours, 1 hour and 15 minutes out.', '3 hours before: a normal meal with carbohydrates and some protein.\n\n1 hour before: something small and easy, like a banana or crackers.\n\nAfter: a snack with carbohydrates and protein within an hour, like chocolate milk or a sandwich.', 3],
+    ['Water and sports drinks', 'Water first; sports drinks for long, hot sessions.', 'Send a full water bottle to every session. Pale yellow urine is a good sign they are drinking enough.\n\nSports drinks help during long or very hot sessions. For most practices under an hour, water is enough. Energy drinks are not sports drinks and are not recommended for kids.', 3]] },
+  { title: 'Recruiting basics for parents', description: 'A calm, general overview. Rules change, so always check the official sources.', age_min: 13, age_max: 18, lessons: [
+    ['When to start thinking about it', 'Grades count from 9th grade on.', 'College coaches look at grades as well as ability, and high school grades count from the first day of 9th grade. The most useful thing to do early is keep grades up and keep playing.\n\nContact rules between college coaches and athletes depend on the division, the sport and the athlete\'s grade, and they change often. Check the NCAA, NAIA and NJCAA websites for current rules.', 4],
+    ['What coaches look for', 'Film, measurable results, grades and character.', 'Coaches look at game film, measurable results (like the testing numbers in our progress reports), grades and test scores, and how an athlete treats teammates and coaches.\n\nOur printable progress report is a simple way to share testing results with a coach.', 3],
+    ['Your role as a parent', 'Support, organize, and let your athlete lead.', 'Coaches want to hear from the athlete, not the parent. Help your athlete keep a list of schools, deadlines and emails, and let them do the talking.\n\nBe wary of services that promise scholarships for a fee. Ask your high school counselor and coach what they recommend.', 3]] }
+];
+export function addStarterParentCourses(ctx) {
+  const made = [];
+  ctx.db.tx(() => {
+    for (const c of STARTER_PARENT_COURSES) {
+      if (ctx.db.get('SELECT id FROM courses WHERE title = ?', c.title)) continue;
+      const course = createCourse(ctx, { title: c.title, description: c.description, audience: 'parents', age_min: c.age_min, age_max: c.age_max, published: false });
+      for (const [title, summary, body, minutes] of c.lessons) createLesson(ctx, { title, summary, body, minutes, course_id: course.id });
+      made.push(course.title);
+    }
+  });
+  return { added: made, message: made.length ? `Added ${made.length} draft ${made.length === 1 ? 'course' : 'courses'} for parents. Read and edit them, then publish.` : 'The starter courses are already here.' };
 }
 
 // ---------- The three tabs, as the athlete or a parent sees them ----------
@@ -532,6 +834,7 @@ export function staffOverview(ctx, clientId) {
     flagged: checkins.filter((c) => c.flags.length).reverse().slice(0, 5),
     goals: goalsFor(ctx, clientId).map((g) => ({ ...g, client_goal: !g.team })),
     targets: perf.targets, rankings: perf.rankings, rankings_enabled: perf.rankings_enabled,
+    skill_badges: perf.skill_badges,
     tests: perf.tests.map((t) => ({ test: t.test, test_name: t.test_name, unit: t.unit, best: t.best, best_text: t.best_text })),
     education: { assigned: edu.assigned, completed: edu.completed }
   };
@@ -539,11 +842,12 @@ export function staffOverview(ctx, clientId) {
 
 // Athletes whose latest check-in (today or yesterday) needs a look, for Today.
 export function recentFlags(ctx) {
+  const on = readinessOn(ctx);
   const since = addDaysToDate(today(ctx), -1);
   const seen = new Set();
   return ctx.db.all('SELECT d.*, c.name, c.athlete_id FROM daily_checkins d JOIN clients c ON c.id = d.client_id WHERE d.date >= ? ORDER BY d.date DESC', since)
     .filter((d) => { if (seen.has(d.client_id)) return false; seen.add(d.client_id); return true; })
-    .map((d) => ({ client_id: d.client_id, name: d.name, athlete_id: d.athlete_id, date: d.date, note: d.note, flags: flagsOf(d) }))
+    .map((d) => ({ client_id: d.client_id, name: d.name, athlete_id: d.athlete_id, date: d.date, note: d.note, flags: flagsOf(d), readiness: on ? readinessOf(d).level : null }))
     .filter((d) => d.flags.length);
 }
 
@@ -565,8 +869,11 @@ export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org
   FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.status = 'active' ORDER BY o.name, t.name`).map((t) => ({ ...t, label: `${t.org_name} ${t.name}` }));
 
 export function setRankings(ctx, body = {}) {
-  const on = body.rankings === 'on' || body.rankings === true || body.rankings_enabled === true;
-  if (body.rankings === undefined && body.rankings_enabled === undefined) throw badRequest('Send rankings: "on" or "off".');
-  ctx.db.run(`INSERT INTO settings (key, value) VALUES ('rankings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, on ? 'on' : 'off');
-  return { rankings: on ? 'on' : 'off' };
+  const put = (key, on) => ctx.db.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, on ? 'on' : 'off');
+  const flag = (x) => x === 'on' || x === true;
+  if (body.rankings === undefined && body.rankings_enabled === undefined && body.readiness_adjust === undefined) throw badRequest('Send rankings or readiness_adjust: "on" or "off".');
+  if (body.rankings !== undefined || body.rankings_enabled !== undefined) put('rankings', flag(body.rankings) || body.rankings_enabled === true);
+  if (body.readiness_adjust !== undefined) put('readiness_adjust', flag(body.readiness_adjust));
+  return engagementSettings(ctx);
 }
+export const engagementSettings = (ctx) => ({ rankings: rankingsOn(ctx) ? 'on' : 'off', readiness_adjust: readinessOn(ctx) ? 'on' : 'off' });

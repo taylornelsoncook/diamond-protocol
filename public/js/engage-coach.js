@@ -3,6 +3,7 @@
 // Owners and coaches manage; front desk sees everything read-only (the server enforces the same).
 import { h, fill, toast, busy, btn, field, input, select, panel, ago, videoEmbed } from './ui.js';
 import { sparkline, fmtResult } from './charts.js';
+import { saleForm } from './shop-admin.js';
 
 let deps = null;     // { api, render, header, role }
 export function initEngage(d) { deps = d; }
@@ -15,6 +16,7 @@ const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return
 const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
 const tag = (text, tone = 'neutral') => h('span', { class: `dp-badge dp-badge--${tone}` }, text);
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', ...attrs }); t.value = value ?? ''; return t; };
+export const BADGE_CATEGORIES = ['Speed', 'Strength', 'Power', 'Mobility', 'Skill', 'Mindset'];
 export const GOAL_KINDS = [['workouts', 'Workouts'], ['sessions', 'Sessions attended'], ['checkins', 'Daily check-ins'], ['custom', 'Custom (athlete ticks it off)']];
 const MEASURES = [['sleep_hours', 'Sleep', (x) => `${x} h`, 'higher'], ['hydration', 'Hydration', (x) => `${x} of 5`, 'higher'], ['soreness', 'Soreness', (x) => `${x} of 5`, 'lower'], ['energy', 'Energy', (x) => `${x} of 5`, 'higher'], ['mood', 'Mood', (x) => `${x} of 5`, 'higher']];
 const valueHint = (unit) => (unit === 'in' ? 'Inches, or feet and inches like 6\'8"' : unit === 's' ? 'Seconds, like 5.75' : unit ? `In ${unit}` : 'Choose a test first');
@@ -28,7 +30,7 @@ function openDialog(...kids) {
 
 // ---------- Client profile ----------
 // en = GET /v1/clients/:id/engagement; tests = GET /v1/tests (for the target picker).
-export function clientPanels(c, en, tests) {
+export function clientPanels(c, en, tests, badgeList = []) {
   const manage = canManage(), first = c.name.split(' ')[0], id = c.id, today = en.today;
   const w = en.this_week, st = en.streaks;
   const stat = (label, value) => h('div', null, h('b', null, value), h('span', null, label));
@@ -59,13 +61,17 @@ export function clientPanels(c, en, tests) {
     }); } }, h('div', { class: 'form-grid' }, field('What it counts', kind), field('Per week', per)), field('Goal (optional)', title, 'Leave blank to name it from what it counts.'), h('div', null, btn('Add goal', null, 'secondary', { type: 'submit' }))) : null);
 
   const body = textarea('', { rows: '3', maxlength: '2000', placeholder: `Write to ${first}`, 'aria-label': `Message to ${first}` });
-  const messages = panel('Messages', { subtitle: h('span', null, `Notes from coaches. ${first} reads them in the app`, en.unread ? h('span', { class: 'warn-text' }, ` · ${en.unread} unread`) : null, '.') },
+  // Replies from the athlete or a parent count as seen once a coach opens this page.
+  const unseen = en.messages.filter((m) => m.from && m.from !== 'coach' && !m.seen_by_coach);
+  if (unseen.length && canManage()) post(`/v1/clients/${id}/messages/seen`).catch(() => {});
+  const author = (m) => (m.from === 'coach' || !m.from ? `${m.coach ?? 'Coach'}` : m.from === 'parent' ? `${m.author} (parent)` : m.author ?? first);
+  const messages = panel('Messages', { subtitle: h('span', null, `Notes between coaches and ${first}${c.family ? ' and their parents' : ''}. They read and reply in the app`, en.unread ? h('span', { class: 'warn-text' }, ` · ${en.unread} unread by ${first}`) : null, '.') },
     manage ? h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       await post(`/v1/clients/${id}/messages`, { body: body.value }); toast(`Sent. ${first} and their parents are emailed a copy.`); deps.render();
     }); } }, body, h('div', { class: 'row wrap' }, h('span', { class: 'small muted grow' }, `${first}${c.family ? ' and their parents' : ''} are emailed a copy.`), btn('Send message', null, 'secondary', { type: 'submit' }))) : null,
-    en.messages.length ? h('div', null, en.messages.slice(0, 8).map((m) => h('div', { class: 'list-item', style: 'align-items:flex-start' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'eg-note' }, m.body), h('span', { class: 'small muted' }, `${m.coach ?? 'Coach'} · ${ago(m.created_at)}${m.team ? ' · to the team' : ''}`)),
-      m.read ? h('span', { class: 'small muted' }, 'Read') : tag('Unread')))) : h('p', { class: 'muted small' }, 'No messages yet.'));
+    en.messages.length ? h('div', null, en.messages.slice(0, 12).map((m) => h('div', { class: 'list-item', style: `align-items:flex-start${m.from && m.from !== 'coach' ? ';padding-left:16px;border-left:3px solid var(--green-mid)' : ''}` },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'eg-note' }, m.body), h('span', { class: 'small muted' }, `${author(m)} · ${ago(m.created_at)}${m.team ? ' · to the team' : ''}`)),
+      m.from && m.from !== 'coach' ? (unseen.includes(m) ? tag('New reply') : null) : m.read ? h('span', { class: 'small muted' }, 'Read') : tag('Unread')))) : h('p', { class: 'muted small' }, 'No messages yet.'));
 
   const tested = new Set(en.tests.map((t) => t.test));
   const unitOf = new Map(tests.map((t) => [t.key, t.metrics[0]?.unit]));
@@ -101,7 +107,28 @@ export function clientPanels(c, en, tests) {
       h('div', { class: 'grow stack-tight' }, h('span', null, x.title, h('span', { class: 'small muted' }, ` · ${x.type === 'course' ? `Course, ${x.progress}` : 'Lesson'}${x.team ? ' · team' : ''}`)),
         h('span', { class: 'small muted' }, x.due_date ? h('span', { class: x.overdue ? 'warn-text' : '' }, `${x.overdue ? 'Overdue, was due' : 'Due'} ${day(x.due_date)}`) : 'No due date', x.note ? ` · ${x.note}` : '')),
       x.done ? tag('Done', 'good') : x.overdue ? tag('Overdue', 'warn') : tag('Not done', 'muted')))) : h('p', { class: 'muted small' }, 'Nothing assigned.'));
-  return { accountability, goals, messages, targets, education };
+  // Skill badges: earned ones, newest first, and a form to award one (or make a new one on the spot).
+  const earned = en.skill_badges ?? [];
+  const have = new Set(earned.map((b) => b.badge_id));
+  const pick = select([['', 'Choose a badge'], ...badgeList.filter((b) => !have.has(b.id)).map((b) => [b.id, b.category ? `${b.name} (${b.category})` : b.name]), ['new', 'New badge…']], { 'aria-label': 'Badge to award' });
+  const newName = input({ maxlength: '60', placeholder: 'Like Sprint start' }), newCat = select([['', 'No category'], ...BADGE_CATEGORIES.map((x) => [x, x])], { 'aria-label': 'Badge category' });
+  const newDesc = input({ maxlength: '300', placeholder: 'What it shows, like "Explodes out of a 3-point stance with a clean first step"' });
+  const newFields = h('div', { class: 'stack', hidden: true }, h('div', { class: 'form-grid' }, field('Badge name', newName), field('Category', newCat)), field('What it means (optional)', newDesc));
+  pick.addEventListener('change', () => { newFields.hidden = pick.value !== 'new'; if (pick.value === 'new') newName.focus(); });
+  const note = input({ maxlength: '300', placeholder: `A word for ${first} (optional)`, 'aria-label': 'Note with the badge' });
+  const badges = panel('Skill badges', { subtitle: `Earned skills ${first}${c.family ? ' and their parents' : ''} see on the Performance tab. Awarding one emails them.` },
+    earned.length ? h('div', { class: 'cl-badges' }, earned.map((b) => h('div', { class: 'cl-badge' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, b.name, b.category ? h('span', { class: 'small muted', style: 'font-weight:400' }, ` · ${b.category}`) : null),
+        h('span', { class: 'small muted' }, `${day(b.awarded_at)} by ${b.awarded_by ?? 'a coach'}${b.note ? ` · "${b.note}"` : ''}`)),
+      manage ? btn('Take back', (e) => { if (confirm(`Take back "${b.name}" from ${first}? It disappears from their app. No email is sent.`)) busy(e.currentTarget, async () => { await del(`/v1/badge-awards/${b.id}`); toast('Badge taken back.'); deps.render(); }); }, 'ghost') : null)))
+      : h('p', { class: 'muted small' }, 'No badges yet.'),
+    manage ? h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (!pick.value) throw new Error('Choose a badge to award, or pick "New badge…".');
+      const badgeId = pick.value === 'new' ? (await post('/v1/skill-badges', { name: newName.value, category: newCat.value || null, description: newDesc.value || undefined })).id : pick.value;
+      await post(`/v1/skill-badges/${badgeId}/awards`, { client_id: id, note: note.value || undefined });
+      toast(`Badge awarded. ${first}${c.family ? ' and their parents' : ''} got an email.`); deps.render();
+    }); } }, field('Badge', pick), newFields, note, h('div', null, btn('Award badge', null, 'secondary', { type: 'submit' }))) : null);
+  return { accountability, goals, messages, targets, education, badges };
 }
 
 // ---------- Today ----------
@@ -111,7 +138,7 @@ export async function flagsPanel() {
   return panel('Check-ins that need a look', { subtitle: 'Latest daily check-in from today or yesterday: short sleep, high soreness, or low energy, mood or water.' },
     data.map((f) => h('div', { class: 'list-item', style: 'align-items:flex-start' },
       h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${f.client_id}`, class: 'strong', style: 'color:var(--steel)' }, f.name),
-        h('span', { class: 'small warn-text' }, f.flags.join(' · ')), f.note ? h('span', { class: 'small muted' }, `"${f.note}"`) : null),
+        h('span', { class: 'small warn-text' }, f.flags.join(' · ')), f.readiness && f.date === todayIso() ? h('span', { class: 'small muted' }, f.readiness === 'red' ? 'Their app suggests an easy day: lower weights and one set less.' : 'Their app suggests slightly lower weights.') : null, f.note ? h('span', { class: 'small muted' }, `"${f.note}"`) : null),
       h('span', { class: 'small muted' }, f.date === todayIso() ? 'Today' : 'Yesterday'),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${f.client_id}` }, 'Open'))));
 }
@@ -122,6 +149,12 @@ export function rankingsPanel(settings) {
   return panel('Rankings', { subtitle: 'Athletes and parents see where a best result ranks: against the same sex and age group, their team, and everyone here. Only counts and percentages, never anyone else\'s name. Groups need 4 or more athletes tested.' },
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, on, h('span', null, 'Show rankings in the athlete app and parent portal')),
     canManage() ? h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', { rankings: on.checked ? 'on' : 'off' }); toast(on.checked ? 'Rankings are on.' : 'Rankings are off.'); }), 'primary')) : null);
+}
+export function readinessPanel(settings) {
+  const on = h('input', { type: 'checkbox', checked: settings.readiness_adjust !== 'off', disabled: !canManage() });
+  return panel('Lighter days after a rough check-in', { subtitle: 'When an athlete\'s daily check-in shows short sleep, high soreness, or low energy, mood or water, their app says so above the workout. One problem takes weights set from a tested max down 10 points (75% becomes 65%). Two or more, under 5 hours of sleep, or soreness 5 of 5 makes it an easy day: down 20 points and one set less.' },
+    h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, on, h('span', null, 'Adjust workouts from daily check-ins')),
+    canManage() ? h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', { readiness_adjust: on.checked ? 'on' : 'off' }); toast(on.checked ? 'Workouts adjust to check-ins.' : 'Workouts no longer adjust to check-ins.'); }), 'primary')) : null);
 }
 
 // ---------- Team page ----------
@@ -192,11 +225,12 @@ async function lessonDialog(lesson, courses, preset = {}) {
   const l = lesson ? await get(`/v1/lessons/${lesson.id}`) : { published: true, course_id: preset.course_id ?? null };
   const f = { title: input({ value: l.title ?? '', maxlength: '160' }), summary: input({ value: l.summary ?? '', maxlength: '300' }), body: textarea(l.body ?? '', { style: 'min-height:200px' }),
     video_url: input({ type: 'url', value: l.video_url ?? '', placeholder: 'https://www.youtube.com/watch?v=…' }), minutes: input({ type: 'number', min: '1', max: '240', value: l.minutes ?? '' }),
-    course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, c.title])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }) };
+    course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, c.title])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }),
+    quiz: textarea(l.quiz_text ?? '', { style: 'min-height:140px;font-family:var(--font-mono);font-size:14px', placeholder: 'What should your knees do when you land?\n- Cave inward\n* Track over your toes\n- Lock straight' }) };
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
     try {
-      const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked };
+      const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked, quiz_text: f.quiz.value };
       if (lesson) await patch(`/v1/lessons/${lesson.id}`, body); else await post('/v1/lessons', body);
       d.close(); toast(lesson ? 'Lesson saved.' : f.published.checked ? 'Lesson posted. Athletes can read it now.' : 'Draft saved. Athletes won\'t see it until you publish it.'); deps.render();
     } catch (x) { err.textContent = x.message; }
@@ -206,22 +240,33 @@ async function lessonDialog(lesson, courses, preset = {}) {
     field('Lesson text', f.body, 'Plain text. Leave a blank line between paragraphs.'),
     h('div', { class: 'form-grid' }, field('Video link (optional)', f.video_url, 'YouTube, Vimeo or a direct .mp4 link, starting with https://'), field('Minutes to read or watch', f.minutes)),
     field('Course', f.course_id),
+    field('Quiz (optional)', f.quiz, 'A question on one line, then its choices below, each starting with - and the right one with *. A blank line between questions. Up to 10. Athletes need 80% to finish the lesson.'),
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, f.published, h('span', null, 'Published: athletes and parents can see it')),
     err, h('div', { class: 'row' }, btn(lesson ? 'Save lesson' : 'Post lesson', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   f.title.focus();
 }
+// Owners: price a course and put it in the online store.
+async function saleDialog(courseId) {
+  const info = (await get('/v1/shop')).courses.find((x) => x.id === courseId);
+  const d = openDialog(h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, `Sell ${info.title} online`),
+    saleForm(put, 'course', info, () => { d.close(); deps.render(); }), h('div', null, btn('Close', () => d.close(), 'ghost'))));
+}
 function courseDialog(course) {
   const title = input({ value: course?.title ?? '', maxlength: '160' }), desc = textarea(course?.description ?? '', { rows: '3', style: 'min-height:72px' }), pub = h('input', { type: 'checkbox', checked: course ? course.published : true });
+  const audience = select([['athletes', 'Athletes (and their parents with them)'], ['parents', 'Parents only: shows under For parents in the parent portal']], { value: course?.audience ?? 'athletes' });
+  const ageMin = input({ type: 'number', min: '3', max: '25', inputmode: 'numeric', value: course?.age_min ?? '', placeholder: 'Any' }), ageMax = input({ type: 'number', min: '3', max: '25', inputmode: 'numeric', value: course?.age_max ?? '', placeholder: 'Any' });
+  const ages = h('div', { class: 'form-grid', hidden: audience.value !== 'parents' }, field('For parents of athletes aged from', ageMin), field('to', ageMax));
+  audience.addEventListener('change', () => { ages.hidden = audience.value !== 'parents'; });
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
     try {
-      const body = { title: title.value, description: desc.value || null, published: pub.checked };
+      const body = { title: title.value, description: desc.value || null, published: pub.checked, audience: audience.value, age_min: ageMin.value || null, age_max: ageMax.value || null };
       if (course) await patch(`/v1/courses/${course.id}`, body); else await post('/v1/courses', body);
       d.close(); toast(course ? 'Course saved.' : 'Course created. Add lessons to it.'); deps.render();
     } catch (x) { err.textContent = x.message; }
   }); } },
     h('h2', { class: 'week-title', style: 'color:var(--steel)' }, course ? 'Edit course' : 'New course'),
-    field('Title', title), field('Description', desc),
+    field('Title', title), field('Description', desc), field('Who it\'s for', audience), ages,
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, pub, h('span', null, 'Published')),
     err, h('div', { class: 'row' }, btn(course ? 'Save course' : 'Create course', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   title.focus();
@@ -242,22 +287,27 @@ export async function viewEducation(main) {
   const lessonRow = (l, i, list, course) => h('div', { class: 'edu-row' },
     course ? h('span', { class: 'edu-n' }, i + 1) : null,
     h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'strong' }, l.title, l.published ? null : h('span', { class: 'small muted', style: 'font-weight:400' }, ' · draft')),
-      h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, `${plural(l.completions, 'athlete')} finished`].filter(Boolean).join(' · '))),
+      h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null, course?.audience === 'parents' ? null : `${plural(l.completions, 'athlete')} finished`].filter(Boolean).join(' · '))),
     h('div', { class: 'edu-acts' },
       course && manage ? [btn('↑', (e) => move(e, course, i, -1), 'ghost', { 'aria-label': `Move ${l.title} up`, disabled: i === 0 }), btn('↓', (e) => move(e, course, i, 1), 'ghost', { 'aria-label': `Move ${l.title} down`, disabled: i === list.length - 1 })] : null,
       btn('Preview', () => previewLesson(l.id), 'ghost'),
       manage ? btn('Edit', () => lessonDialog(l, edu.courses), 'ghost') : null,
-      manage && l.published ? btn('Assign', () => assignDialog({ lesson_id: l.id }), 'ghost') : null,
+      manage && l.published && course?.audience !== 'parents' ? btn('Assign', () => assignDialog({ lesson_id: l.id }), 'ghost') : null,
       manage ? btn('Delete', (e) => { if (confirm(`Delete "${l.title}"? Completions are removed too.`)) busy(e.currentTarget, async () => { await del(`/v1/lessons/${l.id}`); toast('Lesson deleted.'); deps.render(); }); }, 'ghost') : null));
   async function move(e, course, i, dir) {
     const ids = course.lessons.map((l) => l.id);
     [ids[i], ids[i + dir]] = [ids[i + dir], ids[i]];
     await busy(e.currentTarget, async () => { await put(`/v1/courses/${course.id}/order`, { lesson_ids: ids }); deps.render(); });
   }
-  const coursesPanel = panel('Courses', { subtitle: 'Lessons in order. Athletes see the next lesson when they finish one.', action: manage ? btn('New course', () => courseDialog(null), 'secondary') : null },
+  const starter = !edu.courses.some((c) => c.audience === 'parents') && manage ? h('div', { class: 'dp-panel stack', style: 'background:transparent' },
+    h('span', { class: 'strong' }, 'Courses for parents'), h('p', { class: 'small muted', style: 'margin:0' }, 'Short courses parents read in the parent portal, shown by their athlete\'s age. Start from three drafts (growth spurts, fueling, recruiting basics), then read, edit and publish them.'),
+    h('div', null, btn('Add starter drafts', (e) => busy(e.currentTarget, async () => { toast((await post('/v1/courses/starter-parent')).message); deps.render(); }), 'secondary'))) : null;
+  const coursesPanel = panel('Courses', { subtitle: 'Lessons in order. Athletes see the next lesson when they finish one. Parent courses show in the parent portal.', action: manage ? btn('New course', () => courseDialog(null), 'secondary') : null },
+    starter,
     edu.courses.length ? edu.courses.map((c) => h('div', { class: 'edu-course' },
-      h('div', { class: 'row wrap' }, h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'edu-course-title' }, c.title), h('span', { class: 'small muted' }, `${plural(c.lessons.length, 'lesson')}${c.published ? '' : ' · draft, hidden from athletes'}${c.description ? ` · ${c.description}` : ''}`)),
-        manage ? h('div', { class: 'edu-acts' }, btn('Add lesson', () => lessonDialog(null, edu.courses, { course_id: c.id }), 'ghost'), c.published && c.lessons.some((l) => l.published) ? btn('Assign', () => assignDialog({ course_id: c.id }), 'ghost') : null, btn('Edit', () => courseDialog(c), 'ghost'),
+      h('div', { class: 'row wrap' }, h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'edu-course-title' }, c.title), h('span', { class: 'small muted' }, `${c.audience === 'parents' ? `For parents${c.age_min != null || c.age_max != null ? `, ages ${c.age_min ?? 'any'}–${c.age_max ?? 'any'}` : ''} · ${plural(c.parents_reading ?? 0, 'parent')} reading · ` : ''}${plural(c.lessons.length, 'lesson')}${c.certificates ? ` · ${plural(c.certificates, 'certificate')} earned` : ''}${c.published ? '' : ' · draft, hidden from athletes'}${c.for_sale ? ' · for sale online' : ''}${c.description ? ` · ${c.description}` : ''}`)),
+        manage ? h('div', { class: 'edu-acts' }, btn('Add lesson', () => lessonDialog(null, edu.courses, { course_id: c.id }), 'ghost'), c.audience !== 'parents' && c.published && c.lessons.some((l) => l.published) ? btn('Assign', () => assignDialog({ course_id: c.id }), 'ghost') : null, btn('Edit', () => courseDialog(c), 'ghost'),
+          deps.role() === 'owner' && c.audience !== 'parents' ? btn(c.for_sale ? 'For sale' : 'Sell online', (e) => busy(e.currentTarget, () => saleDialog(c.id)), 'ghost') : null,
           btn('Delete', (e) => { if (confirm(`Delete the course "${c.title}"? Its lessons stay in the library.`)) busy(e.currentTarget, async () => { await del(`/v1/courses/${c.id}`); toast('Course deleted. Its lessons are in the library.'); deps.render(); }); }, 'ghost')) : null),
       c.lessons.length ? h('div', null, c.lessons.map((l, i, list) => lessonRow(l, i, list, c))) : h('p', { class: 'muted small' }, 'No lessons yet.')))
       : h('p', { class: 'muted' }, 'No courses yet. A course is a short series of lessons, like "Recovery basics".'));

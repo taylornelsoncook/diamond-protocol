@@ -5,13 +5,14 @@ export const EVENT_TYPES = [
   'subscription.created', 'subscription.updated',
   'invoice.paid', 'invoice.payment_failed',
   'program.assigned', 'workout.completed',
-  'sale.completed', 'sale.failed', 'sale.refunded', 'payment.disputed',
+  'sale.completed', 'sale.failed', 'sale.refunded', 'payment.disputed', 'money_check.problems',
   'session.checked_in', 'client.card_updated',
   'booking.created', 'booking.waitlisted', 'booking.canceled', 'session.canceled',
   'enrollment.created', 'family.waiver_signed',
   'team_contract.created', 'team_invoice.created', 'team_invoice.paid', 'team_invoice.overdue', 'team_invoice.voided', 'team_invoice.payment_failed',
   'results.recorded', 'performance.pr', 'integration.synced', 'queue.linked', 'testing.shared',
-  'family.signed_up', 'family.deletion_requested', 'family.deleted', 'clients.imported'
+  'family.signed_up', 'family.deletion_requested', 'family.deleted', 'clients.imported',
+  'lead.created', 'lead.updated', 'pay_link.created', 'pay_link.paid', 'stock.changed', 'badge.awarded', 'course.completed', 'purchase.completed', 'spots.offered', 'progress_note.approved'
 ];
 
 // Record an event and queue a delivery for every active endpoint subscribed to it.

@@ -1,4 +1,4 @@
-import { newId, v, notFound, badRequest, conflict, addDays, addMonths } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, addDays, addMonths, withLock } from '../util.js';
 import { emit } from './events.js';
 import { payerFor } from './families.js';
 import { membershipReceipt, paymentFailed, trialReminders } from './notify.js';
@@ -164,7 +164,9 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
   return attemptCharge(ctx, id, asOf);
 }
 
-export async function attemptCharge(ctx, invoiceId, asOf = ctx.now()) {
+// One charge or payment per invoice at a time: a retry waiting on Stripe and a pay link paid meanwhile can't both land.
+export function attemptCharge(ctx, invoiceId, asOf = ctx.now()) { return withLock(`invoice:${invoiceId}`, () => chargeInvoice(ctx, invoiceId, asOf)); }
+async function chargeInvoice(ctx, invoiceId, asOf) {
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status === 'paid') return inv;
   if (inv.status === 'void') throw conflict('This invoice was voided and cannot be charged.');
@@ -177,10 +179,7 @@ export async function attemptCharge(ctx, invoiceId, asOf = ctx.now()) {
   ctx.db.tx(() => {
     const s = getSubscription(ctx, inv.subscription_id);
     if (result.ok) {
-      ctx.db.run(`UPDATE invoices SET status = 'paid', attempts = ?, paid_at = ?, payment_ref = ?, last_error = NULL, next_retry_at = NULL WHERE id = ?`,
-        attempts, ctx.now(), result.ref, inv.id);
-      emit(ctx, 'invoice.paid', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents });
-      if (['past_due', 'trialing'].includes(s.status)) setStatus(ctx, s.id, 'active');
+      recordPaid(ctx, inv, s, { attempts, ref: result.ref });
     } else {
       const giveUp = attempts >= MAX_ATTEMPTS;
       ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
@@ -199,19 +198,39 @@ export async function attemptCharge(ctx, invoiceId, asOf = ctx.now()) {
   return getInvoice(ctx, inv.id);
 }
 
+function recordPaid(ctx, inv, s, { attempts = inv.attempts, ref }) {
+  ctx.db.run(`UPDATE invoices SET status = 'paid', attempts = ?, paid_at = ?, payment_ref = ?, last_error = NULL, next_retry_at = NULL WHERE id = ?`,
+    attempts, ctx.now(), ref, inv.id);
+  emit(ctx, 'invoice.paid', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents });
+  if (['past_due', 'trialing'].includes(s.status)) setStatus(ctx, s.id, 'active');
+}
+// A parent paid a failed or open invoice some other way (a pay link). Returns false if it was already paid or voided.
+export function markInvoicePaid(ctx, invoiceId, ref, opts = {}) { return withLock(`invoice:${invoiceId}`, () => recordInvoicePayment(ctx, invoiceId, ref, opts)); }
+async function recordInvoicePayment(ctx, invoiceId, ref, { how } = {}) {
+  const inv = getInvoice(ctx, invoiceId);
+  if (!['failed', 'open'].includes(inv.status)) return false;
+  ctx.db.tx(() => recordPaid(ctx, inv, getSubscription(ctx, inv.subscription_id), { ref }));
+  await membershipReceipt(ctx, inv.id, { how });
+  return true;
+}
+// A family just saved a new card: charge any membership payment that failed, now, instead of waiting for the next retry.
+export async function retryWithNewCard(ctx, { familyId, clientId }) {
+  const rows = ctx.db.all(`SELECT i.id FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN clients c ON c.id = i.client_id
+    WHERE i.status = 'failed' AND i.next_retry_at IS NOT NULL AND s.status = 'past_due' AND ${familyId ? 'c.family_id = ?' : 'c.id = ?'}`, familyId ?? clientId);
+  const out = [];
+  for (const r of rows) out.push(await attemptCharge(ctx, r.id));
+  return out;
+}
+
 // Stripe webhook: a membership charge settled differently from what the charge call said. A card the bank
 // asked the client to approve can succeed later, and a payment still processing can fail later. Only the
 // invoice's latest PaymentIntent counts, and nothing changes when the invoice already agrees.
-export async function reconcileInvoicePayment(ctx, invoiceId, { ref, succeeded, error }) {
+export function reconcileInvoicePayment(ctx, invoiceId, outcome) { return withLock(`invoice:${invoiceId}`, () => reconcile(ctx, invoiceId, outcome)); }
+async function reconcile(ctx, invoiceId, { ref, succeeded, error }) {
   const inv = ctx.db.get(`SELECT i.*, c.name AS client_name FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
   if (!inv || !ref || inv.payment_ref !== ref) return 'ignored';
   if (succeeded && inv.status === 'failed') {
-    ctx.db.tx(() => {
-      ctx.db.run(`UPDATE invoices SET status = 'paid', paid_at = ?, last_error = NULL, next_retry_at = NULL WHERE id = ?`, ctx.now(), inv.id);
-      emit(ctx, 'invoice.paid', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents });
-      const s = getSubscription(ctx, inv.subscription_id);
-      if (s.status === 'past_due') setStatus(ctx, s.id, 'active');
-    });
+    ctx.db.tx(() => recordPaid(ctx, inv, getSubscription(ctx, inv.subscription_id), { ref }));
     await membershipReceipt(ctx, inv.id);
     return 'paid';
   }
@@ -259,7 +278,8 @@ export async function runBilling(ctx, asOf = ctx.now()) {
 
   const retries = ctx.db.all(
     `SELECT i.id FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id
-     WHERE i.status = 'failed' AND i.next_retry_at IS NOT NULL AND i.next_retry_at <= ? AND s.status = 'past_due'`, asOf);
+     WHERE i.status = 'failed' AND i.next_retry_at IS NOT NULL AND i.next_retry_at <= ? AND s.status = 'past_due'
+       AND NOT EXISTS (SELECT 1 FROM pay_links p WHERE p.invoice_id = i.id AND p.status = 'open' AND p.checkout_started_at > ?)`, asOf, new Date(Date.parse(asOf) - 3600000).toISOString());   // a parent is paying by link right now
   for (const r of retries) {
     summary.retried++;
     const inv = await attemptCharge(ctx, r.id, asOf);

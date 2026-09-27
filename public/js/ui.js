@@ -41,7 +41,7 @@ export function ago(iso) {
 
 const STATUS = { active: ['Active', 'good'], trialing: ['Trial', 'neutral'], past_due: ['Past due', 'warn'], paused: ['Paused', 'muted'], canceled: ['Canceled', 'muted'], none: ['No plan', 'muted'],
   paid: ['Paid', 'good'], failed: ['Failed', 'warn'], open: ['Open', 'neutral'], void: ['Void', 'muted'], succeeded: ['Paid', 'good'], pending: ['Waiting', 'neutral'], revoked: ['Revoked', 'muted'], delivered: ['Delivered', 'good'], retrying: ['Retrying', 'neutral'],
-  refunded: ['Refunded', 'muted'], partially_refunded: ['Part refunded', 'neutral'] };
+  refunded: ['Refunded', 'muted'], partially_refunded: ['Part refunded', 'neutral'], settled: ['Paid another way', 'muted'], expired: ['Expired', 'muted'] };
 export function badge(status) {
   const [label, tone] = STATUS[status] || [status, 'muted'];
   return h('span', { class: `dp-badge dp-badge--${tone}` }, label);

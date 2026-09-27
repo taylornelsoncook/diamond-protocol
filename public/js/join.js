@@ -73,7 +73,8 @@ function renderCode(started) {
     const res = await fetch('/portal/api/signup/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ signup_id: started.signup_id, code: code.value }) });
     const data = await res.json();
     if (!res.ok) { err.textContent = data.error?.message ?? 'That didn\'t work. Try again.'; return; }
-    location.href = '/parent?welcome=1';
+    const buy = new URLSearchParams(location.search).get('buy');     // from the store page: land on what they came to buy
+    location.href = `/parent?welcome=1${buy && /^(program|course):[\w-]+$/.test(buy) ? `&buy=${encodeURIComponent(buy)}` : ''}`;
   }); } },
     h('h1', { class: 'p-title' }, 'Check your email'),
     h('p', { class: 'muted' }, `We sent a 6-digit code to ${state.parent.email}. It expires in 30 minutes. If you already have an account, we emailed you a sign-in link instead.`),

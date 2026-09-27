@@ -45,6 +45,7 @@
 .eg-msg{display:flex;flex-direction:column;gap:6px;padding:12px 0}
 .eg-list>.eg-msg:first-child{padding-top:0}
 .eg-msg--new{border-left:3px solid var(--green-mid);padding-left:10px}
+.eg-msg--mine{margin-left:24px;padding:10px 12px;border-radius:10px;background:var(--surface-2, rgba(255,255,255,.04))}
 
 /* Calendar */
 .eg-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
@@ -97,8 +98,9 @@
 .eg-tab[aria-current="page"]{color:var(--green-bright)}
 .eg-tab svg{width:22px;height:22px}
 .eg-tab .eg-tab-dot,.p-subtab .eg-tab-dot{position:absolute;top:8px;left:calc(50% + 8px);width:8px;height:8px;border-radius:50%;background:var(--amber)}
-.p-subtabs{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.3fr) minmax(0,1.15fr) minmax(0,1fr);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);overflow:hidden}
-.p-subtab{position:relative;background:none;border:0;border-left:1px solid var(--line-subtle);color:var(--steel-muted);min-height:48px;font:500 13px/1.1 var(--font-sans);cursor:pointer;padding:0 4px}
+.p-subtabs{display:flex;overflow-x:auto;scrollbar-width:none;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.p-subtabs::-webkit-scrollbar{display:none}
+.p-subtab{position:relative;flex:1 0 auto;white-space:nowrap;background:none;border:0;border-left:1px solid var(--line-subtle);color:var(--steel-muted);min-height:48px;font:500 13px/1.1 var(--font-sans);cursor:pointer;padding:0 14px}
 .p-subtab:first-child{border-left:0}
 .p-subtab[aria-current="page"]{background:var(--green);color:var(--on-green)}
 .p-subtab .eg-tab-dot{top:6px;left:auto;right:6px}
@@ -123,4 +125,19 @@
 .edu-bar{width:120px}
 @media (max-width:760px){.cl-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.edu-acts{width:100%}.edu-bar{width:100%}}
 @media (max-width:420px){.eg-ci-sum{grid-template-columns:repeat(3,minmax(0,1fr))}.eg-opt span{font-size:10px}.eg-summary b{font-size:24px}.eg-summary b.eg-word{font-size:18px}}
-@media (max-width:420px){.p-subtab{font-size:12px;padding:0 2px}}
+@media (max-width:420px){.p-subtab{font-size:12px;padding:0 10px}}
+/* Skill badges: athlete and parent Performance tab, and the coach's client profile. */
+.eg-badges{display:grid;gap:10px}
+.eg-badge{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--green-mid);border-radius:var(--radius-md);background:var(--green-deep)}
+.eg-badge-icon{font-size:22px;line-height:1;color:var(--green-bright)}
+.cl-badges{display:flex;flex-direction:column}
+.cl-badge{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-subtle)}
+.eg-badge--milestone{background:var(--surface);border-color:var(--line)}
+.eg-badge--milestone .eg-badge-icon{color:var(--amber)}
+/* Lesson quizzes. */
+.eg-quiz fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.eg-quiz legend{margin-bottom:6px;padding:0}
+.eg-q--wrong{border-left:3px solid var(--amber)!important;padding-left:10px!important}
+.eg-choice{display:flex;gap:10px;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer}
+.eg-choice input{width:20px;height:20px;accent-color:var(--green-bright)}
+.eg-choice:has(input:checked){border-color:var(--green-bright);background:var(--green-deep)}

@@ -98,6 +98,19 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       } catch (e) { return { ok: false, error: e.message }; }
     },
 
+    // Every payment created in [from, to), for the daily money check (services/moneychecks.js).
+    async listPayments({ from, to }) {
+      const out = [];
+      let after;
+      for (let page = 0; page < 50; page++) {
+        const r = await call('GET', '/v1/payment_intents', { created: { gte: Math.floor(Date.parse(from) / 1000), lt: Math.floor(Date.parse(to) / 1000) }, limit: 100, starting_after: after });
+        for (const pi of r.data ?? []) out.push({ ref: pi.id, status: pi.status, amount_cents: pi.amount_received || pi.amount, created_at: new Date(pi.created * 1000).toISOString(), description: pi.description ?? null });
+        if (!r.has_more || !r.data?.length) break;
+        after = r.data[r.data.length - 1].id;
+      }
+      return out;
+    },
+
     async connectionToken(locationId) {
       const t = await call('POST', '/v1/terminal/connection_tokens', locationId ? { location: locationId } : {});
       return t.secret;
@@ -125,14 +138,22 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       });
       return { id: s.id, url: s.url };
     },
-    // Hosted payment page for a team invoice: card, or US bank account (ACH) when billing in USD.
-    async checkoutPayment({ amountCents, description, email, metadata, successUrl, cancelUrl, idempotencyKey }) {
+    // Close an unpaid hosted payment page so it can't be paid later. Already paid or expired: nothing to do.
+    async expireCheckoutSession(id) {
+      try { await call('POST', `/v1/checkout/sessions/${encodeURIComponent(id)}/expire`, {}); return true; } catch { return false; }
+    },
+    // Hosted payment page for a team invoice: card, or US bank account (ACH) when billing in USD. Pay links pass cardOnly.
+    async checkoutPayment({ amountCents, description, email, metadata, successUrl, cancelUrl, idempotencyKey, cardOnly = false }) {
       const s = await call('POST', '/v1/checkout/sessions', {
-        mode: 'payment', payment_method_types: currency === 'usd' ? ['card', 'us_bank_account'] : ['card'], customer_email: email ?? undefined,
+        mode: 'payment', payment_method_types: currency === 'usd' && !cardOnly ? ['card', 'us_bank_account'] : ['card'], customer_email: email ?? undefined,
         line_items: [{ price_data: { currency, unit_amount: amountCents, product_data: { name: description } }, quantity: 1 }],
         metadata, payment_intent_data: { metadata }, success_url: successUrl, cancel_url: cancelUrl
       }, { idempotencyKey });
       return { id: s.id, url: s.url };
+    },
+    async getCheckoutSession(id) {
+      const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`);
+      return { paid: s.payment_status === 'paid', ref: s.payment_intent ?? s.id, metadata: s.metadata ?? {} };
     },
     async getSetupSession(id) {
       const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`, { expand: ['setup_intent.payment_method'] });

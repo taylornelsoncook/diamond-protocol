@@ -586,11 +586,18 @@ What the school's athletic director or treasurer sees.
 
 _Where: each athlete's private link_
 
-Where athletes do their program.
+Where athletes do their program, on their phone.
 
-- Opens to the next workout: week and day, and progress through the program.
-- Each exercise shows sets, reps, cues and a demo video.
-- Tap Log as each exercise is done, add a note for the coach, and Finish workout.
+- Opens to the next workout: week and day, and progress through the program. The first exercise still to do is open.
+- Tap an exercise to open it: demo video, cues, what they lifted last time and their best weight, and a row per set.
+- Log each set with its weight (lb) and reps. Left blank, a set takes last time's weight and the target reps. Timed and distance sets just get a tick. Add a set if they do more; edit or clear a logged set by changing it or tapping its tick again.
+- Logging the last set marks the exercise done and opens the next one. Log marks a whole exercise done without numbers.
+- A rest timer runs after each set (90 seconds to start; −15 s, +15 s or Skip, and it buzzes when rest is over). It can be turned off.
+- No signal in the gym: logs are kept on the phone and sent when the connection is back. Finish workout waits until they're sent.
+- Before finishing: rate how hard it was from 1 to 10 (optional) and add a note for the coach. Finishing with exercises left asks first and shows them as skipped.
+- The done screen shows exercises, sets, time taken, effort and any new best weights, then what's next. Finished by mistake? Reopen this workout, for 2 hours and until the next workout is started.
+- Coming up lists the next three workouts. Finished workouts open to show every exercise, the sets logged, effort and the note.
+- The coach sees each finished workout in Recent activity with effort, sets and new bests; the workout.completed webhook carries the sets too.
 
 ## iPhone app: DP Coach
 

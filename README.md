@@ -168,6 +168,7 @@ Use `sk_test_...` keys until you've run real test payments end to end. The serve
 - **Staff accounts:** owners add staff under Staff & security. Each gets a one-time password by email and must choose their own at first sign-in. Owners can change roles, turn accounts off (signed out everywhere at once), reset passwords and unlock accounts. There is always at least one owner.
 - **Sign-in protection:** five wrong passwords lock an account for 15 minutes; sign-in attempts and overall requests are rate-limited per address; parent sign-in codes are limited too.
 - **Activity log:** every change, refused attempt and sign-in by staff, API keys and parents: who, what, which record, when, from where. Request contents are never stored.
+- **Connection check:** Staff & security → Check my connection shows the X-Forwarded-For header your request arrived with, the connection address, the address the app decided is yours and the `TRUST_PROXY` setting, with one sentence on whether to change it. Open it on each server (staging and production) after a hosting change.
 - **Backups:** a full copy of the database every day (last 30 kept), plus "Back up now" and downloads for the owner. Keep downloaded copies off the server.
 
 ## Parent progress reports

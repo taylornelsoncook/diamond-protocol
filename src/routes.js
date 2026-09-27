@@ -330,6 +330,7 @@ export const routes = [
   ['POST', '/v1/staff', 'session', 'Admin', 'Add a staff member: name, email, role (owner, coach, front_desk). Returns a one-time password, also emailed.', (ctx, r) => security.addStaff(ctx, r.body, r.baseUrl), 201],
   ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change role, rename, turn an account off (active=false) or unlock it (unlock=true).', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
   ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
+  ['GET', '/v1/staff/connection', 'session', 'Admin', 'Connection check: the X-Forwarded-For header this request arrived with, the connection address, the address the app decided on and TRUST_PROXY, with what to change.', (ctx, r) => security.connectionCheck(r.connection)],
   ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in: who, what, when, from where. ?actor_id, ?target, ?failures=true, ?limit.', (ctx, r) => list(security.listAudit(ctx, r.query).map((a) => ({ ...a, description: describeAction(a.action) })))],
   ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept).', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx) })],
   ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now.', (ctx) => backups.createBackup(ctx), 201],

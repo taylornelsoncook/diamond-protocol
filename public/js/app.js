@@ -1910,7 +1910,16 @@ async function viewStaff(main) {
       }, 'outline') : null,
       r.status === 'open' ? btn('Decline', (e) => { const reason = prompt('Why? (kept with the request)'); if (reason) busy(e.currentTarget, async () => { await post(`/v1/data-requests/${r.id}/decline`, { reason }); render(); }); }, 'ghost') : null))
       : h('p', { class: 'muted small' }, 'No requests yet.'));
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? h('div') : reqPanel), auditPanel);
+  // Connection check: what the hosting proxy sent and which address the app picked, to confirm TRUST_PROXY.
+  const connOut = h('div', { class: 'stack-tight' });
+  const connPanel = panel('Connection check', { subtitle: 'Sign-in limits and the activity log go by the visitor\'s internet address. This shows which one the app sees for you, so you can confirm the TRUST_PROXY setting on each server.' },
+    connOut, h('div', null, btn('Check my connection', (ev) => busy(ev.currentTarget, async () => {
+      const c = await get('/v1/staff/connection');
+      const row = (label, value) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' }, h('span', { class: 'grow muted', style: 'min-width:180px' }, label), h('code', { style: 'word-break:break-all' }, value ?? 'none'));
+      fill(connOut, row('X-Forwarded-For header', c.forwarded_for), row('Connection address', c.connection_address), row('Address the app decided on', c.decided_address), row('TRUST_PROXY', c.trust_proxy ?? 'not set'),
+        h('p', { class: 'strong', style: 'margin:8px 0 0' }, c.guidance));
+    }), 'secondary')));
+  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, auditPanel);
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.

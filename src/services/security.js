@@ -107,6 +107,21 @@ export function changePassword(ctx, user, body) {
   return { ok: true };
 }
 
+// ---------- Connection check (owner, Staff & security) ----------
+// Shows what the hosting proxy sent and which address the app picked, so the owner can confirm TRUST_PROXY.
+const PRIVATE = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|fc|fd|fe80:|::ffff:(10|127|192\.168|172\.(1[6-9]|2\d|3[01]))\.)/i;
+export function connectionCheck({ forwardedFor, socketAddress, clientIp, trustProxy, hops }) {
+  const list = String(forwardedFor ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  let guidance;
+  if (!hops && list.length) guidance = `Requests reach the app through ${list.length === 1 ? 'a proxy' : 'proxies'} but TRUST_PROXY is off, so every visitor looks like ${socketAddress} and shares one rate limit: set TRUST_PROXY to ${list.length} if ${list[0]} is your own internet address.`;
+  else if (!hops) guidance = 'No proxy header arrived and TRUST_PROXY is off, which is right when nothing sits in front of the app.';
+  else if (!list.length) guidance = 'TRUST_PROXY is on but no X-Forwarded-For header arrived, so the app uses the connection address; turn TRUST_PROXY off unless a proxy sits in front of the app.';
+  else if (hops > list.length) guidance = `TRUST_PROXY is ${hops} but only ${list.length} ${list.length === 1 ? 'address arrived' : 'addresses arrived'}, so the app falls back to ${clientIp}: lower TRUST_PROXY to ${list.length}.`;
+  else if (PRIVATE.test(clientIp)) guidance = `The app picked ${clientIp}, a private address inside the hosting network, not yours: raise TRUST_PROXY by one (to ${hops + 1}) and check again.`;
+  else guidance = `If ${clientIp} is your own internet address (search "what is my IP" on this device to compare), TRUST_PROXY is set right; if it isn't, lower TRUST_PROXY by one and check again.`;
+  return { forwarded_for: forwardedFor || null, forwarded_addresses: list, connection_address: socketAddress ?? null, decided_address: clientIp ?? null, trust_proxy: trustProxy ?? null, proxies_trusted: hops, guidance };
+}
+
 // ---------- Audit log ----------
 export function audit(ctx, e) {
   try {

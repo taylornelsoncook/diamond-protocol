@@ -1,8 +1,11 @@
-import { newId, v, notFound, badRequest, conflict, HttpError } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, HttpError, withLock } from '../util.js';
 import { emit } from './events.js';
 import { payerFor } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
+import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
+import { retryWithNewCard } from './billing.js';
+import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
 const hasAddress = (l) => !!(l.address_line1 && l.city && l.state && l.postal_code);
@@ -78,14 +81,14 @@ export function removeReader(ctx, id) {
 
 // ---------- Products ----------
 const PRODUCT_KINDS = ['session', 'pack', 'gear', 'other'];
-const shapeProduct = (p) => ({ ...p, active: !!p.active });
+const shapeProduct = (ctx, p) => ({ ...p, active: !!p.active, ...stockFields(ctx, p) });
 export function listProducts(ctx, { includeInactive = false } = {}) {
-  return ctx.db.all(`SELECT * FROM products ${includeInactive ? '' : 'WHERE active = 1'} ORDER BY CASE kind WHEN 'session' THEN 0 WHEN 'pack' THEN 1 ELSE 2 END, price_cents`).map(shapeProduct);
+  return ctx.db.all(`SELECT * FROM products ${includeInactive ? '' : 'WHERE active = 1'} ORDER BY CASE kind WHEN 'session' THEN 0 WHEN 'pack' THEN 1 ELSE 2 END, price_cents`).map((p) => shapeProduct(ctx, p));
 }
 export function getProduct(ctx, id) {
   const p = ctx.db.get('SELECT * FROM products WHERE id = ?', id);
   if (!p) throw notFound('Product');
-  return shapeProduct(p);
+  return shapeProduct(ctx, p);
 }
 function productSessions(kind, sessions) {
   if (kind === 'session') return 1;
@@ -96,20 +99,22 @@ const CREDIT_TYPES = ['private', 'group'];
 export function createProduct(ctx, body) {
   const kind = v.oneOf(body.kind, 'kind', PRODUCT_KINDS);
   const id = newId('prod');
-  ctx.db.run('INSERT INTO products (id, name, kind, price_cents, sessions, credit_type, active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
+  const stock = stockSettings(ctx, ['session', 'pack'].includes(kind) ? {} : body);
+  ctx.db.run('INSERT INTO products (id, name, kind, price_cents, sessions, credit_type, active, created_at, track_stock, low_stock_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)',
     id, v.str(body.name, 'name', { max: 80 }), kind, v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }), productSessions(kind, body.sessions),
-    v.oneOf(body.credit_type ?? 'private', 'credit_type', CREDIT_TYPES), ctx.now());
+    v.oneOf(body.credit_type ?? 'private', 'credit_type', CREDIT_TYPES), ctx.now(), stock.track_stock, stock.low_stock_at);
   return getProduct(ctx, id);
 }
 export function updateProduct(ctx, id, body) {
   const p = getProduct(ctx, id);
   const kind = body.kind !== undefined ? v.oneOf(body.kind, 'kind', PRODUCT_KINDS) : p.kind;
-  ctx.db.run('UPDATE products SET name = ?, kind = ?, price_cents = ?, sessions = ?, credit_type = ?, active = ? WHERE id = ?',
+  const stock = stockSettings(ctx, ['session', 'pack'].includes(kind) ? { track_stock: false } : body, p);
+  ctx.db.run('UPDATE products SET name = ?, kind = ?, price_cents = ?, sessions = ?, credit_type = ?, active = ?, track_stock = ?, low_stock_at = ? WHERE id = ?',
     body.name !== undefined ? v.str(body.name, 'name', { max: 80 }) : p.name, kind,
     body.price_cents !== undefined ? v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }) : p.price_cents,
     productSessions(kind, body.sessions ?? p.sessions),
     body.credit_type !== undefined ? v.oneOf(body.credit_type, 'credit_type', CREDIT_TYPES) : p.credit_type,
-    body.active !== undefined ? !!body.active : p.active, id);
+    body.active !== undefined ? !!body.active : p.active, stock.track_stock, stock.low_stock_at, id);
   return getProduct(ctx, id);
 }
 
@@ -154,8 +159,11 @@ export async function addTestCard(ctx, clientId) {
   const payer = payerFor(ctx, clientId);
   await ensureCustomer(ctx, payer);
   saveCard(ctx, payer, ctx.payments.testCard());
+  await retryFailed(ctx, payer);
   return cardSummary(ctx, clientId);
 }
+// A new card pays any membership payment that failed on the old one.
+const retryFailed = (ctx, payer) => retryWithNewCard(ctx, payer.table === 'families' ? { familyId: payer.id } : { clientId: payer.id }).catch((e) => console.error('retry', e.message));
 export function removeCard(ctx, clientId) {
   saveCard(ctx, payerFor(ctx, clientId), {});
   return cardSummary(ctx, clientId);
@@ -215,7 +223,7 @@ export function getSale(ctx, id, { withSecret = false } = {}) {
     `SELECT s.*, c.name AS client_name, l.name AS location_name, l.stripe_location_id, r.label AS reader_label
      FROM sales s LEFT JOIN clients c ON c.id = s.client_id JOIN locations l ON l.id = s.location_id LEFT JOIN readers r ON r.id = s.reader_id WHERE s.id = ?`, id);
   if (!s) throw notFound('Sale');
-  s.items = ctx.db.all('SELECT id, product_id, name, unit_price_cents, quantity, sessions FROM sale_items WHERE sale_id = ?', id);
+  s.items = ctx.db.all('SELECT id, product_id, variant_id, name, unit_price_cents, quantity, sessions FROM sale_items WHERE sale_id = ?', id);
   s.save_card = !!s.save_card;
   const secret = s.client_secret;
   delete s.client_secret;
@@ -250,7 +258,8 @@ export async function createSale(ctx, body, actor, { online = false } = {}) {
   for (const it of Array.isArray(body.items) ? body.items : []) {
     const p = getProduct(ctx, v.str(it.product_id, 'product_id'));
     if (!p.active) throw conflict(`${p.name} is no longer sold.`);
-    lines.push({ product_id: p.id, name: p.name, unit: p.price_cents, qty: v.int(it.quantity ?? 1, 'quantity', { min: 1, max: 99 }), sessions: p.sessions });
+    const size = pickVariant(ctx, p, it.variant_id);
+    lines.push({ product_id: p.id, variant_id: size?.id ?? null, name: size ? `${p.name} (${size.name})` : p.name, unit: p.price_cents, qty: v.int(it.quantity ?? 1, 'quantity', { min: 1, max: 99 }), sessions: p.sessions });
   }
   if (body.custom) lines.push({ product_id: null, name: v.str(body.custom.description, 'custom.description', { max: 80 }), unit: v.int(body.custom.amount_cents, 'custom.amount_cents', { min: 1, max: 10000000 }), qty: 1, sessions: 0 });
   if (!lines.length) throw badRequest('Add at least one item to the sale.');
@@ -274,7 +283,7 @@ export async function createSale(ctx, body, actor, { online = false } = {}) {
     ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at)
                 VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
       id, client?.id, loc.id, method, amount, wantsSave, reader?.id, v.str(body.note, 'note', { max: 200, optional: true }), actor ?? null, ctx.now());
-    for (const l of lines) ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, ?)', newId('si'), id, l.product_id, l.name, l.unit, l.qty, l.sessions);
+    for (const l of lines) ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('si'), id, l.product_id, l.variant_id ?? null, l.name, l.unit, l.qty, l.sessions);
   });
   const description = lines.map((l) => l.name).join(', ').slice(0, 200);
   const metadata = { sale_id: id, location: loc.name, ...(client ? { client_id: client.id } : {}) };
@@ -352,12 +361,37 @@ function completeSale(ctx, id, { card, savedCard }) {
     }
     if (s.client_id && s.save_card && savedCard) saveCard(ctx, payerFor(ctx, s.client_id), { paymentMethod: savedCard, brand: card?.brand, last4: card?.last4 });
     if (s.note?.startsWith('booking:')) settleBooking(ctx, s.note.slice(8), id);
+    stockForSale(ctx, id, -1, 'sale');
     emit(ctx, 'sale.completed', {
       sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', location_id: s.location_id, location_name: s.location_name,
       amount_cents: s.amount_cents, method: s.method, items: s.items.map((i) => ({ name: i.name, quantity: i.quantity })), sessions_added: sessions
     });
   });
   if (completed) saleReceipt(ctx, id).catch((e) => console.error('receipt', e.message));
+  if (completed && savedCard) { const s = ctx.db.get('SELECT client_id, save_card FROM sales WHERE id = ?', id); if (s.client_id && s.save_card) retryFailed(ctx, payerFor(ctx, s.client_id)); }
+}
+
+// Online sales need a sales location; one named "Online" is created the first time.
+export function onlineLocation(ctx) {
+  const l = ctx.db.get(`SELECT id FROM locations WHERE name = 'Online' AND kind = 'other'`);
+  if (l) return l.id;
+  const id = newId('loc');
+  ctx.db.run(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES (?, 'Online', 'other', 'US', 0, ?)`, id, ctx.now());
+  return id;
+}
+// A payment that already happened online (a pay link): record it as a sale so it shows in sales, reports and receipts,
+// adds any sessions from a pack, and settles an unpaid booking (note 'booking:<id>').
+export function recordOnlineSale(ctx, { clientId, productId, description, amountCents, note, paymentRef, actor }) {
+  const id = newId('sale');
+  const p = productId ? ctx.db.get('SELECT * FROM products WHERE id = ?', productId) : null;
+  ctx.db.tx(() => {
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_by, created_at) VALUES (?, ?, ?, 'online', 'pending', ?, ?, ?, ?, ?)`,
+      id, clientId ?? null, onlineLocation(ctx), amountCents, paymentRef ?? null, note ?? null, actor ?? 'Pay link', ctx.now());
+    const sizes = p ? activeVariants(ctx, p.id) : [];
+    ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', newId('si'), id, p?.id ?? null, sizes.length === 1 ? sizes[0].id : null, description.slice(0, 80), amountCents, p?.sessions ?? 0);
+  });
+  completeSale(ctx, id, {});
+  return id;
 }
 
 // Ask the payment provider where an in-person payment stands and record the result.
@@ -391,7 +425,9 @@ export async function cancelSale(ctx, id) {
   return getSale(ctx, id);
 }
 
-export async function refundSale(ctx, id, body = {}) {
+// One refund per sale at a time, so two presses can't put stock back or take credits away twice.
+export function refundSale(ctx, id, body = {}) { return withLock(`sale:${id}`, () => refundNow(ctx, id, body)); }
+async function refundNow(ctx, id, body) {
   const s = getSale(ctx, id);
   if (!['succeeded', 'partially_refunded'].includes(s.status)) throw conflict('Only a completed sale can be refunded.');
   const remaining = s.amount_cents - s.refunded_cents;
@@ -412,7 +448,14 @@ export async function refundSale(ctx, id, body = {}) {
         if (n > 0) { ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, sale_id, created_at) VALUES (?, ?, ?, ?, 'refund', ?, ?)`, newId('cr'), s.client_id, type, -n, id, ctx.now()); removed += n; }
       }
     }
-    emit(ctx, 'sale.refunded', { sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', amount_cents: amount, total_refunded_cents: total, full, sessions_removed: removed, method: s.method });
+    // Gear comes back on the shelf with a full refund, unless it can't be sold again (restock: false).
+    const restocked = full && body.restock !== false ? stockForSale(ctx, id, 1, 'refund') : 0;
+    // A program or course bought online ends with a full refund: the athlete comes off the program (or the course locks).
+    if (full) for (const b of ctx.db.all(`SELECT * FROM purchases WHERE sale_id = ? AND status = 'active'`, id)) {
+      ctx.db.run(`UPDATE purchases SET status = 'refunded', refunded_at = ? WHERE id = ?`, ctx.now(), b.id);
+      if (b.item_kind === 'program') ctx.db.run('UPDATE assignments SET active = 0 WHERE client_id = ? AND program_id = ? AND active = 1', b.client_id, b.item_id);
+    }
+    emit(ctx, 'sale.refunded', { sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', amount_cents: amount, total_refunded_cents: total, full, sessions_removed: removed, items_restocked: restocked, method: s.method });
   });
   return getSale(ctx, id);
 }
@@ -439,11 +482,11 @@ export async function handleStripeEvent(ctx, event) {
     const s = ctx.db.get('SELECT id FROM sales WHERE payment_ref = ?', obj.id);
     if (s) await syncSale(ctx, s.id);
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
-    await handleInvoiceCheckout(ctx, event.type, obj);
+    if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
     const info = await ctx.payments.getSetupSession(obj.id);
     const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
-    if (payer && info.paymentMethod) saveCard(ctx, payer, info);
+    if (payer && info.paymentMethod) { saveCard(ctx, payer, info); await retryFailed(ctx, payer); }
   }
   return { received: true };
 }

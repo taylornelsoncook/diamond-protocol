@@ -1,5 +1,7 @@
 import { newId, v, notFound, badRequest, conflict } from '../util.js';
 import { emit } from './events.js';
+import { parentFilter } from './performance.js';
+import { readinessToday } from './engage.js';
 
 // ---- Exercise library ----
 export function listExercises(ctx) {
@@ -42,7 +44,7 @@ export function getProgram(ctx, id) {
   const p = ctx.db.get('SELECT * FROM programs WHERE id = ?', id);
   if (!p) throw notFound('Program');
   const items = ctx.db.all(
-    `SELECT we.id, we.workout_id, we.position, we.prescription, e.id AS exercise_id, e.name, e.video_url, e.instructions
+    `SELECT we.id, we.workout_id, we.position, we.prescription, we.load_test, we.load_pct, e.id AS exercise_id, e.name, e.video_url, e.instructions
      FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id
      JOIN workouts w ON w.id = we.workout_id WHERE w.program_id = ? ORDER BY we.position`, id);
   p.workouts = ctx.db.all('SELECT * FROM workouts WHERE program_id = ? ORDER BY week, day', id).map((w) => ({
@@ -98,10 +100,47 @@ export function addWorkoutExercise(ctx, workoutId, body) {
   getExercise(ctx, v.str(body.exercise_id, 'exercise_id'));
   const pos = ctx.db.get('SELECT COALESCE(MAX(position), 0) + 1 AS n FROM workout_exercises WHERE workout_id = ?', workoutId).n;
   const id = newId('wex');
-  ctx.db.run('INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription) VALUES (?, ?, ?, ?, ?)',
-    id, workoutId, body.exercise_id, pos, v.str(body.prescription, 'prescription', { max: 80 }));
+  const load = loadInput(body);
+  ctx.db.run('INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription, load_test, load_pct) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id, workoutId, body.exercise_id, pos, v.str(body.prescription, 'prescription', { max: 80 }), load.test, load.pct);
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
+// Weights from test results: an exercise can be prescribed as a percent of the athlete's latest tested max
+// (back squat, bench press or power clean 1RM). The weight updates on its own when a new max is recorded, rounded
+// to the nearest 5 lb. Athletes only see weights from results their family can see (the share rule).
+export const LOAD_TESTS = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_clean_1rm: 'power clean' };
+function loadInput(body) {
+  if (!body.load_test) return { test: null, pct: null };
+  const test = v.oneOf(body.load_test, 'load_test', Object.keys(LOAD_TESTS));
+  const pct = Number(body.load_pct);
+  if (!Number.isInteger(pct) || pct < 30 || pct > 110) throw badRequest('Enter the percent of their max as a whole number from 30 to 110, like 75.');
+  return { test, pct };
+}
+export function updateWorkoutExercise(ctx, id, body) {
+  const x = ctx.db.get('SELECT * FROM workout_exercises WHERE id = ?', id);
+  if (!x) throw notFound('Workout exercise');
+  const load = body.load_test === undefined ? { test: x.load_test, pct: x.load_pct } : loadInput(body);
+  ctx.db.run('UPDATE workout_exercises SET prescription = ?, load_test = ?, load_pct = ? WHERE id = ?',
+    body.prescription !== undefined ? v.str(body.prescription, 'prescription', { max: 80 }) : x.prescription, load.test, load.pct, id);
+  return ctx.db.get('SELECT id, prescription, load_test, load_pct FROM workout_exercises WHERE id = ?', id);
+}
+export function latestMax(ctx, clientId, testKey, { visibleOnly = false } = {}) {
+  return ctx.db.get(`SELECT r.value, r.recorded_at FROM perf_results r JOIN perf_tests t ON t.id = r.test_id
+    WHERE r.client_id = ? AND t.key = ? AND r.metric = 'load' AND r.voided = 0 ${visibleOnly ? parentFilter(ctx) : ''} ORDER BY r.recorded_at DESC, r.rowid DESC LIMIT 1`, clientId, testKey) ?? null;
+}
+// drop: percentage points to take off today after a rough daily check-in (readiness).
+export function loadFor(ctx, clientId, x, { drop = 0, ...opts } = {}) {
+  if (!x.load_test) return null;
+  const max = latestMax(ctx, clientId, x.load_test, opts);
+  const lift = LOAD_TESTS[x.load_test];
+  const pct = drop ? Math.max(30, x.load_pct - drop) : x.load_pct;
+  const lighter = pct < x.load_pct ? { planned_pct: x.load_pct } : {};
+  if (!max) return { pct, lift, ...lighter, missing: true, text: `${pct}% of your ${lift} max${lighter.planned_pct ? ' (lighter today)' : ''}. Test your max to get a weight.` };
+  const lb = Math.max(5, Math.round((max.value * pct) / 100 / 5) * 5);
+  return { pct, lift, lb, max_lb: max.value, tested_at: max.recorded_at, ...lighter,
+    text: lighter.planned_pct ? `${lb} lb (lighter today: ${pct}% instead of ${x.load_pct}% of your ${max.value} lb ${lift} max)` : `${lb} lb (${pct}% of your ${max.value} lb ${lift} max)` };
+}
+
 export function removeWorkoutExercise(ctx, id) {
   if (!ctx.db.get('SELECT id FROM workout_exercises WHERE id = ?', id)) throw notFound('Workout exercise');
   ctx.db.run('DELETE FROM workout_exercises WHERE id = ?', id);
@@ -143,17 +182,21 @@ export function clientHome(ctx, client) {
   const sub = ctx.db.get(`SELECT status FROM subscriptions WHERE client_id = ? ORDER BY (status = 'canceled'), created_at DESC LIMIT 1`, client.id);
   const status = sub?.status ?? 'none';
   const base = { client: { name: client.name, first_name: client.name.split(' ')[0] }, membership: status };
-  if (!ACCESS[status]) return { ...base, locked: true, message: status === 'paused' ? 'Your membership is paused. Message your coach to pick back up.' : 'You don\'t have an active membership. Message your coach to get started.' };
+  // A program bought online opens the app on its own, membership or not.
+  const bought = !ACCESS[status] && ctx.db.get(`SELECT a.id FROM assignments a JOIN purchases b ON b.client_id = a.client_id AND b.item_kind = 'program' AND b.item_id = a.program_id AND b.status = 'active' WHERE a.client_id = ? AND a.active = 1`, client.id);
+  if (!ACCESS[status] && !bought) return { ...base, locked: true, message: status === 'paused' ? 'Your membership is paused. Message your coach to pick back up.' : 'You don\'t have an active membership. Message your coach to get started.' };
   const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', client.id);
   if (!a) return { ...base, locked: false, program: null, message: 'Your coach is building your program. Check back soon.' };
   const program = getProgram(ctx, a.program_id);
   const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', a.id).map((r) => r.workout_id));
   const next = program.workouts.find((w) => !done.has(w.id)) ?? null;
+  const readiness = next ? readinessToday(ctx, client.id) : null;
   return {
     ...base, locked: false,
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: done.size, total: program.workouts.length },
-    workout: next,
+    readiness,
+    workout: next && { ...next, exercises: next.exercises.map((x) => ({ ...x, load: loadFor(ctx, client.id, x, { visibleOnly: true, drop: readiness?.drop ?? 0 }) })) },
     message: next ? null : 'Program complete. Your coach will set your next block.'
   };
 }

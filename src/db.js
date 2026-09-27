@@ -39,19 +39,45 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 30;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
   12: ['daily_checkins', 'goals', 'goal_checks', 'coach_messages', 'message_reads', 'test_targets', 'courses', 'lessons', 'lesson_progress', 'lesson_assignments'],   // accountability, targets, education
-  13: ['job_runs', 'job_state']                  // background job history and leases
+  13: ['texts'],                                                          // text messages
+  14: ['leads'],                                                          // leads and follow-up
+  15: ['pay_links'],                                                      // pay links
+  16: ['kiosks'],                                                         // self check-in tablets
+  17: ['product_variants', 'stock_moves'],                                // retail inventory
+  18: ['review_requests'],                                                // Google review requests
+  19: ['campaigns', 'campaign_recipients', 'email_optouts'],              // announcement emails
+  22: ['skill_badges', 'badge_awards'],                                   // skill badges
+  24: ['quiz_attempts', 'course_certificates'],                           // lesson quizzes and course certificates
+  25: ['guardian_lesson_progress'],                                       // parent education
+  26: ['purchases'],                                                      // programs and courses sold online
+  27: ['spot_offers'],                                                    // open-spot offers for light classes
+  28: ['progress_notes'],                                                 // progress notes for parents
+  29: ['money_checks'],                                                   // daily money checks
+  30: ['job_runs', 'job_state']                                           // background job history and leases
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))"],   // athlete_id: version 6, sex: version 10
   team_roster: ['athlete_id TEXT'],
   perf_sessions: ['shared_at TEXT', 'parent_note TEXT'],                 // version 10
   subscriptions: ['trial_reminded_at TEXT'],                              // version 11
-  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL']       // version 4
+  guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT'],               // version 13
+  bookings: ['reminded_at TEXT'],                                         // version 13
+  locations: ['checkin_code TEXT'],                                       // version 16
+  products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
+  sale_items: ['variant_id TEXT'],                                        // version 17
+  workout_exercises: ['load_test TEXT', 'load_pct INTEGER'],             // version 21: weights from tested maxes
+  coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies
+  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL'],      // version 4
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL'],           // version 23: weight-room screen
+  workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL'],        // version 23 (then rebuilt so assignment_id can be empty)
+  lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
+  courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
+  programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER']                   // version 26: sold online
 };
 
 function migrate(raw, schema) {
@@ -66,6 +92,8 @@ function migrate(raw, schema) {
   }
   if (version < 3) rebuild(raw, schema, ['clients', 'products', 'session_credits'], ['families', 'guardians']);
   if (version < 9) rebuild(raw, schema, ['users']);                                   // staff roles and sign-in protection
+  if (version < 15) rebuild(raw, schema, ['sales']);                                  // 'online' payment method for pay links
+  if (version < 23) rebuild(raw, schema, ['workout_logs']);                           // screen logs without a program assignment
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
 }
 // SQLite can't change constraints in place: create the new table, copy shared columns, swap.

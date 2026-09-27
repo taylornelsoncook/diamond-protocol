@@ -52,7 +52,8 @@ export function athleteReport(ctx, clientId, { parentView = false } = {}) {
   const highlights = withPct.filter((t) => t.improvement_pct > 0).sort((a, b) => b.improvement_pct - a.improvement_pct).slice(0, 3);
   const sessions = ctx.db.all(`SELECT DISTINCT s.id, s.name, s.date, s.parent_note, s.shared_at FROM perf_sessions s JOIN perf_results r ON r.session_id = s.id
     WHERE r.client_id = ? AND r.voided = 0 ${parentView ? 'AND s.shared_at IS NOT NULL' : ''} ORDER BY s.date DESC`, c.id);
-  const last = sessions[0];
+  // The coach's approved note for this athlete on the latest testing day.
+  const last = sessions[0] ? { ...sessions[0], athlete_note: ctx.db.get('SELECT body FROM progress_notes WHERE client_id = ? AND perf_session_id = ? AND approved_at IS NOT NULL', c.id, sessions[0].id)?.body ?? null } : undefined;
   const short = (n) => n.replace(/\s*\(.*\)$/, '');
   const prTests = last ? withPct.filter((t) => t.best_date === last.date && t.tests_count > 1) : [];
   const newPrs = [...new Set(prTests.map((t) => short(t.test_name)))].map((name) => {
@@ -79,8 +80,9 @@ export function shareSession(ctx, id, body = {}, baseUrl) {
   if (body.notify !== false) {
     const kids = ctx.db.all(`SELECT DISTINCT c.id, c.name, c.family_id FROM perf_results r JOIN clients c ON c.id = r.client_id WHERE r.session_id = ? AND r.voided = 0 AND c.family_id IS NOT NULL`, id);
     for (const k of kids) {
+      const own = ctx.db.get('SELECT body FROM progress_notes WHERE client_id = ? AND perf_session_id = ? AND approved_at IS NOT NULL', k.id, id)?.body;
       notifyFamily(ctx, k.family_id, `${k.name.split(' ')[0]}'s results from ${s.name} are ready`,
-        `${k.name.split(' ')[0]}'s results from ${s.name} are in the parent portal, with progress since earlier tests.${note ? `\n\nFrom your coach: ${note}` : ''}\n\nSee them: ${baseUrl ?? ctx.publicUrl ?? ''}/parent`);
+        `${k.name.split(' ')[0]}'s results from ${s.name} are in the parent portal, with progress since earlier tests.${own ? `\n\n${own}` : ''}${note ? `\n\nFrom your coach: ${note}` : ''}\n\nSee them: ${baseUrl ?? ctx.publicUrl ?? ''}/parent`);
       notified++;
     }
   }

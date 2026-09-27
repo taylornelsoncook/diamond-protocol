@@ -1,4 +1,4 @@
-import { h, fill, toast, money, busy, btn, field, input, select, panel } from './ui.js';
+import { h, fill, toast, money, busy, btn, field, input, select, panel, videoEmbed } from './ui.js';
 import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 
@@ -24,7 +24,20 @@ const KIND = { group: 'Group class', clinic: 'Clinic', camp: 'Camp', private: 'P
 async function boot() {
   try { state.me = await get('me'); state.athleteId ??= state.me.athletes[0]?.id; } catch { state.me = null; }
   // Just signed up: go straight to the waiver and card.
-  if (state.me && new URLSearchParams(location.search).has('welcome')) { state.tab = 'family'; history.replaceState(null, '', '/parent'); setTimeout(() => toast('Welcome! Sign the waiver and add a card, then you can book.'), 300); }
+  // Signed in from the check-in QR code on the door: go back to it.
+  const back = new URLSearchParams(location.search).get('checkin');
+  if (state.me && back && /^[\w-]+$/.test(back)) { location.replace(`/here/${back}`); return; }
+  // From the public Book now page: open the Book tab on classes or evaluations.
+  const book = new URLSearchParams(location.search).get('book');
+  if (state.me && ['classes', 'private', 'evaluation'].includes(book)) { state.tab = 'book'; state.bookMode = book; history.replaceState(null, '', '/parent'); }
+  // From the store page (/shop): open Programs on what they came to buy. New families add a card first.
+  const buy = new URLSearchParams(location.search).get('buy');
+  const buying = state.me && /^(program|course):[\w-]+$/.test(buy ?? '');
+  if (buying) state.buy = buy;
+  if (state.me && new URLSearchParams(location.search).has('welcome')) {
+    state.tab = 'family'; history.replaceState(null, '', '/parent');
+    setTimeout(() => toast(buying ? 'Welcome! Add a card here, then buy it on the Programs tab.' : 'Welcome! Sign the waiver and add a card, then you can book.'), 300);
+  } else if (buying) { state.tab = 'programs'; history.replaceState(null, '', '/parent'); }
   render();
 }
 async function refresh() { state.me = await get('me'); render(); }
@@ -112,11 +125,14 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
+  const cur = subtabs.querySelector('[aria-current]');
+  if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
 }
 async function viewHome(main) {
   subtabs = h('nav', { class: 'p-subtabs', 'aria-label': 'Home sections' });
+  if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
   const a = athlete(), eng = engageFor(a);
   const where = h('div', { class: 'eg-view' });
@@ -126,6 +142,43 @@ async function viewHome(main) {
   if (!had) { fill(where, h('p', { class: 'muted' }, 'Loading…')); await eng.load(); }
   eng.render(where, state.homeTab);
   if (had) eng.load().then(() => eng.rerender()).catch(() => {});      // show what we have, then refresh
+}
+// ---------- For parents: short courses the coaches wrote for parents, by athlete age ----------
+let parentReader = null;
+const openCourse = new Set();
+async function viewParentEd(main) {
+  const where = h('div', { class: 'eg-view' });
+  fill(main, top('For parents'), subtabs, where);
+  drawSubtabs();
+  if (parentReader) return renderParentReader(where);
+  const { data } = await get('parent-courses');
+  if (data.length === 1) openCourse.add(data[0].id);
+  fill(where, data.length ? [h('p', { class: 'small muted', style: 'margin:0' }, 'Short reads from our coaches for parents, picked for your athletes\' ages.'), data.map((c) => {
+    const open = openCourse.has(c.id);
+    const list = h('div', { class: 'eg-list', hidden: !open }, c.description ? h('p', { class: 'small muted' }, c.description) : null, c.lessons.map((l) => h('button', { type: 'button', class: 'eg-lesson', onClick: () => openParentLesson(l.id) },
+      h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
+      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.done ? 'Read' : null].filter(Boolean).join(' · ') || 'Lesson')))));
+    return h('div', { class: 'dp-panel eg-course' },
+      h('button', { type: 'button', class: 'eg-course-h', 'aria-expanded': String(open), onClick: (ev) => { const now = !openCourse.has(c.id); now ? openCourse.add(c.id) : openCourse.delete(c.id); ev.currentTarget.setAttribute('aria-expanded', String(now)); list.hidden = !now; } },
+        h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.title), h('span', { class: 'small muted' }, `${c.done} of ${c.total} read${c.complete ? ' · Finished' : ''}`)), h('span', { class: 'eg-chev', 'aria-hidden': 'true' }, '›')),
+      list);
+  })] : h('div', { class: 'empty' }, 'Nothing here yet. When our coaches post reading for parents, it shows up here.'));
+}
+async function openParentLesson(id) {
+  try { parentReader = await get(`parent-lessons/${id}`); render(); }
+  catch (e) { toast(e.message, 'warn'); }
+}
+function renderParentReader(where) {
+  const l = parentReader;
+  fill(where, h('article', { class: 'eg-reader' },
+    h('div', null, btn('‹ Back to For parents', () => { parentReader = null; render(); }, 'ghost')),
+    h('p', { class: 'small muted' }, `${l.course.title} · Lesson ${l.position.n} of ${l.position.of}`),
+    h('h2', { class: 'eg-reader-t' }, l.title),
+    l.video_url ? videoEmbed(l.video_url, l.title) : null,
+    h('div', { class: 'eg-body' }, String(l.body ?? l.summary ?? '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => h('p', null, p))),
+    h('div', { class: 'row wrap' },
+      btn(l.done ? '✓ Read' : 'Mark as read', (e) => busy(e.currentTarget, async () => { parentReader = await post(`parent-lessons/${l.id}/complete`, { done: !l.done }); render(); }), l.done ? 'outline' : 'primary', { 'aria-pressed': String(!!l.done) }),
+      l.next ? btn('Next ›', () => openParentLesson(l.next.id), l.done ? 'primary' : 'secondary') : null)));
 }
 async function viewOverview(main) {
   const cards = state.me.athletes.map((a) => {
@@ -165,7 +218,8 @@ async function cancelBooking(button, u) {
 async function viewBook(main) {
   const a = athlete();
   if (!a) return fill(main, top('Book'), h('div', { class: 'empty' }, 'Add an athlete on the Family tab first.'));
-  const mode = { value: 'classes' };
+  const mode = { value: state.bookMode ?? 'classes' };
+  state.bookMode = null;
   const body = h('div', { class: 'stack' });
   const modes = h('div', { class: 'p-chips' }, [['classes', 'Classes'], ['private', 'Private'], ['evaluation', 'Evaluation']].map(([k, label]) =>
     h('button', { type: 'button', class: 'p-chip', 'aria-pressed': String(mode.value === k), onClick: (e) => { mode.value = k; [...modes.children].forEach((c) => c.setAttribute('aria-pressed', String(c === e.currentTarget))); load(); } }, label)));
@@ -240,7 +294,8 @@ async function viewProgress(main) {
   const g = r.growth;
   fill(main, top('Progress'), athleteChips(() => render()),
     !r.tests.length ? h('div', { class: 'empty' }, `No results shared for ${a.first_name} yet. Your coach will let you know when testing results are ready.`) : [
-      r.latest_session?.parent_note ? panel(`From your coach`, { subtitle: `${r.latest_session.name} · ${fmtDay(r.latest_session.date)}` }, h('p', { style: 'white-space:pre-wrap;margin:0' }, r.latest_session.parent_note)) : null,
+      r.latest_session?.athlete_note || r.latest_session?.parent_note ? panel(`From your coach`, { subtitle: `${r.latest_session.name} · ${fmtDay(r.latest_session.date)}` },
+        [r.latest_session.athlete_note, r.latest_session.parent_note].filter(Boolean).map((t) => h('p', { style: 'white-space:pre-wrap;margin:0' }, t))) : null,
       r.highlights.length ? panel('Biggest improvements', {}, h('div', { class: 'p-stats' }, r.highlights.map((t) => h('div', { class: 'p-stat' }, h('b', { style: 'color:var(--green-bright)' }, `+${t.improvement_pct}%`), h('span', null, t.test_name.replace(/\s*\(.*\)$/, '')))))) : null,
       r.new_prs.length ? h('p', { class: 'small' }, h('strong', null, 'New PRs: '), r.new_prs.join(', ')) : null,
       panel('Every test', { subtitle: 'Best result and change since the first test.' }, r.tests.map((t) => h('div', { class: 'p-row' },
@@ -262,7 +317,7 @@ async function viewProgress(main) {
 // ---------- Programs: standing spots, camps, packs, memberships ----------
 async function viewPrograms(main) {
   const a = athlete();
-  const [{ data: progs }, store] = await Promise.all([get('programs'), get('store')]);
+  const [{ data: progs }, store, shop] = await Promise.all([get('programs'), get('store'), get('shop')]);
   // Only show what fits this athlete's age (when we know it).
   const fits = (p) => a?.age == null || ((p.age_min == null || a.age >= p.age_min) && (p.age_max == null || a.age <= p.age_max));
   const groups = progs.filter((p) => p.kind === 'group' && fits(p)), camps = progs.filter((p) => p.kind !== 'group' && fits(p));
@@ -296,7 +351,25 @@ async function viewPrograms(main) {
     ...store.products.map((p) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, p.kind === 'pack' ? `${p.sessions} ${p.credit_type} sessions` : `1 ${p.credit_type} session`)),
       buy('Buy', p.price_cents, async () => { await post('purchase', { product_id: p.id, athlete_id: a.id }); toast('Added to your account.'); await refresh(); }))));
 
-  fill(main, top('Programs'), banners(), athleteChips(() => render()), a ? [campPanel, groupPanel, storePanel] : h('div', { class: 'empty' }, 'Add an athlete on the Family tab first.'));
+  // Programs and courses sold online: pay once, it shows in the athlete's app.
+  const owns = (x) => shop.owned.some((o) => o.client_id === a?.id && o.item_kind === x.kind && o.item_id === x.id);
+  const onlineRow = (x) => {
+    const picked = state.buy === `${x.kind}:${x.id}`;
+    return h('div', { class: 'p-row', id: picked ? 'buy-pick' : null, style: picked ? 'outline:2px solid var(--green);outline-offset:4px;border-radius:var(--radius-md)' : null },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title),
+        h('span', { class: 'small muted' }, x.kind === 'program' ? `Training program · ${x.weeks} ${x.weeks === 1 ? 'week' : 'weeks'}${x.level ? ` · ${x.level}` : ''}` : `Course · ${x.lessons} ${x.lessons === 1 ? 'lesson' : 'lessons'}`),
+        x.description ? h('span', { class: 'small muted' }, x.description) : null),
+      owns(x) ? h('span', { class: 'dp-badge dp-badge--good' }, 'In the app') : buy('Buy', x.price_cents, async () => {
+        if (x.kind === 'program' && a.program && !confirm(`${x.title} replaces ${a.first_name}'s current program, ${a.program.name}. Buy it anyway?`)) return;
+        await post('shop/buy', { kind: x.kind, item_id: x.id, athlete_id: a.id });
+        state.buy = null;
+        toast(`${x.title} is in ${a.first_name}'s app now. We emailed you the link.`); await refresh();
+      }));
+  };
+  const onlinePanel = shop.items.length ? panel('Online programs & courses', { subtitle: `Pay once and ${a?.first_name ?? 'your athlete'} gets it in their app. No membership needed.` }, shop.items.map(onlineRow)) : null;
+
+  fill(main, top('Programs'), banners(), athleteChips(() => render()), a ? [state.buy ? onlinePanel : null, campPanel, groupPanel, storePanel, state.buy ? null : onlinePanel] : h('div', { class: 'empty' }, 'Add an athlete on the Family tab first.'));
+  document.getElementById('buy-pick')?.scrollIntoView({ block: 'center' });
 }
 // [1,2,3,4,5] -> "Mon–Fri", [1,3] -> "Mon & Wed"
 const dayList = (days) => {
@@ -348,6 +421,17 @@ async function viewFamily(main) {
       const a = await post('athletes', { name: newName.value, birth_date: newBirth.value || undefined, sport: newSport.value || undefined }); state.athleteId = a.id; toast(`${a.first_name} added.`); await refresh();
     }); } }, field('Full name', newName), h('div', { class: 'form-grid' }, field('Birthday', newBirth), field('Sport', newSport)), btn('Add athlete', null, 'secondary', { type: 'submit' })));
 
+  const me = state.me.guardian;
+  const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
+  const phone = input({ type: 'tel', autocomplete: 'tel', inputmode: 'tel', value: phoneText(me.phone) ?? '', placeholder: '(512) 555-0100' });
+  const textsPanel = panel('Text messages', { subtitle: me.texts === 'on' ? `On for ${phoneText(me.phone)}. Reminders the day before a session, waitlist spots, cancellations and payment problems.` : 'Get a reminder the day before each session, and a text when a spot opens, a session is canceled or a payment doesn\'t go through.' },
+    me.texts === 'stopped' ? h('p', { class: 'small warn-text' }, 'You replied STOP, so texts are off. Turn them on again below, or reply START to our number.') : null,
+    me.texts === 'on' ? null : field('Mobile number', phone),
+    h('div', { class: 'row wrap' }, me.texts === 'on'
+      ? btn('Turn off texts', (e) => busy(e.currentTarget, async () => { await api('PATCH', 'texts', { texts: false }); toast('Texts turned off.'); await refresh(); }), 'secondary')
+      : btn('Turn on texts', (e) => busy(e.currentTarget, async () => { await api('PATCH', 'texts', { texts: true, phone: phone.value }); toast('Texts are on. We just sent a confirmation.'); await refresh(); }), 'primary')),
+    h('p', { class: 'small muted' }, 'Message and data rates may apply. Message frequency varies. Reply STOP to stop, HELP for help.'));
+
   const needs = state.me.agreements?.needs ?? [];
   const agreeBox = h('input', { type: 'checkbox' });
   const LABEL = { terms: 'terms of service', privacy: 'privacy policy' };
@@ -372,7 +456,7 @@ async function viewFamily(main) {
         }, 'ghost')),
     h('p', { class: 'small muted' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
 
-  fill(main, top('Family'), agreementsPanel, cardPanel, waiverPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, addAthlete,
+  fill(main, top('Family'), agreementsPanel, cardPanel, waiverPanel, textsPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, addAthlete,
     panel('Parents', {}, f.guardians.map((g) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', null, g.name), h('span', { class: 'small muted' }, g.email)))), h('p', { class: 'small muted' }, 'To add another parent, ask your coach.')),
     dataPanel,
     btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.me = null; render(); }), 'ghost'));

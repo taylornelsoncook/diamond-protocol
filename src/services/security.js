@@ -10,23 +10,26 @@ export const ROLES = {
   front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
 };
 const OWNER_ONLY = [
-  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|api-keys|webhooks|webhook-deliveries|outbox|staff|audit|backups|jobs)(\/|$)/,
+  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/,
   /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
   ['GET', /^\/v1\/(dashboard|events|clients|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
-  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses)(\/|$)/],
+  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/], ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
   ['POST', /^\/v1\/clients\/:id\/subscription$/],   // start a membership at the counter (not change, pause or cancel)
   ['POST', /^\/v1\/families(\/:id\/(guardians|athletes))?$/],
   ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate))?$/], ['POST', /^\/v1\/terminal\//],
   ['POST', /^\/v1\/sessions\/:id\/(bookings|team-attendance)$/], ['POST', /^\/v1\/bookings\/:id\/(cancel|attendance|pay)$/],
   ['POST', /^\/v1\/class-series\/:id\/(enroll|register)$/], ['POST', /^\/v1\/slots\/book$/],
-  ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/]
+  ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/],
+  ['GET', /^\/v1\/kiosks$/], ['POST', /^\/v1\/kiosks$/],   // set up the check-in tablet at the desk
+  ['GET', /^\/v1\/inventory$/], ['POST', /^\/v1\/products\/:id\/stock$/],   // receive deliveries and count the shelf
+  ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/]   // inquiries at the counter and on the phone
 ];
-const COACH_DENY = [['DELETE', /^\/v1\/families\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
+const COACH_DENY = [['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;

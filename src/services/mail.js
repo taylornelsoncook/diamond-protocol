@@ -6,8 +6,9 @@ import { newId } from '../util.js';
 // EMAIL_ONLY_TO (comma list of addresses or @domains) limits real delivery, e.g. on a staging copy with
 // demo families; anything else stays in the outbox marked "held".
 
+const clean = (v) => cleanSetting(v);
 // Settings pasted on a phone can pick up curly quotes, spaces or invisible characters.
-function clean(v) {
+export function cleanSetting(v) {
   return String(v || '').replace(/[​-‍⁠﻿ ]/g, '').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
 }
 function resendKey(ctx) {

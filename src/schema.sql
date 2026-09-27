@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS guardians (
   phone TEXT,
   relationship TEXT,
   is_primary INTEGER NOT NULL DEFAULT 0,
+  sms_opt_in_at TEXT,                    -- the parent turned texts on in the portal (phone is then stored as +15125550100)
+  sms_opt_out_at TEXT,                   -- the parent replied STOP; no texts until they reply START or turn texts on again
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS clients (
@@ -119,7 +121,9 @@ CREATE TABLE IF NOT EXISTS programs (
   description TEXT,
   level TEXT,
   weeks INTEGER NOT NULL DEFAULT 4 CHECK (weeks BETWEEN 1 AND 52),
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  for_sale INTEGER NOT NULL DEFAULT 0,   -- sold online in the parent portal and at /shop (version 26)
+  price_cents INTEGER
 );
 CREATE TABLE IF NOT EXISTS workouts (
   id TEXT PRIMARY KEY,
@@ -134,7 +138,9 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   exercise_id TEXT NOT NULL REFERENCES exercises(id),
   position INTEGER NOT NULL,
-  prescription TEXT NOT NULL
+  prescription TEXT NOT NULL,
+  load_test TEXT,                                -- version 21: weight as a percent of this tested max (squat_1rm...)
+  load_pct INTEGER
 );
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,
@@ -148,10 +154,11 @@ CREATE INDEX IF NOT EXISTS assignments_client ON assignments(client_id, active);
 CREATE TABLE IF NOT EXISTS workout_logs (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+  assignment_id TEXT REFERENCES assignments(id) ON DELETE CASCADE,   -- empty when logged on the weight-room screen by an athlete not on that program
   workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   notes TEXT,
-  completed_at TEXT NOT NULL
+  completed_at TEXT NOT NULL,
+  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL    -- logged on the weight-room screen during this session (version 23)
 );
 CREATE INDEX IF NOT EXISTS workout_logs_client ON workout_logs(client_id, completed_at);
 CREATE TABLE IF NOT EXISTS exercise_logs (
@@ -204,6 +211,7 @@ CREATE TABLE IF NOT EXISTS locations (
   address_line1 TEXT, city TEXT, state TEXT, postal_code TEXT, country TEXT NOT NULL DEFAULT 'US',
   stripe_location_id TEXT,
   active INTEGER NOT NULL DEFAULT 1,
+  checkin_code TEXT,                     -- the code in the door poster's QR link (/here/<code>); version 16
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS readers (
@@ -222,13 +230,85 @@ CREATE TABLE IF NOT EXISTS products (
   sessions INTEGER NOT NULL DEFAULT 0 CHECK (sessions >= 0),
   credit_type TEXT NOT NULL DEFAULT 'private' CHECK (credit_type IN ('private','group')),
   active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  track_stock INTEGER NOT NULL DEFAULT 0,        -- version 17: count what's on the shelf (gear)
+  low_stock_at INTEGER                           -- warn on Today at or below this many (per size)
+);
+-- Sizes or colors of a product (version 17). Stock is kept per size when a product has them.
+CREATE TABLE IF NOT EXISTS product_variants (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sku TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS product_variants_product ON product_variants(product_id);
+-- Stock is a ledger (version 17): what's on hand is the sum of the moves. A sale takes stock out, a full refund
+-- puts it back, a delivery adds it, a count sets it to what's really on the shelf.
+CREATE TABLE IF NOT EXISTS stock_moves (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  variant_id TEXT REFERENCES product_variants(id) ON DELETE SET NULL,
+  delta INTEGER NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('sale','refund','received','count','adjust')),
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stock_moves_product ON stock_moves(product_id, variant_id);
+-- Google review requests sent to families (version 18). One per family every 6 months at most.
+CREATE TABLE IF NOT EXISTS review_requests (
+  id TEXT PRIMARY KEY,
+  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('milestone','pr')),
+  detail TEXT,
+  token TEXT NOT NULL UNIQUE,
+  sent_to TEXT,
+  sent_at TEXT NOT NULL,
+  clicked_at TEXT,
+  opted_out_at TEXT
+);
+CREATE INDEX IF NOT EXISTS review_requests_family ON review_requests(family_id, sent_at);
+-- Announcement emails to a group (version 19). Opens aren't tracked; clicks on links are.
+CREATE TABLE IF NOT EXISTS campaigns (
+  id TEXT PRIMARY KEY,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  audience TEXT NOT NULL,                        -- {group, age_min, age_max, sport}
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sending','sent')),
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
+CREATE TABLE IF NOT EXISTS campaign_recipients (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  name TEXT,
+  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+  lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL,
+  token TEXT NOT NULL UNIQUE,
+  links TEXT,                                    -- the original links, in order, for the counted redirects
+  sent_at TEXT NOT NULL,
+  clicked_at TEXT,
+  unsubscribed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS campaign_recipients_campaign ON campaign_recipients(campaign_id);
+-- Addresses that asked for no more announcement or review emails (receipts and booking emails still go).
+CREATE TABLE IF NOT EXISTS email_optouts (
+  email TEXT PRIMARY KEY COLLATE NOCASE,
+  source TEXT,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
   location_id TEXT NOT NULL REFERENCES locations(id),
-  method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash')),
+  method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash','online')),   -- online: paid through a pay link (version 15)
   status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed','canceled','refunded','partially_refunded')),
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   refunded_cents INTEGER NOT NULL DEFAULT 0,
@@ -252,7 +332,8 @@ CREATE TABLE IF NOT EXISTS sale_items (
   name TEXT NOT NULL,
   unit_price_cents INTEGER NOT NULL,
   quantity INTEGER NOT NULL CHECK (quantity > 0),
-  sessions INTEGER NOT NULL DEFAULT 0
+  sessions INTEGER NOT NULL DEFAULT 0,
+  variant_id TEXT                                -- version 17: the size sold
 );
 -- Session credits are a ledger per type: +N when a pack is bought, -1 per booking or walk-in check-in,
 -- +1 back when a booking is canceled in time, negative on refund.
@@ -310,6 +391,7 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   drop_in_cents INTEGER,
   status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled','canceled')),
   created_at TEXT NOT NULL,
+  workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,   -- shown on the weight-room screen (version 23)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);
@@ -332,6 +414,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   sale_id TEXT REFERENCES sales(id),
   enrollment_id TEXT REFERENCES enrollments(id) ON DELETE SET NULL,
   booked_by TEXT,
+  reminded_at TEXT,                      -- reminder text handled (sent, or skipped because nobody in the family gets texts)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (session_id, client_id)
@@ -370,6 +453,86 @@ CREATE TABLE IF NOT EXISTS outbox (
   body TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('logged','sent','failed')),
   error TEXT,
+  created_at TEXT NOT NULL
+);
+-- Text messages sent to parents (out) and their replies (in). Without Twilio settings they're only logged here.
+CREATE TABLE IF NOT EXISTS texts (
+  id TEXT PRIMARY KEY,
+  direction TEXT NOT NULL CHECK (direction IN ('out','in')),
+  phone TEXT NOT NULL,
+  family_id TEXT REFERENCES families(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('logged','sent','failed','held','received')),
+  error TEXT,
+  provider_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS texts_family ON texts(family_id);
+
+-- Leads: families who asked about training (public form, unfinished sign-up, or added by staff) but haven't joined yet.
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  parent_name TEXT NOT NULL,
+  email TEXT COLLATE NOCASE,
+  phone TEXT,
+  athlete_name TEXT,
+  athlete_age INTEGER,
+  sport TEXT,
+  message TEXT,
+  source TEXT NOT NULL CHECK (source IN ('inquiry','signup_unfinished','manual','phone','walk_in','event','referral')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','signed_up','evaluation','member','lost')),
+  texts_ok INTEGER NOT NULL DEFAULT 0,       -- they ticked "text me about this" on the form
+  follow_up_step INTEGER NOT NULL DEFAULT 0, -- 0: thank-you, 1: 2-day nudge, 2: 7-day last note, 3: done
+  next_follow_up_at TEXT,                    -- NULL when follow-up has stopped
+  last_contacted_at TEXT,
+  notes TEXT,
+  lost_reason TEXT,
+  family_id TEXT REFERENCES families(id) ON DELETE SET NULL,
+  converted_at TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS leads_status ON leads(status, next_follow_up_at);
+CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
+
+-- Pay links: a page a parent opens from an email or text to pay one thing without signing in: a membership payment
+-- that didn't go through, an unpaid session, a pack, or a set amount. The link is the token; it expires after 30 days.
+CREATE TABLE IF NOT EXISTS pay_links (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('invoice','booking','product','custom')),
+  invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
+  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','paid','settled','canceled')),   -- settled: paid some other way first
+  checkout_ref TEXT,
+  checkout_started_at TEXT,
+  payment_ref TEXT,
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  sent_to TEXT,
+  sent_at TEXT,
+  paid_at TEXT,
+  expires_at TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pay_links_invoice ON pay_links(invoice_id);
+CREATE INDEX IF NOT EXISTS pay_links_client ON pay_links(client_id, status);
+
+-- Check-in tablets: a browser at the front desk opened with a secret link (/kiosk#<key>) where athletes tap their name.
+CREATE TABLE IF NOT EXISTS kiosks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  location_id TEXT NOT NULL REFERENCES locations(id),
+  key_hash TEXT NOT NULL UNIQUE,
+  last_seen_at TEXT,
+  revoked_at TEXT,
+  created_by TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -533,6 +696,7 @@ CREATE TABLE IF NOT EXISTS import_batches (
 
 CREATE UNIQUE INDEX IF NOT EXISTS clients_athlete_id ON clients(athlete_id);
 CREATE UNIQUE INDEX IF NOT EXISTS roster_athlete_id ON team_roster(athlete_id);
+CREATE UNIQUE INDEX IF NOT EXISTS locations_checkin_code ON locations(checkin_code);
 
 -- A checked upload waiting for the coach to confirm. Saved results always come from here, never from the browser.
 CREATE TABLE IF NOT EXISTS upload_previews (
@@ -680,6 +844,24 @@ CREATE TABLE IF NOT EXISTS goal_checks (
   PRIMARY KEY (goal_id, client_id, date)
 );
 -- Notes from coaches to one athlete or a whole team. Read state is kept per athlete.
+-- Skill badges a coach awards by hand (version 22): "Sprint start", "Hinge pattern". Athletes and parents see them.
+CREATE TABLE IF NOT EXISTS skill_badges (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  description TEXT,
+  category TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS badge_awards (
+  id TEXT PRIMARY KEY,
+  badge_id TEXT NOT NULL REFERENCES skill_badges(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  note TEXT,
+  awarded_by TEXT,
+  awarded_at TEXT NOT NULL,
+  UNIQUE (badge_id, client_id)
+);
 CREATE TABLE IF NOT EXISTS coach_messages (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
@@ -688,6 +870,10 @@ CREATE TABLE IF NOT EXISTS coach_messages (
   staff_name TEXT,
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  from_kind TEXT NOT NULL DEFAULT 'coach',       -- version 20: coach, athlete or parent (replies)
+  author_name TEXT,                              -- who wrote a reply
+  guardian_id TEXT,                              -- the parent who wrote it
+  staff_read_at TEXT,                            -- when a coach saw a reply
   CHECK ((client_id IS NULL) <> (contract_id IS NULL))
 );
 CREATE TABLE IF NOT EXISTS message_reads (
@@ -712,7 +898,12 @@ CREATE TABLE IF NOT EXISTS courses (
   title TEXT NOT NULL,
   description TEXT,
   published INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents')),   -- parent courses show in the parent portal (version 25)
+  age_min INTEGER,                                                                           -- for parents of athletes this age (version 25)
+  age_max INTEGER,
+  for_sale INTEGER NOT NULL DEFAULT 0,                                                       -- sold online; locked for athletes who haven't bought it (version 26)
+  price_cents INTEGER
 );
 CREATE TABLE IF NOT EXISTS lessons (
   id TEXT PRIMARY KEY,
@@ -725,13 +916,100 @@ CREATE TABLE IF NOT EXISTS lessons (
   position INTEGER NOT NULL DEFAULT 0,
   published INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  quiz TEXT                                     -- JSON [{q, choices, answer}]; pass it to finish the lesson (version 24)
 );
 CREATE TABLE IF NOT EXISTS lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   completed_at TEXT NOT NULL,
   PRIMARY KEY (lesson_id, client_id)
+);
+-- Programs and courses bought online (version 26). A refund of the sale ends access.
+CREATE TABLE IF NOT EXISTS purchases (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('program','course')),
+  item_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','refunded')),
+  created_at TEXT NOT NULL,
+  refunded_at TEXT
+);
+CREATE INDEX IF NOT EXISTS purchases_client ON purchases(client_id, item_kind, item_id);
+-- Open-spot offers (version 27): a family is told a class it fits has room; the first to tap the link gets the spot.
+CREATE TABLE IF NOT EXISTS spot_offers (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  session_id TEXT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
+  family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  client_ids TEXT NOT NULL,                       -- the family's athletes who fit, comma separated
+  sent_to TEXT,
+  sent_by TEXT,
+  sent_at TEXT NOT NULL,
+  opened_at TEXT,
+  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+  booked_at TEXT,
+  UNIQUE (session_id, family_id)
+);
+-- Progress notes for parents (version 28): one per athlete per testing day, drafted by the app, approved by a coach.
+CREATE TABLE IF NOT EXISTS progress_notes (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  perf_session_id TEXT NOT NULL REFERENCES perf_sessions(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'draft' CHECK (source IN ('draft','ai','edited')),
+  approved_at TEXT,
+  approved_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (client_id, perf_session_id)
+);
+-- Daily money checks (version 29): one row per business day checked. Findings hold ids and amounts, never names.
+CREATE TABLE IF NOT EXISTS money_checks (
+  id TEXT PRIMARY KEY,
+  check_date TEXT NOT NULL UNIQUE,                -- YYYY-MM-DD, business time
+  status TEXT NOT NULL CHECK (status IN ('ok','problems','error')),
+  findings TEXT NOT NULL,                         -- JSON list
+  totals TEXT NOT NULL,                           -- JSON {card_payments, recorded_cents, stripe_cents}
+  stripe_checked INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 1,
+  ran_at TEXT NOT NULL,
+  ran_by TEXT,
+  alerted_at TEXT,
+  reviewed_at TEXT,
+  reviewed_by TEXT
+);
+-- What each parent has read of the parent courses (version 25).
+CREATE TABLE IF NOT EXISTS guardian_lesson_progress (
+  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (lesson_id, guardian_id)
+);
+-- Quiz tries (version 24). The latest passing try finishes the lesson.
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+  id TEXT PRIMARY KEY,
+  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  score INTEGER NOT NULL,
+  total INTEGER NOT NULL,
+  passed INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS quiz_attempts_client ON quiz_attempts(client_id, lesson_id);
+-- A certificate for finishing every lesson in a course (version 24). The token makes a shareable page at /certificate#<token>.
+CREATE TABLE IF NOT EXISTS course_certificates (
+  id TEXT PRIMARY KEY,
+  course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  issued_at TEXT NOT NULL,
+  UNIQUE (course_id, client_id)
 );
 -- A lesson or a course assigned to an athlete or a team roster, with an optional due date.
 CREATE TABLE IF NOT EXISTS lesson_assignments (

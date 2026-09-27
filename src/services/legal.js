@@ -47,7 +47,13 @@ export function exportFamily(ctx, familyId) {
   return {
     exported_at: ctx.now(), business: getSetting(ctx, 'business_name'),
     family: { ...f, card: f.card_last4 ? `${f.card_brand} ending ${f.card_last4}` : null, card_brand: undefined, card_last4: undefined },
-    parents: ctx.db.all('SELECT name, email, phone, relationship, created_at FROM guardians WHERE family_id = ?', familyId),
+    parents: ctx.db.all('SELECT name, email, phone, relationship, sms_opt_in_at AS texts_turned_on_at, sms_opt_out_at AS texts_stopped_at, created_at FROM guardians WHERE family_id = ?', familyId),
+    parent_lessons_read: ctx.db.all('SELECT g.name AS parent, l.title AS lesson, p.completed_at FROM guardian_lesson_progress p JOIN guardians g ON g.id = p.guardian_id JOIN lessons l ON l.id = p.lesson_id WHERE g.family_id = ? ORDER BY p.completed_at', familyId),
+    texts: ctx.db.all('SELECT direction, phone, body, status, created_at FROM texts WHERE family_id = ? ORDER BY created_at', familyId),
+    pay_links: ctx.db.all(`SELECT description, amount_cents, status, sent_to, sent_at, paid_at, created_at FROM pay_links WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?) ORDER BY created_at`, familyId),
+    announcement_emails: ctx.db.all('SELECT c.subject, r.email, r.sent_at, r.clicked_at, r.unsubscribed_at FROM campaign_recipients r JOIN campaigns c ON c.id = r.campaign_id WHERE r.family_id = ? ORDER BY r.sent_at', familyId),
+    review_requests: ctx.db.all('SELECT reason, detail, sent_to, sent_at, clicked_at, opted_out_at FROM review_requests WHERE family_id = ? ORDER BY sent_at', familyId),
+    inquiries: ctx.db.all(`SELECT parent_name, email, phone, athlete_name, athlete_age, sport, message, source, status, created_at FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId),
     agreements: familyConsents(ctx, familyId),
     athletes: kids.map((k) => ({
       ...k,
@@ -59,7 +65,12 @@ export function exportFamily(ctx, familyId) {
       workouts: per(`SELECT w.title AS workout, l.completed_at, l.notes FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
       daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
-      coach_messages: per(`SELECT staff_name AS coach, body, created_at FROM coach_messages WHERE client_id = ? ORDER BY created_at`, k.id)
+      quizzes: per(`SELECT l.title AS lesson, q.score, q.total, q.passed, q.created_at FROM quiz_attempts q JOIN lessons l ON l.id = q.lesson_id WHERE q.client_id = ? ORDER BY q.created_at`, k.id),
+      certificates: per(`SELECT c.title AS course, x.issued_at FROM course_certificates x JOIN courses c ON c.id = x.course_id WHERE x.client_id = ? ORDER BY x.issued_at`, k.id),
+      progress_notes: per(`SELECT s.name AS testing_day, s.date, n.body AS note, n.approved_at FROM progress_notes n JOIN perf_sessions s ON s.id = n.perf_session_id WHERE n.client_id = ? AND n.approved_at IS NOT NULL ORDER BY s.date`, k.id),
+      bought_online: per(`SELECT item_kind AS kind, title, amount_cents, status, created_at, refunded_at FROM purchases WHERE client_id = ? ORDER BY created_at`, k.id),
+      skill_badges: per(`SELECT b.name AS badge, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id WHERE a.client_id = ? ORDER BY a.awarded_at`, k.id),
+      messages: per(`SELECT CASE from_kind WHEN 'coach' THEN staff_name ELSE author_name END AS written_by, from_kind AS sender, body, created_at FROM coach_messages WHERE client_id = ? ORDER BY created_at`, k.id)
     }))
   };
 }
@@ -94,12 +105,21 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`DELETE FROM perf_results WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM athlete_links WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
-      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,
         medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
     }
+    ctx.db.run('DELETE FROM texts WHERE family_id = ?', familyId);
+    // Pay links: unpaid ones go; paid ones stay as payment records, without names or contact details.
+    ctx.db.run(`DELETE FROM pay_links WHERE status != 'paid' AND client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
+    ctx.db.run(`UPDATE pay_links SET description = 'Deleted family', sent_to = NULL WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
+    ctx.db.run('DELETE FROM review_requests WHERE family_id = ?', familyId);
+    ctx.db.run('DELETE FROM spot_offers WHERE family_id = ?', familyId);
+    ctx.db.run('UPDATE campaign_recipients SET email = \'deleted\', name = NULL, family_id = NULL WHERE family_id = ?', familyId);
+    ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
+    ctx.db.run('DELETE FROM guardian_lesson_progress WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);
     const note = `Deleted by ${actor?.name ?? 'an owner'} on ${ctx.now().slice(0, 10)}`;

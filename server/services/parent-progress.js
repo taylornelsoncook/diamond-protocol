@@ -43,9 +43,10 @@ function periodOf(athleteId, q, days) {
   return { key: 'all', from: null, label: 'All results' };
 }
 
+// The next testing day the athlete is on (by name or through their team), including one that's today.
 function nextTesting(a) {
   return get(`SELECT d.id, d.name, d.date FROM testing_days d
-    WHERE d.status='open' AND d.date > ? AND (EXISTS (SELECT 1 FROM testing_day_athletes x WHERE x.day_id=d.id AND x.athlete_id=?) OR (d.team_id IS NOT NULL AND d.team_id=?))
+    WHERE d.status='open' AND d.date >= ? AND (EXISTS (SELECT 1 FROM testing_day_athletes x WHERE x.day_id=d.id AND x.athlete_id=?) OR (d.team_id IS NOT NULL AND d.team_id=?))
     ORDER BY d.date, d.id LIMIT 1`, todayLocal(), a.id, a.team_id ?? -1) || null;
 }
 

@@ -1,7 +1,7 @@
 // Programs: the athlete's membership, camps and clinics, standing weekly spots, session packs and plans.
 // Payments go on the family card; a missing or declined card offers Add a card / Update card and comes back here.
 // Families ask to switch plans, pause or cancel (the owners are emailed); they can't change a membership themselves.
-import { html, raw, mount, api, toast, toastError, modal, money, badge } from '/js/ui.js';
+import { html, raw, mount, api, toast, toastError, modal, money, badge, fmtDate } from '/js/ui.js';
 import { header, athletePills, bindAthletePills, dayShort, dayLong, clock, clockHM, weekdays } from '../common.js';
 import { cardState } from './home.js';
 
@@ -48,8 +48,8 @@ export async function render(ctx) {
         <dt>Group classes</dt><dd>${m.group_per_month == null ? 'Unlimited' : ['active', 'trial'].includes(m.status) ? `${m.member_left} of ${m.group_per_month} left this month` : `${m.group_per_month} a month`}</dd>
         ${m.private_per_month ? html`<dt>Privates</dt><dd>${m.private_per_month} a month, added when it renews</dd>` : ''}
       </dl>
-      ${d.request ? html`<p class="pg-req small" role="status">You asked to ${d.request.kind === 'change' && d.request.plan_name ? `switch to ${d.request.plan_name}` : REQ[d.request.kind]} on ${dayShort(d.request.created_at.slice(0, 10))}. The front desk will reply by email.</p>` : ''}
-      <div><button type="button" class="btn" id="pg-ask">Ask to change, pause or cancel</button></div>
+      ${d.request ? html`<p class="pg-req small" role="status">You asked to ${d.request.kind === 'change' && d.request.plan_name ? `switch to ${d.request.plan_name}` : REQ[d.request.kind]} on ${fmtDate(d.request.created_at, { year: false })}. The front desk will reply by email.</p>` : ''}
+      <div><button type="button" class="btn" id="pg-ask">${m.status === 'paused' ? 'Ask to switch or cancel' : 'Ask to change, pause or cancel'}</button></div>
     </section>` : '';
 
   mount(ctx.el, html`${header('Programs', ctx.familyName)}
@@ -206,15 +206,16 @@ export async function render(ctx) {
   // Ask to switch plans, pause or cancel.
   const ask = async (preset = {}) => {
     const others = d.plans.filter((p) => p.id !== m.plan_id);
-    const first = preset.kind || (others.length ? 'change' : 'pause');
+    const paused = m.status === 'paused'; // already paused: switch or cancel
+    const first = preset.kind || (others.length ? 'change' : paused ? 'cancel' : 'pause');
     const r = await modal({
       title: 'Ask to change the membership',
       body: html`<form class="stack" id="rq" novalidate>
         <p style="margin:0">The front desk makes the change and replies by email. Nothing changes until they do.</p>
         <fieldset class="pg-kinds"><legend class="label">What would you like?</legend>
           ${others.length ? html`<label class="check"><input type="radio" name="kind" value="change" ${first === 'change' ? raw('checked') : ''}> Switch to another plan</label>` : ''}
-          <label class="check"><input type="radio" name="kind" value="pause" ${first === 'pause' ? raw('checked') : ''}> Pause for a while</label>
-          <label class="check"><input type="radio" name="kind" value="cancel" ${first === 'cancel' ? raw('checked') : ''}> Cancel</label>
+          ${paused ? '' : html`<label class="check"><input type="radio" name="kind" value="pause" ${first === 'pause' ? raw('checked') : ''}> Pause for a while</label>`}
+          <label class="check"><input type="radio" name="kind" value="cancel" ${first === 'cancel' ? raw('checked') : ''}> Cancel the membership</label>
         </fieldset>
         ${others.length ? html`<div class="field" id="rq-plan-f"><label class="label" for="rq-plan">New plan</label><select class="input" id="rq-plan" name="plan_id">${others.map((p) => html`<option value="${p.id}" ${p.id === preset.plan_id ? raw('selected') : ''}>${p.name}, ${money(p.price_cents)} a month</option>`)}</select></div>` : ''}
         <div class="field"><label class="label" for="rq-note">Note <span class="muted">(optional)</span></label>
@@ -229,7 +230,7 @@ export async function render(ctx) {
         f.note.addEventListener('input', () => { const n = NOTE_MAX - f.note.value.length; left.textContent = n < 100 ? `${n} characters left` : ''; });
         f.addEventListener('submit', (e) => e.preventDefault());
       },
-      actions: [{ label: 'Cancel', value: null }, { label: 'Send request', kind: 'primary', onClick: async (body) => {
+      actions: [{ label: 'Not now', value: null }, { label: 'Send request', kind: 'primary', onClick: async (body) => {
         const f = body.querySelector('#rq');
         const kind = f.kind.value;
         return api.post('/parent/membership/request', { athlete_id: a.id, kind, plan_id: kind === 'change' ? Number(f.plan_id?.value) : null, note: f.note.value });

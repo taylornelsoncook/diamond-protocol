@@ -539,9 +539,9 @@ Open times from your hours, each with its coach.
 
 _Where: Progress tab_
 
-Shared test results, in plain language. Only results from testing days the coach has shared are shown.
+Shared test results, in plain language. Only results from testing days the coach has shared are shown. Archived athletes don't show, and the family can't open or share their report.
 
-- Next testing day, when the athlete is on one that's planned (by name or through their team).
+- Next testing day, when the athlete is on one that's planned (by name or through their team); on the day it says Testing day today.
 - Tests, new PRs and the last testing date across the top, then your coach's note from the latest testing day.
 - Showing: All results, Last 12 months, or Since an earlier testing day, so you can look at one season. Change since: First test or Last test. Both are remembered while the app is open, and the page stays where you were.
 - Biggest improvements (percent, with the from and to results) and new PRs with their dates. PRs are always best-ever results, whatever the period. Height, weight and other body measurements are never counted as improvements or marked better or worse.
@@ -558,7 +558,7 @@ _Where: Programs tab_
 The athlete's membership, camps, standing spots, packs and plans.
 
 - Which card payments go on, with Change card. No card, or an expired one, shows a banner with Add a card or Update card; buying without a card opens Add a card, which comes straight back here. A declined card says nothing was charged and offers Update card.
-- The athlete's membership: plan and status, the trial end or next charge, group classes left this month (or unlimited) and privates a month. A failed payment shows in amber with Update card. Ask to change, pause or cancel sends the owners an email (switch to which plan, pause or cancel, plus an optional note up to 500 characters), shows "You asked to ..." for two weeks and is in Recent activity. Nothing changes until the front desk does it; up to three requests a day. Other plans show Ask to switch.
+- The athlete's membership: plan and status, the trial end or next charge, group classes left this month (or unlimited) and privates a month. A failed payment shows in amber with Update card. Ask to change, pause or cancel sends the owners an email (switch to which plan, pause or cancel, plus an optional note up to 500 characters), shows "You asked to ..." for two weeks and is in Recent activity. Nothing changes until the front desk does it; up to three requests a day. A paused membership can ask to switch or cancel, not to pause again. Other plans show Ask to switch.
 - Register for a camp or clinic in one tap after confirming the days and price; the card on file is charged and every day is booked. Rows show spots left (amber when 3 or fewer), the registration deadline (amber in the last 3 days) and which brothers or sisters are already registered. A full camp says so and is refused before any charge. Registered camps stay listed, with a link to the days on Home.
 - Members can hold a standing weekly spot in a group class. Each class shows its next session; a held spot shows the next booked session and how many are booked. Holding asks first and explains what it uses (on a capped plan, the month's group classes; never pack sessions). Non-members get an explanation and a way to the plans.
 - Start a membership (free trial or first month), or buy session packs. Packs show the price a session and what they save against singles or the drop-in price. After any change the page comes back to the section you were in.

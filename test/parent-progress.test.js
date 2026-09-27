@@ -254,3 +254,49 @@ test('setting rankings off removes them from Progress', async () => {
   try { assert.equal((await call('GET', `/parent/athletes/${ava.id}/progress`, null, maria)).data.rankings, null); }
   finally { setSetting('rankings_enabled', true); }
 });
+
+// ---- review fixes ----
+test('membership request: odd kinds and a non-text note are refused cleanly; a paused membership is not paused again', async () => {
+  const kurt = await signIn(KURT);
+  const emma = athlete('Emma', 'Jensen');
+  const post = (body) => call('POST', '/parent/membership/request', { athlete_id: emma.id, ...body }, kurt);
+  for (const kind of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    const r = await post({ kind });
+    assert.equal(r.status, 400, `${kind}: ${JSON.stringify(r.data)}`);
+  }
+  assert.equal((await post({ kind: 'pause', note: { text: 'hi' } })).status, 400, 'the note is text');
+  const m = get("SELECT * FROM memberships WHERE athlete_id=? AND status IN ('trial','active','past_due','paused') ORDER BY id DESC LIMIT 1", emma.id);
+  assert.ok(m, 'Emma has a membership');
+  run("UPDATE memberships SET status='paused' WHERE id=?", m.id);
+  try {
+    const again = await post({ kind: 'pause' });
+    assert.equal(again.status, 400);
+    assert.match(again.data.error, /already paused/);
+    assert.equal(get('SELECT COUNT(*) n FROM membership_requests WHERE athlete_id=?', emma.id).n, 0, 'nothing was saved for the refused requests');
+    assert.equal((await post({ kind: 'cancel' })).status, 200, 'a paused membership can still be cancelled');
+  } finally { run('UPDATE memberships SET status=? WHERE id=?', m.status, m.id); }
+});
+
+test('progress: a testing day that is today still shows as the next testing day', async () => {
+  const kurt = await signIn(KURT);
+  const nate = athlete('Nate', 'Jensen');
+  const day = get("SELECT * FROM testing_days WHERE name='Winter retest'");
+  run('UPDATE testing_days SET date=? WHERE id=?', booking.todayLocal(), day.id);
+  try {
+    const r = await call('GET', `/parent/athletes/${nate.id}/progress`, null, kurt);
+    assert.equal(r.data.next_testing?.id, day.id);
+    assert.equal(r.data.next_testing.date, booking.todayLocal());
+  } finally { run('UPDATE testing_days SET date=? WHERE id=?', day.date, day.id); }
+});
+
+test('report: the family cannot open or share the report of an archived athlete', async () => {
+  const kurt = await signIn(KURT);
+  const add = await call('POST', '/parent/athletes', { first_name: 'Gone', last_name: 'Jensen', birthday: '2011-02-02' }, kurt);
+  const code = get('SELECT code FROM athletes WHERE id=?', add.data.id).code;
+  assert.equal((await call('GET', `/report/${code}`, null, kurt)).status, 200, 'open while active');
+  run('UPDATE athletes SET archived=1 WHERE id=?', add.data.id);
+  assert.equal((await call('GET', `/report/${code}`, null, kurt)).status, 404);
+  assert.equal((await call('GET', `/report/${code}/links`, null, kurt)).status, 404);
+  const owner = await staffSignIn('owner@demo.test', 'demo-owner-2026');
+  assert.equal((await call('GET', `/report/${code}`, null, owner)).status, 200, 'staff still see archived athletes');
+});

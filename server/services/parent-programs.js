@@ -48,8 +48,10 @@ function lastRequest(athleteId) {
 
 // Validate and record a request; emails every active owner. Returns the saved request.
 function request({ athlete, membership, parent, kind, plan_id, note }) {
-  if (!KINDS[kind]) throw bad('Choose switch plans, pause or cancel.');
+  if (!Object.hasOwn(KINDS, kind)) throw bad('Choose switch plans, pause or cancel.');
   if (!membership) throw bad(`${athlete.first_name} doesn't have a membership to change.`);
+  if (kind === 'pause' && membership.status === 'paused') throw bad(`${athlete.first_name}'s membership is already paused. Ask to switch plans or cancel, or reply to the front desk to start it again.`);
+  if (note != null && typeof note !== 'string') throw bad('Write the note as text.');
   const text = String(note ?? '').trim().replace(/\r\n/g, '\n');
   if (text.length > NOTE_MAX) throw bad(`Keep the note under ${NOTE_MAX} characters.`);
   let plan = null;

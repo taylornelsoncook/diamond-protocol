@@ -540,7 +540,8 @@ function routes(api) {
       if (req.query.view === 'family') return res.json({ view: 'family', preview: true, can_share: OC_ROLES.includes(req.staff.role), ...familyView() });
       return res.json({ view: 'coach', can_share: OC_ROLES.includes(req.staff.role), business: businessName(), ...core.progress(a.id, { view: 'staff', ...per }), all_days: reportDays(a.id, false), period: per });
     }
-    if (req.parent && a && a.family_id === req.parent.family_id) return res.json({ view: 'parent', can_share: true, ...familyView() });
+    // An archived athlete is gone for the family, as on Progress.
+    if (req.parent && a && !a.archived && a.family_id === req.parent.family_id) return res.json({ view: 'parent', can_share: true, ...familyView() });
     if (req.query.link) {
       // Changing the period on the page reloads it with ?from=; only the first open counts as a view.
       if (a && !a.archived && lib.openLink(a.id, String(req.query.link), { count: !per.from && !per.to })) {
@@ -563,7 +564,7 @@ function routes(api) {
       if (!a) throw notFound('That athlete');
       return a;
     }
-    if (req.parent) { if (!a || a.family_id !== req.parent.family_id) throw notFound('That athlete'); return a; }
+    if (req.parent) { if (!a || a.archived || a.family_id !== req.parent.family_id) throw notFound('That athlete'); return a; }
     throw new HttpError(401, 'Sign in to share this report.');
   }
   const linkOut = (a, l) => ({ ...l, url: `${appUrl()}/report/${encodeURIComponent(a.code)}?link=${l.token}` });

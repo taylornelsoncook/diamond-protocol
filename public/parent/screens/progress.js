@@ -49,7 +49,8 @@ function rankText(r, unit) {
   return `${ord(r.rank)} of ${r.of} in ${r.group}`;
 }
 const bar = (pct, label) => html`<div class="bar eg-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${label}"><span style="width:${Math.max(0, Math.min(100, pct))}%"></span></div>`;
-const dayText = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dayText = (d) => (d === ymd(new Date()) ? 'today' : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
 
 // Every result for one test, newest first, with the change from the one before and the best marked.
 function historyTable(t) {
@@ -88,13 +89,13 @@ export async function render(ctx) {
   if (!ctx.isCurrent()) return;
   const top = html`${header('Progress', ctx.familyName)}${athletePills(ctx)}`;
   const next = p?.next_testing;
-  const nextLine = next ? html`<div class="banner info pp-next"><span class="pp-next-in">${svg(CAL)}<span>Next testing day: <span class="strong">${next.name}</span>, ${dayText(next.date)}.</span></span></div>` : '';
+  const nextLine = next ? html`<div class="banner info pp-next"><span class="pp-next-in">${svg(CAL)}<span>${dayText(next.date) === 'today' ? 'Testing day today' : 'Next testing day'}: <span class="strong">${next.name}</span>${dayText(next.date) === 'today' ? '' : `, ${dayText(next.date)}`}.</span></span></div>` : '';
   const tests = (p?.tests || []).filter((t) => t.count > 0 || t.best != null);
   const everShared = (p?.all_days || []).length > 0 || tests.length > 0;
   if (!p || (!everShared && !p.note && !p.growth)) {
     mount(ctx.el, html`${top}${nextLine}
       <section class="panel"><h2 class="panel-title">No shared results yet</h2>
-        <p class="muted" style="margin:0">${next ? `After ${a.first_name}'s testing day on ${dayText(next.date)}, your coach shares the results here: every test, what changed and any new PRs.`
+        <p class="muted" style="margin:0">${next ? `After ${a.first_name}'s testing day ${dayText(next.date) === 'today' ? 'today' : `on ${dayText(next.date)}`}, your coach shares the results here: every test, what changed and any new PRs.`
           : `After ${a.first_name}'s first testing day, your coach shares the results here: every test, what changed and any new PRs.`}</p>
         ${next ? '' : html`<p class="muted" style="margin:0">An evaluation is the quickest way to get a starting point.</p><div><a class="btn" href="/parent/book?kind=evaluation">Book an evaluation</a></div>`}
       </section>`);
@@ -231,7 +232,7 @@ async function shareDialog(a, code) {
   try { links = await api.get(base); } catch (err) { return toastError(err); }
   const canSend = typeof navigator.share === 'function';
   const listHtml = () => (links.length ? html`<ul class="pp-links">${links.map((l) => html`<li>
-      <div class="grow"><div class="strong">${l.label || 'Link'}</div><div class="small muted">Works until ${fmtDate(l.expires_at.slice(0, 10))} · ${l.views ? `opened ${plural(l.views, 'time')}` : 'not opened yet'}${l.created_by ? ` · made by ${l.created_by}` : ''}</div></div>
+      <div class="grow"><div class="strong">${l.label || 'Link'}</div><div class="small muted">Works until ${fmtDate(l.expires_at)} · ${l.views ? `opened ${plural(l.views, 'time')}` : 'not opened yet'}${l.created_by ? ` · made by ${l.created_by}` : ''}</div></div>
       <button type="button" class="btn btn-sm" data-copy="${l.id}" aria-label="Copy the link${l.label ? ` for ${l.label}` : ''}">Copy</button>
       <button type="button" class="btn btn-ghost btn-sm" data-off="${l.id}" aria-label="Turn off ${l.label || 'this link'}">Turn off</button></li>`)}</ul>`
     : html`<p class="small muted" style="margin:0">No working links yet.</p>`);
@@ -255,6 +256,7 @@ async function shareDialog(a, code) {
         try {
           const l = await api.post(base, { label: f.label.value, days: Number(f.days.value) });
           links.unshift(l); paint();
+          body.querySelector('#nl-new').dataset.id = String(l.id);
           mount(body.querySelector('#nl-new'), html`<div class="field"><label class="label" for="nl-url">Your new link</label>
             <input class="input mono pp-url" id="nl-url" readonly value="${l.url}">
             <div class="btn-row">${canSend ? html`<button type="button" class="btn" id="nl-send">Send</button>` : ''}<button type="button" class="btn" id="nl-copy">Copy link</button></div></div>`);
@@ -273,6 +275,8 @@ async function shareDialog(a, code) {
         try {
           await api.del(`${base}/${off.dataset.off}`);
           links = links.filter((l) => String(l.id) !== off.dataset.off); paint();
+          // The link just made is the one turned off: don't leave it on screen to copy.
+          if (body.querySelector('#nl-new')?.dataset.id === off.dataset.off) mount(body.querySelector('#nl-new'), '');
           toast('Link turned off. It no longer opens the report.');
         } catch (err) { toastError(err); off.disabled = false; }
       });

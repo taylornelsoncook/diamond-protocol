@@ -1,5 +1,6 @@
 // Athlete workout app (/w/:token). No sign-in: the private link is the key.
-import { html, mount, api, icon, toast, toastError, debounce, fmtDate, plural } from '/js/ui.js';
+import { html, raw, mount, api, icon, toast, toastError, debounce, fmtDate, plural } from '/js/ui.js';
+import { createEngage, engageDots, parseVideo, tabIcon, ENGAGE_TABS } from '/js/engage-view.js';
 
 const root = document.getElementById('root');
 const token = decodeURIComponent(location.pathname.split('/')[2] || '');
@@ -8,24 +9,7 @@ let s = null;          // state from the server
 let selected = null;   // item id shown in the video frame
 let finished = null;   // result of the last Finish workout, for the done screen
 
-// ---- demo videos: YouTube / Vimeo embeds, or a video file ----
-function parseVideo(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return null;
-  let u; try { u = new URL(raw); } catch { return null; }
-  if (!/^https?:$/.test(u.protocol)) return null;
-  const host = u.hostname.replace(/^www\.|^m\./, '');
-  if (host === 'youtube.com' || host === 'youtube-nocookie.com' || host === 'youtu.be') {
-    let id = null;
-    if (host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
-    else if (u.pathname === '/watch') id = u.searchParams.get('v');
-    else { const m = u.pathname.match(/^\/(?:embed|shorts|live|v)\/([^/?#]+)/); if (m) id = m[1]; }
-    return id && /^[\w-]{6,20}$/.test(id) ? { kind: 'youtube', id } : null;
-  }
-  if (host === 'vimeo.com' || host === 'player.vimeo.com') { const m = u.pathname.match(/(?:^|\/)(\d{5,12})(?:\/|$)/); return m ? { kind: 'vimeo', id: m[1] } : null; }
-  if (/\.(mp4|m4v|webm|mov|ogv)$/i.test(u.pathname)) return { kind: 'file', url: raw };
-  return null;
-}
+// ---- demo videos: YouTube / Vimeo embeds, or a video file (parseVideo is shared with the lesson reader) ----
 function video(item) {
   const v = parseVideo(item?.video_url);
   const t = `Demo: ${item?.name || 'exercise'}`;
@@ -158,6 +142,55 @@ async function load() {
   }
 }
 
+// ---- tabs: Workout | Accountability | Performance | Education ----
+const engageEl = document.getElementById('engage');
+const tabbar = document.getElementById('tabbar');
+const TABS = [{ id: 'workout', label: 'Workout', icon: 'workout' }, ...ENGAGE_TABS];
+const tabFromHash = () => { const h = location.hash.slice(1); return TABS.some((t) => t.id === h) ? h : 'workout'; };
+let tab = tabFromHash();
+const view = createEngage({ base, audience: 'athlete', onData: () => paintTabbar() });
+
+function paintTabbar() {
+  if (!view.data) return;
+  const dots = engageDots(view.data);
+  tabbar.hidden = false;
+  document.body.classList.add('eg-has-tabbar');
+  mount(tabbar, html`<div class="eg-tabbar-in">${TABS.map((t) => html`<button type="button" class="eg-tab" data-tab="${t.id}" ${t.id === tab ? raw('aria-current="page"') : ''}>
+    ${tabIcon(t.icon)}<span>${t.label}</span>${dots[t.id] ? html`<span class="eg-dot" aria-hidden="true"></span><span class="sr-only">${t.id === 'education' ? ', something assigned' : ', new message'}</span>` : ''}</button>`)}</div>`);
+}
+function showTab() {
+  const onWorkout = tab === 'workout' || !view.data;
+  root.hidden = !onWorkout;
+  engageEl.hidden = onWorkout;
+  if (!onWorkout) {
+    const t = TABS.find((x) => x.id === tab);
+    mount(engageEl, html`${header()}<div><p class="wo-hi">${view.data.athlete.first_name} ${view.data.athlete.last_name}</p><h1 class="eg-title">${t.label}</h1></div>
+      <div class="eg-view" id="eg-body"></div>${foot}`);
+    view.render(engageEl.querySelector('#eg-body'), tab);
+  }
+  paintTabbar();
+}
+tabbar.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]');
+  if (!b) return;
+  const same = b.dataset.tab === tab;
+  tab = b.dataset.tab;
+  if (same) view.closeReader();
+  window.history.replaceState(null, '', tab === 'workout' ? location.pathname + location.search : `#${tab}`);
+  showTab();
+  window.scrollTo(0, 0);
+  // Pick up anything that changed since (a finished workout, a new message) without losing a half-filled form.
+  if (tab !== 'workout') { const t = tab; view.load().then(() => { if (tab === t && !view.busy()) showTab(); }).catch(() => {}); }
+});
+async function loadEngage() {
+  try { await view.load(); showTab(); } catch { /* link not found or offline: the workout screen explains */ }
+}
+
 // Come back to the tab later (e.g. the next day) and it shows the latest.
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && s && !finished) load(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (s && !finished) load();
+  if (view.data) view.load().then(() => { if (tab !== 'workout' && !view.busy()) showTab(); }).catch(() => {});
+});
 load();
+loadEngage();

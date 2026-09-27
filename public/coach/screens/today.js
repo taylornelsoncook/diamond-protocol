@@ -1,5 +1,5 @@
 // Today: numbers across the top, today's sessions, what needs a decision, recent activity, revenue by location (owners).
-import { html, mount, api, money, relTime, fmtTime, badge, toast, toastError, plural } from '/js/ui.js';
+import { html, mount, api, money, relTime, fmtTime, badge, toast, toastError, plural, localISO } from '/js/ui.js';
 
 const STYLE = html`<style>
   .td-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -41,11 +41,20 @@ function attentionRow(item, i) {
       <div class="small muted">${item.detail}</div></div>${btn}</div>`;
 }
 
+// A daily check-in that needs a look: short sleep, high soreness, low energy, mood or hydration.
+function flagRow(f) {
+  return html`<div class="td-row">
+    <div class="td-grow"><div><a class="td-title" href="/app/clients/${f.athlete_id}">${f.name}</a> checked in: <span class="warn-text">${f.flags.join(' · ')}</span></div>
+      <div class="small muted">${f.date === localISO() ? 'Today' : 'Yesterday'}'s check-in. Worth a word before they train.</div></div>
+    <a class="btn btn-outline btn-sm" href="/app/clients/${f.athlete_id}">View client</a></div>`;
+}
+
 export const routes = [{
   path: '/today', nav: 'today', title: 'Today',
   render: async (ctx) => {
     const owner = ctx.me.role === 'owner';
-    const [d, activity] = await Promise.all([api.get('/today'), api.get('/activity?limit=40').then((l) => l.filter((a) => a.kind !== 'signin' && a.kind !== 'refused').slice(0, 12)).catch(() => [])]);
+    const [d, activity, flags] = await Promise.all([api.get('/today'), api.get('/activity?limit=40').then((l) => l.filter((a) => a.kind !== 'signin' && a.kind !== 'refused').slice(0, 12)).catch(() => []),
+      api.get('/checkins/flags', { noRedirect: true }).catch(() => [])]);
     if (!ctx.isCurrent()) return;
     const sub = owner
       ? `Revenue, clients and anything that needs a decision. ${money(d.in_person_today_cents)} in person today.`
@@ -68,7 +77,7 @@ export const routes = [{
       <div class="grid-2" style="align-items:start">
         <section class="panel td-att">
           <h2 class="panel-title">Needs your attention</h2>
-          ${d.attention.length ? html`<div class="list">${d.attention.map(attentionRow)}</div>` : html`<p class="muted" style="margin:0">Nothing needs a decision right now.</p>`}
+          ${d.attention.length || flags.length ? html`<div class="list">${flags.map(flagRow)}${d.attention.map(attentionRow)}</div>` : html`<p class="muted" style="margin:0">Nothing needs a decision right now.</p>`}
         </section>
         <section class="panel">
           <h2 class="panel-title">Recent activity</h2>

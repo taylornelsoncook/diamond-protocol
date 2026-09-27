@@ -1,6 +1,6 @@
 // Accountability, performance and education: the athlete app (/w/:token), the parent portal, and the coach side.
 'use strict';
-const { get, all, run, insert, update, setting, setSetting } = require('../db');
+const { get, all, run, insert, update, tx, setting, setSetting } = require('../db');
 const { h, bad, notFound, log } = require('../lib');
 const { requireStaff, requireParent } = require('../auth');
 const e = require('../services/engage');
@@ -174,10 +174,20 @@ function routes(api) {
     log(req, 'Deleted a course', c.title);
     res.json({ ok: true });
   }));
+  // Reorder a course's lessons in one step.
+  api.put('/courses/:id/order', COACH, h(async (req, res) => {
+    const c = get('SELECT * FROM courses WHERE id=?', Number(req.params.id)); if (!c) throw notFound('That course');
+    const ids = Array.isArray(req.body.lesson_ids) ? req.body.lesson_ids.map(Number) : [];
+    tx(() => ids.forEach((id, i) => run('UPDATE lessons SET ord=? WHERE id=? AND course_id=?', i, id, c.id)));
+    log(req, 'Reordered a course', c.title);
+    res.json({ ok: true });
+  }));
   api.post('/assignments', COACH, h(async (req, res) => {
     const b = req.body || {};
     const id = e.assign({ lesson_id: toInt(b.lesson_id), course_id: toInt(b.course_id), athlete_id: toInt(b.athlete_id), team_id: toInt(b.team_id), due_date: b.due_date || null, note: b.note || null }, req.staff);
-    log(req, 'Assigned reading', `#${id}`);
+    const x = get('SELECT COALESCE(l.title, c.title) AS t FROM assignments a LEFT JOIN lessons l ON l.id=a.lesson_id LEFT JOIN courses c ON c.id=a.course_id WHERE a.id=?', id);
+    const who = b.athlete_id ? get("SELECT first_name || ' ' || last_name AS n FROM athletes WHERE id=?", toInt(b.athlete_id))?.n : get('SELECT team_name AS n FROM team_contracts WHERE id=?', toInt(b.team_id))?.n;
+    log(req, 'Assigned reading', `${x?.t} to ${who}`);
     res.status(201).json({ id });
   }));
   api.delete('/assignments/:id', COACH, h(async (req, res) => { run('DELETE FROM assignments WHERE id=?', Number(req.params.id)); log(req, 'Removed an assignment'); res.json({ ok: true }); }));

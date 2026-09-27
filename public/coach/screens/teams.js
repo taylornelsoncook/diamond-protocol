@@ -1,5 +1,6 @@
 // Teams: school and club contracts, one contract's invoices/terms/roster/sessions, and New team contract. Owner only.
 import { html, raw, mount, api, money, fmtDate, relTime, badge, toast, toastError, modal, confirmDialog, formData, options, localISO, plural } from '/js/ui.js';
+import { assignDialog } from './education.js';
 
 const STYLE = html`<style>
 .tm .tm-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md)}
@@ -23,7 +24,47 @@ a.row-title:hover{color:var(--green-soft)}
 .tm details summary{cursor:pointer;font-size:14px;min-height:32px;display:flex;align-items:center;gap:8px;list-style:none}.tm details summary::-webkit-details-marker{display:none}.tm details summary::before{content:'';width:0;height:0;border:5px solid transparent;border-left:7px solid currentColor;border-right:0}.tm details[open] summary::before{transform:rotate(90deg)}
 .tm .tm-new{max-width:680px}
 @media (max-width:600px){.tm .inv-actions{justify-content:flex-start;width:100%}}
+.tm .tm-eng-h{font:500 14px/20px var(--font-sans);color:var(--steel-muted);margin:4px 0 -4px}
+.tm .tm-add-row{display:grid;grid-template-columns:minmax(0,1.4fr) 88px;gap:var(--space-2)}
+.tm .tm-msg{white-space:pre-line;overflow-wrap:anywhere}
+.tm .tm-add{border-top:1px solid var(--line-subtle);padding-top:var(--space-3);display:flex;flex-direction:column;gap:var(--space-2)}
 </style>`;
+
+const GOAL_KINDS = [{ id: 'workouts', name: 'Workouts' }, { id: 'sessions', name: 'Sessions attended' }, { id: 'checkins', name: 'Daily check-ins' }, { id: 'custom', name: 'Custom' }];
+const KIND_LABEL = Object.fromEntries(GOAL_KINDS.map((k) => [k.id, k.name]));
+
+// Team goals, team messages and assigned reading. Every athlete on the roster sees them in their app.
+function accountabilityPanel(ctx, eng, manage) {
+  if (!eng) return '';
+  return html`<section class="panel" id="tm-acc">
+    <div class="panel-head"><div><h2 class="panel-title">Team accountability</h2><p class="panel-sub">Goals and messages go to everyone on the roster, in their app. Athletes and parents are emailed messages.</p></div>
+      ${manage ? html`<button class="btn btn-sm" data-act="assign-lesson">Assign lesson to team</button>` : ''}</div>
+    <div class="tm-eng-h">Team goals</div>
+    ${eng.goals.length ? html`<div class="list">${eng.goals.map((g) => html`<div class="list-row">
+      <div class="grow"><div class="row-title">${g.title}</div><div class="row-sub">${KIND_LABEL[g.kind] || g.kind} · ${g.target} a week, per athlete</div></div>
+      ${manage ? html`<button class="btn btn-ghost btn-sm" data-act="goal-end" data-id="${g.id}" data-title="${g.title}">End</button>` : ''}</div>`)}</div>`
+      : html`<p class="panel-sub">No team goals.</p>`}
+    ${manage ? html`<form class="tm-add" id="tg" novalidate>
+      <div class="tm-add-row"><div class="field"><label class="label small" for="tg-k">What it counts</label><select class="input" id="tg-k" name="kind">${options(GOAL_KINDS, 'sessions')}</select></div>
+        <div class="field"><label class="label small" for="tg-t">Per week</label><input class="input" id="tg-t" name="target" type="number" min="1" max="14" value="2" inputmode="numeric"></div></div>
+      <div class="field"><label class="label small" for="tg-n">Goal</label><input class="input" id="tg-n" name="title" maxlength="120" placeholder="Like Make 2 team sessions this week"></div>
+      <div><button class="btn">Add team goal</button></div></form>` : ''}
+    <div class="tm-eng-h" style="margin-top:8px">Team messages</div>
+    ${manage ? html`<form class="stack-sm" id="tmsg" novalidate>
+      <label class="sr-only" for="tmsg-b">Message to the team</label>
+      <textarea class="input" id="tmsg-b" name="body" rows="3" maxlength="2000" style="min-height:80px" placeholder="Write to the whole team"></textarea>
+      <div class="spread"><span class="hint">Every athlete on the roster and their parents are emailed a copy.</span><button class="btn">Send to team</button></div></form>` : ''}
+    ${eng.messages.length ? html`<div class="list">${eng.messages.map((m) => html`<div class="list-row"><div class="grow"><div class="tm-msg">${m.body}</div>
+      <div class="row-sub">${m.coach || 'Coach'} · ${relTime(m.created_at)}</div></div></div>`)}</div>` : html`<p class="panel-sub">No team messages yet.</p>`}
+    ${eng.assigned.length ? html`<div class="tm-eng-h" style="margin-top:8px">Assigned reading</div>
+      <div class="list">${eng.assigned.map((x) => {
+        const late = x.due_date && x.due_date < localISO() && x.finished < x.total;
+        return html`<div class="list-row"><div class="grow"><div class="row-title">${x.title}</div>
+          <div class="row-sub">${x.type === 'course' ? 'Course' : 'Lesson'} · ${x.due_date ? html`<span class="${late ? 'warn-text' : ''}">${late ? 'overdue, was due' : 'due'} ${fmtDate(x.due_date)}</span>` : 'no due date'}</div></div>
+          <span class="small ${late ? 'warn-text' : x.finished === x.total ? 'good-text' : 'muted'}">${x.finished} of ${x.total} finished</span></div>`;
+      })}</div><a class="small" href="/app/education">All assignments</a>` : ''}
+  </section>`;
+}
 
 const TERMS = [{ id: 0, name: 'Due on receipt' }, { id: 15, name: 'Net 15' }, { id: 30, name: 'Net 30' }, { id: 45, name: 'Net 45' }, { id: 60, name: 'Net 60' }];
 const termsName = (d) => (d === 0 ? 'Due on receipt' : `Net ${d}`);
@@ -117,9 +158,11 @@ async function renderList(ctx) {
 async function renderTeam(ctx) {
   const id = ctx.params.id;
   async function draw() {
-    const d = await api.get(`/teams/${id}`);
+    const [d, eng, edu] = await Promise.all([api.get(`/teams/${id}`), api.get(`/teams/${id}/engage`, { noRedirect: true }).catch(() => null), api.get('/education', { noRedirect: true }).catch(() => null)]);
+    if (eng) eng.assigned = (edu?.assignments || []).filter((x) => x.team_id === Number(id));
     if (!ctx.isCurrent()) return;
     const c = d.contract;
+    const manage = ctx.me.role === 'owner' || ctx.me.role === 'coach';
     const ended = c.status === 'ended';
     const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     mount(ctx.el, html`${STYLE}<div class="stack tm">
@@ -183,6 +226,7 @@ async function renderTeam(ctx) {
               <div><button class="btn">Add to roster</button></div>
               <p class="hint" style="margin:0">Each player gets an Athlete ID. Names already on the roster are skipped.</p></form>
           </section>
+          ${accountabilityPanel(ctx, eng, manage)}
         </div>
       </div></div>`);
     bind(c);
@@ -202,6 +246,11 @@ async function renderTeam(ctx) {
         } else if (b.dataset.act === 'rm-session') {
           if (!(await confirmDialog('Remove these team sessions?', 'Future sessions come off the schedule. Past attendance is kept.', 'Remove sessions', 'warn'))) return;
           await api.post(`/teams/${c.id}/sessions/${b.dataset.id}/remove`); toast('Team sessions removed.');
+        } else if (b.dataset.act === 'goal-end') {
+          if (!(await confirmDialog(`End "${b.dataset.title}"?`, 'It comes off every athlete\'s list. Past weeks aren\'t affected.', 'End goal', 'warn'))) return;
+          await api.put(`/goals/${b.dataset.id}`, { active: false }); toast('Team goal ended.');
+        } else if (b.dataset.act === 'assign-lesson') {
+          if (!(await assignDialog({ team: { id: c.id, name: `${c.school_name} ${c.team_name}` } }))) return;
         } else if (b.dataset.act === 'rm-athlete') {
           if (!(await confirmDialog(`Remove ${b.dataset.name}?`, 'They come off this roster. Their profile and results are kept.', 'Remove', 'warn'))) return;
           await api.post(`/teams/${c.id}/roster/${b.dataset.id}/remove`); toast('Removed from the roster.');
@@ -219,6 +268,11 @@ async function renderTeam(ctx) {
         if (f.id === 'ct') { await api.put(`/teams/${c.id}`, d); toast('Contract saved.'); }
         else if (f.id === 'ss') { const r = await api.post(`/teams/${c.id}/sessions`, d); toast(`Team sessions added to the schedule (${plural(r.sessions_created, 'session')} over the next 8 weeks).`); }
         else if (f.id === 'ro') { const r = await api.post(`/teams/${c.id}/roster`, d); toast(`${plural(r.added, 'athlete')} added${r.skipped ? `, ${r.skipped} already on the roster` : ''}.`); }
+        else if (f.id === 'tg') { await api.post(`/teams/${c.id}/goals`, d); toast('Team goal added. Every athlete on the roster sees it.'); }
+        else if (f.id === 'tmsg') {
+          if (!d.body.trim()) throw new Error('Write a message first.');
+          await api.post(`/teams/${c.id}/messages`, { body: d.body.trim() }); toast('Message sent to the team. Athletes and parents were emailed.');
+        }
         else if (f.id === 'extra') { const r = await api.post(`/teams/${c.id}/invoices`, d); toast(`${r.number} ${r.emailed ? 'sent' : 'created. Add a billing email to send it'}.`); }
         await draw();
       } catch (err) { toastError(err); }

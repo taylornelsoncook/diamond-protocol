@@ -193,7 +193,8 @@ function rankIn(group, testId, athleteId, lowerBetter, onlyShared) {
   const vals = [...bests.values()];
   const better = vals.filter((v) => (lowerBetter ? v < mine : v > mine)).length;
   const beaten = vals.filter((v) => (lowerBetter ? v > mine : v < mine)).length;
-  return { group: group.label, rank: better + 1, of: vals.length, percentile: Math.round((beaten / (vals.length - 1)) * 100) };
+  const ties = vals.length - better - beaten - 1; // others with the same best
+  return { group: group.label, rank: better + 1, of: vals.length, percentile: Math.round(((beaten + ties / 2) / (vals.length - 1)) * 100) };
 }
 function rankings(a, tests, onlyShared) {
   if (!setting('rankings_enabled', false)) return null;

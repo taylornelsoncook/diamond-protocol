@@ -316,7 +316,7 @@ async function collectModal(ctx, e, row, mode) {
 // ---------------------------------------------------------------- hours & settings
 async function renderHours(ctx) {
   const owner = ctx.me.role === 'owner';
-  const [hours, settings, lk] = await Promise.all([api.get('/availability'), api.get('/settings'), api.get('/lookups')]);
+  const [hours, settings, lk, eng] = await Promise.all([api.get('/availability'), api.get('/settings'), api.get('/lookups'), api.get('/engage/settings').catch(() => null)]);
   if (!ctx.isCurrent()) return;
   const dis = owner ? '' : raw('disabled');
   const hourLabel = (v) => `${DAYS[v.weekday]} ${v.start_time}–${v.end_time} · ${v.kind === 'private' ? 'Privates' : 'Evaluations'} · ${v.slot_min} min · ${v.location || 'No location'}${v.kind === 'evaluation' && v.price_cents ? ` · ${money(v.price_cents)}` : ''}${v.coach ? ` · ${v.coach}` : ''}`;
@@ -350,6 +350,13 @@ async function renderHours(ctx) {
         <div><button class="btn btn-primary">Add hours</button></div>
       </form>
     </section>
+
+    ${eng ? html`<section class="panel" id="rk">
+      <div class="spread" style="align-items:flex-start;flex-wrap:nowrap">
+        <div><h2 class="panel-title" id="rk-t">Rankings</h2>
+          <p class="panel-sub">Athletes and parents see where they rank by best result against their age group, team and everyone at the gym. No names are shown.</p></div>
+        <button class="toggle" id="rk-b" aria-pressed="${eng.rankings_enabled ? 'true' : 'false'}" aria-label="Show rankings to athletes and parents">${eng.rankings_enabled ? 'On' : 'Off'}</button>
+      </div></section>` : ''}
 
     <section class="panel">
       <div><h2 class="panel-title">Policies</h2>
@@ -393,6 +400,18 @@ async function renderHours(ctx) {
     try { await api.del(`/availability/${b.dataset.del}`); toast('Hours removed. Anything already booked stays booked.'); ctx.reload(); }
     catch (e) { toastError(e); b.disabled = false; }
   }));
+
+  const rk = ctx.el.querySelector('#rk-b');
+  rk?.addEventListener('click', async () => {
+    const on = rk.getAttribute('aria-pressed') !== 'true';
+    rk.disabled = true;
+    try {
+      await api.put('/engage/settings', { rankings_enabled: on });
+      rk.setAttribute('aria-pressed', String(on)); rk.textContent = on ? 'On' : 'Off';
+      toast(on ? 'Rankings on. Athletes and parents see them in the app.' : 'Rankings off. Athletes and parents no longer see them.');
+    } catch (e) { toastError(e); }
+    finally { rk.disabled = false; }
+  });
 
   const pf = ctx.el.querySelector('#pf');
   pf.addEventListener('submit', async (ev) => {

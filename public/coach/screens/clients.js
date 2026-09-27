@@ -1,5 +1,7 @@
 // Clients: the list, New client, and the client profile.
-import { html, raw, mount, api, money, fmtDate, fmtTime, fmtDateTime, relTime, badge, toast, toastError, modal, confirmDialog, formData, debounce, options, age, fullName, icon } from '/js/ui.js';
+import { html, raw, mount, api, money, fmtDate, fmtTime, fmtDateTime, relTime, badge, toast, toastError, modal, confirmDialog, formData, debounce, options, age, fullName, icon, sparkline, plural, localISO } from '/js/ui.js';
+import { parseEntry, fmtValue } from '/js/testing-format.js';
+import { assignDialog } from './education.js';
 
 const STYLE = html`<style>
 .cl-list .cl-tools{display:flex;gap:var(--space-3);flex-wrap:wrap}
@@ -28,6 +30,22 @@ const STYLE = html`<style>
 .cl-pro .inline{display:flex;gap:var(--space-2);flex-wrap:wrap}.cl-pro .inline>select,.cl-pro .inline>.input{flex:1 1 200px;width:auto;min-width:0}
 .cl-pro .banner.medical{justify-content:flex-start;gap:6px 20px}
 .cl-pro .banner.medical b{font-weight:600}
+.cl-eng .cl-eng-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius-sm);overflow:hidden}
+.cl-eng .cl-eng-stats>div{padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0;background:var(--surface)}
+.cl-eng .cl-eng-k{font-size:12px;line-height:16px;color:var(--steel-muted)}
+.cl-eng .cl-eng-v{font:600 24px/1.1 var(--font-display);color:var(--steel)}
+.cl-eng .cl-eng-v small{font:400 12px/1 var(--font-sans);color:var(--steel-muted);margin-left:4px}
+@media (max-width:1300px) and (min-width:1001px),(max-width:560px){.cl-eng .cl-eng-stats{grid-template-columns:repeat(6,minmax(0,1fr))}.cl-eng .cl-eng-stats>div{grid-column:span 2}.cl-eng .cl-eng-stats>div:nth-child(-n+2){grid-column:span 3}}
+.cl-eng .cl-eng-h{font:500 14px/20px var(--font-sans);color:var(--steel-muted);margin:4px 0 -4px}
+.cl-eng .cl-avg{display:grid;grid-template-columns:minmax(0,1fr) auto 96px;align-items:center;gap:4px 12px;padding:6px 0;border-top:1px solid var(--line-subtle)}
+.cl-eng .cl-avg:first-of-type{border-top:0}
+.cl-eng .cl-avg .val{font-weight:600;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.cl-eng .cl-flag{border-left:2px solid var(--amber);padding:4px 0 4px 10px}
+.cl-eng .cl-bar{width:100%;max-width:220px;margin-top:6px}
+.cl-eng .cl-msg{white-space:pre-line;overflow-wrap:anywhere}
+.cl-eng .cl-add{border-top:1px solid var(--line-subtle);padding-top:var(--space-3);display:flex;flex-direction:column;gap:var(--space-2)}
+.cl-eng .cl-add-row{display:grid;grid-template-columns:minmax(0,1.4fr) 88px;gap:var(--space-2)}
+.cl-eng .cl-rank{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
 </style>`;
 
 const statusBadge = (s) => (s === 'none' ? badge('draft', 'No plan') : s === 'team' ? badge('team') : badge(s));
@@ -174,6 +192,107 @@ function changeText(t) {
   return html`<span class="${better ? 'good-text' : 'warn-text'}">${n > 0 ? '+' : ''}${fmtVal(Math.round(n * 100) / 100, t.unit)}</span>`;
 }
 
+// ---------------------------------------------------------------- accountability, targets, education
+const GOAL_KINDS = [{ id: 'workouts', name: 'Workouts' }, { id: 'sessions', name: 'Sessions attended' }, { id: 'checkins', name: 'Daily check-ins' }, { id: 'custom', name: 'Custom' }];
+const MEASURES = [['sleep_hours', 'Sleep', (v) => `${v} h`], ['hydration', 'Hydration', (v) => `${v} of 5`], ['soreness', 'Soreness', (v) => `${v} of 5`], ['energy', 'Energy', (v) => `${v} of 5`], ['mood', 'Mood', (v) => `${v} of 5`]];
+const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+const valueHint = (unit) => (unit === 'in' ? 'Inches, or feet and inches like 6\'8"' : unit === 's' ? 'Seconds, like 3.35' : unit ? `In ${unit}` : 'Choose a test first');
+
+function engagePanels(ctx, a, en, library) {
+  const manage = ctx.me.role === 'owner' || ctx.me.role === 'coach';
+  const today = localISO();
+  if (!en) return { accountability: '', goals: '', messages: '', targets: '', education: '' };
+  const w = en.this_week, st = en.streaks;
+  const stat = (k, v, unit) => html`<div><span class="cl-eng-k">${k}</span><span class="cl-eng-v">${v}<small>${unit}</small></span></div>`;
+  const accountability = html`<section class="panel cl-eng" id="cl-acc">
+    <div><h2 class="panel-title">Accountability</h2><p class="panel-sub">Streaks, this week so far, and daily check-ins over the last 30 days.</p></div>
+    <div class="cl-eng-stats">
+      ${stat('Check-in streak', st.checkin_days, st.checkin_days === 1 ? 'day' : 'days')}
+      ${stat('Training streak', st.active_weeks, st.active_weeks === 1 ? 'week' : 'weeks')}
+      ${stat('Workouts', w.workouts, 'this wk')}${stat('Sessions', w.sessions, 'this wk')}${stat('Check-ins', w.checkins, 'this wk')}
+    </div>
+    ${en.checkins.length ? html`<div class="cl-eng-h">30-day averages from ${plural(en.checkins.length, 'check-in')}</div>
+      <div>${MEASURES.map(([k, label, fmt]) => {
+        const vals = en.checkins.map((c) => c[k]).filter((v) => v != null);
+        return html`<div class="cl-avg"><span>${label}${k === 'soreness' ? html` <span class="muted small">lower is better</span>` : ''}</span>
+          <span class="val">${en.averages[k] == null ? '—' : fmt(en.averages[k])}</span>${vals.length > 1 ? sparkline(vals, { w: 96, h: 24 }) : html`<span></span>`}</div>`;
+      })}</div>`
+      : html`<p class="panel-sub">No check-ins in the last 30 days. ${a.first_name} checks in from the athlete app.</p>`}
+    ${en.flagged.length ? html`<div class="cl-eng-h">Check-ins that need a look</div>
+      <div class="stack-sm">${en.flagged.map((c) => html`<div class="cl-flag small"><span class="strong">${c.date === today ? 'Today' : fmtDate(c.date, { year: false, weekday: true })}</span>
+        <span class="warn-text"> · ${c.flags.join(' · ')}</span>${c.note ? html`<div class="muted">"${c.note}"</div>` : ''}</div>`)}</div>` : ''}
+  </section>`;
+
+  const goals = html`<section class="panel cl-eng">
+    <div><h2 class="panel-title">Weekly goals</h2><p class="panel-sub">Progress this week, Monday to Sunday. Workouts, sessions and check-ins count themselves; ${a.first_name} ticks off custom goals.</p></div>
+    ${en.goals.length ? html`<div class="list">${en.goals.map((g) => html`<div class="list-row">
+      <div class="grow"><div class="strong">${g.title} ${g.team ? badge('team', 'Team goal') : ''}</div>
+        <div class="muted small">${g.kind_label} · ${g.progress} of ${g.target} this week</div>
+        <div class="bar cl-bar"><span style="width:${Math.min(100, Math.round((g.progress / g.target) * 100))}%"></span></div></div>
+      ${g.done ? badge('complete', 'Done') : ''}
+      ${manage && !g.team ? html`<button class="btn btn-ghost btn-sm" data-act="goal-end" data-id="${g.id}" data-title="${g.title}">End</button>` : ''}</div>`)}</div>`
+      : html`<p class="panel-sub">No goals yet.</p>`}
+    ${manage ? html`<form class="cl-add" data-form="goal" novalidate>
+      <div class="cl-add-row"><div class="field"><label class="label small" for="gl-k">What it counts</label><select class="input" id="gl-k" name="kind">${options(GOAL_KINDS, 'workouts')}</select></div>
+        <div class="field"><label class="label small" for="gl-t">Per week</label><input class="input" id="gl-t" name="target" type="number" min="1" max="14" value="3" inputmode="numeric"></div></div>
+      <div class="field"><label class="label small" for="gl-n">Goal</label><input class="input" id="gl-n" name="title" maxlength="120" placeholder="Like 3 workouts this week"><span class="hint">Leave blank to name it from what it counts.</span></div>
+      <div><button class="btn">Add goal</button></div></form>` : ''}
+  </section>`;
+
+  const messages = html`<section class="panel cl-eng">
+    <div><h2 class="panel-title">Messages</h2><p class="panel-sub">Notes from coaches. ${a.first_name} reads them in the app${en.unread ? html`; <span class="warn-text">${en.unread} unread</span>` : ''}.</p></div>
+    ${manage ? html`<form class="stack-sm" data-form="message" novalidate>
+      <label class="sr-only" for="msg-b">Message to ${a.first_name}</label>
+      <textarea class="input" id="msg-b" name="body" rows="3" maxlength="2000" style="min-height:80px" placeholder="Write to ${a.first_name}"></textarea>
+      <div class="spread"><span class="hint">${a.first_name} and their parents are emailed a copy.</span><button class="btn">Send message</button></div></form>` : ''}
+    ${en.messages.length ? html`<div class="list">${en.messages.map((m) => html`<div class="list-row" style="align-items:flex-start">
+      <div class="grow"><div class="cl-msg">${m.body}</div>
+        <div class="muted small">${m.coach || 'Coach'} · ${relTime(m.created_at)}${m.team ? ' · to the team' : ''}</div></div>
+      ${m.read ? html`<span class="muted small">Read</span>` : badge('open', 'Unread')}</div>`)}</div>`
+      : html`<p class="panel-sub">No messages yet.</p>`}
+  </section>`;
+
+  const tested = en.tests || [];
+  const testedIds = new Set(tested.map((t) => t.test_id));
+  const rest = (library || []).filter((t) => !testedIds.has(t.id));
+  const targets = html`<section class="panel cl-eng">
+    <div><h2 class="panel-title">Test targets</h2><p class="panel-sub">Best result so far against the target. Progress counts from the first test.</p></div>
+    ${en.targets.length ? html`<div class="list">${en.targets.map((t) => html`<div class="list-row">
+      <div class="grow"><div class="strong">${t.test}</div>
+        <div class="muted small">${t.best_text ? `Best ${t.best_text}` : 'Not tested yet'} → target ${t.target_text}${t.due_date ? html` · <span class="${!t.reached && t.due_date < today ? 'warn-text' : ''}">by ${fmtDate(t.due_date, { year: false })}</span>` : ''}</div>
+        <div class="bar cl-bar"><span style="width:${t.pct}%"></span></div></div>
+      ${t.reached ? badge('complete', 'Reached') : html`<span class="small muted">${t.pct}%</span>`}
+      ${manage ? html`<button class="btn btn-ghost btn-sm" data-act="target-rm" data-id="${t.id}" data-title="${t.test}">Remove</button>` : ''}</div>`)}</div>`
+      : html`<p class="panel-sub">No targets yet.</p>`}
+    ${manage ? html`<form class="cl-add" data-form="target" novalidate>
+      <div class="field"><label class="label small" for="tg-t">Test</label><select class="input" id="tg-t" name="test_id"><option value="">Choose a test</option>
+        ${tested.length ? html`<optgroup label="${a.first_name} has done">${tested.map((t) => html`<option value="${t.test_id}" data-unit="${t.unit}">${t.name}${t.best != null ? ` (best ${fmtValue(t.best, t.unit)})` : ''}</option>`)}</optgroup>` : ''}
+        <optgroup label="All tests">${rest.map((t) => html`<option value="${t.id}" data-unit="${t.unit}">${t.name}</option>`)}</optgroup></select></div>
+      <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--space-2)">
+        <div class="field"><label class="label small" for="tg-v">Target</label><input class="input" id="tg-v" name="target" autocomplete="off"><span class="hint" id="tg-h">${valueHint(null)}</span></div>
+        <div class="field"><label class="label small" for="tg-d">By (optional)</label><input class="input" id="tg-d" name="due_date" type="date" min="${today}"></div></div>
+      <div><button class="btn">Set target</button></div></form>` : ''}
+    ${en.rankings ? html`<div class="cl-eng-h">Where ${a.first_name} ranks (best result; athletes and parents see this without names)</div>
+      ${en.rankings.length ? html`<div class="list">${en.rankings.map((r) => html`<div class="list-row small" style="align-items:flex-start">
+        <div class="grow"><span class="strong">${r.test}</span> <span class="muted">· best ${fmtValue(r.best, r.unit)}</span>
+          <div class="cl-rank">${r.ranks.map((k) => html`<span class="chip">${ordinal(k.rank)} of ${k.of} · ${k.group}</span>`)}</div></div></div>`)}</div>`
+        : html`<p class="panel-sub">Not enough athletes have done the same tests to rank yet.</p>`}`
+      : html`<p class="hint" style="margin:0">Rankings are off. ${manage ? html`Turn them on in <a href="/app/schedule/hours">Hours & settings</a>.` : ''}</p>`}
+  </section>`;
+
+  const as = en.education.assigned;
+  const education = html`<section class="panel cl-eng">
+    <div class="panel-head"><div><h2 class="panel-title">Education</h2><p class="panel-sub">${plural(en.education.completed, 'lesson')} finished. Assigned reading shows first in ${a.first_name}'s app.</p></div>
+      ${manage ? html`<button class="btn btn-sm" data-act="assign-lesson">Assign lesson</button>` : ''}</div>
+    ${as.length ? html`<div class="list">${as.map((x) => html`<div class="list-row">
+      <div class="grow"><div>${x.title} <span class="muted small">${x.type === 'course' ? `Course · ${x.progress}` : 'Lesson'}</span></div>
+        <div class="muted small">${x.due_date ? html`<span class="${x.overdue ? 'warn-text' : ''}">${x.overdue ? 'Overdue, was due' : 'Due'} ${fmtDate(x.due_date, { year: false })}</span>` : 'No due date'}${x.note ? ` · ${x.note}` : ''}</div></div>
+      ${x.done ? badge('complete', 'Done') : x.overdue ? badge('overdue') : badge('open', 'Not done')}</div>`)}</div>`
+      : html`<p class="panel-sub">Nothing assigned.</p>`}
+  </section>`;
+  return { accountability, goals, messages, targets, education };
+}
+
 async function renderProfile(ctx) {
   const id = ctx.params.id;
   let progress = null; // loaded once; testing API may not exist yet
@@ -181,9 +300,10 @@ async function renderProfile(ctx) {
   const progressP = api.get(`/athletes/${id}/progress`, { noRedirect: true }).then((p) => { progress = p; }).catch(() => { progressErr = true; });
   const lookupsP = api.get('/lookups');
   const plansP = api.get('/plans');
+  const libraryP = api.get('/tests').catch(() => []);
 
   async function draw() {
-    const [d, lookups, plans] = await Promise.all([api.get(`/athletes/${id}`), lookupsP, plansP, progressP]);
+    const [d, lookups, plans, , en, library] = await Promise.all([api.get(`/athletes/${id}`), lookupsP, plansP, progressP, api.get(`/athletes/${id}/engage`, { noRedirect: true }).catch(() => null), libraryP]);
     if (!ctx.isCurrent()) return;
     const a = d.athlete, fam = d.family, m = d.membership, owner = isOwner(ctx), role = ctx.me.role;
     document.title = `${fullName(a)} · Diamond Protocol`;
@@ -317,6 +437,7 @@ async function renderProfile(ctx) {
           ${role !== 'frontdesk' ? html`<button class="btn btn-ghost" type="button" data-act="archive">${a.archived ? 'Restore client' : 'Archive client'}</button>` : ''}</div>
       </form></section>`;
 
+    const eng = engagePanels(ctx, a, en, library);
     mount(ctx.el, html`${STYLE}<div class="stack cl-pro">
       <div class="page-header"><div><div class="cl-title"><h1 class="page-title">${fullName(a)}</h1><span class="cl-code">${a.code}</span>${a.archived ? badge('ended', 'Archived') : ''}</div>
         <p class="page-sub">${subBits.join(' · ')}</p></div>
@@ -324,8 +445,8 @@ async function renderProfile(ctx) {
       ${medical.length ? html`<div class="banner medical" role="note">${icon('warn')}${medical.map(([k, v]) => html`<span><b>${k}:</b> ${v}</span>`)}
         ${a.emergency_name || a.emergency_phone ? html`<span><b>Emergency contact:</b> ${[a.emergency_name, a.emergency_phone].filter(Boolean).join(', ')}</span>` : ''}</div>` : ''}
       <div class="cl-cols">
-        <div class="cl-col">${familyPanel}${membershipPanel}${cardPanel}${paymentsPanel}</div>
-        <div class="cl-col">${upcomingPanel}${testingPanel}${trainingPanel}${profilePanel}</div>
+        <div class="cl-col">${familyPanel}${membershipPanel}${cardPanel}${eng.accountability}${eng.goals}${paymentsPanel}</div>
+        <div class="cl-col">${upcomingPanel}${eng.messages}${testingPanel}${eng.targets}${eng.education}${trainingPanel}${profilePanel}</div>
       </div></div>`);
     bind(d);
   }
@@ -362,6 +483,9 @@ async function renderProfile(ctx) {
         case 'card-decline': return act(() => api.post(`/families/${fam.id}/card`, { action: 'test_decline' }), 'Test card set to decline (ends 0002).');
         case 'card-approve': return act(() => api.post(`/families/${fam.id}/card`, { action: 'test_approve' }), 'Test card set to succeed (ends 4242).');
         case 'walk-in': return act(() => api.post(`/athletes/${a.id}/walk-in`, { event_id: q('#wi-ev').value }), (r) => (r.coverage === 'unpaid' ? `${a.first_name} is checked in. Not covered: sell a drop-in${r.price_cents ? ` (${money(r.price_cents)})` : ''}.` : `${a.first_name} is checked in.`));
+        case 'goal-end': if (await confirmDialog(`End "${b.dataset.title}"?`, `It comes off ${a.first_name}'s list. Past weeks aren't affected.`, 'End goal', 'warn')) act(() => api.put(`/goals/${b.dataset.id}`, { active: false }), 'Goal ended.'); return;
+        case 'target-rm': if (await confirmDialog(`Remove the ${b.dataset.title} target?`, 'Results stay. Only the target goes.', 'Remove target', 'warn')) act(() => api.del(`/targets/${b.dataset.id}`), 'Target removed.'); return;
+        case 'assign-lesson': if (await assignDialog({ athlete: { id: a.id, name: fullName(a) } })) draw(); return;
         case 'retry': return act(() => api.post(`/invoices/${b.dataset.id}/retry`), 'Charge went through.');
         case 'credits': {
           const r = await modal({ title: 'Adjust sessions', body: html`<p class="muted" style="margin:0">Set how many sessions ${a.first_name} has left. Use this to fix a mistake or give a session back.</p>
@@ -381,6 +505,16 @@ async function renderProfile(ctx) {
         }
       }
     });
+    const tf = root.querySelector('[data-form="target"]');
+    if (tf) {
+      const hint = () => {
+        const unit = tf.test_id.selectedOptions[0]?.dataset.unit, v = parseEntry(tf.target.value, unit);
+        const h = tf.querySelector('#tg-h');
+        h.classList.toggle('warn-text', !!tf.target.value.trim() && !!unit && !(v > 0));
+        h.textContent = unit && tf.target.value.trim() ? (v > 0 ? `Target: ${fmtValue(v, unit)}` : `Enter it in ${unit === 'in' ? 'inches or feet and inches' : unit}.`) : valueHint(unit);
+      };
+      tf.test_id.addEventListener('change', hint); tf.target.addEventListener('input', hint);
+    }
     root.addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = e.target;
@@ -389,6 +523,19 @@ async function renderProfile(ctx) {
       try {
         if (f.id === 'pf') { await api.put(`/athletes/${a.id}`, formData(f)); toast('Profile saved.'); await draw(); }
         else if (f.dataset.form === 'sibling') { const r = await api.post(`/families/${fam.id}/athletes`, formData(f)); toast(`Sibling added. Athlete ID ${r.code}.`); ctx.go(`/app/clients/${r.id}`); }
+        else if (f.dataset.form === 'goal') { await api.post(`/athletes/${a.id}/goals`, formData(f)); toast('Goal added. It shows in the app now.'); await draw(); }
+        else if (f.dataset.form === 'message') {
+          const body = f.body.value.trim();
+          if (!body) throw new Error('Write a message first.');
+          await api.post(`/athletes/${a.id}/messages`, { body }); toast(`Message sent. ${a.first_name} and their parents were emailed.`); await draw();
+        } else if (f.dataset.form === 'target') {
+          const dd = formData(f), opt = f.test_id.selectedOptions[0];
+          if (!dd.test_id) throw new Error('Choose a test.');
+          const v = parseEntry(dd.target, opt.dataset.unit);
+          if (v == null || !Number.isFinite(v) || v <= 0) throw new Error(opt.dataset.unit === 'in' ? 'Enter the target in inches, or feet and inches like 6\'8".' : `Enter the target in ${opt.dataset.unit}.`);
+          await api.post(`/athletes/${a.id}/targets`, { test_id: Number(dd.test_id), target: dd.target, due_date: dd.due_date || null });
+          toast(`Target set: ${opt.textContent.replace(/ \(best.*$/, '')} ${fmtValue(v, opt.dataset.unit)}.`); await draw();
+        }
         else if (f.dataset.form === 'parent') { await api.post(`/families/${fam.id}/parents`, formData(f)); toast('Parent added. They were emailed a portal sign-in link.'); await draw(); }
       } catch (err) { toastError(err); }
       finally { if (btn?.isConnected) btn.disabled = false; }

@@ -98,7 +98,7 @@ const P = {
   check: 'M4 10l4 4 8-8', play: 'M6 4v12l10-6z', chevron: 'M8 5l5 5-5 5', back: 'M12 5l-5 5 5 5', warn: 'M10 3l8 14H2zM10 8v4M10 14v1',
   print: 'M5 7V2h10v5M5 14H3V7h14v7h-2M5 11h10v7H5z', download: 'M10 3v10M6 9l4 4 4-4M3 17h14', upload: 'M10 13V3M6 7l4-4 4 4M3 17h14',
   home: 'M3 9l7-6 7 6v8H3zM8 17v-5h4v5', book: 'M3 4h14v13H3zM3 8h14M7 2v4M13 2v4M7 12l2 2 4-4', progress: 'M3 17l5-6 4 3 5-8', family: 'M6 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM14 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM2 16c0-2.5 1.8-4.5 4-4.5s4 2 4 4.5M10 16c0-2.5 1.8-4.5 4-4.5s4 2 4 4.5',
-  card: 'M2 5h16v10H2zM2 8h16', timer: 'M10 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM10 7v4M8 2h4',
+  card: 'M2 5h16v10H2zM2 8h16', lesson: 'M10 5c-2-1.5-5-2-7-1.5v12c2-.5 5 0 7 1.5M10 5c2-1.5 5-2 7-1.5v12c-2-.5-5 0-7 1.5M10 5v12.5', timer: 'M10 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM10 7v4M8 2h4',
 };
 export function icon(name, size = 20) {
   return raw(`<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="miter" stroke-linecap="square" aria-hidden="true"><path d="${P[name] || ''}"/></svg>`);

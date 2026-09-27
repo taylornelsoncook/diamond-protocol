@@ -15,10 +15,11 @@ const NAV = [
   { id: 'testing', label: 'Testing', path: '/app/testing', roles: ['owner', 'coach', 'frontdesk'] },
   { id: 'billing', label: 'Billing', path: '/app/billing', roles: ['owner'] },
   { id: 'programs', label: 'Programs', path: '/app/programs', roles: ['owner', 'coach', 'frontdesk'] },
+  { id: 'education', label: 'Education', path: '/app/education', roles: ['owner', 'coach', 'frontdesk'] },
   { id: 'api', label: 'API & integrations', path: '/app/integrations', roles: ['owner'] },
   { id: 'staff', label: 'Staff & security', path: '/app/staff', roles: ['owner'] },
 ];
-const ICON = { today: 'today', schedule: 'schedule', pos: 'pos', clients: 'clients', teams: 'teams', testing: 'testing', billing: 'billing', programs: 'programs', api: 'api', staff: 'staff' };
+const ICON = { today: 'today', schedule: 'schedule', pos: 'pos', clients: 'clients', teams: 'teams', testing: 'testing', billing: 'billing', programs: 'programs', education: 'lesson', api: 'api', staff: 'staff' };
 const ROLE_LABEL = { owner: 'Owner', coach: 'Coach', frontdesk: 'Front desk' };
 
 // ---- routing ----

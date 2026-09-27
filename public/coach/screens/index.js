@@ -7,6 +7,7 @@ import * as teams from './teams.js';
 import * as billing from './billing.js';
 import * as testing from './testing.js';
 import * as programs from './programs.js';
+import * as education from './education.js';
 import * as integrations from './integrations.js';
 import * as staff from './staff.js';
-export const screens = [today, schedule, pos, clients, teams, billing, testing, programs, integrations, staff];
+export const screens = [today, schedule, pos, clients, teams, billing, testing, programs, education, integrations, staff];

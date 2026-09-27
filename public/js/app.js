@@ -2359,147 +2359,402 @@ function fmtResult(v, unit, decimals = 2, { delta = false } = {}) {
   const n = Number(v).toFixed(decimals ?? 2);
   return `${n}${UNIT_LABEL[unit] === '' ? '' : ` ${UNIT_LABEL[unit] ?? unit}`}`;
 }
+// Values as typed on a testing day: 4.71, "4,71", 8'5" for feet and inches, 1:32 for minutes and seconds.
+function parseTyped(raw, unit) {
+  const t = String(raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!t) return null;
+  const fi = t.match(/^(\d+)\s*(?:'|′|ft)\s*(\d+(?:\.\d+)?)?\s*(?:"|″|in)?$/);
+  if (fi && unit === 'in') return Number(fi[1]) * 12 + Number(fi[2] ?? 0);
+  const ms = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+  if (ms && unit === 's') return Number(ms[1]) * 60 + Number(ms[2]);
+  const n = /^-?\d+,\d+$/.test(t) ? Number(t.replace(',', '.')) : Number(t);
+  return Number.isFinite(n) ? n : NaN;
+}
+// A metric's possible range is [lowest, highest] (the coach's own from the Test library, or the built-in one); a built-in
+// range can be one-sided (null for the open end), like the server's.
+const outOfRange = (v, r) => !!r && ((r[0] != null && v < r[0]) || (r[1] != null && v > r[1]));
+const rangeWords = (r, unit) => { const u = UNIT_LABEL[unit] ? ` ${UNIT_LABEL[unit]}` : ''; return r[0] != null && r[1] != null ? `${r[0]}–${r[1]}${u}` : r[0] != null ? `at least ${r[0]}${u}` : `at most ${r[1]}${u}`; };
+const typedHint = (metric) => (metric.unit === 'in' && (metric.range?.[1] ?? 0) >= 60 ? 'Feet and inches work: 8\'5"' : metric.unit === 's' && (metric.range?.[1] ?? 0) >= 90 ? 'Minutes work: 1:32' : null);
+const better = (metric, a, b) => (metric.better === 'lower' ? a < b : a > b);
+const shortTest = (t) => t.name.replace(/ \(.*\)$/, '');
+// Answers a 409 confirmation_required by asking, then sends the same request again with the confirmation.
+async function withConfirm(send, ask) {
+  try { return await send(false); }
+  catch (e) { if (e.code !== 'confirmation_required') throw e; if (!confirm(ask(e))) return null; return send(true); }
+}
+
+// Front desk enters results and adds walk-ups; planning days, uploads, devices and linking are for owners and coaches.
+const deskStop = (main, title) => (state.user?.role === 'front_desk' ? (fill(main, header(title, null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')), h('div', { class: 'empty' }, 'Owners and coaches do this. You can enter results and add walk-ups on a testing day.')), true) : false);
+let testingFilter = { status: 'all', q: '' };
 async function viewTesting(main) {
-  const desk = state.user?.role === 'front_desk';          // front desk can't open devices or the results queue
-  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations'), desk ? { n: 0 } : get('/v1/queue')]);
+  const desk = state.user?.role === 'front_desk';          // front desk can't open devices, uploads or the results queue
+  const [days, integrations] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations')]);
   const connected = integrations.data.filter((i) => i.connected);
+  const list = h('div', { class: 'stack-tight' });
+  const toggles = [['all', 'All'], ['open', 'Open'], ['shared', 'Shared']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(testingFilter.status === k), onClick: () => { testingFilter.status = k; toggles.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.k === k))); draw(); }, 'data-k': k }, label));
+  const find = input({ type: 'search', placeholder: 'Find a day by name or team', value: testingFilter.q, 'aria-label': 'Find a testing day', style: 'max-width:320px' });
+  find.addEventListener('input', () => { testingFilter.q = find.value; draw(); });
+  function draw() {
+    const q = testingFilter.q.trim().toLowerCase();
+    const shown = days.data.filter((d) => (testingFilter.status === 'all' || d.status === testingFilter.status) && (!q || `${d.name} ${d.team_name ?? ''}`.toLowerCase().includes(q)));
+    fill(list, shown.length ? shown.map((d) => {
+      const pct = d.progress.planned ? Math.round((d.progress.done / d.progress.planned) * 100) : 0;
+      return h('a', { class: 'list-item', href: `#/testing/${d.id}`, style: 'text-decoration:none;color:inherit;flex-wrap:wrap' },
+        h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, d.name),
+          h('span', { class: 'small muted' }, [ymd(d.date), d.team_name, `${d.athletes_count} ${d.athletes_count === 1 ? 'athlete' : 'athletes'}`, `${d.tests.length} ${d.tests.length === 1 ? 'test' : 'tests'}`].filter(Boolean).join(' · '))),
+        d.status === 'shared' ? h('span', { class: 'dp-badge dp-badge--good' }, 'Shared')
+          : h('span', { class: `dp-badge dp-badge--${d.progress.done ? 'neutral' : 'muted'}`, title: 'Athlete-and-test pairs with a result' }, d.progress.planned ? `${d.progress.done}/${d.progress.planned} done (${pct}%)` : 'No tests'));
+    }) : h('div', { class: 'empty' }, days.data.length ? 'No testing days match. Clear the search or pick All.' : desk ? 'No testing days yet. An owner or coach starts one.' : 'No testing days yet. Start one, or upload results from a device.'));
+  }
+  draw();
   fill(main,
-    waiting.n ? h('div', { class: 'test-banner row', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waiting.n} ${waiting.n === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
-    header('Testing', 'Combines, evaluations and team testing. Enter results by hand or stopwatch, import files, or connect your devices.', h('div', { class: 'row' },
-      h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'Test library'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/connections' }, 'Devices'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'), h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/new' }, 'New testing day'))),
+    days.waiting ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${days.waiting} ${days.waiting === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.${desk ? ' An owner or coach links them.' : ''}`), desk ? null : h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
+    header('Testing', 'Combines, evaluations and team testing. Enter results by hand or stopwatch, upload sheets, or connect your devices.', h('div', { class: 'row wrap' },
+      h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'Test library'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/connections' }, 'Devices'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/new' }, 'New testing day'))),
     connected.length ? h('p', { class: 'small muted' }, `Connected: ${connected.map((i) => i.name.split(' (')[0]).join(', ')}.`) : null,
-    panel('Testing days', {}, days.data.length ? days.data.map((d) => h('a', { class: 'list-item', href: `#/testing/${d.id}`, style: 'text-decoration:none;color:inherit' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, d.name), h('span', { class: 'small muted' }, `${ymd(d.date)} · ${d.athletes_count} athletes · ${d.tests.length} tests`)),
-      h('span', { class: `dp-badge dp-badge--${d.results_count ? 'good' : 'muted'}` }, `${d.results_count} results`))) : h('div', { class: 'empty' }, 'No testing days yet. Start one, or import results from a device.')));
+    panel('Testing days', { action: h('div', { class: 'row wrap tm-views' }, toggles) }, h('div', null, find), list));
 }
 
 async function viewNewTesting(main) {
-  const [lib, clientsList, contracts, presetList] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts'), get('/v1/test-presets')]);
-  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: bizDate() });
-  const team = select([['', 'Individual athletes'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
+  if (deskStop(main, 'New testing day')) return;
+  const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
+  const [lib, clientsList, teamList, days, presetList] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/teams'), get('/v1/testing-sessions'), get('/v1/test-presets')]);
+  const name = input({ value: 'Testing day', 'aria-label': 'Name' }), date = input({ type: 'date', value: bizDate() });
+  let nameTouched = false;
+  name.addEventListener('input', () => { nameTouched = true; });
+  const setName = (text) => { if (!nameTouched) name.value = text; };
+  const teams = teamList.data;                              // active teams, names only (coaches can't see contracts)
+  const team = select([['', 'Individual athletes'], ...teams.map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
+  const retest = select([['', 'No, pick athletes and tests'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)}, ${d.athletes_count} athletes, ${d.tests.length} tests)`])], { value: qs.get('retest') ?? '' });
+
+  // Athletes: find, tick all shown, clear.
   const picked = new Set();
+  const athletes = clientsList.data.map((c) => ({ ...c, cb: h('input', { type: 'checkbox', 'aria-label': c.name, onChange: (e) => { e.target.checked ? picked.add(c.id) : picked.delete(c.id); countA(); } }) }));
+  const athleteRows = athletes.map((a) => { const row = h('label', { class: 'row small ts-pick' }, a.cb, h('span', null, a.name), h('span', { class: 'muted', style: 'font-family:var(--font-mono);font-size:12px' }, a.athlete_id)); a.row = row; return row; });
+  const findA = input({ type: 'search', placeholder: 'Find an athlete by name or ID', 'aria-label': 'Find an athlete' });
+  const aCount = h('span', { class: 'small muted' });
+  const countA = () => { aCount.textContent = `${picked.size} picked`; };
+  const shownA = () => athletes.filter((a) => a.row.style.display !== 'none');
+  findA.addEventListener('input', () => { const q = findA.value.trim().toLowerCase(); athletes.forEach((a) => { a.row.style.display = !q || `${a.name} ${a.athlete_id}`.toLowerCase().includes(q) ? '' : 'none'; }); });
+  const athleteBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Athletes (walk-ups can be added on the day)'),
+    h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:220px' }, findA),
+      btn('Tick all shown', () => { shownA().forEach((a) => { a.cb.checked = true; picked.add(a.id); }); countA(); }, 'secondary'),
+      btn('Clear', () => { athletes.forEach((a) => { a.cb.checked = false; }); picked.clear(); countA(); }, 'ghost'), aCount),
+    h('div', { class: 'ts-picklist' }, athleteRows.length ? athleteRows : h('p', { class: 'muted small' }, 'No clients yet. Add clients first, or pick a team.')));
+  countA();
+
+  // Tests: find, presets, and the running order with remove buttons.
+  const order = [];
   const testBoxes = new Map();
-  const order = [];          // running order: a preset's order first, then tests ticked by hand in the order they were ticked
+  const orderList = h('ol', { class: 'ts-order' });
+  const drawOrder = () => fill(orderList, order.length ? order.map((k, i) => { const t = lib.data.find((x) => x.key === k);
+    return h('li', { class: 'row', style: 'gap:8px' }, h('span', { class: 'muted small', style: 'min-width:20px' }, `${i + 1}.`), h('span', { class: 'grow' }, t.name), btn('×', () => toggleTest(k, false), 'ghost', { 'aria-label': `Remove ${t.name}`, class: 'dp-btn dp-btn--ghost ts-x' })); })
+    : h('li', { class: 'muted small', style: 'list-style:none' }, 'No tests yet. Tick tests below or start from a preset.'));
+  const toggleTest = (k, on) => { const cb = testBoxes.get(k); if (cb) cb.checked = on; const i = order.indexOf(k); if (on && i < 0) order.push(k); if (!on && i >= 0) order.splice(i, 1); drawOrder(); };
   const byCat = lib.categories.map((cat) => [cat, lib.data.filter((t) => t.category === cat.key)]).filter(([, ts]) => ts.length);
-  const testPicker = h('div', { class: 'stack' }, byCat.map(([cat, ts]) => h('details', null, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:36px' }, cat.name),
-    h('div', { class: 'row wrap', style: 'gap:4px 16px;margin:8px 0' }, ts.map((t) => {
-      const cb = h('input', { type: 'checkbox', value: t.key, onChange: () => { const i = order.indexOf(t.key); if (cb.checked && i < 0) order.push(t.key); if (!cb.checked && i >= 0) order.splice(i, 1); } });
-      testBoxes.set(t.key, cb);
-      return h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, cb, t.name);
-    })))));
-  const usePreset = (p) => {
-    for (const t of p.tests) { const cb = testBoxes.get(t.key); if (cb) { cb.checked = true; cb.closest('details').open = true; if (!order.includes(t.key)) order.push(t.key); } }
-    if (!name.value.trim() || name.value === 'Testing day') name.value = p.name;
-  };
+  const catBlocks = byCat.map(([cat, ts]) => {
+    const labels = ts.map((t) => { const cb = h('input', { type: 'checkbox', value: t.key, onChange: (e) => toggleTest(t.key, e.target.checked) }); testBoxes.set(t.key, cb); const l = h('label', { class: 'row small ts-pick' }, cb, t.name); l.dataset.search = `${t.name} ${t.key} ${(t.aliases ?? []).join(' ')}`.toLowerCase(); return l; });
+    const d = h('details', null, h('summary', { class: 'strong ts-summary' }, cat.name), h('div', { class: 'row wrap', style: 'gap:0 16px;margin:4px 0 8px' }, labels));
+    return { d, labels };
+  });
+  const findT = input({ type: 'search', placeholder: 'Find a test', 'aria-label': 'Find a test' });
+  findT.addEventListener('input', () => { const q = findT.value.trim().toLowerCase(); catBlocks.forEach(({ d, labels }) => { let any = false; labels.forEach((l) => { const hit = !q || l.dataset.search.includes(q); l.style.display = hit ? '' : 'none'; any ||= hit; }); d.style.display = any ? '' : 'none'; d.open = !!q && any; }); });
+  // Presets are kept in the Test library; a preset adds its tests in its own order.
+  const usePreset = (p) => { p.tests.forEach((t) => { if (testBoxes.has(t.key)) toggleTest(t.key, true); }); setName(team.value ? name.value : p.name); };
   const usable = presetList.data.filter((p) => p.tests.length);
   const presets = usable.length ? h('div', { class: 'row wrap' }, usable.map((p) => btn(p.name, () => usePreset(p), 'secondary', { title: p.tests.map((t) => t.name).join(', ') })))
-    : h('p', { class: 'small muted' }, 'No presets yet. ', h('a', { href: '#/testing/library?tab=presets' }, 'Make one in the Test library'), ' to start faster next time.');
-  const start = usable.find((p) => p.id === hashQuery().get('preset'));
-  const athleteList = h('div', { class: 'row wrap', style: 'gap:4px 16px' }, clientsList.data.filter((c) => c.status !== 'canceled').map((c) => {
-    const cb = h('input', { type: 'checkbox', onChange: (e) => (e.target.checked ? picked.add(c.id) : picked.delete(c.id)) });
-    return h('label', { class: 'row small', style: 'gap:6px;min-height:32px' }, cb, c.name);
-  }));
-  const athleteBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Athletes (you can add walk-ups on the day)'), athleteList);
-  team.addEventListener('change', () => { athleteBox.style.display = team.value ? 'none' : ''; });
-  fill(main, header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or pulled from devices.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Cancel')),
+    : h('p', { class: 'small muted', style: 'margin:0' }, 'No presets yet. ', h('a', { href: '#/testing/library?tab=presets' }, 'Make one in the Test library'), ' to start faster next time.');
+  const testsBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Tests, in running order'), orderList,
+    h('div', { class: 'small muted' }, 'Start from a preset, then adjust.'), presets, h('div', { style: 'max-width:320px' }, findT), catBlocks.map((c) => c.d));
+  drawOrder();
+
+  const retestNote = h('p', { class: 'small muted' });
+  const sync = () => {
+    const past = days.data.find((d) => d.id === retest.value);
+    athleteBox.style.display = past || team.value ? 'none' : '';
+    testsBox.style.display = past ? 'none' : '';
+    team.disabled = !!past;
+    retestNote.textContent = past ? `Same ${past.athletes_count} athletes and ${past.tests.length} tests as ${past.name}. Archived athletes are left out.` : '';
+    if (past) setName(`${past.name} retest`);
+    else if (team.value) { const c = teams.find((x) => x.id === team.value); setName(`${c.org_name} ${c.name} testing`); }
+  };
+  team.addEventListener('change', sync); retest.addEventListener('change', sync);
+  sync();
+  fill(main, header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or uploaded from a sheet or device.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Cancel')),
     h('form', { class: 'dp-panel stack', style: 'max-width:900px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const rank = (k) => (order.includes(k) ? order.indexOf(k) : order.length);
-      const tests = [...testBoxes.entries()].filter(([, cb]) => cb.checked).map(([k]) => k).sort((x, y) => rank(x) - rank(y));
-      if (!tests.length) throw new Error('Choose at least one test.');
-      const d = await post('/v1/testing-sessions', { name: name.value, date: date.value, tests, contract_id: team.value || undefined, athletes: team.value ? undefined : [...picked].map((client_id) => ({ client_id })) });
+      if (!date.value) throw new Error('Pick the date.');
+      let d;
+      if (retest.value) d = await post('/v1/testing-sessions', { retest_of: retest.value, name: name.value, date: date.value });
+      else {
+        if (!order.length) throw new Error('Choose at least one test.');
+        if (!team.value && !picked.size) throw new Error('Pick at least one athlete, or a team. Walk-ups can be added on the day.');
+        d = await post('/v1/testing-sessions', { name: name.value, date: date.value, tests: order, contract_id: team.value || undefined, athletes: team.value ? undefined : [...picked].map((client_id) => ({ client_id })) });
+      }
+      toast(`${d.name} is ready: ${d.athletes.length} ${d.athletes.length === 1 ? 'athlete' : 'athletes'}${d.left_out ? `, ${d.left_out} archived ${d.left_out === 1 ? 'athlete' : 'athletes'} left out` : ''}.`);
       location.hash = `#/testing/${d.id}`;
     }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 2fr' }, field('Name', name), field('Date', date), field('Team', team)),
-      athleteBox, h('div', { class: 'dp-label' }, 'Tests'), h('div', { class: 'small muted' }, 'Start from a preset, then adjust. Tests run in the preset\'s order, then in the order you tick them.'), presets, testPicker,
+      h('div', { class: 'form-grid cols-3' }, field('Name', name), field('Date', date), field('Team', team)),
+      field('Retest a past day?', retest), retestNote,
+      athleteBox, testsBox,
       h('div', null, btn('Start testing day', null, 'primary', { type: 'submit' }))));
+  const start = usable.find((p) => p.id === qs.get('preset'));
   if (start) usePreset(start);        // "Plan a day" from a preset in the Test library
 }
 
-// Entry screen: one test at a time, every athlete's attempts, and a stopwatch for hand timing.
-let testingState = { testKey: null, athleteIdx: 0 };
+// Entry screen: one test at a time, every athlete's attempts, a stopwatch for hand timing, and live rankings.
+let testingState = { dayId: null, testKey: null, athleteIdx: 0, view: 'entry', find: '', extra: {}, focus: null };
 let stopwatchRunning = false;
+// Stopwatch memory across redraws: a time that couldn't be saved (pending) and the last saved time (for Undo).
+let swState = { pending: null, last: null };
+let swEscape = null;
 async function viewTestingDay(main, id) {
-  const [day, clientsList, notes] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients'), get(`/v1/testing-sessions/${id}/notes`).catch(() => null)]);
-  if (!day.tests.length) return fill(main, header(day.name, ymd(day.date)), h('div', { class: 'empty' }, 'No tests on this day.'));
-  if (!day.tests.some((t) => t.key === testingState.testKey)) testingState = { testKey: day.tests[0].key, athleteIdx: 0 };
-  const test = day.tests.find((t) => t.key === testingState.testKey);
-  const metric = test.metrics[0];
-  const units = metric.units;
-  const unitSel = select(units.map((u) => [u, UNIT_LABEL[u] || u]), { value: metric.unit, 'aria-label': 'Unit' });
-  const sides = test.sides === 'lr' ? ['L', 'R'] : [null];
-  const hand = h('input', { type: 'checkbox', checked: !!test.timed });
+  const manage = state.user?.role !== 'front_desk';
+  const [day, clientsList, notes, lib] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients'), get(`/v1/testing-sessions/${id}/notes`).catch(() => null), manage ? get('/v1/tests') : { data: [] }]);
+  if (testingState.dayId !== id) { testingState = { dayId: id, testKey: null, athleteIdx: 0, view: 'entry', find: '', extra: {}, focus: null }; swState = { pending: null, last: null }; }
+  stopwatchRunning = false;                                // a fresh screen has no clock running
+  // Redraw keeping the scroll position; while the clock runs, stopping it redraws instead (so the run isn't lost).
+  const redraw = () => { if (stopwatchRunning) return; const y = window.scrollY; render(); setTimeout(() => window.scrollTo(0, y), 250); };
   const athletes = day.athletes;
   const who = (a) => (a.client_id ? { client_id: a.client_id } : { roster_id: a.roster_id });
-  const results = (a, side) => a.results.filter((r) => r.test_id === test.id && r.metric === metric.key && (r.side ?? null) === side);
-  const bestOf = (rs) => (rs.length ? (metric.better === 'lower' ? Math.min(...rs.map((r) => r.value)) : Math.max(...rs.map((r) => r.value))) : null);
+  const akey = (a) => a.client_id ?? a.roster_id;
 
-  async function save(a, side, value, attempt, timing) {
-    const r = await post('/v1/results', { session_id: id, results: [{ ...who(a), test: test.key, metric: metric.key, value, unit: unitSel.value, side, attempt, timing, recorded_at: `${day.date}T${new Date().toISOString().slice(11)}` }] });
+  // Share: preview who it reaches first.
+  async function share() {
+    const pv = await get(`/v1/testing-sessions/${id}/share-preview`);
+    if (!pv.with_results) return toast('Enter some results before sharing this day.', 'warn');
+    const note = textarea(day.parent_note ?? '', { rows: '3', 'aria-label': 'Note for families', placeholder: 'Optional. It appears on their report and in the email.' });
+    const list = (label, names) => (names.length ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'muted' }, `${label} (${names.length}): `), names.join(', ')) : null);
+    teamDialog('Share with parents', h('div', { class: 'stack' },
+      h('p', { style: 'margin:0' }, `${pv.with_results} of ${pv.athletes} ${pv.athletes === 1 ? 'athlete' : 'athletes'} ${pv.with_results === 1 ? 'has' : 'have'} results. They appear in the parent portal, and ${pv.families ? `${pv.families} ${pv.families === 1 ? 'family is' : 'families are'} emailed` : 'no family is emailed'}.`),
+      list('No results yet, not shared', pv.without_results), list('No parent email, not emailed', pv.no_email),
+      field('A note for families', note)),
+      [{ label: pv.families ? `Share and email ${pv.families} ${pv.families === 1 ? 'family' : 'families'}` : 'Share without emails', variant: 'primary', onClick: async () => {
+        const r = await post(`/v1/testing-sessions/${id}/share`, { parent_note: note.value });
+        toast(r.families_notified ? `Shared. ${r.families_notified} ${r.families_notified === 1 ? 'family' : 'families'} emailed.` : 'Shared. No emails were sent.'); redraw(); } },
+      { label: 'Cancel', variant: 'ghost' }]);
+  }
+  // After sharing: late results can be sent to just the families who have something new.
+  let banner = null;
+  if (manage && day.shared_at && day.new_since_share) {
+    const pv = await get(`/v1/testing-sessions/${id}/share-preview`);
+    banner = h('div', { class: 'test-banner row wrap', style: 'gap:12px' },
+      h('span', { class: 'grow' }, `${pv.new_since_share.length} ${pv.new_since_share.length === 1 ? 'athlete has' : 'athletes have'} results added since families were emailed (${pv.new_since_share.slice(0, 4).join(', ')}${pv.new_since_share.length > 4 ? '…' : ''}).${pv.new_families ? '' : ' None of them has a parent email.'}`),
+      pv.new_families ? btn(`Email ${pv.new_families} ${pv.new_families === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/testing-sessions/${id}/share`, { only_new: true }); toast(`${r.families_notified} ${r.families_notified === 1 ? 'family' : 'families'} emailed.`); redraw(); }), 'outline')
+        : btn('Save and mark as shared', (e) => busy(e.currentTarget, async () => { await post(`/v1/testing-sessions/${id}/share`, { only_new: true, notify: false }); toast('Marked as shared. No emails were sent.'); redraw(); }), 'outline'));
+  }
+
+  // Edit day: rename, re-date, remove tests, retest these athletes, delete.
+  function editDay() {
+    const nm = input({ value: day.name, 'aria-label': 'Name' }), dt = input({ type: 'date', value: day.date, 'aria-label': 'Date' });
+    const testsList = h('div', { class: 'stack-tight' }, day.tests.map((t) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, t.name),
+      day.tests.length > 1 ? btn('Remove', async (e) => {
+        const b = e.currentTarget; b.disabled = true;
+        try {
+          const r = await withConfirm((ok) => patch(`/v1/testing-sessions/${id}`, { tests: day.tests.filter((x) => x.key !== t.key).map((x) => x.key), ...(ok ? { confirm: true } : {}) }),
+            (err) => `${t.name} has ${err.details.results} ${err.details.results === 1 ? 'result' : 'results'} on this day. Removing the test deletes ${err.details.results === 1 ? 'it' : 'them'} from every profile. Remove it?`);
+          if (r) { document.getElementById('dialog').close(); toast(`${t.name} removed${r.deleted_results ? ` with ${r.deleted_results} ${r.deleted_results === 1 ? 'result' : 'results'}` : ''}.`); redraw(); }
+        } catch (x) { toast(x.message, 'warn'); } finally { b.disabled = false; }
+      }, 'ghost') : null)));
+    const canDelete = !day.shared_at || isOwner();
+    teamDialog('Edit testing day', h('div', { class: 'stack' },
+      h('div', { class: 'form-grid' }, field('Name', nm), field('Date', dt)),
+      h('div', { class: 'dp-label' }, 'Tests'), testsList,
+      h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/new?retest=${id}`, onClick: () => document.getElementById('dialog').close() }, 'Retest these athletes'),
+        canDelete ? btn('Delete this day', async (e) => {
+          const b = e.currentTarget; b.disabled = true;
+          try {
+            const r = await withConfirm((ok) => del(`/v1/testing-sessions/${id}${ok ? '?confirm=true' : ''}`), (err) => `${day.name} has ${err.details.results} ${err.details.results === 1 ? 'result' : 'results'}. Deleting the day deletes ${err.details.results === 1 ? 'it' : 'them'} from every profile. This can't be undone. Delete it?`);
+            if (r) { document.getElementById('dialog').close(); toast(`${day.name} deleted.`); location.hash = '#/testing'; }
+          } catch (x) { toast(x.message, 'warn'); } finally { b.disabled = false; }
+        }, 'ghost', { style: 'color:var(--amber)' }) : h('span', { class: 'small muted' }, 'Families have these results. Only the owner can delete a shared day.'))),
+      [{ label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/testing-sessions/${id}`, { name: nm.value, date: dt.value }); toast('Saved.'); redraw(); } }, { label: 'Cancel', variant: 'ghost' }]);
+  }
+
+  const addTest = manage ? select([['', 'Add a test…'], ...lib.data.filter((t) => !day.tests.some((x) => x.key === t.key)).map((t) => [t.key, t.name])], { 'aria-label': 'Add a test to this day', style: 'max-width:240px' }) : null;
+  addTest?.addEventListener('change', () => busy(addTest, async () => { if (!addTest.value) return; await patch(`/v1/testing-sessions/${id}`, { tests: [...day.tests.map((t) => t.key), addTest.value] }); testingState.testKey = addTest.value; toast('Test added.'); redraw(); }));
+  const walkUp = select([['', 'Add a walk-up athlete…'], ...clientsList.data.filter((c) => !athletes.some((a) => a.client_id === c.id)).map((c) => [c.id, `${c.name} (${c.athlete_id})`])], { 'aria-label': 'Add a walk-up athlete' });
+  walkUp.addEventListener('change', () => busy(walkUp, async () => { if (!walkUp.value) return; await post(`/v1/testing-sessions/${id}/athletes`, { client_id: walkUp.value }); toast('Added.'); redraw(); }));
+  const headerActions = h('div', { class: 'row wrap' },
+    manage ? (day.shared_at ? btn('Shared with parents ✓', (e) => { if (confirm('Hide these results from families again?')) busy(e.currentTarget, async () => { await del(`/v1/testing-sessions/${id}/share`); toast('Hidden from families.'); redraw(); }); }, 'outline')
+      : btn('Share with parents', (e) => busy(e.currentTarget, share), day.tests.some((t) => t.timed) ? 'secondary' : 'primary')) : null,
+    manage ? btn('Edit day', editDay, 'secondary') : null,
+    btn('Download sheet', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?session_id=${id}`)), 'secondary'),
+    manage ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/upload?session=${id}` }, 'Upload results') : null,
+    h('a', { class: 'dp-btn dp-btn--ghost', href: '#/testing' }, 'All testing days'));
+  const subtitle = `${ymd(day.date)} · ${athletes.length} ${athletes.length === 1 ? 'athlete' : 'athletes'} · ${day.shared_at ? 'Shared with families' : 'Not shared yet'}`;
+  if (!day.tests.length) return fill(main, header(day.name, subtitle, headerActions), h('div', { class: 'empty' }, 'No tests on this day.', manage ? h('div', { style: 'margin-top:12px;display:flex;justify-content:center' }, addTest) : null));
+  if (!day.tests.some((t) => t.key === testingState.testKey)) { testingState.testKey = day.tests[0].key; testingState.athleteIdx = 0; }
+  const test = day.tests.find((t) => t.key === testingState.testKey);
+  const metric = test.metrics[0];
+  const unitSel = select(metric.units.map((u) => [u, UNIT_LABEL[u] || u]), { value: metric.unit, 'aria-label': 'Unit' });
+  const sides = test.sides === 'lr' ? ['L', 'R'] : [null];
+  const hand = h('input', { type: 'checkbox', checked: !!test.timed });
+  const resultsOf = (a, side, t = test, m = metric) => a.results.filter((r) => r.test_id === t.id && r.metric === m.key && (r.side ?? null) === side).sort((x, y) => (x.attempt ?? 99) - (y.attempt ?? 99));
+  const bestOf = (rs, m = metric) => (rs.length && m.better !== 'none' ? (m.better === 'lower' ? Math.min(...rs.map((r) => r.value)) : Math.max(...rs.map((r) => r.value))) : rs.length ? rs[rs.length - 1].value : null);
+  const prevOf = (a, side, t = test, m = metric) => a.previous_best?.[`${t.key}|${m.key}|${side ?? ''}`] ?? null;
+  const doneFor = (t) => athletes.filter((a) => (t.sides === 'lr' ? ['L', 'R'] : [null]).every((sd) => resultsOf(a, sd, t, t.metrics[0]).length)).length;
+
+  async function save(a, side, value, attempt, timing, source) {
+    const r = await post('/v1/results', { session_id: id, results: [{ ...who(a), test: test.key, metric: metric.key, value, unit: unitSel.value, side, attempt, timing, source, recorded_at: `${day.date}T${new Date().toISOString().slice(11)}` }] });
     if (r.errors.length) throw new Error(r.errors[0].message);
     if (r.prs.length) toast(`New PR for ${a.name.split(' ')[0]}: ${fmtResult(r.prs[0].value, metric.unit, metric.decimals)}`);
     return r;
   }
-  const rows = athletes.map((a, idx) => sides.map((side) => {
-    const rs = results(a, side);
+  const checkValue = (v) => {
+    if (!Number.isFinite(v)) return 'Type a number.';
+    if (unitSel.value === metric.unit && outOfRange(v, metric.range)) return `${+v.toFixed(3)} ${UNIT_LABEL[metric.unit] ?? metric.unit} isn't possible for ${shortTest(test)} (${rangeWords(metric.range, metric.unit)}).`;
+    return null;
+  };
+
+  // Rows: one per athlete (and side). Typed entry: Enter or the arrow keys move down the column.
+  const q = testingState.find.trim().toLowerCase();
+  const visible = athletes.map((a, idx) => ({ a, idx })).filter(({ a }) => !q || `${a.name} ${a.athlete_id ?? ''}`.toLowerCase().includes(q));
+  const hint = typedHint(metric);
+  const focusCell = (athleteIdx, side, attempt) => main.querySelector(`input[data-cell="${athleteIdx}|${side ?? ''}|${attempt}"]`)?.focus();
+  const move = (pos, dir, attempt) => { const i = pos + dir; const next = rowsOrder[i]; if (next) focusCell(next.idx, next.side, attempt); };
+  const rowsOrder = visible.flatMap(({ idx }) => sides.map((side) => ({ idx, side })));
+  const rows = visible.map(({ a, idx }) => sides.map((side) => {
+    const rs = resultsOf(a, side);
+    const extraKey = `${test.key}|${akey(a)}|${side ?? ''}`;
+    const slots = Math.min(20, Math.max(test.attempts, (rs.at(-1)?.attempt ?? rs.length)) + (testingState.extra[extraKey] ?? 0));
+    const pos = rowsOrder.findIndex((x) => x.idx === idx && x.side === side);
     const inputs = [];
-    for (let n = 1; n <= Math.max(test.attempts, rs.length + (rs.length >= test.attempts ? 0 : 0)); n++) {
-      const existing = rs[n - 1];
-      const inp = input({ type: 'number', step: 'any', inputmode: 'decimal', value: existing ? String(+existing.value.toFixed(metric.decimals + 1)) : '', disabled: !!existing, style: 'width:92px', 'aria-label': `${a.name}${side ? ` ${side}` : ''} attempt ${n}` });
-      if (!existing) inp.addEventListener('change', () => busy(inp, async () => { if (inp.value === '') return; await save(a, side, Number(inp.value), n, test.timed && hand.checked ? 'hand' : test.timed ? 'electronic' : undefined); render(); }));
-      if (existing) inputs.push(h('span', { class: 'row', style: 'gap:2px' }, inp, btn('×', (e) => { if (confirm('Delete this attempt?')) busy(e.currentTarget, async () => { await del(`/v1/results/${existing.id}`); render(); }); }, 'ghost', { 'aria-label': 'Delete attempt', style: 'min-width:28px;padding:0 6px' })));
-      else inputs.push(inp);
+    for (let n = 1; n <= slots; n++) {
+      const existing = rs.find((r) => (r.attempt ?? rs.indexOf(r) + 1) === n);
+      const inp = input({ type: 'text', inputmode: 'decimal', autocomplete: 'off', value: existing ? String(+existing.value.toFixed(metric.decimals + 1)) : '', disabled: !!existing, class: 'dp-input ts-cell',
+        'data-cell': `${idx}|${side ?? ''}|${n}`, 'aria-label': `${a.name}${side ? ` ${side === 'L' ? 'left' : 'right'}` : ''} attempt ${n}` });
+      if (!existing) {
+        // Enter and leaving the box both save; the first one wins, so a value is never saved twice.
+        const commit = () => { if (inp.dataset.saving || inp.value.trim() === '') return; inp.dataset.saving = '1'; return busy(inp, async () => {
+          const v = parseTyped(inp.value, unitSel.value), problem = checkValue(v);
+          if (problem) { inp.classList.add('ts-bad'); throw new Error(problem); }
+          await save(a, side, v, n, test.timed && hand.checked ? 'hand' : test.timed ? 'electronic' : undefined, 'manual');
+          const next = rowsOrder[pos + 1];
+          testingState.focus = next ? `${next.idx}|${next.side ?? ''}|${n}` : null;
+          redraw();
+        }).finally(() => { delete inp.dataset.saving; }); };
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); if (inp.value.trim()) commit(); else move(pos, 1, n); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); move(pos, 1, n); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); move(pos, -1, n); }
+        });
+        inp.addEventListener('change', commit);
+        inp.addEventListener('input', () => inp.classList.remove('ts-bad'));
+        inputs.push(inp);
+      } else if (!manage) inputs.push(inp);                // front desk can't delete results; an owner or coach fixes mistakes
+      else inputs.push(h('span', { class: 'row', style: 'gap:0' }, inp, btn('×', (e) => { if (confirm(`Delete ${a.name.split(' ')[0]}'s attempt ${n} (${fmtResult(existing.value, metric.unit, metric.decimals)})?`)) busy(e.currentTarget, async () => { await del(`/v1/results/${existing.id}`); redraw(); }); }, 'ghost', { 'aria-label': `Delete attempt ${n}`, class: 'dp-btn dp-btn--ghost ts-x' })));
     }
-    const best = bestOf(rs);
+    if (slots < 20) inputs.push(btn('+', () => { testingState.extra[extraKey] = (testingState.extra[extraKey] ?? 0) + 1; redraw(); }, 'ghost', { 'aria-label': `Add another attempt for ${a.name}`, title: 'Another attempt', class: 'dp-btn dp-btn--ghost ts-x' }));
+    const best = bestOf(rs), prev = prevOf(a, side);
+    const pr = best != null && prev != null && metric.better !== 'none' && better(metric, best, prev);
     const up = test.timed && testingState.athleteIdx === idx;
-    return h('div', { class: 'list-item', style: `flex-wrap:wrap;${up ? 'outline:2px solid var(--green-mid);outline-offset:-2px;border-radius:6px' : ''}` },
-      test.timed && side === sides[0] ? btn(up ? 'Up' : 'Time', () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.athleteIdx = idx; render(); }, up ? 'primary' : 'ghost', { 'aria-label': `Time ${a.name} next`, style: 'min-width:64px' }) : test.timed ? h('span', { style: 'min-width:64px' }) : null,
-      h('div', { class: 'grow stack-tight', style: 'min-width:160px' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, [a.athlete_id, side ? (side === 'L' ? 'Left' : 'Right') : null].filter(Boolean).join(' · '))),
+    return h('div', { class: `list-item ts-row${up ? ' ts-up' : ''}` },
+      test.timed && side === sides[0] ? btn(up ? 'Up' : 'Time', () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.athleteIdx = idx; redraw(); }, up ? 'outline' : 'ghost', { 'aria-label': `Time ${a.name} next`, style: 'min-width:64px' }) : test.timed ? h('span', { style: 'min-width:64px' }) : null,
+      h('div', { class: 'grow stack-tight', style: 'min-width:150px' }, h('span', { class: 'strong' }, a.name, a.archived ? h('span', { class: 'dp-badge dp-badge--muted', style: 'margin-left:6px' }, 'Archived') : null),
+        h('span', { class: 'small muted' }, [a.athlete_id, side ? (side === 'L' ? 'Left' : 'Right') : null, prev != null ? `Best before ${fmtResult(prev, metric.unit, metric.decimals)}` : metric.better !== 'none' ? 'First time' : null].filter(Boolean).join(' · '))),
       h('div', { class: 'row wrap', style: 'gap:6px' }, inputs),
-      h('span', { class: 'strong', style: 'min-width:90px;text-align:right' }, best == null ? '' : fmtResult(best, metric.unit, metric.decimals)));
+      h('span', { class: 'strong', style: 'min-width:92px;text-align:right' }, best == null ? '' : fmtResult(best, metric.unit, metric.decimals), pr ? h('span', { class: 'dp-badge dp-badge--good', style: 'margin-left:6px' }, 'PR') : null),
+      manage && side === sides[0] ? btn('Remove', async (e) => {
+        const b = e.currentTarget; b.disabled = true;
+        try {
+          const r = await withConfirm((ok) => del(`/v1/testing-sessions/${id}/athletes/${akey(a)}${ok ? '?confirm=true' : ''}`), (err) => `${a.name} has ${err.details.results} ${err.details.results === 1 ? 'result' : 'results'} on this day. Removing ${a.name.split(' ')[0]} deletes ${err.details.results === 1 ? 'it' : 'them'}. Remove?`);
+          if (r) { toast(`${a.name} removed.`); redraw(); }
+        } catch (x) { toast(x.message, 'warn'); } finally { b.disabled = false; }
+      }, 'ghost', { 'aria-label': `Remove ${a.name} from this day`, class: 'dp-btn dp-btn--ghost ts-remove' }) : null);
   }));
 
-  // Stopwatch: Start, then Stop records the time into the selected athlete's next open attempt and moves to the next athlete.
+  // Stopwatch: Start, then Stop saves the time to the athlete who's up and moves on. Cancel run (or Esc) for a false start.
   let stopwatch = null;
-  if (test.timed) {
-    const display = h('div', { style: 'font:700 44px/1 var(--font-mono);color:var(--steel);min-width:180px' }, '0.00');
+  if (test.timed && testingState.view === 'entry') {
+    const display = h('div', { class: 'ts-clock', 'aria-live': 'off' }, '0.00');
     let t0 = null, raf = null;
     const cur = athletes[testingState.athleteIdx];
     const tick = () => { display.textContent = ((performance.now() - t0) / 1000).toFixed(2); raf = requestAnimationFrame(tick); };
+    const cancelBtn = btn('Cancel run', () => cancel(), 'ghost', { style: 'display:none' });
+    const cancel = () => { if (t0 == null) return; cancelAnimationFrame(raf); t0 = null; stopwatchRunning = false; go.textContent = 'Start'; display.textContent = '0.00'; cancelBtn.style.display = 'none'; toast('Run cancelled. Nothing was saved.'); };
+    swEscape = (e) => { if (e.key === 'Escape' && stopwatchRunning) { e.preventDefault(); cancel(); } };
+    const saveTime = async (p) => {
+      const a = athletes.find((x) => akey(x) === p.key);
+      const problem = checkValue(p.secs);
+      if (problem) throw new Error(problem);
+      const r = await save(a, p.side, p.secs, p.attempt, 'hand', 'stopwatch');
+      swState = { pending: null, last: { id: r.results[0].id, idx: athletes.indexOf(a), label: `${a.name.split(' ')[0]} ${p.secs.toFixed(2)} s` } };
+      const done = sides.every((sd) => resultsOf(a, sd).length + (sd === p.side ? 1 : 0) >= test.attempts);
+      if (done && athletes.indexOf(a) === testingState.athleteIdx) testingState.athleteIdx = Math.min(athletes.length - 1, testingState.athleteIdx + 1);
+    };
     const go = btn('Start', async () => {
       if (!cur) return toast('Add an athlete first.', 'warn');
-      if (t0 == null) { t0 = performance.now(); stopwatchRunning = true; go.textContent = 'Stop'; tick(); return; }
-      cancelAnimationFrame(raf); stopwatchRunning = false;
+      if (swState.pending) return toast('Save or discard the last time first.', 'warn');
+      if (t0 == null) { t0 = performance.now(); stopwatchRunning = true; go.textContent = 'Stop'; cancelBtn.style.display = ''; tick(); return; }
+      cancelAnimationFrame(raf); stopwatchRunning = false; cancelBtn.style.display = 'none';
       const secs = Number(((performance.now() - t0) / 1000).toFixed(2));
       t0 = null; go.textContent = 'Start'; display.textContent = secs.toFixed(2);
-      const side = sides.find((sd) => results(cur, sd).length < test.attempts) ?? sides[0];
-      await save(cur, side, secs, results(cur, side).length + 1, 'hand');
-      const done = sides.every((sd) => results(cur, sd).length + (sd === side ? 1 : 0) >= test.attempts);
-      if (done) testingState.athleteIdx = Math.min(athletes.length - 1, testingState.athleteIdx + 1);
-      render();
+      const side = sides.find((sd) => resultsOf(cur, sd).length < test.attempts) ?? sides[0];
+      const p = { key: akey(cur), name: cur.name, side, attempt: (resultsOf(cur, side).at(-1)?.attempt ?? resultsOf(cur, side).length) + 1, secs };
+      try { await saveTime(p); redraw(); }
+      catch (e) { swState = { ...swState, pending: { ...p, error: e.message } }; redraw(); }
     }, 'primary', { style: 'min-width:140px;min-height:64px;font-size:22px' });
-    stopwatch = panel('Stopwatch', { subtitle: cur ? `Up: ${cur.name}. Tap Time next to anyone to switch. Stopping the clock saves the time and moves to the next athlete.` : null },
-      h('div', { class: 'row wrap', style: 'gap:16px;align-items:center' }, display, go, h('span', { class: 'small muted' }, 'Hand times usually read faster than electronic gates, so the app keeps them labeled.')));
-  }
-  const add = select([['', 'Add a walk-up athlete…'], ...clientsList.data.filter((c) => !athletes.some((a) => a.client_id === c.id)).map((c) => [c.id, c.name])], { 'aria-label': 'Add athlete' });
-  add.addEventListener('change', () => busy(add, async () => {
-    await patch(`/v1/testing-sessions/${id}`, { athletes: [...athletes.map(who), { client_id: add.value }] }); render();
-  }));
-  fill(main,
-    header(day.name, `${ymd(day.date)} · ${athletes.length} athletes`, h('div', { class: 'row' },
-      day.shared_at ? btn('Shared with parents ✓', (e) => { if (confirm('Hide these results from families again?')) busy(e.currentTarget, async () => { await del(`/v1/testing-sessions/${id}/share`); toast('Hidden from families.'); render(); }); }, 'outline')
-        : btn('Share with parents', (e) => { const note = prompt('A note for families (optional). It appears on their report and in the email.', day.parent_note ?? ''); if (note === null) return; busy(e.currentTarget, async () => { const r = await post(`/v1/testing-sessions/${id}/share`, { parent_note: note }); toast(`Shared. ${r.families_notified} ${r.families_notified === 1 ? 'family' : 'families'} emailed.`); render(); }); }, 'primary'),
-      btn('Download sheet', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?session_id=${id}`)), 'secondary'),
-      h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/upload?session=${id}` }, 'Upload results'),
-      h('a', { class: 'dp-btn dp-btn--ghost', href: '#/testing' }, 'All testing days'))),
-    h('div', { class: 'p-chips', style: 'display:flex;gap:8px;overflow-x:auto' }, day.tests.map((t) => btn(t.name.replace(/ \(.*\)$/, ''), () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState = { testKey: t.key, athleteIdx: 0 }; render(); }, t.key === test.key ? 'primary' : 'secondary', { style: 'white-space:nowrap;flex-shrink:0' }))),
-    stopwatch,
-    panel(test.name, { subtitle: `${metric.name}${metric.better !== 'none' ? ` · ${metric.better} is better` : ''} · ${test.attempts} ${test.attempts === 1 ? 'attempt' : 'attempts'}${test.sides === 'lr' ? ' per side' : ''}. Values save as you type.`,
-      action: h('div', { class: 'row' }, test.timed ? h('label', { class: 'row small', style: 'gap:6px' }, hand, 'Hand-timed') : null, h('div', { style: 'width:110px' }, unitSel)) },
-      test.description ? h('p', { class: 'small muted' }, test.description) : null,
-      athletes.length ? rows : h('p', { class: 'muted' }, 'No athletes yet.'),
-      h('div', { style: 'max-width:360px;margin-top:8px' }, add)),
+    const pending = swState.pending;
+    const pendingBox = pending ? h('div', { class: 'ts-pending row wrap', role: 'alert' },
+      h('span', { class: 'grow' }, `${pending.name}: ${pending.secs.toFixed(2)} s wasn't saved. ${pending.error}`),
+      btn('Save again', (e) => busy(e.currentTarget, async () => { await saveTime(pending); redraw(); }), 'secondary'),
+      btn('Discard', () => { swState = { ...swState, pending: null }; redraw(); }, 'ghost')) : null;
+    const last = swState.last;
+    const undoBtn = last && !pending && manage ? btn(`Undo ${last.label}`, (e) => busy(e.currentTarget, async () => { await del(`/v1/results/${last.id}`); testingState.athleteIdx = last.idx; swState = { pending: null, last: null }; toast('Time removed.'); redraw(); }), 'ghost') : null;
+    stopwatch = h('section', { class: 'dp-panel stack ts-sticky' },
+      h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, display, go, cancelBtn, undoBtn,
+        h('span', { class: 'small muted grow', style: 'min-width:200px' }, cur ? `Up: ${cur.name}. Stopping the clock saves the time and moves on. Esc cancels a false start.` : 'Add an athlete to start timing.')),
+      pendingBox);
+  } else swEscape = null;
+
+  // Rankings: today's best per athlete, best first, with the change from their previous best.
+  const rankings = () => sides.map((side) => {
+    const ranked = athletes.map((a) => ({ a, best: bestOf(resultsOf(a, side)), prev: prevOf(a, side) })).filter((x) => x.best != null)
+      .sort((x, y) => (metric.better === 'lower' ? x.best - y.best : y.best - x.best));
+    const missing = athletes.filter((a) => !resultsOf(a, side).length);
+    return h('div', { class: 'stack-tight' }, side ? h('div', { class: 'dp-label' }, side === 'L' ? 'Left' : 'Right') : null,
+      ranked.length ? ranked.map((x, i) => {
+        const change = x.prev != null ? x.best - x.prev : null;
+        const improved = change != null && better(metric, x.best, x.prev);
+        return h('div', { class: 'list-item' }, h('span', { class: 'strong', style: 'min-width:32px' }, metric.better === 'none' ? '' : `${i + 1}.`),
+          h('span', { class: 'grow' }, x.a.name), h('span', { class: 'strong' }, fmtResult(x.best, metric.unit, metric.decimals)),
+          h('span', { class: `small ${improved ? 'good-text' : 'muted'}`, style: 'min-width:120px;text-align:right' }, change == null ? 'First time' : change === 0 ? 'Same as best' : `${change > 0 ? '+' : '−'}${fmtResult(Math.abs(change), metric.unit, metric.decimals, { delta: true })} vs best`),
+          improved ? h('span', { class: 'dp-badge dp-badge--good' }, 'PR') : null);
+      }) : h('p', { class: 'muted small' }, 'No results yet.'),
+      missing.length && ranked.length ? h('p', { class: 'small muted' }, `Not tested yet: ${missing.map((a) => a.name).join(', ')}.`) : null);
+  });
+
+  // Test tabs with progress; arrow keys move between them.
+  const tabs = h('div', { class: 'ts-tabs', role: 'tablist', 'aria-label': 'Tests on this day' }, day.tests.map((t, i) => {
+    const done = doneFor(t), all = athletes.length && done === athletes.length;
+    return h('button', { type: 'button', role: 'tab', class: 'ts-tab', 'aria-selected': String(t.key === test.key), tabindex: t.key === test.key ? '0' : '-1',
+      onClick: () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.testKey = t.key; testingState.athleteIdx = 0; swState = { pending: null, last: null }; redraw(); },
+      onKeydown: (e) => { if (!['ArrowRight', 'ArrowLeft'].includes(e.key)) return; e.preventDefault(); const next = day.tests[(i + (e.key === 'ArrowRight' ? 1 : -1) + day.tests.length) % day.tests.length]; if (stopwatchRunning) return; testingState.testKey = next.key; testingState.athleteIdx = 0; testingState.focus = `tab|${next.key}`; redraw(); },
+      'data-tab': t.key }, shortTest(t), h('span', { class: `ts-tab-count${all ? ' ts-done' : ''}` }, all ? '✓' : `${done}/${athletes.length}`));
+  }), addTest);
+  const views = h('div', { class: 'row wrap tm-views' }, [['entry', 'Enter results'], ['rankings', 'Rankings']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(testingState.view === k), onClick: () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.view = k; redraw(); } }, label)));
+  const find = athletes.length > 8 ? input({ type: 'search', placeholder: 'Find an athlete', value: testingState.find, 'aria-label': 'Find an athlete', style: 'max-width:260px' }) : null;
+  find?.addEventListener('input', () => { testingState.find = find.value; testingState.focus = 'find'; render(); });
+
+  fill(main, banner, header(day.name, subtitle, headerActions), tabs, stopwatch,
+    panel(test.name, { subtitle: testingState.view === 'rankings' ? `Today's best per athlete, ${metric.better === 'lower' ? 'fastest' : metric.better === 'higher' ? 'best' : 'latest'} first, with the change from each athlete's previous best.`
+      : `${metric.name}${metric.better !== 'none' ? ` · ${metric.better} is better` : ''} · ${test.attempts} ${test.attempts === 1 ? 'attempt' : 'attempts'}${test.sides === 'lr' ? ' per side' : ''}${metric.range ? ` · possible: ${rangeWords(metric.range, metric.unit)}` : ''}. Values save as you type; Enter moves down.${hint ? ` ${hint}.` : ''}`,
+    action: h('div', { class: 'row wrap' }, views, testingState.view === 'entry' && test.timed ? h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, hand, 'Hand-timed') : null, testingState.view === 'entry' ? h('div', { style: 'width:110px' }, unitSel) : null) },
+      test.description && testingState.view === 'entry' ? h('p', { class: 'small muted' }, test.description) : null,
+      find,
+      testingState.view === 'rankings' ? rankings() : athletes.length ? (rows.flat().length ? rows : h('p', { class: 'muted small' }, 'No athletes match. Clear the search.')) : h('p', { class: 'muted' }, 'No athletes yet. Add a walk-up below.'),
+      h('div', { style: 'max-width:360px;margin-top:8px' }, walkUp)),
     notes?.data.length ? notesPanel(id, notes) : null);
+  // Put the cursor back where the coach was typing.
+  const f = testingState.focus; testingState.focus = null;
+  if (f === 'find') { find?.focus(); find?.setSelectionRange(find.value.length, find.value.length); }
+  else if (f?.startsWith('tab|')) main.querySelector(`[data-tab="${f.slice(4)}"]`)?.focus();
+  else if (f) main.querySelector(`input[data-cell="${f}"]`)?.focus();
 }
+document.addEventListener('keydown', (e) => { if (location.hash.startsWith('#/testing/')) swEscape?.(e); });
 
 // A short note per athlete for parents: drafted from the results, read and approved by a coach.
 function notesPanel(id, notes) {
@@ -2618,8 +2873,8 @@ function testDialog(t, categories, prefillName = '') {
   const metrics = (t?.metrics ?? [{ key: 'value', name: 'Result', unit: '', better: 'higher', range: null, range_custom: false }]).map((m) => ({
     m, name: input({ value: m.name, disabled: !!locked, maxlength: '60' }), unit: input({ value: m.unit, disabled: !!locked, placeholder: 's, in, lb, mph…', maxlength: '20' }),
     better: select([['lower', 'Lower is better'], ['higher', 'Higher is better'], ['none', 'A measurement']], { value: m.better, disabled: !!locked }),
-    min: input({ type: 'number', step: 'any', value: m.range ? String(m.range[0]) : '', 'aria-label': `${m.name}: lowest possible` }),
-    max: input({ type: 'number', step: 'any', value: m.range ? String(m.range[1]) : '', 'aria-label': `${m.name}: highest possible` })
+    min: input({ type: 'number', step: 'any', value: m.range?.[0] != null ? String(m.range[0]) : '', 'aria-label': `${m.name}: lowest possible` }),
+    max: input({ type: 'number', step: 'any', value: m.range?.[1] != null ? String(m.range[1]) : '', 'aria-label': `${m.name}: highest possible` })
   }));
   for (const x of metrics) { x.min0 = x.min.value; x.max0 = x.max.value; }
   const metricRows = metrics.map((x) => h('div', { class: 'lib-metric' },
@@ -2682,7 +2937,7 @@ async function viewTestDetails(main, key) {
       t.description ? h('p', { class: 'small muted' }, t.description) : null),
     panel('Details', {},
       h('div', { class: 'stack-tight small' },
-        t.metrics.map((m) => h('div', null, h('span', { class: 'strong' }, metricText(m)), m.range ? h('span', { class: 'muted' }, ` · possible ${m.range[0]} to ${m.range[1]}${m.range_custom ? ' (your range)' : ''}`) : null)),
+        t.metrics.map((m) => h('div', null, h('span', { class: 'strong' }, metricText(m)), m.range ? h('span', { class: 'muted' }, ` · possible ${rangeWords(m.range, m.unit)}${m.range_custom ? ' (your range)' : ''}`) : null)),
         h('div', null, `${t.attempts} ${t.attempts === 1 ? 'attempt' : 'attempts'}${t.sides === 'lr' ? ' per side' : ''}${t.timed ? ' · can be hand-timed' : ''}`),
         h('div', null, usageText(t.usage), t.usage.days ? ` · ${t.usage.days} testing ${t.usage.days === 1 ? 'day' : 'days'}` : ''),
         h('div', null, t.presets.length ? ['In presets: ', t.presets.map((p, i) => [i ? ', ' : '', h('a', { href: '#/testing/library?tab=presets' }, p.name)])] : 'Not in any preset.'))),
@@ -2751,86 +3006,6 @@ function presetDialog(p, lib, done) {
   d.addEventListener('close', () => fill(d), { once: true });
   d.showModal();
   name.focus();
-}
-
-async function viewConnections(main) {
-  const [integ, imports, lib, clientsList] = await Promise.all([get('/v1/integrations'), get('/v1/imports'), get('/v1/tests'), get('/v1/clients')]);
-  const hawkin = integ.data.find((i) => i.provider === 'hawkin');
-  const token = input({ type: 'password', autocomplete: 'off', placeholder: 'Integration token from Hawkin' }), region = select([['americas', 'Americas'], ['europe', 'Europe'], ['apac', 'Asia-Pacific']], { value: hawkin.region ?? 'americas' });
-  const hawkinPanel = panel('Hawkin Dynamics force plates', { subtitle: hawkin.connected ? `Connected (${hawkin.token_hint}). ${hawkin.last_sync_at ? `Last sync ${ago(hawkin.last_sync_at)}.` : ''} New tests sync every 15 minutes.` : hawkin.note },
-    hawkin.last_error ? h('p', { class: 'small warn-text' }, hawkin.last_error) : null,
-    hawkin.connected ? h('div', { class: 'row' },
-      btn('Sync now', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/integrations/hawkin/sync'); toast(`${r.results} new results${r.waiting_for_match ? `, ${r.waiting_for_match} waiting for an athlete match` : ''}.`); render(); }), 'primary'),
-      btn('Disconnect', (e) => { if (confirm('Disconnect Hawkin?')) busy(e.currentTarget, async () => { await del('/v1/integrations/hawkin'); render(); }); }, 'ghost'))
-      : h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await api('PUT', '/v1/integrations/hawkin', { refresh_token: token.value, region: region.value }); toast(`Connected. ${r.sync.results} results pulled from the last 90 days.`); render(); }); } },
-        h('div', { class: 'grow' }, field('Integration token', token)), field('Region', region), h('div', { style: 'align-self:flex-end' }, btn('Connect', null, 'primary', { type: 'submit' }))));
-
-  // File import: pick system + file, preview how columns match, fix anything, import.
-  const provider = select(integ.data.filter((i) => i.how === 'file').map((i) => [i.provider, i.name]), { value: 'ovr' });
-  const oneTest = select([['', 'Detect from the file'], ...lib.data.map((t) => [t.key, t.name])], { value: '' });
-  const file = h('input', { type: 'file', accept: '.csv,text/csv,.txt', class: 'dp-input' });
-  const note = h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note);
-  provider.addEventListener('change', () => { note.textContent = integ.data.find((i) => i.provider === provider.value).note ?? 'Export a CSV from the system and upload it.'; });
-  const preview = h('div', { class: 'stack' });
-  let csvText = '', fileName = '';
-  const testOpts = [['', 'Ignore'], ...lib.data.flatMap((t) => t.metrics.map((m) => [`${t.key}|${m.key}`, `${t.name} – ${m.name}`]))];
-  async function runPreview() {
-    if (!file.files[0]) throw new Error('Choose a file.');
-    csvText = await file.files[0].text(); fileName = file.files[0].name;
-    const dry = await post('/v1/imports', { provider: provider.value, csv: csvText, test: oneTest.value || undefined, dry_run: true, filename: fileName });
-    const colSelects = {};
-    const colRows = Object.entries(dry.mapping.columns).map(([hdr, col]) => {
-      const current = col ? (col.metric_name ? '__row__' : `${col.test ?? dry.mapping.test}|${col.metric}`) : '';
-      const sel = select(col?.metric_name ? [['__row__', 'Metric for each row\'s test'], ['', 'Ignore']] : testOpts, { value: current, 'aria-label': hdr });
-      colSelects[hdr] = { sel, col };
-      return h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, hdr), h('div', { style: 'width:340px' }, sel), col?.side ? h('span', { class: 'muted' }, col.side === 'L' ? 'Left' : 'Right') : null);
-    });
-    const testSelects = Object.entries(dry.mapping.tests ?? {}).map(([name, key]) => { const sel = select([['', 'Skip these rows'], ...lib.data.map((t) => [t.key, t.name])], { value: key ?? '' }); return [name, sel]; });
-    fill(preview,
-      h('p', null, `${dry.rows} rows, ${dry.results_found} results found. `, dry.saved_mapping ? h('span', { class: 'good-text' }, 'Using your saved column matches for this layout.') : null),
-      dry.problems.length ? h('p', { class: 'small warn-text' }, dry.problems.slice(0, 3).map((p) => `Row ${p.row}: ${p.message}`).join(' ')) : null,
-      h('div', { class: 'dp-label' }, `Columns → tests (athlete: ${dry.mapping.roles.athlete_name ?? [dry.mapping.roles.first_name, dry.mapping.roles.last_name].filter(Boolean).join(' + ') ?? 'not found'}, date: ${dry.mapping.roles.date ?? 'none, uses today'})`),
-      colRows,
-      testSelects.length ? [h('div', { class: 'dp-label' }, 'Test names in the file'), ...testSelects.map(([name, sel]) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, name), h('div', { style: 'width:340px' }, sel)))] : null,
-      dry.unmatched_athletes.length ? h('p', { class: 'small' }, `${dry.unmatched_athletes.length} ${dry.unmatched_athletes.length === 1 ? 'athlete isn\'t' : 'athletes aren\'t'} matched yet (${dry.unmatched_athletes.slice(0, 5).map((a) => a.name ?? a.external_id).join(', ')}${dry.unmatched_athletes.length > 5 ? '…' : ''}). Their results wait below until you match them.`) : null,
-      btn(`Import ${dry.results_found} results`, (e) => busy(e.currentTarget, async () => {
-        const mapping = { ...dry.mapping, columns: Object.fromEntries(Object.entries(colSelects).map(([hdr, { sel, col }]) => {
-          if (!sel.value) return [hdr, null];
-          if (sel.value === '__row__') return [hdr, col];
-          const [test, metric] = sel.value.split('|');
-          return [hdr, { test, metric, unit: col?.unit, side: col?.side }];
-        })), tests: Object.fromEntries(testSelects.map(([name, sel]) => [name, sel.value || null])) };
-        const r = await post('/v1/imports', { provider: provider.value, csv: csvText, mapping, filename: fileName });
-        toast(`${r.imported} results imported${r.duplicates ? `, ${r.duplicates} already here` : ''}${r.pending_results ? `, ${r.pending_results} waiting for athlete matches` : ''}.`);
-        render();
-      }), 'primary'));
-  }
-  const importPanel = panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns or any spreadsheet. Column matches are remembered for next time.' },
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('System', provider), field('File', file), field('If the file is one test', oneTest)), note,
-    h('div', null, btn('Preview', (e) => busy(e.currentTarget, runPreview), 'secondary')), preview);
-
-  const [waitingQ, links] = await Promise.all([get('/v1/queue'), get('/v1/athlete-links')]);
-  const waitingPanel = waitingQ.n ? panel('Waiting to be linked', { subtitle: `${waitingQ.n} results from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.` },
-    h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/queue' }, 'Link them')) : null;
-  const linksPanel = panel('Linked device IDs', { subtitle: 'Results from these device IDs and names go straight to the athlete. Everything else needs an Athlete ID or waits for you.' },
-    links.data.length ? links.data.map((l) => h('div', { class: 'list-item small' },
-      h('span', { class: 'grow' }, `${integ.data.find((i) => i.provider === l.provider)?.name.split(' (')[0] ?? l.provider}: ${l.external_id.startsWith('name:') ? `name "${l.external_name ?? l.external_id.slice(5)}"` : `ID ${l.external_id}`}${l.external_name && !l.external_id.startsWith('name:') ? ` (${l.external_name})` : ''}`),
-      h('span', null, '→ ', l.athlete_name), idChip(l.athlete_id),
-      btn('Unlink', (e) => { if (confirm(`Stop sending results from ${l.external_id.replace(/^name:/, '')} to ${l.athlete_name}? Future results from it will wait in the queue.`)) busy(e.currentTarget, async () => { await del(`/v1/athlete-links/${l.provider}/${encodeURIComponent(l.external_id)}`); render(); }); }, 'ghost')))
-      : h('p', { class: 'muted small' }, 'None yet. Links are created when you link waiting results and choose to remember them.'));
-  const example = `curl -X POST ${location.origin}/v1/results \\
-  -H "Authorization: Bearer dp_live_..." -H "Content-Type: application/json" \\
-  -d '{"provider":"gates","results":[{"athlete":{"external_id":"A-17","name":"Jordan Ellis"},
-       "test":"dash_40yd","value":4.71,"timing":"electronic","external_id":"run-8812"}]}'`;
-  const apiPanel = panel('Send results from any system', { subtitle: 'Any timing system, app or script can post results to the open API with an API key. Values in other units are converted, athletes are matched by ID or name, and resending the same result is ignored.' },
-    h('pre', { class: 'small', style: 'white-space:pre-wrap;overflow-x:auto;background:var(--ground);padding:12px;border-radius:6px' }, example),
-    h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/integrations' }, 'API keys'), h('a', { class: 'dp-btn dp-btn--ghost', href: '/v1/openapi.json', target: '_blank' }, 'Full API reference')));
-
-  fill(main, header('Devices & imports', 'Get results in from anywhere: live connections, file imports, the open API, or by hand.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    waitingPanel, hawkinPanel,
-    panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/upload' }, 'Upload results'))),
-    apiPanel, linksPanel,
-    imports.data.length ? panel('Recent imports', {}, imports.data.slice(0, 10).map((b) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${b.provider_name} · ${b.filename ?? 'sync'}`), h('span', null, `${b.imported} imported${b.duplicates ? ` · ${b.duplicates} duplicates` : ''}${b.pending_results ? ` · ${b.pending_results} waiting to link` : ''}`), h('span', { class: 'muted' }, ago(b.created_at))))) : null);
 }
 
 // ---------- Import clients from a spreadsheet ----------
@@ -2964,67 +3139,203 @@ async function viewStaff(main) {
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.
+// Everyone results can be linked to: clients (not archived) and active team roster players.
+const linkableAthletes = async () => (await get('/v1/athletes')).data;
+// Pick an athlete by typing a name or Athlete ID: arrow keys move through matches, Enter picks. Editing the text
+// after a pick clears the pick, so a result never goes to someone who wasn't chosen on purpose.
+function athletePicker(everyone, { label, onChange }) {
+  let chosen = null, active = -1, matches = [];
+  const box = input({ type: 'text', role: 'combobox', 'aria-expanded': 'false', 'aria-autocomplete': 'list', autocomplete: 'off', placeholder: 'Type a name or Athlete ID', 'aria-label': label });
+  const list = h('ul', { class: 'ts-combo-list', role: 'listbox', style: 'display:none' });
+  const status = h('span', { class: 'small' });
+  const set = (a) => { chosen = a; status.textContent = a ? `✓ ${a.name} (${a.athlete_id})${a.team ? `, ${a.team}` : ''}` : box.value.trim() ? 'Pick an athlete from the list.' : ''; status.className = a ? 'small good-text' : 'small warn-text'; onChange?.(a); };
+  const close = () => { list.style.display = 'none'; box.setAttribute('aria-expanded', 'false'); active = -1; };
+  const draw = () => {
+    const q = box.value.trim().toLowerCase();
+    matches = q ? everyone.filter((a) => `${a.name} ${a.athlete_id}`.toLowerCase().includes(q)).slice(0, 8) : [];
+    fill(list, matches.map((a, i) => h('li', { role: 'option', class: 'ts-combo-opt', 'aria-selected': String(i === active), onMousedown: (e) => { e.preventDefault(); pick(a); } },
+      h('span', null, a.name), h('span', { class: 'muted small', style: 'font-family:var(--font-mono)' }, a.athlete_id), a.team ? h('span', { class: 'muted small' }, a.team) : null)));
+    list.style.display = matches.length ? '' : 'none'; box.setAttribute('aria-expanded', String(!!matches.length));
+  };
+  const pick = (a) => { box.value = `${a.name} · ${a.athlete_id}`; close(); set(a); };
+  box.addEventListener('input', () => { active = -1; draw(); set(null); });
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && matches.length) { e.preventDefault(); active = (active + 1) % matches.length; draw(); }
+    else if (e.key === 'ArrowUp' && matches.length) { e.preventDefault(); active = (active - 1 + matches.length) % matches.length; draw(); }
+    else if (e.key === 'Enter' && matches.length && list.style.display !== 'none') { e.preventDefault(); pick(matches[Math.max(active, 0)]); }
+    else if (e.key === 'Escape') close();
+  });
+  box.addEventListener('blur', () => setTimeout(close, 150));
+  return { el: h('div', { class: 'stack-tight' }, h('div', { class: 'ts-combo' }, box, list), status), get: () => chosen, pick, focus: () => box.focus() };
+}
+
+let queueFilter = { source: '', q: '' };
 async function viewQueue(main) {
-  const [q, clientsList, contracts] = await Promise.all([get('/v1/queue'), get('/v1/clients'), get('/v1/team-contracts')]);
-  const everyone = clientsList.data.map((c) => ({ client_id: c.id, name: c.name, athlete_id: c.athlete_id }));
-  for (const c of contracts.data.filter((x) => x.status === 'active')) everyone.push(...(await get(`/v1/team-contracts/${c.id}`)).roster.map((r) => ({ roster_id: r.id, name: r.name, athlete_id: r.athlete_id, team: `${c.org_name} ${c.name}` })));
-  everyone.sort((a, b) => a.name.localeCompare(b.name));
-  const listId = 'athlete-options';
-  const datalist = h('datalist', { id: listId }, everyone.map((a) => h('option', { value: `${a.name} · ${a.athlete_id}${a.team ? ` · ${a.team}` : ''}` })));
-  // The picker only accepts a real athlete: the Athlete ID must be in the text.
-  const pickFrom = (text) => { const id = String(text).match(/[A-Za-z]{6}\d{4}(-\d{1,3})?/)?.[0]?.toUpperCase(); return id ? everyone.find((a) => a.athlete_id === id) ?? null : null; };
+  if (deskStop(main, 'Waiting to be linked')) return;
+  const [q, everyone] = await Promise.all([get('/v1/queue'), linkableAthletes()]);
   const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+  const intro = h('p', { class: 'small muted' });
+  const totalLeft = () => q.data.reduce((n, g) => n + g.items.length, 0);
+  const syncIntro = () => { const n = totalLeft(); intro.textContent = n ? `${n} ${n === 1 ? 'result' : 'results'} from ${q.data.filter((g) => g.items.length).length} unrecognized ${q.data.filter((g) => g.items.length).length === 1 ? 'athlete' : 'athletes'}. Pick who each set belongs to and link it. Linking is all or nothing, and nothing is ever matched by name on its own. Tip: enter Athlete IDs as names on your devices and results skip this step.` : 'Nothing is waiting. Every result has been linked to a profile.'; };
 
   const cards = q.data.map((g) => {
-    const who = input({ list: listId, placeholder: 'Type a name or Athlete ID, then pick from the list', autocomplete: 'off', 'aria-label': `Athlete for ${g.label}` });
-    const chosen = h('span', { class: 'small' });
+    const picker = athletePicker(everyone, { label: `Athlete for ${g.label}`, onChange: () => sync() });
     const remember = h('input', { type: 'checkbox', checked: true });
-    const checks = g.items.map((it) => { const cb = h('input', { type: 'checkbox', checked: true, 'aria-label': `Include ${it.test_name} ${it.value}` }); return [it, cb]; });
-    const linkBtn = btn(`Link ${g.count} results`, null, 'primary');
+    const rows = g.items.map((it) => {
+      const cb = h('input', { type: 'checkbox', checked: true, 'aria-label': `Include ${it.test_name} ${fmtResult(it.value, it.unit, it.decimals)}` });
+      const row = h('label', { class: 'list-item small ts-qrow' }, cb,
+        h('span', { class: 'grow stack-tight', style: 'min-width:140px' }, h('span', null, `${it.test_name}${it.metric_name && it.metric !== 'time' && it.metric !== 'value' ? ` – ${it.metric_name}` : ''}${it.side ? ` (${it.side === 'L' ? 'left' : 'right'})` : ''}`),
+          h('span', { class: 'muted' }, [fmtDay(it.recorded_at), it.device].filter(Boolean).join(' · '))),
+        h('span', { class: 'strong' }, fmtResult(it.value, it.unit, it.decimals)));
+      cb.addEventListener('change', () => sync());
+      return { it, cb, row };
+    });
+    const tickAll = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Tick all' });
+    tickAll.addEventListener('change', () => { live().forEach((r) => { r.cb.checked = tickAll.checked; }); sync(); });
+    const linkBtn = btn('Link', null, 'primary');
+    const live = () => rows.filter((r) => !r.gone);
     const sync = () => {
-      const a = pickFrom(who.value);
-      chosen.textContent = a ? `✓ ${a.name} (${a.athlete_id})` : who.value ? 'Pick an athlete from the list.' : '';
-      chosen.className = a ? 'small good-text' : 'small warn-text';
-      const n = checks.filter(([, cb]) => cb.checked).length, all = n === g.items.length;
+      const left = live(), n = left.filter((r) => r.cb.checked).length, all = n === left.length;
       remember.disabled = !all; if (!all) remember.checked = false;
+      tickAll.checked = all && n > 0;
       linkBtn.textContent = `Link ${n} ${n === 1 ? 'result' : 'results'}`;
-      linkBtn.disabled = !a || n === 0;
+      linkBtn.disabled = !picker.get() || n === 0;
+      countEl.textContent = `${left.length} ${left.length === 1 ? 'result' : 'results'}`;
     };
-    who.addEventListener('input', sync);
-    checks.forEach(([, cb]) => cb.addEventListener('change', sync));
+    const countEl = h('span');
+    // After linking or discarding, the rows (or the whole card) clear in place.
+    const clear = (done) => { done.forEach((r) => { r.gone = true; r.row.remove(); }); g.items = live().map((r) => r.it); if (!g.items.length) { card.dataset.gone = '1'; card.remove(); } else sync(); syncIntro(); if (!totalLeft()) render(); };
     linkBtn.addEventListener('click', () => busy(linkBtn, async () => {
-      const a = pickFrom(who.value);
+      const a = picker.get();
       if (!a) throw new Error('Pick the athlete from the list.');
-      const sel = checks.filter(([, cb]) => cb.checked).map(([it]) => it);
-      const all = sel.length === g.items.length;
+      const left = live(), sel = left.filter((r) => r.cb.checked), all = sel.length === left.length && left.length === g.count;
       if (!confirm(`Link ${sel.length} ${sel.length === 1 ? 'result' : 'results'} from "${g.label}" (${g.source_name}) to ${a.name} (${a.athlete_id})?${all && remember.checked ? `\n\nFuture results from ${g.device_id ? `device ID ${g.device_id}` : `"${g.label}"`} will go straight to ${a.name}.` : ''}`)) return;
-      const body = { athlete_id: a.athlete_id, ...(all ? { provider: g.provider, identity: g.identity, expect_count: g.count, remember: remember.checked } : { ids: sel.map((it) => it.id) }) };
+      const body = { athlete_id: a.athlete_id, ...(all ? { provider: g.provider, identity: g.identity, expect_count: g.count, remember: remember.checked } : { ids: sel.map((r) => r.it.id) }) };
       const r = await post('/v1/queue/link', body);
       toast(`${r.saved} ${r.saved === 1 ? 'result' : 'results'} added to ${r.athlete.name}${r.prs ? `, ${r.prs} new PR${r.prs === 1 ? '' : 's'}` : ''}${r.remembered ? '. Future results will go straight there.' : '.'}`);
-      render();
+      g.count -= sel.length; clear(sel);
     }));
     const discardBtn = btn('Discard selected', (e) => {
-      const sel = checks.filter(([, cb]) => cb.checked).map(([it]) => it.id);
-      if (!sel.length) return toast('Select results to discard.', 'warn');
-      if (confirm(`Discard ${sel.length} ${sel.length === 1 ? 'result' : 'results'} from "${g.label}"? They won't be added to any profile.`)) busy(e.currentTarget, async () => { await post('/v1/queue/discard', { ids: sel }); toast('Discarded.'); render(); });
+      const sel = live().filter((r) => r.cb.checked);
+      if (!sel.length) return toast('Tick the results to discard.', 'warn');
+      if (confirm(`Discard ${sel.length} ${sel.length === 1 ? 'result' : 'results'} from "${g.label}"? They won't be added to any profile.`)) busy(e.currentTarget, async () => { const r = await post('/v1/queue/discard', { ids: sel.map((x) => x.it.id) }); toast(`${r.discarded} discarded.`); g.count -= sel.length; clear(sel); });
     }, 'ghost');
-    const card = panel(g.label, { subtitle: `${g.source_name}${g.device_id && g.device_id !== g.label ? ` · device ID ${g.device_id}` : ''} · ${g.count} ${g.count === 1 ? 'result' : 'results'} · received ${ago(g.first_received)}${ago(g.last_received) !== ago(g.first_received) ? ` to ${ago(g.last_received)}` : ''}` },
-      g.suggestions.length ? h('div', { class: 'row wrap small', style: 'gap:8px' }, h('span', { class: 'muted' }, 'Could be:'), g.suggestions.map((sug) => btn(`${sug.name} (${sug.athlete_id})`, () => { who.value = `${sug.name} · ${sug.athlete_id}`; sync(); }, 'secondary'))) : null,
-      h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('div', { class: 'grow', style: 'min-width:280px' }, who), chosen),
-      h('div', { style: 'overflow-x:auto' }, h('table', { class: 'table' },
-        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Test'), h('th', null, 'Result'), h('th', null, 'Tested'), h('th', null, 'Device'))),
-        h('tbody', null, checks.map(([it, cb]) => h('tr', null, h('td', null, cb),
-          h('td', null, `${it.test_name}${it.metric_name && it.metric !== 'time' && it.metric !== 'value' ? ` – ${it.metric_name}` : ''}${it.side ? ` (${it.side === 'L' ? 'left' : 'right'})` : ''}`),
-          h('td', { class: 'strong' }, fmtResult(it.value, it.unit, it.decimals)), h('td', null, fmtDay(it.recorded_at)), h('td', { class: 'muted' }, it.device ?? '')))))),
-      h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, remember, h('span', null, `Remember: send future results from ${g.device_id ? `device ID ${g.device_id}` : `"${g.label}"`} (${g.source_name}) straight to this athlete`)),
+    const card = panel(g.label, { subtitle: h('span', null, `${g.source_name}${g.device_id && g.device_id !== g.label ? ` · device ID ${g.device_id}` : ''} · `, countEl, ` · received ${ago(g.first_received).toLowerCase()}`) },
+      g.suggestions.length ? h('div', { class: 'row wrap small', style: 'gap:8px' }, h('span', { class: 'muted' }, 'Could be:'), g.suggestions.map((sug) => btn(`${sug.name} (${sug.athlete_id})`, () => picker.pick(everyone.find((a) => a.athlete_id === sug.athlete_id) ?? sug), 'secondary'))) : null,
+      h('div', { style: 'max-width:480px' }, picker.el),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, tickAll, h('span', null, 'Tick all')),
+      h('div', { class: 'stack-tight' }, rows.map((r) => r.row)),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, remember, h('span', null, `Remember: send future results from ${g.device_id ? `device ID ${g.device_id}` : `"${g.label}"`} (${g.source_name}) straight to this athlete`)),
       h('div', { class: 'row wrap' }, linkBtn, discardBtn));
+    card.dataset.source = g.source_name;
+    card.dataset.search = `${g.label} ${g.device_id ?? ''} ${g.items.map((it) => it.test_name).join(' ')}`.toLowerCase();
     sync();
     return card;
   });
+  const sources = [...new Set(q.data.map((g) => g.source_name))].sort();
+  const sourceSel = select([['', 'All sources'], ...sources.map((x) => [x, x])], { value: queueFilter.source, 'aria-label': 'Source' });
+  const find = input({ type: 'search', placeholder: 'Find a name, device ID or test', value: queueFilter.q, 'aria-label': 'Find waiting results' });
+  const none = h('p', { class: 'muted small', style: 'display:none' }, 'Nothing matches. Clear the search or pick All sources.');
+  const apply = () => { queueFilter = { source: sourceSel.value, q: find.value }; const s = find.value.trim().toLowerCase(); let n = 0; cards.forEach((c) => { const ok = (!sourceSel.value || c.dataset.source === sourceSel.value) && (!s || c.dataset.search.includes(s)); c.style.display = ok ? '' : 'none'; n += ok && !c.dataset.gone; }); none.style.display = n || !cards.length ? 'none' : ''; };
+  sourceSel.addEventListener('change', apply); find.addEventListener('input', apply);
+  syncIntro();
   fill(main, header('Waiting to be linked', 'These results arrived without an Athlete ID or a device you\'ve linked. None of them are in a profile yet.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    datalist,
-    q.data.length ? h('p', { class: 'small muted' }, 'Pick who each set belongs to and link it. Linking is all or nothing, and nothing is ever matched by name on its own. Tip: enter Athlete IDs as names on your devices and results skip this step.') : null,
-    ...(q.data.length ? cards : [h('div', { class: 'empty' }, 'Nothing is waiting. Every result has been linked to a profile.')]));
+    intro,
+    q.data.length > 1 ? h('div', { class: 'row wrap' }, sources.length > 1 ? h('div', { style: 'width:220px' }, sourceSel) : null, h('div', { class: 'grow', style: 'min-width:220px;max-width:360px' }, find)) : null,
+    none, ...(q.data.length ? cards : [h('div', { class: 'empty' }, 'Nothing is waiting. Every result has been linked to a profile.')]));
+  apply();
+}
+
+async function viewConnections(main) {
+  if (deskStop(main, 'Devices & imports')) return;
+  const owner = isOwner();
+  const [integ, links, everyone, waitingQ] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue')]);
+  const sysName = (p) => (p === 'api' ? 'Open API' : integ.data.find((i) => i.provider === p)?.name.split(' (')[0] ?? p);
+
+  // Hawkin: a failed sync shows Needs attention, and the owner can paste a new token right there.
+  const hawkin = integ.data.find((i) => i.provider === 'hawkin');
+  const token = input({ type: 'password', autocomplete: 'off', placeholder: 'Integration token from Hawkin' }), region = select([['americas', 'Americas'], ['europe', 'Europe'], ['apac', 'Asia-Pacific']], { value: hawkin.region ?? 'americas' });
+  const tokenForm = h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await api('PUT', '/v1/integrations/hawkin', { refresh_token: token.value, region: region.value }); toast(`Connected. ${r.sync.results} results pulled from the last 90 days.`); render(); }); } },
+    h('div', { class: 'grow', style: 'min-width:220px' }, field(hawkin.last_error ? 'Paste a new token' : 'Integration token', token)), field('Region', region), h('div', { style: 'align-self:flex-end' }, btn('Connect', null, 'secondary', { type: 'submit' })));
+  const needsAttention = hawkin.connected && hawkin.last_error;
+  const hawkinPanel = panel('Hawkin Dynamics force plates', { subtitle: hawkin.connected ? `Connected (${hawkin.token_hint}). ${hawkin.last_sync_at ? `Last sync ${ago(hawkin.last_sync_at).toLowerCase()}.` : ''} New tests sync every 15 minutes.` : hawkin.note,
+    action: needsAttention ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Needs attention') : hawkin.connected ? h('span', { class: 'dp-badge dp-badge--good' }, 'Connected') : null },
+    needsAttention ? h('p', { class: 'small warn-text' }, `The last sync failed: ${hawkin.last_error} ${owner ? 'If Hawkin gave you a new integration token, paste it below.' : 'Ask the owner to paste a new token from Hawkin.'}`) : null,
+    owner && hawkin.connected ? h('div', { class: 'row wrap' },
+      btn('Sync now', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/integrations/hawkin/sync'); toast(`${r.results} new results${r.waiting_for_match ? `, ${r.waiting_for_match} waiting for an athlete match` : ''}.`); render(); }), 'secondary'),
+      btn('Disconnect', (e) => { if (confirm('Disconnect Hawkin? Results already saved stay.')) busy(e.currentTarget, async () => { await del('/v1/integrations/hawkin'); render(); }); }, 'ghost')) : null,
+    owner && (!hawkin.connected || needsAttention) ? tokenForm : null,
+    !owner && !hawkin.connected ? h('p', { class: 'small muted' }, 'The owner connects Hawkin.') : null);
+
+  // Link a device ahead of time.
+  const providers = [...new Set(['api', ...integ.data.map((i) => i.provider).filter((p) => p !== 'generic'), ...waitingQ.data.map((g) => g.provider)])];
+  const sys = select(providers.map((p) => [p, sysName(p)]), { value: 'freelap', 'aria-label': 'System' });
+  const kind = select([['id', 'A device ID'], ['name', 'A name the device uses']], { value: 'id', 'aria-label': 'What you\'re typing' });
+  const ext = input({ placeholder: 'Like 1047 or A-17', 'aria-label': 'Device ID or name' });
+  kind.addEventListener('change', () => { ext.placeholder = kind.value === 'name' ? 'Like Tyler G, as the device spells it' : 'Like 1047 or A-17'; });
+  const picker = athletePicker(everyone, { label: 'Athlete this device belongs to' });
+  const linkPanel = panel('Link a device', { subtitle: 'Results from this device ID (or the name it uses) go straight to the athlete from now on. Anything already waiting from it is linked too.' },
+    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const a = picker.get();
+      if (!ext.value.trim()) throw new Error('Enter the device ID or the name the device uses.');
+      if (!a) throw new Error('Pick the athlete from the list.');
+      const idText = kind.value === 'name' ? `name:${ext.value.trim().toLowerCase()}` : ext.value.trim();
+      const had = links.data.find((l) => l.provider === sys.value && l.external_id.toLowerCase() === idText.toLowerCase());
+      if (had && had.athlete_id !== a.athlete_id && !confirm(`${ext.value.trim()} is linked to ${had.athlete_name} now. Linking it again moves it to ${a.name}. Continue?`)) return;
+      const r = await post('/v1/athlete-links', { provider: sys.value, external_id: ext.value.trim(), kind: kind.value, athlete_id: a.athlete_id });
+      toast(`${r.moved_from ? `Moved from ${r.moved_from.name} to ${a.name}` : r.already_linked ? `Already linked to ${a.name}` : `Linked to ${a.name}`}${r.linked ? `. ${r.linked} waiting ${r.linked === 1 ? 'result' : 'results'} added` : ''}.`);
+      render();
+    }); } },
+      h('div', { class: 'form-grid cols-3' }, field('System', sys), field('What you\'re typing', kind), field('Device ID or name', ext)),
+      h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Athlete'), picker.el),
+      h('div', null, btn('Link device', null, 'primary', { type: 'submit' }))));
+
+  // Linked devices: find, change the athlete, unlink with Undo.
+  const listBox = h('div', { class: 'stack-tight' });
+  const findL = input({ type: 'search', placeholder: 'Find a device or athlete', 'aria-label': 'Find a linked device', style: 'max-width:320px' });
+  const linkLabel = (l) => (l.external_id.startsWith('name:') ? `name "${l.external_name ?? l.external_id.slice(5)}"` : `ID ${l.external_id}${l.external_name && l.external_name !== l.external_id ? ` (${l.external_name})` : ''}`);
+  const rowFor = (l) => {
+    const row = h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+      h('span', { class: 'grow', style: 'min-width:200px' }, `${sysName(l.provider)}: ${linkLabel(l)}`),
+      h('span', null, '→ ', l.athlete_name ?? 'Removed athlete'), idChip(l.athlete_id), l.athlete_archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null,
+      btn('Change', () => {
+        const p = athletePicker(everyone, { label: `New athlete for ${linkLabel(l)}` });
+        const save = btn('Move link', (e) => busy(e.currentTarget, async () => {
+          const a = p.get(); if (!a) throw new Error('Pick the athlete from the list.');
+          const r = await post('/v1/athlete-links', { provider: l.provider, external_id: l.external_id, athlete_id: a.athlete_id });
+          toast(`Moved to ${a.name}${r.linked ? `. ${r.linked} waiting ${r.linked === 1 ? 'result' : 'results'} added` : ''}.`); render();
+        }), 'primary');
+        fill(row, h('div', { class: 'stack', style: 'width:100%' }, h('span', null, `${sysName(l.provider)}: ${linkLabel(l)} → who instead?`), p.el, h('div', { class: 'row wrap' }, save, btn('Cancel', () => render(), 'ghost'))));
+        p.focus();
+      }, 'ghost'),
+      btn('Unlink', (e) => busy(e.currentTarget, async () => {
+        const r = await del(`/v1/athlete-links/${l.provider}/${encodeURIComponent(l.external_id)}`);
+        row.remove(); links.data = links.data.filter((x) => x !== l);
+        undoToast(`Unlinked ${linkLabel(l)}. Its results will wait to be linked.`, () => busy(null, async () => { await post('/v1/athlete-links', r.link); toast('Link put back.'); render(); }));
+      }), 'ghost'));
+    row.dataset.search = `${sysName(l.provider)} ${l.external_id} ${l.external_name ?? ''} ${l.athlete_name ?? ''} ${l.athlete_id ?? ''}`.toLowerCase();
+    return row;
+  };
+  const linkRows = links.data.map(rowFor);
+  findL.addEventListener('input', () => { const s = findL.value.trim().toLowerCase(); linkRows.forEach((r) => { r.style.display = !s || r.dataset.search.includes(s) ? '' : 'none'; }); });
+  fill(listBox, linkRows.length ? linkRows : h('p', { class: 'muted small' }, 'None yet. Link a device above, or link waiting results and choose to remember them.'));
+  const linksPanel = panel('Linked devices', { subtitle: 'Results from these device IDs and names go straight to the athlete. Everything else needs an Athlete ID or waits for you.' },
+    links.data.length > 6 ? findL : null, listBox);
+
+  const example = `curl -X POST ${location.origin}/v1/results \\
+  -H "Authorization: Bearer dp_live_..." -H "Content-Type: application/json" \\
+  -d '{"provider":"gates","results":[{"athlete":{"athlete_id":"AVALOP2026"},
+       "test":"dash_40yd","value":4.71,"timing":"electronic","external_id":"run-8812"}]}'`;
+  const apiPanel = panel('Send results from any system', { subtitle: 'Any timing system, app or script can post results to the open API with an API key. Values in other units are converted, results with an Athlete ID (or from a linked device) land right away, and resending the same result is ignored.' },
+    h('div', { class: 'row', style: 'justify-content:flex-end' }, btn('Copy', async () => { await navigator.clipboard?.writeText(example).catch(() => {}); toast('Example copied.'); }, 'ghost', { 'aria-label': 'Copy the API example' })),
+    h('pre', { class: 'small', style: 'white-space:pre-wrap;overflow-x:auto;background:var(--ground);padding:12px;border-radius:6px;margin:0' }, example),
+    h('div', { class: 'row wrap' }, owner ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/integrations' }, 'API keys') : null, h('a', { class: 'dp-btn dp-btn--ghost', href: '/v1/openapi.json', target: '_blank' }, 'Full API reference')));
+
+  fill(main, header('Devices & imports', 'Get results in from anywhere: live connections, file imports, the open API, or by hand.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
+    waitingQ.n ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waitingQ.n} ${waitingQ.n === 1 ? 'result is' : 'results are'} waiting from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
+    linkPanel, linksPanel, hawkinPanel,
+    panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
+    apiPanel);
 }
 
 // Download a file from the API with the coach's session.
@@ -3039,19 +3350,25 @@ async function download(path) {
 const toBase64 = (buf) => { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); };
 
 // Upload results: 1 get a sheet with everyone's athlete ID, 2 upload it (or any export), 3 review sorted by athlete, then save.
+// The form's choices are kept while a sheet is fixed and checked again.
 let uploadState = null;
+let uploadForm = { session: null, date: null, test: '', source: '', paste: '', fileName: null };
+const UPLOAD_SOURCES = ['Our sheet', 'Freelap', 'Swift', 'Brower', 'Dashr', 'OVR', 'VALD', 'Jump mat', 'Rapsodo', 'Radar gun', 'Paper sheet', 'Other'];
+const MAX_UPLOAD_MB = 10;
 async function viewUpload(main) {
+  if (deskStop(main, 'Upload results')) return;
   const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const [days, lib, contracts, clientsList, presetList] = await Promise.all([get('/v1/testing-sessions'), get('/v1/tests'), get('/v1/team-contracts'), get('/v1/clients'), get('/v1/test-presets')]);
+  if (qs.get('session')) uploadForm.session = qs.get('session');
+  const [days, lib, teamList, clientsList, recent, presetList] = await Promise.all([get('/v1/testing-sessions'), get('/v1/tests'), get('/v1/teams'), get('/v1/clients'), get('/v1/uploads'), get('/v1/test-presets')]);
   const presets = presetList.data.filter((p) => p.tests.length);
 
   // Step 1: template
-  const daySel = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const teamSel = select([['', 'Choose athletes later'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name}`])]);
+  const daySel = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: uploadForm.session ?? '' });
+  const teamSel = select([['', 'Choose athletes later'], ...teamList.data.map((c) => [c.id, c.label])]);
   const presetSel = select(presets.length ? presets.map((p) => [p.id, p.name]) : [['', 'No presets yet']], { disabled: !presets.length });
-  const tplOpts = h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(2,minmax(0,1fr))' }, field('Team', teamSel), field('Tests', presetSel, presets.length ? 'From your presets in the Test library.' : 'Add a preset in the Test library, or pick a testing day.'));
-  const sync = () => { tplOpts.style.display = daySel.value ? 'none' : ''; };
-  daySel.addEventListener('change', sync); sync();
+  const tplOpts = h('div', { class: 'form-grid' }, field('Team', teamSel), field('Tests', presetSel, presets.length ? 'From your presets in the Test library.' : 'Add a preset in the Test library, or pick a testing day.'));
+  const syncTpl = () => { tplOpts.style.display = daySel.value ? 'none' : ''; };
+  daySel.addEventListener('change', syncTpl); syncTpl();
   const tplQuery = () => {
     if (daySel.value) return `session_id=${daySel.value}`;
     const preset = presets.find((p) => p.id === presetSel.value);
@@ -3060,75 +3377,158 @@ async function viewUpload(main) {
   };
   const step1 = panel('1. Get the sheet', { subtitle: 'Every athlete\'s ID is filled in, with a column for each test and attempt. Fill it in on paper, a laptop, or a phone.' },
     field('Testing day', daySel), tplOpts,
-    h('div', { class: 'row wrap' }, btn('Download Excel', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}`)), 'primary'), btn('Download CSV (Google Sheets)', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}&format=csv`)), 'ghost')));
+    h('div', { class: 'row wrap' }, btn('Download Excel', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}`)), 'secondary'), btn('Download CSV (Google Sheets)', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}&format=csv`)), 'ghost')));
 
-  // Step 2: upload
-  const file = h('input', { type: 'file', accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input' });
-  const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px' });
-  const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])]);
-  const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const upDate = input({ type: 'date', value: bizDate(), max: bizDate() });
-  async function doPreview() {
-    const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDate.value || undefined };
-    if (file.files[0]) {
-      body.filename = file.files[0].name;
-      if (/\.xlsx$/i.test(file.files[0].name)) body.xlsx_base64 = toBase64(await file.files[0].arrayBuffer());
-      else if (/\.xls$/i.test(file.files[0].name)) throw new Error('That\'s an old .xls file. In Excel, choose File → Save As → Excel Workbook (.xlsx), then upload it.');
-      else body.csv = await file.files[0].text();
-    } else if (paste.value.trim()) { body.csv = paste.value; body.filename = 'Pasted rows'; }
+  // Step 2: upload (drag and drop, or choose, or paste)
+  const file = h('input', { type: 'file', accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'Choose a file' });
+  const fileNote = h('span', { class: 'small muted' }, 'Excel (.xlsx) or CSV, up to 10 MB.');
+  const pickFile = (f) => {
+    if (!f) return;
+    if (f.size > MAX_UPLOAD_MB * 1024 * 1024) { file.value = ''; fileNote.textContent = `${f.name} is over ${MAX_UPLOAD_MB} MB. Split it into smaller sheets.`; fileNote.className = 'small warn-text'; return; }
+    fileNote.textContent = `${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB) is ready to check.`; fileNote.className = 'small good-text';
+  };
+  file.addEventListener('change', () => pickFile(file.files[0]));
+  const drop = h('div', { class: 'ts-drop', onDragover: (e) => { e.preventDefault(); drop.classList.add('over'); }, onDragleave: () => drop.classList.remove('over'),
+    onDrop: (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) { file.files = e.dataTransfer.files; pickFile(file.files[0]); } } },
+    h('span', { class: 'strong' }, 'Drop the file here, or choose it'), file, fileNote);
+  const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px', 'aria-label': 'Pasted rows' });
+  paste.value = uploadForm.paste;
+  const source = select([['', 'Where it\'s from…'], ...UPLOAD_SOURCES.map((x) => [x, x])], { value: uploadForm.source, 'aria-label': 'Where it\'s from' });
+  const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])], { value: uploadForm.test });
+  const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: uploadForm.session ?? '' });
+  const upDate = input({ type: 'date', value: uploadForm.date ?? bizDate(), max: bizDate() });
+  const dateNote = h('span', { class: 'small muted' });
+  const syncDate = () => { const d = days.data.find((x) => x.id === upDay.value); upDate.disabled = !!d; if (d) upDate.value = d.date; dateNote.textContent = d ? 'The testing day sets the date.' : ''; };
+  upDay.addEventListener('change', syncDate); syncDate();
+  const remember = () => { uploadForm = { session: upDay.value || null, date: upDate.disabled ? uploadForm.date : upDate.value, test: oneTest.value, source: source.value, paste: paste.value, fileName: file.files[0]?.name ?? null }; };
+  async function doPreview(fromFile = file, fromPaste = paste) {
+    remember();
+    const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDay.value ? undefined : upDate.value || undefined, source: source.value || undefined };
+    const f = fromFile?.files?.[0];
+    if (f) {
+      if (f.size > MAX_UPLOAD_MB * 1024 * 1024) throw new Error(`${f.name} is over ${MAX_UPLOAD_MB} MB. Split it into smaller sheets and upload them one at a time.`);
+      body.filename = f.name;
+      if (/\.xlsx$/i.test(f.name)) body.xlsx_base64 = toBase64(await f.arrayBuffer());
+      else if (/\.xls$/i.test(f.name)) throw new Error('That\'s an old .xls file. In Excel, choose File → Save As → Excel Workbook (.xlsx), then upload it.');
+      else body.csv = await f.text();
+    } else if (fromPaste?.value.trim()) { body.csv = fromPaste.value; body.filename = 'Pasted rows'; uploadForm.paste = fromPaste.value; }
     else throw new Error('Choose a file or paste your rows.');
-    uploadState = { ...(await post('/v1/uploads/preview', body)), filename: body.filename, confirmed: new Set(), saved: null };
+    uploadState = { ...(await post('/v1/uploads/preview', body)), filename: body.filename, pasted: !f, confirmed: new Set(), saved: null, filter: 'all', q: '' };
     render();
   }
   const step2 = panel('2. Upload it', { subtitle: 'Every row needs a real Athlete ID and every value has to fit its test. If anything is off, nothing is saved and you\'ll see exactly what to fix.' },
-    field('File (Excel or CSV)', file), paste,
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Add to testing day', upDay), field('Date for rows without one', upDate), field('Device export with one test?', oneTest)),
+    drop, paste,
+    h('div', { class: 'form-grid' }, field('Add to testing day', upDay), h('div', { class: 'stack-tight' }, field('Date for rows without one', upDate), dateNote), field('Where it\'s from', source), field('Device export with one test?', oneTest)),
     h('div', null, btn('Check the sheet', (e) => busy(e.currentTarget, () => doPreview()), 'primary')));
+
+  // Recent uploads, each with Undo.
+  let undoing = false;
+  const undoUpload = async (b, button) => {
+    if (undoing) return;
+    const what = [b.created && `${b.created} new ${b.created === 1 ? 'result comes' : 'results come'} out`, b.replaced && `${b.replaced} replaced ${b.replaced === 1 ? 'value goes' : 'values go'} back`, b.waiting && `${b.waiting} waiting ${b.waiting === 1 ? 'result is' : 'results are'} dropped`].filter(Boolean);
+    if (!confirm(`Undo ${b.filename ?? 'this upload'}? ${what.length ? `${what.join(', ')}.` : ''} Anything changed or linked since is left alone.`)) return;
+    undoing = true; button.disabled = true;
+    try { const r = await post(`/v1/uploads/${b.id}/undo`); toast(`Undone: ${r.summary}.`); if (uploadState?.saved?.batch_id === b.id) uploadState = null; render(); }
+    catch (e) { toast(e.message, 'warn'); button.disabled = false; }
+    finally { undoing = false; }
+  };
+  const recentPanel = recent.data.length ? panel('Recent uploads', { subtitle: 'Undo takes an upload back out: new results are removed, replaced values go back, and results sent to waiting are dropped.' },
+    recent.data.map((b) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, b.filename ?? 'Upload'),
+        h('span', { class: 'muted' }, [b.source, b.session_name, b.by_name && `by ${b.by_name}`, ago(b.created_at)].filter(Boolean).join(' · '))),
+      h('span', null, [`${b.saved} saved`, b.replaced && `${b.replaced} replaced`, b.unchanged && `${b.unchanged} already saved`, b.waiting && `${b.waiting} to link`, b.prs && `${b.prs} PR${b.prs === 1 ? '' : 's'}`].filter(Boolean).join(' · ')),
+      b.undone_at ? h('span', { class: 'dp-badge dp-badge--muted', title: b.undo_summary ?? '' }, `Undone ${ago(b.undone_at).toLowerCase()}`) : btn('Undo', (e) => undoUpload(b, e.currentTarget), 'ghost')))) : null;
 
   // Step 3: results of the check
   let step3 = null;
   const st = uploadState;
-  const problemTable = (list) => h('div', { style: 'overflow-x:auto' }, h('table', { class: 'table' },
-    h('thead', null, h('tr', null, h('th', null, 'Row'), h('th', null, 'Column'), h('th', null, 'Athlete'), h('th', null, 'What to fix'))),
-    h('tbody', null, list.map((e) => h('tr', null, h('td', null, e.row ?? '—'), h('td', null, e.column ?? '—'), h('td', { style: 'font-family:var(--font-mono)' }, e.athlete_id ?? ''), h('td', null, e.message))))));
-  const again = h('div', { class: 'row' }, btn('Upload the fixed sheet', () => { uploadState = null; render(); }, 'primary'));
+  const problemsCsv = (list) => { const cell = (x) => (/[",\n]/.test(String(x ?? '')) ? `"${String(x).replace(/"/g, '""')}"` : x ?? ''); return ['Row,Column,Athlete ID,What to fix', ...list.map((e) => [e.row, e.column, e.athlete_id, e.message].map(cell).join(','))].join('\r\n'); };
+  const saveCsv = (text, name) => { const url = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv' })); const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); };
+  const problemList = (list) => h('div', null,
+    h('div', { class: 'ts-problems-table', style: 'overflow-x:auto' }, h('table', { class: 'table' },
+      h('thead', null, h('tr', null, h('th', null, 'Row'), h('th', null, 'Column'), h('th', null, 'Athlete'), h('th', null, 'What to fix'))),
+      h('tbody', null, list.map((e) => h('tr', null, h('td', null, e.row ?? '—'), h('td', null, e.column ?? '—'), h('td', { style: 'font-family:var(--font-mono)' }, e.athlete_id ?? ''), h('td', null, e.message)))))),
+    h('div', { class: 'ts-problems-cards stack-tight' }, list.map((e) => h('div', { class: 'list-item small', style: 'flex-direction:column;align-items:flex-start' },
+      h('span', { class: 'muted' }, [e.row ? `Row ${e.row}` : null, e.column, e.athlete_id].filter(Boolean).join(' · ') || 'Whole sheet'), h('span', null, e.message)))));
   if (st?.saved) {
-    step3 = panel('Saved', { subtitle: `${st.saved.saved} results added to ${st.saved.athletes.length} ${st.saved.athletes.length === 1 ? 'athlete' : 'athletes'}${st.saved.prs ? `, ${st.saved.prs} new PRs` : ''}${st.saved.already_saved ? `. ${st.saved.already_saved} were already saved from an earlier upload.` : '.'}` },
-      st.saved.athletes.map((a) => h('a', { class: 'list-item', href: a.client_id ? `#/clients/${a.client_id}` : `#/teams/${a.contract_id}`, style: 'text-decoration:none;color:inherit' },
+    const s = st.saved;
+    step3 = panel('Saved', { subtitle: `${s.saved} ${s.saved === 1 ? 'result' : 'results'} saved for ${s.athletes.length} ${s.athletes.length === 1 ? 'athlete' : 'athletes'}${s.replaced ? ` (${s.replaced} replaced an earlier value)` : ''}${s.prs ? `, ${s.prs} new PR${s.prs === 1 ? '' : 's'}` : ''}.${s.already_saved ? ` ${s.already_saved} ${s.already_saved === 1 ? 'was' : 'were'} already saved and left as ${s.already_saved === 1 ? 'it was' : 'they were'}.` : ''}` },
+      s.athletes.map((a) => h('a', { class: 'list-item', href: a.client_id ? `#/clients/${a.client_id}` : `#/teams/${a.contract_id}`, style: 'text-decoration:none;color:inherit' },
         h('span', { class: 'grow strong' }, a.name), idChip(a.athlete_id), h('span', { class: 'small muted' }, `${a.results} ${a.results === 1 ? 'result' : 'results'}`), a.prs ? h('span', { class: 'dp-badge dp-badge--good' }, `${a.prs} PR${a.prs === 1 ? '' : 's'}`) : null)),
-      h('div', { class: 'row' }, btn('Upload another', () => { uploadState = null; render(); }, 'secondary')));
+      h('div', { class: 'row wrap' }, btn('Upload another', () => { uploadState = null; uploadForm.paste = ''; render(); }, 'primary'),
+        recent.data.some((b) => b.id === s.batch_id && !b.undone_at) ? btn('Undo this upload', (e) => undoUpload(recent.data.find((b) => b.id === s.batch_id), e.currentTarget), 'ghost') : null,
+        st.session?.id ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/${st.session.id}` }, 'Back to the testing day') : null));
   } else if (st && !st.ok) {
+    // Fix in place: pasted rows edit right here; a file is chosen again. The options above are kept.
+    const fixPaste = st.pasted ? h('textarea', { class: 'dp-input', wrap: 'off', style: 'min-height:160px;font-family:var(--font-mono);font-size:13px;white-space:pre', 'aria-label': 'Your rows, to fix' }) : null;
+    if (fixPaste) fixPaste.value = uploadForm.paste;
+    const fixFile = st.pasted ? null : h('input', { type: 'file', accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'Choose the fixed file' });
     step3 = h('section', { class: 'dp-panel stack', style: 'border-color:var(--amber)' },
       h('h2', { class: 'dp-panel-title', style: 'color:var(--amber)' }, 'This sheet can\'t be saved'),
-      h('p', null, `Nothing was saved. ${st.error_count} ${st.error_count === 1 ? 'problem needs' : 'problems need'} fixing in ${st.filename ?? 'the sheet'}. Fix ${st.error_count === 1 ? 'it' : 'them'}, save, and upload the sheet again.`),
-      problemTable(st.errors), st.error_count > st.errors.length ? h('p', { class: 'small muted' }, `Showing the first ${st.errors.length}.`) : null, again);
+      h('p', null, `Nothing was saved. ${st.error_count} ${st.error_count === 1 ? 'problem needs' : 'problems need'} fixing in ${st.filename ?? 'the sheet'}.`),
+      problemList(st.errors), st.error_count > st.errors.length ? h('p', { class: 'small muted' }, `Showing the first ${st.errors.length}.`) : null,
+      h('div', { class: 'row wrap' }, btn('Download the problems (CSV)', () => saveCsv(problemsCsv(st.errors), 'problems-to-fix.csv'), 'ghost')),
+      h('div', { class: 'dp-label' }, st.pasted ? 'Fix the rows here' : `Fix ${st.filename ?? 'the file'}, save it, and choose it again`),
+      fixPaste ?? fixFile,
+      h('div', { class: 'row wrap' }, btn('Check again', (e) => busy(e.currentTarget, () => (st.pasted ? doPreview(null, fixPaste) : doPreview(fixFile, null))), 'primary'),
+        btn('Start over', () => { uploadState = null; render(); }, 'ghost')));
   } else if (st) {
     const s = st.summary;
     const saveBtn = btn(`Save ${s.results} results`, (e) => busy(e.currentTarget, async () => {
-      try { const saved = await post('/v1/uploads/commit', { preview_id: st.preview_id, confirm: [...st.confirmed] }); uploadState = { ...st, saved }; toast(`${saved.saved} results saved.`); render(); }
+      try { const saved = await post('/v1/uploads/commit', { preview_id: st.preview_id, confirm: [...st.confirmed] }); uploadState = { ...st, saved }; uploadForm.paste = ''; toast(`${saved.saved} ${saved.saved === 1 ? 'result' : 'results'} saved.`); render(); }
       catch (err) { if (!err.details) throw err; uploadState = { ...st, ok: err.code !== 'upload_rejected', errors: err.details, error_count: err.details.length }; if (err.code === 'upload_rejected') render(); else throw err; }
     }), 'primary');
-    const syncSave = () => { const left = st.warnings.length - st.confirmed.size; saveBtn.disabled = left > 0; saveBtn.textContent = left ? `Confirm ${left} more to save` : `Save ${s.results} results to ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}`; };
+    const write = s.new + s.replaced;
+    const syncSave = () => { const left = st.warnings.length - st.confirmed.size; saveBtn.disabled = left > 0 || !write; saveBtn.textContent = left ? `Confirm ${left} more to save` : write ? `Save ${write} ${write === 1 ? 'result' : 'results'} for ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}` : 'Nothing new to save'; };
     const confirmPanel = st.warnings.length ? h('div', { class: 'stack', style: 'border:1px solid var(--amber);border-radius:8px;padding:12px' },
       h('strong', { style: 'color:var(--amber)' }, `Confirm ${st.warnings.length === 1 ? 'this value' : `these ${st.warnings.length} values`}`),
       h('p', { class: 'small muted', style: 'margin:0' }, 'They\'re possible but unusual. Tick each one that\'s right. If one is a mistake, fix the sheet and upload it again.'),
       st.warnings.map((w) => { const cb = h('input', { type: 'checkbox', checked: st.confirmed.has(w.key) }); cb.addEventListener('change', () => { cb.checked ? st.confirmed.add(w.key) : st.confirmed.delete(w.key); syncSave(); });
-        return h('label', { class: 'row small', style: 'gap:10px;min-height:40px' }, cb, h('span', null, h('span', { class: 'muted' }, `Row ${w.row}, ${w.column}: `), w.message)); })) : null;
-    const cards = st.athletes.map((g) => h('details', { class: 'dp-panel', open: g.results.some((r) => r.warning) },
-      h('summary', { class: 'row', style: 'cursor:pointer;gap:12px;min-height:36px;list-style:none' }, h('span', { class: 'strong grow' }, g.name), idChip(g.athlete_id), h('span', { class: 'small muted' }, `${g.results.length} ${g.results.length === 1 ? 'result' : 'results'}`), g.results.some((r) => r.warning) ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Confirm') : null),
-      g.results.map((r) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
-        h('span', { class: 'grow' }, `${r.test_name}${r.side ? ` – ${r.side === 'L' ? 'Left' : 'Right'}` : ''}${r.attempt ? ` #${r.attempt}` : ''}`),
-        h('span', { class: 'muted' }, ymd(r.date)),
-        h('span', { class: 'strong' }, fmtResult(r.value, r.unit, r.decimals)),
-        r.entered_unit !== r.unit ? h('span', { class: 'muted' }, `from ${r.entered} ${r.entered_unit}`) : null,
-        r.warning ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Unusual') : null))));
-    step3 = panel('3. Every row checks out', { subtitle: `${s.results} results for ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}, each matched by Athlete ID. Saving adds all of them at once.` },
-      confirmPanel, cards, h('div', { class: 'row wrap' }, saveBtn, btn('Start over', () => { uploadState = null; render(); }, 'ghost')));
-    syncSave();
+        return h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, cb, h('span', null, h('span', { class: 'muted' }, `Row ${w.row}, ${w.column}: `), w.message)); })) : null;
+    const statusBadge = (r) => (r.status === 'unchanged' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Already saved')
+      : r.status === 'replace' ? h('span', { class: 'dp-badge dp-badge--neutral' }, `Was ${r.was.map((x) => fmtResult(x, r.unit, r.decimals)).join(', ')}`) : h('span', { class: 'dp-badge dp-badge--good' }, 'New'));
+    const cards = st.athletes.map((g) => {
+      const card = h('details', { class: 'dp-panel', open: g.results.some((r) => r.warning) || st.athletes.length <= 3 },
+        h('summary', { class: 'row wrap', style: 'cursor:pointer;gap:12px;min-height:44px;list-style:none' }, h('span', { class: 'strong grow' }, g.name), idChip(g.athlete_id), h('span', { class: 'small muted' }, `${g.results.length} ${g.results.length === 1 ? 'result' : 'results'}`),
+          g.results.some((r) => r.pr) ? h('span', { class: 'dp-badge dp-badge--good' }, 'PR') : null, g.results.some((r) => r.warning) ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Confirm') : null),
+        g.results.map((r) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+          h('span', { class: 'grow', style: 'min-width:160px' }, `${r.test_name}${r.side ? ` – ${r.side === 'L' ? 'Left' : 'Right'}` : ''}${r.attempt ? ` #${r.attempt}` : ''}`),
+          h('span', { class: 'muted' }, ymd(r.date)),
+          h('span', { class: 'strong' }, fmtResult(r.value, r.unit, r.decimals)),
+          r.entered_unit !== r.unit ? h('span', { class: 'muted' }, `from ${r.entered} ${r.entered_unit}`) : null,
+          statusBadge(r),
+          r.previous_best != null ? h('span', { class: 'muted' }, `Best before ${fmtResult(r.previous_best, r.unit, r.decimals)}`) : null,
+          r.pr ? h('span', { class: 'dp-badge dp-badge--good' }, 'PR') : null,
+          r.warning ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Unusual') : null)));
+      card.dataset.search = `${g.name} ${g.athlete_id}`.toLowerCase();
+      card.dataset.look = String(g.results.some((r) => r.warning || r.status === 'replace'));
+      card.dataset.pr = String(g.results.some((r) => r.pr));
+      return card;
+    });
+    // Big sheets: filter to what needs a look, or the PRs, and find an athlete.
+    const applyFilter = () => { const q = st.q.trim().toLowerCase(); let shown = 0; cards.forEach((c) => { const ok = (st.filter === 'all' || (st.filter === 'look' && c.dataset.look === 'true') || (st.filter === 'prs' && c.dataset.pr === 'true')) && (!q || c.dataset.search.includes(q)); c.style.display = ok ? '' : 'none'; shown += ok; }); none.style.display = shown ? 'none' : ''; };
+    const none = h('p', { class: 'muted small', style: 'display:none' }, 'No athletes match.');
+    const filterBtns = [['all', 'All'], ['look', 'Needs a look'], ['prs', 'PRs']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(st.filter === k), onClick: () => { st.filter = k; filterBtns.forEach((b, i) => b.setAttribute('aria-pressed', String(['all', 'look', 'prs'][i] === k))); applyFilter(); } }, label));
+    const findA = input({ type: 'search', placeholder: 'Find an athlete', 'aria-label': 'Find an athlete in this sheet', style: 'max-width:260px' });
+    findA.addEventListener('input', () => { st.q = findA.value; applyFilter(); });
+    const r = st.read;
+    const how = r ? h('details', { class: 'small' }, h('summary', { style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'How the file was read'),
+      h('ul', { class: 'stack-tight', style: 'margin:0;padding-left:18px' },
+        h('li', null, `${st.pasted ? 'Pasted rows' : st.format === 'xlsx' ? `Excel file ${st.filename ?? ''}` : `CSV file ${st.filename ?? ''}`}, ${st.rows} ${st.rows === 1 ? 'row' : 'rows'}${st.source ? `, from ${st.source}` : ''}.`),
+        h('li', null, `Athletes found by the "${r.id_column ?? r.name_column}" column${r.id_column && r.name_column ? `, checked against "${r.name_column}"` : ''}.`),
+        h('li', null, r.date_column ? `Dates from "${r.date_column}"${st.session ? `; rows without one use the testing day (${ymd(st.session.date)})` : ''}.` : st.session ? `Every result is dated ${ymd(st.session.date)}, the testing day.` : 'No date column: every result uses the date you chose.'),
+        h('li', null, `Test columns: ${r.columns.map((c) => c.header).join(', ')}.`),
+        r.ignored.length ? h('li', null, `Left out (empty or not a test): ${r.ignored.join(', ')}.`) : null)) : null;
+    const summaryLine = [`${s.results} ${s.results === 1 ? 'result' : 'results'} for ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}`, s.new && `${s.new} new`, s.replaced && `${s.replaced} replace an earlier value`, s.unchanged && `${s.unchanged} already saved (left as ${s.unchanged === 1 ? 'it is' : 'they are'})`, s.prs && `${s.prs} PR${s.prs === 1 ? '' : 's'}`].filter(Boolean).join(', ');
+    step3 = panel('3. Every row checks out', { subtitle: `${summaryLine}. Each result is matched by Athlete ID, and saving adds them all at once.${st.session ? ` Added to ${st.session.name}.` : ''}` },
+      how, confirmPanel,
+      st.athletes.length > 6 ? h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { class: 'row wrap tm-views' }, filterBtns), findA) : null,
+      cards, none, h('div', { class: 'row wrap' }, saveBtn, btn('Start over', () => { uploadState = null; render(); }, 'ghost')));
+    syncSave(); applyFilter();
   }
 
   fill(main, header('Upload results', 'All or nothing: a sheet is saved only when every row matches a real Athlete ID and every value fits its test.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    step3 ?? h('div', { class: 'grid grid-2' }, step1, step2));
+    step3 ?? h('div', { class: 'grid grid-2' }, step1, step2), recentPanel);
 }
 
 boot();

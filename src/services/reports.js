@@ -163,19 +163,27 @@ export function emailReport(ctx, clientId, body = {}, by = {}, baseUrl) {
 export function shareSession(ctx, id, body = {}, baseUrl) {
   const s = getSession(ctx, id);
   const note = body.parent_note !== undefined ? v.str(body.parent_note, 'parent_note', { max: 2000, optional: true }) : s.parent_note;
+  // only_new: the day is already shared; email just the families whose results were added since they were last emailed.
+  if (body.only_new && !s.shared_at) throw conflict('Share this day first.');
+  const since = body.only_new ? (s.notified_at ?? s.shared_at) : null;
   ctx.db.run('UPDATE perf_sessions SET shared_at = COALESCE(shared_at, ?), parent_note = ? WHERE id = ?', ctx.now(), note, id);
   let notified = 0;
   if (body.notify !== false) {
-    const kids = ctx.db.all(`SELECT DISTINCT c.id, c.name, c.family_id FROM perf_results r JOIN clients c ON c.id = r.client_id WHERE r.session_id = ? AND r.voided = 0 AND c.family_id IS NOT NULL`, id);
+    // Archived athletes' families aren't contacted. One email per athlete; the count is families with an email address.
+    const kids = ctx.db.all(`SELECT DISTINCT c.id, c.name, c.family_id FROM perf_results r JOIN clients c ON c.id = r.client_id
+      WHERE r.session_id = ? AND r.voided = 0 AND c.family_id IS NOT NULL AND c.archived_at IS NULL${since ? ' AND r.created_at > ?' : ''}`, id, ...(since ? [since] : []));
+    if (body.only_new && !kids.length) throw conflict('No results have been added since families were last emailed.');
     for (const k of kids) {
       const own = ctx.db.get('SELECT body FROM progress_notes WHERE client_id = ? AND perf_session_id = ? AND approved_at IS NOT NULL', k.id, id)?.body;
       notifyFamily(ctx, k.family_id, `${k.name.split(' ')[0]}'s results from ${s.name} are ready`,
         `${k.name.split(' ')[0]}'s results from ${s.name} are in the parent portal, with progress since earlier tests.${own ? `\n\n${own}` : ''}${note ? `\n\nFrom your coach: ${note}` : ''}\n\nSee them: ${baseUrl ?? ctx.publicUrl ?? ''}/parent`);
-      notified++;
     }
+    notified = new Set(kids.filter((k) => ctx.db.get(`SELECT 1 FROM guardians WHERE family_id = ? AND email IS NOT NULL AND email != '' LIMIT 1`, k.family_id)).map((k) => k.family_id)).size;
   }
-  emit(ctx, 'testing.shared', { session_id: id, name: s.name, families_notified: notified });
-  return { ...getSession(ctx, id), families_notified: notified };
+  // "Added since" counts from now on (also when emails were skipped).
+  ctx.db.run('UPDATE perf_sessions SET notified_at = ? WHERE id = ?', ctx.now(), id);
+  if (!body.only_new) emit(ctx, 'testing.shared', { session_id: id, name: s.name, families_notified: notified });
+  return { ...getSession(ctx, id), families_notified: notified, again: !!body.only_new };
 }
 export function unshareSession(ctx, id) {
   getSession(ctx, id);

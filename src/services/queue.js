@@ -1,5 +1,5 @@
 import { v, badRequest, notFound, conflict, HttpError } from '../util.js';
-import { recordResults, linkAthlete, resolveAthlete, getTest } from './performance.js';
+import { recordResults, linkAthlete, resolveAthlete, getTest, identityOf } from './performance.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { emit } from './events.js';
 
@@ -18,7 +18,7 @@ export function listQueue(ctx, { status = 'pending' } = {}) {
     const g = groups.get(k);
     if (!tests.has(item.test)) tests.set(item.test, getTest(ctx, item.test));
     const t = tests.get(item.test), m = t.metrics.find((x) => x.key === item.metric);
-    g.items.push({ id: r.id, test: item.test, test_name: t.name, metric: item.metric, metric_name: m.name, value: item.value, unit: item.unit, decimals: m.decimals, side: item.side, attempt: item.attempt, recorded_at: item.recorded_at, device: item.device, received_at: r.received_at });
+    g.items.push({ id: r.id, source: r.source, test: item.test, test_name: t.name, metric: item.metric, metric_name: m.name, value: item.value, unit: item.unit, decimals: m.decimals, side: item.side, attempt: item.attempt, recorded_at: item.recorded_at, device: item.device, received_at: r.received_at });
     g.last_received = r.received_at;
   }
   return [...groups.values()].map((g) => ({ ...g, count: g.items.length, suggestions: suggestionsFor(ctx, g.athlete) }))
@@ -45,8 +45,9 @@ function suggestionsFor(ctx, ref) {
 function targetFrom(ctx, body) {
   const t = body.athlete_id ? findByAthleteId(ctx, body.athlete_id) : body.client_id ? { client_id: body.client_id } : body.roster_id ? { roster_id: body.roster_id } : null;
   if (!t || !resolveAthlete(ctx, t)) throw badRequest(body.athlete_id ? `No athlete has the ID ${String(body.athlete_id).toUpperCase()}.` : 'Choose the athlete these results belong to.');
-  const p = t.client_id ? ctx.db.get('SELECT name, athlete_id FROM clients WHERE id = ?', t.client_id) : ctx.db.get('SELECT name, athlete_id FROM team_roster WHERE id = ?', t.roster_id);
-  return { ...t, ...p };
+  const p = t.client_id ? ctx.db.get('SELECT name, athlete_id, archived_at FROM clients WHERE id = ?', t.client_id) : ctx.db.get('SELECT name, athlete_id FROM team_roster WHERE id = ?', t.roster_id);
+  if (p.archived_at) throw badRequest(`${p.name} is archived. Restore their profile first, or pick someone else.`);
+  return { client_id: t.client_id, roster_id: t.roster_id, name: p.name, athlete_id: p.athlete_id };
 }
 
 // Link waiting results to a profile. Either everything from one sender identity (provider + identity),
@@ -93,4 +94,28 @@ export function discardQueue(ctx, body) {
   let n = 0;
   ctx.db.tx(() => { for (const id of ids) n += ctx.db.run(`UPDATE results_queue SET status = 'discarded', resolved_at = ? WHERE id = ? AND status = 'pending'`, ctx.now(), id).changes; });
   return { discarded: n };
+}
+
+// Link a device ahead of time: results from this device ID (or the name the device uses) go straight to the athlete.
+// Anything already waiting from it is linked now, all or nothing. Linking a device that's already linked moves it;
+// moved_from says who had it.
+export function linkDevice(ctx, body) {
+  const provider = v.str(String(body.provider ?? '').trim().toLowerCase(), 'provider', { max: 40 });
+  const raw = v.str(String(body.external_id ?? '').trim(), 'external_id', { max: 200 });
+  const byName = body.kind === 'name' || raw.startsWith('name:');
+  const externalId = byName ? identityOf({ name: raw.replace(/^name:/, '') }) : raw;
+  if (byName && externalId === 'name:') throw badRequest('Enter the name the device uses for this athlete.');
+  const identity = byName ? externalId : `id:${externalId}`;
+  const target = targetFrom(ctx, body);
+  const before = ctx.db.get(`SELECT l.client_id, l.roster_id, l.external_name, COALESCE(c.name, r.name) AS name, COALESCE(c.athlete_id, r.athlete_id) AS athlete_id FROM athlete_links l
+    LEFT JOIN clients c ON c.id = l.client_id LEFT JOIN team_roster r ON r.id = l.roster_id WHERE l.provider = ? AND l.external_id = ?`, provider, externalId);
+  const waiting = ctx.db.all(`SELECT id, athlete_ref FROM results_queue WHERE provider = ? AND identity = ? AND status = 'pending' ORDER BY received_at`, provider, identity);
+  // Keep the name the device uses (from what's waiting, or the existing link) rather than labelling it with the bare ID.
+  const deviceName = String(body.external_name ?? '').trim().slice(0, 120) || before?.external_name || waiting.map((w) => JSON.parse(w.athlete_ref).name).find(Boolean) || (byName ? raw.replace(/^name:/, '') : null);
+  return ctx.db.tx(() => {
+    const link = linkAthlete(ctx, { provider, external_id: externalId, external_name: deviceName, client_id: target.client_id, roster_id: target.roster_id });
+    const moved = !!before && (before.client_id !== (target.client_id ?? null) || before.roster_id !== (target.roster_id ?? null));
+    const linked = waiting.length ? linkQueue(ctx, { client_id: target.client_id, roster_id: target.roster_id, ids: waiting.map((w) => w.id) }) : { linked: 0, prs: 0 };
+    return { ...link, external_name: deviceName, athlete_id: target.athlete_id, moved_from: moved ? { name: before.name, athlete_id: before.athlete_id } : null, already_linked: !!before && !moved, linked: linked.linked, prs: linked.prs };
+  });
 }

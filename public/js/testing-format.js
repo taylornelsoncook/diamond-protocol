@@ -54,6 +54,8 @@ export function parseEntry(raw, unit) {
   return Number(s);
 }
 export const better = (t, a, b) => (t.lower_better ? a < b : a > b);
+// Outside what's possible for a test? Same rule as the server: a test can have a lowest, a highest, both or neither.
+export const outOfRange = (t, v) => (t.min_value != null && v < t.min_value) || (t.max_value != null && v > t.max_value);
 export function bestOf(t, vals) { let m = null; for (const v of vals) if (v != null && (m == null || better(t, v, m))) m = v; return m; }
 
 // Small trend line; the last point gets a dot. Higher on the chart always means better.

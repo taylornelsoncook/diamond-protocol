@@ -63,7 +63,8 @@ function fmtValue(v, unit) {
 }
 function fmtRange(t) {
   const u = t.unit === 's' ? ' s' : ' ' + t.unit;
-  return `${trim(t.min_value, 2)}–${trim(t.max_value, 2)}${u}`;
+  if (t.min_value != null && t.max_value != null) return `${trim(t.min_value, 2)}–${trim(t.max_value, 2)}${u}`;
+  return t.min_value != null ? `at least ${trim(t.min_value, 2)}${u}` : `at most ${trim(t.max_value, 2)}${u}`;
 }
 
 // ---- tests ------------------------------------------------------------------

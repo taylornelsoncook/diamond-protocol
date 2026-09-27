@@ -507,3 +507,45 @@ test('share preview, then emailing only the families with results added since sh
   assert.equal((await coach.get(`/api/testing/days/${id}`)).data.day.new_since_share, 0);
   assert.ok(db.get("SELECT 1 FROM activity WHERE action='Emailed families again' AND detail LIKE 'Late walk-up day%'"));
 });
+
+test('review fixes: emailing again counts families not athletes; archived athletes cannot be walk-ups', async () => {
+  const nate = athlete('Nate'), emma = athlete('Emma'), ava = athlete('Ava'), t40 = testId('40-yard dash');
+  assert.equal(nate.family_id, emma.family_id, 'Nate and Emma are siblings in the demo');
+  const id = (await coach.post('/api/testing/days', { name: 'Siblings late', date: '2026-10-11', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.0 });
+  await coach.post(`/api/testing/days/${id}/share`, {});
+  for (const a of [nate, emma]) {
+    assert.equal((await desk.post(`/api/testing/days/${id}/athletes`, { athlete_id: a.id })).status, 200);
+    await desk.put(`/api/testing/days/${id}/results`, { athlete_id: a.id, test_id: t40, attempt: 1, value: 6.3 });
+  }
+  const pre = await coach.get(`/api/testing/days/${id}/share-preview`);
+  assert.equal(pre.data.new_since_share.length, 2);
+  const emails = count("SELECT COUNT(*) n FROM parents WHERE family_id=? AND email IS NOT NULL AND email != ''", nate.family_id);
+  assert.equal(pre.data.new_families, emails ? 1 : 0);
+  // Archived athletes stay off testing days
+  const gone = db.insert('athletes', { code: 'GONE2027', first_name: 'Old', last_name: 'Profile', archived: 1 });
+  const r = await desk.post(`/api/testing/days/${id}/athletes`, { athlete_id: gone });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /archived/);
+  assert.ok(!db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, gone));
+});
+
+test('review fixes: the screen range check matches the server for one-sided ranges', async () => {
+  const { outOfRange } = await import('../public/js/testing-format.js');
+  const minOnly = { min_value: 60, max_value: null }, maxOnly = { min_value: null, max_value: 10 }, both = { min_value: 4, max_value: 9 }, none = { min_value: null, max_value: null };
+  for (const [t, v] of [[minOnly, 75], [minOnly, 600], [maxOnly, 3], [both, 5.2], [none, 0.01]]) {
+    assert.equal(outOfRange(t, v), false, `${JSON.stringify(t)} ${v}`);
+    assert.equal(core.checkValue({ ...t, name: 'X', unit: 's' }, v, 's').error, undefined);
+  }
+  for (const [t, v] of [[minOnly, 30], [maxOnly, 12], [both, 0.09], [both, 9.5]]) {
+    assert.equal(outOfRange(t, v), true, `${JSON.stringify(t)} ${v}`);
+    assert.ok(core.checkValue({ ...t, name: 'X', unit: 's' }, v, 's').error);
+  }
+  assert.match(core.checkValue({ ...minOnly, name: 'Mile', unit: 's' }, 30, 's').error, /at least 60 s/);
+  // Through the API: a one-sided custom test rejects an impossible value with a 400, not a crash
+  const mile = (await coach.post('/api/tests', { name: 'Review mile', unit: 's', lower_better: 1, min_value: 60, timed: 1 })).data;
+  const id = (await coach.post('/api/testing/days', { name: 'Mile day', date: '2026-10-12', athlete_ids: [athlete('Ava').id], test_ids: [mile.id] })).data.id;
+  const bad = await desk.put(`/api/testing/days/${id}/results`, { athlete_id: athlete('Ava').id, test_id: mile.id, attempt: 1, value: 30, source: 'stopwatch' });
+  assert.equal(bad.status, 400);
+  assert.equal((await desk.put(`/api/testing/days/${id}/results`, { athlete_id: athlete('Ava').id, test_id: mile.id, attempt: 1, value: 400, source: 'stopwatch' })).status, 200);
+});

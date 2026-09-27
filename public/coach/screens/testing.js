@@ -1,14 +1,16 @@
 // Testing: testing days, running a day (stopwatch + typed entry), uploads, results waiting to be linked,
 // devices & imports, and the test library.
 import { html, raw, mount, api, icon, toast, toastError, modal, confirmDialog, formData, options, fmtDate, relTime, localISO, debounce, plural, badge } from '/js/ui.js';
-import { fmtValue, fmtNumber, fmtChange, unitsFor, convert, parseEntry, bestOf, better, scoring } from '/js/testing-format.js';
+import { fmtValue, fmtNumber, fmtChange, unitsFor, convert, parseEntry, bestOf, better, scoring, outOfRange } from '/js/testing-format.js';
 
 const OC = ['owner', 'coach'];
 const canRun = (ctx) => OC.includes(ctx.me.role);
 const CAT_ORDER = ['Speed', 'Agility', 'Power', 'Strength', 'Endurance', 'Mobility', 'Body', 'Force plate', 'Baseball', 'Basketball', 'Hockey', 'Soccer'];
 const catSort = (a, b) => ((CAT_ORDER.indexOf(a) + 1 || 99) - (CAT_ORDER.indexOf(b) + 1 || 99)) || a.localeCompare(b);
 const name = (a) => `${a.first_name} ${a.last_name}`;
-const rangeText = (t) => (t.min_value != null && t.max_value != null ? `${fmtNumber(t.min_value, '')}–${fmtNumber(t.max_value, '')} ${t.unit}` : '');
+const rangeText = (t) => (t.min_value != null && t.max_value != null ? `${fmtNumber(t.min_value, '')}–${fmtNumber(t.max_value, '')} ${t.unit}`
+  : t.min_value != null ? `at least ${fmtNumber(t.min_value, '')} ${t.unit}` : t.max_value != null ? `at most ${fmtNumber(t.max_value, '')} ${t.unit}` : '');
+const MAX_ATTEMPTS = 20;
 
 const STYLE = raw(`<style>
 .tst-days .list-row{padding:14px 0}
@@ -93,6 +95,12 @@ const STYLE = raw(`<style>
 .tst-rankrow:nth-child(-n+3) .tst-rankno{color:var(--green-bright)}
 .tst-edfoot{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--line-subtle);padding-top:12px}
 .tst-edtests .list-row{padding:6px 0}
+/* 44px touch targets on the testing screens */
+.tst-tools .btn,.tst-kit .seg button,.tst-filters .seg button,.tst-up,.tst-last .btn,.tst-filters .input,.tst-banner .btn{min-height:44px}
+.tst-chip{min-height:44px}.tst-chip button{min-width:44px;min-height:44px}
+.tst-cat>summary{min-height:44px;display:flex;align-items:center;gap:6px}
+.tst-cat>summary::before{content:'▸';color:var(--steel-muted)}.tst-cat[open]>summary::before{content:'▾'}
+.tst-cat>summary::-webkit-details-marker{display:none}.tst-cat>summary{list-style:none}
 @media (max-width:700px){
   .tst-row.can-rm{grid-template-columns:56px minmax(0,1fr) 80px}
   .tst-row.no-watch.can-rm{grid-template-columns:minmax(0,1fr) 80px}
@@ -128,7 +136,7 @@ function header(title, sub, actions = '') {
 const back = () => html`<a class="btn" href="/app/testing">Testing</a>`;
 function pendingBanner(ctx, p) {
   if (!p || !p.count) return '';
-  return html`<div class="banner"><span>${p.count === 1 ? '1 result is' : `${p.count} results are`} waiting to be linked to a profile.${canRun(ctx) ? '' : ' A coach can link them.'}</span>
+  return html`<div class="banner tst-banner"><span>${p.count === 1 ? '1 result is' : `${p.count} results are`} waiting to be linked to a profile.${canRun(ctx) ? '' : ' A coach can link them.'}</span>
     ${canRun(ctx) ? html`<a class="btn btn-outline btn-sm" href="/app/testing/queue">Link them</a>` : ''}</div>`;
 }
 const dayWhen = (date) => (date === localISO() ? 'Today' : fmtDate(date, { weekday: true }));
@@ -311,7 +319,8 @@ async function renderNew(ctx) {
       athleteBoxes().forEach((c) => { if (ids.has(c.value)) c.checked = true; });
       countAthletes(); syncTests(); suggestName();
       const skipped = d.tests.length - d.tests.filter((t) => testById.has(t.id)).length;
-      toast(`Copied ${plural(ids.size, 'athlete')} and ${plural(selected.size, 'test')} from ${d.day.name}.${skipped ? ` ${plural(skipped, 'hidden test')} left out.` : ''}`);
+      const copied = athleteBoxes().filter((c) => ids.has(c.value)).length, archived = ids.size - copied;
+      toast(`Copied ${plural(copied, 'athlete')}${archived ? ` (${plural(archived, 'archived athlete')} left out)` : ''} and ${plural(selected.size, 'test')} from ${d.day.name}.${skipped ? ` ${plural(skipped, 'hidden test')} left out.` : ''}`);
     } catch (err) { toastError(err); }
   };
   const fromSel = f.querySelector('#from');
@@ -394,7 +403,7 @@ async function renderDay(ctx) {
         ${oc ? html`<a class="btn" href="/app/testing/upload?day=${day.id}">${icon('upload')}<span>Upload results</span></a><button class="btn" id="edit">Edit day</button>` : ''}
         <a class="btn btn-ghost" href="/app/testing">All testing days</a>
       </div></div>
-    ${shared && oc && day.new_since_share ? html`<div class="banner"><span>${day.new_since_share === 1 ? '1 athlete has' : `${day.new_since_share} athletes have`} results added since you shared. Their families haven't been emailed about them.</span><button class="btn btn-outline btn-sm" id="share-new">Email their families</button></div>` : ''}
+    ${shared && oc && day.new_since_share ? html`<div class="banner tst-banner"><span>${day.new_since_share === 1 ? '1 athlete has' : `${day.new_since_share} athletes have`} results added since you shared. Their families haven't been emailed about them.</span><button class="btn btn-outline btn-sm" id="share-new">Email their families</button></div>` : ''}
     ${tests.length ? html`<div class="tst-tabbar"><div class="tst-tabs" role="tablist" aria-label="Tests" id="tabs"></div>
         ${oc ? html`<button class="btn btn-ghost tst-addtest" id="addtest" aria-label="Add a test to this day">${icon('plus')}<span class="tst-hide-sm">Add test</span></button>` : ''}</div>
       <section class="panel tst-watchp" id="watch" hidden aria-label="Stopwatch"></section>
@@ -516,7 +525,7 @@ async function renderDay(ctx) {
   }
   async function saveTime(tid, aid, secs) {
     const t = tests.find((x) => x.id === tid), attempt = nextEmpty(t, aid);
-    if (t.min_value != null && (secs < t.min_value || secs > t.max_value)) {
+    if (outOfRange(t, secs)) {
       // A slip of the thumb: don't send an impossible time, just offer to discard it.
       unsaved = { aid, tid, secs, error: `That's outside what's possible for ${t.name} (${rangeText(t)}).`, impossible: true };
       drawWatch(); const c = watchEl.querySelector('#clock'); if (c) c.textContent = secs.toFixed(2);
@@ -582,7 +591,7 @@ async function renderDay(ctx) {
           <div style="min-width:0"><div class="strong">${name(a)}</div><div class="small muted"><span class="mono">${a.code}</span> · ${prevLine(t, a.id)}</div></div>
           <div class="tst-atts">${Array.from({ length: n }, (_, i) => html`<input class="input tst-att" inputmode="decimal" enterkeyhint="next" autocomplete="off" data-att="${i + 1}"
             aria-label="${name(a)}, ${t.name}, attempt ${i + 1}" placeholder="#${i + 1}" value="${show(results.get(rk(a.id, t.id, i + 1))?.value)}">`)}
-            <button type="button" class="btn btn-ghost tst-more" data-more="${a.id}" aria-label="Add another attempt for ${name(a)}" title="Add another attempt">${icon('plus', 16)}</button></div>
+            ${n < MAX_ATTEMPTS ? html`<button type="button" class="btn btn-ghost tst-more" data-more="${a.id}" aria-label="Add another attempt for ${name(a)}" title="Add another attempt">${icon('plus', 16)}</button>` : ''}</div>
           <div class="tst-best">${rowBest(t, a.id)}</div>
           ${oc ? html`<button type="button" class="btn btn-ghost tst-rm" data-rm="${a.id}" aria-label="Remove ${name(a)} from this day" title="Remove from this day">${icon('close', 16)}</button>` : ''}
           <div class="tst-rowmsg small warn-text" hidden></div>
@@ -637,7 +646,7 @@ async function renderDay(ctx) {
     const m = e.target.closest('[data-more]');
     if (m) {
       const aid = Number(m.dataset.more), k = `${aid}|${current.id}`;
-      extra[k] = slots(current, aid) + 1; drawSheet();
+      extra[k] = Math.min(MAX_ATTEMPTS, slots(current, aid) + 1); drawSheet();
       sheetEl.querySelector(`[data-a="${aid}"] [data-att="${extra[k]}"]`)?.focus();
       return;
     }
@@ -670,7 +679,7 @@ async function renderDay(ctx) {
     if (Number.isNaN(v)) warn = `"${inp.value}" isn't a number.`;
     else if (v != null) {
       const base = convert(v, unit, t.unit);
-      if (t.min_value != null && (base < t.min_value || base > t.max_value)) warn = `${inp.value} ${unit} is outside what's possible for ${t.name} (${rangeText(t)}). It won't be saved.`;
+      if (outOfRange(t, base)) warn = `${inp.value} ${unit} is outside what's possible for ${t.name} (${rangeText(t)}). It won't be saved.`;
     }
     inp.setAttribute('aria-invalid', warn ? 'true' : 'false');
     msg.hidden = !warn; msg.textContent = warn;
@@ -791,7 +800,7 @@ async function shareModal(ctx, day) {
   const actions = [{ label: 'Cancel', value: null }];
   if (shared) {
     actions.push({ label: 'Save note', kind: fresh.length ? '' : 'primary', onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value }) });
-    if (fresh.length) actions.push({ label: `Save and email ${plural(fresh.length, 'family', 'families')}`, kind: 'primary', onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value, only_new: true }) });
+    if (fresh.length) actions.push({ label: p.new_families ? `Save and email ${plural(p.new_families, 'family', 'families')}` : 'Save and mark as shared', kind: 'primary', onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value, only_new: true }) });
   } else if (!p.with_results) {
     await modal({ title: 'Share with parents', body: html`<p style="margin:0">Nobody on ${day.name} has a result yet. Enter some results first, then share them with families.</p>` });
     return;
@@ -801,7 +810,7 @@ async function shareModal(ctx, day) {
   const r = await modal({
     title: shared ? 'Shared with parents' : 'Share with parents',
     body: html`${shared ? html`<p style="margin:0" class="muted">Families have had these results since ${fmtDate(p.shared_at)}. Changing the note updates their Progress tab and report without a new email.</p>
-        ${fresh.length ? html`<div class="banner"><span>New since you shared: ${names(fresh)}. Email ${fresh.length === 1 ? 'that family' : 'those families'} their results.</span></div>` : ''}`
+        ${fresh.length ? html`<div class="banner"><span>New since you shared: ${names(fresh)}. ${p.new_families ? `Email ${p.new_families === 1 ? 'that family' : 'those families'} their results.` : 'No parent email is on file, so nobody is emailed. Their results still show in the portal.'}</span></div>` : ''}`
       : html`<p style="margin:0">${p.with_results} of ${plural(p.athletes, 'athlete')} have results. ${p.emails ? `${plural(p.emails, 'parent')} in ${plural(p.families, 'family', 'families')} get an email with their athlete's results and a link to the parent portal.` : 'No parent emails are on file for these athletes, so nobody is emailed.'} Results show on each family's Progress tab.</p>
         ${p.without_results.length ? html`<p class="small warn-text" style="margin:0">No results yet for ${names(p.without_results)}. They're left out of the email.</p>` : ''}
         ${p.no_email.length ? html`<p class="small warn-text" style="margin:0">No parent email on file for ${names(p.no_email)}. Their results still show in the portal.</p>` : ''}`}
@@ -810,7 +819,7 @@ async function shareModal(ctx, day) {
     actions,
   });
   if (!r) return;
-  toast(r.updated ? 'Note saved.' : r.again ? `${plural(r.emails, 'family email')} sent about the new results.` : `Shared. ${plural(r.emails, 'family email')} sent.`);
+  toast(r.updated ? 'Note saved.' : r.again ? (r.emails ? `${plural(r.emails, 'family email')} sent about the new results.` : 'Marked as shared. No family emails were sent.') : `Shared. ${plural(r.emails, 'family email')} sent.`);
   ctx.reload();
 }
 

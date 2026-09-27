@@ -221,8 +221,10 @@ function routes(api) {
 
   api.post('/testing/days/:id/athletes', STAFF, h(async (req, res) => {
     const d = dayOr404(req.params.id);
-    const a = get('SELECT id, code, first_name, last_name FROM athletes WHERE id=?', Number(req.body.athlete_id));
+    const a = get('SELECT id, code, first_name, last_name, archived FROM athletes WHERE id=?', Number(req.body?.athlete_id));
     if (!a) throw bad('Pick an athlete to add.');
+    if (a.archived) throw bad(`${a.first_name} ${a.last_name} is archived. Restore their profile first.`);
+    delete a.archived;
     run('INSERT OR IGNORE INTO testing_day_athletes (day_id, athlete_id) VALUES (?,?)', d.id, a.id);
     log(req, 'Added walk-up', `${a.first_name} ${a.last_name} to ${d.name}`);
     res.json({ ...a, prev: prevBests(d, a.id) });
@@ -311,6 +313,7 @@ function routes(api) {
       no_email: withResults.filter((a) => !a.emails).map(nm),
       new_since_share: fresh.map(nm),
       new_emails: fresh.reduce((n, a) => n + a.emails, 0),
+      new_families: new Set(fresh.filter((a) => a.emails).map((a) => a.family_id)).size,
     });
   });
 

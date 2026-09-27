@@ -15,6 +15,7 @@ const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return
 const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
 const tag = (text, tone = 'neutral') => h('span', { class: `dp-badge dp-badge--${tone}` }, text);
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', ...attrs }); t.value = value ?? ''; return t; };
+export const BADGE_CATEGORIES = ['Speed', 'Strength', 'Power', 'Mobility', 'Skill', 'Mindset'];
 export const GOAL_KINDS = [['workouts', 'Workouts'], ['sessions', 'Sessions attended'], ['checkins', 'Daily check-ins'], ['custom', 'Custom (athlete ticks it off)']];
 const MEASURES = [['sleep_hours', 'Sleep', (x) => `${x} h`, 'higher'], ['hydration', 'Hydration', (x) => `${x} of 5`, 'higher'], ['soreness', 'Soreness', (x) => `${x} of 5`, 'lower'], ['energy', 'Energy', (x) => `${x} of 5`, 'higher'], ['mood', 'Mood', (x) => `${x} of 5`, 'higher']];
 const valueHint = (unit) => (unit === 'in' ? 'Inches, or feet and inches like 6\'8"' : unit === 's' ? 'Seconds, like 5.75' : unit ? `In ${unit}` : 'Choose a test first');
@@ -28,7 +29,7 @@ function openDialog(...kids) {
 
 // ---------- Client profile ----------
 // en = GET /v1/clients/:id/engagement; tests = GET /v1/tests (for the target picker).
-export function clientPanels(c, en, tests) {
+export function clientPanels(c, en, tests, badgeList = []) {
   const manage = canManage(), first = c.name.split(' ')[0], id = c.id, today = en.today;
   const w = en.this_week, st = en.streaks;
   const stat = (label, value) => h('div', null, h('b', null, value), h('span', null, label));
@@ -105,7 +106,28 @@ export function clientPanels(c, en, tests) {
       h('div', { class: 'grow stack-tight' }, h('span', null, x.title, h('span', { class: 'small muted' }, ` · ${x.type === 'course' ? `Course, ${x.progress}` : 'Lesson'}${x.team ? ' · team' : ''}`)),
         h('span', { class: 'small muted' }, x.due_date ? h('span', { class: x.overdue ? 'warn-text' : '' }, `${x.overdue ? 'Overdue, was due' : 'Due'} ${day(x.due_date)}`) : 'No due date', x.note ? ` · ${x.note}` : '')),
       x.done ? tag('Done', 'good') : x.overdue ? tag('Overdue', 'warn') : tag('Not done', 'muted')))) : h('p', { class: 'muted small' }, 'Nothing assigned.'));
-  return { accountability, goals, messages, targets, education };
+  // Skill badges: earned ones, newest first, and a form to award one (or make a new one on the spot).
+  const earned = en.skill_badges ?? [];
+  const have = new Set(earned.map((b) => b.badge_id));
+  const pick = select([['', 'Choose a badge'], ...badgeList.filter((b) => !have.has(b.id)).map((b) => [b.id, b.category ? `${b.name} (${b.category})` : b.name]), ['new', 'New badge…']], { 'aria-label': 'Badge to award' });
+  const newName = input({ maxlength: '60', placeholder: 'Like Sprint start' }), newCat = select([['', 'No category'], ...BADGE_CATEGORIES.map((x) => [x, x])], { 'aria-label': 'Badge category' });
+  const newDesc = input({ maxlength: '300', placeholder: 'What it shows, like "Explodes out of a 3-point stance with a clean first step"' });
+  const newFields = h('div', { class: 'stack', hidden: true }, h('div', { class: 'form-grid' }, field('Badge name', newName), field('Category', newCat)), field('What it means (optional)', newDesc));
+  pick.addEventListener('change', () => { newFields.hidden = pick.value !== 'new'; if (pick.value === 'new') newName.focus(); });
+  const note = input({ maxlength: '300', placeholder: `A word for ${first} (optional)`, 'aria-label': 'Note with the badge' });
+  const badges = panel('Skill badges', { subtitle: `Earned skills ${first}${c.family ? ' and their parents' : ''} see on the Performance tab. Awarding one emails them.` },
+    earned.length ? h('div', { class: 'cl-badges' }, earned.map((b) => h('div', { class: 'cl-badge' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, b.name, b.category ? h('span', { class: 'small muted', style: 'font-weight:400' }, ` · ${b.category}`) : null),
+        h('span', { class: 'small muted' }, `${day(b.awarded_at)} by ${b.awarded_by ?? 'a coach'}${b.note ? ` · "${b.note}"` : ''}`)),
+      manage ? btn('Take back', (e) => { if (confirm(`Take back "${b.name}" from ${first}? It disappears from their app. No email is sent.`)) busy(e.currentTarget, async () => { await del(`/v1/badge-awards/${b.id}`); toast('Badge taken back.'); deps.render(); }); }, 'ghost') : null)))
+      : h('p', { class: 'muted small' }, 'No badges yet.'),
+    manage ? h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (!pick.value) throw new Error('Choose a badge to award, or pick "New badge…".');
+      const badgeId = pick.value === 'new' ? (await post('/v1/skill-badges', { name: newName.value, category: newCat.value || null, description: newDesc.value || undefined })).id : pick.value;
+      await post(`/v1/skill-badges/${badgeId}/awards`, { client_id: id, note: note.value || undefined });
+      toast(`Badge awarded. ${first}${c.family ? ' and their parents' : ''} got an email.`); deps.render();
+    }); } }, field('Badge', pick), newFields, note, h('div', null, btn('Award badge', null, 'secondary', { type: 'submit' }))) : null);
+  return { accountability, goals, messages, targets, education, badges };
 }
 
 // ---------- Today ----------

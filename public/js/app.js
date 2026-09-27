@@ -348,8 +348,8 @@ async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), get(`/v1/athlete-links?client_id=${id}`)]);
-  const [en, testLib, owed, products] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null]);
-  const eng = clientPanels(c, en, testLib.data);
+  const [en, testLib, owed, products, badgeLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges')]);
+  const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
@@ -479,7 +479,7 @@ async function viewClient(main, id) {
   fill(main,
     header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id)), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients')),
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.education, training, account)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
 }
 
 async function viewNewClient(main) {

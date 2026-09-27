@@ -6,6 +6,7 @@ import { newId, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDay
 import { getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
+import { emit } from './events.js';
 
 const SCALES = ['hydration', 'soreness', 'energy', 'mood'];           // 1 to 5
 export const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
@@ -366,8 +367,76 @@ export function performance(ctx, clientId, { parentView = false } = {}) {
     last_tested: lastDate || null,
     targets: targetsFor(ctx, c.id, tests),
     rankings: rankings(ctx, c, tests, parentView),
-    rankings_enabled: rankingsOn(ctx)
+    rankings_enabled: rankingsOn(ctx),
+    skill_badges: badgesFor(ctx, c.id)
   };
+}
+
+// ---------- Skill badges ----------
+// Coaches award these by hand when an athlete shows a skill ("Sprint start", "Hinge pattern"). Athletes and parents
+// see them on the Performance tab, and the family gets an email. Removing a badge from the list hides it from new
+// awards but keeps the ones already earned.
+export const BADGE_CATEGORIES = ['Speed', 'Strength', 'Power', 'Mobility', 'Skill', 'Mindset'];
+function badgeRow(ctx, id) {
+  const b = ctx.db.get('SELECT * FROM skill_badges WHERE id = ?', id);
+  if (!b) throw notFound('Skill badge');
+  return b;
+}
+const shapeBadge = (ctx, b) => ({ id: b.id, name: b.name, description: b.description, category: b.category, archived: !!b.archived, created_at: b.created_at,
+  awarded: ctx.db.get('SELECT COUNT(*) AS n FROM badge_awards WHERE badge_id = ?', b.id).n });
+export function listBadges(ctx, { all = false } = {}) {
+  return ctx.db.all(`SELECT * FROM skill_badges ${all ? '' : 'WHERE archived = 0'} ORDER BY category, name`).map((b) => shapeBadge(ctx, b));
+}
+function badgeInput(body, cur = {}) {
+  const name = v.str(body.name ?? cur.name, 'name', { max: 60 });
+  const description = body.description === undefined ? cur.description ?? null : v.str(body.description, 'description', { max: 300, optional: true }) ?? null;
+  const category = body.category === undefined ? cur.category ?? null : body.category === null || body.category === '' ? null : v.oneOf(body.category, 'category', BADGE_CATEGORIES);
+  return { name, description, category };
+}
+export function createBadge(ctx, body = {}) {
+  const b = badgeInput(body), id = newId('bdg');
+  if (ctx.db.get('SELECT id FROM skill_badges WHERE name = ?', b.name)) throw conflict(`There's already a badge called "${b.name}". Pick it from the list or use another name.`);
+  ctx.db.run('INSERT INTO skill_badges (id, name, description, category, created_at) VALUES (?, ?, ?, ?, ?)', id, b.name, b.description, b.category, ctx.now());
+  return shapeBadge(ctx, badgeRow(ctx, id));
+}
+export function updateBadge(ctx, id, body = {}) {
+  const cur = badgeRow(ctx, id), b = badgeInput(body, cur);
+  if (ctx.db.get('SELECT id FROM skill_badges WHERE name = ? AND id != ?', b.name, id)) throw conflict(`There's already a badge called "${b.name}".`);
+  const archived = body.archived === undefined ? cur.archived : body.archived ? 1 : 0;
+  ctx.db.run('UPDATE skill_badges SET name = ?, description = ?, category = ?, archived = ? WHERE id = ?', b.name, b.description, b.category, archived, id);
+  return shapeBadge(ctx, badgeRow(ctx, id));
+}
+// Award one badge to one or more athletes (after a clinic, say). Athletes who already have it are skipped.
+export function awardBadge(ctx, badgeId, body = {}, actor) {
+  const b = badgeRow(ctx, badgeId);
+  if (b.archived) throw conflict('This badge was removed from the list. Put it back to award it.');
+  const ids = Array.isArray(body.client_ids) ? [...new Set(body.client_ids.map(String))] : body.client_id ? [String(body.client_id)] : [];
+  if (!ids.length) throw badRequest('Choose at least one athlete.');
+  if (ids.length > 200) throw badRequest('Award to 200 athletes or fewer at a time.');
+  const who = ids.map((id) => clientRow(ctx, id));
+  const note = v.str(body.note, 'note', { max: 300, optional: true }) ?? null;
+  const by = staffName(actor);
+  const awarded = [];
+  ctx.db.tx(() => {
+    for (const c of who) {
+      const r = ctx.db.run('INSERT INTO badge_awards (id, badge_id, client_id, note, awarded_by, awarded_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(badge_id, client_id) DO NOTHING', newId('bda'), b.id, c.id, note, by, ctx.now());
+      if (r.changes) awarded.push(c);
+    }
+  });
+  const coach = by.split(' ')[0];
+  for (const c of awarded) {
+    emit(ctx, 'badge.awarded', { client_id: c.id, client_name: c.name, badge_id: b.id, badge_name: b.name, awarded_by: by });
+    notifyAthlete(ctx, c, `${firstName(c)} earned a skill badge: ${b.name}`, `${firstName(c)} earned the "${b.name}" skill badge from ${coach}.${b.description ? `\n\n${b.description}` : ''}${note ? `\n\n${coach}: "${note}"` : ''}`);
+  }
+  return { badge: shapeBadge(ctx, b), awarded: awarded.length, already_had: who.length - awarded.length };
+}
+export function removeAward(ctx, id) {
+  if (!ctx.db.run('DELETE FROM badge_awards WHERE id = ?', id).changes) throw notFound('Badge award');
+  return { id, deleted: true };
+}
+export function badgesFor(ctx, clientId) {
+  return ctx.db.all(`SELECT a.id, a.badge_id, b.name, b.description, b.category, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id
+    WHERE a.client_id = ? ORDER BY a.awarded_at DESC`, clientId);
 }
 
 // ---------- Education ----------
@@ -578,6 +647,7 @@ export function staffOverview(ctx, clientId) {
     flagged: checkins.filter((c) => c.flags.length).reverse().slice(0, 5),
     goals: goalsFor(ctx, clientId).map((g) => ({ ...g, client_goal: !g.team })),
     targets: perf.targets, rankings: perf.rankings, rankings_enabled: perf.rankings_enabled,
+    skill_badges: perf.skill_badges,
     tests: perf.tests.map((t) => ({ test: t.test, test_name: t.test_name, unit: t.unit, best: t.best, best_text: t.best_text })),
     education: { assigned: edu.assigned, completed: edu.completed }
   };

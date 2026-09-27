@@ -238,6 +238,11 @@ engage.createGoal(ctx, { clientId: cole.id }, { kind: 'checkins', target: 6, tit
 engage.sendMessage(ctx, { contractId: hillCountry }, { body: 'Great energy at practice. Hydrate before Thursday; it will be hot on the field.' }, coachUser);
 engage.sendMessage(ctx, { clientId: lopez.id }, { body: 'Your broad jump is up 5 inches since summer. Keep the landings quiet and we will chase 6 feet 8.' }, coachUser);
 engage.sendMessage(ctx, { clientId: cole.id }, { body: 'Saw your check-in: short on sleep and a tight hamstring. Easy warm-up today and tell me how it feels.' }, coachUser);
+// Skill badges, with one earned by Ava.
+const sprintStart = engage.createBadge(ctx, { name: 'Sprint start', category: 'Speed', description: 'Drives out of a two-point start with a low, powerful first three steps.' });
+engage.createBadge(ctx, { name: 'Hinge pattern', category: 'Strength', description: 'Hinges at the hips with a flat back, ready for deadlifts and cleans.' });
+engage.createBadge(ctx, { name: 'Quiet landings', category: 'Power', description: 'Lands jumps softly with knees tracking over toes.' });
+engage.awardBadge(ctx, sprintStart.id, { client_id: lopez.id, note: 'Your first step is so much quicker than in the summer.' }, coachUser);
 engage.setTarget(ctx, lopez.id, { test: 'broad_jump', target: '6\'8"', due_date: addDaysToDate(today, 60) }, coachUser);
 engage.setTarget(ctx, lopez.id, { test: 'dash_40yd', target: '5.75', due_date: addDaysToDate(today, 60) }, coachUser);
 engage.setTarget(ctx, cole.id, { test: 'vertical_standing', target: '28', due_date: addDaysToDate(today, 90) }, coachUser);

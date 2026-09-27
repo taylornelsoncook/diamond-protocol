@@ -125,3 +125,9 @@
 @media (max-width:760px){.cl-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.edu-acts{width:100%}.edu-bar{width:100%}}
 @media (max-width:420px){.eg-ci-sum{grid-template-columns:repeat(3,minmax(0,1fr))}.eg-opt span{font-size:10px}.eg-summary b{font-size:24px}.eg-summary b.eg-word{font-size:18px}}
 @media (max-width:420px){.p-subtab{font-size:12px;padding:0 2px}}
+/* Skill badges: athlete and parent Performance tab, and the coach's client profile. */
+.eg-badges{display:grid;gap:10px}
+.eg-badge{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--green-mid);border-radius:var(--radius-md);background:var(--green-deep)}
+.eg-badge-icon{font-size:22px;line-height:1;color:var(--green-bright)}
+.cl-badges{display:flex;flex-direction:column}
+.cl-badge{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-subtle)}

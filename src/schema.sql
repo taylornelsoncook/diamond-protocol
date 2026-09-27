@@ -814,6 +814,24 @@ CREATE TABLE IF NOT EXISTS goal_checks (
   PRIMARY KEY (goal_id, client_id, date)
 );
 -- Notes from coaches to one athlete or a whole team. Read state is kept per athlete.
+-- Skill badges a coach awards by hand (version 22): "Sprint start", "Hinge pattern". Athletes and parents see them.
+CREATE TABLE IF NOT EXISTS skill_badges (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  description TEXT,
+  category TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS badge_awards (
+  id TEXT PRIMARY KEY,
+  badge_id TEXT NOT NULL REFERENCES skill_badges(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  note TEXT,
+  awarded_by TEXT,
+  awarded_at TEXT NOT NULL,
+  UNIQUE (badge_id, client_id)
+);
 CREATE TABLE IF NOT EXISTS coach_messages (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,

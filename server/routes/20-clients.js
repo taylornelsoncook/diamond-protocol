@@ -2,7 +2,7 @@
 // staff notes, visit history, parent contacts and paper waivers.
 'use strict';
 const { get, all, run, insert, update, tx, setting } = require('../db');
-const { h, bad, notFound, HttpError, log, emit, sendEmail, makeAthleteCode, randomToken, today, appUrl, businessName, payments } = require('../lib');
+const { h, bad, notFound, HttpError, log, emit, randomToken, today, appUrl, payments } = require('../lib');
 const { requireStaff } = require('../auth');
 const billing = require('../services/billing');
 const booking = require('../services/booking');
@@ -14,27 +14,7 @@ const EMAIL_RE = /^\S+@\S+\.\S+$/;
 const clean = (v) => { const s = String(v ?? '').trim(); return s || null; };
 const LIVE = "('trial','active','past_due','paused')";
 
-function splitName(full) {
-  const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length < 2) throw bad('Enter the athlete\'s first and last name.');
-  return [parts[0], parts.slice(1).join(' ')];
-}
-function athleteNames(b) {
-  if (b.first_name || b.last_name) {
-    const f = clean(b.first_name), l = clean(b.last_name);
-    if (!f || !l) throw bad('Enter the athlete\'s first and last name.');
-    return [f, l];
-  }
-  return splitName(b.name);
-}
-const validDate = (d) => (d == null || d === '' ? null : /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d ? d : (() => { throw bad('Use a real date.'); })());
-const birthDate = (d) => {
-  const v = validDate(d);
-  if (v && v > today()) throw bad('The birthday is in the future. Check the year.');
-  if (v && v < '1900-01-01') throw bad('That birthday is too long ago. Check the year.');
-  return v;
-};
-const sex = (s) => (s === 'M' || s === 'F' ? s : null);
+const { athleteNames, birthDate, sex, welcomeParent, createAthlete } = clients;
 const LIST_SORTS = ['name', 'last_seen', 'newest'];
 const noProgramsForDesk = (req, programId) => {
   if (programId && req.staff.role === 'frontdesk') throw new HttpError(403, 'Only coaches and owners assign programs. Leave it for a coach.');
@@ -42,24 +22,6 @@ const noProgramsForDesk = (req, programId) => {
 const waiverVersion = () => Number(setting('waiver_version', 1));
 // SQLite datetime('now') and JS ISO strings, both UTC, as comparable ISO strings (null when missing or unreadable).
 const utcIso = (t) => { if (!t) return null; const d = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(t) ? t : String(t).replace(' ', 'T') + 'Z'); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
-
-function welcomeParent(p, athleteFirst) {
-  const self = p.is_self;
-  sendEmail(p.email, `Your ${businessName()} account`,
-    `Hi ${p.name.split(' ')[0]},\n\n${self ? 'Your account is ready.' : `${athleteFirst}'s account is ready.`} Sign in to the parent portal to sign the waiver, add a card and book sessions:\n\n${appUrl()}/parent\n\nUse this email address (${p.email}). We'll email you a one-time code; there's no password to remember.\n\n${businessName()}`);
-}
-
-function createAthlete(familyId, b, extra = {}) {
-  const [first, last] = athleteNames(b);
-  const id = insert('athletes', {
-    code: makeAthleteCode(first, last), family_id: familyId, first_name: first, last_name: last,
-    email: clean(b.email)?.toLowerCase() || null, birthday: birthDate(b.birthday), sex: sex(b.sex), sport: clean(b.sport), position: clean(b.position), school: clean(b.school),
-    phone: clean(b.phone), grad_year: clients.gradYear(b.grad_year),
-    allergies: clean(b.allergies), injuries: clean(b.injuries), emergency_name: clean(b.emergency_name), emergency_phone: clean(b.emergency_phone),
-    workout_token: randomToken(12), ...extra,
-  });
-  return get('SELECT * FROM athletes WHERE id=?', id);
-}
 
 function athleteRow(id) {
   const a = get('SELECT * FROM athletes WHERE id=?', id);
@@ -147,56 +109,10 @@ function routes(api) {
   });
 
   // ---- new client ----
+  // The rules live in services/clients.createClient, shared with converting a CRM lead into a client.
   api.post('/clients', requireStaff(), h(async (req, res) => {
-    const b = req.body || {};
-    const withParent = b.with_parent !== false && b.with_parent !== 'false';
-    const [first, last] = athleteNames(b);
-    const planId = b.plan_id ? Number(b.plan_id) : null;
-    const programId = b.program_id ? Number(b.program_id) : null;
-    let parent;
-    if (withParent) {
-      parent = { name: clean(b.parent_name), email: clean(b.parent_email)?.toLowerCase(), phone: clean(b.parent_phone), is_self: 0 };
-      if (!parent.name) throw bad('Enter the parent or guardian\'s name.');
-      if (!EMAIL_RE.test(parent.email || '')) throw bad('Enter the parent\'s email. It\'s how they sign in.');
-    } else {
-      parent = { name: `${first} ${last}`, email: clean(b.email)?.toLowerCase(), phone: clean(b.phone), is_self: 1 };
-      if (!EMAIL_RE.test(parent.email || '')) throw bad('Enter their email. It\'s how they sign in.');
-    }
-    const existing = get(`SELECT p.family_id, f.name AS family, a.id AS athlete_id, a.first_name, a.last_name FROM parents p JOIN families f ON f.id=p.family_id
-      LEFT JOIN athletes a ON a.id=(SELECT id FROM athletes WHERE family_id=p.family_id ORDER BY archived, id LIMIT 1) WHERE p.email=?`, parent.email);
-    if (existing) {
-      throw bad(`That email already has a portal login (${existing.family}). Open ${existing.first_name ? `${existing.first_name} ${existing.last_name}` : 'that family'} and use Add sibling.`,
-        existing.athlete_id ? { existing: { athlete_id: existing.athlete_id, name: `${existing.first_name} ${existing.last_name}`, family: existing.family } } : undefined);
-    }
-    if (planId && !get('SELECT 1 FROM plans WHERE id=? AND active=1', planId)) throw bad('Choose a plan.');
-    noProgramsForDesk(req, programId);
-    if (programId && !get('SELECT 1 FROM programs WHERE id=? AND archived=0', programId)) throw bad('Choose a program.');
-    clients.gradYear(b.grad_year);
-    // Same name (and the same birthday, when both are known) is probably someone already on file.
-    if (b.allow_duplicate !== true) {
-      const bd = birthDate(b.birthday);
-      const dup = all(`SELECT id, code, first_name, last_name, birthday, archived FROM athletes WHERE first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE
-        ${bd ? 'AND (birthday IS NULL OR birthday=?)' : ''} ORDER BY archived, id LIMIT 3`, first, last, ...(bd ? [bd] : []));
-      if (dup.length) {
-        throw new HttpError(409, `${first} ${last} may already be a client (${dup.map((d) => d.code + (d.archived ? ', archived' : '')).join('; ')}). Open them, or create the account anyway.`,
-          { duplicates: dup.map((d) => ({ id: d.id, code: d.code, name: `${d.first_name} ${d.last_name}`, birthday: d.birthday, archived: !!d.archived })) });
-      }
-    }
-
-    const out = tx(() => {
-      const familyId = insert('families', { name: `${withParent ? parent.name.split(' ').slice(-1)[0] : last} family` });
-      insert('parents', { family_id: familyId, ...parent });
-      const a = createAthlete(familyId, { ...b, first_name: first, last_name: last, email: withParent ? b.athlete_email : parent.email, phone: withParent ? b.athlete_phone : parent.phone },
-        programId ? { program_id: programId, program_started: today() } : {});
-      let membership = null;
-      if (planId) membership = billing.startMembership(a.id, planId);
-      return { a, familyId, membership };
-    });
-    const { a, familyId, membership } = out;
-    welcomeParent(parent, first);
-    emit('client.created', { athlete_id: a.id, athlete_code: a.code, first_name: a.first_name, last_name: a.last_name, family_id: familyId, parent_email: parent.email });
-    if (programId) emit('program.assigned', { athlete_id: a.id, athlete_code: a.code, program_id: programId });
-    log(req, 'Added client', `${first} ${last} (${a.code})`);
+    const { athlete: a, familyId, membership } = clients.createClient(req.body || {}, { role: req.staff.role });
+    log(req, 'Added client', `${a.first_name} ${a.last_name} (${a.code})`);
     const reply = { id: a.id, code: a.code, family_id: familyId };
     if (membership) reply.membership = { ok: membership.ok, trial: !!membership.trial, error: membership.error || null };
     res.status(201).json(reply);

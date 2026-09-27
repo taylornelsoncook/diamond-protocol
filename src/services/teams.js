@@ -130,7 +130,7 @@ export async function createContract(ctx, body, baseUrl) {
   if (!['all', 'current', 'none'].includes(past)) throw fieldError('past must be all, current or none.', 'past');
   const day = today(ctx);
   let next = start;
-  if (start < day && past === 'current') next = periodContaining(start, day);
+  if (start < day && past === 'current') next = periodContaining(start, end && end < day ? end : day);   // a contract that already ended: its last month
   if (start < day && past === 'none') next = firstPeriodFrom(start, addDaysToDate(day, 1));
   const id = newId('tc');
   const orgId = ctx.db.tx(() => {
@@ -268,6 +268,7 @@ export async function updateContract(ctx, id, body, sched = {}, baseUrl) {
   let restart = c.status === 'ended' && !ending && (body.status === 'active' || (endChanged && (!end || end >= day)));
   if (restart && end && end < day && body.end_date !== undefined) throw fieldError('To restart this contract, clear the end date or move it to today or later.', 'end_date');
   if (restart && end && end <= day && body.end_date === undefined) end = null;   // status=active alone: it runs open-ended again
+  const endMoved = (end ?? null) !== (c.end_date ?? null);   // includes that open-ended restart, so the team sessions follow it too
   if (((c.status === 'active' && name !== c.name) || restart) && !ending && duplicateActive(ctx, org.name, name, id)) throw fieldError(`${org.name} already has an active ${name} contract. Use a different team name.`, 'name', 409);
   const restartFrom = restart ? firstPeriodFrom(c.start_date, day) : null;
   const endedOn = ending ? (c.end_date && c.end_date < day ? c.end_date : day) : null;
@@ -288,7 +289,7 @@ export async function updateContract(ctx, id, body, sched = {}, baseUrl) {
   if (ending) {
     out.sessions_removed = futureTeamSessions(ctx, id);
     for (const s of c.series.filter((x) => x.active)) await sched.updateSeries?.(s.id, { active: false });
-  } else if (endChanged && (c.status === 'active' || restart) && sched.generateSessions) {
+  } else if (endMoved && (c.status === 'active' || restart) && sched.generateSessions) {
     const r = await followEndDate(ctx, id, end, sched);
     out.sessions_removed = r.removed; out.sessions_added = r.added;
   }
@@ -692,6 +693,8 @@ export async function simulateInvoicePaid(ctx, tok) {
   await recordPayment(ctx, row.id, { reference: 'test payment' }, undefined, { online: true });
   return publicInvoice(ctx, tok);
 }
+// Stripe can deliver the same webhook more than once: flag each extra online payment only once, so it isn't refunded twice.
+const toldTwice = (ctx, invoiceId, ref) => !!ctx.db.get(`SELECT 1 FROM events WHERE type = 'team_invoice.paid_twice' AND json_extract(data, '$.invoice_id') = ? AND json_extract(data, '$.online_reference') = ?`, invoiceId, ref);
 // Stripe webhook: Checkout finished (cards are paid now; bank payments settle a few days later).
 export async function handleInvoiceCheckout(ctx, type, obj) {
   const id = obj.metadata?.team_invoice_id;
@@ -701,14 +704,14 @@ export async function handleInvoiceCheckout(ctx, type, obj) {
   if (inv.status !== 'open') {
     // Paid by check (or voided) before the online payment went through: the school paid twice. Tell the owner.
     const ref = obj.payment_intent ?? obj.id;
-    if (succeeded && ref !== inv.paid_reference) emit(ctx, 'team_invoice.paid_twice', { invoice_id: id, number: inv.number, amount_cents: inv.amount_cents, status: inv.status, paid_method: inv.paid_method, online_reference: ref });
+    if (succeeded && ref !== inv.paid_reference && !toldTwice(ctx, id, ref)) emit(ctx, 'team_invoice.paid_twice', { invoice_id: id, number: inv.number, amount_cents: inv.amount_cents, status: inv.status, paid_method: inv.paid_method, online_reference: ref });
     return true;
   }
   if (succeeded) {
     try { await recordPayment(ctx, id, { reference: obj.payment_intent ?? obj.id }, undefined, { online: true }); }
     catch (e) {
       if (e.status !== 409) throw e;   // recorded by hand a moment ago: still two payments
-      emit(ctx, 'team_invoice.paid_twice', { invoice_id: id, number: inv.number, amount_cents: inv.amount_cents, online_reference: obj.payment_intent ?? obj.id });
+      if (!toldTwice(ctx, id, obj.payment_intent ?? obj.id)) emit(ctx, 'team_invoice.paid_twice', { invoice_id: id, number: inv.number, amount_cents: inv.amount_cents, online_reference: obj.payment_intent ?? obj.id });
     }
   } else if (type === 'checkout.session.async_payment_failed') {
     emit(ctx, 'team_invoice.payment_failed', { invoice_id: id });

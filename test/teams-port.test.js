@@ -308,3 +308,35 @@ test('the Teams list has attendance, overdue days and a summary; coaches and fro
     ['POST', `/v1/team-contracts/${c.id}/roster/tr_x/restore`], ['DELETE', `/v1/team-contracts/${c.id}/sessions/ser_x`], ['GET', `/v1/team-contracts/${c.id}`], ['PATCH', `/v1/team-contracts/${c.id}`]];
   for (const who of [coach, desk]) for (const [m, p] of paths) assert.equal((await who(m, p, m === 'GET' ? undefined : {})).status, 403, `${m} ${p}`);
 });
+
+test('review fixes: restart by status alone brings team sessions back, past=current on an ended contract, one flag per extra online payment', async () => {
+  // A contract the billing clock ended (its schedule is still active) restarted with status=active runs open-ended,
+  // and its team sessions follow.
+  const c = await newContract({ start_date: monthsAgo(1) });
+  const s = (await owner('POST', `/v1/team-contracts/${c.id}/sessions`, { location_id: facility.id, weekdays: [0, 1, 2, 3, 4, 5, 6], start_time: '17:00', duration_min: 60, start_date: today() })).body;
+  const weather = app.ctx.db.get(`SELECT id FROM class_sessions WHERE series_id = ? AND starts_at > ? ORDER BY starts_at LIMIT 1 OFFSET 3`, s.id, new Date().toISOString()).id;
+  await owner('POST', `/v1/sessions/${weather}/cancel`, { reason: 'Lightning' });
+  await owner('PATCH', `/v1/team-contracts/${c.id}`, { end_date: addDaysToDate(today(), -1) });
+  await teams.runTeamBilling(app.ctx, { contractId: c.id });
+  const back = (await owner('PATCH', `/v1/team-contracts/${c.id}`, { status: 'active' })).body;
+  assert.deepEqual([back.status, back.end_date, back.series[0].end_date], ['active', null, null]);
+  assert.ok(back.sessions_added > 20 && back.sessions_upcoming > 20, 'the team is back on the schedule');
+  assert.equal(app.ctx.db.get('SELECT status FROM class_sessions WHERE id = ?', weather).status, 'canceled', 'a weather cancel stays canceled');
+
+  // past=current for a contract that started and ended in the past bills its last month, as the form promises.
+  const done = await newContract({ start_date: monthsAgo(4), end_date: addDaysToDate(monthsAgo(2), 3), past: 'current' });
+  let last = done.start_date;
+  for (let k = 0; teams.periodStart(done.start_date, k) <= done.end_date; k++) last = teams.periodStart(done.start_date, k);
+  assert.deepEqual(done.invoices.map((i) => i.period_start), [last]);
+
+  // Stripe delivering the same webhook twice flags the extra payment once.
+  const x = await newContract();
+  const [i] = x.invoices;
+  await owner('POST', `/v1/team-invoices/${i.id}/payments`, { method: 'check', reference: '2002' });
+  const hook = { id: 'cs_dup', payment_status: 'paid', payment_intent: 'pi_dup', metadata: { team_invoice_id: i.id } };
+  await teams.handleInvoiceCheckout(app.ctx, 'checkout.session.completed', hook);
+  await teams.handleInvoiceCheckout(app.ctx, 'checkout.session.completed', hook);
+  assert.equal((await owner('GET', '/v1/events?type=team_invoice.paid_twice')).body.data.filter((e) => e.data.invoice_id === i.id).length, 1);
+  await teams.handleInvoiceCheckout(app.ctx, 'checkout.session.completed', { ...hook, id: 'cs_dup2', payment_intent: 'pi_dup2' });
+  assert.equal((await owner('GET', '/v1/events?type=team_invoice.paid_twice')).body.data.filter((e) => e.data.invoice_id === i.id).length, 2, 'a second, different online payment is flagged too');
+});

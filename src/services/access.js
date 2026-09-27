@@ -1,4 +1,4 @@
-import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpError, addDays, startOfLocalDay } from '../util.js';
+import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpError, addDays, startOfLocalDay, localDate, zonedToUtc } from '../util.js';
 import { getSetting } from './families.js';
 import { listEvents } from './events.js';
 import { teamSummary } from './teams.js';
@@ -84,6 +84,62 @@ export function keyForSecret(ctx, secret) {
   return k;
 }
 
+// ---- Business pulse: the small-print numbers under Today's header ----
+// Month figures run from the 1st in the business time zone; "last month" compares the same number of days.
+function monthStarts(ctx) {
+  const zone = getSetting(ctx, 'timezone'), today = localDate(ctx.now(), zone);
+  const first = (ymd) => startOfLocalDay(zonedToUtc(`${ymd.slice(0, 8)}01`, '12:00', zone), zone);
+  const thisStart = first(today);
+  const [y, m] = today.split('-').map(Number);
+  const prevYmd = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, '0')}-01`;
+  const prevStart = first(prevYmd);
+  const sameDayLastMonth = new Date(Math.min(Date.parse(prevStart) + (Date.parse(ctx.now()) - Date.parse(thisStart)), Date.parse(thisStart))).toISOString();
+  return { zone, thisStart, prevStart, sameDayLastMonth, dayStart: startOfLocalDay(ctx.now(), zone) };
+}
+function collected(db, from, to) {
+  const sales = db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ? AND completed_at < ?`, from, to).c;
+  const members = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?`, from, to).c;
+  const teams = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM team_invoices WHERE status = 'paid' AND paid_on >= ? AND paid_on < ?`, from.slice(0, 10), to.slice(0, 10)).c;
+  return { total: sales + members + teams, sales, members, teams };
+}
+export function pulse(ctx, { role = 'owner' } = {}) {
+  const db = ctx.db, now = ctx.now(), { thisStart, prevStart, sameDayLastMonth, dayStart } = monthStarts(ctx);
+  const dayEnd = addDays(dayStart, 1), weekAgo = addDays(now, -7), weekAhead = addDays(now, 7);
+  const counts = clientCounts(ctx);
+  const newClients = db.get(`SELECT COUNT(*) AS n FROM clients WHERE archived_at IS NULL AND created_at >= ?`, thisStart).n;
+  const canceled = db.get(`SELECT COUNT(DISTINCT client_id) AS n FROM subscriptions WHERE status = 'canceled' AND canceled_at >= ?`, thisStart).n;
+  const today = db.get(`SELECT COUNT(DISTINCT s.id) AS sessions, COALESCE(SUM(s.capacity), 0) AS capacity,
+      (SELECT COUNT(*) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE x.status = 'scheduled' AND x.starts_at >= ? AND x.starts_at < ? AND b.status IN ('booked','attended','no_show')) AS booked
+    FROM class_sessions s WHERE s.status = 'scheduled' AND s.starts_at >= ? AND s.starts_at < ?`, dayStart, dayEnd, dayStart, dayEnd);
+  const att = db.get(`SELECT SUM(b.status = 'attended') AS came, SUM(b.status = 'no_show') AS missed FROM bookings b JOIN class_sessions s ON s.id = b.session_id
+    WHERE s.starts_at >= ? AND s.starts_at < ?`, weekAgo, now);
+  const upcoming = db.get(`SELECT COUNT(*) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id
+    WHERE s.status = 'scheduled' AND b.status = 'booked' AND s.starts_at >= ? AND s.starts_at < ?`, now, weekAhead).n;
+  const workouts = db.get('SELECT COUNT(*) AS n, COUNT(DISTINCT client_id) AS athletes FROM workout_logs WHERE completed_at >= ?', weekAgo);
+  const leads = db.get(`SELECT COUNT(*) AS n, SUM(converted_at IS NOT NULL) AS won, SUM(status IN ('new','contacted','evaluation')) AS open FROM leads WHERE created_at >= ?`, thisStart);
+  const out = {
+    clients: { active: counts.current, trialing: counts.trialing, new_this_month: newClients, canceled_this_month: canceled },
+    today: { sessions: today.sessions, booked: today.booked, capacity: today.capacity },
+    attendance: { came: att.came ?? 0, missed: att.missed ?? 0 },
+    bookings_next_7_days: upcoming,
+    workouts: { last_7_days: workouts.n, athletes: workouts.athletes },
+    leads: { this_month: leads.n, won: leads.won ?? 0, open: leads.open ?? 0 }
+  };
+  if (role !== 'owner') return out;
+  const mrr = db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS c, COUNT(*) AS n FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`);
+  const teams = teamSummary(ctx);
+  const risk = db.get(`SELECT COALESCE(SUM(i.amount_cents), 0) AS c, COUNT(*) AS n FROM invoices i WHERE i.status = 'failed'`);
+  const todaySales = db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, dayStart);
+  return { ...out,
+    money: {
+      month: collected(db, thisStart, now), same_point_last_month: collected(db, prevStart, sameDayLastMonth).total,
+      today_cents: todaySales.c, today_sales: todaySales.n,
+      mrr_cents: mrr.c + teams.monthly_cents, member_mrr_cents: mrr.c, team_mrr_cents: teams.monthly_cents, paying_members: mrr.n,
+      failed_cents: risk.c, failed_invoices: risk.n,
+      team_open_cents: teams.open_cents, team_overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0), team_overdue: teams.overdue.length
+    } };
+}
+
 // ---- Dashboard ----
 export function dashboard(ctx, { role = 'owner' } = {}) {
   const db = ctx.db;
@@ -130,11 +186,12 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   if (low.length) waiting.push({ kind: 'low_stock', count: low.length, items: low.slice(0, 4).map((x) => ({ name: x.name, on_hand: x.on_hand })) });
   if (role !== 'owner') {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
-    return { today_sales: null, metrics: { active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, archived_clients: counts.archived, workouts_last_7_days: workouts }, teams: null,
+    return { pulse: pulse(ctx, { role }), today_sales: null, metrics: { active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, archived_clients: counts.archived, workouts_last_7_days: workouts }, teams: null,
       attention: [...waiting, ...quiet, ...(role === 'front_desk' ? pendingSales.map(({ amount_cents, ...x }) => x) : pendingSales)],
       activity: listEvents(ctx, { limit: 12 }).filter((e) => !OWNER_EVENTS.test(e.type)) };
   }
   return {
+    pulse: pulse(ctx, { role }),
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
     today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfLocalDay(ctx.now(), getSetting(ctx, 'timezone'))),
     metrics: { mrr_cents: active.mrr, active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, archived_clients: counts.archived, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },

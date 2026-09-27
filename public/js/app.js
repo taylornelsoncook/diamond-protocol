@@ -131,7 +131,6 @@ async function viewToday(main) {
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
-  const m = d.metrics;
   const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--primary', href: '#/sell' }, 'New sale') },
     rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
       : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
@@ -173,16 +172,8 @@ async function viewToday(main) {
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.client_id}` }, 'Check in'));
   });
   fill(main, 
-    header('Today', isOwner() ? `Revenue, clients and anything that needs a decision. ${money(d.today_sales.cents)} in person today.` : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
-    !isOwner() ? h('div', { class: 'metrics' },
-      activeMetric(m),
-      metric('Sessions today', ag.sessions.length, `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked`),
-      metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)) :
-    h('div', { class: 'metrics' },
-      metric('Monthly recurring revenue', money(m.mrr_cents + d.teams.monthly_cents), d.teams.active_contracts ? `${money(m.mrr_cents)} memberships · ${money(d.teams.monthly_cents)} teams` : `${m.paying_clients} paying ${m.paying_clients === 1 ? 'client' : 'clients'}`),
-      activeMetric(m),
-      metric('Payments failed', m.past_due_clients, `${money(m.at_risk_cents)} at risk this month`, m.past_due_clients ? 'warn' : null),
-      metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
+    header('Today', isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
+    pulseBlock(d.pulse),
     agendaPanel,
     spots?.data.length ? spotsPanel(spots) : null,
     flags,
@@ -198,8 +189,41 @@ async function viewToday(main) {
     revPanel);
 }
 
-// "Active clients" is the client list's Active filter (not archived, paid up or on a free trial); the tile opens that list.
-const activeMetric = (m) => h('a', { href: '#/clients?status=current', style: 'text-decoration:none;color:inherit' }, metric('Active clients', m.active_clients ?? m.paying_clients + m.trialing_clients, `${m.trialing_clients} on free trial`));
+// The small-print summary under Today's header: many numbers, each with one line of detail. Tiles open the screen behind them.
+const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
+function pulseTile(label, value, detail, { tone, href } = {}) {
+  const body = [h('div', { class: 'pulse-label' }, label), h('div', { class: `pulse-value${tone ? ' pulse-value--' + tone : ''}` }, value), detail ? h('div', { class: 'pulse-detail' }, detail) : null];
+  return href ? h('a', { class: 'pulse-tile', href }, ...body) : h('div', { class: 'pulse-tile' }, ...body);
+}
+function pulseBlock(p) {
+  if (!p) return null;
+  const c = p.clients, att = p.attendance.came + p.attendance.missed, tiles = [];
+  if (p.money) {
+    const mo = p.money, diff = mo.month.total - mo.same_point_last_month;
+    tiles.push(
+      pulseTile('Collected this month', money(mo.month.total), mo.same_point_last_month || mo.month.total ? `${diff >= 0 ? '+' : '−'}${money(Math.abs(diff))} vs this point last month` : 'Nothing collected yet', { href: '#/billing' }),
+      pulseTile('In person today', money(mo.today_cents), `${mo.today_sales} ${mo.today_sales === 1 ? 'sale' : 'sales'}`, { href: '#/sell' }),
+      pulseTile('Monthly recurring', money(mo.mrr_cents), `${money(mo.member_mrr_cents)} members · ${money(mo.team_mrr_cents)} teams`, { href: '#/billing' }),
+      pulseTile('Average per member', mo.paying_members ? money(Math.round(mo.member_mrr_cents / mo.paying_members)) : '–', `${mo.paying_members} paying ${mo.paying_members === 1 ? 'member' : 'members'}`, { href: '#/clients?status=current' }));
+  }
+  tiles.push(
+    pulseTile('Active clients', c.active, `${c.trialing} on trial · ${c.new_this_month} added this month`, { href: '#/clients?status=current' }),
+    pulseTile('Cancellations', c.canceled_this_month, c.canceled_this_month ? `This month · ${pct(c.canceled_this_month, c.active + c.canceled_this_month)} of members` : 'None this month', { tone: c.canceled_this_month ? 'warn' : null, href: '#/clients' }));
+  if (p.money) {
+    const mo = p.money;
+    tiles.push(
+      pulseTile('Failed payments', money(mo.failed_cents), mo.failed_invoices ? `${mo.failed_invoices} ${mo.failed_invoices === 1 ? 'charge' : 'charges'} to retry` : 'Everyone is paid up', { tone: mo.failed_invoices ? 'warn' : null, href: '#/billing' }),
+      pulseTile('Team invoices open', money(mo.team_open_cents), mo.team_overdue ? `${money(mo.team_overdue_cents)} overdue on ${mo.team_overdue}` : 'Nothing overdue', { tone: mo.team_overdue ? 'warn' : null, href: '#/teams' }));
+  }
+  tiles.push(
+    pulseTile('Sessions today', p.today.sessions, p.today.capacity ? `${p.today.booked} of ${p.today.capacity} spots filled (${pct(p.today.booked, p.today.capacity)})` : 'Nothing scheduled', { href: '#/schedule' }),
+    pulseTile('Attendance, 7 days', pct(p.attendance.came, att), att ? `${p.attendance.came} came · ${p.attendance.missed} no-shows` : 'No sessions checked in yet', { tone: att && p.attendance.came / att < 0.8 ? 'warn' : null }),
+    pulseTile('Booked, next 7 days', p.bookings_next_7_days, 'Spots booked on the schedule', { href: '#/schedule' }),
+    pulseTile('Workouts logged', p.workouts.last_7_days, `Last 7 days · ${p.workouts.athletes} ${p.workouts.athletes === 1 ? 'athlete' : 'athletes'}`, { tone: p.workouts.last_7_days ? 'good' : null, href: '#/programs' }),
+    pulseTile('Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
+  return h('section', { class: 'pulse', 'aria-label': 'How the business is doing' }, ...tiles);
+}
+
 
 // Classes in the next 2 days with open spots and nobody waiting. One tap offers the spots to families who fit.
 function spotsPanel(spots) {

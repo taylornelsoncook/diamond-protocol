@@ -111,6 +111,12 @@ function seed() {
       ['Riley Tran (frontdesk)', 'Checked in', `Emma Jensen · ${first.name}`],
       ['Riley Tran (frontdesk)', 'Took payment', 'Walk-in · $30 · 2 × Water bottle · Provo facility · Cash'],
     ]) insert('activity', { actor, action, detail, kind: 'change' });
+
+    // Two team athletes with birthdays this week (one today), so Today's birthday list has something to show.
+    for (const [n, ahead] of [['Tyler Jacobs', 0], ['Marcus Bell', 3]]) {
+      const a = A(n);
+      if (a && !a.birthday) { const md = addDays(T, ahead).slice(5); update('athletes', a.id, { birthday: `${md === '02-29' ? 2008 : 2009}-${md}` }); }
+    }
   });
 }
 

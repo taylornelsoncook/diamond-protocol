@@ -94,12 +94,15 @@ _Where: Today_
 
 [Owner] [Coach] [Front desk] 
 
-Your home screen: today's sessions, anything that needs a decision, and what just happened.
+Your home screen: today's sessions, who to check in, anything that needs a decision, and what just happened. It refreshes itself every minute while it's open, so the front desk can leave it up all day.
 
-- Glance at the numbers across the top. Owners see recurring revenue, failed payments and workouts logged; coaches and front desk see clients and sessions, never money.
-- Open any of today's sessions to check athletes in.
-- Work through Needs your attention: retry a declined payment, open an overdue school invoice, link waiting test results, or reach out to a client who has gone quiet.
-- Recent activity shows every booking, payment, check-in and new PR as it happens. Owners also see revenue by location.
+- Glance at the numbers across the top; each one opens its screen. Owners see recurring revenue, active clients, failed payments and workouts logged, and the header shows today's in-person sales. Coaches and front desk see clients, sessions (what's on now and next), check-ins against the number expected and workouts logged, never money.
+- Today's sessions shows each session's time, place, coach, bookings and a check-in bar, marked On now, Next or Done, with unpaid and waitlist counts. Open one to work its roster. Below the list: how tomorrow looks.
+- Check in: everyone booked today, still-to-arrive first. Type a name or Athlete ID and press Enter to check in the only match, or tap Check in; Undo is in the confirmation and on the row. Rows flag allergies and injuries, a missing waiver, an unpaid booking, a red-flag daily check-in and a birthday. Team athletes check in from the session roster.
+- Work through Needs your attention: check-ins with red flags (short sleep, soreness, low energy, mood or hydration, and whether they train today), declined payments (owners: Retry charge asks you to confirm the amount and card; a family with no card goes to Add a card), overdue school invoices, unpaid bookings to collect at the door, test results waiting to be linked, trials ending and clients who have gone quiet.
+- Follow up without losing track: Send a note (owners and coaches) writes to the athlete's app and emails the family, then takes the item off Today; Call dials the family; Reached out, Followed up and Mark reviewed hide an item for everyone for a while (a week for quiet clients, until a trial ends) and log who did it. Undo from the confirmation, or open the followed-up items at the bottom of the list and Bring back.
+- Birthdays this week sit under the list.
+- Recent activity shows every booking, payment, check-in, workout and new PR as it happens, newest first. Filter it (Check-ins, Bookings, Training, Testing, and Money for owners) and Show more. Coaches and front desk never see amounts. Owners also see revenue by location for the month, with a total.
 
 ### Schedule
 

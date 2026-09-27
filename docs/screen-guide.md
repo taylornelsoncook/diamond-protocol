@@ -262,8 +262,9 @@ _Where: Testing_
 Your testing days, and every way results come in.
 
 - Open a testing day to run it, or start a New testing day.
+- Filter the list to Open or Shared days, or find one by name or team. Open days show how many athlete-tests have a result so far.
 - Upload results for paper or spreadsheet sheets, Devices for Hawkin, OVR and other systems, and the Test library to see or add tests.
-- A banner appears when results are waiting to be linked to an athlete.
+- A banner appears when results are waiting to be linked to an athlete. Front desk sees it too, with a note that a coach links them.
 
 ### New testing day
 
@@ -273,9 +274,10 @@ _Where: Testing, then New testing day_
 
 Plan a combine, evaluation day or team testing.
 
-- Name it and pick the date.
-- Choose a team (brings in the whole roster) or tick individual athletes.
-- Start from a preset (Combine, Force plate, Baseball, Basketball, Hockey, Soccer, Youth), then add or remove tests.
+- Name it and pick the date. The name fills in from the preset, team or retested day until you type your own.
+- Retest a past day (optional) to bring in the same athletes and tests, so the comparison is like for like. A testing day's Edit day menu has the same shortcut: Retest these athletes.
+- Choose a team (brings in the whole roster) or tick individual athletes. Find athletes by name or ID, Tick all shown, or Clear.
+- Start from a preset (Combine, Force plate, Baseball, Basketball, Hockey, Soccer, Youth), then add or remove tests. Find a test by name. Selected tests show in the order they'll run, each with a remove button.
 - Start testing day.
 
 ### Testing day
@@ -286,13 +288,16 @@ _Where: Testing, then a testing day_
 
 Run the tests: one test at a time, every athlete, every attempt.
 
-- Pick a test from the tabs across the top.
-- For timed tests, tap Start, then Stop. The time saves to the athlete marked Up and moves to the next athlete. Tap Time beside anyone to switch.
-- Or type results into the attempt boxes; they save as you type. Choose another unit (like cm) if that's what you measured.
-- A toast celebrates each new PR. Add walk-ups with the menu at the bottom.
-- When you're done: Share with parents (with an optional note), Download sheet for paper backup, or Upload results.
+- Pick a test from the tabs across the top. Each tab shows how many athletes have a result (3/4), with a check when everyone does. Arrow keys move between tabs. Owners and coaches can Add test.
+- For timed tests, tap Start, then Stop. The time saves to the athlete marked Up and moves to the next athlete. Tap Time beside anyone to switch. Cancel run (or Esc) stops a false start without saving. Undo removes the last time and puts that athlete back up. If a time can't be saved it stays on screen with Save again. On a phone the stopwatch stays pinned at the top while you scroll.
+- Or type results into the attempt boxes; they save as you type, and Enter moves down the column. Choose another unit (like cm) if that's what you measured. The + adds another attempt.
+- Each athlete shows their previous best, and a PR badge when today beats it. A toast celebrates each new PR.
+- Rankings shows today's best for the test, fastest or furthest first, with each athlete's change from their previous best.
+- Find an athlete by name or ID on big days. Add walk-ups with the menu at the bottom. Owners and coaches can remove an athlete (their results on this day go too, after a confirmation).
+- Edit day (owners and coaches): rename or re-date the day, remove tests, retest these athletes, or delete the day. Deleting a day with results asks first; only the owner can delete a day that's been shared.
+- When you're done: Share with parents shows who has results, who doesn't, and anyone with no parent email before you send (with an optional note). If results are added after sharing, a banner offers to email just those families. Download sheet for paper backup, or Upload results.
 
-> Note: Hand times are labeled hand-timed so they're never confused with electronic gates.
+> Note: Hand times are labeled hand-timed so they're never confused with electronic gates. Front desk enters results and adds walk-ups; sharing, editing and removing are for owners and coaches.
 
 ### Upload results
 

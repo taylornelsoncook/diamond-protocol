@@ -1,7 +1,7 @@
 // Testing: testing days, running a day (stopwatch + typed entry), uploads, results waiting to be linked,
 // devices & imports, and the test library.
 import { html, raw, mount, api, icon, toast, toastError, modal, confirmDialog, formData, options, fmtDate, relTime, localISO, debounce, plural, badge } from '/js/ui.js';
-import { fmtValue, fmtNumber, unitsFor, convert, parseEntry, bestOf, scoring } from '/js/testing-format.js';
+import { fmtValue, fmtNumber, fmtChange, unitsFor, convert, parseEntry, bestOf, better, scoring } from '/js/testing-format.js';
 
 const OC = ['owner', 'coach'];
 const canRun = (ctx) => OC.includes(ctx.me.role);
@@ -60,7 +60,56 @@ const STYLE = raw(`<style>
 .tst-sugg button:hover,.tst-sugg button:focus{background:var(--green-deep)}
 .tst-lib .list-row{padding:14px 0}
 .tst-lib .hidden-test .strong{color:var(--steel-muted)}
+.tst-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tst-filters .input{width:240px;min-height:40px}
+.tst-days .list-row{flex-wrap:wrap}
+.tst-prog{display:flex;align-items:center;gap:8px;min-width:150px}
+.tst-prog .bar{width:90px}
+.tst-badges{display:flex;gap:8px;align-items:center}
+.tst-new .tst-checks .check{min-height:44px}
+.tst-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.tst-tools .input{max-width:320px;flex:1;min-width:180px}
+.tst-chips{display:flex;flex-wrap:wrap;gap:6px}
+.tst-chip{display:inline-flex;align-items:center;gap:6px;padding:0 0 0 12px;min-height:40px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface-raised);font-size:14px}
+.tst-chip button{display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;background:none;border:0;color:var(--steel-muted);cursor:pointer}
+.tst-chip button:hover,.tst-chip button:focus-visible{color:var(--amber)}
+.tst-tabbar{display:flex;gap:8px;align-items:flex-start}
+.tst-tabbar .tst-tabs{flex:1;min-width:0}
+.tst-addtest{flex-shrink:0}
+.tst-count{font-size:12px;font-weight:600;color:var(--steel-muted);display:inline-flex;align-items:center}
+.tst-count.done{color:var(--green-bright)}
+.tst-tabs .btn[aria-selected="true"] .tst-count{color:var(--on-green)}
+.tst-last{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:14px}
+.tst-row.can-rm{grid-template-columns:64px minmax(0,1fr) auto 88px 44px}
+.tst-row.no-watch.can-rm{grid-template-columns:minmax(0,1fr) auto 88px 44px}
+.tst-more,.tst-rm{min-width:44px;padding:0;color:var(--steel-muted)}
+.tst-rm:hover{color:var(--amber)}
+.tst-best .badge{margin-top:2px}
+.tst-handchk{align-items:center;min-height:44px}
+.tst-rank{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.tst-rankrow{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:10px 4px;border-top:1px solid var(--line-subtle)}
+.tst-rankrow:first-child{border-top:0}
+.tst-rankno{font:600 22px/1 var(--font-display);color:var(--steel-muted);text-align:center}
+.tst-rankrow:nth-child(-n+3) .tst-rankno{color:var(--green-bright)}
+.tst-edfoot{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;border-top:1px solid var(--line-subtle);padding-top:12px}
+.tst-edtests .list-row{padding:6px 0}
 @media (max-width:700px){
+  .tst-row.can-rm{grid-template-columns:56px minmax(0,1fr) 80px}
+  .tst-row.no-watch.can-rm{grid-template-columns:minmax(0,1fr) 80px}
+  .tst-row.can-rm .tst-atts{grid-column:1/-2}
+  .tst-row.can-rm .tst-rm{order:6;justify-self:end}
+  .tst-rowmsg{order:7}
+  .tst-row.can-rm .tst-att{width:70px}
+  .tst-row.can-rm .tst-atts{gap:6px}
+  .tst-filters,.tst-filters .input{width:100%}
+  .tst-prog{order:5;width:100%}
+  .tst-dayhead .btn-row .btn{padding:0 12px;font-size:14px}
+  .tst-dayhead .btn-row .btn svg{display:none}
+  .tst-watchp{position:sticky;top:57px;z-index:30;padding:12px 14px;gap:8px;box-shadow:0 8px 16px rgba(0,0,0,.45)}
+  .tst-watchp .panel-title{display:none}
+  .tst-watch .btn-lg{min-width:110px;min-height:56px}
+  .tst-rankrow{grid-template-columns:36px minmax(0,1fr) auto}
+  .tst-addtest{padding:0 12px}
   .tst-row{grid-template-columns:56px minmax(0,1fr) 72px;gap:8px;padding:10px 8px}
   .tst-row.no-watch{grid-template-columns:minmax(0,1fr) 72px}
   .tst-row .tst-atts{grid-column:1/-1;justify-content:flex-start;order:5}
@@ -79,15 +128,19 @@ function header(title, sub, actions = '') {
 const back = () => html`<a class="btn" href="/app/testing">Testing</a>`;
 function pendingBanner(ctx, p) {
   if (!p || !p.count) return '';
-  return html`<div class="banner"><span>${p.count === 1 ? '1 result is' : `${p.count} results are`} waiting to be linked to a profile.</span>
+  return html`<div class="banner"><span>${p.count === 1 ? '1 result is' : `${p.count} results are`} waiting to be linked to a profile.${canRun(ctx) ? '' : ' A coach can link them.'}</span>
     ${canRun(ctx) ? html`<a class="btn btn-outline btn-sm" href="/app/testing/queue">Link them</a>` : ''}</div>`;
 }
+const dayWhen = (date) => (date === localISO() ? 'Today' : fmtDate(date, { weekday: true }));
+const progressBar = (done, total, label) => html`<div class="tst-prog" title="${label}"><div class="bar" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${done}"><span style="width:${total ? Math.round((done / total) * 100) : 0}%"></span></div><span class="small muted">${done} of ${total}</span></div>`;
 
 // ============ Testing (list) ============
 async function renderList(ctx) {
   const d = await api.get('/testing');
   if (!ctx.isCurrent()) return;
   const oc = canRun(ctx);
+  const q = { show: ['open', 'shared'].includes(ctx.query.show) ? ctx.query.show : 'all', term: ctx.query.q || '' };
+  const counts = { all: d.days.length, open: d.days.filter((x) => x.status !== 'shared').length, shared: d.days.filter((x) => x.status === 'shared').length };
   mount(ctx.el, html`${STYLE}
     ${pendingBanner(ctx, d.pending)}
     ${header('Testing', 'Combines, evaluations and team testing. Enter results by hand or stopwatch, import files, or connect your devices.', html`
@@ -95,15 +148,43 @@ async function renderList(ctx) {
       ${oc ? html`<a class="btn" href="/app/testing/devices">Devices</a><a class="btn" href="/app/testing/upload">Upload results</a>
       <a class="btn btn-primary" href="/app/testing/new">${icon('plus')}New testing day</a>` : ''}`)}
     <section class="panel tst-days">
-      <h2 class="panel-title">Testing days</h2>
-      ${d.days.length ? html`<div class="list">${d.days.map((x) => html`<div class="list-row">
-        <div class="grow"><a class="strong" href="/app/testing/day/${x.id}">${x.name}</a>
-          <div class="small muted">${fmtDate(x.date)} · ${plural(x.athletes, 'athlete')} · ${plural(x.tests, 'test')}${x.team_name ? ` · ${x.team_name}` : ''}</div></div>
-        ${x.status === 'shared' ? badge('active', 'Shared') : badge('open', 'Open')}
-        <span class="badge ${x.results ? 'badge-good' : 'badge-muted'}">${plural(x.results, 'result')}</span>
-      </div>`)}</div>`
-    : html`<div class="empty">No testing days yet. ${oc ? html`Start one with <a href="/app/testing/new">New testing day</a>.` : 'A coach will start one.'}</div>`}
+      <div class="panel-head"><h2 class="panel-title">Testing days</h2>
+        ${d.days.length > 1 ? html`<div class="tst-filters">
+          <div class="seg" role="group" aria-label="Show">${[['all', 'All'], ['open', 'Open'], ['shared', 'Shared']].map(([k, l]) => html`<button type="button" data-show="${k}" aria-pressed="${q.show === k}">${l} (${counts[k]})</button>`)}</div>
+          <label class="sr-only" for="dq">Find a testing day</label><input class="input" id="dq" type="search" placeholder="Find by name or team" value="${q.term}" autocomplete="off">
+        </div>` : ''}</div>
+      <div id="days"></div>
     </section>`);
+  const listEl = ctx.el.querySelector('#days');
+  const draw = () => {
+    const term = q.term.trim().toLowerCase();
+    const rows = d.days.filter((x) => (q.show === 'all' || (q.show === 'shared' ? x.status === 'shared' : x.status !== 'shared'))
+      && (!term || `${x.name} ${x.team_name || ''}`.toLowerCase().includes(term)));
+    if (!d.days.length) {
+      mount(listEl, html`<div class="empty">No testing days yet. ${oc ? html`Start one with <a href="/app/testing/new">New testing day</a>, or upload a sheet you already have.` : 'A coach will start one, and you can enter results here.'}</div>`);
+      return;
+    }
+    if (!rows.length) { mount(listEl, html`<div class="empty">No testing days match. <button class="btn btn-ghost btn-sm" id="clr">Show all</button></div>`); listEl.querySelector('#clr').onclick = () => { q.show = 'all'; q.term = ''; const i = ctx.el.querySelector('#dq'); if (i) i.value = ''; sync(); }; return; }
+    mount(listEl, html`<div class="list">${rows.map((x) => {
+      const slots = x.athletes * x.tests;
+      return html`<div class="list-row">
+        <div class="grow"><a class="strong" href="/app/testing/day/${x.id}">${x.name}</a>
+          <div class="small muted">${dayWhen(x.date)} · ${plural(x.athletes, 'athlete')} · ${plural(x.tests, 'test')}${x.team_name ? ` · ${x.team_name}` : ''}</div></div>
+        ${x.status !== 'shared' && slots ? progressBar(Math.min(x.done, slots), slots, `${x.done} of ${slots} athlete-tests have a result`) : ''}
+        <span class="tst-badges">${x.status === 'shared' ? badge('active', 'Shared') : badge('open', 'Open')}
+        <span class="badge ${x.results ? 'badge-good' : 'badge-muted'}">${plural(x.results, 'result')}</span></span>
+      </div>`;
+    })}</div>`);
+  };
+  const sync = () => {
+    ctx.el.querySelectorAll('[data-show]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.show === q.show)));
+    const p = new URLSearchParams(); if (q.show !== 'all') p.set('show', q.show); if (q.term) p.set('q', q.term);
+    history.replaceState(history.state, '', `${location.pathname}${p.toString() ? `?${p}` : ''}`);
+    draw();
+  };
+  ctx.el.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => { q.show = b.dataset.show; sync(); }));
+  ctx.el.querySelector('#dq')?.addEventListener('input', debounce((e) => { q.term = e.target.value; sync(); }, 150));
+  draw();
 }
 
 // ============ New testing day ============
@@ -112,71 +193,145 @@ async function renderNew(ctx) {
   if (!ctx.isCurrent()) return;
   const cats = [...new Set(o.tests.map((t) => t.category))].sort(catSort);
   const presetNames = Object.keys(o.presets || {});
-  const selected = new Set();
-  const firstPreset = presetNames[0];
+  const testById = new Map(o.tests.map((t) => [t.id, t]));
   const idByName = Object.fromEntries(o.tests.map((t) => [t.name, t.id]));
-  (o.presets[firstPreset] || []).forEach((n) => idByName[n] && selected.add(idByName[n]));
+  const selected = new Set(); // insertion order = order on the day
+  const pastDays = o.days || [];
+  const today = localISO();
+  let preset = presetNames[0];
+  (o.presets[preset] || []).forEach((n) => idByName[n] && selected.add(idByName[n]));
   mount(ctx.el, html`${STYLE}
     ${header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or pulled from devices.', html`<a class="btn" href="/app/testing">Cancel</a>`)}
-    <form class="panel" id="f" style="max-width:980px" novalidate>
+    <form class="panel tst-new" id="f" style="max-width:980px" novalidate>
       <div class="form-grid">
-        <div class="field"><label class="label" for="n">Name</label><input class="input" id="n" name="name" value="Testing day" required></div>
-        <div class="field"><label class="label" for="dt">Date</label><input class="input" id="dt" name="date" type="date" value="${localISO()}" required></div>
+        <div class="field"><label class="label" for="n">Name</label><input class="input" id="n" name="name" value="${preset || 'Testing day'}" maxlength="120" required></div>
+        <div class="field"><label class="label" for="dt">Date</label><input class="input" id="dt" name="date" type="date" value="${today}" required></div>
         <div class="field"><label class="label" for="tm">Team</label><select class="input" id="tm" name="team_id">
           <option value="">Individual athletes</option>${o.teams.map((t) => html`<option value="${t.id}">${t.team_name} (${plural(t.athletes, 'athlete')})</option>`)}</select></div>
       </div>
-      <div class="field"><span class="label" id="ath-label">Athletes (you can add walk-ups on the day)</span>
+      ${pastDays.length ? html`<div class="field"><label class="label" for="from">Retest a past day <span class="muted">(optional)</span></label>
+        <select class="input" id="from" style="max-width:460px"><option value="">Start fresh</option>${pastDays.map((x) => html`<option value="${x.id}">${x.name} (${fmtDate(x.date)})</option>`)}</select>
+        <span class="hint">Brings in the same athletes and tests so you can compare like for like.</span></div>` : ''}
+      <div class="field"><div class="spread"><span class="label" id="ath-label">Athletes <span class="muted">(you can add walk-ups on the day)</span></span><span class="small muted" id="ath-count" aria-live="polite"></span></div>
         <p class="hint" id="team-hint" hidden></p>
-        <div class="tst-checks" role="group" aria-labelledby="ath-label">${o.athletes.map((a) => html`<label class="check"><input type="checkbox" name="athlete_ids" data-multi value="${a.id}" data-team="${a.team_id || ''}"> ${name(a)}</label>`)}</div></div>
-      <div class="field"><span class="label">Tests</span><span class="hint">Start from a preset, then adjust.</span>
-        <div class="tst-presets" role="group" aria-label="Presets">${presetNames.map((p) => html`<button type="button" class="btn" data-preset="${p}" aria-pressed="${p === firstPreset}">${p}</button>`)}</div></div>
+        <div class="tst-tools"><label class="sr-only" for="aq">Find athletes</label><input class="input" id="aq" type="search" placeholder="Find athletes by name or ID" autocomplete="off">
+          <button type="button" class="btn btn-sm" id="a-all">Tick all shown</button><button type="button" class="btn btn-ghost btn-sm" id="a-none">Clear</button></div>
+        <div class="tst-checks" role="group" aria-labelledby="ath-label">${o.athletes.map((a) => html`<label class="check" data-find="${`${name(a)} ${a.code}`.toLowerCase()}"><input type="checkbox" name="athlete_ids" data-multi value="${a.id}" data-team="${a.team_id || ''}"> ${name(a)}</label>`)}</div>
+        <p class="small muted" id="ath-none" hidden style="margin:0">No athlete matches.</p></div>
+      <div class="field"><span class="label">Tests</span><span class="hint">Start from a preset, then adjust. Tests run in the order shown below.</span>
+        <div class="tst-presets" role="group" aria-label="Presets">${presetNames.map((p) => html`<button type="button" class="btn" data-preset="${p}" aria-pressed="${p === preset}">${p}</button>`)}</div></div>
+      <div class="field"><span class="label" id="sel-label">Selected tests <span class="muted" id="count"></span></span>
+        <div class="tst-chips" id="chips" role="list" aria-labelledby="sel-label"></div></div>
+      <div class="field"><label class="sr-only" for="tq">Find a test</label><input class="input" id="tq" type="search" placeholder="Find a test to add, like broad jump or exit velocity" autocomplete="off" style="max-width:460px"></div>
       <div id="cats">${cats.map((c) => html`<details class="tst-cat" data-cat="${c}"><summary>${c}</summary><div class="tst-checks">
-        ${o.tests.filter((t) => t.category === c).map((t) => html`<label class="check"><input type="checkbox" name="test_ids" data-multi value="${t.id}"> ${t.name}</label>`)}</div></details>`)}</div>
-      <p class="small muted" id="count" style="margin:0"></p>
+        ${o.tests.filter((t) => t.category === c).map((t) => html`<label class="check" data-find="${t.name.toLowerCase()}"><input type="checkbox" name="test_ids" data-multi value="${t.id}"> ${t.name}</label>`)}</div></details>`)}</div>
       <div class="error" id="err" role="alert"></div>
       <div><button class="btn btn-primary">Start testing day</button></div>
     </form>`);
   const f = ctx.el.querySelector('#f');
-  let preset = firstPreset;
+  const nameEl = f.querySelector('#n');
+  let nameTouched = false, fromDay = null;
+  nameEl.addEventListener('input', () => { nameTouched = true; });
+  const teamName = () => { const s = f.querySelector('#tm'); return s.value ? o.teams.find((t) => String(t.id) === s.value)?.team_name : ''; };
+  const suggestName = () => {
+    if (nameTouched) return;
+    nameEl.value = fromDay ? `${fromDay.name.replace(/ retest$/i, '')} retest` : [teamName(), preset].filter(Boolean).join(' ') || 'Testing day';
+  };
+  const athleteBoxes = () => [...f.querySelectorAll('input[name=athlete_ids]')];
+  const countAthletes = () => { const n = athleteBoxes().filter((c) => c.checked).length; f.querySelector('#ath-count').textContent = `${plural(n, 'athlete')} selected`; };
   const syncTests = () => {
     f.querySelectorAll('input[name=test_ids]').forEach((c) => { c.checked = selected.has(Number(c.value)); });
     f.querySelectorAll('.tst-cat').forEach((d) => { if ([...d.querySelectorAll('input')].some((c) => c.checked)) d.open = true; });
-    f.querySelector('#count').textContent = `${plural(selected.size, 'test')} selected.`;
+    f.querySelector('#count').textContent = `(${selected.size})`;
+    const chips = f.querySelector('#chips');
+    mount(chips, selected.size ? [...selected].map((id, i) => html`<span class="tst-chip" role="listitem"><span class="muted">${i + 1}.</span> ${testById.get(id)?.name || 'Test'}
+      <button type="button" data-unpick="${id}" aria-label="Remove ${testById.get(id)?.name || 'test'}">${icon('close', 16)}</button></span>`)
+      : html`<span class="small muted">No tests yet. Pick a preset or tick tests below.</span>`);
   };
-  syncTests();
-  f.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => {
-    preset = b.dataset.preset; selected.clear();
-    (o.presets[preset] || []).forEach((n) => idByName[n] && selected.add(idByName[n]));
-    f.querySelectorAll('[data-preset]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  syncTests(); countAthletes();
+  const setPreset = (p) => {
+    preset = p; fromDay = null; selected.clear();
+    (o.presets[p] || []).forEach((n) => idByName[n] && selected.add(idByName[n]));
+    f.querySelectorAll('[data-preset]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.preset === p)));
     f.querySelectorAll('.tst-cat').forEach((d) => { d.open = false; });
-    syncTests();
-  }));
+    const fr = f.querySelector('#from'); if (fr) fr.value = '';
+    syncTests(); suggestName();
+  };
+  f.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => setPreset(b.dataset.preset)));
+  f.querySelector('#chips').addEventListener('click', (e) => { const b = e.target.closest('[data-unpick]'); if (!b) return; selected.delete(Number(b.dataset.unpick)); syncTests(); });
+  const applyTeam = (team) => {
+    let n = 0;
+    athleteBoxes().forEach((c) => {
+      const onTeam = team && c.dataset.team === team;
+      if (onTeam) n++;
+      c.disabled = !!onTeam; if (onTeam) c.checked = true; else if (c.dataset.auto) c.checked = false;
+      c.dataset.auto = onTeam ? '1' : '';
+    });
+    const hint = f.querySelector('#team-hint');
+    hint.hidden = !team;
+    hint.textContent = team ? `All ${plural(n, 'athlete')} on the team are in. Tick anyone else who's testing with them.` : '';
+    countAthletes();
+  };
   f.addEventListener('change', (e) => {
-    if (e.target.name === 'test_ids') { e.target.checked ? selected.add(Number(e.target.value)) : selected.delete(Number(e.target.value)); f.querySelector('#count').textContent = `${plural(selected.size, 'test')} selected.`; }
-    if (e.target.name === 'team_id') {
-      const team = e.target.value;
-      let n = 0;
-      f.querySelectorAll('input[name=athlete_ids]').forEach((c) => {
-        const onTeam = team && c.dataset.team === team;
-        if (onTeam) n++;
-        c.disabled = !!onTeam; if (onTeam) c.checked = true; else if (c.dataset.auto) c.checked = false;
-        c.dataset.auto = onTeam ? '1' : '';
-      });
-      const hint = f.querySelector('#team-hint');
-      hint.hidden = !team;
-      hint.textContent = team ? `All ${plural(n, 'athlete')} on the team are in. Tick anyone else who's testing with them.` : '';
-    }
+    if (e.target.name === 'test_ids') { e.target.checked ? selected.add(Number(e.target.value)) : selected.delete(Number(e.target.value)); syncTests(); }
+    if (e.target.name === 'athlete_ids') countAthletes();
+    if (e.target.name === 'team_id') { applyTeam(e.target.value); suggestName(); }
   });
+  // Filter athletes and tests as you type.
+  const filterChecks = (root, term) => { let shown = 0; root.querySelectorAll('[data-find]').forEach((l) => { const hit = !term || l.dataset.find.includes(term); l.hidden = !hit; if (hit) shown++; }); return shown; };
+  f.querySelector('#aq').addEventListener('input', (e) => {
+    const shown = filterChecks(f.querySelector('[aria-labelledby=ath-label]'), e.target.value.trim().toLowerCase());
+    f.querySelector('#ath-none').hidden = shown > 0;
+  });
+  f.querySelector('#aq').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  f.querySelector('#tq').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  f.querySelector('#a-all').onclick = () => { athleteBoxes().forEach((c) => { if (!c.closest('label').hidden && !c.disabled) c.checked = true; }); countAthletes(); };
+  f.querySelector('#a-none').onclick = () => { athleteBoxes().forEach((c) => { if (!c.disabled) c.checked = false; }); countAthletes(); };
+  f.querySelector('#tq').addEventListener('input', (e) => {
+    const term = e.target.value.trim().toLowerCase();
+    f.querySelectorAll('.tst-cat').forEach((d) => {
+      const shown = filterChecks(d, term);
+      d.hidden = !!term && !shown;
+      if (term) d.open = shown > 0; else d.open = [...d.querySelectorAll('input')].some((c) => c.checked);
+    });
+  });
+  // Retest: copy a past day's athletes and tests.
+  const loadFrom = async (id) => {
+    if (!id) { fromDay = null; suggestName(); return; }
+    try {
+      const d = await api.get(`/testing/days/${id}`);
+      fromDay = d.day; preset = d.day.preset || preset;
+      selected.clear(); d.tests.forEach((t) => testById.has(t.id) && selected.add(t.id));
+      f.querySelectorAll('[data-preset]').forEach((x) => x.setAttribute('aria-pressed', 'false'));
+      const tm = f.querySelector('#tm');
+      tm.value = d.day.team_id && o.teams.some((t) => t.id === d.day.team_id) ? String(d.day.team_id) : '';
+      const ids = new Set(d.athletes.map((a) => String(a.id)));
+      athleteBoxes().forEach((c) => { c.dataset.auto = ''; c.disabled = false; c.checked = ids.has(c.value); });
+      applyTeam(tm.value);
+      athleteBoxes().forEach((c) => { if (ids.has(c.value)) c.checked = true; });
+      countAthletes(); syncTests(); suggestName();
+      const skipped = d.tests.length - d.tests.filter((t) => testById.has(t.id)).length;
+      toast(`Copied ${plural(ids.size, 'athlete')} and ${plural(selected.size, 'test')} from ${d.day.name}.${skipped ? ` ${plural(skipped, 'hidden test')} left out.` : ''}`);
+    } catch (err) { toastError(err); }
+  };
+  const fromSel = f.querySelector('#from');
+  if (fromSel) {
+    fromSel.addEventListener('change', () => loadFrom(fromSel.value));
+    if (ctx.query.from && pastDays.some((x) => String(x.id) === String(ctx.query.from))) { fromSel.value = String(ctx.query.from); loadFrom(fromSel.value); }
+  }
   f.onsubmit = async (e) => {
     e.preventDefault();
+    const err = f.querySelector('#err'); err.textContent = '';
     const d = formData(f);
-    const athleteIds = [...f.querySelectorAll('input[name=athlete_ids]:checked')].map((c) => c.value);
-    const btn = f.querySelector('button.btn-primary'); btn.disabled = true;
+    if (!selected.size) { err.textContent = 'Pick at least one test.'; return; }
+    if (!d.date) { err.textContent = 'Pick the date.'; return; }
+    const athleteIds = athleteBoxes().filter((c) => c.checked).map((c) => c.value);
+    const btn = f.querySelector('button.btn-primary'); btn.disabled = true; btn.textContent = 'Starting…';
     try {
-      const r = await api.post('/testing/days', { name: d.name, date: d.date, team_id: d.team_id || null, athlete_ids: athleteIds, test_ids: [...selected], preset });
+      const r = await api.post('/testing/days', { name: d.name, date: d.date, team_id: d.team_id || null, athlete_ids: athleteIds, test_ids: [...selected], preset: fromDay ? fromDay.preset : preset });
       toast('Testing day started.');
       ctx.go(`/app/testing/day/${r.id}`);
-    } catch (err) { f.querySelector('#err').textContent = err.message; btn.disabled = false; }
+    } catch (e2) { err.textContent = e2.message; btn.disabled = false; btn.textContent = 'Start testing day'; }
   };
 }
 
@@ -191,19 +346,29 @@ async function renderDay(ctx) {
   const results = new Map(); // `${athlete}|${test}|${attempt}` → result
   const rk = (a, t, n) => `${a}|${t}|${n}`;
   for (const r of d.results) results.set(rk(r.athlete_id, r.test_id, r.attempt), r);
+  const prev = new Map(); // `${athlete}|${test}` → best before this day
+  const addPrev = (list) => (list || []).forEach((p) => prev.set(`${p.athlete_id}|${p.test_id}`, p.best));
+  addPrev(d.prev);
   let current = tests.find((t) => String(t.id) === ctx.query.test) || tests[0];
-  const unitSel = {}; const handSel = {};
+  let view = ctx.query.view === 'rank' ? 'rank' : 'enter';
+  let filter = '';
+  const unitSel = {}; const handSel = {}; const extra = {};
   let upId = null;
   let clock = { running: false, start: 0, raf: 0 };
+  let last = null; // { aid, tid, attempt, secs } — the last stopwatch time, for Undo
+  let unsaved = null; // a stopped time that failed to save, for Save again
 
   const slots = (t, aid) => {
-    let max = t.attempts || 1;
+    let max = Math.max(t.attempts || 1, extra[`${aid}|${t.id}`] || 0);
     for (const k of results.keys()) { const [a, tt, n] = k.split('|').map(Number); if (a === aid && tt === t.id && n > max) max = n; }
     return max;
   };
   const nextEmpty = (t, aid) => { const n = slots(t, aid); for (let i = 1; i <= n; i++) if (!results.has(rk(aid, t.id, i))) return i; return n + 1; };
   const hasEmpty = (t, aid) => nextEmpty(t, aid) <= (t.attempts || 1);
-  const bestFor = (t, aid) => bestOf(t, [...results.values()].filter((r) => r.athlete_id === aid && r.test_id === t.id).map((r) => r.value));
+  const valuesFor = (t, aid) => [...results.values()].filter((r) => r.athlete_id === aid && r.test_id === t.id);
+  const bestFor = (t, aid) => bestOf(t, valuesFor(t, aid).map((r) => r.value));
+  const isPR = (t, aid) => { const b = bestFor(t, aid), p = prev.get(`${aid}|${t.id}`); return b != null && p != null && better(t, b, p); };
+  const doneFor = (t) => athletes.filter((a) => valuesFor(t, a.id).length).length;
   const pickUp = (t) => { const a = athletes.find((x) => hasEmpty(t, x.id)) || athletes[0]; upId = a?.id ?? null; };
   const advanceUp = (t) => {
     if (!athletes.length) return;
@@ -214,37 +379,85 @@ async function renderDay(ctx) {
 
   const shared = day.status === 'shared';
   const onDay = new Set(athletes.map((a) => a.id));
+  const subText = () => {
+    const total = athletes.length * tests.length;
+    const done = tests.reduce((n, t) => n + doneFor(t), 0);
+    return `${dayWhen(day.date)} · ${plural(athletes.length, 'athlete')}${day.team_name ? ` · ${day.team_name}` : ''}${total ? ` · ${done} of ${total} results in` : ''}${shared ? ` · shared ${relTime(day.shared_at)}` : ''}`;
+  };
   mount(ctx.el, html`${STYLE}
     ${pendingBanner(ctx, d.pending)}
-    <div class="page-header"><div><h1 class="page-title">${day.name}</h1>
-      <p class="page-sub">${fmtDate(day.date)} · ${plural(athletes.length, 'athlete')}${day.team_name ? ` · ${day.team_name}` : ''}</p></div>
+    <div class="page-header tst-dayhead"><div><h1 class="page-title">${day.name}</h1>
+      <p class="page-sub" id="sub">${subText()}</p></div>
       <div class="btn-row">
-        ${oc ? html`<button class="btn ${shared ? 'btn-outline' : 'btn-primary'}" id="share">${shared ? 'Shared with parents ✓' : 'Share with parents'}</button>` : ''}
-        <a class="btn" href="/api/testing/sheet?day_id=${day.id}&format=xlsx" download>${icon('download')}Download sheet</a>
-        ${oc ? html`<a class="btn" href="/app/testing/upload?day=${day.id}">${icon('upload')}Upload results</a>` : ''}
+        ${oc ? html`<button class="btn" id="share">${shared ? html`${icon('check')}Shared with parents` : 'Share with parents'}</button>` : ''}
+        <a class="btn" href="/api/testing/sheet?day_id=${day.id}&format=xlsx" download>${icon('download')}<span>Download sheet</span></a>
+        ${oc ? html`<a class="btn" href="/app/testing/upload?day=${day.id}">${icon('upload')}<span>Upload results</span></a><button class="btn" id="edit">Edit day</button>` : ''}
         <a class="btn btn-ghost" href="/app/testing">All testing days</a>
       </div></div>
-    ${tests.length ? html`<div class="tst-tabs" role="tablist" aria-label="Tests" id="tabs"></div>
-      <section class="panel" id="watch" hidden></section>
-      <section class="panel" id="sheet"></section>`
-    : html`<div class="empty">This testing day has no tests.</div>`}
+    ${shared && oc && day.new_since_share ? html`<div class="banner"><span>${day.new_since_share === 1 ? '1 athlete has' : `${day.new_since_share} athletes have`} results added since you shared. Their families haven't been emailed about them.</span><button class="btn btn-outline btn-sm" id="share-new">Email their families</button></div>` : ''}
+    ${tests.length ? html`<div class="tst-tabbar"><div class="tst-tabs" role="tablist" aria-label="Tests" id="tabs"></div>
+        ${oc ? html`<button class="btn btn-ghost tst-addtest" id="addtest" aria-label="Add a test to this day">${icon('plus')}<span class="tst-hide-sm">Add test</span></button>` : ''}</div>
+      <section class="panel tst-watchp" id="watch" hidden aria-label="Stopwatch"></section>
+      <section class="panel" id="sheet" role="tabpanel"></section>`
+    : html`<div class="empty">This testing day has no tests. ${oc ? html`<button class="btn" id="addtest">${icon('plus')}Add test</button>` : ''}</div>`}
   `);
-  if (oc) ctx.el.querySelector('#share').onclick = () => shareModal(ctx, day);
+  const shareBtn = ctx.el.querySelector('#share');
+  if (shareBtn) shareBtn.onclick = () => shareModal(ctx, day);
+  ctx.el.querySelector('#share-new')?.addEventListener('click', () => shareModal(ctx, day));
+  ctx.el.querySelector('#edit')?.addEventListener('click', () => { if (clock.running) { toast('Stop the clock first.', 'warn'); return; } editDayModal(ctx, day, tests, results.size); });
+  ctx.el.querySelector('#addtest')?.addEventListener('click', addTest);
+  async function addTest() {
+    if (clock.running) { toast('Stop the clock first.', 'warn'); return; }
+    const onDayTests = new Set(tests.map((t) => t.id));
+    const avail = opts.tests.filter((t) => !onDayTests.has(t.id));
+    const cats = [...new Set(avail.map((t) => t.category))].sort(catSort);
+    const r = await modal({
+      title: 'Add a test to this day',
+      body: html`<div class="field"><label class="label" for="at">Test</label><select class="input" id="at"><option value="">Choose a test…</option>
+        ${cats.map((c) => html`<optgroup label="${c}">${avail.filter((t) => t.category === c).map((t) => html`<option value="${t.id}">${t.name} (${t.unit})</option>`)}</optgroup>`)}</select>
+        <span class="hint">It goes at the end of the tabs. Hidden tests don't show here; show them in the Test library first.</span></div>`,
+      actions: [{ label: 'Cancel', value: null }, { label: 'Add test', kind: 'primary', onClick: async (body) => {
+        const id = body.querySelector('#at').value;
+        if (!id) { toast('Choose a test to add.', 'warn'); return false; }
+        return api.post(`/testing/days/${day.id}/tests`, { test_id: Number(id) });
+      } }],
+    });
+    if (!r) return;
+    toast(`${r.test.name} added.`);
+    if (!tests.length) { ctx.go(`/app/testing/day/${day.id}?test=${r.test.id}`); return; }
+    tests.push(r.test); addPrev(r.prev);
+    current = r.test; syncUrl(); pickUp(current); drawAll();
+  }
   if (!tests.length) return;
 
   const tabsEl = ctx.el.querySelector('#tabs'), watchEl = ctx.el.querySelector('#watch'), sheetEl = ctx.el.querySelector('#sheet');
+  const syncUrl = () => history.replaceState(history.state, '', `${location.pathname}?test=${current.id}${view === 'rank' ? '&view=rank' : ''}`);
+  function drawHead() {
+    ctx.el.querySelector('#sub').textContent = subText();
+    // One green button per view: Start owns it on timed tests; otherwise Share does, until the day is shared.
+    if (shareBtn) shareBtn.classList.toggle('btn-primary', !shared && !current.timed);
+  }
   function drawTabs() {
     mount(tabsEl, tests.map((t) => {
-      const done = athletes.length && athletes.every((a) => results.has(rk(a.id, t.id, 1)));
-      return html`<button class="btn" role="tab" data-test="${t.id}" aria-selected="${t.id === current.id}">${t.name}${done ? html` <span class="tst-dot" title="Everyone has a result"></span>` : ''}</button>`;
+      const n = doneFor(t), all = athletes.length && n === athletes.length;
+      return html`<button class="btn" role="tab" id="tab-${t.id}" aria-controls="sheet" data-test="${t.id}" aria-selected="${t.id === current.id}" tabindex="${t.id === current.id ? 0 : -1}">${t.name}
+        <span class="tst-count ${all ? 'done' : ''}" aria-label="${n} of ${athletes.length} done">${all ? icon('check', 14) : `${n}/${athletes.length}`}</span></button>`;
     }));
+    sheetEl.setAttribute('aria-labelledby', `tab-${current.id}`);
   }
-  tabsEl.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-test]'); if (!b) return;
+  const switchTo = (id, focus) => {
     if (clock.running) { toast('Stop the clock before switching tests.', 'warn'); return; }
-    current = tests.find((t) => t.id === Number(b.dataset.test));
-    history.replaceState({}, '', `${location.pathname}?test=${current.id}`);
-    pickUp(current); drawTabs(); drawWatch(); drawSheet();
+    current = tests.find((t) => t.id === id) || current;
+    syncUrl(); pickUp(current); drawAll();
+    if (focus) tabsEl.querySelector(`[data-test="${current.id}"]`)?.focus();
+  };
+  tabsEl.addEventListener('click', (e) => { const b = e.target.closest('[data-test]'); if (b) switchTo(Number(b.dataset.test)); });
+  tabsEl.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const i = tests.findIndex((t) => t.id === current.id);
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? tests.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + tests.length) % tests.length;
+    switchTo(tests[j].id, true);
   });
 
   function drawWatch() {
@@ -252,44 +465,98 @@ async function renderDay(ctx) {
     watchEl.hidden = !t.timed;
     if (!t.timed) return;
     const up = athletes.find((a) => a.id === upId);
-    mount(watchEl, html`<div><h2 class="panel-title">Stopwatch</h2>
-      <p class="panel-sub" id="up-line">${up ? `Up: ${name(up)}. Tap Time next to anyone to switch. Stopping the clock saves the time and moves to the next athlete.` : 'Add an athlete to start timing.'}</p></div>
+    const lastA = last && athletes.find((a) => a.id === last.aid);
+    mount(watchEl, html`<div class="tst-watchhead"><h2 class="panel-title">Stopwatch</h2>
+      <p class="panel-sub" id="up-line">${up ? html`Up: <strong>${name(up)}</strong>, attempt ${nextEmpty(t, up.id)}.<span class="tst-hide-sm"> Tap Time next to anyone to switch. Stopping the clock saves the time and moves to the next athlete.</span>` : 'Add an athlete to start timing.'}</p></div>
       <div class="tst-watch">
         <div class="tst-clock" id="clock" aria-live="off">0.00</div>
         <button class="btn btn-primary btn-lg" id="sw" ${up ? '' : raw('disabled')}>Start</button>
-        <p class="tst-note" style="flex:1;min-width:220px">Hand times usually read faster than electronic gates, so the app keeps them labeled. Space bar starts and stops.</p>
-      </div>`);
+        <button class="btn btn-ghost" id="sw-cancel" hidden>Cancel run</button>
+        <p class="tst-note tst-hide-sm" style="flex:1;min-width:220px">Hand times usually read faster than electronic gates, so the app keeps them labeled. Space bar starts and stops; Esc cancels a false start.</p>
+      </div>
+      ${unsaved ? html`<div class="tst-last warn-text"><span>${unsaved.secs.toFixed(2)} s for ${name(athletes.find((a) => a.id === unsaved.aid) || { first_name: 'this', last_name: 'athlete' })} didn't save.${unsaved.error ? ` ${unsaved.error}` : ''}</span>${unsaved.impossible ? '' : html`<button class="btn btn-sm" id="sw-retry">Save again</button>`}<button class="btn btn-ghost btn-sm" id="sw-drop">Discard</button></div>`
+      : lastA && last.tid === t.id ? html`<div class="tst-last"><span class="muted">Last: ${name(lastA)}, attempt ${last.attempt}, ${last.secs.toFixed(2)} s</span><button class="btn btn-ghost btn-sm" id="sw-undo">Undo</button></div>` : ''}`);
     watchEl.querySelector('#sw').onclick = toggleClock;
+    watchEl.querySelector('#sw-cancel').onclick = cancelClock;
+    watchEl.querySelector('#sw-undo')?.addEventListener('click', undoLast);
+    watchEl.querySelector('#sw-retry')?.addEventListener('click', async () => { const u = unsaved; unsaved = null; await saveTime(u.tid, u.aid, u.secs); });
+    watchEl.querySelector('#sw-drop')?.addEventListener('click', () => { unsaved = null; drawWatch(); });
   }
   function tick() {
     const el = watchEl.querySelector('#clock');
-    if (!clock.running || !el) return;
+    if (!clock.running || !el || !document.body.contains(watchEl)) return;
     el.textContent = ((performance.now() - clock.start) / 1000).toFixed(2);
     clock.raf = requestAnimationFrame(tick);
   }
-  async function toggleClock() {
+  const setRunning = (on) => {
     const btn = watchEl.querySelector('#sw'), el = watchEl.querySelector('#clock');
+    btn.textContent = on ? 'Stop' : 'Start';
+    btn.classList.toggle('btn-primary', !on); btn.classList.toggle('btn-warn', on);
+    el.classList.toggle('running', on);
+    watchEl.querySelector('#sw-cancel').hidden = !on;
+  };
+  function cancelClock() {
+    if (!clock.running) return;
+    cancelAnimationFrame(clock.raf); clock.running = false;
+    setRunning(false); watchEl.querySelector('#clock').textContent = '0.00';
+    toast('Run canceled. Nothing was saved.');
+  }
+  async function toggleClock() {
     if (!clock.running) {
       if (!upId) return;
+      unsaved = null;
       clock = { running: true, start: performance.now(), raf: 0 };
-      btn.textContent = 'Stop'; btn.classList.remove('btn-primary'); btn.classList.add('btn-warn'); el.classList.add('running');
-      tick();
+      setRunning(true); tick();
       return;
     }
     const secs = Math.round(((performance.now() - clock.start) / 1000) * 100) / 100;
     cancelAnimationFrame(clock.raf); clock.running = false;
-    el.textContent = secs.toFixed(2); el.classList.remove('running');
-    btn.textContent = 'Start'; btn.classList.add('btn-primary'); btn.classList.remove('btn-warn');
-    const t = current, aid = upId, attempt = nextEmpty(t, aid);
+    setRunning(false); watchEl.querySelector('#clock').textContent = secs.toFixed(2);
+    await saveTime(current.id, upId, secs);
+  }
+  async function saveTime(tid, aid, secs) {
+    const t = tests.find((x) => x.id === tid), attempt = nextEmpty(t, aid);
+    if (t.min_value != null && (secs < t.min_value || secs > t.max_value)) {
+      // A slip of the thumb: don't send an impossible time, just offer to discard it.
+      unsaved = { aid, tid, secs, error: `That's outside what's possible for ${t.name} (${rangeText(t)}).`, impossible: true };
+      drawWatch(); const c = watchEl.querySelector('#clock'); if (c) c.textContent = secs.toFixed(2);
+      return;
+    }
     const ok = await save(t, aid, attempt, secs, { source: 'stopwatch', unit: 's' });
-    if (ok) { advanceUp(t); drawWatch(); watchEl.querySelector('#clock').textContent = secs.toFixed(2); drawSheet(); drawTabs(); }
+    if (ok) { last = { aid, tid, attempt, secs }; if (current.id === tid) advanceUp(t); }
+    else unsaved = { aid, tid, secs, error: saveError };
+    drawWatch(); if (ok || unsaved) { const c = watchEl.querySelector('#clock'); if (c) c.textContent = secs.toFixed(2); }
+    drawSheet(); drawTabs(); drawHead();
+  }
+  async function undoLast() {
+    if (!last || clock.running) return;
+    const t = tests.find((x) => x.id === last.tid), a = athletes.find((x) => x.id === last.aid);
+    const key = rk(last.aid, last.tid, last.attempt);
+    try {
+      await api.put(`/testing/days/${day.id}/results`, { athlete_id: last.aid, test_id: last.tid, attempt: last.attempt, value: '' });
+      results.delete(key); lastSent.delete(key);
+      upId = last.aid;
+      toast(`Removed ${last.secs.toFixed(2)} s for ${name(a)}. ${a.first_name} is up again.`);
+      last = null;
+      if (current.id === t.id) { drawWatch(); drawSheet(); } drawTabs(); drawHead();
+    } catch (err) { toastError(err); }
   }
   const onKey = (e) => {
     if (!document.body.contains(watchEl)) { document.removeEventListener('keydown', onKey); return; }
-    if (e.code !== 'Space' || !current.timed || e.target.closest('input,textarea,select,button,a')) return;
+    if (!current.timed || document.querySelector('.modal-back')) return;
+    if (e.key === 'Escape' && clock.running) { e.preventDefault(); cancelClock(); return; }
+    if (e.code !== 'Space' || e.target.closest('input,textarea,select,button,a')) return;
     e.preventDefault(); toggleClock();
   };
   document.addEventListener('keydown', onKey);
+
+  const rowBest = (t, aid) => {
+    const best = bestFor(t, aid);
+    const anyHand = t.unit === 's' && valuesFor(t, aid).some((x) => x.hand_timed);
+    return html`${best != null ? html`<div>${fmtValue(best, t.unit)}</div>` : ''}${isPR(t, aid) ? html`<span class="badge badge-good">PR</span>` : ''}${anyHand ? html`<div class="tst-tag">hand-timed</div>` : ''}`;
+  };
+  const prevLine = (t, aid) => { const p = prev.get(`${aid}|${t.id}`); return p != null ? `Previous best ${fmtValue(p, t.unit)}` : 'No previous result'; };
+  const matches = (a) => !filter || `${name(a)} ${a.code}`.toLowerCase().includes(filter);
 
   function drawSheet() {
     const t = current;
@@ -298,43 +565,99 @@ async function renderDay(ctx) {
     const units = unitsFor(t.unit);
     const walkups = opts.athletes.filter((a) => !onDay.has(a.id));
     const show = (v) => { if (v == null) return ''; const x = convert(v, t.unit, unit); return unit === 's' ? fmtNumber(x, 's') : String(Number(x.toFixed(2))); };
+    const entryHint = unit === 'in' ? ' Feet and inches work too, like 6\'5".' : unit === 's' && !t.timed ? ' Minutes work too, like 1:05.3.' : '';
+    const shownAthletes = athletes.filter(matches);
     mount(sheetEl, html`<div class="panel-head"><div><h2 class="panel-title">${t.name}</h2>
-        <p class="panel-sub">${t.unit} · ${scoring(t)} · ${plural(t.attempts || 1, 'attempt')}. Values save as you type.${rangeText(t) ? ` Expected range ${rangeText(t)}.` : ''}</p></div>
+        <p class="panel-sub">${t.unit} · ${scoring(t)} · ${plural(t.attempts || 1, 'attempt')}. ${view === 'enter' ? `Values save as you type; Enter moves down.${entryHint}` : 'Best result today, fastest or furthest first.'}${rangeText(t) ? ` Possible range ${rangeText(t)}.` : ''}</p></div>
       <div class="tst-kit">
-        ${t.unit === 's' ? html`<label class="check" style="align-items:center"><input type="checkbox" id="hand" ${handSel[t.id] ? raw('checked') : ''}> Hand-timed</label>` : ''}
-        ${units.length > 1 ? html`<label class="sr-only" for="unit">Unit</label><select class="input" id="unit">${units.map((u) => html`<option ${u === unit ? raw('selected') : ''}>${u}</option>`)}</select>` : ''}
+        <div class="seg" role="group" aria-label="View"><button type="button" data-view="enter" aria-pressed="${view === 'enter'}">Enter results</button><button type="button" data-view="rank" aria-pressed="${view === 'rank'}">Rankings</button></div>
+        ${view === 'enter' && t.unit === 's' ? html`<label class="check tst-handchk"><input type="checkbox" id="hand" ${handSel[t.id] ? raw('checked') : ''}> Hand-timed</label>` : ''}
+        ${view === 'enter' && units.length > 1 ? html`<label class="sr-only" for="unit">Unit</label><select class="input" id="unit">${units.map((u) => html`<option ${u === unit ? raw('selected') : ''}>${u}</option>`)}</select>` : ''}
       </div></div>
-      <div class="tst-rows">${athletes.map((a) => {
-        const n = slots(t, a.id), best = bestFor(t, a.id);
-        const anyHand = [...results.values()].some((r) => r.athlete_id === a.id && r.test_id === t.id && r.hand_timed);
-        return html`<div class="tst-row ${t.timed ? '' : 'no-watch'} ${t.timed && a.id === upId ? 'up' : ''}" data-a="${a.id}">
-          ${t.timed ? html`<button class="btn tst-up" data-up="${a.id}" aria-pressed="${a.id === upId}">${a.id === upId ? 'Up' : 'Time'}</button>` : ''}
-          <div style="min-width:0"><div class="strong">${name(a)}</div><div class="small muted mono">${a.code}</div></div>
-          <div class="tst-atts">${Array.from({ length: n }, (_, i) => html`<input class="input tst-att" inputmode="decimal" autocomplete="off" data-att="${i + 1}"
-            aria-label="${name(a)}, ${t.name}, attempt ${i + 1}" placeholder="#${i + 1}" value="${show(results.get(rk(a.id, t.id, i + 1))?.value)}">`)}</div>
-          <div class="tst-best">${best != null ? fmtValue(best, t.unit) : ''}${anyHand && t.unit === 's' ? html`<div class="tst-tag">hand-timed</div>` : ''}</div>
+      ${athletes.length > 8 ? html`<div><label class="sr-only" for="afind">Find an athlete</label><input class="input" id="afind" type="search" placeholder="Find an athlete by name or ID" value="${filter}" autocomplete="off" style="max-width:360px"></div>` : ''}
+      ${view === 'rank' ? rankings(t) : html`<div class="tst-rows">${shownAthletes.map((a) => {
+        const n = slots(t, a.id);
+        return html`<div class="tst-row ${t.timed ? '' : 'no-watch'} ${oc ? 'can-rm' : ''} ${t.timed && a.id === upId ? 'up' : ''}" data-a="${a.id}">
+          ${t.timed ? html`<button class="btn tst-up" data-up="${a.id}" aria-pressed="${a.id === upId}" aria-label="${a.id === upId ? `${name(a)} is up` : `Time ${name(a)} next`}">${a.id === upId ? 'Up' : 'Time'}</button>` : ''}
+          <div style="min-width:0"><div class="strong">${name(a)}</div><div class="small muted"><span class="mono">${a.code}</span> · ${prevLine(t, a.id)}</div></div>
+          <div class="tst-atts">${Array.from({ length: n }, (_, i) => html`<input class="input tst-att" inputmode="decimal" enterkeyhint="next" autocomplete="off" data-att="${i + 1}"
+            aria-label="${name(a)}, ${t.name}, attempt ${i + 1}" placeholder="#${i + 1}" value="${show(results.get(rk(a.id, t.id, i + 1))?.value)}">`)}
+            <button type="button" class="btn btn-ghost tst-more" data-more="${a.id}" aria-label="Add another attempt for ${name(a)}" title="Add another attempt">${icon('plus', 16)}</button></div>
+          <div class="tst-best">${rowBest(t, a.id)}</div>
+          ${oc ? html`<button type="button" class="btn btn-ghost tst-rm" data-rm="${a.id}" aria-label="Remove ${name(a)} from this day" title="Remove from this day">${icon('close', 16)}</button>` : ''}
           <div class="tst-rowmsg small warn-text" hidden></div>
         </div>`;
       })}</div>
+      ${athletes.length && !shownAthletes.length ? html`<div class="empty">No athlete on this day matches "${filter}".</div>` : ''}`}
       ${athletes.length ? '' : html`<div class="empty">No athletes yet. Add a walk-up below.</div>`}
       <div class="row"><label class="sr-only" for="walk">Add a walk-up athlete</label>
-        <select class="input" id="walk" style="max-width:320px"><option value="">Add a walk-up athlete…</option>${walkups.map((a) => html`<option value="${a.id}">${name(a)} (${a.code})</option>`)}</select></div>`);
+        <select class="input" id="walk" style="max-width:320px"><option value="">${walkups.length ? 'Add a walk-up athlete…' : 'Every athlete is already on this day'}</option>${walkups.map((a) => html`<option value="${a.id}">${name(a)} (${a.code})</option>`)}</select></div>`);
     sheetEl.querySelector('#unit')?.addEventListener('change', (e) => { unitSel[t.id] = e.target.value; drawSheet(); });
     sheetEl.querySelector('#hand')?.addEventListener('change', (e) => { handSel[t.id] = e.target.checked; });
+    sheetEl.querySelector('#afind')?.addEventListener('input', debounce((e) => {
+      filter = e.target.value.trim().toLowerCase();
+      const pos = e.target.selectionStart; drawSheet();
+      const i = sheetEl.querySelector('#afind'); if (i) { i.focus(); i.setSelectionRange(pos, pos); }
+    }, 150));
     sheetEl.querySelector('#walk').addEventListener('change', async (e) => {
       const id = Number(e.target.value); if (!id) return;
       try {
         const a = await api.post(`/testing/days/${day.id}/athletes`, { athlete_id: id });
-        athletes.push(a); onDay.add(a.id);
+        if (!onDay.has(a.id)) { athletes.push({ id: a.id, code: a.code, first_name: a.first_name, last_name: a.last_name }); onDay.add(a.id); }
+        addPrev(a.prev);
         if (!upId) upId = a.id;
         toast(`${name(a)} added.`);
-        drawWatch(); drawSheet();
+        drawWatch(); drawSheet(); drawTabs(); drawHead();
       } catch (err) { toastError(err); }
     });
   }
-  sheetEl.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-up]'); if (!b) return;
-    upId = Number(b.dataset.up); drawWatch(); drawSheet();
+
+  function rankings(t) {
+    const ranked = athletes.map((a) => ({ a, best: bestFor(t, a.id), prev: prev.get(`${a.id}|${t.id}`) })).filter((x) => x.best != null && matches(x.a))
+      .sort((x, y) => (better(t, x.best, y.best) ? -1 : better(t, y.best, x.best) ? 1 : name(x.a).localeCompare(name(y.a))));
+    const missing = athletes.filter((a) => bestFor(t, a.id) == null && matches(a));
+    let rank = 0, lastVal = null;
+    return html`${ranked.length ? html`<ol class="tst-rank">${ranked.map((x, i) => {
+      if (x.best !== lastVal) { rank = i + 1; lastVal = x.best; }
+      const change = x.prev != null ? x.best - x.prev : null;
+      const improved = x.prev != null && better(t, x.best, x.prev);
+      return html`<li class="tst-rankrow"><span class="tst-rankno">${rank}</span>
+        <div style="min-width:0"><div class="strong">${name(x.a)}</div><div class="small muted">${x.prev != null ? `Previous best ${fmtValue(x.prev, t.unit)}` : 'No previous result'}</div></div>
+        <span class="small ${improved ? 'good-text' : 'muted'} tst-hide-sm">${change != null && change !== 0 ? fmtChange(Math.round(change * 100) / 100, t.unit) : ''}</span>
+        <span class="tst-best">${fmtValue(x.best, t.unit)}${improved ? html` <span class="badge badge-good">PR</span>` : ''}</span></li>`;
+    })}</ol>` : html`<div class="empty">No results for ${t.name} yet.</div>`}
+    ${missing.length ? html`<p class="small muted" style="margin:0">No result yet: ${missing.map(name).join(', ')}.</p>` : ''}`;
+  }
+
+  sheetEl.addEventListener('click', async (e) => {
+    const v = e.target.closest('[data-view]');
+    if (v) { view = v.dataset.view; syncUrl(); drawSheet(); return; }
+    const b = e.target.closest('[data-up]');
+    if (b) { if (clock.running) { toast('Stop the clock before switching athletes.', 'warn'); return; } upId = Number(b.dataset.up); unsaved = null; drawWatch(); drawSheet(); return; }
+    const m = e.target.closest('[data-more]');
+    if (m) {
+      const aid = Number(m.dataset.more), k = `${aid}|${current.id}`;
+      extra[k] = slots(current, aid) + 1; drawSheet();
+      sheetEl.querySelector(`[data-a="${aid}"] [data-att="${extra[k]}"]`)?.focus();
+      return;
+    }
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      const aid = Number(rm.dataset.rm), a = athletes.find((x) => x.id === aid);
+      const n = [...results.values()].filter((r) => r.athlete_id === aid).length;
+      if (clock.running && upId === aid) { toast('Stop the clock first.', 'warn'); return; }
+      const ok = await confirmDialog(`Remove ${name(a)}`, n ? `${a.first_name} has ${plural(n, 'result')} on this day. Removing ${a.first_name} deletes them from this day and their profile.` : `Take ${a.first_name} off this day? You can add them back as a walk-up.`, n ? `Remove and delete ${plural(n, 'result')}` : 'Remove', 'warn');
+      if (!ok) return;
+      try {
+        await api.del(`/testing/days/${day.id}/athletes/${aid}${n ? '?confirm=1' : ''}`);
+        athletes.splice(athletes.indexOf(a), 1); onDay.delete(aid);
+        for (const k of [...results.keys()]) if (k.startsWith(`${aid}|`)) results.delete(k);
+        if (last?.aid === aid) last = null;
+        if (upId === aid) pickUp(current);
+        toast(`${name(a)} removed from ${day.name}.`);
+        drawAll();
+      } catch (err) { toastError(err); }
+    }
   });
   const timers = new Map();
   sheetEl.addEventListener('input', (e) => {
@@ -354,7 +677,18 @@ async function renderDay(ctx) {
     const k = `${aid}|${att}`;
     clearTimeout(timers.get(k));
     if (warn) return;
-    timers.set(k, setTimeout(() => save(t, aid, att, inp.value, { unit, input: inp }), 700));
+    timers.set(k, setTimeout(() => { timers.delete(k); save(t, aid, att, inp.value, { unit, input: inp }); }, 700));
+  });
+  // Enter or arrow keys move down or up the same attempt column, like a spreadsheet.
+  sheetEl.addEventListener('keydown', (e) => {
+    const inp = e.target.closest('.tst-att'); if (!inp) return;
+    if (!['Enter', 'ArrowDown', 'ArrowUp'].includes(e.key)) return;
+    e.preventDefault();
+    const rows = [...sheetEl.querySelectorAll('.tst-row')];
+    const i = rows.indexOf(inp.closest('.tst-row'));
+    const next = rows[i + (e.key === 'ArrowUp' ? -1 : 1)];
+    const target = next?.querySelector(`[data-att="${inp.dataset.att}"]`) || next?.querySelector('.tst-att');
+    if (target) { target.focus(); target.select(); } else inp.blur();
   });
   sheetEl.addEventListener('focusout', (e) => {
     const inp = e.target.closest('.tst-att'); if (!inp) return;
@@ -364,10 +698,11 @@ async function renderDay(ctx) {
   });
 
   const lastSent = new Map();
+  let saveError = '';
   async function save(t, aid, attempt, value, { source, unit, input } = {}) {
     const key = rk(aid, t.id, attempt), sig = `${value}|${unit}`;
     if (source !== 'stopwatch' && lastSent.get(key) === sig) return true;
-    lastSent.set(key, sig);
+    if (source === 'stopwatch') lastSent.delete(key); else lastSent.set(key, sig);
     try {
       const r = await api.put(`/testing/days/${day.id}/results`, { athlete_id: aid, test_id: t.id, attempt, value, unit, source, hand_timed: source === 'stopwatch' || !!handSel[t.id] });
       if (r.cleared) results.delete(key); else results.set(key, r.result);
@@ -376,39 +711,106 @@ async function renderDay(ctx) {
       else if (source === 'stopwatch') toast(`${name(a)}: ${r.display}, hand-timed.`);
       if (input) {
         const row = input.closest('[data-a]');
-        const best = bestFor(t, aid);
-        const anyHand = [...results.values()].some((x) => x.athlete_id === aid && x.test_id === t.id && x.hand_timed);
         const bestEl = row?.querySelector('.tst-best');
-        if (bestEl) mount(bestEl, html`${best != null ? fmtValue(best, t.unit) : ''}${anyHand && t.unit === 's' ? html`<div class="tst-tag">hand-timed</div>` : ''}`);
-        drawTabs();
+        if (bestEl) mount(bestEl, rowBest(t, aid));
+        const m = row?.querySelector('.tst-rowmsg'); if (m && input.getAttribute('aria-invalid') === 'true') { m.hidden = true; input.setAttribute('aria-invalid', 'false'); }
+        drawTabs(); drawHead();
+        if (current.timed && !clock.running) drawWatchLine();
       }
       return true;
     } catch (err) {
       lastSent.delete(key);
       if (input) { input.setAttribute('aria-invalid', 'true'); const m = input.closest('[data-a]')?.querySelector('.tst-rowmsg'); if (m) { m.hidden = false; m.textContent = err.message; } }
-      else toastError(err);
+      else { saveError = err.message; toastError(err); }
       return false;
     }
   }
+  // Keep the "Up: … attempt N" line honest after typed entries without redrawing the clock.
+  function drawWatchLine() {
+    const up = athletes.find((a) => a.id === upId), el = watchEl.querySelector('#up-line');
+    if (up && el) { const s = el.querySelector('strong'); if (s && s.nextSibling) s.nextSibling.textContent = `, attempt ${nextEmpty(current, up.id)}.`; }
+  }
+  function drawAll() { drawTabs(); drawWatch(); drawSheet(); drawHead(); }
 
-  pickUp(current); drawTabs(); drawWatch(); drawSheet();
+  pickUp(current); drawAll();
+}
+
+async function editDayModal(ctx, day, tests, resultCount) {
+  const owner = ctx.me.role === 'owner';
+  const canDelete = day.status !== 'shared' || owner;
+  const r = await modal({
+    title: 'Edit testing day',
+    body: html`<form class="stack" id="ed" novalidate>
+      <div class="form-grid">
+        <div class="field"><label class="label" for="ed-n">Name</label><input class="input" id="ed-n" name="name" value="${day.name}" maxlength="120" required></div>
+        <div class="field"><label class="label" for="ed-d">Date</label><input class="input" id="ed-d" name="date" type="date" value="${day.date}" required></div>
+      </div></form>
+      <details class="tst-cat"><summary>Tests on this day (${tests.length})</summary>
+        <div class="list tst-edtests">${tests.map((t) => html`<div class="list-row"><span class="grow">${t.name}</span>
+          ${tests.length > 1 ? html`<button type="button" class="btn btn-ghost btn-sm" data-rmtest="${t.id}">Remove</button>` : ''}</div>`)}</div>
+        <span class="hint">Removing a test also deletes its results from this day.</span></details>
+      <div class="tst-edfoot">
+        <a class="btn btn-ghost" href="/app/testing/new?from=${day.id}">Retest these athletes</a>
+        ${canDelete ? html`<button type="button" class="btn btn-ghost warn-text" id="ed-del">Delete testing day</button>`
+          : html`<span class="small muted">Only the owner can delete a shared testing day.</span>`}
+      </div>`,
+    actions: [{ label: 'Cancel', value: null }, { label: 'Save changes', kind: 'primary', onClick: async (body) => api.patch(`/testing/days/${day.id}`, formData(body.querySelector('#ed'))) }],
+    onMount: (body, close) => {
+      body.querySelector('a[href^="/app/testing/new"]').addEventListener('click', () => close(null));
+      body.querySelectorAll('[data-rmtest]').forEach((b) => b.addEventListener('click', async () => {
+        const t = tests.find((x) => x.id === Number(b.dataset.rmtest));
+        close(null);
+        try {
+          await api.del(`/testing/days/${day.id}/tests/${t.id}`);
+          toast(`${t.name} removed from ${day.name}.`); ctx.reload();
+        } catch (err) {
+          if (!err.data?.results) { toastError(err); return; }
+          if (!(await confirmDialog(`Remove ${t.name}`, err.message, `Remove and delete ${plural(err.data.results, 'result')}`, 'warn'))) return;
+          try { await api.del(`/testing/days/${day.id}/tests/${t.id}?confirm=1`); toast(`${t.name} removed from ${day.name}.`); ctx.reload(); } catch (e2) { toastError(e2); }
+        }
+      }));
+      body.querySelector('#ed-del')?.addEventListener('click', async () => {
+        close(null);
+        const ok = await confirmDialog('Delete testing day', resultCount
+          ? `Delete ${day.name} and its ${plural(resultCount, 'result')}? They come out of every athlete's profile${day.status === 'shared' ? ' and the parent portal' : ''}. This can't be undone.`
+          : `Delete ${day.name}? It has no results yet.`, resultCount ? `Delete day and ${plural(resultCount, 'result')}` : 'Delete testing day', 'warn');
+        if (!ok) return;
+        try { await api.del(`/testing/days/${day.id}${resultCount ? '?confirm=1' : ''}`); toast(`${day.name} deleted.`); ctx.go('/app/testing'); } catch (err) { toastError(err); }
+      });
+    },
+  });
+  if (r) { toast('Testing day saved.'); ctx.reload(); }
 }
 
 async function shareModal(ctx, day) {
-  const shared = day.status === 'shared';
+  let p;
+  try { p = await api.get(`/testing/days/${day.id}/share-preview`); } catch (err) { toastError(err); return; }
+  const shared = p.status === 'shared';
+  const fresh = shared ? p.new_since_share : [];
+  const names = (list) => (list.length > 6 ? `${list.slice(0, 6).join(', ')} and ${list.length - 6} more` : list.join(', '));
+  const actions = [{ label: 'Cancel', value: null }];
+  if (shared) {
+    actions.push({ label: 'Save note', kind: fresh.length ? '' : 'primary', onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value }) });
+    if (fresh.length) actions.push({ label: `Save and email ${plural(fresh.length, 'family', 'families')}`, kind: 'primary', onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value, only_new: true }) });
+  } else if (!p.with_results) {
+    await modal({ title: 'Share with parents', body: html`<p style="margin:0">Nobody on ${day.name} has a result yet. Enter some results first, then share them with families.</p>` });
+    return;
+  } else {
+    actions.push({ label: p.emails ? `Share and email ${plural(p.families, 'family', 'families')}` : 'Share', kind: 'primary', onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value }) });
+  }
   const r = await modal({
-    title: shared ? 'Coach note' : 'Share with parents',
-    body: html`<p style="margin:0" class="muted">${shared ? 'Families already have these results. Changing the note updates their Progress tab and report; no new email goes out.'
-      : "Each family gets an email with their athlete's results and a link to the parent portal. Results show on their Progress tab."}</p>
+    title: shared ? 'Shared with parents' : 'Share with parents',
+    body: html`${shared ? html`<p style="margin:0" class="muted">Families have had these results since ${fmtDate(p.shared_at)}. Changing the note updates their Progress tab and report without a new email.</p>
+        ${fresh.length ? html`<div class="banner"><span>New since you shared: ${names(fresh)}. Email ${fresh.length === 1 ? 'that family' : 'those families'} their results.</span></div>` : ''}`
+      : html`<p style="margin:0">${p.with_results} of ${plural(p.athletes, 'athlete')} have results. ${p.emails ? `${plural(p.emails, 'parent')} in ${plural(p.families, 'family', 'families')} get an email with their athlete's results and a link to the parent portal.` : 'No parent emails are on file for these athletes, so nobody is emailed.'} Results show on each family's Progress tab.</p>
+        ${p.without_results.length ? html`<p class="small warn-text" style="margin:0">No results yet for ${names(p.without_results)}. They're left out of the email.</p>` : ''}
+        ${p.no_email.length ? html`<p class="small warn-text" style="margin:0">No parent email on file for ${names(p.no_email)}. Their results still show in the portal.</p>` : ''}`}
       <div class="field"><label class="label" for="note">Note to families (optional)</label>
-      <textarea class="input" id="note" maxlength="2000" placeholder="What stood out, and what to work on before the next test.">${day.note || ''}</textarea></div>`,
-    actions: [{ label: 'Cancel', value: null }, {
-      label: shared ? 'Save note' : 'Share and email families', kind: 'primary',
-      onClick: async (body) => api.post(`/testing/days/${day.id}/share`, { note: body.querySelector('#note').value }),
-    }],
+      <textarea class="input" id="note" maxlength="2000" rows="4" placeholder="What stood out, and what to work on before the next test.">${day.note || ''}</textarea></div>`,
+    actions,
   });
   if (!r) return;
-  toast(r.updated ? 'Note saved.' : `Shared. ${plural(r.emails, 'family email')} sent.`);
+  toast(r.updated ? 'Note saved.' : r.again ? `${plural(r.emails, 'family email')} sent about the new results.` : `Shared. ${plural(r.emails, 'family email')} sent.`);
   ctx.reload();
 }
 

@@ -377,3 +377,133 @@ test('share with parents: status shared, families emailed, webhooks fire', async
   const p = await kurt.get(`/api/parent/athletes/${athlete('Nate').id}/progress`);
   assert.equal(p.data.note.text, 'Strong day. Keep sprinting.');
 });
+
+// ---- Testing days: progress, previous bests, editing, removing, share preview and emailing again ----
+test('overview shows how many athlete-tests have a result; day detail carries previous bests', async () => {
+  const r = await desk.get('/api/testing');
+  const fall = r.data.days.find((d) => d.name === 'Fall combine');
+  assert.equal(fall.done, fall.athletes * fall.tests);
+  const oct = db.get("SELECT * FROM testing_days WHERE name='October youth testing'");
+  const d = await desk.get(`/api/testing/days/${oct.id}`);
+  const nate = athlete('Nate'), t40 = testId('40-yard dash');
+  const p = d.data.prev.find((x) => x.athlete_id === nate.id && x.test_id === t40);
+  const expected = db.get('SELECT MIN(r.value) v FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.athlete_id=? AND r.test_id=? AND d.date < ?', nate.id, t40, oct.date).v;
+  assert.equal(p.best, expected);
+  // Higher-is-better tests use the max
+  const tbj = testId('Standing broad jump');
+  const pj = d.data.prev.find((x) => x.athlete_id === nate.id && x.test_id === tbj);
+  assert.equal(pj.best, db.get('SELECT MAX(r.value) v FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.athlete_id=? AND r.test_id=? AND d.date < ?', nate.id, tbj, oct.date).v);
+});
+
+test('new testing day: real dates only, long names trimmed, archived athletes left out', async () => {
+  assert.equal((await coach.post('/api/testing/days', { name: 'X', date: '2026-02-30', test_ids: [testId('40-yard dash')] })).status, 400);
+  const gone = db.insert('athletes', { code: 'GONE2026', first_name: 'Gone', last_name: 'Away', archived: 1 });
+  const r = await coach.post('/api/testing/days', { name: 'N'.repeat(300), date: '2026-10-05', athlete_ids: [gone, athlete('Ava').id], test_ids: [testId('40-yard dash')] });
+  assert.equal(r.status, 200);
+  const day = db.get('SELECT * FROM testing_days WHERE id=?', r.data.id);
+  assert.equal(day.name.length, 120);
+  assert.equal(count('SELECT COUNT(*) n FROM testing_day_athletes WHERE day_id=?', day.id), 1);
+});
+
+test('edit and delete a testing day: coach and owner only, results need confirming, shared days need the owner', async () => {
+  const ava = athlete('Ava'), t40 = testId('40-yard dash');
+  const id = (await coach.post('/api/testing/days', { name: 'Mistake day', date: '2026-10-06', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  assert.equal((await desk.patch(`/api/testing/days/${id}`, { name: 'Nope' })).status, 403);
+  assert.equal((await coach.patch(`/api/testing/days/${id}`, { date: '2026-13-01' })).status, 400);
+  assert.equal((await coach.patch(`/api/testing/days/${id}`, { name: '   ' })).status, 400);
+  const ok = await coach.patch(`/api/testing/days/${id}`, { name: 'Wrong date day', date: '2026-10-07' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.day.name, 'Wrong date day');
+  assert.equal(ok.data.day.date, '2026-10-07');
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Updated testing day' AND detail LIKE 'Wrong date day%'"));
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.1 });
+  assert.equal((await desk.del(`/api/testing/days/${id}?confirm=1`)).status, 403);
+  const refused = await coach.del(`/api/testing/days/${id}`);
+  assert.equal(refused.status, 400);
+  assert.equal(refused.data.results, 1);
+  assert.ok(db.get('SELECT 1 FROM testing_days WHERE id=?', id), 'nothing deleted without confirm');
+  const del = await coach.del(`/api/testing/days/${id}?confirm=1`);
+  assert.equal(del.status, 200);
+  assert.equal(del.data.deleted_results, 1);
+  assert.equal(count('SELECT COUNT(*) n FROM results WHERE day_id=?', id), 0);
+  assert.ok(!db.get('SELECT 1 FROM testing_days WHERE id=?', id));
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Deleted testing day' AND detail LIKE 'Wrong date day%'"));
+  // Shared days: only the owner can delete
+  const sid = (await coach.post('/api/testing/days', { name: 'Shared once', date: '2026-10-08', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${sid}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.2 });
+  await coach.post(`/api/testing/days/${sid}/share`, {});
+  assert.equal((await coach.del(`/api/testing/days/${sid}?confirm=1`)).status, 403);
+  assert.equal((await owner.del(`/api/testing/days/${sid}?confirm=1`)).status, 200);
+});
+
+test('add and remove tests and athletes on a day', async () => {
+  const ava = athlete('Ava'), kevin = athlete('Kevin'), t40 = testId('40-yard dash'), tvj = testId('Vertical jump');
+  const id = (await coach.post('/api/testing/days', { name: 'Adjust day', date: '2026-10-09', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  // Adding a test returns it (with previous bests) so the screen can add a tab
+  assert.equal((await desk.post(`/api/testing/days/${id}/tests`, { test_id: tvj })).status, 403);
+  const add = await coach.post(`/api/testing/days/${id}/tests`, { test_id: tvj });
+  assert.equal(add.data.test.name, 'Vertical jump');
+  assert.ok(add.data.prev.some((p) => p.athlete_id === ava.id && p.test_id === tvj));
+  // Walk-ups come back with their previous bests too
+  const walk = await desk.post(`/api/testing/days/${id}/athletes`, { athlete_id: kevin.id });
+  assert.equal(walk.status, 200);
+  assert.ok(Array.isArray(walk.data.prev));
+  // Removing an athlete: front desk can't; results need confirming
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: kevin.id, test_id: t40, attempt: 1, value: 6.4 });
+  assert.equal((await desk.del(`/api/testing/days/${id}/athletes/${kevin.id}?confirm=1`)).status, 403);
+  const r1 = await coach.del(`/api/testing/days/${id}/athletes/${kevin.id}`);
+  assert.equal(r1.status, 400);
+  assert.equal(r1.data.results, 1);
+  assert.equal((await coach.del(`/api/testing/days/${id}/athletes/${kevin.id}?confirm=1`)).data.deleted_results, 1);
+  assert.ok(!db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, kevin.id));
+  assert.equal(count('SELECT COUNT(*) n FROM results WHERE day_id=? AND athlete_id=?', id, kevin.id), 0);
+  assert.equal((await coach.del(`/api/testing/days/${id}/athletes/${kevin.id}`)).status, 404);
+  // Removing a test: results need confirming, and the last test stays
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: tvj, attempt: 1, value: 20 });
+  assert.equal((await desk.del(`/api/testing/days/${id}/tests/${tvj}?confirm=1`)).status, 403);
+  assert.equal((await coach.del(`/api/testing/days/${id}/tests/${tvj}`)).status, 400);
+  assert.equal((await coach.del(`/api/testing/days/${id}/tests/${tvj}?confirm=1`)).status, 200);
+  assert.equal(count('SELECT COUNT(*) n FROM results WHERE day_id=? AND test_id=?', id, tvj), 0);
+  const last = await coach.del(`/api/testing/days/${id}/tests/${t40}`);
+  assert.equal(last.status, 400);
+  assert.match(last.data.error, /at least one test/);
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Removed athlete from testing day'"));
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Removed test from testing day'"));
+});
+
+test('share preview, then emailing only the families with results added since sharing', async () => {
+  const ava = athlete('Ava'), nate = athlete('Nate'), t40 = testId('40-yard dash');
+  const id = (await coach.post('/api/testing/days', { name: 'Late walk-up day', date: '2026-10-10', athlete_ids: [ava.id, nate.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.0 });
+  assert.equal((await desk.get(`/api/testing/days/${id}/share-preview`)).status, 403);
+  const pre = await coach.get(`/api/testing/days/${id}/share-preview`);
+  assert.equal(pre.status, 200);
+  assert.equal(pre.data.athletes, 2);
+  assert.equal(pre.data.with_results, 1);
+  assert.deepEqual(pre.data.without_results, ['Nate Jensen']);
+  const avaEmails = count("SELECT COUNT(*) n FROM parents WHERE family_id=? AND email IS NOT NULL AND email != ''", ava.family_id);
+  assert.equal(pre.data.emails, avaEmails);
+  assert.equal(pre.data.families, avaEmails ? 1 : 0);
+  // Nothing new before sharing
+  assert.equal((await coach.post(`/api/testing/days/${id}/share`, { only_new: true })).status, 200); // not shared yet: a normal share
+  assert.equal(db.get('SELECT status FROM testing_days WHERE id=?', id).status, 'shared');
+  assert.equal((await coach.post(`/api/testing/days/${id}/share`, { only_new: true })).status, 400);
+  // Nate tests late
+  await desk.put(`/api/testing/days/${id}/results`, { athlete_id: nate.id, test_id: t40, attempt: 1, value: 6.3 });
+  const day = await coach.get(`/api/testing/days/${id}`);
+  assert.equal(day.data.day.new_since_share, 1);
+  const pre2 = await coach.get(`/api/testing/days/${id}/share-preview`);
+  assert.deepEqual(pre2.data.new_since_share, ['Nate Jensen']);
+  const out = count('SELECT COUNT(*) n FROM outbox');
+  const avaMail = count("SELECT COUNT(*) n FROM outbox o JOIN parents p ON p.email=o.to_email WHERE p.family_id=?", ava.family_id);
+  const again = await coach.post(`/api/testing/days/${id}/share`, { note: 'Nate made it in.', only_new: true });
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  assert.equal(again.data.again, true);
+  assert.equal(again.data.athletes, 1);
+  const nateEmails = count("SELECT COUNT(*) n FROM parents WHERE family_id=? AND email IS NOT NULL AND email != ''", nate.family_id);
+  assert.equal(count('SELECT COUNT(*) n FROM outbox'), out + nateEmails);
+  assert.equal(count("SELECT COUNT(*) n FROM outbox o JOIN parents p ON p.email=o.to_email WHERE p.family_id=?", ava.family_id), avaMail, "Ava's family isn't emailed twice");
+  assert.equal(db.get('SELECT note FROM testing_days WHERE id=?', id).note, 'Nate made it in.');
+  assert.equal((await coach.get(`/api/testing/days/${id}`)).data.day.new_since_share, 0);
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Emailed families again' AND detail LIKE 'Late walk-up day%'"));
+});

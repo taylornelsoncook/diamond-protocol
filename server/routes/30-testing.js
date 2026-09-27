@@ -16,6 +16,14 @@ const ids = (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map
 const fmtDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const TEST_COLS = 'id, name, category, unit, lower_better, attempts, min_value, max_value, timed, hidden, custom';
 
+// Schema upgrade: the highest result id at the moment a day was shared, so "added since sharing" is exact.
+if (!all('PRAGMA table_info(testing_days)').some((c) => c.name === 'shared_result_id')) run('ALTER TABLE testing_days ADD COLUMN shared_result_id INTEGER');
+
+const validDate = (s) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false; const t = new Date(s + 'T12:00:00Z'); return !Number.isNaN(t.getTime()) && t.toISOString().slice(0, 10) === s; };
+const dayName = (v) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+// Results on this day added after it was shared (by id; older databases fall back to the recorded time).
+const NEW_SINCE_SHARE = "(r.id > d.shared_result_id OR (d.shared_result_id IS NULL AND r.recorded_at > replace(substr(d.shared_at,1,19),'T',' ')))";
+
 function dayOr404(id) {
   const d = get('SELECT * FROM testing_days WHERE id=?', Number(id));
   if (!d) throw notFound('That testing day');
@@ -23,6 +31,15 @@ function dayOr404(id) {
 }
 function dayTests(dayId) {
   return all(`SELECT ${TEST_COLS.split(', ').map((c) => 't.' + c).join(', ')} FROM testing_day_tests x JOIN tests t ON t.id=x.test_id WHERE x.day_id=? ORDER BY x.ord, t.id`, dayId);
+}
+// Each athlete's best on each of the day's tests from before this day (for PR context on the day).
+function prevBests(d, athleteId = null) {
+  return all(`SELECT r.athlete_id, r.test_id, CASE WHEN t.lower_better THEN MIN(r.value) ELSE MAX(r.value) END AS best
+    FROM results r JOIN tests t ON t.id=r.test_id JOIN testing_day_tests xt ON xt.day_id=? AND xt.test_id=r.test_id
+    LEFT JOIN testing_days od ON od.id=r.day_id
+    WHERE (r.day_id IS NULL OR r.day_id != ?) AND COALESCE(od.date, substr(r.recorded_at,1,10)) <= ?
+      AND ${athleteId ? 'r.athlete_id=?' : 'r.athlete_id IN (SELECT athlete_id FROM testing_day_athletes WHERE day_id=?)'}
+    GROUP BY r.athlete_id, r.test_id`, d.id, d.id, d.date, athleteId || d.id);
 }
 function pendingSummary() {
   const r = get('SELECT COUNT(*) AS n, COUNT(DISTINCT source || char(0) || sender_key) AS senders FROM pending_results');
@@ -50,9 +67,12 @@ async function readUploadBody(b) {
   throw bad('Choose a file or paste rows from your spreadsheet.');
 }
 
-function shareDay(day, note, req) {
+// opts.athleteIds limits the emails to those athletes (emailing again after late results); opts.emit=false skips webhooks.
+function shareDay(day, note, req, opts = {}) {
+  const only = opts.athleteIds ? new Set(opts.athleteIds) : null;
   const results = all(`SELECT r.*, t.name AS test, t.unit, t.lower_better, a.first_name, a.last_name, a.code, a.family_id
-    FROM results r JOIN tests t ON t.id=r.test_id JOIN athletes a ON a.id=r.athlete_id WHERE r.day_id=? ORDER BY a.last_name, a.first_name, t.id, r.attempt`, day.id);
+    FROM results r JOIN tests t ON t.id=r.test_id JOIN athletes a ON a.id=r.athlete_id WHERE r.day_id=? ORDER BY a.last_name, a.first_name, t.id, r.attempt`, day.id)
+    .filter((r) => !only || only.has(r.athlete_id));
   const byAthlete = new Map();
   for (const r of results) {
     if (!byAthlete.has(r.athlete_id)) byAthlete.set(r.athlete_id, { a: r, tests: new Map() });
@@ -62,7 +82,8 @@ function shareDay(day, note, req) {
   }
   let emails = 0;
   tx(() => {
-    update('testing_days', day.id, { status: 'shared', shared_at: new Date().toISOString(), note: note || null });
+    const maxId = get('SELECT MAX(id) AS m FROM results WHERE day_id=?', day.id)?.m ?? null;
+    update('testing_days', day.id, { status: 'shared', shared_at: new Date().toISOString(), note: note || null, shared_result_id: maxId });
     for (const { a, tests } of byAthlete.values()) {
       const lines = [];
       for (const r of tests.values()) {
@@ -70,7 +91,7 @@ function shareDay(day, note, req) {
           WHERE r.athlete_id=? AND r.test_id=? AND (r.day_id IS NULL OR r.day_id != ?) AND COALESCE(d.date, substr(r.recorded_at,1,10)) < ?`, a.athlete_id, r.test_id, day.id, day.date)?.v;
         const pr = prior != null && core.better(r, r.value, prior);
         lines.push(`${r.test}: ${core.fmtValue(r.value, r.unit)}${r.hand_timed && r.unit === 's' ? ' (hand-timed)' : ''}${pr ? ', new PR' : ''}`);
-        core.emitResult({ id: a.athlete_id, code: a.code, first_name: a.first_name, last_name: a.last_name }, { id: r.test_id, name: r.test, unit: r.unit }, r, pr);
+        if (opts.emit !== false) core.emitResult({ id: a.athlete_id, code: a.code, first_name: a.first_name, last_name: a.last_name }, { id: r.test_id, name: r.test, unit: r.unit }, r, pr);
       }
       if (!a.family_id) continue;
       for (const p of all('SELECT name, email FROM parents WHERE family_id=?', a.family_id)) {
@@ -83,7 +104,7 @@ function shareDay(day, note, req) {
       }
     }
   });
-  log(req, 'Shared testing day', `${day.name}: ${byAthlete.size} athletes, ${emails} emails`);
+  log(req, only ? 'Emailed families again' : 'Shared testing day', `${day.name}: ${byAthlete.size} athletes, ${emails} emails`);
   return { athletes: byAthlete.size, emails };
 }
 
@@ -92,6 +113,7 @@ function routes(api) {
   api.get('/testing', STAFF, (_req, res) => {
     const days = all(`SELECT d.*, (SELECT COUNT(*) FROM testing_day_athletes x WHERE x.day_id=d.id) AS athletes,
         (SELECT COUNT(*) FROM testing_day_tests x WHERE x.day_id=d.id) AS tests, (SELECT COUNT(*) FROM results r WHERE r.day_id=d.id) AS results,
+        (SELECT COUNT(DISTINCT r.athlete_id || '|' || r.test_id) FROM results r JOIN testing_day_tests xt ON xt.day_id=r.day_id AND xt.test_id=r.test_id WHERE r.day_id=d.id) AS done,
         tc.team_name FROM testing_days d LEFT JOIN team_contracts tc ON tc.id=d.team_id ORDER BY d.date DESC, d.id DESC`);
     res.json({ days, pending: pendingSummary() });
   });
@@ -139,14 +161,14 @@ function routes(api) {
   // ---- testing days ----
   api.post('/testing/days', OC, h(async (req, res) => {
     const b = req.body || {};
-    const name = String(b.name || '').trim() || 'Testing day';
+    const name = dayName(b.name) || 'Testing day';
     const date = String(b.date || today());
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw bad('Pick the date.');
+    if (!validDate(date)) throw bad('Pick the date.');
     const teamId = Number(b.team_id) || null;
     if (teamId && !get('SELECT 1 FROM team_contracts WHERE id=?', teamId)) throw bad('That team no longer exists.');
     const testIds = ids(b.test_ids).filter((id) => get('SELECT 1 FROM tests WHERE id=?', id));
     if (!testIds.length) throw bad('Pick at least one test.');
-    const athleteIds = new Set(ids(b.athlete_ids).filter((id) => get('SELECT 1 FROM athletes WHERE id=?', id)));
+    const athleteIds = new Set(ids(b.athlete_ids).filter((id) => get('SELECT 1 FROM athletes WHERE id=? AND archived=0', id)));
     if (teamId) for (const a of all('SELECT id FROM athletes WHERE team_id=? AND archived=0', teamId)) athleteIds.add(a.id);
     const id = tx(() => {
       const id = insert('testing_days', { name, date, team_id: teamId, preset: b.preset || null, status: 'open', created_by: req.staff.id });
@@ -164,8 +186,38 @@ function routes(api) {
       WHERE x.day_id=? ORDER BY a.first_name, a.last_name`, d.id);
     const results = all('SELECT id, athlete_id, test_id, attempt, value, unit_entered, hand_timed, source FROM results WHERE day_id=? ORDER BY attempt', d.id);
     const team = d.team_id ? get('SELECT team_name FROM team_contracts WHERE id=?', d.team_id) : null;
-    res.json({ day: { ...d, team_name: team?.team_name || null }, tests: dayTests(d.id), athletes, results, pending: pendingSummary() });
+    const newSince = d.status === 'shared' ? get(`SELECT COUNT(DISTINCT r.athlete_id) AS n FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.day_id=? AND ${NEW_SINCE_SHARE}`, d.id).n : 0;
+    res.json({ day: { ...d, team_name: team?.team_name || null, new_since_share: newSince }, tests: dayTests(d.id), athletes, results, prev: prevBests(d), pending: pendingSummary() });
   });
+
+  // Rename or re-date a day.
+  api.patch('/testing/days/:id', OC, h(async (req, res) => {
+    const d = dayOr404(req.params.id);
+    const b = req.body || {};
+    const patch = {};
+    if ('name' in b) { patch.name = dayName(b.name); if (!patch.name) throw bad('Name the testing day.'); }
+    if ('date' in b) { patch.date = String(b.date || ''); if (!validDate(patch.date)) throw bad('Pick the date.'); }
+    if (!Object.keys(patch).length) throw bad('Nothing to change.');
+    update('testing_days', d.id, patch);
+    log(req, 'Updated testing day', `${patch.name || d.name}${patch.date && patch.date !== d.date ? `, moved to ${patch.date}` : ''}`);
+    res.json({ ok: true, day: get('SELECT * FROM testing_days WHERE id=?', d.id) });
+  }));
+
+  // Delete a day made by mistake. Its results go with it, so that needs ?confirm=1; a shared day needs the owner.
+  api.delete('/testing/days/:id', OC, h(async (req, res) => {
+    const d = dayOr404(req.params.id);
+    if (d.status === 'shared' && req.staff.role !== 'owner') throw new HttpError(403, 'Families already have these results. Only the owner can delete a shared testing day.');
+    const n = get('SELECT COUNT(*) AS n FROM results WHERE day_id=?', d.id).n;
+    if (n && req.query.confirm !== '1') throw bad(`${d.name} has ${n} result${n === 1 ? '' : 's'}. Deleting the day deletes them from every profile.`, { results: n });
+    tx(() => {
+      run('DELETE FROM results WHERE day_id=?', d.id);
+      run('DELETE FROM testing_day_tests WHERE day_id=?', d.id);
+      run('DELETE FROM testing_day_athletes WHERE day_id=?', d.id);
+      run('DELETE FROM testing_days WHERE id=?', d.id);
+    });
+    log(req, 'Deleted testing day', `${d.name} (${d.date}), ${n} result${n === 1 ? '' : 's'}`);
+    res.json({ ok: true, deleted_results: n });
+  }));
 
   api.post('/testing/days/:id/athletes', STAFF, h(async (req, res) => {
     const d = dayOr404(req.params.id);
@@ -173,7 +225,22 @@ function routes(api) {
     if (!a) throw bad('Pick an athlete to add.');
     run('INSERT OR IGNORE INTO testing_day_athletes (day_id, athlete_id) VALUES (?,?)', d.id, a.id);
     log(req, 'Added walk-up', `${a.first_name} ${a.last_name} to ${d.name}`);
-    res.json(a);
+    res.json({ ...a, prev: prevBests(d, a.id) });
+  }));
+
+  // Take an athlete off the day (added by mistake, or absent). Their results on this day need ?confirm=1.
+  api.delete('/testing/days/:id/athletes/:athleteId', OC, h(async (req, res) => {
+    const d = dayOr404(req.params.id);
+    const a = get('SELECT id, first_name, last_name FROM athletes WHERE id=?', Number(req.params.athleteId));
+    if (!a || !get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', d.id, a.id)) throw notFound('That athlete on this day');
+    const n = get('SELECT COUNT(*) AS n FROM results WHERE day_id=? AND athlete_id=?', d.id, a.id).n;
+    if (n && req.query.confirm !== '1') throw bad(`${a.first_name} has ${n} result${n === 1 ? '' : 's'} on this day. Removing ${a.first_name} deletes them.`, { results: n });
+    tx(() => {
+      run('DELETE FROM results WHERE day_id=? AND athlete_id=?', d.id, a.id);
+      run('DELETE FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', d.id, a.id);
+    });
+    log(req, 'Removed athlete from testing day', `${a.first_name} ${a.last_name} from ${d.name}${n ? `, ${n} result${n === 1 ? '' : 's'} deleted` : ''}`);
+    res.json({ ok: true, deleted_results: n });
   }));
 
   api.post('/testing/days/:id/tests', OC, h(async (req, res) => {
@@ -182,7 +249,22 @@ function routes(api) {
     if (!t) throw bad('Pick a test to add.');
     run('INSERT OR IGNORE INTO testing_day_tests (day_id, test_id, ord) VALUES (?,?,(SELECT COALESCE(MAX(ord),0)+1 FROM testing_day_tests WHERE day_id=?))', d.id, t.id, d.id);
     log(req, 'Added test to testing day', `${t.name} to ${d.name}`);
-    res.json({ ok: true });
+    res.json({ ok: true, test: get(`SELECT ${TEST_COLS} FROM tests WHERE id=?`, t.id), prev: prevBests(d).filter((p) => p.test_id === t.id) });
+  }));
+
+  api.delete('/testing/days/:id/tests/:testId', OC, h(async (req, res) => {
+    const d = dayOr404(req.params.id);
+    const t = get('SELECT id, name FROM tests WHERE id=?', Number(req.params.testId));
+    if (!t || !get('SELECT 1 FROM testing_day_tests WHERE day_id=? AND test_id=?', d.id, t.id)) throw notFound('That test on this day');
+    if (get('SELECT COUNT(*) AS n FROM testing_day_tests WHERE day_id=?', d.id).n <= 1) throw bad('A testing day needs at least one test. Add another before removing this one.');
+    const n = get('SELECT COUNT(*) AS n FROM results WHERE day_id=? AND test_id=?', d.id, t.id).n;
+    if (n && req.query.confirm !== '1') throw bad(`${t.name} has ${n} result${n === 1 ? '' : 's'} on this day. Removing the test deletes them.`, { results: n });
+    tx(() => {
+      run('DELETE FROM results WHERE day_id=? AND test_id=?', d.id, t.id);
+      run('DELETE FROM testing_day_tests WHERE day_id=? AND test_id=?', d.id, t.id);
+    });
+    log(req, 'Removed test from testing day', `${t.name} from ${d.name}${n ? `, ${n} result${n === 1 ? '' : 's'} deleted` : ''}`);
+    res.json({ ok: true, deleted_results: n });
   }));
 
   // Save (or clear) one attempt. Stopwatch times come in with source 'stopwatch' and are always hand-timed.
@@ -209,9 +291,37 @@ function routes(api) {
     res.json({ result: row, pr: r.pr, prev_best: r.prev_best, display: core.fmtValue(row.value, t.unit) });
   }));
 
+  // Who sharing reaches: athletes with and without results, families and emails, and anyone with no parent email.
+  api.get('/testing/days/:id/share-preview', OC, (req, res) => {
+    const d = dayOr404(req.params.id);
+    const rows = all(`SELECT a.id, a.first_name, a.last_name, a.family_id,
+        (SELECT COUNT(*) FROM results r WHERE r.day_id=x.day_id AND r.athlete_id=a.id) AS results,
+        (SELECT COUNT(*) FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.day_id=x.day_id AND r.athlete_id=a.id AND d.status='shared' AND ${NEW_SINCE_SHARE}) AS new_results,
+        (SELECT COUNT(*) FROM parents p WHERE p.family_id=a.family_id AND p.email IS NOT NULL AND p.email != '') AS emails
+      FROM testing_day_athletes x JOIN athletes a ON a.id=x.athlete_id WHERE x.day_id=? ORDER BY a.first_name, a.last_name`, d.id);
+    const nm = (a) => `${a.first_name} ${a.last_name}`;
+    const withResults = rows.filter((a) => a.results);
+    const fresh = withResults.filter((a) => a.new_results);
+    res.json({
+      status: d.status, shared_at: d.shared_at,
+      athletes: rows.length, with_results: withResults.length,
+      without_results: rows.filter((a) => !a.results).map(nm),
+      families: new Set(withResults.filter((a) => a.emails).map((a) => a.family_id)).size,
+      emails: withResults.reduce((n, a) => n + a.emails, 0),
+      no_email: withResults.filter((a) => !a.emails).map(nm),
+      new_since_share: fresh.map(nm),
+      new_emails: fresh.reduce((n, a) => n + a.emails, 0),
+    });
+  });
+
   api.post('/testing/days/:id/share', OC, h(async (req, res) => {
     const d = dayOr404(req.params.id);
     const note = String(req.body.note ?? '').trim().slice(0, 2000);
+    if (d.status === 'shared' && req.body.only_new) {
+      const fresh = all(`SELECT DISTINCT r.athlete_id FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.day_id=? AND ${NEW_SINCE_SHARE}`, d.id).map((r) => r.athlete_id);
+      if (!fresh.length) throw bad('No results have been added since you shared this day.');
+      return res.json({ ok: true, again: true, ...shareDay(d, note, req, { athleteIds: fresh, emit: false }) });
+    }
     if (d.status === 'shared' && !req.body.resend) {
       update('testing_days', d.id, { note: note || null });
       log(req, 'Updated coach note', d.name);

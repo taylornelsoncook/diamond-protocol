@@ -403,7 +403,8 @@ function routes(api) {
     const list = ids(req.body.ids);
     if (!list.length) throw bad('Tick the results to discard.');
     let n = 0;
-    const first = get(`SELECT source, sender_label, sender_key FROM pending_results WHERE id IN (${list.map(() => '?').join(',')}) LIMIT 1`, ...list);
+    const head = list.slice(0, 500); // enough to name the sender without running into SQLite's variable limit
+    const first = get(`SELECT source, sender_label, sender_key FROM pending_results WHERE id IN (${head.map(() => '?').join(',')}) LIMIT 1`, ...head);
     tx(() => { for (const id of list) n += Number(run('DELETE FROM pending_results WHERE id=?', id).changes); });
     if (!n) throw bad('Those results were already linked or discarded.');
     log(req, 'Discarded waiting results', `${n} result${n === 1 ? '' : 's'}${first ? ` from ${first.sender_label || first.sender_key} (${first.source})` : ''}`);
@@ -451,7 +452,8 @@ function routes(api) {
     if (!source) throw bad('Say which system the results come from, like Hawkin or Freelap.');
     if (!key) throw bad('Enter the device ID or the name the device uses for this athlete.');
     const a = linkAthlete(req.body.athlete_id);
-    const label = String(req.body.sender_label ?? '').trim().slice(0, 120) || key;
+    const waitingLabel = get('SELECT sender_label FROM pending_results WHERE source=? COLLATE NOCASE AND sender_key=? AND sender_label IS NOT NULL ORDER BY id LIMIT 1', source, key)?.sender_label;
+    const label = String(req.body.sender_label ?? '').trim().slice(0, 120) || waitingLabel || key;
     const existing = get('SELECT * FROM device_links WHERE source=? COLLATE NOCASE AND sender_key=?', source, key);
     let id;
     if (existing) { run('UPDATE device_links SET athlete_id=?, sender_label=? WHERE id=?', a.id, existing.sender_label || label, existing.id); id = existing.id; }

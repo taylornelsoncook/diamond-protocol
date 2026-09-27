@@ -311,7 +311,7 @@ Get paper or spreadsheet results into profiles, safely.
 - Get the sheet: pick a testing day (or a team and a preset) and download Excel or CSV. Every athlete's ID is already filled in, with a column for each test and attempt. A testing day's sheet also carries the results already entered, so it doubles as a backup. Picking a day here also points the upload at it.
 - Fill it in on paper, a laptop or a phone.
 - Upload it: drop the file on the box or choose it (Excel or CSV, up to 3.5 MB), or paste rows from Excel or Google Sheets. Choose the testing day (rows then take the day's date; otherwise set the date for rows without one). Where it's from is worked out from the file, or pick OVR, VALD, Swift, Freelap and the rest so device links match. For a device file with a single value column, pick its test under One-test device export. Then Check the sheet.
-- Recent uploads lists the last ten uploads with who saved them, the testing day and the counts. Undo takes one back out: new results are removed, values it replaced go back to what they were, and results it sent to waiting are dropped. Anything changed or linked since the upload is left alone, and the undo is recorded on the list and in the activity log.
+- Recent uploads lists the last ten uploads with who saved them, the testing day and the counts. Undo takes one back out: new results are removed, values it replaced go back to what they were, and results it sent to waiting are dropped. Anything changed or linked since the upload is left alone (including a value typed or timed again, even if it's the same), and the undo is recorded on the list and in the activity log.
 
 > Note: All or nothing: a sheet is saved only when every row matches a real Athlete ID and every value fits its test.
 
@@ -365,7 +365,7 @@ How results get in automatically.
 - Hawkin Dynamics: paste an integration token once (owner only). New force plate tests sync every 15 minutes; owners can Sync now. When a sync fails the badge says Needs attention and the owner can paste a new token. Put each athlete's Athlete ID in Hawkin as their External ID and results go straight in.
 - Import a file: exports from OVR, VALD, Swift, Freelap and others go through Upload results, and can be undone there.
 - Send results from any system: the open API example for timing systems and scripts, with Copy.
-- Linked device IDs: every device ID or name you've linked to an athlete. Link a device adds one ahead of time (system, device ID or name, athlete) and links anything already waiting from it. Change moves a link to another athlete; Unlink asks first and offers Undo. Find a device when the list is long.
+- Linked device IDs: every device ID or name you've linked to an athlete. Link a device adds one ahead of time (system, device ID or name, athlete) and links anything already waiting from it, keeping the name the device uses. If the device is already linked it says to whom, and linking it again moves it. Change moves a link to another athlete; Unlink asks first and offers Undo. Find a device when the list is long.
 
 ### Test library
 

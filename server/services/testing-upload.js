@@ -291,9 +291,10 @@ function undoBatch(id, req) {
         if (run('DELETE FROM pending_results WHERE id=?', it.pending_id).changes) pendingRemoved++; else kept++;
         continue;
       }
-      const r = get('SELECT id, value FROM results WHERE id=? AND athlete_id=? AND test_id=?', it.result_id, it.athlete_id, it.test_id);
+      const r = get('SELECT id, value, source FROM results WHERE id=? AND athlete_id=? AND test_id=?', it.result_id, it.athlete_id, it.test_id);
       if (!r) continue; // already gone, e.g. the testing day was deleted
-      if (Math.abs(r.value - it.value) > 1e-9) { kept++; continue; }
+      // Retyped since (a different value, or the same value typed or timed again) means it isn't the upload's any more.
+      if (Math.abs(r.value - it.value) > 1e-9 || r.source !== 'upload') { kept++; continue; }
       if (it.created) { run('DELETE FROM results WHERE id=?', r.id); removed++; }
       else {
         run('UPDATE results SET value=?, unit_entered=?, hand_timed=?, source=?, recorded_at=?, created_by=? WHERE id=?',

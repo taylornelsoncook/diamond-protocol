@@ -695,3 +695,42 @@ test('device links: link ahead of time (waiting results follow), move, unlink; a
   const d2 = await coach.post('/api/testing/pending/discard', { ids: [p] });
   assert.equal(d2.status, 400);
 });
+
+// ---- Review fixes: undo leaves retyped results alone, device link labels, big discard lists ----
+test('review fixes: undo leaves a result retyped with the same value alone', async () => {
+  const kevin = athlete('Kevin'), mason = athlete('Mason');
+  const t40 = testId('40-yard dash');
+  const id = (await coach.post('/api/testing/days', { name: 'Retype day', date: '2026-10-16', athlete_ids: [kevin.id, mason.id], test_ids: [t40] })).data.id;
+  const text = tsv([['Athlete ID', 'Name', '40-yard dash (s) #1'], [kevin.code, 'Kevin Nguyen', '5.5'], [mason.code, 'Mason Harper', '5.7']]);
+  const c = await coach.post('/api/testing/upload/check', { text, day_id: id });
+  const s = await coach.post('/api/testing/upload/save', { text, day_id: id, filename: 'retype.tsv', confirmed: c.data.unusual.map((u) => u.key) });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+  // Kevin is re-timed on the stopwatch and gets the same 5.50: it's now a hand-timed result, not the upload's
+  await desk.put(`/api/testing/days/${id}/results`, { athlete_id: kevin.id, test_id: t40, attempt: 1, value: 5.5, source: 'stopwatch' });
+  const u = await coach.post(`/api/testing/uploads/${s.data.batch_id}/undo`);
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  assert.equal(u.data.removed, 1);
+  assert.equal(u.data.kept, 1);
+  const kr = db.get('SELECT value, source, hand_timed FROM results WHERE day_id=? AND athlete_id=? AND test_id=?', id, kevin.id, t40);
+  assert.deepEqual({ ...kr }, { value: 5.5, source: 'stopwatch', hand_timed: 1 });
+  assert.ok(!db.get('SELECT 1 FROM results WHERE day_id=? AND athlete_id=?', id, mason.id));
+});
+
+test('review fixes: linking a device ahead of time keeps the name the device uses', async () => {
+  const ava = athlete('Ava');
+  db.insert('pending_results', { source: 'Swift', sender_key: 'SW-77', sender_label: 'Swift gate SW-77', test_id: testId('10-yard sprint'), test_name: '10-yard sprint', value: 1.95, unit: 's', recorded_at: '2026-09-22 16:00:00', source_ref: 'test:sw-77-1' });
+  const r = await coach.post('/api/testing/links', { source: 'Swift', sender_key: 'SW-77', athlete_id: ava.id });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.linked, 1);
+  assert.equal(db.get('SELECT sender_label FROM device_links WHERE id=?', r.data.id).sender_label, 'Swift gate SW-77');
+  // With nothing waiting, the device ID is the label
+  const r2 = await coach.post('/api/testing/links', { source: 'Swift', sender_key: 'SW-78', athlete_id: ava.id });
+  assert.equal(db.get('SELECT sender_label FROM device_links WHERE id=?', r2.data.id).sender_label, 'SW-78');
+});
+
+test('review fixes: discarding a very long list of ids answers cleanly', async () => {
+  const many = Array.from({ length: 40000 }, (_, i) => 5000000 + i);
+  const r = await coach.post('/api/testing/pending/discard', { ids: many });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /already linked or discarded/);
+});

@@ -849,7 +849,8 @@ const UP_STYLE = raw(`<style>
 .tst-lrow:first-child{border-top:0}
 .tst-lrow .btn-row{flex-wrap:nowrap}
 .tst-copy{position:relative}
-.tst-copy .btn{position:absolute;top:8px;right:8px;min-height:36px}
+.tst-copy .btn{position:absolute;top:8px;right:8px;min-height:44px}
+.tst-copy .tst-pre{padding-top:60px}
 @media (max-width:700px){
   .tst-probs thead{display:none}
   .tst-probs tr{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:12px 0;border-bottom:1px solid var(--line)}
@@ -975,17 +976,21 @@ async function renderUpload(ctx) {
         ${b.undone_at ? badge('off', 'Undone') : html`${b.day_id && b.day_exists ? html`<a class="btn btn-ghost btn-sm" href="/app/testing/day/${b.day_id}">Open day</a>` : ''}<button class="btn btn-sm" data-undo="${b.id}">Undo</button>`}
       </div>`)}</div></section>`;
   }
+  let undoing = false;
   async function undo(id, after) {
+    if (undoing) return;
     const b = state.recent.find((x) => x.id === id);
-    const what = b ? `${b.filename || 'the pasted rows'} (${plural(b.saved + b.pending, 'result')})` : 'this upload';
+    if (b?.undone_at) { toast('This upload was already undone.'); after(); return; }
+    const what = b ? `${b.filename || 'the pasted rows'} (${plural((b.created + b.replaced + b.pending) || b.saved, 'result')})` : 'this upload';
     if (!(await confirmDialog('Undo upload', `Take ${what} back out? New results are removed from profiles and any values it replaced go back to what they were. Results changed since the upload are left alone.`, 'Undo upload', 'warn'))) return;
+    undoing = true;
     try {
       const r = await api.post(`/testing/uploads/${id}/undo`);
       const parts = [r.removed && `${plural(r.removed, 'result')} removed`, r.restored && `${r.restored} put back`, r.pending_removed && `${r.pending_removed} waiting dropped`].filter(Boolean);
       toast(`Upload undone.${parts.length ? ` ${parts.join(', ')}.` : ''}${r.kept ? ` ${r.kept} changed since, left alone.` : ''}`);
       state.recent = await api.get('/testing/uploads').catch(() => state.recent);
       after();
-    } catch (err) { toastError(err); }
+    } catch (err) { toastError(err); } finally { undoing = false; }
   }
   const bindRecent = (after) => stage.querySelectorAll('[data-undo]').forEach((b) => b.addEventListener('click', () => undo(Number(b.dataset.undo), after)));
 
@@ -1058,7 +1063,7 @@ async function renderUpload(ctx) {
     </section>
     <section class="panel"><div><h2 class="panel-title">Fix and check again</h2>
       <p class="panel-sub">${pasted ? 'Fix the rows here, or in your spreadsheet and paste them again.' : `Fix ${state.file.name} in your spreadsheet, save it, and choose it again.`} The testing day and other options stay as they were.</p></div>
-      ${pasted ? html`<div class="field"><label class="sr-only" for="fix-paste">Rows</label><textarea class="input mono" id="fix-paste" rows="${Math.min(14, Math.max(5, state.text.split('\n').length + 1))}" style="font-size:13px">${state.text}</textarea></div>`
+      ${pasted ? html`<div class="field"><label class="sr-only" for="fix-paste">Rows</label><textarea class="input mono" id="fix-paste" wrap="off" rows="${Math.min(14, Math.max(5, state.text.split('\n').length + 1))}" style="font-size:13px">${state.text}</textarea></div>`
         : html`<div id="fix-file">${fileBox()}</div>`}
       <div class="error" id="fix-err" role="alert"></div>
       <div class="btn-row"><button class="btn btn-primary" id="again">Check again</button><button class="btn btn-ghost" id="opts">Change options</button></div>
@@ -1159,7 +1164,7 @@ async function renderUpload(ctx) {
       <div class="btn-row">${c.day ? html`<a class="btn btn-primary" href="/app/testing/day/${c.day.id}">Open ${c.day.name}</a>` : ''}
         ${r.pending ? html`<a class="btn ${c.day ? '' : 'btn-primary'}" href="/app/testing/queue">Link waiting results</a>` : ''}
         <button class="btn ${c.day || r.pending ? 'btn-ghost' : 'btn-primary'}" id="another">Upload another sheet</button>
-        ${r.batch_id ? html`<button class="btn btn-ghost" id="undo-this">Undo this upload</button>` : ''}</div></section>
+        ${r.batch_id && !state.recent.find((b) => b.id === r.batch_id)?.undone_at ? html`<button class="btn btn-ghost" id="undo-this">Undo this upload</button>` : ''}</div></section>
       ${recentPanel()}`);
     stage.querySelector('#another').onclick = () => { state.file = null; state.text = ''; drawForm(); top(); };
     stage.querySelector('#undo-this')?.addEventListener('click', () => undo(r.batch_id, () => { drawForm(); top(); }));
@@ -1354,17 +1359,29 @@ async function renderDevices(ctx) {
       title: 'Link a device',
       body: html`<p style="margin:0" class="small muted">Results from this device ID or name will go straight to the athlete. Anything already waiting from it is linked now.</p>
         <div class="field"><label class="label" for="nl-src">Comes from</label><input class="input" id="nl-src" list="nl-srcs" autocomplete="off" placeholder="Hawkin, Freelap, OVR, gates…"><datalist id="nl-srcs">${d.sources.map((s) => html`<option value="${s}">`)}</datalist></div>
-        <div class="field"><label class="label" for="nl-key">Device ID or the name it uses</label><input class="input" id="nl-key" autocomplete="off" placeholder="e.g. FL-107 or Coley P"></div>
+        <div class="field"><label class="label" for="nl-key">Device ID or the name it uses</label><input class="input" id="nl-key" autocomplete="off" placeholder="e.g. FL-107 or Coley P"><span class="small muted" id="nl-dup"></span></div>
         <div class="tst-picker"><label class="label" for="nl-q">Athlete</label><input class="input" id="nl-q" autocomplete="off" placeholder="Type a name or Athlete ID"><div class="tst-sugg" hidden></div>
           <p class="small" id="nl-who" style="margin:6px 0 0"></p></div>`,
       actions: [{ label: 'Cancel', value: null }, { label: 'Link device', kind: 'primary', onClick: async (body) => {
         if (!athlete) throw new Error('Pick the athlete from the list.');
         return api.post('/testing/links', { source: body.querySelector('#nl-src').value, sender_key: body.querySelector('#nl-key').value, athlete_id: athlete.id });
       } }],
-      onMount: (body) => bindPicker(body.querySelector('#nl-q'), body.querySelector('.tst-sugg'), (a) => {
-        athlete = a; body.querySelector('.tst-sugg').hidden = true; body.querySelector('#nl-q').value = name(a);
-        body.querySelector('#nl-who').textContent = `Linking to ${name(a)} (${a.code}).`;
-      }),
+      onMount: (body) => {
+        const q = body.querySelector('#nl-q'), who = body.querySelector('#nl-who');
+        bindPicker(q, body.querySelector('.tst-sugg'), (a) => {
+          athlete = a; body.querySelector('.tst-sugg').hidden = true; q.value = name(a);
+          who.textContent = `Linking to ${name(a)} (${a.code}).`;
+        });
+        // Typing again after a pick means a different athlete: the pick no longer holds.
+        q.addEventListener('input', () => { if (athlete) { athlete = null; who.textContent = ''; } });
+        // Say so when the device is already linked, since linking it again moves it.
+        const dup = () => {
+          const src = body.querySelector('#nl-src').value.trim().toLowerCase(), key = body.querySelector('#nl-key').value.trim();
+          const l = src && key && d.links.find((x) => x.source.toLowerCase() === src && x.sender_key === key);
+          body.querySelector('#nl-dup').textContent = l ? `Already linked to ${l.first_name} ${l.last_name}. Linking it again moves it.` : '';
+        };
+        body.querySelector('#nl-src').addEventListener('input', dup); body.querySelector('#nl-key').addEventListener('input', dup);
+      },
     });
     if (r) { toast(`${r.moved ? 'Link moved' : 'Device linked'}.${r.linked ? ` ${plural(r.linked, 'waiting result')} linked too.` : ''}`); ctx.reload(); }
   });

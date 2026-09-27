@@ -20,7 +20,7 @@ export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20 } = {
   const day = (days) => localDate(iso(days), getSetting(ctx, 'timezone'));        // check-in dates are business days
   const people = ctx.db.all(`SELECT c.id, c.name, c.family_id, f.name AS family_name, f.card_status AS family_card, c.card_status,
       (SELECT status FROM subscriptions s WHERE s.client_id = c.id AND s.status IN ('active','trialing','past_due') ORDER BY s.created_at DESC LIMIT 1) AS membership
-    FROM clients c LEFT JOIN families f ON f.id = c.family_id WHERE c.athlete_id IS NOT NULL`);   // deleted athletes have no ID
+    FROM clients c LEFT JOIN families f ON f.id = c.family_id WHERE c.athlete_id IS NOT NULL AND c.archived_at IS NULL`);   // deleted athletes have no ID; archived ones stopped training
   const out = [];
   for (const p of people) {
     const attended = (from, to) => ctx.db.get(`SELECT COUNT(*) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?`, p.id, from, to).n;

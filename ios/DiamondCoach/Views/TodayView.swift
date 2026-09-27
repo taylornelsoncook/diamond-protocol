@@ -44,7 +44,7 @@ struct SessionRow: View {
                 .font(Theme.display(20)).foregroundStyle(Theme.steel).frame(width: 84, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.name).font(.headline)
-                Text("\(session.locationName) · \(session.team != nil ? "\(session.team!.athletes.filter(\.present).count)/\(session.team!.athletes.count) here" : "\(session.attendedCount)/\(session.bookedCount) here")")
+                Text("\(session.locationName)\(session.coachName.map { " · \($0)" } ?? "") · \(session.team != nil ? "\(session.team!.athletes.filter(\.present).count)/\(session.team!.athletes.count) here" : "\(session.attendedCount)/\(session.bookedCount) here")")
                     .font(.caption).foregroundStyle(Theme.muted)
             }
             Spacer()
@@ -68,7 +68,7 @@ struct RosterView: View {
         List {
             if let d = detail {
                 Section {
-                    Text("\(d.start.formatted(date: .omitted, time: .shortened))–\(d.end.formatted(date: .omitted, time: .shortened)) · \(d.locationName)").foregroundStyle(Theme.muted)
+                    Text("\(d.start.formatted(date: .omitted, time: .shortened))–\(d.end.formatted(date: .omitted, time: .shortened)) · \(d.locationName)\(d.coachName.map { " · \($0)" } ?? "")").foregroundStyle(Theme.muted)
                 }.listRowBackground(Theme.surface)
                 if let team = d.team {
                     Section {

@@ -42,7 +42,7 @@ export function familyConsents(ctx, familyId) {
 export function exportFamily(ctx, familyId) {
   const f = ctx.db.get('SELECT id, name, created_at, card_brand, card_last4, waiver_version, waiver_signed_by, waiver_signed_at FROM families WHERE id = ?', familyId);
   if (!f) throw notFound('Family');
-  const kids = ctx.db.all(`SELECT id, athlete_id, name, email, phone, birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, created_at FROM clients WHERE family_id = ?`, familyId);
+  const kids = ctx.db.all(`SELECT id, athlete_id, name, email, phone, birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, created_at, archived_at FROM clients WHERE family_id = ?`, familyId);
   const per = (sql, id) => ctx.db.all(sql, id);
   return {
     exported_at: ctx.now(), business: getSetting(ctx, 'business_name'),
@@ -70,6 +70,7 @@ export function exportFamily(ctx, familyId) {
       progress_notes: per(`SELECT s.name AS testing_day, s.date, n.body AS note, n.approved_at FROM progress_notes n JOIN perf_sessions s ON s.id = n.perf_session_id WHERE n.client_id = ? AND n.approved_at IS NOT NULL ORDER BY s.date`, k.id),
       bought_online: per(`SELECT item_kind AS kind, title, amount_cents, status, created_at, refunded_at FROM purchases WHERE client_id = ? ORDER BY created_at`, k.id),
       skill_badges: per(`SELECT b.name AS badge, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id WHERE a.client_id = ? ORDER BY a.awarded_at`, k.id),
+      staff_notes: per(`SELECT author_name AS written_by, body AS note, pinned, coach_only, created_at, updated_at FROM client_notes WHERE client_id = ? ORDER BY created_at`, k.id),
       messages: per(`SELECT CASE from_kind WHEN 'coach' THEN staff_name ELSE author_name END AS written_by, from_kind AS sender, body, created_at FROM coach_messages WHERE client_id = ? ORDER BY created_at`, k.id)
     }))
   };
@@ -105,10 +106,10 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`DELETE FROM perf_results WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM athlete_links WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
-      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
-      ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,
+      ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', archived_by = NULL, athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,
         medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
     }
     ctx.db.run('DELETE FROM texts WHERE family_id = ?', familyId);

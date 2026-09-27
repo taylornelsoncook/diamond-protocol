@@ -15,10 +15,12 @@ const OWNER_ONLY = [
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|clients|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
-  ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/], ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
+  ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
+  ['POST', /^\/v1\/clients\/:id\/notes$/], ['PATCH', /^\/v1\/client-notes\/:id$/], ['DELETE', /^\/v1\/client-notes\/:id$/],   // staff notes (never coach-only ones)
+  ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
   ['POST', /^\/v1\/clients\/:id\/subscription$/],   // start a membership at the counter (not change, pause or cancel)
   ['POST', /^\/v1\/families(\/:id\/(guardians|athletes))?$/],
   ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate))?$/], ['POST', /^\/v1\/terminal\//],
@@ -105,6 +107,21 @@ export function changePassword(ctx, user, body) {
   if (pw === body.current_password) throw badRequest('Choose a different password.');
   ctx.db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', hashPassword(pw), u.id);
   return { ok: true };
+}
+
+// ---------- Connection check (owner, Staff & security) ----------
+// Shows what the hosting proxy sent and which address the app picked, so the owner can confirm TRUST_PROXY.
+const PRIVATE = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|fc|fd|fe80:|::ffff:(10|127|192\.168|172\.(1[6-9]|2\d|3[01]))\.)/i;
+export function connectionCheck({ forwardedFor, socketAddress, clientIp, trustProxy, hops }) {
+  const list = String(forwardedFor ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  let guidance;
+  if (!hops && list.length) guidance = `Requests reach the app through ${list.length === 1 ? 'a proxy' : 'proxies'} but TRUST_PROXY is off, so every visitor looks like ${socketAddress} and shares one rate limit: set TRUST_PROXY to ${list.length} if ${list[0]} is your own internet address.`;
+  else if (!hops) guidance = 'No proxy header arrived and TRUST_PROXY is off, which is right when nothing sits in front of the app.';
+  else if (!list.length) guidance = 'TRUST_PROXY is on but no X-Forwarded-For header arrived, so the app uses the connection address; turn TRUST_PROXY off unless a proxy sits in front of the app.';
+  else if (hops > list.length) guidance = `TRUST_PROXY is ${hops} but only ${list.length} ${list.length === 1 ? 'address arrived' : 'addresses arrived'}, so the app falls back to ${clientIp}: lower TRUST_PROXY to ${list.length}.`;
+  else if (PRIVATE.test(clientIp)) guidance = `The app picked ${clientIp}, a private address inside the hosting network, not yours: raise TRUST_PROXY by one (to ${hops + 1}) and check again.`;
+  else guidance = `If ${clientIp} is your own internet address (search "what is my IP" on this device to compare), TRUST_PROXY is set right; if it isn't, lower TRUST_PROXY by one and check again.`;
+  return { forwarded_for: forwardedFor || null, forwarded_addresses: list, connection_address: socketAddress ?? null, decided_address: clientIp ?? null, trust_proxy: trustProxy ?? null, proxies_trusted: hops, guidance };
 }
 
 // ---------- Audit log ----------

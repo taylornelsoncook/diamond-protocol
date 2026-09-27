@@ -32,7 +32,7 @@ function lightSessions(ctx, asOf) {
 // The families who fit a session, regulars of the class first. Each with the athletes who fit.
 export function candidates(ctx, s, asOf = ctx.now()) {
   const kids = ctx.db.all(`SELECT c.id, c.name, c.birth_date, c.family_id FROM clients c JOIN families f ON f.id = c.family_id
-    WHERE c.name != 'Deleted athlete'
+    WHERE c.name != 'Deleted athlete' AND c.archived_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM data_requests d WHERE d.family_id = c.family_id AND d.kind = 'delete' AND d.status = 'open')
       AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = ? AND b.client_id = c.id AND b.status IN ('booked','attended','waitlisted'))
       AND NOT EXISTS (SELECT 1 FROM spot_offers o WHERE o.session_id = ? AND o.family_id = c.family_id)`, s.id, s.id);

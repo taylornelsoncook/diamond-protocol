@@ -37,6 +37,8 @@ import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocal
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
 // Each entry: [method, path, auth, tag, summary, handler(ctx, req)] where req = { params, query, body, user, apiKey }
 const list = (data) => ({ data });
+// Who is writing a staff note: the signed-in staff member, or an API key (treated like the owner).
+const noteActor = (r) => (r.user ? { id: r.user.id, name: r.user.name, role: r.user.role } : { id: null, name: r.apiKey?.label ?? 'API', role: 'owner' });
 const subOf = (ctx, clientId) => {
   const s = billing.currentSubscription(ctx, clientId);
   if (!s) throw new HttpError(409, 'conflict', 'This client has no active subscription.');
@@ -60,10 +62,20 @@ export const routes = [
     .filter((e) => !r.user || r.user.role === 'owner' || !security.OWNER_EVENTS.test(e.type)))],
 
   // Clients
-  ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name or email) and ?status=.', (ctx, r) => list(clients.listClients(ctx, r.query))],
+  ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name, athlete ID, email or family) and ?status= (a membership status, none, or current for active clients: paid up or on a free trial). Archived clients are left out: ?archived=true lists only them, ?archived=all everyone. archived_matches says how many archived clients the search would have found.', (ctx, r) => {
+    const out = list(clients.listClients(ctx, r.query));
+    return r.query.archived === 'true' || r.query.archived === 'all' ? out : { ...out, archived_matches: clients.archivedMatches(ctx, r.query.q) };
+  }],
+  ['GET', '/v1/client-counts', 'any', 'Clients', 'How many clients have each membership status, how many are active (current: paid up or on a free trial) and how many are archived.', (ctx) => clients.clientCounts(ctx)],
   ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program.', (ctx, r) => clients.createClient(ctx, r.body), 201],
   ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: true })],
   ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone or notes.', (ctx, r) => clients.updateClient(ctx, r.params.id, r.body)],
+  ['POST', '/v1/clients/:id/archive', 'any', 'Clients', 'Archive a client who stopped training (owner and coach): hidden from lists, search, pickers and automatic messages; nothing is deleted. Refused while they have a membership. Upcoming bookings and standing spots are canceled, which needs confirm: true.', (ctx, r) => clients.archiveClient(ctx, r.params.id, r.body, r.user)],
+  ['POST', '/v1/clients/:id/restore', 'any', 'Clients', 'Bring an archived client back.', (ctx, r) => clients.restoreClient(ctx, r.params.id, r.user)],
+  ['GET', '/v1/clients/:id/notes', 'any', 'Clients', 'Staff notes on a client, pinned first, then newest. Front desk doesn\'t get coach-only notes.', (ctx, r) => list(clients.listNotes(ctx, r.params.id, noteActor(r)))],
+  ['POST', '/v1/clients/:id/notes', 'any', 'Clients', 'Add a staff note: body, pinned (true shows it at the top of the client page), coach_only (true hides it from front desk).', (ctx, r) => clients.addNote(ctx, r.params.id, r.body, noteActor(r)), 201],
+  ['PATCH', '/v1/client-notes/:id', 'any', 'Clients', 'Change a staff note: body, pinned, coach_only. Only its author can change it; owners can pin or unpin any note.', (ctx, r) => clients.updateNote(ctx, r.params.id, r.body, noteActor(r))],
+  ['DELETE', '/v1/client-notes/:id', 'any', 'Clients', 'Delete a staff note: owners any, everyone else their own.', (ctx, r) => clients.deleteNote(ctx, r.params.id, noteActor(r))],
   ['POST', '/v1/clients/:id/app-link', 'any', 'Clients', 'Issue a new private app link. The old link stops working.', (ctx, r) => clients.resetAppLink(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/subscription', 'any', 'Clients', 'Start a subscription on plan_id.', async (ctx, r) => billing.subscribe(ctx, r.params.id, v.str(r.body.plan_id, 'plan_id')), 201],
   ['POST', '/v1/clients/:id/subscription/pause', 'any', 'Clients', 'Pause billing and app access.', (ctx, r) => billing.pause(ctx, subOf(ctx, r.params.id))],
@@ -229,21 +241,25 @@ export const routes = [
   ['DELETE', '/v1/leads/:id', 'session', 'Leads', 'Delete a lead and its details (owner only).', (ctx, r) => leads.deleteLead(ctx, r.params.id)],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
-  ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind= and ?location_id=.', (ctx, r) => {
+  ['GET', '/v1/coaches', 'any', 'Schedule', 'Staff who can lead sessions (active owners and coaches), for coach pickers.', (ctx) => list(schedule.listCoaches(ctx))],
+  ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind=, ?location_id= and ?coach_id= (me for your own).', (ctx, r) => {
     const from = r.query.from ? v.date(r.query.from, 'from') : new Date(Date.now() - 3600000).toISOString();
     const to = r.query.to ? v.date(r.query.to, 'to') : new Date(Date.now() + 14 * 86400000).toISOString();
-    return list(schedule.listSessions(ctx, { from, to, kind: r.query.kind, locationId: r.query.location_id, includeCanceled: r.query.include_canceled === 'true' }));
+    if (r.query.coach_id === 'me' && !r.user) throw badRequest('coach_id=me needs a staff sign-in. Pass a staff id instead.');
+    const coachId = r.query.coach_id === 'me' ? r.user.id : r.query.coach_id || undefined;
+    return list(schedule.listSessions(ctx, { from, to, kind: r.query.kind, locationId: r.query.location_id, coachId, includeCanceled: r.query.include_canceled === 'true' }));
   }],
   ['GET', '/v1/agenda', 'any', 'Schedule', 'One day (?date=YYYY-MM-DD, default today) with every roster.', (ctx, r) => schedule.agenda(ctx, r.query.date)],
   ['GET', '/v1/class-series', 'any', 'Schedule', 'Recurring classes, camps, clinics and team series.', (ctx, r) => list(schedule.listSeries(ctx, { kind: r.query.kind, includeInactive: r.query.include_inactive === 'true' }))],
-  ['POST', '/v1/class-series', 'any', 'Schedule', 'Create a class or camp: name, kind (group, camp, clinic, team, evaluation), location_id, weekdays [0-6], start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date.', (ctx, r) => schedule.createSeries(ctx, r.body), 201],
+  ['POST', '/v1/class-series', 'any', 'Schedule', 'Create a class or camp: name, kind (group, camp, clinic, team, evaluation), location_id, weekdays [0-6], start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, coach_id (who leads it).', (ctx, r) => schedule.createSeries(ctx, r.body), 201],
   ['GET', '/v1/class-series/:id', 'any', 'Schedule', 'A class or camp with who is enrolled.', (ctx, r) => schedule.getSeries(ctx, r.params.id)],
-  ['PATCH', '/v1/class-series/:id', 'any', 'Schedule', 'Change future sessions. active=false cancels the rest (credits returned, families emailed).', (ctx, r) => schedule.updateSeries(ctx, r.params.id, r.body)],
+  ['PATCH', '/v1/class-series/:id', 'any', 'Schedule', 'Change future sessions. active=false cancels the rest (credits returned, families emailed). coach_id hands the upcoming sessions to another coach, except ones given to a sub.', (ctx, r) => schedule.updateSeries(ctx, r.params.id, r.body)],
   ['POST', '/v1/class-series/:id/enroll', 'any', 'Schedule', 'Give a member a standing spot: client_id.', (ctx, r) => schedule.enroll(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), { isCoach: true })],
   ['DELETE', '/v1/class-series/:id/enroll/:client', 'any', 'Schedule', 'End a standing spot and release future bookings.', (ctx, r) => schedule.endEnrollment(ctx, r.params.id, r.params.client)],
   ['POST', '/v1/class-series/:id/register', 'any', 'Schedule', 'Register for a camp or clinic: client_id, pay (card_on_file, or omit to collect later).', (ctx, r) => schedule.registerCamp(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), { pay: r.body.pay, actor: r.user?.id, isCoach: true })],
-  ['POST', '/v1/sessions', 'any', 'Schedule', 'One-off session: name, kind, location_id, date, start_time, duration_min, capacity.', (ctx, r) => schedule.createSession(ctx, r.body), 201],
+  ['POST', '/v1/sessions', 'any', 'Schedule', 'One-off session: name, kind, location_id, date, start_time, duration_min, capacity, coach_id.', (ctx, r) => schedule.createSession(ctx, r.body), 201],
   ['GET', '/v1/sessions/:id', 'any', 'Schedule', 'A session with its roster and waitlist, and the workout on the weight-room screen.', (ctx, r) => { const s = schedule.getSession(ctx, r.params.id); return { ...s, workout: s.workout_id ? screen.workoutView(ctx, s.workout_id) : null }; }],
+  ['PATCH', '/v1/sessions/:id', 'any', 'Schedule', 'Change who leads this one session: coach_id (a sub; null for nobody).', (ctx, r) => schedule.updateSession(ctx, r.params.id, r.body)],
   ['PUT', '/v1/sessions/:id/workout', 'any', 'Schedule', 'Pick the workout the weight-room screen shows during this session: workout_id (null clears it).', (ctx, r) => screen.setSessionWorkout(ctx, r.params.id, r.body)],
   ['POST', '/v1/sessions/:id/cancel', 'any', 'Schedule', 'Cancel a session: credits back, paid drop-ins refunded, families emailed. Optional reason.', (ctx, r) => schedule.cancelSession(ctx, r.params.id, { reason: v.str(r.body.reason, 'reason', { max: 200, optional: true }) })],
   ['POST', '/v1/sessions/:id/bookings', 'any', 'Schedule', 'Add an athlete: client_id, optional pay=card_on_file, override_age. Coaches can book now and collect later.', (ctx, r) => schedule.book(ctx, { sessionId: r.params.id, clientId: v.str(r.body.client_id, 'client_id'), pay: r.body.pay, actor: r.user?.id, isCoach: true, overrideAge: !!r.body.override_age }), 201],
@@ -252,9 +268,13 @@ export const routes = [
   ['POST', '/v1/bookings/:id/pay', 'any', 'Schedule', 'Collect for an unpaid booking: method (card_on_file, cash, tap_to_pay, reader), reader_id.', (ctx, r) => schedule.payBooking(ctx, r.params.id, r.body, r.user?.id)],
   ['GET', '/v1/clients/:id/bookings', 'any', 'Schedule', 'A client\'s upcoming bookings (?past=true for history).', (ctx, r) => list(schedule.clientBookings(ctx, r.params.id, { upcoming: r.query.past !== 'true' }))],
   ['GET', '/v1/availability', 'any', 'Schedule', 'Your hours for privates and evaluations.', (ctx) => list(schedule.listAvailability(ctx))],
-  ['POST', '/v1/availability', 'any', 'Schedule', 'Add hours: kind (private or evaluation), location_id, weekday, start_time, end_time, slot_minutes, price_cents.', (ctx, r) => schedule.addAvailability(ctx, r.body), 201],
+  ['POST', '/v1/availability', 'any', 'Schedule', 'Add hours: kind (private or evaluation), location_id, weekday, start_time, end_time, slot_minutes, price_cents, coach_id (whose hours; anything that coach leads anywhere then blocks them).', (ctx, r) => schedule.addAvailability(ctx, r.body), 201],
+  ['PATCH', '/v1/availability/:id', 'any', 'Schedule', 'Hand hours to another coach: coach_id (null: nobody, so anything at that place blocks them).', (ctx, r) => schedule.updateAvailability(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/availability/:id', 'any', 'Schedule', 'Remove hours.', (ctx, r) => schedule.removeAvailability(ctx, r.params.id)],
-  ['GET', '/v1/slots', 'any', 'Schedule', 'Open private or evaluation times (?kind=, ?days=).', (ctx, r) => list(schedule.openSlots(ctx, { kind: r.query.kind === 'evaluation' ? 'evaluation' : 'private', days: v.int(r.query.days ?? 14, 'days', { min: 1, max: 60 }) }))],
+  ['GET', '/v1/time-off', 'any', 'Schedule', 'Coach and facility days off, from today on (or ?from= and ?to=, YYYY-MM-DD).', (ctx, r) => list(schedule.listTimeOff(ctx, { from: r.query.from, to: r.query.to }))],
+  ['POST', '/v1/time-off', 'any', 'Schedule', 'Add days off: start_date, end_date (YYYY-MM-DD, inclusive), note, user_id (a coach; empty for the whole facility, owners only). Coaches add their own. Private and evaluation times those days aren\'t offered; sessions_to_cover lists what that coach still leads then.', (ctx, r) => schedule.addTimeOff(ctx, r.body, r.user), 201],
+  ['DELETE', '/v1/time-off/:id', 'any', 'Schedule', 'Remove days off (coaches their own, owners any).', (ctx, r) => schedule.removeTimeOff(ctx, r.params.id, r.user)],
+  ['GET', '/v1/slots', 'any', 'Schedule', 'Open private or evaluation times (?kind=, ?days=), each with the coach whose hours they are.', (ctx, r) => list(schedule.openSlots(ctx, { kind: r.query.kind === 'evaluation' ? 'evaluation' : 'private', days: v.int(r.query.days ?? 14, 'days', { min: 1, max: 60 }) }))],
   ['POST', '/v1/slots/book', 'any', 'Schedule', 'Book an open slot: kind, starts_at, availability_id, client_id, optional pay.', (ctx, r) => schedule.bookSlot(ctx, { kind: r.body.kind, startsAt: v.str(r.body.starts_at, 'starts_at'), availabilityId: v.str(r.body.availability_id, 'availability_id'), clientId: v.str(r.body.client_id, 'client_id'), pay: r.body.pay, actor: r.user?.id, isCoach: true }), 201],
 
   // Team contracts: schools and clubs billed a monthly fee
@@ -330,6 +350,7 @@ export const routes = [
   ['POST', '/v1/staff', 'session', 'Admin', 'Add a staff member: name, email, role (owner, coach, front_desk). Returns a one-time password, also emailed.', (ctx, r) => security.addStaff(ctx, r.body, r.baseUrl), 201],
   ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change role, rename, turn an account off (active=false) or unlock it (unlock=true).', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
   ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
+  ['GET', '/v1/staff/connection', 'session', 'Admin', 'Connection check: the X-Forwarded-For header this request arrived with, the connection address, the address the app decided on and TRUST_PROXY, with what to change.', (ctx, r) => security.connectionCheck(r.connection)],
   ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in: who, what, when, from where. ?actor_id, ?target, ?failures=true, ?limit.', (ctx, r) => list(security.listAudit(ctx, r.query).map((a) => ({ ...a, description: describeAction(a.action) })))],
   ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept).', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx) })],
   ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now.', (ctx) => backups.createBackup(ctx), 201],

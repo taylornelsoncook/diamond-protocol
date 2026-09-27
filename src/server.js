@@ -89,6 +89,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview'].includes(url.pathname) ? 30_000_000 : 1_000_000);
       const ip = clientIp(req);
       r.ip = ip;
+      r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
       r.kioskKey = req.headers['x-kiosk-key'];
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);

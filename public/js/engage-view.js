@@ -144,14 +144,22 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
           h('div', { class: 'row' }, h('span', { class: 'small muted grow' }, `${g.team ? 'Team goal. ' : ''}${g.kind === 'custom' ? 'Tick it off each day you do it.' : `Counts itself from ${g.kind === 'checkins' ? 'daily check-ins' : g.kind === 'sessions' ? 'sessions attended' : 'finished workouts'}.`}`), toggle));
       })) : h('p', { class: 'muted' }, 'No goals this week. Your coach can add some.'));
   }
+  // Messages both ways: the coach's notes, and replies from the athlete or a parent (only the coaches see those).
   function messages(a) {
-    return section('From your coach', null, a.messages.length ? h('div', { class: 'eg-list' }, a.messages.map((m) => {
-      const isNew = fresh.has(m.id) || !m.read;
-      return h('article', { class: `eg-msg${isNew ? ' eg-msg--new' : ''}` },
-        h('div', { class: 'row' }, h('span', { class: 'strong grow' }, m.coach || 'Your coach', m.team ? h('span', { class: 'muted', style: 'font-weight:400' }, ' · to the team') : null),
-          isNew ? h('span', { class: 'dp-badge dp-badge--good' }, 'New') : null, h('span', { class: 'small muted' }, ago(m.created_at))),
+    const box = h('textarea', { class: 'dp-input', rows: '3', maxlength: '2000', placeholder: parent ? `Write to ${name()}'s coach` : 'Write to your coach', 'aria-label': 'Message to the coach' });
+    const err = h('div', { class: 'dp-error', role: 'alert' });
+    const send = h('button', { type: 'submit', class: 'dp-btn dp-btn--secondary' }, 'Send');
+    const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(send, async () => {
+      try { await api.post('messages', { body: box.value }); box.value = ''; toast('Sent. Your coach gets an email.'); await load(); rerender(); } catch (x) { err.textContent = x.message; }
+    }); } }, box, err, h('div', { class: 'row' }, h('span', { class: 'small muted grow' }, 'Only the coaches see this.'), send));
+    const who = (m) => (m.from === 'coach' ? m.coach || 'Your coach' : m.from === 'athlete' && !parent ? 'You' : m.author ?? 'You');
+    return section('Messages with your coach', null, a.messages.length ? h('div', { class: 'eg-list' }, a.messages.map((m) => {
+      const isNew = m.from === 'coach' && (fresh.has(m.id) || !m.read);
+      return h('article', { class: `eg-msg${isNew ? ' eg-msg--new' : ''}${m.from !== 'coach' ? ' eg-msg--mine' : ''}` },
+        h('div', { class: 'row' }, h('span', { class: 'strong grow' }, who(m), m.team ? h('span', { class: 'muted', style: 'font-weight:400' }, ' · to the team') : null),
+          isNew ? h('span', { class: 'dp-badge dp-badge--good' }, 'New') : null, m.from !== 'coach' && m.seen_by_coach ? h('span', { class: 'small muted' }, 'Seen') : null, h('span', { class: 'small muted' }, ago(m.created_at))),
         h('p', { class: 'eg-note' }, m.body));
-    })) : h('p', { class: 'muted' }, 'No messages yet.'));
+    })) : h('p', { class: 'muted' }, 'No messages yet.'), form);
   }
   function calendar(a) {
     const pad = (new Date(`${a.calendar[0].date}T12:00:00Z`).getUTCDay() + 6) % 7;

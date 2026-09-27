@@ -3,6 +3,7 @@ import { listEvents } from './events.js';
 import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
+import { unreadReplies } from './engage.js';
 
 const SESSION_DAYS = 14;
 
@@ -116,6 +117,8 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   const waiting = q.n ? [{ kind: 'results_waiting', count: q.n, groups: q.groups }] : [];
   const fresh = db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ?`, weekAgo);
   if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
+  const replies = unreadReplies(ctx);
+  if (replies.length) waiting.unshift({ kind: 'replies', count: replies.length, items: replies.slice(0, 4).map((x) => ({ client_id: x.client_id, name: x.name, author: x.author, count: x.count, last_at: x.last_at })) });
   const low = inventory(ctx).low;
   if (low.length) waiting.push({ kind: 'low_stock', count: low.length, items: low.slice(0, 4).map((x) => ({ name: x.name, on_hand: x.on_hand })) });
   if (role !== 'owner') {

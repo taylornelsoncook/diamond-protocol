@@ -2,7 +2,7 @@
 // performance (test targets and opt-in rankings, on top of the testing results) and education
 // (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
 // team goals, messages and reading reach the roster athletes who are also clients.
-import { newId, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
@@ -165,10 +165,11 @@ export function updateGoal(ctx, id, body = {}) {
 // ---------- Coach messages ----------
 export function messagesFor(ctx, clientId, limit = 30) {
   const teams = teamsOf(ctx, clientId);
-  return ctx.db.all(`SELECT m.id, m.body, m.created_at, m.contract_id, m.staff_name AS coach, r.read_at FROM coach_messages m
+  return ctx.db.all(`SELECT m.id, m.body, m.created_at, m.contract_id, m.staff_name AS coach, m.from_kind, m.author_name, m.staff_read_at, r.read_at FROM coach_messages m
       LEFT JOIN message_reads r ON r.message_id = m.id AND r.client_id = ?
     WHERE m.client_id = ? OR m.contract_id IN (${inList(teams)}) ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`, clientId, clientId, ...teams, limit)
-    .map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, coach: m.coach, team: !!m.contract_id, read: !!m.read_at }));
+    .map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, from: m.from_kind, coach: m.from_kind === 'coach' ? m.coach : null, author: m.from_kind === 'coach' ? m.coach : m.author_name,
+      team: !!m.contract_id, read: m.from_kind !== 'coach' || !!m.read_at, ...(m.from_kind !== 'coach' ? { seen_by_coach: !!m.staff_read_at } : {}) }));
 }
 export function markRead(ctx, clientId) {
   const unread = messagesFor(ctx, clientId, 500).filter((m) => !m.read);
@@ -191,6 +192,34 @@ export function sendMessage(ctx, { clientId = null, contractId = null }, body = 
   const from = staffName(actor).split(' ')[0];
   for (const c of who) notifyAthlete(ctx, c, `A note from ${from} at ${getSetting(ctx, 'business_name')}`, `${from} wrote to ${firstName(c)}:\n\n${text}`);
   return { id, body: text, created_at: ctx.now(), coach: staffName(actor), team: !!contractId, recipients: who.length };
+}
+
+// Replies from the athlete (in their app) or a parent (in the portal). The coach who last wrote to the athlete is
+// emailed, or the owners when no coach has written yet. Replies never go to other families.
+const REPLIES_PER_DAY = 20;
+export function replyMessage(ctx, clientId, body = {}, { from, name, guardianId = null }) {
+  const c = clientRow(ctx, clientId);
+  const text = v.str(body.body, 'Message', { max: 2000 });
+  const today = ctx.db.get(`SELECT COUNT(*) AS n FROM coach_messages WHERE client_id = ? AND from_kind != 'coach' AND created_at >= ?`, clientId, new Date(Date.now() - 86400000).toISOString()).n;
+  if (today >= REPLIES_PER_DAY) throw new HttpError(429, 'too_many_messages', 'That\'s a lot of messages today. Call or text your coach if it\'s urgent.');
+  const id = newId('cmsg');
+  ctx.db.run('INSERT INTO coach_messages (id, client_id, contract_id, staff_id, staff_name, body, created_at, from_kind, author_name, guardian_id) VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)',
+    id, clientId, text, ctx.now(), from, name, guardianId);
+  const last = ctx.db.get(`SELECT u.email FROM coach_messages m JOIN users u ON u.id = m.staff_id WHERE m.client_id = ? AND m.from_kind = 'coach' AND u.active = 1 ORDER BY m.created_at DESC LIMIT 1`, clientId);
+  const to = last ? [last.email] : ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`).map((u) => u.email);
+  const who = from === 'parent' ? `${name} (${firstName(c)}'s parent)` : name;
+  for (const email of to) sendEmail(ctx, { to: email, subject: `${who} replied`, text: `${who} wrote:\n\n${text}\n\nReply on ${firstName(c)}'s page: ${ctx.publicUrl ?? ''}/#/clients/${c.id}` }).catch(() => {});
+  return { id, body: text, created_at: ctx.now(), from, author: name };
+}
+// Replies no coach has seen yet, one row per athlete, for Today.
+export function unreadReplies(ctx) {
+  return ctx.db.all(`SELECT m.client_id, c.name, COUNT(*) AS count, MAX(m.created_at) AS last_at,
+      (SELECT author_name FROM coach_messages x WHERE x.client_id = m.client_id AND x.from_kind != 'coach' AND x.staff_read_at IS NULL ORDER BY x.created_at DESC LIMIT 1) AS author
+    FROM coach_messages m JOIN clients c ON c.id = m.client_id WHERE m.from_kind != 'coach' AND m.staff_read_at IS NULL GROUP BY m.client_id ORDER BY last_at DESC`);
+}
+export function markRepliesSeen(ctx, clientId) {
+  clientRow(ctx, clientId);
+  return { seen: ctx.db.run(`UPDATE coach_messages SET staff_read_at = ? WHERE client_id = ? AND from_kind != 'coach' AND staff_read_at IS NULL`, ctx.now(), clientId).changes };
 }
 
 // ---------- Performance: targets and rankings ----------

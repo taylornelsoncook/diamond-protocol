@@ -321,6 +321,8 @@ export const routes = [
   // Accountability, performance targets and education. Owners and coaches manage; front desk views.
   ['GET', '/v1/clients/:id/engagement', 'any', 'Engagement', 'Accountability for one athlete: streaks, this week, 30-day check-in averages and flags, goals, messages, test targets, rankings and assigned reading.', (ctx, r) => engage.staffOverview(ctx, clients.getClient(ctx, r.params.id).id)],
   ['POST', '/v1/clients/:id/goals', 'any', 'Engagement', 'Set a weekly goal: kind (workouts, sessions, checkins, custom), target (1-14 a week), optional title.', (ctx, r) => engage.createGoal(ctx, { clientId: clients.getClient(ctx, r.params.id).id }, r.body, r.user ?? r.apiKey), 201],
+  ['GET', '/v1/replies', 'any', 'Engagement', 'Replies from athletes and parents that no coach has seen yet, one row per athlete.', (ctx) => list(engage.unreadReplies(ctx))],
+  ['POST', '/v1/clients/:id/messages/seen', 'any', 'Engagement', 'Mark an athlete\'s replies as seen by the coaches.', (ctx, r) => engage.markRepliesSeen(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/messages', 'any', 'Engagement', 'Send the athlete a message: body. The athlete and their parents are emailed a copy.', (ctx, r) => engage.sendMessage(ctx, { clientId: clients.getClient(ctx, r.params.id).id }, r.body, r.user ?? r.apiKey), 201],
   ['POST', '/v1/clients/:id/targets', 'any', 'Engagement', 'Set a test target: test (key), target (like 84, 6\'5" or 1:05), optional due_date. Replaces an existing target for that test.', (ctx, r) => engage.setTarget(ctx, clients.getClient(ctx, r.params.id).id, r.body, r.user ?? r.apiKey), 201],
   ['DELETE', '/v1/targets/:id', 'any', 'Engagement', 'Remove a test target. Results stay.', (ctx, r) => engage.removeTarget(ctx, r.params.id)],
@@ -351,6 +353,7 @@ export const routes = [
   ['POST', '/app/api/daily-check-in', 'client', 'Client app', 'Today\'s check-in: sleep_hours (0-16), hydration, soreness, energy, mood (1-5), note. Saving again today updates it.', (ctx, r) => engage.saveCheckin(ctx, r.client.id, r.body)],
   ['POST', '/app/api/goals/:id/check', 'client', 'Client app', 'Tick a custom goal for today (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, r.client.id, r.params.id, r.body.done !== false)],
   ['POST', '/app/api/messages/read', 'client', 'Client app', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, r.client.id)],
+  ['POST', '/app/api/messages', 'client', 'Client app', 'Write back to your coach: body.', (ctx, r) => engage.replyMessage(ctx, r.client.id, r.body, { from: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/lessons/:id', 'client', 'Client app', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, r.client.id, r.params.id)],
   ['POST', '/app/api/lessons/:id/complete', 'client', 'Client app', 'Mark a lesson done (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, r.client.id, r.params.id, r.body.done !== false)],
   ...portalRoutes.map(([method, path, auth, summary, handler, status]) => [method, path, auth, 'Parent portal', summary, handler, status])

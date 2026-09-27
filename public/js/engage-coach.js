@@ -59,13 +59,17 @@ export function clientPanels(c, en, tests) {
     }); } }, h('div', { class: 'form-grid' }, field('What it counts', kind), field('Per week', per)), field('Goal (optional)', title, 'Leave blank to name it from what it counts.'), h('div', null, btn('Add goal', null, 'secondary', { type: 'submit' }))) : null);
 
   const body = textarea('', { rows: '3', maxlength: '2000', placeholder: `Write to ${first}`, 'aria-label': `Message to ${first}` });
-  const messages = panel('Messages', { subtitle: h('span', null, `Notes from coaches. ${first} reads them in the app`, en.unread ? h('span', { class: 'warn-text' }, ` · ${en.unread} unread`) : null, '.') },
+  // Replies from the athlete or a parent count as seen once a coach opens this page.
+  const unseen = en.messages.filter((m) => m.from && m.from !== 'coach' && !m.seen_by_coach);
+  if (unseen.length && canManage()) post(`/v1/clients/${id}/messages/seen`).catch(() => {});
+  const author = (m) => (m.from === 'coach' || !m.from ? `${m.coach ?? 'Coach'}` : m.from === 'parent' ? `${m.author} (parent)` : m.author ?? first);
+  const messages = panel('Messages', { subtitle: h('span', null, `Notes between coaches and ${first}${c.family ? ' and their parents' : ''}. They read and reply in the app`, en.unread ? h('span', { class: 'warn-text' }, ` · ${en.unread} unread by ${first}`) : null, '.') },
     manage ? h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       await post(`/v1/clients/${id}/messages`, { body: body.value }); toast(`Sent. ${first} and their parents are emailed a copy.`); deps.render();
     }); } }, body, h('div', { class: 'row wrap' }, h('span', { class: 'small muted grow' }, `${first}${c.family ? ' and their parents' : ''} are emailed a copy.`), btn('Send message', null, 'secondary', { type: 'submit' }))) : null,
-    en.messages.length ? h('div', null, en.messages.slice(0, 8).map((m) => h('div', { class: 'list-item', style: 'align-items:flex-start' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'eg-note' }, m.body), h('span', { class: 'small muted' }, `${m.coach ?? 'Coach'} · ${ago(m.created_at)}${m.team ? ' · to the team' : ''}`)),
-      m.read ? h('span', { class: 'small muted' }, 'Read') : tag('Unread')))) : h('p', { class: 'muted small' }, 'No messages yet.'));
+    en.messages.length ? h('div', null, en.messages.slice(0, 12).map((m) => h('div', { class: 'list-item', style: `align-items:flex-start${m.from && m.from !== 'coach' ? ';padding-left:16px;border-left:3px solid var(--green-mid)' : ''}` },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'eg-note' }, m.body), h('span', { class: 'small muted' }, `${author(m)} · ${ago(m.created_at)}${m.team ? ' · to the team' : ''}`)),
+      m.from && m.from !== 'coach' ? (unseen.includes(m) ? tag('New reply') : null) : m.read ? h('span', { class: 'small muted' }, 'Read') : tag('Unread')))) : h('p', { class: 'muted small' }, 'No messages yet.'));
 
   const tested = new Set(en.tests.map((t) => t.test));
   const unitOf = new Map(tests.map((t) => [t.key, t.metrics[0]?.unit]));

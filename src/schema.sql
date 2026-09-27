@@ -820,6 +820,10 @@ CREATE TABLE IF NOT EXISTS coach_messages (
   staff_name TEXT,
   body TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  from_kind TEXT NOT NULL DEFAULT 'coach',       -- version 20: coach, athlete or parent (replies)
+  author_name TEXT,                              -- who wrote a reply
+  guardian_id TEXT,                              -- the parent who wrote it
+  staff_read_at TEXT,                            -- when a coach saw a reply
   CHECK ((client_id IS NULL) <> (contract_id IS NULL))
 );
 CREATE TABLE IF NOT EXISTS message_reads (

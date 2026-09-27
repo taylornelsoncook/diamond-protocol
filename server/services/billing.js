@@ -38,7 +38,7 @@ function charge({ family_id, athlete_id = null, amount_cents, description, metho
   const family = family_id ? get('SELECT * FROM families WHERE id=?', family_id) : null;
   const r = payments.charge({ amount_cents, method, family });
   const invoice_id = insert('invoices', {
-    number: nextInvoiceNumber('DP'), kind, family_id, athlete_id, membership_id, description, amount_cents, period,
+    number: nextInvoiceNumber('DP'), kind, family_id, athlete_id, membership_id, description, amount_cents, period, issued_at: today(), // the business day, not UTC's
     status: r.ok ? 'paid' : 'failed', paid_at: r.ok ? new Date().toISOString() : null, pay_method: method, charge_id: r.charge_id || null,
     attempts: 1, next_retry: r.ok ? null : addDays(today(), RETRY_DAYS), view_token: randomToken(16),
   });
@@ -50,7 +50,7 @@ function refundInvoice(invoiceId, amount_cents) {
   const inv = get('SELECT * FROM invoices WHERE id=?', invoiceId);
   if (!inv || inv.status !== 'paid') return { ok: false };
   const r = payments.refund({ charge_id: inv.charge_id, amount_cents: amount_cents ?? inv.amount_cents });
-  const id = insert('invoices', { number: nextInvoiceNumber('RF'), kind: 'charge', family_id: inv.family_id, athlete_id: inv.athlete_id, description: `Refund: ${inv.description}`,
+  const id = insert('invoices', { number: nextInvoiceNumber('RF'), kind: 'charge', family_id: inv.family_id, athlete_id: inv.athlete_id, description: `Refund: ${inv.description}`, issued_at: today(),
     amount_cents: -(amount_cents ?? inv.amount_cents), status: 'paid', paid_at: new Date().toISOString(), pay_method: inv.pay_method, charge_id: r.refund_id, view_token: randomToken(16),
     refund_of: inv.amount_cents > 0 ? inv.id : null });
   return { ok: true, refund_invoice_id: id };

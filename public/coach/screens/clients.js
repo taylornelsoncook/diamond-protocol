@@ -463,6 +463,14 @@ function restore(root, snap) {
   }
   for (const id of snap.open) root.querySelector('#' + CSS.escape(id))?.setAttribute('open', '');
 }
+// What the family asked for in the parent portal (Programs tab), until the membership shows it was done.
+function requestBanner(r, a, m, owner) {
+  const what = r.kind === 'change' ? `switch ${a.first_name} to ${r.plan_name || 'another plan'}` : r.kind === 'pause' ? `pause ${a.first_name}'s membership` : `cancel ${a.first_name}'s membership`;
+  const when = relTime(r.created_at);
+  return html`<div class="banner" role="status"><div class="stack-sm" style="flex:1 1 260px">
+    <span>${r.parent_name || 'The family'} asked ${/ago$|^just now$/.test(when) ? when : `on ${when}`} to ${what} (from the parent portal).${r.note ? html` Their note: “${r.note}”` : ''}</span>
+    <span class="small">${owner && m ? 'Make the change below, then' : 'An owner makes the change. Then'} reply to ${r.parent_email ? html`<a href="mailto:${r.parent_email}">${r.parent_email}</a>` : 'the family'} to confirm.</span></div></div>`;
+}
 const telHref = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '');
 const smsHref = (p) => 'sms:' + String(p).replace(/[^\d+]/g, '');
 const OUTCOME = { attended: ['complete', 'Attended'], no_show: ['overdue', 'No-show'], late_cancel: ['cancelled', 'Late cancel'] };
@@ -605,6 +613,7 @@ async function renderProfile(ctx) {
 
     const membershipPanel = fam ? html`<section class="panel" id="cl-mem">
       <h2 class="panel-title">Membership</h2>
+      ${d.membership_request ? requestBanner(d.membership_request, a, m, owner) : ''}
       ${m ? html`<div class="kv4">
           <div><div class="k">Status</div>${badge(m.status)}</div>
           <div><div class="k">Plan</div>${m.plan_name}</div>

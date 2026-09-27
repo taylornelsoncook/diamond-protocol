@@ -66,7 +66,13 @@ const payments = {
 
 // ---- Money & dates ----
 const money = (c) => '$' + (Number(c || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 });
-const today = () => localDate(new Date());
+// Today's date in the business time zone (Settings), the same day Today, Schedule and the parent portal use.
+// The server itself usually runs in UTC, where a Provo evening is already tomorrow.
+function today() {
+  let tz = setting('timezone', 'America/Denver');
+  try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); } catch { tz = 'America/Denver'; }
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
 function localDate(d) { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; }
 function addDays(dateStr, n) { const d = new Date(dateStr + 'T12:00:00'); d.setDate(d.getDate() + n); return localDate(d); }
 function addMonths(dateStr, n) { const d = new Date(dateStr + 'T12:00:00'); const day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n); d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate())); return localDate(d); }

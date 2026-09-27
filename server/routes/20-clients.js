@@ -7,6 +7,7 @@ const { requireStaff } = require('../auth');
 const billing = require('../services/billing');
 const booking = require('../services/booking');
 const clients = require('../services/clients');
+require('../services/parent-programs'); // membership requests from the parent portal
 
 const isOwner = (req) => req.staff?.role === 'owner';
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
@@ -71,6 +72,17 @@ function membershipView(req, m) {
   const out = { id: m.id, plan_id: m.plan_id, plan_name: m.plan_name, status: m.status, started_at: m.started_at, next_charge: m.next_charge, cancelled_at: m.cancelled_at, group_per_month: m.group_per_month, private_per_month: m.private_per_month };
   if (isOwner(req)) out.price_cents = m.price_cents;
   return out;
+}
+
+// A family's request from the portal (switch plans, pause, cancel) in the last 14 days that the membership doesn't
+// already reflect, so whoever opens the profile from the owner's email sees what was asked.
+function openRequest(athleteId, m) {
+  const r = get(`SELECT r.kind, r.plan_id, r.note, r.created_at, p.name AS plan_name, pa.name AS parent_name, pa.email AS parent_email
+    FROM membership_requests r LEFT JOIN plans p ON p.id=r.plan_id LEFT JOIN parents pa ON pa.id=r.parent_id
+    WHERE r.athlete_id=? AND r.created_at >= datetime('now','-14 days') ORDER BY r.id DESC LIMIT 1`, athleteId);
+  if (!r) return null;
+  const done = !m ? true : r.kind === 'cancel' ? m.status === 'cancelled' : r.kind === 'pause' ? m.status === 'paused' : m.plan_id === r.plan_id;
+  return done ? null : r;
 }
 
 function assertMembership(id) {
@@ -211,6 +223,7 @@ function routes(api) {
       } : null,
       team: a.team_id ? get('SELECT t.id, t.team_name, s.name AS school FROM team_contracts t JOIN schools s ON s.id=t.school_id WHERE t.id=?', a.team_id) : null,
       membership: membershipView(req, m),
+      membership_request: openRequest(a.id, m),
       sessions_left: (() => { const n = billing.memberSessionsLeft(a.id); return { member_group: n === Infinity ? 'unlimited' : n, group_credits: a.group_credits, private_credits: a.private_credits }; })(),
       upcoming: all(`SELECT b.id, b.status, b.coverage, b.checked_in_at, e.id AS event_id, e.name, e.starts_at, e.type, l.name AS location FROM bookings b JOIN events e ON e.id=b.event_id
         LEFT JOIN locations l ON l.id=e.location_id WHERE b.athlete_id=? AND b.status IN ('booked','waitlist') AND e.cancelled=0 AND e.starts_at>=? ORDER BY e.starts_at LIMIT 10`, a.id, now.slice(0, 10)),

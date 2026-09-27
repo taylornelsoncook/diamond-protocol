@@ -200,3 +200,34 @@ test('demo sales and their invoices carry the same day, so Billing and Point of 
     assert.equal(s.paid_at.slice(0, 10), s.created_at.slice(0, 10));
   }
 });
+
+test('a family\'s membership request from the portal shows on the client profile until the membership reflects it', async () => {
+  const ava = athlete('Ava', 'Lopez');
+  const m = get("SELECT * FROM memberships WHERE athlete_id=? AND status IN ('active','trial') ORDER BY id DESC LIMIT 1", ava.id);
+  assert.ok(m, 'Ava has a live membership in the demo');
+  const p = await parent('maria.lopez@example.com');
+  const r = await p.post('/api/parent/membership/request', { athlete_id: ava.id, kind: 'pause', note: 'Away for two weeks' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const o = await owner(), d = await desk();
+  const prof = (await o.get(`/api/athletes/${ava.id}`)).data;
+  assert.equal(prof.membership_request.kind, 'pause');
+  assert.equal(prof.membership_request.note, 'Away for two weeks');
+  assert.equal(prof.membership_request.parent_email, 'maria.lopez@example.com');
+  assert.equal((await d.get(`/api/athletes/${ava.id}`)).data.membership_request.kind, 'pause', 'the front desk sees it too');
+  assert.equal((await o.post(`/api/memberships/${m.id}/pause`, {})).status, 200);
+  assert.equal((await o.get(`/api/athletes/${ava.id}`)).data.membership_request, null, 'done once the membership is paused');
+  await o.post(`/api/memberships/${m.id}/resume`, {});
+});
+
+test('Billing and Today agree on what day it is even when the server runs in another time zone', async () => {
+  const lib = require('../server/lib');
+  const saved = process.env.TZ;
+  process.env.TZ = 'Pacific/Kiritimati'; // UTC+14: a different calendar day from Provo most hours of the day
+  try {
+    assert.equal(lib.today(), booking.todayLocal());
+    const o = await owner();
+    const b = (await o.get('/api/billing/summary')).data;
+    const t = (await o.get('/api/today')).data;
+    assert.equal(b.month.start, t.date.slice(0, 7) + '-01');
+  } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+});

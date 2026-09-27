@@ -161,7 +161,7 @@ export const routes = [{
   path: '/today', nav: 'today', title: 'Today',
   render: async (ctx) => {
     const role = ctx.me.role, owner = role === 'owner', canNote = role === 'owner' || role === 'coach';
-    const loadActivity = () => api.get('/activity?limit=100&kind=change').catch(() => []);
+    const loadActivity = () => api.get('/activity?limit=100&kind=change').then((r) => (Array.isArray(r) ? r : [])).catch(() => []);
     let [d, activity] = await Promise.all([api.get('/today'), loadActivity()]);
     if (!ctx.isCurrent()) return;
     let actFilter = 'all', actShown = ACT_PAGE, showHidden = false, query = '', updatedAt = new Date();

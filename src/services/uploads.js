@@ -1,9 +1,8 @@
-import { newId, v, badRequest, notFound, localDate } from '../util.js';
+import { newId, v, badRequest, notFound, conflict, localDate, isDate } from '../util.js';
 import { getSetting } from './families.js';
-import { RANGES } from './test-library.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { unitFromHeader } from './units.js';
-import { listTests, getTest, getSession, recordResults, resultExternalId } from './performance.js';
+import { listTests, getTest, getSession, recordResults, rangeOf, outOfRange, rangeText } from './performance.js';
 import { parseCsv, guessMapping } from './perf-import.js';
 import { convert, normalizeUnit } from './units.js';
 import { readXlsx, writeXlsx } from './xlsx.js';
@@ -126,7 +125,11 @@ function checkUpload(ctx, { headers, rows, options }) {
     if (!columns[h] && rows.some((r) => String(r[h] ?? '').trim() !== '')) err(1, h, `"${h}" isn't a test column. Use the column names from the downloaded sheet, or delete this column.`);
   }
   if (!idCol) err(1, null, 'The sheet needs an "Athlete ID" column. Download the sheet from Upload results to get one with every ID filled in.');
-  if (errors.length) return { errors, warnings, items: [], groups: [], session };
+  // How the file was read, for the review screen.
+  const read = { id_column: roles.id ?? null, name_column: roles.name ?? null, date_column: roles.date ?? null, notes_column: roles.notes ?? null,
+    columns: Object.entries(columns).filter(([, c]) => c?.test).map(([hdr, c]) => ({ header: hdr, test: c.test, side: c.side ?? null, attempt: c.attempt ?? null, unit: c.unit ?? null })),
+    ignored: headers.filter((hdr) => !Object.values(roles).includes(hdr) && !columns[hdr]?.test) };
+  if (errors.length) return { errors, warnings, items: [], groups: [], session, read };
 
   const tests = new Map(), seen = new Map(), athleteCache = new Map(), bests = new Map();
   const today = localDate(ctx.now(), getSetting(ctx, 'timezone'));
@@ -163,11 +166,12 @@ function checkUpload(ctx, { headers, rows, options }) {
       if (num == null) { err(rowNo, h, `"${row[h]}" isn't a number.`, profile.athlete_id); continue; }
       let value;
       try { value = convert(num, unit, metric.unit); } catch { err(rowNo, h, `${unit} can't be converted to ${metric.unit}.`, profile.athlete_id); continue; }
-      const range = RANGES[`${test.key}.${metric.key}`];
-      if (range && (value < range[0] || value > range[1])) { err(rowNo, h, `${fmt(num, unit, 3)} isn't possible for ${test.name} (${range[0]}–${range[1]} ${metric.unit}). Is it in the wrong column?`, profile.athlete_id); continue; }
+      const range = rangeOf(test, metric);
+      if (outOfRange(value, range)) { err(rowNo, h, `${fmt(num, unit, 3)} isn't possible for ${test.name} (${rangeText(range, metric.unit)}). Is it in the wrong column?`, profile.athlete_id); continue; }
       if (!range && metric.better !== 'none' && value <= 0) { err(rowNo, h, 'Must be more than zero.', profile.athlete_id); continue; }
       if (col.side && test.sides !== 'lr') { err(rowNo, h, `${test.name} isn't tested by side.`, profile.athlete_id); continue; }
-      const dupKey = `${key}|${test.key}|${metric.key}|${col.side ?? ''}|${col.attempt ?? ''}|${date}`;
+      // One value per attempt: on a testing day per athlete, test, side and attempt; otherwise per date too.
+      const dupKey = `${key}|${test.key}|${metric.key}|${col.side ?? ''}|${col.attempt ?? 1}|${session ? '' : date}`;
       if (seen.has(dupKey)) { err(rowNo, h, `Entered twice for ${profile.name} on ${date} (also row ${seen.get(dupKey)}).`, profile.athlete_id); continue; }
       seen.set(dupKey, rowNo);
       const item = { key: `${rowNo}|${h}`, row: rowNo, column: h, who, athlete: profile, test, metric, side: col.side ?? null, attempt: col.attempt ?? null, value, entered: String(row[h]).trim(), unit, date, notes: roles.notes ? row[roles.notes] || null : null };
@@ -199,7 +203,51 @@ function checkUpload(ctx, { headers, rows, options }) {
     }
   });
   if (!errors.length && !items.length) err(null, null, 'There are no results in this sheet.');
-  return { errors, warnings, items, session };
+  return { errors, warnings, items, session, read };
+}
+
+// ---------- What each result will do ----------
+// new: nothing there yet. replace: a different value is in the same spot (same testing day, athlete, test, side and
+// attempt; or, without a testing day, an earlier upload for that date), which is set aside and comes back on undo.
+// unchanged: the same value is already saved, so it's left exactly as it is (a stopwatch time stays hand-timed).
+// PRs are counted the way saving counts them: the best new value per athlete, test and side against their best before.
+const SAME = 1e-9;
+function planItems(ctx, check) {
+  const sessionId = check.session?.id ?? null;
+  for (const it of check.items) {
+    const col = it.who.client_id ? 'client_id' : 'roster_id', wid = it.who.client_id ?? it.who.roster_id;
+    const slot = sessionId
+      ? ctx.db.all(`SELECT id, value, source FROM perf_results WHERE session_id = ? AND ${col} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND COALESCE(attempt, 1) = ? AND voided = 0`,
+        sessionId, wid, it.test.id, it.metric.key, it.side ?? '', it.attempt ?? 1)
+      : ctx.db.all(`SELECT id, value, source FROM perf_results WHERE session_id IS NULL AND ${col} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND COALESCE(attempt, 1) = ? AND substr(recorded_at, 1, 10) = ? AND voided = 0`,
+        wid, it.test.id, it.metric.key, it.side ?? '', it.attempt ?? 1, it.date);
+    const same = slot.find((r) => Math.abs(r.value - it.value) < SAME);
+    const replaces = same ? [] : sessionId ? slot : slot.filter((r) => r.source === 'upload');
+    it.status = same ? 'unchanged' : replaces.length ? 'replace' : 'new';
+    it.replaces = replaces.map((r) => r.id);
+    it.was = replaces.map((r) => r.value);
+    it.pr = false;
+  }
+  const setAside = new Set(check.items.flatMap((it) => it.replaces));
+  const groups = new Map();
+  for (const it of check.items) {
+    const k = `${it.who.client_id ?? it.who.roster_id}|${it.test.id}|${it.metric.key}|${it.side ?? ''}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(it);
+  }
+  for (const items of groups.values()) {
+    const { who, test, metric, side } = items[0];
+    const lower = metric.better === 'lower';
+    const rows = ctx.db.all(`SELECT id, value FROM perf_results WHERE ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND voided = 0`,
+      who.client_id ?? who.roster_id, test.id, metric.key, side ?? '').filter((r) => !setAside.has(r.id)).map((r) => r.value);
+    const prev = metric.better === 'none' || !rows.length ? null : lower ? Math.min(...rows) : Math.max(...rows);
+    for (const it of items) it.previous_best = prev;
+    if (prev == null) continue;
+    const best = items.filter((it) => it.status !== 'unchanged').reduce((b, it) => (!b || (lower ? it.value < b.value : it.value > b.value) ? it : b), null);
+    if (best && (lower ? best.value < prev : best.value > prev)) best.pr = true;
+  }
+  const n = (st) => check.items.filter((it) => it.status === st).length;
+  return { new: n('new'), replaced: n('replace'), unchanged: n('unchanged'), prs: check.items.filter((it) => it.pr).length };
 }
 
 function summarize(ctx, check) {
@@ -208,35 +256,49 @@ function summarize(ctx, check) {
     const k = it.who.client_id ?? it.who.roster_id;
     if (!groups.has(k)) groups.set(k, { ...it.who, name: it.athlete.name, athlete_id: it.athlete.athlete_id, results: [] });
     const w = check.warnings.find((x) => x.key === it.key);
-    groups.get(k).results.push({ key: it.key, row: it.row, test: it.test.key, test_name: it.test.name, metric_name: it.metric.name, side: it.side, attempt: it.attempt,
-      value: it.value, unit: it.metric.unit, decimals: it.metric.decimals, entered: it.entered, entered_unit: it.unit, date: it.date, warning: w?.message ?? null });
+    groups.get(k).results.push({ key: it.key, row: it.row, column: it.column, test: it.test.key, test_name: it.test.name, metric_name: it.metric.name, side: it.side, attempt: it.attempt,
+      value: it.value, unit: it.metric.unit, decimals: it.metric.decimals, entered: it.entered, entered_unit: it.unit, date: it.date, warning: w?.message ?? null,
+      status: it.status, was: it.was?.length ? it.was : null, previous_best: it.previous_best ?? null, pr: !!it.pr });
   }
   return [...groups.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function readOptions(ctx, body) {
+  const source = body.source ? String(body.source).trim().replace(/\s+/g, ' ').slice(0, 40) || null : null;
+  const options = { session_id: body.session_id || null, date: body.date && isDate(body.date) ? body.date : null, test: body.test || null, source };
+  if (options.session_id) options.date = getSession(ctx, options.session_id).date;     // a testing day sets the date
+  return options;
+}
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
 export function previewUpload(ctx, body) {
+  if (String(body.csv ?? '').length > MAX_UPLOAD_BYTES || String(body.xlsx_base64 ?? '').length > MAX_UPLOAD_BYTES * 1.4) throw badRequest('That file is over 10 MB. Split it into smaller sheets and upload them one at a time.');
   const { headers, rows } = readUpload(body);
   if (rows.length > 20000) throw badRequest('Upload up to 20,000 rows at a time.');
-  const options = { session_id: body.session_id || null, date: body.date && /^\d{4}-\d{2}-\d{2}$/.test(body.date) ? body.date : null, test: body.test || null };
-  if (options.session_id) getSession(ctx, options.session_id);
+  const options = readOptions(ctx, body);
   const check = checkUpload(ctx, { headers, rows, options });
+  const plan = check.errors.length ? null : planItems(ctx, check);
   ctx.db.run(`DELETE FROM upload_previews WHERE expires_at < ?`, ctx.now());
   const id = newId('upl');
   ctx.db.run('INSERT INTO upload_previews (id, filename, options, headers, rows, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     id, body.filename ? String(body.filename).slice(0, 200) : null, JSON.stringify(options), JSON.stringify(headers), JSON.stringify(rows), new Date(Date.now() + 24 * 3600000).toISOString(), ctx.now());
   return {
-    preview_id: id, ok: check.errors.length === 0, format: body.xlsx_base64 ? 'xlsx' : 'csv', rows: rows.length,
+    preview_id: id, ok: check.errors.length === 0, format: body.xlsx_base64 ? 'xlsx' : 'csv', rows: rows.length, source: options.source,
+    session: check.session ? { id: check.session.id, name: check.session.name, date: check.session.date } : null,
+    read: check.read,
     errors: check.errors.slice(0, 200), error_count: check.errors.length, warnings: check.warnings,
-    summary: { results: check.items.length, athletes: new Set(check.items.map((i) => i.who.client_id ?? i.who.roster_id)).size, to_confirm: check.warnings.length },
+    summary: { results: check.items.length, athletes: new Set(check.items.map((i) => i.who.client_id ?? i.who.roster_id)).size, to_confirm: check.warnings.length, ...(plan ?? { new: 0, replaced: 0, unchanged: 0, prs: 0 }) },
     athletes: check.errors.length ? [] : summarize(ctx, check)
   };
 }
 
-// Saves a checked upload: all of it, or none of it.
-export function commitUpload(ctx, body) {
+// Saves a checked upload: all of it, or none of it. Values already saved are left alone; replaced values are set
+// aside (not deleted) so Undo can put them back.
+export function commitUpload(ctx, body, user = null) {
   const p = ctx.db.get('SELECT * FROM upload_previews WHERE id = ?', v.str(body.preview_id, 'preview_id'));
   if (!p || p.expires_at < ctx.now()) throw notFound('Upload (it may have expired; upload the file again)');
   const options = JSON.parse(p.options);
+  if (options.session_id && !ctx.db.get('SELECT id FROM perf_sessions WHERE id = ?', options.session_id)) throw notFound('Testing day (it was deleted; upload the file again without it)');
   const check = checkUpload(ctx, { headers: JSON.parse(p.headers), rows: JSON.parse(p.rows), options });     // checked again, against today's data
   if (check.errors.length) {
     const e = badRequest(`Nothing was saved. ${check.errors.length} ${check.errors.length === 1 ? 'problem needs' : 'problems need'} fixing in the sheet.`);
@@ -250,26 +312,88 @@ export function commitUpload(ctx, body) {
     e.status = 409; e.code = 'confirmation_required'; e.details = open;
     throw e;
   }
-  const items = check.items.map((it) => ({ ...it.who, test: it.test.key, metric: it.metric.key, side: it.side ?? undefined, attempt: it.attempt ?? undefined, value: it.value, unit: it.metric.unit,
-    recorded_at: `${it.date}T12:00:00.000Z`, notes: it.notes ?? undefined, external_id: resultExternalId('upload', it.who.client_id ?? it.who.roster_id, it.test.key, it.metric.key, it.side, it.attempt, it.date, it.value) }));
   const out = ctx.db.tx(() => {
-    const total = { created: 0, duplicates: 0, prs: [] };
-    for (let i = 0; i < items.length; i += 1000) {
-      const r = recordResults(ctx, items.slice(i, i + 1000), { source: 'upload', sessionId: options.session_id });
-      if (r.errors.length || r.unmatched.length) {          // should never happen after the checks; if it does, undo everything
-        const e = badRequest('Nothing was saved. A result could not be stored; upload the file again.');
-        e.status = 409; e.code = 'upload_rejected'; e.details = r.errors;
-        throw e;
-      }
-      total.created += r.created; total.duplicates += r.duplicates; total.prs.push(...r.prs);
+    const plan = planItems(ctx, check);
+    const write = check.items.filter((it) => it.status !== 'unchanged');
+    for (const it of write) for (const rid of it.replaces) ctx.db.run('UPDATE perf_results SET voided = 1 WHERE id = ? AND voided = 0', rid);
+    const r = write.length ? recordResults(ctx, write.map((it) => ({ ...it.who, test: it.test.key, metric: it.metric.key, side: it.side ?? undefined, attempt: it.attempt ?? 1, value: it.value, unit: it.metric.unit,
+      recorded_at: `${it.date}T12:00:00.000Z`, notes: it.notes ?? undefined })), { source: 'upload', sessionId: options.session_id, internal: true })
+      : { created: 0, errors: [], unmatched: [], prs: [], results: [] };
+    if (r.errors.length || r.unmatched.length || r.created !== write.length) {          // should never happen after the checks; if it does, undo everything
+      const e = badRequest('Nothing was saved. A result could not be stored; upload the file again.');
+      e.status = 409; e.code = 'upload_rejected'; e.details = r.errors;
+      throw e;
     }
-    ctx.db.run('INSERT INTO import_batches (id, provider, filename, total_rows, imported, duplicates, pending, errors, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      newId('imp'), 'upload', p.filename ?? 'Upload', items.length, total.created, total.duplicates, '[]', '[]', ctx.now());
+    // Tests in the sheet that weren't on the testing day are added to it (and come off again on undo if nothing is left).
+    let addedTests = [];
+    if (options.session_id) {
+      const keys = JSON.parse(ctx.db.get('SELECT test_keys FROM perf_sessions WHERE id = ?', options.session_id).test_keys);
+      addedTests = [...new Set(write.map((it) => it.test.key))].filter((k) => !keys.includes(k));
+      if (addedTests.length) ctx.db.run('UPDATE perf_sessions SET test_keys = ? WHERE id = ?', JSON.stringify([...keys, ...addedTests]), options.session_id);
+    }
+    const batchId = newId('imp');
+    ctx.db.run(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, duplicates, pending, errors, created_at, kind, source_label, result_source, session_id, replaced, unchanged, prs, added_tests, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', ?, 'upload', ?, 'upload', ?, ?, ?, ?, ?, ?)`,
+      batchId, 'upload', p.filename ?? 'Upload', check.items.length, plan.new, plan.unchanged, ctx.now(), options.source ?? null, options.session_id ?? null, plan.replaced, plan.unchanged, r.prs.length, JSON.stringify(addedTests), user?.id ?? null);
+    for (const saved of r.results) {
+      const it = write[saved.index];
+      ctx.db.run('INSERT INTO import_batch_items (batch_id, result_id, value, replaced) VALUES (?, ?, ?, ?)', batchId, saved.id, saved.value, JSON.stringify(it.replaces));
+    }
     ctx.db.run('DELETE FROM upload_previews WHERE id = ?', p.id);
-    return total;
+    return { plan, prs: r.prs, batchId };
   });
   const athletes = summarize(ctx, check).map((g) => ({ client_id: g.client_id ?? null, roster_id: g.roster_id ?? null, name: g.name, athlete_id: g.athlete_id,
     contract_id: g.roster_id ? ctx.db.get('SELECT contract_id FROM team_roster WHERE id = ?', g.roster_id).contract_id : null,
     results: g.results.length, prs: out.prs.filter((x) => (x.client_id ?? x.roster_id) === (g.client_id ?? g.roster_id)).length }));
-  return { saved: out.created, already_saved: out.duplicates, prs: out.prs.length, athletes };
+  return { batch_id: out.batchId, saved: out.plan.new + out.plan.replaced, created: out.plan.new, replaced: out.plan.replaced, already_saved: out.plan.unchanged, prs: out.prs.length, athletes };
+}
+
+// ---------- Recent uploads and undo ----------
+export function recentUploads(ctx, { limit = 10 } = {}) {
+  return ctx.db.all(`SELECT b.*, s.name AS session_name, u.name AS by_name, x.name AS undone_by_name FROM import_batches b
+      LEFT JOIN perf_sessions s ON s.id = b.session_id LEFT JOIN users u ON u.id = b.created_by LEFT JOIN users x ON x.id = b.undone_by
+    WHERE b.kind IS NOT NULL ORDER BY b.created_at DESC LIMIT ?`, Math.min(Math.max(Number(limit) || 10, 1), 50))
+    .map((b) => ({ id: b.id, kind: b.kind, filename: b.filename, source: b.source_label ?? (b.kind === 'import' ? b.provider : null), session_id: b.session_id, session_name: b.session_name ?? null,
+      saved: b.imported + b.replaced, created: b.imported, replaced: b.replaced, unchanged: b.unchanged, waiting: JSON.parse(b.pending).length, prs: b.prs,
+      created_at: b.created_at, by_name: b.by_name ?? null, undone_at: b.undone_at, undone_by_name: b.undone_by_name ?? null, undo_summary: b.undo_summary }));
+}
+
+// Undo one upload: results it added come back out, values it replaced go back to what they were, and results it
+// sent to waiting are dropped. Anything changed since (typed or timed again, deleted, linked) is left alone.
+export function undoUpload(ctx, id, user = null) {
+  const b = ctx.db.get('SELECT * FROM import_batches WHERE id = ? AND kind IS NOT NULL', id);
+  if (!b) throw notFound('Upload');
+  if (b.undone_at) throw conflict('This upload was already undone.');
+  return ctx.db.tx(() => {
+    let removed = 0, restored = 0, kept = 0, dropped = 0;
+    for (const it of ctx.db.all('SELECT * FROM import_batch_items WHERE batch_id = ?', b.id)) {
+      if (it.queue_id) {
+        const q = ctx.db.get('SELECT status FROM results_queue WHERE id = ?', it.queue_id);
+        if (q?.status === 'pending') { ctx.db.run('DELETE FROM results_queue WHERE id = ?', it.queue_id); dropped++; }
+        else if (q?.status === 'linked') kept++;
+        continue;
+      }
+      const r = ctx.db.get('SELECT id, value, source, voided FROM perf_results WHERE id = ?', it.result_id);
+      if (!r) continue;                                     // already gone (the testing day was deleted, say)
+      if (r.voided || r.source !== b.result_source || Math.abs(r.value - it.value) > SAME) { kept++; continue; }
+      ctx.db.run('DELETE FROM perf_results WHERE id = ?', r.id);
+      const back = JSON.parse(it.replaced).filter((rid) => ctx.db.run('UPDATE perf_results SET voided = 0 WHERE id = ? AND voided = 1', rid).changes).length;
+      if (back) restored++; else removed++;
+    }
+    // Tests the upload put on the testing day come off again if nothing is left for them there.
+    if (b.session_id && ctx.db.get('SELECT id FROM perf_sessions WHERE id = ?', b.session_id)) {
+      const added = JSON.parse(b.added_tests);
+      const keys = JSON.parse(ctx.db.get('SELECT test_keys FROM perf_sessions WHERE id = ?', b.session_id).test_keys);
+      const still = keys.filter((k) => !added.includes(k) || ctx.db.get('SELECT 1 FROM perf_results r JOIN perf_tests t ON t.id = r.test_id WHERE r.session_id = ? AND t.key = ? AND r.voided = 0 LIMIT 1', b.session_id, k));
+      if (still.length && still.length !== keys.length) ctx.db.run('UPDATE perf_sessions SET test_keys = ? WHERE id = ?', JSON.stringify(still), b.session_id);
+    }
+    const parts = [];
+    if (removed) parts.push(`${removed} removed`);
+    if (restored) parts.push(`${restored} put back to the earlier value`);
+    if (dropped) parts.push(`${dropped} waiting ${dropped === 1 ? 'result' : 'results'} dropped`);
+    if (kept) parts.push(`${kept} left alone because ${kept === 1 ? 'it was' : 'they were'} changed or linked since`);
+    const summary = parts.join(', ') || 'Nothing to change';
+    ctx.db.run('UPDATE import_batches SET undone_at = ?, undone_by = ?, undo_summary = ? WHERE id = ?', ctx.now(), user?.id ?? null, summary, b.id);
+    return { undone: true, removed, restored, pending_removed: dropped, kept, summary };
+  });
 }

@@ -3,6 +3,7 @@ import { emit } from './events.js';
 import { payerFor } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { saleReceipt } from './notify.js';
+import { reconcileInvoicePayment } from './billing.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
 const hasAddress = (l) => !!(l.address_line1 && l.city && l.state && l.postal_code);
@@ -438,6 +439,22 @@ export async function handleStripeEvent(ctx, event) {
   if (event.type.startsWith('payment_intent.')) {
     const s = ctx.db.get('SELECT id FROM sales WHERE payment_ref = ?', obj.id);
     if (s) await syncSale(ctx, s.id);
+    // Membership renewals: a charge approved or failed after the renewal ran.
+    else if (obj.metadata?.invoice_id && ['payment_intent.succeeded', 'payment_intent.payment_failed'].includes(event.type)) {
+      await reconcileInvoicePayment(ctx, obj.metadata.invoice_id, { ref: obj.id, succeeded: event.type === 'payment_intent.succeeded', error: obj.last_payment_error?.message });
+    }
+  } else if (event.type === 'charge.refunded') {
+    syncRefundFromStripe(ctx, obj);
+  } else if (event.type === 'charge.dispute.created') {
+    const s = obj.payment_intent ? ctx.db.get('SELECT id, client_id FROM sales WHERE payment_ref = ?', obj.payment_intent) : null;
+    const inv = obj.payment_intent ? ctx.db.get('SELECT id, client_id FROM invoices WHERE payment_ref = ?', obj.payment_intent) : null;
+    emit(ctx, 'payment.disputed', { payment_ref: obj.payment_intent ?? null, sale_id: s?.id ?? null, invoice_id: inv?.id ?? null, client_id: s?.client_id ?? inv?.client_id ?? null, amount_cents: obj.amount, reason: obj.reason ?? null });
+  } else if (event.type === 'payment_method.automatically_updated') {
+    // The bank reissued the card (new number or expiry): keep the label on file right. Renewals keep working either way.
+    for (const table of ['families', 'clients']) {
+      const row = ctx.db.get(`SELECT id FROM ${table} WHERE card_payment_method = ?`, obj.id);
+      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4 }); }
+    }
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
@@ -446,6 +463,20 @@ export async function handleStripeEvent(ctx, event) {
     if (payer && info.paymentMethod) saveCard(ctx, payer, info);
   }
   return { received: true };
+}
+
+// A refund made in the Stripe dashboard: bring the sale's refunded total up to Stripe's. Credits are left alone;
+// refund in the app when sessions should come back off the client.
+function syncRefundFromStripe(ctx, charge) {
+  const s = charge.payment_intent ? ctx.db.get('SELECT * FROM sales WHERE payment_ref = ?', charge.payment_intent) : null;
+  if (!s || !['succeeded', 'partially_refunded', 'refunded'].includes(s.status)) return;
+  const total = Math.min(s.amount_cents, charge.amount_refunded ?? 0);
+  if (total <= s.refunded_cents) return;
+  const full = total >= s.amount_cents;
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE sales SET refunded_cents = ?, status = ? WHERE id = ?', total, full ? 'refunded' : 'partially_refunded', s.id);
+    emit(ctx, 'sale.refunded', { sale_id: s.id, client_id: s.client_id, amount_cents: total - s.refunded_cents, total_refunded_cents: total, full, sessions_removed: 0, method: s.method, source: 'stripe_dashboard' });
+  });
 }
 
 // ---------- Reporting ----------

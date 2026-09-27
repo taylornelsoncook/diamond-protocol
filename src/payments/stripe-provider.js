@@ -48,9 +48,11 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
           amount: amountCents, currency, customer: client.stripe_customer_id, payment_method: client.card_payment_method,
           off_session: true, confirm: true, description, metadata: { [client.metadataKey ?? 'client_id']: client.id, ...metadata }
         }, { idempotencyKey });
-        return pi.status === 'succeeded' ? { ok: true, ref: pi.id } : { ok: false, error: `Payment ${pi.status.replace(/_/g, ' ')}.` };
+        // 'processing' counts as paid; if it fails later the payment_intent.payment_failed webhook reopens the invoice.
+        // The PaymentIntent id comes back either way so webhooks can find the invoice.
+        return ['succeeded', 'processing'].includes(pi.status) ? { ok: true, ref: pi.id } : { ok: false, ref: pi.id, error: `Payment ${pi.status.replace(/_/g, ' ')}.` };
       } catch (e) {
-        if (e.status === 402 || e.stripe?.type === 'card_error') return { ok: false, error: e.message };
+        if (e.status === 402 || e.stripe?.type === 'card_error') return { ok: false, ref: e.stripe?.payment_intent?.id ?? null, error: e.message };
         throw e;
       }
     },

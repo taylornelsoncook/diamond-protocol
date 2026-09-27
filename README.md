@@ -78,7 +78,7 @@ curl -X POST http://localhost:3000/v1/clients \
 
 Lists return `{ "data": [...] }`. Errors return `{ "error": { "code": "...", "message": "..." } }` with a plain-English message. Money is in cents.
 
-**Webhooks** fire on `client.created`, `client.updated`, `client.card_updated`, `subscription.created`, `subscription.updated`, `invoice.paid`, `invoice.payment_failed`, `program.assigned`, `workout.completed`, `sale.completed`, `sale.failed`, `sale.refunded` and `session.checked_in`. Each request carries a `DP-Signature: t=<unix time>,v1=<signature>` header. Verify it on your side:
+**Webhooks** fire on `client.created`, `client.updated`, `client.card_updated`, `subscription.created`, `subscription.updated`, `invoice.paid`, `invoice.payment_failed`, `program.assigned`, `workout.completed`, `sale.completed`, `sale.failed`, `sale.refunded`, `payment.disputed` and `session.checked_in`. Each request carries a `DP-Signature: t=<unix time>,v1=<signature>` header. Verify it on your side:
 
 ```js
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -125,7 +125,7 @@ With a Stripe key, everything runs through Stripe:
 - **In person:** Tap to Pay on iPhone (in the DP Coach app) and Stripe smart readers at the front desk (sent from the dashboard, no app needed).
 - **Saved cards:** from a tap (when the client agrees), or from a secure Stripe link you send them. Card details never touch this server.
 - **Memberships:** this app runs the monthly billing clock and charges the saved card through Stripe.
-- **Stripe webhooks** go to `https://your-domain/stripe/webhook`. Subscribe to `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated` and `checkout.session.completed`.
+- **Stripe webhooks** go to `https://your-domain/stripe/webhook`. Subscribe to `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`.
 
 Use `sk_test_...` keys until you've run real test payments end to end. The server refuses to start with a live key while `DP_TEST_MODE=true`.
 

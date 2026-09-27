@@ -179,7 +179,7 @@ Parents see test results after you share a testing day ("Share with parents", wi
 
 ## Going to production
 
-See **DEPLOY.md** for step-by-step instructions (Render or Fly.io, Docker, a persistent disk, your domain). In short: one instance with a persistent disk at `/data`, `DP_TEST_MODE=false`, `PUBLIC_URL=https://…`, `TRUST_PROXY=true` (set in the Dockerfile), your Stripe and Resend keys, and `ADMIN_EMAIL`/`ADMIN_PASSWORD` for the first start only. The app refuses to start with unsafe settings and says what to fix; `/healthz` reports health.
+See **DEPLOY.md** for step-by-step instructions (Render or Fly.io, Docker, a persistent disk, your domain). In short: one instance with a persistent disk at `/data`, `DP_TEST_MODE=false`, `PUBLIC_URL=https://…`, `TRUST_PROXY` (`2` on Render, set in `render.yaml`; the Dockerfile's `true` means one proxy), your Stripe and Resend keys, and `ADMIN_EMAIL`/`ADMIN_PASSWORD` for the first start only. The app refuses to start with unsafe settings and says what to fix; `/healthz` reports health.
 
 Later, as you grow: Postgres instead of SQLite (only `db.js` and a few date functions change), private video uploads (Mux or Cloudflare Stream), and emailed receipts and trial reminders.
 

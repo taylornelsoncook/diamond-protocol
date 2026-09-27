@@ -110,18 +110,40 @@ export function changePassword(ctx, user, body) {
 }
 
 // ---------- Connection check (owner, Staff & security) ----------
-// Shows what the hosting proxy sent and which address the app picked, so the owner can confirm TRUST_PROXY.
+// Shows what the hosting proxy sent and which address the app picked, so the owner can confirm TRUST_PROXY. Each proxy
+// adds the address it heard from at the end of X-Forwarded-For, and TRUST_PROXY=N picks the Nth entry from the end.
+// If that entry is a proxy's own address (a private hosting-network address or a Cloudflare edge; Render fronts every
+// service with Cloudflare), N is too low; previews show what each value would pick.
 const PRIVATE = /^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|fc|fd|fe80:|::ffff:(10|127|192\.168|172\.(1[6-9]|2\d|3[01]))\.)/i;
+// Cloudflare's published ranges (https://www.cloudflare.com/ips/).
+const CLOUDFLARE_V4 = ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+  '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22'];
+const CLOUDFLARE_V6 = /^(2400:cb00|2606:4700|2803:f800|2405:b500|2405:8100|2a06:98c[0-7]|2c0f:f248):/i;
+const v4num = (ip) => { const p = ip.split('.').map(Number); return p.length === 4 && p.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) ? ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3] : null; };
+export function addressKind(ip) {
+  const a = String(ip ?? '').trim().replace(/^::ffff:(?=\d+\.)/i, '');
+  if (!a) return null;
+  if (PRIVATE.test(a) || PRIVATE.test(String(ip))) return 'private';
+  const n = v4num(a);
+  if (n != null) return CLOUDFLARE_V4.some((c) => { const [base, bits] = c.split('/'); const mask = bits === '0' ? 0 : (~0 << (32 - Number(bits))) >>> 0; return ((n & mask) >>> 0) === ((v4num(base) & mask) >>> 0); }) ? 'cloudflare' : 'public';
+  return CLOUDFLARE_V6.test(a) ? 'cloudflare' : 'public';
+}
+const KIND_WORDS = { private: 'a private address inside the hosting network', cloudflare: 'a Cloudflare proxy address', public: 'a public address' };
 export function connectionCheck({ forwardedFor, socketAddress, clientIp, trustProxy, hops }) {
   const list = String(forwardedFor ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const pick = (n) => list[Math.max(0, list.length - n)];
+  const previews = list.map((_, i) => ({ trust_proxy: i + 1, address: pick(i + 1), kind: addressKind(pick(i + 1)) }));
+  const kind = addressKind(clientIp), left = hops ? list.length - hops : 0;     // entries to the left of the one picked
   let guidance;
   if (!hops && list.length) guidance = `Requests reach the app through ${list.length === 1 ? 'a proxy' : 'proxies'} but TRUST_PROXY is off, so every visitor looks like ${socketAddress} and shares one rate limit: set TRUST_PROXY to ${list.length} if ${list[0]} is your own internet address.`;
   else if (!hops) guidance = 'No proxy header arrived and TRUST_PROXY is off, which is right when nothing sits in front of the app.';
   else if (!list.length) guidance = 'TRUST_PROXY is on but no X-Forwarded-For header arrived, so the app uses the connection address; turn TRUST_PROXY off unless a proxy sits in front of the app.';
   else if (hops > list.length) guidance = `TRUST_PROXY is ${hops} but only ${list.length} ${list.length === 1 ? 'address arrived' : 'addresses arrived'}, so the app falls back to ${clientIp}: lower TRUST_PROXY to ${list.length}.`;
-  else if (PRIVATE.test(clientIp)) guidance = `The app picked ${clientIp}, a private address inside the hosting network, not yours: raise TRUST_PROXY by one (to ${hops + 1}) and check again.`;
-  else guidance = `If ${clientIp} is your own internet address (search "what is my IP" on this device to compare), TRUST_PROXY is set right; if it isn't, lower TRUST_PROXY by one and check again.`;
-  return { forwarded_for: forwardedFor || null, forwarded_addresses: list, connection_address: socketAddress ?? null, decided_address: clientIp ?? null, trust_proxy: trustProxy ?? null, proxies_trusted: hops, guidance };
+  else if ((kind === 'private' || kind === 'cloudflare') && left > 0) guidance = `The app picked ${clientIp}, ${KIND_WORDS[kind]}, not yours: raise TRUST_PROXY to ${hops + 1} and the app would pick ${pick(hops + 1)}${addressKind(pick(hops + 1)) === 'public' ? ' (check it matches "what is my IP" on this device)' : `, which is also ${KIND_WORDS[addressKind(pick(hops + 1))]}, so you may need more`}.`;
+  else if (kind === 'private' || kind === 'cloudflare') guidance = `The app picked ${clientIp}, ${KIND_WORDS[kind]}, and nothing further arrived in the header, so the proxy in front isn't passing your address along. Check the proxy's settings.`;
+  else if (left > 0) guidance = `If ${clientIp} is your own internet address (search "what is my IP" on this device to compare), TRUST_PROXY is set right. If it isn't, raise TRUST_PROXY to ${hops + 1} and the app would pick ${pick(hops + 1)}.`;
+  else guidance = `If ${clientIp} is your own internet address (search "what is my IP" on this device to compare), TRUST_PROXY is set right${hops > 1 ? '; if it isn\'t, lower TRUST_PROXY by one and check again' : ''}.`;
+  return { forwarded_for: forwardedFor || null, forwarded_addresses: list, connection_address: socketAddress ?? null, decided_address: clientIp ?? null, decided_kind: kind, trust_proxy: trustProxy ?? null, proxies_trusted: hops, previews, guidance };
 }
 
 // ---------- Audit log ----------

@@ -34,6 +34,12 @@ function seed() {
   }
   if (parkOlivia) run("UPDATE memberships SET status='past_due' WHERE id=?", parkOlivia.id);
 
+  // ---- contract details added after launch: billing phones, a club, staff notes ----
+  run("UPDATE team_contracts SET billing_phone='(801) 555-0142', notes='Dana wants the PO number on every invoice. Checks come from the district office, usually in the first week.' WHERE team_name='Riverside Varsity Football'");
+  run("UPDATE team_contracts SET billing_phone='(801) 555-0187' WHERE team_name='Summit Elite 16U'");
+  run("UPDATE schools SET kind='club', contact_phone='(801) 555-0187' WHERE name='Summit Elite Baseball Club'");
+  run("UPDATE schools SET contact_phone='(801) 555-0142' WHERE name='Riverside High School'");
+
   // ---- school invoices ----
   const contracts = all('SELECT * FROM team_contracts ORDER BY id');
   const plans = {

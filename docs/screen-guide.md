@@ -260,9 +260,10 @@ _Where: Teams_
 
 School and club contracts billed a flat monthly fee.
 
-- See monthly contract revenue, what's waiting on payment, and what's overdue.
+- See monthly contract revenue, what's waiting on payment, what's overdue and athletes on rosters.
+- Contracts: Active, Ended or All, with counts; search by school, team or PO number once there are more than a few. Each row shows the fee, terms, roster size, team attendance, the next invoice date, and flags a missing billing email.
 - Open a contract, or add a New team contract.
-- Unpaid invoices can be recorded as paid (check number and all), emailed again or voided right from this list.
+- Unpaid invoices can be recorded as paid (check number and all), emailed again or voided right from this list. Overdue ones say how many days late they are; Email overdue reminders sends every overdue school a reminder now instead of waiting for the weekly one. The panel shows what was collected in the last 30 days.
 
 ### Team contract
 
@@ -270,12 +271,12 @@ _Where: Teams, then a team_
 
 [Owner] 
 
-One school's team: invoices, contract terms, roster and practice schedule.
+One school's team: invoices, contract terms, roster and practice schedule. A section bar jumps to Invoices, Roster, Team sessions, Contract and Accountability, and stays in reach on a phone.
 
-- Invoices: view the one the school sees, record a payment, email it again, void a mistake, or bill something extra.
-- Contract: change the monthly fee (applies from the next invoice), end date, payment terms, PO number and billing contact.
-- Team sessions: put the team on your schedule by day and time.
-- Roster: paste the team list, one athlete per line. Each player gets an Athlete ID, and attendance rates build up as you check them in.
+- Invoices: unpaid and paid-to-date totals; view the one the school sees, record a payment, email it again, void a mistake, or bill something extra. Record one payment for several covers the common case of one check paying several months. Email statement sends the billing contact one email listing every open invoice with its link and the total. Older invoices fold behind Show all.
+- Contract: team name, school or club, monthly fee (applies from the next invoice), end date, payment terms, PO number, billing contact (name, phone with tap to call, email) and staff-only notes. Unsaved changes are flagged. Team sessions follow the end date: a shorter contract takes later sessions off the schedule, a longer one brings them back. Ending a contract takes future team sessions off the schedule. An ended contract restarts when its end date is cleared or moved later; billing picks up on the next billing day and the months it was ended aren't billed.
+- Team sessions: put the team on your schedule by day, time, place and coach; times show as 3:30 PM.
+- Roster: team attendance, the last session's check-ins and a bar for each of the last eight sessions (amber under 60%). Find a player, sort by name, lowest attendance or grad year, and export the roster as CSV. Add an existing client (search by name or Athlete ID; moving someone from another team asks first). Paste the team list, one athlete per line (Name, position, grad year; spreadsheet rows, list numbers and jersey numbers work). Lines are checked first: problems are listed before anything is saved, and names that match a client you already have can be linked instead of creating a duplicate. Each new player gets an Athlete ID, rows show Class of and last time here, and Remove has Undo.
 
 ### New team contract
 
@@ -285,9 +286,10 @@ _Where: Teams, then New team contract_
 
 Set up a school or club in one step.
 
-- Choose an existing school or club, or add a new one with its billing contact and address.
+- Choose an existing school or club (its billing contact, phone and address fill in), or add a new one with its type, billing contact, phone and address.
 - Enter the team, monthly fee, start date, optional end date, payment terms and PO number.
-- Create contract. If it has started, the first month is invoiced and emailed immediately; each month after goes out on the same day.
+- A summary says exactly what happens on save: how many invoices go out now, their total, and when the next one follows. If the start date is in the past, choose whether to invoice every month so far, only the current month, or none of them (already billed another way).
+- Create contract. Mistakes point at the field to fix; a second active contract for the same school and team is refused. Each month after the first goes out on the same day.
 
 ### Testing
 
@@ -577,9 +579,9 @@ _Where: the link in each invoice email_
 
 What the school's athletic director or treasurer sees.
 
-- Invoice number, dates, PO, who it's billed to, what it covers and the amount due.
-- Pay online by card or bank transfer, or follow your check instructions.
-- Print or save as PDF. Paid invoices show a Paid stamp.
+- Invoice number, dates, PO, team, who it's billed to, what it covers and the amount due.
+- How to pay: online by card or bank transfer, or by check with your instructions and the invoice number to write on the memo. Past-due invoices say how many days late they are.
+- Print or save as PDF. Paid invoices show a Paid stamp. Questions go back by replying to the invoice email.
 
 ### Athlete workout app
 

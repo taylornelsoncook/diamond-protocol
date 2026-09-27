@@ -114,11 +114,11 @@ Every class, camp, clinic, team session, private and evaluation, two weeks at a 
 
 - Tap a session to open its roster. Sessions on now say On now; finished ones are dimmed with a check-in bar. Full sessions, unpaid bookings and waitlists are flagged, and a staff note shows under the session.
 - Move a week at a time with Previous week and Next week (Today brings you back). Find a session by name, place or coach, and filter by type (group classes, camps and clinics, team sessions, privates and evaluations), coach (or My sessions) and place. The filters stay in the address, so a reload or a shared link shows the same view. The line under the filters totals the sessions, bookings, unpaid and waitlisted in view.
-- Days a coach is off, or the facility is closed, are marked on the day.
-- To add a weekly class: Add class or camp, then fill in the name, type, days, start time, length, spots, ages, price and coach ("No coach set" leaves it open). For camps and clinics, set a first and last day, a registration price and a last day to register (inside the camp).
+- Days a coach is off, or the facility is closed, are marked on the day, in past weeks too. The Schedule button on a roster brings you back to the week and filters you were on.
+- To add a weekly class: Add class or camp, then fill in the name, type, days, start time, length, spots, ages, price and coach ("No coach set" leaves it open). For camps and clinics, set a first and last day, a registration price and a last day to register (on or before the camp's last day).
 - Save it. Sessions are created automatically, eight weeks ahead for weekly classes.
 - Add one session for a makeup or a one-time clinic: name, date, time, length, spots, place, coach, price and a note for staff. Parents can book it like any class.
-- Edit a class to change its name, days, time, length, spots, ages, place, coach or price. Every upcoming session follows. If the time or place changes, booked families are emailed; sessions on days you take away are cancelled (credits back, families emailed); new days are added. Spots can't go below what an upcoming session already has booked. Coaches edit without seeing prices, and prices stay as they were.
+- Edit a class to change its name, days, time, length, spots, ages, place, coach or price. Every upcoming session follows what you changed; a session you changed on its own (a sub coach, a new time, more spots) keeps that change. If the time or place changes, booked families get one email listing their sessions; sessions on days you take away are cancelled (credits back, families emailed); new days are added. Spots can't go below what an upcoming session already has booked. Coaches edit without seeing prices, and prices stay as they were.
 - Archive a class to cancel its future sessions. Credits go back and families are emailed.
 
 > Note: Front desk can view the schedule and manage bookings, but only owners and coaches add, edit or archive classes and sessions. Only owners see prices in the schedule list and the classes list.
@@ -137,7 +137,7 @@ Run a session: check athletes in, see medical flags, missing waivers and parent 
 - Add a walk-in: type a name, Athlete ID or email and tap the match, or press Enter when there's only one. A full session puts them on the waitlist, which moves up automatically when someone cancels. Move up books someone from the waitlist now, even over the spots (it asks first), and emails the family.
 - Email families sends a message to everyone booked (and the waitlist if you tick it), signed with your name: "Starting 10 minutes late", "Bring your cleats". Team sessions go to the whole team.
 - Print roster gives a clean sign-in sheet with a box by each name.
-- Edit session (owners and coaches) changes just this session: date and time, length, spots, place, coach (a sub) and a note for staff. Booked families are emailed if the day, time or place changes (you can turn that off). More spots move the waitlist up.
+- Edit session (owners and coaches) changes just this session: date and time, length, spots, place, coach (a sub) and a note for staff. Booked families are emailed if the day, time or place changes (you can turn that off). More spots move the waitlist up. A class session moved to another day still counts as that week's session, so it isn't added again.
 - Cancel this session (for weather, say): credits go back, drop-ins are refunded and families get an email with your reason. For a team session the school contact is emailed too.
 
 > Note: Team sessions show the team's roster instead, with one-tap "Everyone's here", and guests can be added below.

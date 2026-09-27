@@ -74,15 +74,28 @@ function bookedFamilies(eventId, { waitlist = false } = {}) {
 }
 const names = (list) => (list.length < 3 ? list.join(' and ') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`);
 
-// Tell booked families a session moved (new day, time or place).
-function notifyMoved(before, after) {
+// Tell booked families their sessions moved (new day, time or place): one email per family, however many
+// of their sessions changed. `moves` is [{ before, after }]. Returns the number of families emailed.
+function notifyMoved(moves) {
   const loc = (id) => (id ? get('SELECT name FROM locations WHERE id=?', id)?.name : null);
-  const place = before.location_id !== after.location_id && loc(after.location_id) ? ` at ${loc(after.location_id)}` : '';
-  const fams = bookedFamilies(after.id);
-  for (const f of fams) {
-    sendEmail(f.to, `New time: ${after.name}`, `${after.name} on ${when(before)} has moved to ${when(after)}${place}. ${names(f.names)} ${f.names.length > 1 ? 'are' : 'is'} still booked. If the new time doesn't work, cancel from the parent portal.`);
+  const byFamily = new Map();
+  for (const { before, after } of moves) {
+    const place = before.location_id !== after.location_id && loc(after.location_id) ? ` at ${loc(after.location_id)}` : '';
+    const line = `${after.name} on ${when(before)} has moved to ${when(after)}${place}.`;
+    for (const f of bookedFamilies(after.id)) {
+      const key = f.to.toLowerCase();
+      if (!byFamily.has(key)) byFamily.set(key, { to: f.to, names: new Set(), lines: [], subject: after.name });
+      const x = byFamily.get(key);
+      f.names.forEach((n) => x.names.add(n));
+      x.lines.push(line);
+    }
   }
-  return fams.length;
+  for (const f of byFamily.values()) {
+    const who = [...f.names];
+    const body = f.lines.length === 1 ? f.lines[0] : `These sessions have moved:\n${f.lines.map((l) => `- ${l}`).join('\n')}\n`;
+    sendEmail(f.to, `New time: ${f.subject}`, `${body} ${names(who)} ${who.length > 1 ? 'are' : 'is'} still booked. If the new time doesn't work, cancel from the parent portal.`);
+  }
+  return byFamily.size;
 }
 
 const isActiveCoach = (id) => !!get("SELECT 1 FROM staff WHERE id=? AND active=1 AND role IN ('owner','coach')", id);
@@ -351,9 +364,12 @@ function routes(api) {
     if (e.cancelled) throw bad('That session was cancelled. Add a new one instead.');
     const b = req.body || {};
     const next = sessionBody(b, e);
-    if (next.starts_at && next.starts_at !== e.starts_at) {
+    for (const k of Object.keys(next)) if (next[k] === e[k]) delete next[k]; // the form sends every field; keep only real changes
+    if (next.starts_at) {
       if (next.starts_at.slice(0, 10) < booking.todayLocal()) throw bad('Pick today or a later date.');
       if (e.class_id && get('SELECT 1 FROM events WHERE class_id=? AND starts_at=? AND id<>?', e.class_id, next.starts_at, e.id)) throw bad('This class already has a session at that time.');
+      // A class session moved to another day still stands for its original day, so the weekly job doesn't add it again.
+      if (e.class_id && !e.slot_date && next.starts_at.slice(0, 10) !== e.starts_at.slice(0, 10)) next.slot_date = e.starts_at.slice(0, 10);
     }
     const booked = get("SELECT COUNT(*) n FROM bookings WHERE event_id=? AND status='booked'", e.id).n;
     if (next.capacity != null && next.capacity < booked) throw bad(`${booked} athletes are booked. Set spots to ${booked} or more, or remove someone first.`);
@@ -364,9 +380,9 @@ function routes(api) {
       update('events', e.id, next);
       while (booking.promoteWaitlist(e.id)) promoted++;
       const movedIt = after.starts_at !== e.starts_at || after.location_id !== e.location_id;
-      if (movedIt && b.notify !== false) notified = notifyMoved(e, after);
+      if (movedIt && b.notify !== false) notified = notifyMoved([{ before: e, after }]);
     });
-    const changed = Object.keys(next).map((k) => ({ starts_at: 'time', duration_min: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note', name: 'name' })[k]);
+    const changed = Object.keys(next).map((k) => ({ starts_at: 'time', duration_min: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note', name: 'name' })[k]).filter(Boolean);
     log(req, 'Edited session', `${after.name} · ${when(after)} · ${changed.join(', ')}${notified ? ` · ${notified} famil${notified === 1 ? 'y' : 'ies'} emailed` : ''}`);
     res.json({ ok: true, notified, promoted });
   }));
@@ -426,8 +442,10 @@ function routes(api) {
     res.json({ ok: true, id, sessions: count });
   }));
 
-  // Edit a class or camp. Every upcoming session follows: new time or place (booked families are emailed),
-  // spots, price and coach. Sessions on days it no longer runs are cancelled; new days are added.
+  // Edit a class or camp. Every upcoming session follows what changed: new time or place (booked families get one
+  // email), length, spots, price, coach and name. A session changed on its own (a sub coach, a moved time, more
+  // spots) keeps that change unless the class field it overrode changes to match. Sessions on days the class no
+  // longer runs are cancelled; new days are added.
   api.put('/classes/:id', requireStaff('owner', 'coach'), h(async (req, res) => {
     const c = get('SELECT * FROM classes WHERE id=?', req.params.id);
     if (!c) throw notFound('That class');
@@ -437,34 +455,53 @@ function routes(api) {
     const days = row.weekdays.split(',').map(Number);
     const future = all('SELECT * FROM events WHERE class_id=? AND cancelled=0 AND starts_at>? ORDER BY starts_at', c.id, now);
     const eff = { ...c, ...row }; // weekly classes keep any start or end date they already had
+    const dayOf = (e) => e.slot_date || e.starts_at.slice(0, 10); // a moved session stands for its class day
     const fits = (d) => days.includes(new Date(d + 'T12:00:00').getDay()) && (!eff.start_date || d >= eff.start_date) && (!eff.end_date || d <= eff.end_date);
-    const keep = future.filter((e) => fits(e.starts_at.slice(0, 10))), drop = future.filter((e) => !fits(e.starts_at.slice(0, 10)));
-    // Never squeeze anyone out: spots can't go below what an upcoming session already has booked.
-    for (const e of keep) {
-      const n = get("SELECT COUNT(*) n FROM bookings WHERE event_id=? AND status='booked'", e.id).n;
-      if (n > row.capacity) throw bad(`${n} athletes are booked on ${when(e)}. Set spots to ${n} or more.`);
+    const keep = future.filter((e) => fits(dayOf(e))), drop = future.filter((e) => !fits(dayOf(e)));
+    // What each kept session becomes: only class fields that changed, and only where the session still had the old value.
+    const FIELDS = ['name', 'duration_min', 'capacity', 'price_cents', 'location_id', 'coach_id'];
+    const plan = keep.map((e) => {
+      const next = {};
+      for (const k of FIELDS) if (row[k] !== c[k] && e[k] === c[k]) next[k] = row[k];
+      if (row.start_time !== c.start_time && e.starts_at.slice(11, 16) === c.start_time) {
+        const at = `${e.starts_at.slice(0, 10)}T${row.start_time}`;
+        if (at > now) next.starts_at = at; // never move a session into the past
+      }
+      return { e, next };
+    });
+    for (const { e, next } of plan) {
+      // Never squeeze anyone out: spots can't go below what an upcoming session already has booked.
+      if (next.capacity != null) {
+        const n = get("SELECT COUNT(*) n FROM bookings WHERE event_id=? AND status='booked'", e.id).n;
+        if (n > next.capacity) throw bad(`${n} athletes are booked on ${when(e)}. Set spots to ${n} or more.`);
+      }
+      if (next.starts_at && get('SELECT 1 FROM events WHERE class_id=? AND starts_at=? AND id<>?', c.id, next.starts_at, e.id)) {
+        throw bad(`Another session of ${c.name} is already at ${when({ starts_at: next.starts_at })}. Move or cancel it first.`);
+      }
     }
     let moved = 0, notified = 0, cancelled = 0, promoted = 0;
     tx(() => {
       update('classes', c.id, row);
       for (const e of drop) {
         const paid = all("SELECT id FROM bookings WHERE event_id=? AND status='booked' AND coverage='paid' AND paid_cents>0", e.id).map((x) => x.id);
-        booking.cancelEvent(e.id, `${row.name} no longer runs on ${new Date(e.starts_at.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s`);
+        booking.cancelEvent(e.id, `${row.name} no longer runs on ${new Date(dayOf(e) + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })}s`);
         markSalesRefunded(paid);
         cancelled++;
       }
-      for (const e of keep) {
-        const next = { name: row.name, starts_at: `${e.starts_at.slice(0, 10)}T${row.start_time}`, duration_min: row.duration_min, capacity: row.capacity, price_cents: row.price_cents, location_id: row.location_id, coach_id: row.coach_id };
-        update('events', e.id, next);
-        if (next.starts_at !== e.starts_at || next.location_id !== e.location_id) { moved++; notified += notifyMoved(e, { ...e, ...next }); }
+      const moves = [];
+      for (const { e, next } of plan) {
+        if (Object.keys(next).length) update('events', e.id, next);
+        const after = { ...e, ...next };
+        if (after.starts_at !== e.starts_at || after.location_id !== e.location_id) { moved++; moves.push({ before: e, after }); }
         while (booking.promoteWaitlist(e.id)) promoted++;
       }
+      notified = notifyMoved(moves);
     });
     const before = get('SELECT COUNT(*) n FROM events WHERE class_id=?', c.id).n;
     booking.generateEvents();
     const added = get('SELECT COUNT(*) n FROM events WHERE class_id=?', c.id).n - before;
     const bits = [`${keep.length} upcoming session${keep.length === 1 ? '' : 's'} updated`, moved && `${moved} moved`, cancelled && `${cancelled} cancelled`, added && `${added} added`].filter(Boolean);
-    log(req, `Edited ${c.type}`, `${row.name} · ${row.weekdays.split(',').map((d) => DAY[d]).join(', ')} ${row.start_time} · ${bits.join(', ')}`);
+    log(req, `Edited ${c.type}`, `${row.name} · ${row.weekdays.split(',').map((d) => DAY[d]).join(', ')} ${row.start_time} · ${bits.join(', ')}${notified ? ` · ${notified} famil${notified === 1 ? 'y' : 'ies'} emailed` : ''}`);
     res.json({ ok: true, updated: keep.length, moved, cancelled, added, notified, promoted });
   }));
 
@@ -542,8 +579,11 @@ function routes(api) {
   }));
 
   // ---- time off: a coach away, or the facility closed. No private or evaluation times are offered those days. ----
-  api.get('/time-off', requireStaff(), h(async (_req, res) => {
-    res.json(all(`SELECT t.*, s.name AS coach FROM time_off t LEFT JOIN staff s ON s.id=t.coach_id WHERE t.end_date>=? ORDER BY t.start_date, t.id`, booking.todayLocal()));
+  // Upcoming time off, or (with from and to) any that touches those dates, for looking back on the schedule.
+  api.get('/time-off', requireStaff(), h(async (req, res) => {
+    const from = isDate(req.query.from) ? req.query.from : booking.todayLocal();
+    const to = isDate(req.query.to) ? req.query.to : '9999-12-31';
+    res.json(all(`SELECT t.*, s.name AS coach FROM time_off t LEFT JOIN staff s ON s.id=t.coach_id WHERE t.end_date>=? AND t.start_date<=? ORDER BY t.start_date, t.id`, from, to));
   }));
 
   api.post('/time-off', requireStaff('owner', 'coach'), h(async (req, res) => {

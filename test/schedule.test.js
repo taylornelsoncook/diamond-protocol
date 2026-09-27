@@ -306,3 +306,87 @@ test('Class validation: the last day to register must fall inside the camp', asy
   assert.equal(r.status, 400);
   assert.match(r.data.error, /after the camp ends/);
 });
+
+test('Review fixes: a moved class session is not made again by the weekly job', async () => {
+  const o = await owner();
+  const made = await o.post('/api/classes', { name: 'Move Me', type: 'class', weekdays: [2], start_time: '16:00', duration_min: 60, capacity: 6, coach_id: '' });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const [first, second] = all('SELECT * FROM events WHERE class_id=? ORDER BY starts_at', made.data.id);
+  const count = () => get('SELECT COUNT(*) n FROM events WHERE class_id=?', made.data.id).n;
+  const n = count();
+  // A new time on the same day.
+  let r = await o.put(`/api/events/${first.id}`, { start_time: '07:00' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  booking.generateEvents();
+  assert.equal(count(), n, 'no second session at the old time');
+  // Another day entirely.
+  const wed = addDays(second.starts_at.slice(0, 10), 1);
+  r = await o.put(`/api/events/${second.id}`, { date: wed });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(get('SELECT slot_date FROM events WHERE id=?', second.id).slot_date, second.starts_at.slice(0, 10));
+  booking.generateEvents();
+  assert.equal(count(), n, 'the Tuesday it stands for is not added again');
+  assert.equal(get('SELECT COUNT(*) n FROM events WHERE class_id=? AND substr(starts_at,1,10)=?', made.data.id, second.starts_at.slice(0, 10)).n, 0);
+
+  // Editing the class keeps the moved session and its own changes; unchanged fields don't move anything.
+  const coachId = get("SELECT id FROM staff WHERE email='coach@demo.test'").id;
+  await o.put(`/api/events/${second.id}`, { coach_id: coachId, capacity: 9 });
+  r = await o.put(`/api/classes/${made.data.id}`, { name: 'Move Me Renamed', weekdays: [2], start_time: '16:00', duration_min: 60, capacity: 6, location_id: loc(), coach_id: '' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.cancelled, 0, 'a session moved to Wednesday still belongs to Tuesday');
+  const s2 = get('SELECT * FROM events WHERE id=?', second.id);
+  assert.equal(s2.cancelled, 0);
+  assert.equal(s2.starts_at, `${wed}T16:00`);
+  assert.equal(s2.coach_id, coachId, 'the sub coach stays');
+  assert.equal(s2.capacity, 9, 'the extra spots stay');
+  assert.equal(s2.name, 'Move Me Renamed', 'the name follows the class');
+  assert.equal(get('SELECT starts_at FROM events WHERE id=?', first.id).starts_at, `${first.starts_at.slice(0, 10)}T07:00`, 'a session moved on its own keeps its time');
+  booking.generateEvents();
+  assert.equal(count(), n);
+});
+
+test('Review fixes: a class time change after today\'s session does not add a second one today', async () => {
+  const o = await owner();
+  const wd = weekday(T());
+  const made = await o.post('/api/classes', { name: 'Early Bird', type: 'class', weekdays: [wd], start_time: '00:00', duration_min: 30, capacity: 6, coach_id: '' });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const today = () => all('SELECT * FROM events WHERE class_id=? AND substr(starts_at,1,10)=?', made.data.id, T());
+  assert.equal(today().length, 1);
+  const r = await o.put(`/api/classes/${made.data.id}`, { name: 'Early Bird', weekdays: [wd], start_time: '23:58', duration_min: 30, capacity: 6, location_id: loc(), coach_id: '' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(today().length, 1, 'still one session today');
+});
+
+test('Review fixes: a class time change emails each family once, listing every session that moved', async () => {
+  const o = await owner();
+  const made = await o.post('/api/classes', { name: 'Twice Weekly', type: 'class', weekdays: [1, 4], start_time: '15:00', duration_min: 60, capacity: 6, coach_id: '' });
+  const evs = all('SELECT * FROM events WHERE class_id=? ORDER BY starts_at LIMIT 3', made.data.id);
+  const kevin = athlete('Kevin');
+  for (const e of evs) assert.equal((await o.post(`/api/events/${e.id}/bookings`, { athlete_id: kevin.id })).status, 200);
+  const to = require('../server/services/billing').billingEmail(kevin.family_id);
+  const last = get('SELECT MAX(id) m FROM outbox').m;
+  const r = await o.put(`/api/classes/${made.data.id}`, { name: 'Twice Weekly', weekdays: [1, 4], start_time: '15:30', duration_min: 60, capacity: 6, location_id: loc(), coach_id: '' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const mails = all('SELECT * FROM outbox WHERE id>? AND to_email=?', last, to);
+  assert.equal(mails.length, 1, 'one email, not one per session');
+  assert.equal(mails[0].subject, 'New time: Twice Weekly');
+  assert.equal((mails[0].body.match(/has moved to/g) || []).length, 3, 'all three sessions are listed');
+  assert.equal(r.data.notified, 1, 'counts families, not sessions');
+});
+
+test('Review fixes: editing one session logs only what changed; time off can be read for past weeks', async () => {
+  const o = await owner();
+  const eid = insert('events', { type: 'class', name: 'Log Test', starts_at: `${addDays(T(), 3)}T12:00`, duration_min: 60, capacity: 5, location_id: loc() });
+  const e = get('SELECT * FROM events WHERE id=?', eid);
+  // The form sends every field; only the note changed.
+  const r = await o.put(`/api/events/${eid}`, { name: 'Log Test', date: e.starts_at.slice(0, 10), start_time: '12:00', duration_min: 60, capacity: 5, location_id: loc(), coach_id: '', staff_note: 'Cones out' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(get("SELECT detail FROM activity WHERE action='Edited session' ORDER BY id DESC LIMIT 1").detail, / · note$/);
+  assert.equal((await o.put(`/api/events/${eid}`, { name: 'Log Test', staff_note: 'Cones out' })).status, 400, 'nothing changed');
+
+  const past = addDays(T(), -20);
+  insert('time_off', { coach_id: null, start_date: past, end_date: past, note: 'Old holiday' });
+  assert.ok(!(await o.get('/api/time-off')).data.some((t) => t.note === 'Old holiday'), 'the default list is upcoming only');
+  const back = (await o.get(`/api/time-off?from=${addDays(past, -3)}&to=${addDays(past, 10)}`)).data;
+  assert.ok(back.some((t) => t.note === 'Old holiday'), 'looking back shows it');
+});

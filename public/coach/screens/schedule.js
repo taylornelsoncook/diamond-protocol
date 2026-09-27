@@ -103,7 +103,7 @@ async function renderSchedule(ctx) {
   const today = now.slice(0, 10);
   const from = isDate(ctx.query.from) ? ctx.query.from : today;
   const to = addDays(from, 13);
-  const [events, classes, lk, timeOff] = await Promise.all([api.get(`/events?from=${from}&to=${to}`), api.get('/classes'), api.get('/lookups'), api.get('/time-off').catch(() => [])]);
+  const [events, classes, lk, timeOff] = await Promise.all([api.get(`/events?from=${from}&to=${to}`), api.get('/classes'), api.get('/lookups'), api.get(`/time-off?from=${from}&to=${to}`).catch(() => [])]);
   if (!ctx.isCurrent()) return;
   const manage = canManage(ctx.me);
   const f = { q: ctx.query.q || '', type: ctx.query.type || '', coach: ctx.query.coach || '', loc: ctx.query.loc || '' };
@@ -180,6 +180,7 @@ async function renderSchedule(ctx) {
   };
   const sync = () => {
     history.replaceState(history.state, '', href(from));
+    try { sessionStorage.setItem('dp-schedule-view', href(from)); } catch { /* storage blocked: the roster links to this week */ }
     ctx.el.querySelectorAll('[data-from]').forEach((a) => { a.href = href(a.dataset.from); });
     draw();
   };
@@ -342,13 +343,21 @@ async function renderRoster(ctx) {
   let d = await api.get(`/events/${ctx.params.id}`);
   if (!ctx.isCurrent()) return;
   const manage = canManage(ctx.me);
-  // Redraw in place after each action, so the page doesn't jump back to the top mid-roster.
+  let backTo = '/app/schedule';
+  try { const v = sessionStorage.getItem('dp-schedule-view'); if (v && v.startsWith('/app/schedule')) backTo = v; } catch { /* storage blocked */ }
+  // Redraw in place after each action, so the page doesn't jump back to the top mid-roster, and keep focus on
+  // the same button so keyboard and screen-reader users don't lose their place.
+  let focusOn = null; // the button an action came from (it is disabled while it runs, so it loses focus)
+  const selectorFor = (el) => { const k = el && ['check', 'teamcheck', 'collect', 'promote'].find((x) => el.dataset?.[x]); return k ? `[data-${k}="${el.dataset[k]}"]` : null; };
   const refresh = async () => {
     const y = window.scrollY;
+    const sel = focusOn || selectorFor(document.activeElement);
+    focusOn = null;
     d = await api.get(`/events/${ctx.params.id}`);
     if (!ctx.isCurrent()) return;
     draw();
     window.scrollTo(0, y);
+    if (sel) ctx.el.querySelector(sel)?.focus({ preventScroll: true });
   };
 
   function draw() {
@@ -386,7 +395,7 @@ async function renderRoster(ctx) {
     mount(ctx.el, html`${STYLE}<div class="stack sc-page">
       <header class="page-header">
         <div><h1 class="page-title">${e.name}</h1><p class="page-sub">${sub}${st === 'now' ? html` · <span class="sc-now">On now</span>` : ''}</p></div>
-        <a class="btn" href="/app/schedule">Schedule</a>
+        <a class="btn" href="${backTo}">Schedule</a>
       </header>
       <div class="ro-acts no-print">
         ${manage && !e.cancelled ? html`<button class="btn btn-sm" id="edit-session">Edit session</button>` : ''}
@@ -421,7 +430,7 @@ async function renderRoster(ctx) {
   }
 
   function bind(e, sub, isTeam) {
-    const act = async (btn, fn) => { btn.disabled = true; try { await fn(); } catch (err) { toastError(err); btn.disabled = false; } };
+    const act = async (btn, fn) => { focusOn = selectorFor(btn); btn.disabled = true; try { await fn(); } catch (err) { toastError(err); btn.disabled = false; } };
     const all = [...d.booked, ...d.waitlist];
 
     ctx.el.querySelectorAll('[data-check]').forEach((b) => b.addEventListener('click', () => act(b, async () => {
@@ -479,17 +488,22 @@ async function renderRoster(ctx) {
     // Add an athlete: search, then tap a result, or press Enter when there's one match.
     const q = ctx.el.querySelector('#add-q'), results = ctx.el.querySelector('#add-results');
     if (!q) return;
-    let list = [];
+    let list = [], listTerm = '';
     const inIt = new Set([...all, ...(d.guests || [])].map((x) => x.athlete.id));
     const add = async (id, btn) => {
       if (btn) btn.disabled = true;
       try { const r = await api.post(`/events/${e.id}/bookings`, { athlete_id: id }); toast(r.message); await refresh(); ctx.el.querySelector('#add-q')?.focus(); }
       catch (err) { toastError(err); if (btn) btn.disabled = false; }
     };
+    const lookup = async (term) => {
+      const found = await api.get(`/athletes/search?q=${encodeURIComponent(term)}`).catch(() => []);
+      if (q.value.trim() === term) { list = found; listTerm = term; }
+      return found;
+    };
     const search = debounce(async () => {
       const term = q.value.trim();
-      if (term.length < 2) { results.hidden = true; list = []; return; }
-      list = await api.get(`/athletes/search?q=${encodeURIComponent(term)}`).catch(() => []);
+      if (term.length < 2) { results.hidden = true; list = []; listTerm = ''; return; }
+      await lookup(term);
       if (q.value.trim() !== term) return;
       const full = e.capacity && d.booked.length >= e.capacity;
       mount(results, list.length ? list.map((a) => html`<button type="button" data-add="${a.id}" ${inIt.has(a.id) ? raw('disabled') : ''}>
@@ -499,13 +513,20 @@ async function renderRoster(ctx) {
       results.hidden = false;
     }, 200);
     q.addEventListener('input', search);
-    q.addEventListener('keydown', (ev) => {
+    q.addEventListener('keydown', async (ev) => {
       if (ev.key === 'Escape') { q.value = ''; results.hidden = true; }
       if (ev.key !== 'Enter') return;
       ev.preventDefault();
-      const open = list.filter((a) => !inIt.has(a.id));
+      // A scanner or a fast typist can press Enter before the search catches up: search for what's typed now.
+      const term = q.value.trim();
+      if (term.length < 2) return;
+      const found = listTerm === term ? list : await lookup(term);
+      if (q.value.trim() !== term) return;
+      const open = found.filter((a) => !inIt.has(a.id));
       if (open.length === 1) add(open[0].id);
       else if (open.length > 1) toast(`${open.length} athletes match. Tap the one you mean.`, 'warn');
+      else if (found.length) toast(found.length === 1 ? `${found[0].first_name} is already on this session.` : 'Everyone who matches is already on this session.', 'warn');
+      else toast('No athletes match. Check the spelling or Athlete ID.', 'warn');
     });
     results.addEventListener('click', (ev) => {
       const b = ev.target.closest('[data-add]');

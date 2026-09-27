@@ -3,12 +3,15 @@
 const { db, get, all, setting } = require('../db');
 const { ageOn } = require('../lib');
 
-// Schedule schema added after launch: time off (a coach away, or the whole facility closed) and a staff-only
-// note on a session. Both upgrade existing databases in place on start.
+// Schedule schema added after launch: time off (a coach away, or the whole facility closed), a staff-only
+// note on a session, and the class day a moved session stands for. Both upgrade existing databases in place on start.
 db.exec(`CREATE TABLE IF NOT EXISTS time_off (
   id INTEGER PRIMARY KEY, coach_id INTEGER REFERENCES staff(id), -- NULL = the whole facility is closed
   start_date TEXT NOT NULL, end_date TEXT NOT NULL, note TEXT, created_at TEXT DEFAULT (datetime('now')));`);
-if (!all('PRAGMA table_info(events)').some((c) => c.name === 'staff_note')) db.exec('ALTER TABLE events ADD COLUMN staff_note TEXT');
+const eventCols = all('PRAGMA table_info(events)').map((c) => c.name);
+if (!eventCols.includes('staff_note')) db.exec('ALTER TABLE events ADD COLUMN staff_note TEXT');
+// A class session moved to another day keeps the day it stands for, so the weekly job doesn't make it again.
+if (!eventCols.includes('slot_date')) db.exec('ALTER TABLE events ADD COLUMN slot_date TEXT');
 
 // Is this coach (or everyone) off on this local date? Off days offer no private or evaluation times.
 function isTimeOff(coachId, date) {

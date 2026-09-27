@@ -6,6 +6,7 @@ import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
 import { OWNER_EVENTS, can } from './security.js';
+import { clientCounts } from './clients.js';
 
 const SESSION_DAYS = 14;
 
@@ -86,9 +87,12 @@ export function keyForSecret(ctx, secret) {
 // ---- Dashboard ----
 export function dashboard(ctx, { role = 'owner' } = {}) {
   const db = ctx.db;
-  const active = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(p.price_cents), 0) AS mrr FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`);
-  const trialing = db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE status = 'trialing'`).n;
-  const pastDue = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(p.price_cents), 0) AS risk FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'past_due'`);
+  // Client counts come from the same place as the client list's filters (clients.js#clientCounts), so "Active clients"
+  // here is exactly what the list's Active filter shows: not archived, paid up or on a free trial.
+  const counts = clientCounts(ctx);
+  const active = { n: counts.active, mrr: db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS mrr FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`).mrr };
+  const trialing = counts.trialing;
+  const pastDue = { n: counts.past_due, risk: db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS risk FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'past_due'`).risk };
   const weekAgo = addDays(ctx.now(), -7);
   const workouts = db.get('SELECT COUNT(*) AS n FROM workout_logs WHERE completed_at >= ?', weekAgo).n;
 
@@ -106,6 +110,7 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
      FROM clients c JOIN subscriptions s ON s.client_id = c.id AND s.status IN ('active','trialing')
      JOIN assignments a ON a.client_id = c.id AND a.active = 1
      LEFT JOIN workout_logs l ON l.client_id = c.id
+     WHERE c.archived_at IS NULL
      GROUP BY c.id HAVING last_workout_at IS NULL OR last_workout_at < ? ORDER BY last_workout_at LIMIT 5`, weekAgo)
     .filter((r) => r.last_workout_at).map((r) => ({ kind: 'inactive', ...r }));
 
@@ -125,14 +130,14 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   if (low.length) waiting.push({ kind: 'low_stock', count: low.length, items: low.slice(0, 4).map((x) => ({ name: x.name, on_hand: x.on_hand })) });
   if (role !== 'owner') {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
-    return { today_sales: null, metrics: { paying_clients: active.n, trialing_clients: trialing, workouts_last_7_days: workouts }, teams: null,
+    return { today_sales: null, metrics: { active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, archived_clients: counts.archived, workouts_last_7_days: workouts }, teams: null,
       attention: [...waiting, ...quiet, ...(role === 'front_desk' ? pendingSales.map(({ amount_cents, ...x }) => x) : pendingSales)],
       activity: listEvents(ctx, { limit: 12 }).filter((e) => !OWNER_EVENTS.test(e.type)) };
   }
   return {
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
     today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfLocalDay(ctx.now(), getSetting(ctx, 'timezone'))),
-    metrics: { mrr_cents: active.mrr, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },
+    metrics: { mrr_cents: active.mrr, active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, archived_clients: counts.archived, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },
     attention: [...ctx.db.all(`SELECT id AS request_id, family_id, family_name, requested_by, created_at FROM data_requests WHERE status = 'open' AND kind = 'delete'`).map((x) => ({ kind: 'deletion_request', ...x })), ...failed, ...overdueTeams, ...waiting, ...trials, ...quiet, ...pendingSales],
     activity: listEvents(ctx, { limit: 12 })
   };

@@ -281,7 +281,15 @@ ctx.db.run('INSERT INTO lesson_progress (lesson_id, client_id, completed_at) VAL
 engage.assign(ctx, { lesson_id: fuel.id, contract_id: hillCountry, due_date: addDaysToDate(today, 3) }, coachUser);
 engage.assign(ctx, { lesson_id: mindset.id, contract_id: westlake.id, due_date: addDaysToDate(today, 5) }, coachUser);
 
+// Staff notes on Ava (one pinned, one only coaches see), and a client who stopped training, archived.
+clients.addNote(ctx, lopez.id, { body: 'Mom (Maria) prefers texts over calls. Ava is picked up at 6:45 on weekdays.', pinned: true }, { id: headCoach.id, name: 'Head Coach', role: 'owner' });
+clients.addNote(ctx, lopez.id, { body: 'Lost confidence after a tough club season. Keep the praise specific and the reps short.', coach_only: true }, { id: riley.id, name: 'Riley Brooks', role: 'coach' });
+clients.addNote(ctx, lopez.id, { body: 'Asked about the fall camp dates at the desk. Sent the link.' }, { id: desk.id, name: 'Jess Moreno', role: 'front_desk' });
+const owen = await clients.createClient(ctx, { name: 'Owen Fischer', birth_date: '2010-04-18', sport: 'Baseball', parent: { name: 'Karen Fischer', email: 'karen.fischer@example.com', phone: '555-0144' }, send_welcome: false });
+await clients.archiveClient(ctx, owen.id, {}, { name: 'Head Coach' });
+
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
+console.log(`Sample staff (same password): riley@diamondprotocol.local (coach), desk@diamondprotocol.local (front desk)`);
 console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com; in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
 console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);

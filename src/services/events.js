@@ -1,7 +1,7 @@
 import { newId, token, hmac, v, notFound, badRequest } from '../util.js';
 
 export const EVENT_TYPES = [
-  'client.created', 'client.updated',
+  'client.created', 'client.updated', 'client.archived', 'client.restored',
   'subscription.created', 'subscription.updated',
   'invoice.paid', 'invoice.payment_failed',
   'program.assigned', 'workout.completed',

@@ -86,6 +86,8 @@ function renderLogin() {
 const EVENT_TEXT = {
   'client.created': (d) => `${d.client_name} joined`,
   'client.updated': (d) => `${d.client_name}'s details were updated`,
+  'client.archived': (d) => `${d.client_name} was archived${d.by ? ` by ${d.by}` : ''}${d.bookings_canceled ? ` (${d.bookings_canceled} ${d.bookings_canceled === 1 ? 'booking' : 'bookings'} canceled)` : ''}`,
+  'client.restored': (d) => `${d.client_name} was brought back from the archive`,
   'subscription.created': (d) => `${d.client_name} started ${d.plan_name}${d.status === 'trialing' ? ' (free trial)' : ''}`,
   'subscription.updated': (d) => d.previous_plan_name ? `${d.client_name} moved to ${d.plan_name}` : `${d.client_name}'s membership is now ${d.status.replace('_', ' ')}`,
   'invoice.paid': (d) => `Payment of ${money(d.amount_cents)} received from ${d.client_name}`,
@@ -173,12 +175,12 @@ async function viewToday(main) {
   fill(main, 
     header('Today', isOwner() ? `Revenue, clients and anything that needs a decision. ${money(d.today_sales.cents)} in person today.` : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
     !isOwner() ? h('div', { class: 'metrics' },
-      metric('Active clients', m.paying_clients + m.trialing_clients, `${m.trialing_clients} on free trial`),
+      activeMetric(m),
       metric('Sessions today', ag.sessions.length, `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked`),
       metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)) :
     h('div', { class: 'metrics' },
       metric('Monthly recurring revenue', money(m.mrr_cents + d.teams.monthly_cents), d.teams.active_contracts ? `${money(m.mrr_cents)} memberships · ${money(d.teams.monthly_cents)} teams` : `${m.paying_clients} paying ${m.paying_clients === 1 ? 'client' : 'clients'}`),
-      metric('Active clients', m.paying_clients + m.trialing_clients, `${m.trialing_clients} on free trial`),
+      activeMetric(m),
       metric('Payments failed', m.past_due_clients, `${money(m.at_risk_cents)} at risk this month`, m.past_due_clients ? 'warn' : null),
       metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
     agendaPanel,
@@ -195,6 +197,9 @@ async function viewToday(main) {
         h('div', { class: 'grow' }, (EVENT_TEXT[ev.type] || (() => ev.type))(ev.data)))) : h('p', { class: 'muted' }, 'Activity shows up here as clients join, pay and train.'))),
     revPanel);
 }
+
+// "Active clients" is the client list's Active filter (not archived, paid up or on a free trial); the tile opens that list.
+const activeMetric = (m) => h('a', { href: '#/clients?status=current', style: 'text-decoration:none;color:inherit' }, metric('Active clients', m.active_clients ?? m.paying_clients + m.trialing_clients, `${m.trialing_clients} on free trial`));
 
 // Classes in the next 2 days with open spots and nobody waiting. One tap offers the spots to families who fit.
 function spotsPanel(spots) {
@@ -340,26 +345,36 @@ async function viewCampaigns(main) {
 }
 
 // ---------- Clients ----------
+// "Active" means the same as the Today tile: not archived, paid up or on a free trial. Archived clients only show
+// under the Archived filter (or as a hint when a search only finds archived ones).
+const CLIENT_VIEWS = [['', 'All clients'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['archived', 'Archived']];
+const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status) : c.status === view)));
 async function viewClients(main) {
-  const { data } = await get('/v1/clients');
+  const { data } = await get('/v1/clients?archived=all');
   const q = input({ type: 'search', placeholder: 'Name, athlete ID, email or family', id: 'client-search', 'aria-label': 'Search clients' });
-  const status = select([['', 'All statuses'], ['active', 'Active'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan']], { 'aria-label': 'Filter by status', style: 'width:180px' });
+  const start = hashQuery().get('status') ?? '';
+  const status = select(CLIENT_VIEWS.map(([k, label]) => [k, `${label} (${data.filter((c) => inClientView(c, k)).length})`]), { 'aria-label': 'Which clients', style: 'width:auto;min-width:180px', value: CLIENT_VIEWS.some(([k]) => k === start) ? start : '' });
   const body = h('tbody');
+  const hint = h('p', { class: 'small muted', style: 'margin:0' });
+  const matches = (c, s) => !s || c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.athlete_id ?? '').toLowerCase().includes(s) || (c.family?.name ?? '').toLowerCase().includes(s);
   const draw = () => {
     const s = q.value.trim().toLowerCase();
-    const rows = data.filter((c) => (!s || c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.family?.name ?? '').toLowerCase().includes(s)) && (!status.value || c.status === status.value));
+    const rows = data.filter((c) => matches(c, s) && inClientView(c, status.value));
+    const hidden = status.value === 'archived' ? 0 : data.filter((c) => c.archived_at && matches(c, s)).length;
+    fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); status.value = 'archived'; draw(); } }, 'Show archived')] : null);
     fill(body, ...(rows.length ? rows.map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => (location.hash = `#/clients/${c.id}`), onKeydown: (e) => { if (e.key === 'Enter') location.hash = `#/clients/${c.id}`; } },
       h('td', null, h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, c.name), h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), ` · ${c.family ? c.family.name : c.email ?? ''}`))),
       h('td', null, c.subscription?.plan_name ?? '—'),
-      h('td', null, badge(c.status)),
+      h('td', null, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status)),
       h('td', null, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
       h('td', { class: 'muted' }, ago(c.last_workout_at))))
-      : [h('tr', null, h('td', { colspan: '5', class: 'muted' }, data.length ? 'No clients match. Clear the search or filter.' : 'No clients yet. Add your first one.'))]));
+      : [h('tr', null, h('td', { colspan: '5', class: 'muted' }, data.length ? (status.value === 'archived' && !s ? 'No archived clients.' : 'No clients match. Clear the search or filter.') : 'No clients yet. Add your first one.'))]));
   };
   q.addEventListener('input', draw); status.addEventListener('change', draw); draw();
+  const current = data.filter((c) => inClientView(c, 'current')).length, archived = data.filter((c) => c.archived_at).length;
   fill(main, 
-    header('Clients', `${data.length} accounts, their plans and programs.`, h('div', { class: 'row' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import from a spreadsheet') : null, addClientBtn())),
-    panel(null, {}, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), status),
+    header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import from a spreadsheet') : null, addClientBtn())),
+    panel(null, {}, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), status), hint,
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
         h('thead', null, h('tr', null, ['Client', 'Plan', 'Status', 'Program', 'Last workout'].map((t) => h('th', null, t)))), body))));
 }
@@ -368,7 +383,7 @@ async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
-  const [en, testLib, owed, products, badgeLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges')]);
+  const [en, testLib, owed, products, badgeLib, notesList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`)]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
@@ -423,7 +438,7 @@ async function viewClient(main, id) {
     h('div', { class: 'form-grid' }, field('Sport', pf.sport), field('Position', pf.position), field('School', pf.school), field('Grad year', pf.grad_year)),
     field('Medical notes', medical, 'Parents can update these in the portal.'),
     h('div', { class: 'form-grid' }, field('Emergency contact', pf.emergency_name), field('Emergency phone', pf.emergency_phone)),
-    field('Coach notes', notes, 'Only coaches see these.'),
+    field('Profile note', notes, 'One short note every staff member sees here. For dated notes, use Staff notes.'),
     h('div', { class: 'row' }, btn('Save changes', (e) => busy(e.currentTarget, async () => {
       await patch(`/v1/clients/${id}`, { name: name.value, email: email.value || null, phone: phone.value, notes: notes.value, medical_notes: medical.value, ...Object.fromEntries(Object.entries(pf).filter(([k, el]) => k !== 'athlete_id' || el.value.toUpperCase() !== c.athlete_id).map(([k, el]) => [k, k === 'grad_year' ? (el.value ? Number(el.value) : null) : el.value || null])) });
       toast('Changes saved.'); render();
@@ -496,10 +511,64 @@ async function viewClient(main, id) {
     devLinks.data.length ? h('p', { class: 'small muted' }, 'Linked devices: ', devLinks.data.map((l) => `${l.provider} ${l.external_id.replace(/^name:/, 'name ')}`).join(', ')) : null);
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
+  // Archive: owners and coaches. Refused with a membership; upcoming bookings are canceled only after a second yes.
+  const canArchive = state.user.role !== 'front_desk';
+  const archive = (e) => {
+    if (!confirm(`Archive ${first}? They leave the client list, search and pickers, and get no automatic emails or texts. Nothing is deleted and you can bring them back any time.`)) return;
+    busy(e.currentTarget, async () => {
+      try { await post(`/v1/clients/${id}/archive`); }
+      catch (err) { if (err.code !== 'confirm_required' || !confirm(`${err.message}\n\nArchive and cancel them?`)) throw err; await post(`/v1/clients/${id}/archive`, { confirm: true }); }
+      toast(`${first} is archived. Find them under Clients → Archived.`); render();
+    });
+  };
+  const restore = (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/restore`); toast(`${first} is back on the client list.`); render(); });
+  const pinned = notesList.data.filter((n) => n.pinned);
   fill(main,
-    header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id)), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients')),
+    header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
+      h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
+    c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
+    pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, staffNotesPanel(id, notesList.data), bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
+}
+
+// Staff notes: dated, with the author. Anyone on staff adds; authors change their own; owners delete any and pin any.
+// Coach-only notes never reach front desk (the server leaves them out), and front desk can't write them.
+function staffNotesPanel(clientId, notes) {
+  const role = state.user.role, me = state.user.id;
+  const body = h('textarea', { class: 'dp-input', style: 'min-height:72px', 'aria-label': 'New note', placeholder: 'What happened, what to watch for, who to call' });
+  const pin = h('input', { type: 'checkbox' }), coachOnly = h('input', { type: 'checkbox' });
+  const noteRow = (n) => {
+    const mine = n.author_id === me, wrap = h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' });
+    const view = () => fill(wrap,
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('span', { class: 'small muted' }, [n.author_name, date(n.created_at), n.updated_at ? 'edited' : null].filter(Boolean).join(' · '), n.pinned ? h('span', { class: 'dp-badge dp-badge--good', style: 'margin-left:8px' }, 'Pinned') : null, n.coach_only ? h('span', { class: 'dp-badge dp-badge--neutral', style: 'margin-left:8px' }, 'Coach only') : null),
+        h('div', { style: 'white-space:pre-wrap' }, n.body)),
+      h('div', { class: 'row', style: 'gap:4px' },
+        mine || role === 'owner' ? btn(n.pinned ? 'Unpin' : 'Pin', (e) => busy(e.currentTarget, async () => { await patch(`/v1/client-notes/${n.id}`, { pinned: !n.pinned }); render(); }), 'ghost') : null,
+        mine ? btn('Edit', edit, 'ghost') : null,
+        mine || role === 'owner' ? btn('Delete', (e) => { if (confirm('Delete this note?')) busy(e.currentTarget, async () => { await del(`/v1/client-notes/${n.id}`); toast('Note deleted.'); render(); }); }, 'ghost') : null));
+    const edit = () => {
+      const t = h('textarea', { class: 'dp-input', style: 'min-height:72px', 'aria-label': 'Edit note' }); t.value = n.body;
+      const co = h('input', { type: 'checkbox', checked: n.coach_only });
+      fill(wrap, h('div', { class: 'grow stack', style: 'min-width:200px' }, t,
+        role === 'front_desk' ? null : h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, co, h('span', null, 'Coach only (front desk won\'t see it)')),
+        h('div', { class: 'row' }, btn('Save note', (e) => busy(e.currentTarget, async () => { await patch(`/v1/client-notes/${n.id}`, { body: t.value, ...(role === 'front_desk' ? {} : { coach_only: co.checked }) }); toast('Note saved.'); render(); }), 'primary'), btn('Cancel', view, 'ghost'))));
+      t.focus();
+    };
+    view();
+    return wrap;
+  };
+  return panel('Staff notes', { subtitle: role === 'front_desk' ? 'Notes for everyone on staff. Coaches may also keep notes only they see.' : 'Dated notes for the team. Pinned ones show at the top of this page. Coach-only notes are hidden from front desk.' },
+    notes.length ? notes.map(noteRow) : h('p', { class: 'muted small', style: 'margin:0' }, 'No notes yet.'),
+    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (!body.value.trim()) throw new Error('Write the note first.');
+      await post(`/v1/clients/${clientId}/notes`, { body: body.value, pinned: pin.checked, ...(role === 'front_desk' ? {} : { coach_only: coachOnly.checked }) });
+      toast('Note added.'); render();
+    }); } }, body,
+      h('div', { class: 'row wrap', style: 'gap:16px' }, h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, pin, h('span', null, 'Pin to the top')),
+        role === 'front_desk' ? null : h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, coachOnly, h('span', null, 'Coach only'))),
+      h('div', null, btn('Add note', null, 'secondary', { type: 'submit' }))));
 }
 
 async function viewNewClient(main) {

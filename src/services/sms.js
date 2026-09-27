@@ -93,7 +93,7 @@ export async function sendReminders(ctx, asOf = ctx.now()) {
   const until = new Date(Date.parse(asOf) + 24 * 3600000).toISOString();
   const rows = ctx.db.all(`SELECT b.id, b.created_at, s.id AS session_id, s.name AS session_name, s.starts_at, l.name AS location_name, c.name AS client_name, c.family_id
     FROM bookings b JOIN class_sessions s ON s.id = b.session_id JOIN locations l ON l.id = s.location_id JOIN clients c ON c.id = b.client_id
-    WHERE b.status = 'booked' AND b.reminded_at IS NULL AND s.status = 'scheduled' AND s.starts_at > ? AND s.starts_at <= ? ORDER BY s.starts_at, c.name`, asOf, until);
+    WHERE b.status = 'booked' AND b.reminded_at IS NULL AND c.archived_at IS NULL AND s.status = 'scheduled' AND s.starts_at > ? AND s.starts_at <= ? ORDER BY s.starts_at, c.name`, asOf, until);
   if (!textsOn(ctx, 'reminder')) return 0;
   const groups = new Map();
   for (const r of rows) {

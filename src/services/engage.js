@@ -28,7 +28,7 @@ const firstName = (c) => String(c.name ?? '').split(' ')[0];
 const teamsOf = (ctx, clientId) => ctx.db.all('SELECT DISTINCT contract_id FROM team_roster WHERE client_id = ? AND active = 1', clientId).map((r) => r.contract_id);
 const inList = (ids) => (ids.length ? ids.map(() => '?').join(', ') : 'NULL');
 // Athletes a team goal, message or assignment reaches: clients on the active roster.
-const rosterClients = (ctx, contractId) => ctx.db.all(`SELECT DISTINCT c.* FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 ORDER BY c.name`, contractId);
+const rosterClients = (ctx, contractId) => ctx.db.all(`SELECT DISTINCT c.* FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 AND c.archived_at IS NULL ORDER BY c.name`, contractId);
 function teamRow(ctx, id) {
   const t = ctx.db.get('SELECT t.id, t.name, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', id);
   if (!t) throw notFound('Team');

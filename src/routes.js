@@ -37,6 +37,8 @@ import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocal
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
 // Each entry: [method, path, auth, tag, summary, handler(ctx, req)] where req = { params, query, body, user, apiKey }
 const list = (data) => ({ data });
+// Who is writing a staff note: the signed-in staff member, or an API key (treated like the owner).
+const noteActor = (r) => (r.user ? { id: r.user.id, name: r.user.name, role: r.user.role } : { id: null, name: r.apiKey?.label ?? 'API', role: 'owner' });
 const subOf = (ctx, clientId) => {
   const s = billing.currentSubscription(ctx, clientId);
   if (!s) throw new HttpError(409, 'conflict', 'This client has no active subscription.');
@@ -60,10 +62,20 @@ export const routes = [
     .filter((e) => !r.user || r.user.role === 'owner' || !security.OWNER_EVENTS.test(e.type)))],
 
   // Clients
-  ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name or email) and ?status=.', (ctx, r) => list(clients.listClients(ctx, r.query))],
+  ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name, athlete ID, email or family) and ?status= (a membership status, none, or current for active clients: paid up or on a free trial). Archived clients are left out: ?archived=true lists only them, ?archived=all everyone. archived_matches says how many archived clients the search would have found.', (ctx, r) => {
+    const out = list(clients.listClients(ctx, r.query));
+    return r.query.archived === 'true' || r.query.archived === 'all' ? out : { ...out, archived_matches: clients.archivedMatches(ctx, r.query.q) };
+  }],
+  ['GET', '/v1/client-counts', 'any', 'Clients', 'How many clients have each membership status, how many are active (current: paid up or on a free trial) and how many are archived.', (ctx) => clients.clientCounts(ctx)],
   ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program.', (ctx, r) => clients.createClient(ctx, r.body), 201],
   ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: true })],
   ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone or notes.', (ctx, r) => clients.updateClient(ctx, r.params.id, r.body)],
+  ['POST', '/v1/clients/:id/archive', 'any', 'Clients', 'Archive a client who stopped training (owner and coach): hidden from lists, search, pickers and automatic messages; nothing is deleted. Refused while they have a membership. Upcoming bookings and standing spots are canceled, which needs confirm: true.', (ctx, r) => clients.archiveClient(ctx, r.params.id, r.body, r.user)],
+  ['POST', '/v1/clients/:id/restore', 'any', 'Clients', 'Bring an archived client back.', (ctx, r) => clients.restoreClient(ctx, r.params.id, r.user)],
+  ['GET', '/v1/clients/:id/notes', 'any', 'Clients', 'Staff notes on a client, pinned first, then newest. Front desk doesn\'t get coach-only notes.', (ctx, r) => list(clients.listNotes(ctx, r.params.id, noteActor(r)))],
+  ['POST', '/v1/clients/:id/notes', 'any', 'Clients', 'Add a staff note: body, pinned (true shows it at the top of the client page), coach_only (true hides it from front desk).', (ctx, r) => clients.addNote(ctx, r.params.id, r.body, noteActor(r)), 201],
+  ['PATCH', '/v1/client-notes/:id', 'any', 'Clients', 'Change a staff note: body, pinned, coach_only. Only its author can change it; owners can pin or unpin any note.', (ctx, r) => clients.updateNote(ctx, r.params.id, r.body, noteActor(r))],
+  ['DELETE', '/v1/client-notes/:id', 'any', 'Clients', 'Delete a staff note: owners any, everyone else their own.', (ctx, r) => clients.deleteNote(ctx, r.params.id, noteActor(r))],
   ['POST', '/v1/clients/:id/app-link', 'any', 'Clients', 'Issue a new private app link. The old link stops working.', (ctx, r) => clients.resetAppLink(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/subscription', 'any', 'Clients', 'Start a subscription on plan_id.', async (ctx, r) => billing.subscribe(ctx, r.params.id, v.str(r.body.plan_id, 'plan_id')), 201],
   ['POST', '/v1/clients/:id/subscription/pause', 'any', 'Clients', 'Pause billing and app access.', (ctx, r) => billing.pause(ctx, subOf(ctx, r.params.id))],

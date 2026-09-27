@@ -219,3 +219,42 @@ test('Activity feed: newest first by time, sign-ins can be left out, and no doll
     assert.ok(!feed.some((a) => a.action === 'Added product'));
   }
 });
+
+test('Review fixes: check-in flag keys must be a recent real date, and days must be a number', async () => {
+  const id = quietMember('Faye');
+  const d = await desk();
+  for (const date of ['2026-13-45', '2026-02-30', addDays(T(), 1), addDays(T(), -3)]) {
+    const r = await d.post('/api/today/snooze', { key: `flag:${id}:${date}` });
+    assert.equal(r.status, 400, date);
+  }
+  assert.equal(get("SELECT COUNT(*) n FROM today_snoozes WHERE key LIKE ?", `flag:${id}:%`).n, 0, 'nothing stored for a bad date');
+  for (const days of [true, false, [7], { n: 7 }]) assert.equal((await d.post('/api/today/snooze', { key: `quiet:${id}`, days })).status, 400, JSON.stringify(days));
+  const ok = await d.post('/api/today/snooze', { key: `flag:${id}:${addDays(T(), -1)}` });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.message, "Marked Faye Quiet's check-in as reviewed.");
+  const str = await d.post('/api/today/snooze', { key: `quiet:${id}`, days: '3' });
+  assert.equal(str.data.until, addDays(T(), 2));
+  assert.match(str.data.message, /^Reached out: Faye Quiet\. Back on Today /);
+});
+
+test('Review fixes: no-shows from a session that is over sort below people still to arrive', async (t) => {
+  const now = booking.nowLocal();
+  if (now < `${T()}T00:02` || now >= `${T()}T23:58`) return t.skip('needs a clock between 00:02 and 23:58');
+  const early = insert('events', { type: 'class', name: 'Early lift', starts_at: `${T()}T00:00`, duration_min: 1, capacity: 10 });
+  const late = insert('events', { type: 'class', name: 'Late lift', starts_at: `${T()}T23:58`, duration_min: 1, capacity: 10 });
+  const gone = quietMember('Gus'), coming = quietMember('Hal');
+  insert('bookings', { event_id: early, athlete_id: gone, status: 'booked', coverage: 'member' });
+  insert('bookings', { event_id: late, athlete_id: coming, status: 'booked', coverage: 'member' });
+  const list = (await (await desk()).get('/api/today')).data.arrivals;
+  const rank = (r) => (r.checked_in_at ? 2 : r.state === 'done' ? 1 : 0);
+  assert.deepEqual(list.map(rank), [...list.map(rank)].sort(), 'to arrive, then no-shows, then checked in');
+  const iGone = list.findIndex((r) => r.athlete_id === gone), iComing = list.findIndex((r) => r.athlete_id === coming);
+  assert.ok(iComing >= 0 && iGone > iComing, 'the later session comes first');
+  assert.equal(list[iGone].state, 'done');
+});
+
+test('Review fixes: price changes stay out of the coach and front desk feed', async () => {
+  insert('activity', { actor: 'Jordan Avery (owner)', action: 'Changed price', detail: 'Hat · $25 to $30', kind: 'change' });
+  assert.ok((await (await owner()).get('/api/activity?limit=500')).data.some((a) => a.action === 'Changed price'));
+  for (const who of [await coach(), await desk()]) assert.ok(!(await who.get('/api/activity?limit=500')).data.some((a) => a.action === 'Changed price'));
+});

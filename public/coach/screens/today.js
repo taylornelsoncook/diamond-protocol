@@ -95,7 +95,7 @@ function arrivalRow(r) {
       <div class="small muted">${r.event_name} · ${fmtTime(r.starts_at)}${r.code ? ` · ${r.code}` : ''}</div>
       ${r.alerts.length ? html`<div class="td-alert">${r.alerts.join(' · ')}</div>` : ''}
       ${r.flags.length ? html`<div class="td-alert">Check-in: ${r.flags.join(' · ')}</div>` : ''}
-      ${here ? html`<div class="td-here">Checked in ${fmtTime(r.checked_in_at)}</div>` : ''}
+      ${here ? html`<div class="td-here">Checked in ${fmtTime(r.checked_in_at)}</div>` : r.state === 'done' ? html`<div class="small muted">Session over, not checked in.</div>` : ''}
     </div>
     <div class="td-acts">${here
       ? html`<button class="btn btn-ghost btn-sm" data-undo-checkin="${r.booking_id}" aria-label="Undo check-in for ${r.name}">Undo</button>`
@@ -149,7 +149,10 @@ function toastAction(msg, label, onAction) {
 
 function suggestNote(kind, name, item) {
   const n = first(name);
-  if (kind === 'flag') return `Hi ${n}, saw your check-in (${item.flags.join(', ').toLowerCase()}). We'll adjust today's work. Find me before you start.`;
+  if (kind === 'flag') {
+    const saw = `Hi ${n}, saw your check-in (${item.flags.join(', ').toLowerCase()}).`;
+    return item.session ? `${saw} We'll adjust today's work. Find me before you start.` : `${saw} Take it easy, get some rest and water, and tell us if anything hurts.`;
+  }
   if (kind === 'trial_ending') return `Hi ${n}, your free trial wraps up soon. How has training felt so far? Happy to answer any questions about staying on.`;
   return `Hi ${n}, we've missed you at training. Want me to save you a spot this week?`;
 }
@@ -161,7 +164,7 @@ export const routes = [{
     const loadActivity = () => api.get('/activity?limit=100&kind=change').catch(() => []);
     let [d, activity] = await Promise.all([api.get('/today'), loadActivity()]);
     if (!ctx.isCurrent()) return;
-    let actFilter = 'all', actShown = ACT_PAGE, showHidden = false, query = '', updatedAt = new Date(), busy = false;
+    let actFilter = 'all', actShown = ACT_PAGE, showHidden = false, query = '', updatedAt = new Date();
 
     mount(ctx.el, html`${STYLE}<div class="td" id="td-root">
       <header class="page-header">
@@ -238,7 +241,7 @@ export const routes = [{
           <button class="btn btn-ghost btn-sm" data-toggle-hidden aria-expanded="${showHidden}">${showHidden ? 'Hide' : 'Show'} ${plural(hidden.length, 'followed-up item')}</button>
           ${showHidden ? html`<div>${hidden.map((s) => html`<div class="td-hidden-row">
             <div class="td-grow"><div><a class="td-title" href="/app/clients/${s.athlete_id}">${s.name}</a> <span class="muted">· ${s.label}</span></div>
-              <div class="small muted">${s.by ? `${s.by}, ` : ''}${relTime(s.created_at)}${s.note ? ` · ${s.note}` : ''} · back on Today ${fmtDate(nextDay(s.until), { year: false })}</div></div>
+              <div class="small muted">${s.by ? `${s.by}, ` : ''}${relTime(s.created_at)}${s.note ? ` · ${s.note}` : ''} ${s.kind === 'flag' ? '' : ` · back on Today ${fmtDate(nextDay(s.until), { year: false })}`}</div></div>
             <button class="btn btn-ghost btn-sm" data-unsnooze="${s.id}" aria-label="Bring ${s.name} back to Today">Bring back</button></div>`)}</div>` : ''}
         </div>` : ''}
         ${bdays.length ? html`<div class="td-foot"><div class="small muted" style="margin-bottom:8px">Birthdays this week</div>
@@ -269,30 +272,45 @@ export const routes = [{
       </section>` : '');
     }
 
-    const paint = () => { paintHeader(); paintSessions(); paintArrivals(); paintAttention(); paintActivity(); paintRevenue(); };
+    // Repainting replaces the buttons, so keep keyboard focus where it was (or on the search after a check-in).
+    const paint = () => {
+      const a = document.activeElement, inRoot = a && a !== q && root.contains(a);
+      const attr = inRoot ? [...a.attributes].find((x) => x.name.startsWith('data-')) : null;
+      const sel = attr ? `[${attr.name}="${CSS.escape(attr.value)}"]` : null, inArrivals = inRoot && !!a.closest('#td-arrivals');
+      paintHeader(); paintSessions(); paintArrivals(); paintAttention(); paintActivity(); paintRevenue();
+      if (inRoot && !a.isConnected) (sel && root.querySelector(sel) || (inArrivals ? q : null))?.focus();
+    };
+    const q = $('#td-q');
     paint();
 
-    async function refresh() {
-      if (busy) return;
-      busy = true;
-      try {
-        const [nd, na] = await Promise.all([api.get('/today'), loadActivity()]);
-        if (!ctx.isCurrent() || !root.isConnected) return;
-        d = nd; activity = na; updatedAt = new Date();
-        paint();
-      } catch (e) { if (e.status !== 401) toastError(e); }
-      finally { busy = false; }
+    // One refresh at a time. A refresh asked for mid-flight (a second quick check-in) runs once more right after,
+    // so the screen never settles on data fetched before the latest change.
+    let inFlight = null, queued = null;
+    function refresh() {
+      if (inFlight) return (queued ||= inFlight.then(() => { queued = null; return refresh(); }));
+      inFlight = (async () => {
+        try {
+          const [nd, na] = await Promise.all([api.get('/today'), loadActivity()]);
+          if (!ctx.isCurrent() || !root.isConnected) return;
+          d = nd; activity = na; updatedAt = new Date();
+          paint();
+        } catch (e) { if (e.status !== 401) toastError(e); }
+      })().finally(() => { inFlight = null; });
+      return inFlight;
     }
 
     // ---- check-in ----
     async function checkIn(id, btn) {
       const r = d.arrivals.find((x) => String(x.booking_id) === String(id));
+      const hadFocus = btn && document.activeElement === btn; // a disabled button drops focus; put it back on the search
       if (btn) btn.disabled = true;
       try {
         await api.post(`/bookings/${id}/checkin`);
         toastAction(`${r ? r.name : 'Athlete'} checked in.`, 'Undo', async () => { await api.del(`/bookings/${id}/checkin`); toast('Check-in undone.'); await refresh(); });
         await refresh();
-      } catch (e) { toastError(e); if (btn) btn.disabled = false; }
+        if (hadFocus && !btn.isConnected && (document.activeElement === document.body || !document.activeElement)) q.focus();
+        return true;
+      } catch (e) { toastError(e); if (btn) btn.disabled = false; return false; }
     }
 
     // ---- follow-ups ----
@@ -306,6 +324,7 @@ export const routes = [{
       } catch (e) { toastError(e); btn.disabled = false; }
     }
     async function sendNote({ athlete_id, name, key, kind, item }) {
+      let posted = false;
       const sent = await modal({
         title: `Send ${first(name)} a note`,
         body: html`<div class="field"><label class="label" for="td-note">Note</label>
@@ -317,7 +336,7 @@ export const routes = [{
           label: 'Send note', kind: 'primary', onClick: async (el) => {
             const text = el.querySelector('#td-note').value.trim();
             if (!text) { toast('Write a note first.', 'warn'); return false; }
-            await api.post(`/athletes/${athlete_id}/messages`, { body: text });
+            if (!posted) { await api.post(`/athletes/${athlete_id}/messages`, { body: text }); posted = true; }
             const days = el.querySelector('#td-days')?.value;
             await snooze(key, { note: 'Sent a note', ...(days ? { days: Number(days) } : {}) });
             return true;
@@ -325,6 +344,7 @@ export const routes = [{
         }],
       });
       if (sent) { toast(`Note sent to ${first(name)}. It's off Today for now.`); await refresh(); }
+      else if (posted) { toast(`Note sent to ${first(name)}. It's still on Today.`); await refresh(); }
     }
 
     // ---- events (delegated on this screen's root, so they go away with it) ----
@@ -362,7 +382,6 @@ export const routes = [{
       }
     });
 
-    const q = $('#td-q');
     q.addEventListener('input', () => { query = q.value; paintArrivals(); });
     q.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') { q.value = ''; query = ''; paintArrivals(); return; }
@@ -371,7 +390,7 @@ export const routes = [{
       const s = query.trim().toLowerCase();
       if (!s) return;
       const open = d.arrivals.filter((r) => !r.checked_in_at && (r.name.toLowerCase().includes(s) || String(r.code || '').toLowerCase().includes(s)));
-      if (open.length === 1) checkIn(open[0].booking_id).then(() => { q.value = ''; query = ''; paintArrivals(); q.focus(); });
+      if (open.length === 1) checkIn(open[0].booking_id).then((ok) => { if (ok) { q.value = ''; query = ''; paintArrivals(); } q.focus(); });
       else toast(open.length ? `${open.length} people match. Keep typing or tap Check in.` : 'No one waiting to check in matches that.', 'warn');
     });
 

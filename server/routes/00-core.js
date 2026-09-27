@@ -52,7 +52,7 @@ function routes(api) {
     const limit = Math.min(Number(req.query.limit) || 30, 500);
     const owner = req.staff.role === 'owner';
     // Coaches and front desk never see money in the feed.
-    const where = owner ? [] : ["action NOT LIKE '%payment%'", "action NOT LIKE '%refund%'", "action NOT LIKE '%invoice%'", "action NOT LIKE 'Ran billing%'", "action NOT LIKE 'Added product%'", "action NOT LIKE 'Voided%'"];
+    const where = owner ? [] : ["action NOT LIKE '%payment%'", "action NOT LIKE '%refund%'", "action NOT LIKE '%invoice%'", "action NOT LIKE 'Ran billing%'", "action NOT LIKE 'Added product%'", "action NOT LIKE 'Voided%'", "action NOT LIKE 'Changed price%'"];
     // kind=change leaves out sign-ins and refusals (the Today feed); kind=signin|refused asks for just those.
     if (['change', 'signin', 'refused'].includes(req.query.kind)) where.push(`kind='${req.query.kind}'`);
     // Newest first by when it happened (seeded and imported rows can arrive out of id order).

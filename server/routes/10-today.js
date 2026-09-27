@@ -95,8 +95,11 @@ function arrivals(T, sessions, flagsBy) {
       birthday: !!r.birthday && r.birthday.slice(5) === T.slice(5),
       flags: flagsBy[r.athlete_id] || [],
     };
-  }).sort((x, y) => (!!x.checked_in_at - !!y.checked_in_at) || x.starts_at.localeCompare(y.starts_at) || x.name.localeCompare(y.name));
+  }).sort((x, y) => arrivalRank(x) - arrivalRank(y) || x.starts_at.localeCompare(y.starts_at) || x.name.localeCompare(y.name));
 }
+
+// Door order: still to arrive for a session that hasn't ended, then no-shows from sessions already over, then those checked in.
+const arrivalRank = (r) => (r.checked_in_at ? 2 : r.state === 'done' ? 1 : 0);
 
 // Birthdays in the next week among current clients (family athletes and team rosters).
 function birthdays(T) {
@@ -285,12 +288,14 @@ function routes(api) {
     const m = /^(quiet|trial|flag):(\d+)(?::(\d{4}-\d{2}-\d{2}))?$/.exec(String(b.key || ''));
     if (!m || (m[1] === 'flag') !== !!m[3]) throw bad('That item can’t be followed up from Today.');
     const kind = m[1], athleteId = Number(m[2]);
+    const T = booking.todayLocal();
+    // Check-in flags show for today and yesterday; allow one more day so a page left open past midnight still works.
+    if (kind === 'flag' && (addDays(m[3], 0) !== m[3] || m[3] > T || m[3] < addDays(T, -2))) throw bad('That check-in is no longer on Today.');
     const a = get('SELECT id, first_name, last_name FROM athletes WHERE id=? AND archived=0', athleteId);
     if (!a) throw notFound('That client');
-    const T = booking.todayLocal();
     let until;
     if (b.days !== undefined && b.days !== null && b.days !== '') {
-      const days = Number(b.days);
+      const days = typeof b.days === 'number' || typeof b.days === 'string' ? Number(b.days) : NaN;
       if (!Number.isInteger(days) || days < 1 || days > 60) throw bad('Hide it for 1 to 60 days.');
       until = addDays(T, days - 1);
     } else if (kind === 'trial') {
@@ -303,8 +308,8 @@ function routes(api) {
     run('DELETE FROM today_snoozes WHERE key=?', b.key);
     const id = insert('today_snoozes', { key: b.key, athlete_id: athleteId, until, note, staff_name: req.staff.name });
     log(req, SNOOZE_KINDS[kind].action, `${fullName(a)}${note ? `: ${note}` : ''}`);
-    const back = kind === 'flag' ? 'Marked as reviewed.' : `Hidden until ${fmtDay(addDays(until, 1))}.`;
-    res.json({ ok: true, id, until, message: `${SNOOZE_KINDS[kind].label}: ${fullName(a)}. ${back}` });
+    const message = kind === 'flag' ? `Marked ${fullName(a)}'s check-in as reviewed.` : `${SNOOZE_KINDS[kind].label}: ${fullName(a)}. Back on Today ${fmtDay(addDays(until, 1))}.`;
+    res.json({ ok: true, id, until, message });
   }));
 
   // Undo a follow-up: the item comes back on Today.

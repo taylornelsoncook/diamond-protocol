@@ -113,6 +113,14 @@ export function zonedToUtc(dateStr, timeStr, tz) {
   return new Date(utc).toISOString();
 }
 export const localDate = (iso, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+// Midnight at the start of the business day that contains iso, as a UTC ISO string.
+// Where the clocks jump forward at midnight (Chile, Cuba) the day starts at the jump, at the offset from before it.
+export function startOfLocalDay(iso, tz) {
+  const day = localDate(iso, tz), start = zonedToUtc(day, '00:00', tz);
+  if (localDate(start, tz) === day) return start;
+  const t = Date.parse(start);
+  return new Date(Date.parse(`${day}T00:00:00Z`) - tzOffsetMs(t, tz)).toISOString();
+}
 export const weekdayOf = (dateStr) => new Date(`${dateStr}T12:00:00Z`).getUTCDay();
 export const addDaysToDate = (dateStr, n) => new Date(Date.parse(`${dateStr}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 export function ageOn(birthDate, iso) {

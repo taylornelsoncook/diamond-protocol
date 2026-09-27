@@ -17,9 +17,10 @@ const first = (name) => String(name ?? '').split(' ')[0];
 export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20 } = {}) {
   const now = Date.parse(asOf);
   const iso = (days) => new Date(now + days * DAY).toISOString();
+  const day = (days) => localDate(iso(days), getSetting(ctx, 'timezone'));        // check-in dates are business days
   const people = ctx.db.all(`SELECT c.id, c.name, c.family_id, f.name AS family_name, f.card_status AS family_card, c.card_status,
       (SELECT status FROM subscriptions s WHERE s.client_id = c.id AND s.status IN ('active','trialing','past_due') ORDER BY s.created_at DESC LIMIT 1) AS membership
-    FROM clients c LEFT JOIN families f ON f.id = c.family_id WHERE c.athlete_id IS NOT NULL`);   // deleted athletes have no ID
+    FROM clients c LEFT JOIN families f ON f.id = c.family_id WHERE c.athlete_id IS NOT NULL AND c.archived_at IS NULL`);   // deleted athletes have no ID; archived ones stopped training
   const out = [];
   for (const p of people) {
     const attended = (from, to) => ctx.db.get(`SELECT COUNT(*) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?`, p.id, from, to).n;
@@ -34,8 +35,8 @@ export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20 } = {
     if (!upcoming && !standing) { score += 15; reasons.push('Nothing booked for the next 2 weeks'); }
     const misses = ctx.db.get(`SELECT COUNT(*) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status IN ('no_show','late_canceled') AND s.starts_at >= ? AND s.starts_at < ?`, p.id, iso(-30), asOf).n;
     if (misses >= 2) { score += 10; reasons.push(`${misses} no-shows or late cancels this month`); }
-    const checkRecent = ctx.db.get('SELECT COUNT(*) AS n FROM daily_checkins WHERE client_id = ? AND date >= ?', p.id, iso(-14).slice(0, 10)).n;
-    const checkBefore = ctx.db.get('SELECT COUNT(*) AS n FROM daily_checkins WHERE client_id = ? AND date >= ? AND date < ?', p.id, iso(-42).slice(0, 10), iso(-14).slice(0, 10)).n;
+    const checkRecent = ctx.db.get('SELECT COUNT(*) AS n FROM daily_checkins WHERE client_id = ? AND date >= ?', p.id, day(-14)).n;
+    const checkBefore = ctx.db.get('SELECT COUNT(*) AS n FROM daily_checkins WHERE client_id = ? AND date >= ? AND date < ?', p.id, day(-42), day(-14)).n;
     if (checkBefore >= 3 && !checkRecent) { score += 10; reasons.push('Stopped doing daily check-ins'); }
     if (role === 'owner') {
       if (p.membership === 'past_due') { score += 25; reasons.push('Membership payment failed'); }

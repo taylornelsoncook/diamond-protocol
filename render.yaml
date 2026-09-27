@@ -19,6 +19,9 @@ services:
     envVars:
       - key: DP_TEST_MODE
         value: "true"
+      # Render's Cloudflare edge plus its load balancer: two proxies (Staff & security > Connection check confirms it).
+      - key: TRUST_PROXY
+        value: "2"
       - key: DP_DEMO
         value: "1"
       - key: BUSINESS_TZ
@@ -70,6 +73,9 @@ services:
     envVars:
       - key: DP_TEST_MODE
         value: "false"
+      # Render's Cloudflare edge plus its load balancer: two proxies. Add one if you turn on your own Cloudflare proxy.
+      - key: TRUST_PROXY
+        value: "2"
       - key: BUSINESS_TZ
         value: America/Denver
       - key: PUBLIC_URL

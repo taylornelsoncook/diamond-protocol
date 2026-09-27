@@ -147,6 +147,28 @@ test('restore script: from storage and from a downloaded file, checked before wr
   assert.ok(!existsSync(join(tmp, 'nope.db')));
 });
 
+test('the offsite-backup job: skipped when not set up, failed when storage refuses, ok once it works', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-offsite-job-'));
+  const withFile = createApp({ dbFile: join(dir, 'dp.db'), jobs: false });
+  withFile.ctx.backupDir = join(dir, 'backups');
+  const job = withFile.ctx.jobs.byName('offsite-backup');
+  assert.ok(job, 'registered next to daily-backup');
+  await withFile.ctx.jobs.runJob(withFile.ctx.jobs.byName('daily-backup'), { force: true });
+  try {
+    for (const k of Object.keys(process.env)) if (k.startsWith('BACKUP_S3_') || k === 'BACKUP_PASSPHRASE') delete process.env[k];
+    assert.equal((await withFile.ctx.jobs.runJob(job, { force: true })).status, 'skipped');
+    configure();
+    s3.mode = 'denied';
+    const failed = await withFile.ctx.jobs.runJob(job, { force: true });
+    assert.equal(failed.status, 'failed');
+    assert.match(failed.error, /Off-site backup failed: Storage answered 403 AccessDenied/);
+    assert.equal(withFile.ctx.db.get(`SELECT fail_streak FROM job_state WHERE job = 'offsite-backup'`).fail_streak, 1, 'counts toward the owner alert');
+    s3.mode = 'ok';
+    assert.equal((await withFile.ctx.jobs.runJob(job, { force: true })).status, 'ok');
+    assert.equal((await withFile.ctx.jobs.runJob(job, { force: true })).status, 'skipped', 'already sent');
+  } finally { s3.mode = 'ok'; withFile.ctx.db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('request signing matches the AWS Signature V4 reference', () => {
   // Reference value from the aws4 package for this exact request.
   const h = offsite.sign({ method: 'GET', url: 'https://acct.r2.cloudflarestorage.com/my-bucket/diamond-protocol/dp-2026-09-27-120000.db.enc', region: 'us-west-004', keyId: 'AKID', secret: 'SECRET', now: new Date('2026-09-27T12:00:00Z') });

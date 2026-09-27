@@ -135,6 +135,9 @@ test('automatic mode sends in the daytime only; owners pick the mode', async () 
   assert.ok(offerFor(later, ava));
   assert.equal(offerFor(later, ava).sent_by, 'Automatic');
   assert.equal(await runSlotFilling(app.ctx, { asOf: new Date(day.getTime() + HOUR).toISOString() }), 0, 'not again within 12 hours');
+  // Off: classes with open spots still show (the owner sees every one), but offers don't go out and the row says why.
   await owner('PATCH', '/v1/settings', { open_spot_offers: 'off' });
-  assert.deepEqual((await coach('GET', '/v1/open-spots')).body.data, []);
+  const off = (await coach('GET', '/v1/open-spots')).body.data.find((x) => x.id === later);
+  assert.deepEqual([off.can_offer, off.offer_count], [false, 0]);
+  assert.match(off.offer_note, /turned off/);
 });

@@ -19,6 +19,11 @@ function seed() {
     if (!a) continue;
     for (const e of nextOf(cls, n)) { try { booking.book(e.id, a.id, { source: 'parent', quiet: true }); } catch { /* not eligible or already booked */ } }
   }
+  // Nate joins the waitlist of the full session, so Home shows a waitlist spot and its place in line.
+  const nate = athlete('kurt.jensen@example.com', 'Nate');
+  const full = get(`SELECT e.id FROM events e WHERE e.cancelled=0 AND e.starts_at>? AND e.capacity>0
+    AND (SELECT COUNT(*) FROM bookings b WHERE b.event_id=e.id AND b.status='waitlist')>0 ORDER BY e.starts_at LIMIT 1`, now);
+  if (nate && full) { try { booking.book(full.id, nate.id, { source: 'parent', quiet: true }); } catch { /* already on it */ } }
 }
 
 module.exports = { seed };

@@ -476,7 +476,9 @@ _Where: app address /parent_
 
 Parents sign in with the email you have on file. No password to remember.
 
-- Enter their email and tap Email me a sign-in code.
+- Enter their email and tap Email me a sign-in code. The email is remembered on that phone for next time.
+- New families are set up by the facility first; the screen says to ask at the front desk.
+- Codes are limited to 10 an hour for each email (and 60 an hour from one network), the same for every address so nobody can test which emails are on file.
 
 ### Sign-in code
 
@@ -484,8 +486,10 @@ _Where: after asking for a code_
 
 A 6-digit code arrives by email and works once, for 10 minutes.
 
-- Enter the code (phones fill it in from the email).
-- Parents stay signed in on that phone for 30 days.
+- Enter the code (phones fill it in from the email; pasting the whole email line keeps just the code). It signs in as soon as the sixth digit is in.
+- Send a new code unlocks after 30 seconds; the old code stops working. No email? explains where to look and who to ask.
+- Five wrong tries end a code, and 15 wrong tries in an hour across codes lock sign-in for that email for the hour.
+- Parents stay signed in on that phone for 30 days. Every parent sign-in is in the activity log.
 
 > Note: In test mode the code shows on screen, as here. Once email is connected it only goes to the parent's inbox.
 
@@ -493,12 +497,16 @@ A 6-digit code arrives by email and works once, for 10 minutes.
 
 _Where: Home tab_
 
-Each athlete at a glance.
+Each athlete at a glance, with Overview, Accountability, Performance and Education tabs (the last three are the athlete app views, with an athlete switcher and dots for new messages or work assigned).
 
-- See membership status, group and private sessions left, and the Athlete ID.
-- Coming up lists every booking, with Cancel. Inside the late-cancel window the session is still used.
+- See membership status with the renewal or trial end date, group classes left (this month for capped plans, plus pack sessions), privates left, the Athlete ID, and sessions attended in the last 30 days with the latest.
+- Needs a look: new messages from the coach, lessons to do (amber when overdue) and no check-in yet today, each with a button straight to the right tab for that athlete.
+- Coming up lists every booking with Today or Tomorrow, the time, place and coach; the first four show, with Show all. Waitlist spots show their place in line, sessions inside the late-cancel window say so, and a session that's on now shows On now or Checked in (and can't be cancelled here).
+- Tap a session for details: time range, address with Directions, coach, how it's paid, Add to calendar, and Cancel. Cancel asks first; inside the late-cancel window the session is still used.
+- Sessions in your calendar: subscribe Apple or Google Calendar (or copy the link) to a private feed of every family booking that updates itself. Reset link makes a new one and stops the old one.
 - Book a session, or open the athlete's workouts.
-- Banners ask for the waiver or a card until they're done.
+- Banners ask for the waiver or a card until they're done, and warn when a membership payment failed or the card has expired or expires this month or next.
+- Put this on your home screen: the install button where the browser offers one, or the Share, Add to Home Screen steps on iPhone. Not now hides it on that phone. Coming back to the app after 5 minutes shows fresh data, and a bar says when there's no connection.
 
 ### Book: classes
 

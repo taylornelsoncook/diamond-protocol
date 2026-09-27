@@ -133,6 +133,7 @@ router.post('/staff/password', requireStaff(), h(async (req, res) => {
 router.post('/parent/code', h(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   if (!/^\S+@\S+\.\S+$/.test(email)) throw bad('Enter the email address your coach has on file.');
+  codeLimit(req, email); // same limit for every address, so it can't tell which emails are on file
   const p = get('SELECT * FROM parents WHERE email=?', email);
   const out = { ok: true };
   if (p) {
@@ -143,6 +144,7 @@ router.post('/parent/code', h(async (req, res) => {
     // Test mode (or a restricted staging server): the email won't arrive, so show the code on screen.
     if (!require('./email').willDeliver(email)) out.test_code = code;
   }
+  out.resend_in = RESEND_SEC;
   res.json(out); // same answer either way, so emails can't be probed
 }));
 
@@ -152,15 +154,46 @@ router.post('/parent/verify', h(async (req, res) => {
   const row = get("SELECT * FROM parent_codes WHERE email=? AND used=0 ORDER BY id DESC LIMIT 1", email);
   if (!row || row.expires_at < new Date().toISOString()) throw bad('That code has expired. Ask for a new one.');
   if (row.attempts >= 5) throw bad('Too many tries. Ask for a new code.');
-  if (sha256(code) !== row.code_hash) { run('UPDATE parent_codes SET attempts=attempts+1 WHERE id=?', row.id); throw bad("That code doesn't match. Check the latest email."); }
+  // Wrong codes across every code asked for in the last hour: stops guessing by asking for code after code.
+  const since = new Date(Date.now() - 50 * 6e4).toISOString(); // codes last 10 minutes, so this is an hour of codes
+  if ((get('SELECT COALESCE(SUM(attempts),0) n FROM parent_codes WHERE email=? AND expires_at>?', email, since)?.n || 0) >= MAX_WRONG_CODES) {
+    throw new HttpError(429, 'Too many wrong codes. Try again in an hour, or ask the front desk for help.');
+  }
+  if (sha256(code) !== row.code_hash) {
+    run('UPDATE parent_codes SET attempts=attempts+1 WHERE id=?', row.id);
+    if (row.attempts + 1 >= 5) log(null, 'Sign-in failed', `${email}: too many wrong codes`, 'signin');
+    throw bad("That code doesn't match. Check the latest email.");
+  }
   run('UPDATE parent_codes SET used=1 WHERE id=?', row.id);
   const p = get('SELECT * FROM parents WHERE email=?', email);
   if (!p) throw bad('No account uses that email.');
   startSession(res, 'parent', p.id);
+  req.parent = p;
+  log(req, 'Signed in', 'Parent portal', 'signin');
   res.json({ ok: true });
 }));
 
 router.post('/parent/logout', (req, res) => { endSession(req, res, 'parent'); res.json({ ok: true }); });
+
+// Whether this browser has a parent session. Answers 200 either way so opening the portal signed out logs no error.
+router.get('/parent/session', (req, res) => { res.json({ signed_in: !!req.parent }); });
+
+// ---- parent code limits: per email and per network address, kept in memory ----
+const RESEND_SEC = 30, CODES_PER_EMAIL = 10, CODES_PER_IP = 60, MAX_WRONG_CODES = 15, LIMIT_WINDOW = 60 * 6e4;
+const codeAsks = new Map(); // key -> [timestamps]
+function codeLimit(req, email) {
+  const now = Date.now();
+  const recent = (key) => (codeAsks.get(key) || []).filter((t) => now - t < LIMIT_WINDOW);
+  const byEmail = recent('e:' + email), byIp = recent('i:' + (req.ip || ''));
+  if (byEmail.length >= CODES_PER_EMAIL || byIp.length >= CODES_PER_IP) {
+    const oldest = Math.min(...(byEmail.length >= CODES_PER_EMAIL ? byEmail : byIp));
+    const mins = Math.max(1, Math.ceil((oldest + LIMIT_WINDOW - now) / 6e4));
+    throw new HttpError(429, `Too many codes asked for. Try again in ${mins} minute${mins === 1 ? '' : 's'}, or ask the front desk for help.`, { retry_after: mins * 60 });
+  }
+  codeAsks.set('e:' + email, [...byEmail, now]);
+  codeAsks.set('i:' + (req.ip || ''), [...byIp, now]);
+  if (codeAsks.size > 5000) for (const [k, v] of codeAsks) if (!v.some((t) => now - t < LIMIT_WINDOW)) codeAsks.delete(k);
+}
 
 function welcomeStaffEmail(s, pw) {
   sendEmail(s.email, `Your ${businessName()} account`, `Hi ${s.name.split(' ')[0]},\n\nYou've been added as ${s.role === 'frontdesk' ? 'front desk' : s.role}.\n\nSign in at ${appUrl()}/ with:\nEmail: ${s.email}\nOne-time password: ${pw}\n\nYou'll choose your own password when you sign in.`);

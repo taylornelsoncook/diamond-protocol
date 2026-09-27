@@ -463,3 +463,158 @@ test('sign out ends the session', async () => {
   await call('POST', '/auth/parent/logout', {}, cookie);
   assert.equal((await call('GET', '/parent/me', null, cookie)).status, 401);
 });
+
+// ---- sign-in: session check, activity, limits ----
+test('session check answers 200 signed in or out; parent sign-in is logged', async () => {
+  const out = await call('GET', '/auth/parent/session');
+  assert.equal(out.status, 200);
+  assert.equal(out.data.signed_in, false);
+  const before = get('SELECT MAX(id) m FROM activity').m || 0;
+  const c = await call('POST', '/auth/parent/code', { email: LINH });
+  assert.equal(c.data.resend_in, 30);
+  const v = await call('POST', '/auth/parent/verify', { email: LINH, code: c.data.test_code });
+  const cookie = v.res.headers.get('set-cookie').split(';')[0];
+  assert.equal((await call('GET', '/auth/parent/session', null, cookie)).data.signed_in, true);
+  const row = get("SELECT * FROM activity WHERE id>? AND action='Signed in' ORDER BY id DESC LIMIT 1", before);
+  assert.ok(row, 'sign-in is in the activity log');
+  assert.match(row.actor, /\(parent\)/);
+  assert.equal(row.kind, 'signin');
+});
+
+test('codes are limited per email, the same way for addresses that are not on file', async () => {
+  const fid = insert('families', { name: 'Limit family' });
+  insert('parents', { family_id: fid, name: 'Lim Test', email: 'limit.parent@example.com' });
+  for (const email of ['limit.parent@example.com', 'not.on.file@example.com']) {
+    for (let i = 0; i < 10; i++) assert.equal((await call('POST', '/auth/parent/code', { email })).status, 200, `code ${i + 1} for ${email}`);
+    const r = await call('POST', '/auth/parent/code', { email });
+    assert.equal(r.status, 429, email);
+    assert.match(r.data.error, /Too many codes/);
+    assert.ok(r.data.retry_after > 0);
+  }
+});
+
+test('wrong codes across several codes lock sign-in for the hour', async () => {
+  const fid = insert('families', { name: 'Guess family' });
+  insert('parents', { family_id: fid, name: 'Gus Test', email: 'guess.parent@example.com' });
+  const email = 'guess.parent@example.com';
+  // Earlier codes in the hour already took 11 wrong tries; 4 more makes 15.
+  const soon = new Date(Date.now() + 5 * 6e4).toISOString();
+  insert('parent_codes', { email, code_hash: 'x', expires_at: soon, used: 1, attempts: 5 });
+  insert('parent_codes', { email, code_hash: 'y', expires_at: soon, used: 1, attempts: 5 });
+  insert('parent_codes', { email, code_hash: 'z', expires_at: soon, used: 1, attempts: 1 });
+  const c = await call('POST', '/auth/parent/code', { email });
+  const wrong = c.data.test_code === '000000' ? '111111' : '000000';
+  for (let i = 0; i < 4; i++) assert.equal((await call('POST', '/auth/parent/verify', { email, code: wrong })).status, 400);
+  const locked = await call('POST', '/auth/parent/verify', { email, code: c.data.test_code });
+  assert.equal(locked.status, 429, 'the right code is refused once 15 wrong tries are used up');
+  assert.match(locked.data.error, /Too many wrong codes/);
+});
+
+// ---- Home: bookings list details, attendance ----
+test('bookings list shows waitlist place, sessions on now, and a started session cannot be cancelled', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET group_credits=5 WHERE id=?', isa.id);
+  // Waitlist: two others ahead of Isabela
+  const full = makeEvent({ hours: 90, capacity: 1, name: 'Full class' });
+  booking.book(full, athlete('Ava', 'Lopez').id, { source: 'staff' });
+  booking.book(full, athlete('Nate', 'Jensen').id, { source: 'staff' });
+  const w = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: full }, paulo);
+  assert.equal(w.data.status, 'waitlist');
+  // On now: started 20 minutes ago, 60 minutes long
+  const now = insert('events', { type: 'class', name: 'On now class', starts_at: localPlus(-20 / 60), duration_min: 60, capacity: 10, price_cents: 0, location_id: 1 });
+  const nb = booking.book(now, isa.id, { source: 'staff' });
+  // Finished: started 2 hours ago
+  const done = insert('events', { type: 'class', name: 'Finished class', starts_at: localPlus(-2), duration_min: 60, capacity: 10, price_cents: 0, location_id: 1 });
+  booking.book(done, isa.id, { source: 'staff' });
+
+  const list = (await call('GET', '/parent/bookings', null, paulo)).data;
+  const wl = list.find((x) => x.event_id === full);
+  assert.equal(wl.waitlist_pos, 2);
+  assert.equal(wl.address, '1450 N Industrial Pkwy, Provo, UT 84604');
+  const on = list.find((x) => x.event_id === now);
+  assert.ok(on, 'a session on now stays listed');
+  assert.equal(on.started, true);
+  assert.equal(on.waitlist_pos, null);
+  assert.ok(!list.some((x) => x.event_id === done), 'finished sessions drop off');
+  assert.ok(list.every((x) => !('checked_in_at' in x)));
+
+  const c = await call('DELETE', `/parent/bookings/${nb.id}`, null, paulo);
+  assert.equal(c.status, 400);
+  assert.match(c.data.error, /already started/);
+  assert.equal(get('SELECT status FROM bookings WHERE id=?', nb.id).status, 'booked');
+  // Leaving a waitlist is always fine
+  assert.equal((await call('DELETE', `/parent/bookings/${w.data.id}`, null, paulo)).status, 200);
+});
+
+test('me reports attendance: sessions checked in over 30 days and the latest', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  const ev = insert('events', { type: 'class', name: 'Attended class', starts_at: localPlus(-26), duration_min: 60, capacity: 10, price_cents: 0, location_id: 1 });
+  const b = booking.book(ev, isa.id, { source: 'staff' });
+  run("UPDATE bookings SET checked_in_at=datetime('now') WHERE id=?", b.id);
+  const a = (await call('GET', '/parent/me', null, paulo)).data.athletes.find((x) => x.id === isa.id);
+  assert.ok(a.attendance.last_30 >= 1);
+  assert.ok(a.attendance.last_at >= get('SELECT starts_at FROM events WHERE id=?', ev).starts_at, 'the latest session attended');
+  // Not checked in: doesn't count
+  const ev2 = insert('events', { type: 'class', name: 'Missed class', starts_at: localPlus(-3), duration_min: 60, capacity: 10, price_cents: 0, location_id: 1 });
+  booking.book(ev2, isa.id, { source: 'staff' });
+  const a2 = (await call('GET', '/parent/me', null, paulo)).data.athletes.find((x) => x.id === isa.id);
+  assert.equal(a2.attendance.last_30, a.attendance.last_30);
+});
+
+// ---- calendar ----
+test('calendar feed: private link, family bookings only, UTC times, reset kills the old link', async () => {
+  const maria = await signIn(MARIA);
+  assert.equal((await call('GET', '/parent/calendar')).status, 401);
+  const links = (await call('GET', '/parent/calendar', null, maria)).data;
+  assert.match(links.url, /\/api\/calendar\/[\w-]+\.ics$/);
+  assert.ok(links.webcal.startsWith('webcal://'));
+  assert.ok(links.google.includes(encodeURIComponent(links.webcal)));
+  assert.equal((await call('GET', '/parent/calendar', null, maria)).data.url, links.url, 'the same link each time');
+  assert.ok(get("SELECT 1 FROM activity WHERE action='Turned on calendar link'"));
+
+  const path = new URL(links.url).pathname;
+  const res = await fetch(base + path); // no cookie: calendar apps can't sign in
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/calendar/);
+  const ics = await res.text();
+  assert.match(ics, /^BEGIN:VCALENDAR\r\n/);
+  assert.match(ics, /X-WR-CALNAME:.*Lopez family/);
+  assert.match(ics, /SUMMARY:Ava: /);
+  assert.ok(!/SUMMARY:(Nate|Emma|Isabela):/.test(ics), 'no other family');
+  assert.ok(ics.split('\r\n').every((l) => Buffer.byteLength(l) <= 75), 'lines are folded');
+  // A booking at 18:00 local in Denver is 00:00 or 01:00 UTC the next day.
+  const ava = athlete('Ava', 'Lopez');
+  const ev = insert('events', { type: 'class', name: 'Calendar check', starts_at: '2027-01-15T18:00', duration_min: 90, capacity: 10, price_cents: 0, location_id: 1 });
+  booking.book(ev, ava.id, { source: 'staff' });
+  const ics2 = await (await fetch(base + path)).text();
+  assert.match(ics2, /SUMMARY:Ava: Calendar check\r\n/);
+  assert.match(ics2, /DTSTART:20270116T010000Z\r\nDTEND:20270116T023000Z/);
+
+  const reset = (await call('POST', '/parent/calendar/reset', {}, maria)).data;
+  assert.notEqual(reset.url, links.url);
+  assert.equal((await fetch(base + path)).status, 404, 'the old link stops working');
+  assert.equal((await fetch(base + new URL(reset.url).pathname)).status, 200);
+  assert.equal((await fetch(base + '/api/calendar/short.ics')).status, 404);
+});
+
+test('one session as a calendar file, only for your own family', async () => {
+  const maria = await signIn(MARIA);
+  const paulo = await signIn(PAULO);
+  const mine = (await call('GET', '/parent/bookings', null, maria)).data.find((b) => b.status === 'booked');
+  const r = await fetch(`${base}/api/parent/bookings/${mine.id}/ics`, { headers: { cookie: maria } });
+  assert.equal(r.status, 200);
+  const body = await r.text();
+  assert.match(body, /BEGIN:VEVENT[\s\S]*UID:dp-booking-\d+@diamond-protocol[\s\S]*END:VEVENT/);
+  assert.ok(!body.includes('REFRESH-INTERVAL'), 'a one-off file is not a subscription');
+  assert.equal((await fetch(`${base}/api/parent/bookings/${mine.id}/ics`, { headers: { cookie: paulo } })).status, 404);
+});
+
+test('calendar times follow daylight saving', () => {
+  const { localToUtc } = require('../server/services/parent-calendar');
+  assert.equal(new Date(localToUtc('2026-07-01T18:00', 'America/Denver')).toISOString(), '2026-07-02T00:00:00.000Z');
+  assert.equal(new Date(localToUtc('2026-12-01T18:00', 'America/Denver')).toISOString(), '2026-12-02T01:00:00.000Z');
+  assert.equal(new Date(localToUtc('2026-11-01T09:00', 'America/Denver')).toISOString(), '2026-11-01T16:00:00.000Z');
+  assert.equal(new Date(localToUtc('2026-03-08T09:00', 'America/Denver')).toISOString(), '2026-03-08T15:00:00.000Z');
+});

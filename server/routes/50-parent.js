@@ -9,6 +9,7 @@ const { requireParent } = require('../auth');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
 const { luhnValid, cardBrand, parseExpiry } = require('../services/parent-card');
+const cal = require('../services/parent-calendar');
 
 const ATHLETE_FIELDS = ['first_name', 'last_name', 'birthday', 'sex', 'sport', 'position', 'school', 'allergies', 'injuries', 'medical_notes', 'emergency_name', 'emergency_phone'];
 const BOOKABLE_TYPES = ['class', 'camp', 'clinic'];
@@ -42,6 +43,22 @@ function athleteSummary(a) {
     membership: membershipOf(a), member_left: leftOf(billing.memberSessionsLeft(a.id, booking.todayLocal())),
   };
 }
+// Sessions attended (checked in) in the last 30 days and the latest one, for Home.
+function attendanceOf(athleteId) {
+  const now = booking.nowLocal();
+  const since = addDays(now.slice(0, 10), -30) + 'T00:00';
+  const r = get(`SELECT COUNT(*) n, MAX(e.starts_at) last FROM bookings b JOIN events e ON e.id=b.event_id
+    WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND e.starts_at<=? AND e.starts_at>=?`, athleteId, now, since);
+  const last = r.last || get('SELECT MAX(e.starts_at) s FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND e.starts_at<=?', athleteId, now)?.s || null;
+  return { last_30: r.n, last_at: last };
+}
+// Link the calendar apps use; the portal's own address when the app URL isn't configured.
+const origin = (req) => (process.env.DP_APP_URL || process.env.RENDER_EXTERNAL_URL ? appUrl() : `${req.protocol}://${req.get('host')}`);
+function feedLinks(req, token) {
+  const url = `${origin(req)}/api/calendar/${token}.ics`;
+  return { url, webcal: url.replace(/^https?:/, 'webcal:'), google: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(url.replace(/^https?:/, 'webcal:'))}` };
+}
+
 function familyAthletes(req) {
   return all('SELECT * FROM athletes WHERE family_id=? AND archived=0 ORDER BY birthday IS NULL, birthday, id', req.parent.family_id);
 }
@@ -67,7 +84,7 @@ function routes(api) {
         waiver_current: f.waiver_version != null && Number(f.waiver_version) >= current,
       },
       parents: all('SELECT id, name, email, phone FROM parents WHERE family_id=? ORDER BY is_self DESC, id', f.id),
-      athletes: familyAthletes(req).map(athleteSummary),
+      athletes: familyAthletes(req).map((a) => ({ ...athleteSummary(a), attendance: attendanceOf(a.id) })),
       settings: {
         business_name: businessName(), late_cancel_hours: Number(setting('late_cancel_hours', 12)), waiver_version: current,
         waiver_text: setting('waiver_text', ''), payments_mode: payments.mode(),
@@ -78,10 +95,47 @@ function routes(api) {
   // ---- bookings ----
   api.get('/parent/bookings', h(async (req, res) => {
     const lateH = Number(setting('late_cancel_hours', 12));
-    const rows = all(`SELECT b.id, b.athlete_id, b.status, b.coverage, b.paid_cents, e.id AS event_id, e.name, e.type, e.starts_at, e.duration_min, e.location_id, l.name AS location
-      FROM bookings b JOIN events e ON e.id=b.event_id JOIN athletes a ON a.id=b.athlete_id LEFT JOIN locations l ON l.id=e.location_id
-      WHERE a.family_id=? AND b.status IN ('booked','waitlist') AND e.cancelled=0 AND e.starts_at>=? ORDER BY e.starts_at, b.id`, req.parent.family_id, booking.nowLocal());
-    res.json(rows.map((r) => ({ ...r, late: r.status === 'booked' && booking.hoursUntil(r.starts_at) < lateH })));
+    // Sessions that have started but not finished stay listed until they end.
+    const rows = all(`SELECT b.id, b.athlete_id, b.status, b.coverage, b.paid_cents, b.checked_in_at, e.id AS event_id, e.name, e.type, e.starts_at, e.duration_min, e.location_id,
+        l.name AS location, l.address, s.name AS coach,
+        (SELECT COUNT(*) FROM bookings w WHERE w.event_id=b.event_id AND w.status='waitlist' AND w.id<=b.id) AS waitlist_pos
+      FROM bookings b JOIN events e ON e.id=b.event_id JOIN athletes a ON a.id=b.athlete_id LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN staff s ON s.id=e.coach_id
+      WHERE a.family_id=? AND a.archived=0 AND b.status IN ('booked','waitlist') AND e.cancelled=0 AND e.starts_at>=? ORDER BY e.starts_at, b.id`, req.parent.family_id, addDays(booking.todayLocal(), -1) + 'T00:00');
+    const now = booking.nowLocal();
+    const endOf = (r) => { const d = new Date(r.starts_at + ':00Z'); d.setUTCMinutes(d.getUTCMinutes() + (r.duration_min || 60)); return d.toISOString().slice(0, 16); };
+    res.json(rows.filter((r) => endOf(r) > now).map((r) => ({
+      ...r, coach: r.coach ? r.coach.split(' ')[0] : null, waitlist_pos: r.status === 'waitlist' ? r.waitlist_pos : null,
+      started: r.starts_at <= now, checked_in: !!r.checked_in_at, checked_in_at: undefined,
+      late: r.status === 'booked' && booking.hoursUntil(r.starts_at) < lateH,
+    })));
+  }));
+
+  // One session as a calendar file ("Add to calendar").
+  api.get('/parent/bookings/:id/ics', h(async (req, res) => {
+    const body = cal.oneBooking(Number(req.params.id) || 0, req.parent.family_id, `${origin(req)}/parent`);
+    if (!body) throw notFound('That booking');
+    res.set({ 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="session-${Number(req.params.id)}.ics"`, 'Cache-Control': 'no-store' });
+    res.send(body);
+  }));
+
+  // ---- calendar feed: a private link phone calendars subscribe to ----
+  api.get('/parent/calendar', h(async (req, res) => {
+    const { token, created } = cal.tokenFor(req.parent.family_id);
+    if (created) log(req, 'Turned on calendar link', family(req).name);
+    res.json(feedLinks(req, token));
+  }));
+  api.post('/parent/calendar/reset', h(async (req, res) => {
+    const { token } = cal.tokenFor(req.parent.family_id, { reset: true });
+    log(req, 'Reset calendar link', `${family(req).name}: the old link stopped working`);
+    res.json(feedLinks(req, token));
+  }));
+  // Public by design (calendar apps can't sign in): the unguessable token is the key, and it can be reset.
+  api.get('/calendar/:file', h(async (req, res) => {
+    const token = String(req.params.file || '').replace(/\.ics$/i, '');
+    const f = cal.familyByToken(token);
+    if (!f) throw notFound('That calendar');
+    res.set({ 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': 'inline; filename="sessions.ics"', 'Cache-Control': 'private, max-age=900', 'X-Robots-Tag': 'noindex' });
+    res.send(cal.familyFeed(f.id, addDays(booking.todayLocal(), -30) + 'T00:00', `${origin(req)}/parent`));
   }));
 
   api.post('/parent/bookings', h(async (req, res) => {
@@ -110,6 +164,7 @@ function routes(api) {
     const b = get(`SELECT b.*, e.name, e.starts_at, a.first_name, a.last_name FROM bookings b JOIN athletes a ON a.id=b.athlete_id JOIN events e ON e.id=b.event_id
       WHERE b.id=? AND a.family_id=?`, Number(req.params.id) || 0, req.parent.family_id);
     if (!b) throw notFound('That booking');
+    if (b.status === 'booked' && (b.checked_in_at || b.starts_at <= booking.nowLocal())) throw bad('That session has already started, so it can’t be cancelled here. Talk to the front desk.');
     const r = booking.cancelBooking(b.id, { byParent: true });
     log(req, r.late ? 'Late cancel' : 'Cancelled booking', `${b.first_name} ${b.last_name}: ${b.name}, ${b.starts_at.replace('T', ' ')}`);
     res.json({ ok: true, late: r.late });

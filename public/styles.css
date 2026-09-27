@@ -156,3 +156,35 @@ a.pulse-tile:hover,a.pulse-tile:focus-visible{background:var(--surface-raised)}
 .tm-bars{display:flex;gap:4px;align-items:flex-end;height:28px}
 .tm-bars span{flex:0 0 10px;background:var(--green-mid);border-radius:2px 2px 0 0;min-height:2px}
 .tm-bars span.low{background:var(--amber)}
+
+/* Testing: testing day, uploads, waiting results */
+.ts-tabs{display:flex;gap:8px;overflow-x:auto;align-items:center;padding-bottom:2px}
+.ts-tab{flex:0 0 auto;min-height:44px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel-muted);font:600 14px/1 var(--font-sans);cursor:pointer;white-space:nowrap}
+.ts-tab[aria-selected="true"]{border-color:var(--green-mid);background:var(--surface-raised);color:var(--steel)}
+.ts-tab-count{font:500 12px/1 var(--font-mono);color:var(--steel-muted)}
+.ts-tab-count.ts-done{color:var(--green-bright)}
+.ts-row{flex-wrap:wrap}
+.ts-up{outline:2px solid var(--green-mid);outline-offset:-2px;border-radius:6px}
+.ts-cell{width:88px;min-height:44px}
+.ts-cell.ts-bad{border-color:var(--amber)}
+.ts-x{min-width:44px;padding:0 8px}
+.ts-remove{color:var(--steel-muted)}
+.ts-clock{font:700 44px/1 var(--font-mono);color:var(--steel);min-width:180px}
+.ts-pending{gap:8px;padding:8px 12px;border:1px solid var(--amber);border-radius:var(--radius-sm);color:var(--amber)}
+.ts-pick{gap:8px;min-height:44px}
+.ts-picklist{display:flex;flex-wrap:wrap;gap:0 18px;max-height:320px;overflow-y:auto}
+.ts-summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
+.ts-order{margin:0;padding:0;display:flex;flex-direction:column;gap:2px;list-style:none}
+.ts-drop{display:flex;flex-direction:column;gap:8px;padding:16px;border:1px dashed var(--control-border);border-radius:var(--radius-md)}
+.ts-drop.over{border-color:var(--green-mid);background:var(--surface-raised)}
+.ts-problems-cards{display:none}
+.ts-qrow{gap:10px;min-height:44px;cursor:pointer;flex-wrap:wrap}
+.ts-combo{position:relative}
+.ts-combo-list{position:absolute;left:0;right:0;top:100%;z-index:20;margin:2px 0 0;padding:4px;list-style:none;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);max-height:320px;overflow-y:auto}
+.ts-combo-opt{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-height:44px;padding:0 10px;border-radius:4px;cursor:pointer}
+.ts-combo-opt[aria-selected="true"],.ts-combo-opt:hover{background:var(--surface-raised)}
+@media (max-width: 760px){
+  .ts-sticky{position:sticky;top:0;z-index:6}
+  .ts-clock{font-size:36px;min-width:120px}
+}
+@media (max-width: 600px){ .ts-problems-table{display:none} .ts-problems-cards{display:flex} }

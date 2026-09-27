@@ -7,6 +7,8 @@ import * as schedule from './services/schedule.js';
 import * as teams from './services/teams.js';
 import * as perf from './services/performance.js';
 import * as reports from './services/reports.js';
+import * as uploads from './services/uploads.js';
+import * as queue from './services/queue.js';
 import { updateSettings } from './services/families.js';
 import { localDate, addDaysToDate } from './util.js';
 const weekStart = (d) => addDaysToDate(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
@@ -208,6 +210,13 @@ perf.recordResults(ctx, [
   { athlete: { external_id: 'MAT-0412', name: 'Athlete 12' }, test: 'vertical_standing', value: 17.5, recorded_at: at(fall), device: 'Jump mat', external_id: 'mat-demo-1' },
   { athlete: { external_id: 'MAT-0412', name: 'Athlete 12' }, test: 'vertical_standing', value: 18, recorded_at: at(fall), device: 'Jump mat', external_id: 'mat-demo-2' }
 ], { source: 'api:just_jump', provider: 'just_jump' });
+// A Freelap chip linked to Cole, and last week's jump-mat sheet as a recent upload (so Undo has something to show).
+queue.linkDevice(ctx, { provider: 'freelap', external_id: 'FL-2207', external_name: 'Chip 2207', client_id: cole.id });
+const idOf = (c) => ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', c.id).athlete_id;
+const matDay = addDaysToDate(today, -7);
+const matSheet = uploads.previewUpload(ctx, { filename: 'jump-mat-week.csv', source: 'Jump mat', date: matDay,
+  csv: `Athlete ID,Name,Vertical jump (in)\n${idOf(lopez)},Ava Lopez,17.5\n${idOf(cole)},Cole Park,26\n${idOf(nguyen)},${ctx.db.get('SELECT name FROM clients WHERE id = ?', nguyen.id).name},22.5` });
+uploads.commitUpload(ctx, { preview_id: matSheet.preview_id, confirm: matSheet.warnings.map((w) => w.key) }, ctx.db.get(`SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1`));
 
 // Accountability, performance targets and education (sample). Ava is on the Hill Country FC roster and Cole on Westlake's,
 // so team goals, messages and reading reach them in the app and the parent portal.

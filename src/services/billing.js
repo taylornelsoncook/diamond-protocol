@@ -183,8 +183,8 @@ async function chargeInvoice(ctx, invoiceId, asOf) {
       recordPaid(ctx, inv, s, { attempts, ref: result.ref });
     } else {
       const giveUp = attempts >= MAX_ATTEMPTS;
-      ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, last_error = ?, next_retry_at = ? WHERE id = ?`,
-        attempts, result.error, giveUp ? null : addDays(asOf, RETRY_EVERY_DAYS), inv.id);
+      ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
+        attempts, result.error, giveUp ? null : addDays(asOf, RETRY_EVERY_DAYS), result.ref ?? null, inv.id);
       emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, error: result.error, final: giveUp });
       if (giveUp) {
         ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id);
@@ -221,6 +221,34 @@ export async function retryWithNewCard(ctx, { familyId, clientId }) {
   const out = [];
   for (const r of rows) out.push(await attemptCharge(ctx, r.id));
   return out;
+}
+
+// Stripe webhook: a membership charge settled differently from what the charge call said. A card the bank
+// asked the client to approve can succeed later, and a payment still processing can fail later. Only the
+// invoice's latest PaymentIntent counts, and nothing changes when the invoice already agrees.
+export function reconcileInvoicePayment(ctx, invoiceId, outcome) { return withLock(`invoice:${invoiceId}`, () => reconcile(ctx, invoiceId, outcome)); }
+async function reconcile(ctx, invoiceId, { ref, succeeded, error }) {
+  const inv = ctx.db.get(`SELECT i.*, c.name AS client_name FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
+  if (!inv || !ref || inv.payment_ref !== ref) return 'ignored';
+  if (succeeded && inv.status === 'failed') {
+    ctx.db.tx(() => recordPaid(ctx, inv, getSubscription(ctx, inv.subscription_id), { ref }));
+    await membershipReceipt(ctx, inv.id);
+    return 'paid';
+  }
+  if (!succeeded && inv.status === 'paid') {
+    const giveUp = inv.attempts >= MAX_ATTEMPTS;
+    ctx.db.tx(() => {
+      ctx.db.run(`UPDATE invoices SET status = 'failed', paid_at = NULL, last_error = ?, next_retry_at = ? WHERE id = ?`,
+        error || 'The payment failed after it was taken.', giveUp ? null : addDays(ctx.now(), RETRY_EVERY_DAYS), inv.id);
+      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts: inv.attempts, error, final: giveUp });
+      const s = getSubscription(ctx, inv.subscription_id);
+      if (giveUp) { ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id); setStatus(ctx, s.id, 'canceled', { canceled_at: ctx.now() }); }
+      else if (s.status !== 'canceled') setStatus(ctx, s.id, 'past_due');
+    });
+    await paymentFailed(ctx, inv.id);
+    return 'failed';
+  }
+  return 'unchanged';
 }
 
 // Manual retry from the dashboard or API.

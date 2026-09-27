@@ -71,7 +71,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Point your domain at the host and confirm the padlock (HTTPS) shows.
 - [ ] Check `https://your-domain/healthz` shows `{"ok":true}`.
 - [ ] **First sign-in:** choose your own password, then remove `ADMIN_PASSWORD` from the host's settings.
-- [ ] **Stripe webhook:** add `https://your-domain/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
+- [ ] **Stripe webhook:** add `https://your-domain/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
 - [ ] **Uptime alert:** sign up for a free uptime monitor (UptimeRobot, Better Stack or similar) pointed at `/healthz`, so you get a text or email if the site goes down.
 
 ## 8. Set it up with your real business

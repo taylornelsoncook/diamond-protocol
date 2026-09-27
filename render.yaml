@@ -1,55 +1,32 @@
-# Render Blueprint: two copies of the app, each with its own disk for the database and backups.
-# In Render: New > Blueprint > pick this repo. See docs/DEPLOY.md.
+# Render blueprint: New → Blueprint → pick this repository. Fill in the secret values in the dashboard.
 services:
-  # Staging: demo data, test-mode payments. Try every change here first.
-  - type: web
-    name: diamond-protocol-staging
-    runtime: docker
-    plan: starter
-    region: oregon
-    branch: main
-    healthCheckPath: /healthz
-    autoDeploy: true
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DP_DATA_DIR
-        value: /data
-      - key: DP_DEMO
-        value: "1"
-      # Email (optional on staging): set in the Render dashboard, never in this file.
-      - key: RESEND_API_KEY
-        sync: false
-      - key: DP_EMAIL_FROM
-        sync: false
-      # Staging only delivers to these addresses (e.g. your own); demo families never get real email.
-      - key: DP_EMAIL_ONLY_TO
-        sync: false
-
-  # Production: real families. Starts empty and asks you to create the owner account.
-  # Deploys only when you press Manual Deploy, so nothing reaches families untested.
   - type: web
     name: diamond-protocol
     runtime: docker
-    plan: starter
-    region: oregon
-    branch: main
+    plan: starter            # persistent disks need a paid instance
+    region: ohio
     healthCheckPath: /healthz
-    autoDeploy: false
+    numInstances: 1          # SQLite: exactly one instance
     disk:
       name: data
       mountPath: /data
-      sizeGB: 1
+      sizeGB: 5
     envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DP_DATA_DIR
-        value: /data
+      - key: DP_TEST_MODE
+        value: "false"
+      - key: PUBLIC_URL
+        sync: false           # e.g. https://app.diamondprotocol.com
+      - key: BUSINESS_TZ
+        value: America/Chicago
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false           # only for the first start; remove after you sign in
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
       - key: RESEND_API_KEY
         sync: false
-      - key: DP_EMAIL_FROM
+      - key: EMAIL_FROM
         sync: false

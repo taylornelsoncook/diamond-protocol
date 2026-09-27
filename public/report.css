@@ -1,0 +1,27 @@
+body{background:var(--ground)}
+.rp{max-width:880px;margin:0 auto;padding:calc(24px + env(safe-area-inset-top,0px)) 16px calc(48px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px}
+.rp-sheet{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:32px;display:flex;flex-direction:column;gap:28px}
+.rp-head{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.rp-head img{width:140px;height:auto}
+.rp-name{font:700 34px/1.05 var(--font-display);letter-spacing:.05em;text-transform:uppercase;color:var(--steel)}
+.rp-sub{color:var(--steel-muted);font-size:14px;margin-top:6px}
+.rp-h{font:600 15px/1 var(--font-display);letter-spacing:.1em;text-transform:uppercase;color:var(--silver);margin:0 0 12px}
+.rp-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.rp-card{border:1px solid var(--line-subtle);background:var(--ground);border-radius:var(--radius-sm);padding:14px;display:flex;flex-direction:column;gap:4px}
+.rp-card b{font:700 26px/1 var(--font-display);color:var(--green-bright)}
+.rp-card span{font-size:13px;color:var(--steel-muted)}
+.rp-table{width:100%;border-collapse:collapse}
+.rp-table th{text-align:left;font:500 12px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted);padding:0 8px 10px 0;border-bottom:1px solid var(--line)}
+.rp-table td{padding:12px 8px 12px 0;border-bottom:1px solid var(--line-subtle);vertical-align:middle}
+.rp-table .num{font-family:var(--font-mono);white-space:nowrap}
+.rp-up{color:var(--green-bright)} .rp-down{color:var(--amber)}
+.rp-spark{color:var(--green-bright)}
+.rp-note{border-left:3px solid var(--green-mid);padding:8px 14px;background:var(--ground);border-radius:0 var(--radius-sm) var(--radius-sm) 0;white-space:pre-wrap}
+.rp-actions{display:flex;gap:12px;flex-wrap:wrap}
+.rp-foot{font-size:12px;color:var(--steel-muted)}
+@media (max-width:620px){.rp-sheet{padding:20px}.rp-cards{grid-template-columns:1fr}.rp-hide-sm{display:none}}
+@media print{
+  :root{--ground:#fff;--surface:#fff;--steel:#111;--silver:#222;--steel-muted:#555;--line:#bbb;--line-subtle:#ddd;--green-bright:#1f6b2a;--amber:#8a5a00}
+  body{background:#fff}.rp{padding:0;max-width:none}.rp-sheet{border:0;padding:0}.rp-actions{display:none}
+  .rp-head img{filter:invert(1) grayscale(1)} .rp-card{break-inside:avoid} tr{break-inside:avoid}
+}

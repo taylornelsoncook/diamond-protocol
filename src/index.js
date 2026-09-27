@@ -1,0 +1,46 @@
+import { createApp } from './server.js';
+import { createStripeProvider } from './payments/stripe-provider.js';
+import { createTestProvider } from './payments/test-provider.js';
+import { createUser } from './services/access.js';
+
+const port = Number(process.env.PORT || 3000);
+const testMode = process.env.DP_TEST_MODE === 'true';
+const payments = process.env.STRIPE_SECRET_KEY
+  ? createStripeProvider({ secretKey: process.env.STRIPE_SECRET_KEY, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET, currency: process.env.CURRENCY || 'usd' })
+  : createTestProvider();
+if (payments.live && testMode) { console.error('Refusing to start: DP_TEST_MODE=true with a live Stripe key. Set DP_TEST_MODE=false.'); process.exit(1); }
+
+// Production checks: refuse settings that would be unsafe with real families' data and money.
+const problems = [], warnings = [];
+if (!testMode) {
+  if (!process.env.PUBLIC_URL?.startsWith('https://')) problems.push('PUBLIC_URL must be your https:// address (for example https://app.diamondprotocol.com).');
+  if (process.env.ADMIN_PASSWORD === 'change-me-now') problems.push('ADMIN_PASSWORD is still the sample password. Change or remove it.');
+  if (!process.env.STRIPE_SECRET_KEY) warnings.push('No STRIPE_SECRET_KEY: payments use the built-in test provider and nothing is charged.');
+  if (!process.env.RESEND_API_KEY) warnings.push('No RESEND_API_KEY: emails (parent sign-in codes!) are only logged, not sent.');
+  if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) warnings.push('No STRIPE_WEBHOOK_SECRET: Stripe events will be rejected.');
+}
+if (problems.length) { console.error(`Refusing to start:\n- ${problems.join('\n- ')}`); process.exit(1); }
+for (const w of warnings) console.warn(`Warning: ${w}`);
+const { server, ctx } = createApp({ dbFile: process.env.DB_FILE || 'data/diamond.db', testMode, payments, publicUrl: process.env.PUBLIC_URL,
+  mail: { resendKey: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM || 'Diamond Protocol <coach@example.com>' } });
+
+// First start on a new server: create the owner from ADMIN_EMAIL / ADMIN_PASSWORD, who must change it on first sign-in.
+if (!ctx.db.get('SELECT COUNT(*) AS n FROM users').n && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD !== 'change-me-now') {
+  const u = createUser(ctx, { email: process.env.ADMIN_EMAIL, name: process.env.ADMIN_NAME || 'Owner', password: process.env.ADMIN_PASSWORD });
+  ctx.db.run('UPDATE users SET must_change_password = 1 WHERE id = ?', u.id);
+  console.log(`Created the owner account ${u.email}. Sign in and choose a new password, then remove ADMIN_PASSWORD from the settings.`);
+}
+
+server.listen(port, () => {
+  const users = ctx.db.get('SELECT COUNT(*) AS n FROM users').n;
+  console.log(`Diamond Protocol running at http://localhost:${port}`);
+  console.log(`Payments: ${payments.name === 'stripe' ? (payments.live ? 'Stripe LIVE (real charges)' : 'Stripe test mode') : 'built-in test mode (no Stripe key, nothing is charged)'}`);
+  if (!users) console.log('No coach account yet. Set ADMIN_EMAIL and ADMIN_PASSWORD and restart, or run `npm run seed` for sample data.');
+});
+// Hosts stop the app with SIGTERM during deploys: finish in-flight requests, close the database cleanly.
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => {
+  console.log(`${sig} received, shutting down.`);
+  server.close(() => process.exit(0));
+  server.closeIdleConnections?.();
+  setTimeout(() => process.exit(0), 10000).unref();
+});

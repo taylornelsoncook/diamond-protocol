@@ -1,0 +1,27 @@
+.p-wrap{max-width:640px;margin:0 auto;padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(96px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px}
+.p-top{display:flex;align-items:center;gap:12px}
+.p-top img{width:44px;height:auto}
+.p-title{font:700 26px/1 var(--font-display);letter-spacing:.05em;text-transform:uppercase;color:var(--steel)}
+.p-tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(5,1fr);background:var(--black);border-top:1px solid var(--line-subtle);padding-bottom:env(safe-area-inset-bottom,0px);z-index:30}
+.p-tab{background:none;border:0;color:var(--steel-muted);min-height:58px;font:500 13px/1.2 var(--font-sans);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer}
+.p-tab[aria-current="page"]{color:var(--green-bright)}
+.p-tab svg{width:22px;height:22px}
+.p-chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
+.p-chip{flex-shrink:0;border:1px solid var(--control-border);background:var(--surface);color:var(--steel);border-radius:var(--radius-pill);padding:0 16px;min-height:40px;font:500 14px/1 var(--font-sans);cursor:pointer}
+.p-chip[aria-pressed="true"]{background:var(--green);border-color:var(--green-mid);color:var(--on-green)}
+.p-day{font:600 15px/1 var(--font-display);letter-spacing:.06em;text-transform:uppercase;color:var(--silver);margin-top:8px}
+.p-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line-subtle)}
+.p-row:first-child{border-top:0}
+.p-time{width:64px;flex-shrink:0;font:600 18px/1.1 var(--font-display);color:var(--steel)}
+.p-banner{border:1px solid var(--amber);background:var(--amber-deep);color:var(--amber);border-radius:var(--radius-md);padding:14px 16px;display:flex;align-items:center;gap:12px}
+.p-banner .dp-btn{flex-shrink:0}
+.p-athlete-name{font:700 24px/1 var(--font-display);letter-spacing:.04em;text-transform:uppercase;color:var(--steel)}
+.p-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.p-stat{background:var(--ground);border:1px solid var(--line-subtle);border-radius:var(--radius-sm);padding:10px}
+.p-stat b{display:block;font:600 24px/1 var(--font-display);color:var(--steel)}
+.p-stat span{font-size:12px;color:var(--steel-muted)}
+.p-waiver{max-height:240px;overflow:auto;white-space:pre-wrap;background:var(--ground);border:1px solid var(--line-subtle);border-radius:var(--radius-sm);padding:12px;font-size:14px;line-height:21px}
+.p-code{letter-spacing:.4em;font:600 28px/1 var(--font-mono);text-align:center}
+.toast-host{left:16px;right:16px;bottom:calc(76px + env(safe-area-inset-bottom,0px));max-width:none}
+details.dp-panel{display:block}
+details.dp-panel > summary{list-style-position:inside}

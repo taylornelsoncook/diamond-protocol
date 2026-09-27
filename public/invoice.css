@@ -1,0 +1,24 @@
+body{background:var(--ground)}
+.inv{max-width:820px;margin:0 auto;padding:calc(24px + env(safe-area-inset-top,0px)) 16px calc(48px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px}
+.inv-sheet{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:32px;display:flex;flex-direction:column;gap:28px}
+.inv-head{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.inv-head img{width:150px;height:auto}
+.inv-title{font:700 34px/1 var(--font-display);letter-spacing:.08em;text-transform:uppercase;color:var(--steel);text-align:right}
+.inv-meta{display:grid;grid-template-columns:auto auto;gap:4px 16px;justify-content:end;font-size:14px;margin-top:10px}
+.inv-meta dt{color:var(--steel-muted)} .inv-meta dd{margin:0;text-align:right;font-family:var(--font-mono)}
+.inv-parties{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+.inv-parties p{margin:0;white-space:pre-line;line-height:22px}
+.inv-table{width:100%;border-collapse:collapse}
+.inv-table th{text-align:left;font:500 12px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted);padding:0 0 10px;border-bottom:1px solid var(--line)}
+.inv-table td{padding:14px 0;border-bottom:1px solid var(--line-subtle);vertical-align:top}
+.inv-table .amt{text-align:right;font-family:var(--font-mono);white-space:nowrap;padding-left:16px}
+.inv-total{display:flex;justify-content:flex-end;align-items:baseline;gap:24px}
+.inv-total b{font:700 32px/1 var(--font-display);color:var(--steel)}
+.inv-stamp{align-self:flex-start;font:700 15px/1 var(--font-display);letter-spacing:.12em;text-transform:uppercase;border:2px solid currentColor;border-radius:var(--radius-sm);padding:8px 12px}
+.inv-actions{display:flex;gap:12px;flex-wrap:wrap}
+@media (max-width:560px){.inv-sheet{padding:20px}.inv-parties{grid-template-columns:1fr}.inv-title{text-align:left}.inv-meta{justify-content:start}.inv-meta dd{text-align:left}}
+@media print{
+  :root{--ground:#fff;--surface:#fff;--steel:#111;--silver:#222;--steel-muted:#555;--line:#bbb;--line-subtle:#ddd}
+  body{background:#fff;color:#111}.inv{padding:0}.inv-sheet{border:0;padding:0}.inv-actions,.test-banner{display:none}
+  .inv-head img{filter:invert(1) grayscale(1)}
+}

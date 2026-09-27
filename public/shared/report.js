@@ -83,7 +83,7 @@ function render(p) {
   const range = p.first_date ? (p.first_date === p.last_date ? fmtDate(p.first_date) : `${fmtDate(p.first_date)} to ${fmtDate(p.last_date)}`) : '';
   const g = p.growth;
   const periods = periodOptions(p);
-  const backLink = staff ? html`<a class="btn btn-ghost" href="/app/clients/${a.id}">Back to the athlete</a>` : p.view === 'parent' ? html`<a class="btn btn-ghost" href="/parent">Back to Progress</a>` : '';
+  const backLink = staff ? html`<a class="btn btn-ghost" href="/app/clients/${a.id}">Back to the athlete</a>` : p.view === 'parent' ? html`<a class="btn btn-ghost" href="/parent/progress">Back to Progress</a>` : '';
   const multi = tests.some((t) => t.count > 1);
   mount(root, html`
     <div class="rp-bar no-print">

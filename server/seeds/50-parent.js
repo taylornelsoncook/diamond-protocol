@@ -2,6 +2,7 @@
 'use strict';
 const { get, all, run, insert, update } = require('../db');
 const booking = require('../services/booking');
+const { addDays } = require('../lib');
 require('../services/parent-book'); // adds bookings.note
 
 function seed() {
@@ -43,6 +44,14 @@ function seed() {
         update('bookings', b.id, { note: 'Working on first-step quickness before tryouts.' });
       } catch { /* time taken */ }
     }
+  }
+  // A retest already on the calendar, so Progress shows the next testing day for the Lopez and Jensen kids.
+  const kids = all(`SELECT a.id FROM athletes a JOIN families f ON f.id=a.family_id WHERE f.id IN (SELECT family_id FROM parents WHERE email IN ('maria.lopez@example.com','kurt.jensen@example.com')) AND a.archived=0`);
+  const combine = get("SELECT id FROM testing_days WHERE name='Fall combine'");
+  if (kids.length && !get("SELECT 1 FROM testing_days WHERE name='Winter retest'")) {
+    const day = insert('testing_days', { name: 'Winter retest', date: addDays(booking.todayLocal(), 74), preset: 'Combine', status: 'open', created_by: owner?.id || null });
+    if (combine) run('INSERT INTO testing_day_tests (day_id, test_id, ord) SELECT ?, test_id, ord FROM testing_day_tests WHERE day_id=?', day, combine.id);
+    for (const k of kids) insert('testing_day_athletes', { day_id: day, athlete_id: k.id });
   }
 }
 

@@ -11,6 +11,7 @@ const billing = require('../services/billing');
 const { luhnValid, cardBrand, parseExpiry } = require('../services/parent-card');
 const cal = require('../services/parent-calendar');
 const { endAt, bookedBetween, clashIn, clashText, whenText } = require('../services/parent-book');
+const programs = require('../services/parent-programs');
 
 const ATHLETE_FIELDS = ['first_name', 'last_name', 'birthday', 'sex', 'sport', 'position', 'school', 'allergies', 'injuries', 'medical_notes', 'emergency_name', 'emergency_phone'];
 const BOOKABLE_TYPES = ['class', 'camp', 'clinic'];
@@ -309,26 +310,32 @@ function routes(api) {
         (SELECT MAX(starts_at) FROM events e WHERE e.class_id=c.id AND e.cancelled=0 AND e.starts_at>=?) AS last_at,
         (SELECT COUNT(*) FROM events e WHERE e.class_id=c.id AND e.cancelled=0 AND e.starts_at>=?) AS days
       FROM classes c LEFT JOIN locations l ON l.id=c.location_id
-      WHERE c.archived=0 AND c.type IN ('camp','clinic') AND c.reg_price_cents>0 AND (c.end_date IS NULL OR c.end_date>=?) AND (c.reg_deadline IS NULL OR c.reg_deadline>=?)
-      ORDER BY COALESCE(c.start_date, ''), c.name`, now, now, now, T, T)
+      WHERE c.archived=0 AND c.type IN ('camp','clinic') AND c.reg_price_cents>0 AND (c.end_date IS NULL OR c.end_date>=?)
+        AND (c.reg_deadline IS NULL OR c.reg_deadline>=? OR EXISTS (SELECT 1 FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=c.id AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'))
+      ORDER BY COALESCE(c.start_date, ''), c.name`, now, now, now, T, T, a.id)
       .map((c) => ({
         id: c.id, name: c.name, type: c.type, weekdays: c.weekdays, start_time: c.start_time, duration_min: c.duration_min, location: c.location,
         start_date: c.first_at?.slice(0, 10) || c.start_date, end_date: c.last_at?.slice(0, 10) || c.end_date, days: c.days, ages: ageLabel(c),
         reg_price_cents: c.reg_price_cents, reg_deadline: c.reg_deadline, eligible: ageFits(c, a, (c.first_at || T).slice(0, 10)),
         registered: !!get(`SELECT 1 FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'`, c.id, a.id),
+        spots_left: programs.campSpots(c.id), siblings: programs.siblingsRegistered(c.id, a.family_id, a.id),
       }));
     const spots = new Map(all('SELECT id, class_id FROM standing_spots WHERE athlete_id=?', a.id).map((s) => [s.class_id, s.id]));
     const classes = all(`SELECT c.*, l.name AS location FROM classes c LEFT JOIN locations l ON l.id=c.location_id
       WHERE c.archived=0 AND c.type='class' AND (c.end_date IS NULL OR c.end_date>=?) ORDER BY c.name`, T)
       .filter((c) => ageFits(c, a, T) || spots.has(c.id))
-      .map((c) => ({ id: c.id, name: c.name, weekdays: c.weekdays, start_time: c.start_time, duration_min: c.duration_min, location: c.location, ages: ageLabel(c), standing_id: spots.get(c.id) || null }));
+      .map((c) => ({ id: c.id, name: c.name, weekdays: c.weekdays, start_time: c.start_time, duration_min: c.duration_min, location: c.location, ages: ageLabel(c), standing_id: spots.get(c.id) || null,
+        eligible: ageFits(c, a, T), ...programs.classNext(c.id, a.id) }));
     const m = membershipOf(a);
+    const fam = family(req);
     res.json({
-      athlete: athleteSummary(a), card_label: cardLabel(family(req)),
+      athlete: athleteSummary(a), card_label: cardLabel(fam), card_exp: fam.card_exp || null, request: m ? programs.lastRequest(a.id) : null,
       is_member: !!m && ['active', 'trial'].includes(m.status), camps, classes,
       packs: all("SELECT id, name, kind, price_cents, credits FROM products WHERE archived=0 AND kind IN ('group_pack','private_pack') ORDER BY kind, price_cents"),
       plans: all('SELECT id, name, price_cents, trial_days, group_per_month, private_per_month FROM plans WHERE active=1 ORDER BY price_cents'),
-      membership: m,
+      membership: m ? { ...m, member_left: leftOf(billing.memberSessionsLeft(a.id, T)) } : null,
+      // The usual drop-in price of a group class, so packs can show what they save.
+      drop_in_cents: get("SELECT price_cents p FROM classes WHERE archived=0 AND type='class' AND price_cents>0 GROUP BY price_cents ORDER BY COUNT(*) DESC, price_cents LIMIT 1")?.p || null,
     });
   }));
 
@@ -339,6 +346,7 @@ function routes(api) {
     const first = get('SELECT MIN(starts_at) s FROM events WHERE class_id=? AND cancelled=0 AND starts_at>=?', c.id, booking.nowLocal())?.s;
     if (!ageFits(c, a, (first || booking.todayLocal()).slice(0, 10))) throw bad(`${c.name} is for ${(ageLabel(c) || 'other ages').toLowerCase()}.`);
     if (!first) throw bad('There are no days left to register for.');
+    if (programs.campSpots(c.id) === 0) throw bad(`${c.name} is full. Ask the front desk to be told if a spot opens.`, { full: true });
     needCard(family(req));
     const lastInvoice = get('SELECT MAX(id) m FROM invoices').m || 0;
     let r;
@@ -419,6 +427,14 @@ function routes(api) {
     log(req, 'Started membership', `${athleteName(a)}: ${plan.name}${r.trial ? ' (trial)' : ''}${r.ok ? '' : ' (payment failed)'}`);
     if (!r.ok) throw bad(`${r.error || 'The card was declined.'} The membership is on hold until the card works. Update it on the Family tab.`, { membership_id: r.id });
     res.json({ ok: true, id: r.id, trial: !!r.trial, trial_days: r.trial ? plan.trial_days : 0 });
+  }));
+
+  // Ask the facility to switch plans, pause or cancel: the owners are emailed and it's in Recent activity.
+  api.post('/parent/membership/request', h(async (req, res) => {
+    const a = ownAthlete(req, req.body.athlete_id);
+    const r = programs.request({ athlete: a, membership: billing.activeMembership(a.id), parent: req.parent, kind: String(req.body.kind || ''), plan_id: req.body.plan_id, note: req.body.note });
+    log(req, 'Asked to change membership', `${athleteName(a)}: ${r.what}${r.note ? ' (with a note)' : ''}`);
+    res.json(r);
   }));
 
   // ---- family: card, waiver, athletes, parents ----

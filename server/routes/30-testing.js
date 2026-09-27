@@ -9,6 +9,7 @@ const sheet = require('../services/testing-sheet');
 const upload = require('../services/testing-upload');
 const hawkin = require('../services/testing-hawkin');
 const lib = require('../services/testing-library');
+const parentProgress = require('../services/parent-progress');
 
 const STAFF = requireStaff();
 const OC = requireStaff('owner', 'coach');
@@ -517,10 +518,11 @@ function routes(api) {
     if (!p) throw notFound('That athlete');
     res.json(p);
   });
+  // Parent Progress tab: ?period=all|12m or ?since=<shared testing day id>; archived athletes are gone for the family.
   api.get('/parent/athletes/:id/progress', requireParent, (req, res) => {
-    const a = get('SELECT id, family_id FROM athletes WHERE id=?', Number(req.params.id));
-    if (!a || a.family_id !== req.parent.family_id) throw notFound('That athlete');
-    res.json(core.progress(a.id, { view: 'parent', visibility: setting('results_visibility', 'shared') }));
+    const a = get('SELECT id, family_id, archived FROM athletes WHERE id=?', Number(req.params.id) || 0);
+    if (!a || a.family_id !== req.parent.family_id || a.archived) throw notFound('That athlete');
+    res.json(parentProgress.forParent(a.id, req.query));
   });
   // Printable report. Staff get the coach view (?view=family previews what the family sees); the athlete's own
   // family get the family view; anyone with a working share link (?link=) gets the family view without signing in.

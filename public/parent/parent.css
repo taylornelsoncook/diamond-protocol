@@ -176,3 +176,50 @@ details.panel:not([open]){gap:0}
 .bk-body .s-when{overflow-wrap:anywhere}
 @media (max-width:380px){ .bk-body .bk-booked .s-row{grid-template-columns:80px minmax(0,1fr) auto} }
 .bk-body .bk-booked .s-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}
+
+/* ---- Progress (period, change since, tests, growth, share) ---- */
+.pp-next{justify-content:flex-start}
+.pp-next-in{display:flex;gap:10px;align-items:flex-start}
+.pp-next-in svg{flex-shrink:0;margin-top:2px}
+.pp-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:end}
+.pp-controls .field{margin:0}
+.pp-controls .input{min-height:44px}
+.pp-seg button{min-height:44px}
+.imps.one{grid-template-columns:minmax(0,1fr)}
+.pp-imp-name{color:var(--steel);font-weight:600}
+.imp-v.pp-plain{color:var(--steel)}
+.imp .spark{display:block;margin-top:6px;max-width:100%}
+.pp-thist{display:flex;flex-direction:column;gap:8px}
+.pp-means{margin:0;line-height:22px}
+.pp-how{margin:0;line-height:20px}
+.pp-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.pp-actions .btn{justify-content:center;gap:8px}
+.pp-links{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.pp-links li{display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid var(--line-subtle);flex-wrap:wrap}
+.pp-links li:first-child{border-top:0}
+.pp-links .grow{flex:1;min-width:180px}
+.pp-url{font-size:13px}
+@media (max-width:480px){
+  .pp-controls{grid-template-columns:minmax(0,1fr)}
+  .pp-seg{display:flex}
+  .pp-seg button{flex:1}
+  .pp-actions{grid-template-columns:1fr}
+}
+
+/* ---- Programs (card line, membership, camps, requests) ---- */
+.pg-card{margin:0;line-height:20px}
+.pg-card a{color:var(--green-bright);display:inline-flex;align-items:center;min-height:44px;margin:-12px 0}
+.pg-m-head{align-items:flex-start;flex-wrap:nowrap}
+.pg-req{margin:0;padding:10px 14px;border:1px solid var(--line);border-left:3px solid var(--green-bright);border-radius:var(--radius-sm);background:var(--ground)}
+.pg-state{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+.pg-state a{color:var(--green-bright);min-height:44px;display:inline-flex;align-items:center}
+.pg-note{max-width:180px;text-align:right}
+.pg-kinds{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.pg-kinds .check{min-height:44px;align-items:center}
+.pg-kinds .check input{margin:0}
+[id="rq-plan-f"][hidden]{display:none}
+#membership .s-detail{margin:0}
+@media (max-width:480px){
+  .offer.stackable .pg-state{flex-direction:row;align-items:center;width:100%;justify-content:space-between}
+  .offer.stackable .pg-note{max-width:none;text-align:left}
+}

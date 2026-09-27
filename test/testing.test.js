@@ -59,7 +59,8 @@ test.after(() => { server?.close(); });
 test('demo data: days, results and five waiting results', async () => {
   const r = await coach.get('/api/testing');
   assert.equal(r.status, 200);
-  assert.equal(r.data.days.length, 3);
+  assert.equal(r.data.days.length, 4); // three from the testing demo, plus the Winter retest planned ahead (parent demo)
+  assert.ok(r.data.days.some((d) => d.name === 'Winter retest' && d.status === 'open'));
   assert.ok(r.data.days.some((d) => d.status === 'shared' && d.note));
   assert.ok(r.data.days.some((d) => d.status === 'open'));
   assert.equal(r.data.pending.count, 5);

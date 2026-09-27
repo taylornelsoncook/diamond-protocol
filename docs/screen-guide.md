@@ -201,11 +201,16 @@ _Where: Clients_
 
 [Owner] [Coach] [Front desk] 
 
-Everyone you train, with their plan, status, program and last workout.
+Everyone you train, with their plan, status, program and when you last saw them.
 
-- Search by name, Athlete ID, email or family name.
-- Filter by status (active, trial, past due, paused).
-- Open anyone to see their full profile, or Add client.
+- Search by name, Athlete ID, email, phone or family name. Press Enter when only one client matches to open them; Escape clears the search.
+- Views with counts: All, Active, Trial, Past due, Paused, No plan, Team only, No waiver and Archived. Views with nobody in them are hidden.
+- Sort by name, by longest since last seen (who has gone quiet), or newest clients first. The search, view and sort stay in the address.
+- Each row flags what needs attention: Medical (allergies, injuries or medical notes), No waiver, No card (members only) and pinned notes. Grad year shows next to the Athlete ID.
+- Last seen is the latest check-in or workout, and says which.
+- Archived clients live in the Archived view; a search that only matches archived clients offers to search there.
+- Owners can Export CSV of the current view (contacts, plan, program, waiver, last visit and workout; no money).
+- Open anyone to see their full profile, or Add client. Long lists show 100 at a time with Show more.
 
 ### New client
 
@@ -217,8 +222,11 @@ One form creates the athlete, the parent's portal login, the membership and the 
 
 - Leave "Athlete with a parent who pays" ticked for kids. Enter the athlete, then the parent's name, email and phone.
 - For an adult paying for themselves, untick it and enter their own email.
-- Optionally start a plan and assign a starting program.
+- More details (optional): position, grad year, athlete phone, allergies, injuries and emergency contact. Parents can fill these in later in the portal.
+- Optionally start a plan. Owners and coaches can assign a starting program; the front desk leaves that to a coach (the server refuses it).
 - Create account. The athlete gets their Athlete ID (like AVALOP2026) and the parent can sign in to the portal right away.
+- If someone with the same name (and birthday, when both are known) is already on file, including archived clients, the form lists them with links. Open them, or Create a new account anyway.
+- If the parent's email already has a login, the form links straight to that family's athlete with Add sibling open.
 
 > Note: Adding a brother or sister? Open the sibling and use "Add sibling" so the family shares one login and one card.
 
@@ -230,12 +238,19 @@ _Where: Clients, then a client_
 
 Everything about one athlete in one place, tied together by their Athlete ID.
 
-- The medical banner at the top shows allergies, injuries and the emergency contact.
-- Family: parents, waiver status, add a sibling or parent, and copy the portal link.
-- Membership: start, pause, resume, change or cancel.
-- Card & sessions: the card on file, group and private sessions left, walk-in check-in, and Sell.
-- Upcoming sessions, test results with PRs and a printable progress report, and their training program with the workout app link.
-- Profile: birthday, sport, position, school, sex (for growth estimates), medical notes, emergency contact and coach-only notes.
+- The header shows age, grad year, sport and position, with Call, Text and Email for the primary parent (or the athlete). Tap the Athlete ID to copy it.
+- The medical banner at the top shows allergies, injuries and the emergency contact (tap the number to call). Pinned notes show under it for everyone.
+- A section bar (Family, Sessions, Attendance, Upcoming, Notes, Messages, Testing, Goals, Training, Payments, Profile) stays at the top while you scroll and jumps to each panel.
+- Family: parents with tap-to-call and email links, waiver status, add a sibling or parent, and copy the portal link. Edit a parent to fix their name, email or phone, email them the portal sign-in link again, or remove a second parent (a family always keeps one sign-in). When the waiver isn't signed, Record a paper waiver saves who signed it at the desk.
+- Membership (owner): start, pause, resume, change or cancel. Coaches and the front desk see the plan and status, never the price.
+- Card & sessions: the card on file, group and private sessions left, walk-in check-in, and Sell. Coaches never see a drop-in price.
+- Attendance: visits, no-shows and late cancels in the last 30 days, visits in 90 days, last check-in, and the recent sessions with Attended, No-show or Late cancel.
+- Upcoming sessions: Book a session (group sessions in the next two weeks, searchable; full ones join the waitlist) and Cancel a booking (credits come back, drop-ins are refunded, the waitlist moves up).
+- Notes: dated staff notes with who wrote them. Pin a note to the top of the profile; coaches and owners can mark a note Coaches only, which the front desk never sees. The author can edit a note; the author or an owner can delete it.
+- Accountability, weekly goals, coach messages, test targets and education (see the athlete app).
+- Test results with PRs and a printable progress report, and their training program with the workout app link.
+- Profile: birthday, sex (for growth estimates), sport, position, school, grad year, athlete phone and email, medical notes, emergency contact and coach-only notes. Unsaved changes are flagged and survive other actions on the page.
+- Archive (owner, coach) takes a client off the list, search and rosters and cancels their upcoming bookings with credits back; an archived profile has a Restore client button at the top.
 
 ### Teams
 

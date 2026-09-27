@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 30;
+const SCHEMA_VERSION = 31;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -58,10 +58,11 @@ const ADDED_TABLES = {
   27: ['spot_offers'],                                                    // open-spot offers for light classes
   28: ['progress_notes'],                                                 // progress notes for parents
   29: ['money_checks'],                                                   // daily money checks
-  30: ['guardian_message_reads']                                          // parents' own read state for coach messages
+  30: ['guardian_message_reads'],                                         // parents' own read state for coach messages
+  31: ['time_off', 'client_notes']                                        // coach time off, staff notes on clients
 };
 const ADDED_COLUMNS = {
-  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))"],   // athlete_id: version 6, sex: version 10
+  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
   team_roster: ['athlete_id TEXT'],
   perf_sessions: ['shared_at TEXT', 'parent_note TEXT'],                 // version 10
   subscriptions: ['trial_reminded_at TEXT'],                              // version 11
@@ -72,8 +73,9 @@ const ADDED_COLUMNS = {
   sale_items: ['variant_id TEXT'],                                        // version 17
   workout_exercises: ['load_test TEXT', 'load_pct INTEGER'],             // version 21: weights from tested maxes
   coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies
-  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL'],      // version 4
-  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL'],           // version 23: weight-room screen
+  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],      // version 4; coach: version 31
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],           // version 23: weight-room screen; coach: version 31
+  availability: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],                  // version 31
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL'],        // version 23 (then rebuilt so assignment_id can be empty)
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online

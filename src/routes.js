@@ -37,6 +37,8 @@ import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocal
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
 // Each entry: [method, path, auth, tag, summary, handler(ctx, req)] where req = { params, query, body, user, apiKey }
 const list = (data) => ({ data });
+// Team sessions follow their contract (teams.js can't import schedule.js, which imports it).
+const teamSchedule = (ctx) => ({ updateSeries: (id, b) => schedule.updateSeries(ctx, id, b), cancelSession: (id, o) => schedule.cancelSession(ctx, id, o), generateSessions: (id) => schedule.generateSessions(ctx, id) });
 // Who is writing a staff note: the signed-in staff member, or an API key (treated like the owner).
 const noteActor = (r) => (r.user ? { id: r.user.id, name: r.user.name, role: r.user.role } : { id: null, name: r.apiKey?.label ?? 'API', role: 'owner' });
 const subOf = (ctx, clientId) => {
@@ -291,23 +293,41 @@ export const routes = [
   ['GET', '/v1/organizations', 'any', 'Teams', 'Schools and clubs.', (ctx) => list(teams.listOrgs(ctx))],
   ['POST', '/v1/organizations', 'any', 'Teams', 'Add a school or club: name, kind (school, club, other), contact_name, contact_email (receives invoices), contact_phone, billing_address.', (ctx, r) => teams.createOrg(ctx, r.body), 201],
   ['PATCH', '/v1/organizations/:id', 'any', 'Teams', 'Update a school or club, including the billing contact.', (ctx, r) => teams.updateOrg(ctx, r.params.id, r.body)],
-  ['GET', '/v1/team-contracts', 'any', 'Teams', 'Every team contract with its balance and next invoice date.', (ctx) => list(teams.listContracts(ctx))],
-  ['POST', '/v1/team-contracts', 'any', 'Teams', 'New contract: org_id (or organization {...}), name, monthly_cents, start_date, end_date, terms_days (default 30), po_number. The first month is invoiced right away if it has started.', (ctx, r) => teams.createContract(ctx, r.body, r.baseUrl), 201],
-  ['GET', '/v1/team-contracts/:id', 'any', 'Teams', 'A contract with its roster, attendance, sessions and invoices.', (ctx, r) => teams.getContract(ctx, r.params.id, r.baseUrl)],
-  ['PATCH', '/v1/team-contracts/:id', 'any', 'Teams', 'Change the fee (applies from the next invoice), dates, terms or PO. status=ended stops invoicing and cancels future team sessions.', (ctx, r) => teams.updateContract(ctx, r.params.id, r.body, { archiveSeries: (id) => schedule.updateSeries(ctx, id, { active: false }) })],
-  ['POST', '/v1/team-contracts/:id/roster', 'any', 'Teams', 'Add athletes: name, position, grad_year, or names (one per line: "Name, position, grad year").', (ctx, r) => list(teams.addRoster(ctx, r.params.id, r.body)), 201],
-  ['DELETE', '/v1/team-contracts/:id/roster/:rid', 'any', 'Teams', 'Remove an athlete from the roster.', (ctx, r) => list(teams.removeRoster(ctx, r.params.id, r.params.rid))],
-  ['POST', '/v1/team-contracts/:id/sessions', 'any', 'Teams', 'Put this team on the schedule: location_id, weekdays, start_time, duration_min, start_date, end_date.', async (ctx, r) => {
+  ['GET', '/v1/team-contracts', 'any', 'Teams', 'Every team contract with its balance, overdue amount, team attendance and next invoice date.', (ctx) => list(teams.listContracts(ctx))],
+  ['POST', '/v1/team-contracts', 'any', 'Teams', 'New contract: org_id (or organization {...}), name, monthly_cents, start_date, end_date, terms_days (default 30), po_number, notes (staff only). Months that have started are invoiced right away; for a start date in the past, past=all (default), current (only the month running now) or none. A second active contract with the same team name at the same school is refused.', (ctx, r) => teams.createContract(ctx, r.body, r.baseUrl), 201],
+  ['GET', '/v1/team-contracts/:id', 'any', 'Teams', 'A contract with its roster (attendance from each athlete\'s join date, last time here), recent sessions, team schedules and invoices.', (ctx, r) => teams.getContract(ctx, r.params.id, r.baseUrl)],
+  ['PATCH', '/v1/team-contracts/:id', 'any', 'Teams', 'Change the team name, fee (applies from the next invoice), end date, terms, PO or notes. Team sessions follow the end date both ways. status=ended stops invoicing and takes future team sessions off. Restarting an ended contract (status=active, or clearing or moving the end date to today or later) bills from the next billing day, not the months it was ended.', (ctx, r) => teams.updateContract(ctx, r.params.id, r.body, teamSchedule(ctx), r.baseUrl)],
+  ['POST', '/v1/team-contracts/:id/roster', 'any', 'Teams', 'Add athletes: name, position, grad_year, client_id; or names (a pasted list, one per line: "Name, position, grad year"). A list is all or nothing: problem lines come back in details and nothing is saved. links {line: client_id} puts a client you already have on the team instead of a new athlete.', (ctx, r) => { const out = teams.addRoster(ctx, r.params.id, r.body); return { ...list(out.roster), added: out.added, linked: out.linked, skipped: out.skipped }; }, 201],
+  ['POST', '/v1/team-contracts/:id/roster/check', 'any', 'Teams', 'Check a pasted list without saving: each line is new, skip (already on the roster or listed twice), match (clients you already have with that name) or error.', (ctx, r) => teams.checkRoster(ctx, r.params.id, r.body)],
+  ['POST', '/v1/team-contracts/:id/roster/existing', 'any', 'Teams', 'Put a client you already have on the roster: client_id. If they are on another active team, send move=true (take them off it) or keep=true (stay on both); otherwise 409 confirm_required.', (ctx, r) => { const out = teams.addExistingClient(ctx, r.params.id, r.body); return { ...list(out.roster), moved_from: out.moved_from, also_on: out.also_on }; }, 201],
+  ['GET', '/v1/team-contracts/:id/client-search', 'any', 'Teams', 'Find clients to add to this roster by name or Athlete ID: ?q= (at least 2 characters). Shows the teams each is on now.', (ctx, r) => list(teams.searchClientsForTeam(ctx, r.params.id, r.query.q))],
+  ['DELETE', '/v1/team-contracts/:id/roster/:rid', 'any', 'Teams', 'Remove an athlete from the roster (undo with restore).', (ctx, r) => list(teams.removeRoster(ctx, r.params.id, r.params.rid))],
+  ['POST', '/v1/team-contracts/:id/roster/:rid/restore', 'any', 'Teams', 'Undo a removal: the athlete comes back with their join date and attendance.', (ctx, r) => list(teams.restoreRoster(ctx, r.params.id, r.params.rid))],
+  ['POST', '/v1/team-contracts/:id/sessions', 'any', 'Teams', 'Put this team on the schedule: location_id, weekdays, start_time, duration_min, start_date, coach_id (who leads it). Sessions run until the contract ends.', async (ctx, r) => {
     const c = teams.getContract(ctx, r.params.id);
-    return schedule.createSeries(ctx, { ...r.body, kind: 'team', contract_id: c.id, name: r.body.name ?? `${c.org.name} ${c.name}`, capacity: Math.max(c.roster.length, 1, v.int(r.body.capacity ?? 1, 'capacity', { min: 1, max: 500 })), end_date: r.body.end_date ?? c.end_date ?? undefined });
+    if (c.status !== 'active') throw badRequest('This contract has ended. Restart it before adding team sessions.');
+    if (c.end_date && r.body.start_date && r.body.start_date > c.end_date) throw badRequest(`The first day is after the contract ends (${c.end_date}).`);
+    return schedule.createSeries(ctx, { ...r.body, kind: 'team', contract_id: c.id, name: r.body.name ?? `${c.org.name} ${c.name}`, capacity: Math.max(c.roster.length, 1, v.int(r.body.capacity ?? 1, 'capacity', { min: 1, max: 500 })), end_date: c.end_date ?? undefined });
   }, 201],
-  ['POST', '/v1/team-contracts/:id/invoices', 'any', 'Teams', 'One-off invoice: description and amount_cents (or lines [...]). Emailed unless send=false.', (ctx, r) => teams.createOneOffInvoice(ctx, r.params.id, r.body, r.baseUrl), 201],
+  ['DELETE', '/v1/team-contracts/:id/sessions/:sid', 'any', 'Teams', 'Take a team schedule off: its future sessions are canceled. Past attendance is kept.', async (ctx, r) => {
+    const c = teams.getContract(ctx, r.params.id);
+    const s = c.series.find((x) => x.id === r.params.sid);
+    if (!s) throw notFound('Team schedule');
+    const removed = ctx.db.get(`SELECT COUNT(*) AS n FROM class_sessions WHERE series_id = ? AND status = 'scheduled' AND starts_at > ?`, s.id, ctx.now()).n;
+    await schedule.updateSeries(ctx, s.id, { active: false });
+    return { sessions_removed: removed, contract: teams.getContract(ctx, c.id, r.baseUrl) };
+  }],
+  ['POST', '/v1/team-contracts/:id/invoices', 'any', 'Teams', 'One-off invoice: description and amount_cents (or lines [...]). Emailed unless send=false (or there is no billing email yet).', (ctx, r) => teams.createOneOffInvoice(ctx, r.params.id, r.body, r.baseUrl), 201],
+  ['POST', '/v1/team-contracts/:id/payments', 'any', 'Teams', 'One payment (a single check) for several open invoices on this contract: invoice_ids [...], method (check, ach, card, cash, other), reference (check number), paid_on, total_cents (optional: refused if the invoices no longer add up to it). All or nothing.', (ctx, r) => teams.recordContractPayment(ctx, r.params.id, r.body, r.baseUrl)],
+  ['POST', '/v1/team-contracts/:id/statement', 'any', 'Teams', 'Email the billing contact a statement: every open invoice with its link, and the total.', (ctx, r) => teams.emailStatement(ctx, r.params.id, r.baseUrl)],
   ['POST', '/v1/sessions/:id/team-attendance', 'any', 'Teams', 'Team session check-in: roster_id, present (true/false).', (ctx, r) => teams.setTeamAttendance(ctx, schedule.getSession(ctx, r.params.id), v.str(r.body.roster_id, 'roster_id'), r.body.present !== false)],
   ['GET', '/v1/team-invoices', 'any', 'Teams', 'Team invoices. ?status=open, overdue, unpaid, paid or void.', (ctx, r) => list(teams.listInvoices(ctx, { status: r.query.status }, r.baseUrl))],
   ['GET', '/v1/team-invoices/:id', 'any', 'Teams', 'One invoice with its public link.', (ctx, r) => teams.getInvoice(ctx, r.params.id, r.baseUrl)],
   ['POST', '/v1/team-invoices/:id/send', 'any', 'Teams', 'Email (or re-email) the invoice to the billing contact.', (ctx, r) => teams.sendInvoice(ctx, r.params.id, r.baseUrl)],
-  ['POST', '/v1/team-invoices/:id/payments', 'any', 'Teams', 'Record a payment: method (check, ach, card, cash, online, other), reference (check number), paid_on.', (ctx, r) => teams.recordPayment(ctx, r.params.id, r.body, r.baseUrl)],
+  ['POST', '/v1/team-invoices/:id/payments', 'any', 'Teams', 'Record a payment: method (check, ach, card, cash, other), reference (check number), paid_on (a real date, not in the future). Online payments are recorded automatically.', (ctx, r) => teams.recordPayment(ctx, r.params.id, r.body, r.baseUrl)],
   ['POST', '/v1/team-invoices/:id/void', 'any', 'Teams', 'Void an unpaid invoice.', (ctx, r) => teams.voidInvoice(ctx, r.params.id, r.baseUrl)],
+  ['GET', '/v1/team-billing/summary', 'any', 'Teams', 'Monthly contract revenue, open and overdue invoices, collected in the last 30 days and athletes on active rosters.', (ctx) => teams.teamSummary(ctx)],
+  ['POST', '/v1/team-billing/remind-overdue', 'any', 'Teams', 'Email every overdue invoice\'s billing contact a reminder now (the weekly reminder then waits a week).', (ctx, r) => teams.remindOverdueNow(ctx, r.baseUrl)],
   ['POST', '/v1/team-billing/run', 'session', 'Teams', 'Run team invoicing and reminders now (also runs every hour).', (ctx, r) => teams.runTeamBilling(ctx, { baseUrl: r.baseUrl })],
   ['GET', '/invoice-api/:token', 'public', 'Teams', 'Public invoice for the school or club (the link in the email).', (ctx, r) => teams.publicInvoice(ctx, r.params.token)],
   ['POST', '/invoice-api/:token/checkout', 'public', 'Teams', 'Start online payment by card or bank account.', (ctx, r) => teams.checkoutForInvoice(ctx, r.params.token, r.baseUrl)],

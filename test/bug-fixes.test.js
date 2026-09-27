@@ -122,3 +122,18 @@ test('canceling a private frees its time, and only overlapping sessions at the s
   app.ctx.db.run(`UPDATE bookings SET status = 'canceled' WHERE id = ?`, again.id);
   assert.deepEqual(await slots(), [six, eight]);
 });
+
+test('a parent reading coach messages doesn\'t mark them read for the athlete', async () => {
+  await coach('POST', `/v1/clients/${ava.id}/messages`, { body: 'Great sprint work.' });
+  const token = ava.app_link.split('token=')[1];
+  const athlete = async () => (await req('GET', '/app/api/engage', null, { 'x-client-token': token })).body.accountability;
+  const parentView = async () => (await maria('GET', `/portal/api/athletes/${ava.id}/engage`)).body.accountability;
+  assert.equal((await athlete()).unread, 1);
+  assert.equal((await parentView()).unread, 1);
+  assert.equal((await maria('POST', `/portal/api/athletes/${ava.id}/messages/read`)).body.read, 1);
+  assert.equal((await parentView()).unread, 0, 'the parent has read it');
+  assert.equal((await maria('GET', '/portal/api/me')).body.athletes.find((a) => a.id === ava.id).engagement.unread, 0);
+  assert.equal((await athlete()).unread, 1, 'the athlete still has it waiting');
+  await req('POST', '/app/api/messages/read', null, { 'x-client-token': token });
+  assert.equal((await athlete()).unread, 0);
+});

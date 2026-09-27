@@ -27,14 +27,14 @@ function requireWaiver(ctx, r) {
   if (!families.getFamily(ctx, r.guardian.family_id).waiver.signed) throw conflict('Sign the waiver on the Family tab before booking.');
 }
 const familyPayer = (ctx, r) => commerce.payerById(ctx, 'families', r.guardian.family_id);
-function athleteSummary(ctx, id) {
+function athleteSummary(ctx, id, guardianId) {
   const c = clients.getClient(ctx, id);
   return {
     id: c.id, athlete_id: c.athlete_id, name: c.name, first_name: c.name.split(' ')[0], birth_date: c.birth_date, age: ageOn(c.birth_date, ctx.now()),
     sport: c.sport, position: c.position, school: c.school, grad_year: c.grad_year, medical_notes: c.medical_notes,
     emergency_name: c.emergency_name, emergency_phone: c.emergency_phone,
     membership: c.subscription && c.subscription.status !== 'canceled' ? { status: c.subscription.status, plan_name: c.subscription.plan_name, price_cents: c.subscription.price_cents, renews: c.subscription.current_period_end } : null,
-    credits: c.credits, program: c.program, app_link: c.app_link, engagement: engage.badges(ctx, id),
+    credits: c.credits, program: c.program, app_link: c.app_link, engagement: engage.badges(ctx, id, { guardianId }),
     upcoming: schedule.clientBookings(ctx, id, { upcoming: true, limit: 20 }),
     enrollments: ctx.db.all(`SELECT e.series_id, e.kind, s.name FROM enrollments e JOIN class_series s ON s.id = e.series_id WHERE e.client_id = ? AND e.status = 'active'`, id)
   };
@@ -68,7 +68,7 @@ export const portalRoutes = [
     return {
       guardian: { id: r.guardian.id, name: r.guardian.name, email: r.guardian.email, phone: r.guardian.phone, texts: sms.textStatus(r.guardian) },
       agreements, open_deletion_request: !!ctx.db.get(`SELECT 1 FROM data_requests WHERE family_id = ? AND kind = 'delete' AND status = 'open'`, r.guardian.family_id),
-      family: fam, athletes: fam.athlete_ids.map((id) => athleteSummary(ctx, id)),
+      family: fam, athletes: fam.athlete_ids.map((id) => athleteSummary(ctx, id, r.guardian.id)),
       waiver_text: settings.waiver_text, late_cancel_hours: Number(settings.late_cancel_hours), business_name: settings.business_name, timezone: settings.timezone,
       payments: { can_simulate: !!ctx.payments.simulate, provider: ctx.payments.name }
     };
@@ -122,11 +122,11 @@ export const portalRoutes = [
   }],
   ['GET', '/portal/api/athletes/:id/report', 'guardian', 'Progress report for one of your athletes (shared testing days only).', (ctx, r) => reports.athleteReport(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true })],
   // Accountability, performance and education for one of your athletes. Parents can check in and finish lessons for them.
-  ['GET', '/portal/api/athletes/:id/engage', 'guardian', 'Accountability, performance (shared testing days only) and education for one of your athletes.', (ctx, r) => engage.athleteView(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true })],
+  ['GET', '/portal/api/athletes/:id/engage', 'guardian', 'Accountability, performance (shared testing days only) and education for one of your athletes.', (ctx, r) => engage.athleteView(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true, guardianId: r.guardian.id })],
   ['POST', '/portal/api/athletes/:id/daily-check-in', 'guardian', 'Today\'s check-in for your athlete: sleep_hours, hydration, soreness, energy, mood, note.', (ctx, r) => engage.saveCheckin(ctx, athleteOf(ctx, r, r.params.id).id, r.body)],
   ['POST', '/portal/api/athletes/:id/goals/:goal/check', 'guardian', 'Tick a custom goal for today (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, athleteOf(ctx, r, r.params.id).id, r.params.goal, r.body.done !== false)],
   ['POST', '/portal/api/athletes/:id/messages', 'guardian', 'Write to your athlete\'s coach: body.', (ctx, r) => engage.replyMessage(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { from: 'parent', name: r.guardian.name, guardianId: r.guardian.id }), 201],
-  ['POST', '/portal/api/athletes/:id/messages/read', 'guardian', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, athleteOf(ctx, r, r.params.id).id)],
+  ['POST', '/portal/api/athletes/:id/messages/read', 'guardian', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, athleteOf(ctx, r, r.params.id).id, { guardianId: r.guardian.id })],
   ['GET', '/portal/api/athletes/:id/lessons/:lesson', 'guardian', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson)],
   ['GET', '/portal/api/parent-courses', 'guardian', 'Courses for parents that fit your athletes\' ages, with what you have read.', (ctx, r) => list(engage.parentCourses(ctx, r.guardian))],
   ['GET', '/portal/api/parent-lessons/:id', 'guardian', 'Read a lesson for parents.', (ctx, r) => engage.parentLesson(ctx, r.guardian, r.params.id)],
@@ -144,20 +144,20 @@ export const portalRoutes = [
     if (!['session', 'pack'].includes(p.kind) || !p.active) throw badRequest('That item isn\'t sold online.');
     const sale = await commerce.createSale(ctx, { location_id: commerce.onlineLocation(ctx), method: 'card_on_file', client_id: c.id, items: [{ product_id: p.id, quantity: 1 }] }, r.guardian.id, { online: true });
     if (sale.status !== 'succeeded') throw conflict(`The card was declined: ${sale.failure_reason}`);
-    return { sale, athlete: athleteSummary(ctx, c.id) };
+    return { sale, athlete: athleteSummary(ctx, c.id, r.guardian.id) };
   }],
   ['GET', '/portal/api/shop', 'guardian', 'Programs and courses for sale, and what your athletes already have.', (ctx, r) => shop.familyShop(ctx, r.guardian.family_id)],
   ['POST', '/portal/api/shop/buy', 'guardian', 'Buy a program or course for an athlete with the family card: kind (program or course), item_id, athlete_id. A program replaces their current one.', async (ctx, r) => {
     legal.requireAgreements(ctx, r.guardian);
     const c = athleteOf(ctx, r, r.body.athlete_id);
-    return { ...(await shop.buyForAthlete(ctx, r.guardian, c, r.body)), athlete: athleteSummary(ctx, c.id) };
+    return { ...(await shop.buyForAthlete(ctx, r.guardian, c, r.body)), athlete: athleteSummary(ctx, c.id, r.guardian.id) };
   }, 201],
   ['POST', '/portal/api/membership', 'guardian', 'Start a membership: plan_id, athlete_id. Needs a card on file.', async (ctx, r) => {
     requireWaiver(ctx, r);
     const c = athleteOf(ctx, r, r.body.athlete_id);
     if (!familyPayer(ctx, r)?.card_payment_method) throw conflict('Add a card to your family account first.');
     await billing.subscribe(ctx, c.id, v.str(r.body.plan_id, 'plan_id'));
-    return athleteSummary(ctx, c.id);
+    return athleteSummary(ctx, c.id, r.guardian.id);
   }],
   ['POST', '/portal/api/card/setup-link', 'guardian', 'Secure Stripe page to add or replace the family card.', (ctx, r) => commerce.setupLinkFor(ctx, familyPayer(ctx, r), r.baseUrl)],
   ['POST', '/portal/api/card/test', 'guardian', 'Test mode only: add a test card.', async (ctx, r) => {
@@ -166,11 +166,11 @@ export const portalRoutes = [
     return commerce.addTestCard(ctx, kid.id);
   }],
   ['POST', '/portal/api/waiver', 'guardian', 'Sign the current waiver: signed_name, agree=true.', (ctx, r) => families.signWaiver(ctx, r.guardian.family_id, r.guardian, r.body)],
-  ['POST', '/portal/api/athletes', 'guardian', 'Add an athlete to the family.', async (ctx, r) => athleteSummary(ctx, (await clients.createClient(ctx, { ...r.body, family_id: r.guardian.family_id, plan_id: undefined, program_id: undefined, email: undefined })).id), 201],
+  ['POST', '/portal/api/athletes', 'guardian', 'Add an athlete to the family.', async (ctx, r) => athleteSummary(ctx, (await clients.createClient(ctx, { ...r.body, family_id: r.guardian.family_id, plan_id: undefined, program_id: undefined, email: undefined })).id, r.guardian.id), 201],
   ['PATCH', '/portal/api/athletes/:id', 'guardian', 'Update an athlete\'s profile, medical notes and emergency contact.', (ctx, r) => {
     const c = athleteOf(ctx, r, r.params.id);
     const allowed = ['name', 'birth_date', 'sex', 'sport', 'position', 'school', 'grad_year', 'medical_notes', 'emergency_name', 'emergency_phone'];
     clients.updateClient(ctx, c.id, Object.fromEntries(Object.entries(r.body).filter(([k]) => allowed.includes(k))));
-    return athleteSummary(ctx, c.id);
+    return athleteSummary(ctx, c.id, r.guardian.id);
   }]
 ];

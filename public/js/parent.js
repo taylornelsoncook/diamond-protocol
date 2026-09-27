@@ -253,7 +253,7 @@ async function viewBook(main) {
       const byDay = {};
       for (const s of data) (byDay[dayLabel(s.starts_at)] ??= []).push(s);
       fill(body, h('p', { class: 'small muted' }, mode.value === 'private' ? `Uses one private session from ${a.first_name}'s pack.` : `Evaluations${data[0].price_cents ? ` are ${money(data[0].price_cents)}, charged to your card` : ''}. We'll test speed, power and movement and build a plan.`),
-        ...Object.entries(byDay).map(([day, slots]) => panel(day, {}, h('div', { class: 'row wrap' }, slots.map((s) => btn(`${timeLabel(s.starts_at)} · ${s.location_name}`, (e) => bookSlot(e.currentTarget, s), 'secondary'))))));
+        ...Object.entries(byDay).map(([day, slots]) => panel(day, {}, h('div', { class: 'row wrap' }, slots.map((s) => btn(`${timeLabel(s.starts_at)} · ${s.location_name}${s.coach_name ? ` · ${s.coach_name}` : ''}`, (e) => bookSlot(e.currentTarget, s), 'secondary'))))));
     }
   }
 

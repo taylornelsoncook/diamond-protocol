@@ -1151,13 +1151,21 @@ const coverBadge = (c) => h('span', { class: `dp-badge dp-badge--${COVER[c]?.[1]
 function sessionRow(x) {
   return h('a', { class: 'list-item', href: `#/schedule/${x.id}`, style: 'text-decoration:none;color:inherit' },
     h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
-    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.location_name} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
+    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
     x.unpaid_count ? h('span', { class: 'dp-badge dp-badge--warn' }, `${x.unpaid_count} unpaid`) : null,
     kindBadge(x.kind));
 }
 
+// Coach pickers: everyone who can lead a session, plus whoever is set now if their account was turned off since.
+const coachOptions = (coaches, current, currentName) => [['', 'No coach set'], ...coaches.map((c) => [c.id, c.name]), ...(current && !coaches.some((c) => c.id === current) ? [[current, `${currentName ?? 'Former coach'} (account off)`]] : [])];
+const coachPicker = (coaches, current, currentName, attrs = {}) => select(coachOptions(coaches, current, currentName), { value: current ?? '', ...attrs });
+const leads = () => state.user?.role !== 'front_desk';          // owners and coaches lead sessions and assign coaches
+const hashQuery = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
+
 async function viewSchedule(main) {
-  const [sched, series, locs, settings] = await Promise.all([get('/v1/schedule'), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings')]);
+  const mine = leads() && hashQuery().get('mine') === '1';
+  const [sched, series, locs, settings, coachList] = await Promise.all([get(`/v1/schedule${mine ? '?coach_id=me' : ''}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings'), get('/v1/coaches')]);
+  const coaches = coachList.data;
   tzName = settings.timezone;
   const byDay = {};
   for (const x of sched.data) (byDay[dayOf(x.starts_at)] ??= []).push(x);
@@ -1165,17 +1173,18 @@ async function viewSchedule(main) {
   const f = { name: input(), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
     time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }), ageMin: input({ type: 'number', placeholder: 'Any' }), ageMax: input({ type: 'number', placeholder: 'Any' }),
     dropIn: input({ type: 'number', step: '0.01', placeholder: 'Not sold singly' }), reg: input({ type: 'number', step: '0.01', placeholder: 'Camps and clinics' }),
-    start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }) };
+    start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }),
+    coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
     const x = await post('/v1/class-series', { name: f.name.value, kind: f.kind.value, location_id: f.loc.value, weekdays, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value),
       age_min: f.ageMin.value ? Number(f.ageMin.value) : undefined, age_max: f.ageMax.value ? Number(f.ageMax.value) : undefined, drop_in_cents: dollars(f.dropIn), registration_cents: dollars(f.reg),
-      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined });
+      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined, coach_id: f.coach.value || null });
     toast(`${x.name} added: ${x.upcoming_sessions} sessions on the schedule.`); render();
   }); } },
-    h('div', { class: 'form-grid' }, field('Name', f.name), field('Type', f.kind)),
+    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, field('Name', f.name), field('Type', f.kind), field('Coach', f.coach, 'Leads every session. Swap in a sub on a single session.')),
     h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:12px' }, days)),
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap)),
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Min age', f.ageMin), field('Max age', f.ageMax), field('Drop-in ($)', f.dropIn), field('Registration ($)', f.reg)),
@@ -1184,24 +1193,46 @@ async function viewSchedule(main) {
     h('div', null, btn('Add to schedule', null, 'primary', { type: 'submit' })));
 
   const addPanel = panel('Add a class, camp or clinic', { subtitle: 'Sessions are created automatically. Weekly classes are always scheduled 8 weeks ahead.' }, form);
-  const seriesList = series.data.length ? series.data.map((x) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${x.start_time} · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}`)),
-    kindBadge(x.kind),
+  const seriesCoach = (x) => {
+    if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
+    const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${x.name}`, style: 'width:auto;max-width:180px' });
+    sel.addEventListener('change', () => busy(sel, async () => {
+      await patch(`/v1/class-series/${x.id}`, { coach_id: sel.value || null });
+      toast(sel.value ? `${sel.selectedOptions[0].textContent} now leads ${x.name}. Sessions with a sub keep their sub.` : `${x.name} has no coach set.`); render();
+    }));
+    return sel;
+  };
+  const seriesList = series.data.length ? series.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${x.start_time} · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}`)),
+    seriesCoach(x), kindBadge(x.kind),
     btn('Archive', (e) => { if (confirm(`Archive ${x.name}? Future sessions are canceled, credits returned and families emailed.`)) busy(e.currentTarget, async () => { await patch(`/v1/class-series/${x.id}`, { active: false }); toast('Archived.'); render(); }); }, 'ghost')))
     : [h('p', { class: 'muted' }, 'No classes yet. Add your first one below.')];
 
+  // "My sessions": only what you lead, kept in the address so Back and refresh keep it.
+  const mineBox = h('input', { type: 'checkbox', checked: mine });
+  mineBox.addEventListener('change', () => { location.hash = mineBox.checked ? '#/schedule?mine=1' : '#/schedule'; });
+  const filterBar = leads() ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, mineBox, h('span', null, 'My sessions only'), mine ? h('span', { class: 'muted' }, ` · ${sched.data.length} in the next two weeks`) : null) : null;
   fill(main, 
     header('Schedule', 'Classes, camps, clinics, privates and evaluations for the next two weeks.', h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
       locs.data.length ? btn('Add class or camp', () => { addPanel.scrollIntoView({ behavior: 'smooth' }); f.name.focus({ preventScroll: true }); }) : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
-    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, 'Nothing scheduled in the next two weeks.')]),
+    filterBar,
+    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, mine ? 'You don\'t lead anything in the next two weeks. Untick My sessions to see everything.' : 'Nothing scheduled in the next two weeks.')]),
     panel('Classes & camps', {}, ...seriesList),
     locs.data.length ? addPanel : null);
 }
 
 async function viewSession(main, id) {
-  const [x, clientsList, settings, progs] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs')]);
+  const [x, clientsList, settings, progs, coachList] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs'), get('/v1/coaches')]);
   tzName = settings.timezone;
+  // Who leads this session. Changing it here only changes this one (a sub); the class keeps its coach.
+  const coachSel = leads() && x.status === 'scheduled' ? coachPicker(coachList.data, x.coach_id, x.coach_name, { 'aria-label': 'Coach for this session', style: 'width:auto;min-width:200px' }) : null;
+  coachSel?.addEventListener('change', () => busy(coachSel, async () => {
+    await patch(`/v1/sessions/${id}`, { coach_id: coachSel.value || null });
+    toast(coachSel.value ? `${coachSel.selectedOptions[0].textContent} leads this session.${x.series_id ? ' The rest of the class keeps its coach.' : ''}` : 'No coach set for this session.'); render();
+  }));
+  const coachLine = h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('span', { class: 'dp-label', style: 'margin:0' }, 'Coach'), coachSel ?? h('span', { class: 'strong' }, x.coach_name ?? 'No coach set'),
+    x.series_id && coachSel ? h('span', { class: 'small muted' }, 'Changes this session only. Change the whole class on the Schedule page.') : null);
   const active = x.roster.filter((r) => ['booked', 'attended', 'no_show'].includes(r.status));
   const waiting = x.roster.filter((r) => r.status === 'waitlisted');
   const done = x.roster.filter((r) => ['canceled', 'late_canceled'].includes(r.status));
@@ -1218,7 +1249,7 @@ async function viewSession(main, id) {
       render();
     });
   }, 'outline');
-  const row = (r) => h('div', { class: 'list-item' },
+  const row = (r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
     h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'aria-pressed': String(r.status === 'attended'), 'aria-label': `${r.status === 'attended' ? 'Checked in' : 'Check in'} ${r.name}`,
       onClick: (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/attendance`, { status: r.status === 'attended' ? 'booked' : 'attended' }); render(); }) }, r.status === 'attended' ? 'Here' : r.status === 'no_show' ? 'No-show' : 'Check in'),
     h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.name),
@@ -1257,7 +1288,8 @@ async function viewSession(main, id) {
       x.workout ? btn('Clear', (e) => busy(e.currentTarget, async () => { await put(`/v1/sessions/${id}/workout`, { workout_id: null }); toast('Cleared.'); render(); }), 'ghost') : null) : null);
 
   fill(main, 
-    header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
+    header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.coach_name ? ` · ${x.coach_name}` : ''}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
+    panel(null, {}, coachLine),
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
         x.team.athletes.some((a) => !a.present) ? btn('Everyone\'s here', (e) => busy(e.currentTarget, async () => {
           for (const a of x.team.athletes.filter((t) => !t.present)) await post(`/v1/sessions/${id}/team-attendance`, { roster_id: a.id, present: true });
@@ -1311,16 +1343,49 @@ function checkinPanel(locations, kiosks) {
       canManage ? btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/kiosks/${k.id}`); toast('That tablet can\'t check anyone in now.'); render(); }), 'ghost') : null))) : null);
 }
 
+// Days off: a coach's hide that coach's private and evaluation times; the whole facility's hide everyone's.
+function timeOffPanel(rows, coaches) {
+  const owner = isOwner();
+  const who = owner ? select([['', 'Whole facility'], ...coaches.map((c) => [c.id, c.name])], { value: '' }) : null;
+  const from = input({ type: 'date', value: bizDate(1) }), to = input({ type: 'date', value: bizDate(1) }), note = input({ placeholder: 'Optional, like Tournament weekend' });
+  const range = (t) => (t.start_date === t.end_date ? ymd(t.start_date) : `${ymd(t.start_date)} – ${ymd(t.end_date)}`);
+  const mayRemove = (t) => owner || t.user_id === state.user.id;
+  return panel('Time off', { subtitle: 'Private and evaluation times aren\'t offered on these days. Classes stay on the schedule: give them a sub on the session page.' },
+    rows.length ? rows.map((t) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.user_id ? t.coach_name : 'Whole facility'), h('span', { class: 'small muted' }, [range(t), t.note].filter(Boolean).join(' · '))),
+      leads() && mayRemove(t) ? btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/time-off/${t.id}`); toast('Removed. Those times are offered again.'); render(); }), 'ghost') : null))
+      : h('p', { class: 'muted', style: 'margin:0' }, 'No time off coming up.'),
+    !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const r = await post('/v1/time-off', { user_id: owner ? who.value || null : state.user.id, start_date: from.value, end_date: to.value || from.value, note: note.value || undefined });
+      const n = r.sessions_to_cover.length;
+      if (n) toast(`Saved. ${n} ${n === 1 ? 'session' : 'sessions'} on those days still ${n === 1 ? 'needs' : 'need'} a sub: ${r.sessions_to_cover.slice(0, 3).map((x) => `${tzFmt(x.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${x.name}`).join(', ')}${n > 3 ? '…' : ''}.`, 'warn');
+      else toast('Time off saved.');
+      await render();
+    }); } },
+      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, who ? field('Who', who) : null, field('First day', from), field('Last day', to), field('Note', note)),
+      h('div', null, btn(owner ? 'Add time off' : 'Add my time off', null, 'primary', { type: 'submit' }))));
+}
+
 async function viewScheduleSetup(main) {
-  const [av, locs, settings, kiosks] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks')]);
-  const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }) };
-  const hours = panel('Your hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Anything else on your schedule blocks the time.' },
-    ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
-      btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/availability/${x.id}`); render(); }), 'ghost'))) : [h('p', { class: 'muted' }, 'No hours yet.')]),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekday: Number(a.day.value), start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined });
+  const [av, locs, settings, kiosks, coachList, timeOff] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks'), get('/v1/coaches'), get('/v1/time-off')]);
+  tzName = settings.timezone;
+  const coaches = coachList.data;
+  const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }),
+    coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
+  const hoursCoach = (x) => {
+    if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
+    const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${DAY_NAMES[x.weekday]} ${x.start_time} hours`, style: 'width:auto;max-width:180px' });
+    sel.addEventListener('change', () => busy(sel, async () => { await patch(`/v1/availability/${x.id}`, { coach_id: sel.value || null }); toast(sel.value ? `These hours are ${sel.selectedOptions[0].textContent}'s now.` : 'These hours have no coach set.'); render(); }));
+    return sel;
+  };
+  const hours = panel('Hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Hours with a coach are blocked by anything that coach leads, anywhere, and by sessions at that place with no coach. Hours with no coach are blocked by anything at that place.' },
+    ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
+        x.coach_active === false ? h('span', { class: 'small warn-text' }, `${x.coach_name}'s account is turned off, so these hours aren't offered. Pick another coach or remove them.`) : null),
+      hoursCoach(x),
+      leads() ? btn('Remove', (e) => { if (confirm(`Remove ${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time}? Times already booked stay booked.`)) busy(e.currentTarget, async () => { await del(`/v1/availability/${x.id}`); toast('Hours removed.'); render(); }); }, 'ghost') : null)) : [h('p', { class: 'muted' }, 'No hours yet.')]),
+    !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekday: Number(a.day.value), start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null });
       toast('Hours added.'); render();
-    }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Day', a.day)),
+    }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Day', a.day), field('Coach', a.coach)),
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('From', a.from), field('To', a.to), field('Minutes each', a.len), field('Price ($)', a.price)),
       h('div', null, btn('Add hours', null, 'primary', { type: 'submit' }))));
 
@@ -1385,7 +1450,7 @@ async function viewScheduleSetup(main) {
       btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
       btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
     digestOut);
-  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
+  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, timeOffPanel(timeOff.data, coaches), checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
     isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
 }
 

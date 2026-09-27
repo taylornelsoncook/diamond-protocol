@@ -12,7 +12,23 @@ const creditTypeFor = (kind) => (kind === 'private' ? 'private' : kind === 'grou
 const tz = (ctx) => getSetting(ctx, 'timezone');
 const first = (name) => name.split(' ')[0];
 const isMember = (ctx, clientId) => !!ctx.db.get(`SELECT id FROM subscriptions WHERE client_id = ? AND status IN ('active','trialing','past_due') LIMIT 1`, clientId);
+const notArchived = (c, isCoach) => { if (c.archived_at) throw conflict(isCoach ? `${first(c.name)} is archived. Restore them on their client page first.` : `${first(c.name)}'s account is archived. Ask your coach to reopen it.`); };
 const when = (ctx, iso) => new Intl.DateTimeFormat('en-US', { timeZone: tz(ctx), weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+
+// ---------- Coaches ----------
+// Staff who can lead a session: active owners and coaches. Front desk accounts don't lead sessions.
+export function listCoaches(ctx) {
+  return ctx.db.all(`SELECT id, name, role FROM users WHERE active = 1 AND role IN ('owner','coach') ORDER BY name COLLATE NOCASE`);
+}
+// A coach_id from a request: null or '' clears it, anything else must be an active owner or coach.
+function coachInput(ctx, x) {
+  if (x === null || x === '') return null;
+  const u = ctx.db.get('SELECT id, name, role, active FROM users WHERE id = ?', v.str(x, 'coach_id', { max: 64 }));
+  if (!u) throw notFound('Coach');
+  if (!u.active) throw conflict(`${u.name}'s account is turned off. Pick an active coach.`);
+  if (u.role === 'front_desk') throw badRequest(`${u.name} is front desk. Pick a coach or an owner to lead this.`);
+  return u.id;
+}
 
 // ---------- Series (recurring classes, camps, clinics, team sessions) ----------
 function seriesInput(body, cur = {}) {
@@ -49,15 +65,16 @@ export async function createSeries(ctx, body) {
     contractId = ctx.db.get('SELECT id FROM team_contracts WHERE id = ?', body.contract_id)?.id;
     if (!contractId) throw notFound('Team contract');
   }
+  const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   const id = newId('ser');
-  ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, active, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-    id, s.name, s.kind, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, contractId, ctx.now());
+  ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, coach_id, active, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    id, s.name, s.kind, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, contractId, coachId, ctx.now());
   await generateSessions(ctx, id);
   return getSeries(ctx, id);
 }
 export function getSeries(ctx, id) {
-  const s = ctx.db.get('SELECT s.*, l.name AS location_name FROM class_series s JOIN locations l ON l.id = s.location_id WHERE s.id = ?', id);
+  const s = ctx.db.get('SELECT s.*, l.name AS location_name, u.name AS coach_name FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id WHERE s.id = ?', id);
   if (!s) throw notFound('Class');
   s.weekdays = JSON.parse(s.weekdays);
   s.active = !!s.active;
@@ -69,15 +86,23 @@ export function listSeries(ctx, { kind, includeInactive = false } = {}) {
   const where = [], p = [];
   if (kind) { where.push('s.kind = ?'); p.push(kind); }
   if (!includeInactive) where.push('s.active = 1');
-  return ctx.db.all(`SELECT s.*, l.name AS location_name,
+  return ctx.db.all(`SELECT s.*, l.name AS location_name, u.name AS coach_name,
       (SELECT COUNT(*) FROM enrollments e WHERE e.series_id = s.id AND e.status = 'active') AS enrolled_count
-    FROM class_series s JOIN locations l ON l.id = s.location_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.kind, s.start_date, s.start_time`, ...p)
+    FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.kind, s.start_date, s.start_time`, ...p)
     .map((s) => ({ ...s, weekdays: JSON.parse(s.weekdays), active: !!s.active }));
 }
 // Changes apply to future sessions. Archiving cancels future sessions (credits returned, families emailed).
+// A new coach takes over the upcoming sessions, except ones given to a sub.
 export async function updateSeries(ctx, id, body) {
   const cur = getSeries(ctx, id);
   const s = seriesInput(body, { ...cur, weekdays: undefined });
+  if (body.coach_id !== undefined) {
+    const coachId = coachInput(ctx, body.coach_id);
+    if (coachId !== (cur.coach_id ?? null)) {
+      ctx.db.run('UPDATE class_series SET coach_id = ? WHERE id = ?', coachId, id);
+      ctx.db.run(`UPDATE class_sessions SET coach_id = ? WHERE series_id = ? AND starts_at > ? AND status = 'scheduled' AND coach_id IS ?`, coachId, id, ctx.now(), cur.coach_id ?? null);
+    }
+  }
   const weekdays = body.weekdays !== undefined ? s.weekdays : JSON.stringify(cur.weekdays);
   ctx.db.run(`UPDATE class_series SET name = ?, description = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, end_date = ?, weekdays = ?, active = ? WHERE id = ?`,
     s.name, s.description, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.end_date, weekdays, body.active !== undefined ? !!body.active : cur.active, id);
@@ -105,9 +130,9 @@ export async function generateSessions(ctx, seriesId) {
     if (!days.includes(weekdayOf(d))) continue;
     const starts = zonedToUtc(d, s.start_time, zone);
     if (starts <= ctx.now()) continue;
-    const r = ctx.db.run(`INSERT OR IGNORE INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, status, created_at)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
-      newId('cls'), s.id, s.name, s.kind, s.location_id, starts, new Date(Date.parse(starts) + s.duration_min * 60000).toISOString(), s.capacity, s.age_min, s.age_max, s.drop_in_cents, ctx.now());
+    const r = ctx.db.run(`INSERT OR IGNORE INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, status, created_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+      newId('cls'), s.id, s.name, s.kind, s.location_id, starts, new Date(Date.parse(starts) + s.duration_min * 60000).toISOString(), s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.coach_id ?? null, ctx.now());
     if (r.changes) {
       made++;
       const sessionId = ctx.db.get('SELECT id FROM class_sessions WHERE series_id = ? AND starts_at = ?', s.id, starts).id;
@@ -130,25 +155,35 @@ export async function createSession(ctx, body) {
   if (!isTime(body.start_time)) throw badRequest('start_time must look like 17:30.');
   const starts = zonedToUtc(body.date, body.start_time, tz(ctx));
   const dur = v.int(body.duration_min ?? 60, 'duration_min', { min: 10, max: 600 });
+  const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   const id = newId('cls');
-  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, status, created_at)
-              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, status, created_at)
+              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
     id, v.str(body.name, 'name', { max: 80 }), kind, loc.id, starts, new Date(Date.parse(starts) + dur * 60000).toISOString(),
     v.int(body.capacity ?? (kind === 'private' ? 1 : 12), 'capacity', { min: 1, max: 500 }),
     v.int(body.age_min, 'age_min', { min: 3, max: 99, optional: true }), v.int(body.age_max, 'age_max', { min: 3, max: 99, optional: true }),
-    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), ctx.now());
+    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, ctx.now());
+  return getSession(ctx, id);
+}
+// Change one session: coach_id sets who leads it (a sub for this day; null leaves it with nobody).
+export function updateSession(ctx, id, body) {
+  const s = getSession(ctx, id);
+  if (body.coach_id === undefined) throw badRequest('Send coach_id (or null to clear it).');
+  if (s.status !== 'scheduled') throw conflict('This session was canceled.');
+  ctx.db.run('UPDATE class_sessions SET coach_id = ? WHERE id = ?', coachInput(ctx, body.coach_id), id);
   return getSession(ctx, id);
 }
 
-const SESSION_LIST_SQL = `SELECT s.*, l.name AS location_name, cs.registration_cents,
+const SESSION_LIST_SQL = `SELECT s.*, l.name AS location_name, cs.registration_cents, cu.name AS coach_name,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended')) AS booked_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'waitlisted') AS waitlist_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'attended') AS attended_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended') AND b.coverage = 'unpaid') AS unpaid_count
-  FROM class_sessions s JOIN locations l ON l.id = s.location_id LEFT JOIN class_series cs ON cs.id = s.series_id`;
+  FROM class_sessions s JOIN locations l ON l.id = s.location_id LEFT JOIN class_series cs ON cs.id = s.series_id LEFT JOIN users cu ON cu.id = s.coach_id`;
 
-export function listSessions(ctx, { from, to, kind, locationId, includeCanceled = false } = {}) {
+export function listSessions(ctx, { from, to, kind, locationId, coachId, includeCanceled = false } = {}) {
   const where = ['s.starts_at >= ?', 's.starts_at < ?'], p = [from, to];
+  if (coachId) { where.push('s.coach_id = ?'); p.push(coachId); }
   if (kind) { where.push('s.kind = ?'); p.push(kind); }
   if (locationId) { where.push('s.location_id = ?'); p.push(locationId); }
   if (!includeCanceled) where.push(`s.status = 'scheduled'`);
@@ -235,6 +270,7 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
   const s = getSession(ctx, sessionId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');
+  notArchived(c, isCoach);
   if (s.status !== 'scheduled') throw conflict('This session was canceled.');
   if (!isCoach && s.starts_at <= ctx.now()) throw conflict('This session has already started.');
   if (!isCoach && s.kind === 'team') throw conflict('Team sessions are booked by your coach.');
@@ -339,6 +375,7 @@ export async function enroll(ctx, seriesId, clientId, { isCoach = false } = {}) 
   const s = getSeries(ctx, seriesId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');
+  notArchived(c, isCoach);
   if (s.kind !== 'group') throw conflict(s.kind === 'camp' || s.kind === 'clinic' ? 'Register for camps and clinics instead of enrolling.' : 'Only group classes take standing enrollments.');
   if (!isMember(ctx, clientId)) throw conflict(`Standing spots are for members. Book ${first(c.name)} into single classes with group sessions, or start a membership.`);
   if (s.enrolled.some((e) => e.client_id === clientId)) throw conflict(`${first(c.name)} is already enrolled.`);
@@ -367,6 +404,7 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
   const s = getSeries(ctx, seriesId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');
+  notArchived(c, isCoach);
   if (!['camp', 'clinic'].includes(s.kind) || s.registration_cents == null) throw conflict('This class doesn\'t take registrations.');
   if (!s.active) throw conflict('Registration for this camp is closed.');
   if (s.enrolled.some((e) => e.client_id === clientId)) throw conflict(`${first(c.name)} is already registered.`);
@@ -394,16 +432,25 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
 
 // ---------- Private and evaluation availability ----------
 export function listAvailability(ctx) {
-  return ctx.db.all('SELECT a.*, l.name AS location_name FROM availability a JOIN locations l ON l.id = a.location_id ORDER BY a.kind, a.weekday, a.start_time');
+  return ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name, u.active AS coach_active FROM availability a JOIN locations l ON l.id = a.location_id
+    LEFT JOIN users u ON u.id = a.coach_id ORDER BY a.kind, a.weekday, a.start_time`).map((a) => ({ ...a, coach_active: a.coach_id ? !!a.coach_active : null }));
 }
 export function addAvailability(ctx, body) {
   const kind = v.oneOf(body.kind ?? 'private', 'kind', ['private', 'evaluation']);
   const loc = commerce.getLocation(ctx, v.str(body.location_id, 'location_id'));
   if (!isTime(body.start_time) || !isTime(body.end_time) || body.end_time <= body.start_time) throw badRequest('Give a start_time and a later end_time, like 15:00 and 19:00.');
+  const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   const id = newId('av');
-  ctx.db.run('INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, price_cents, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ctx.db.run('INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, price_cents, coach_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     id, kind, loc.id, v.int(body.weekday, 'weekday', { min: 0, max: 6 }), body.start_time, body.end_time,
-    v.int(body.slot_minutes ?? 60, 'slot_minutes', { min: 15, max: 240 }), v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000, optional: true }), ctx.now());
+    v.int(body.slot_minutes ?? 60, 'slot_minutes', { min: 15, max: 240 }), v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000, optional: true }), coachId, ctx.now());
+  return listAvailability(ctx).find((a) => a.id === id);
+}
+// Hand hours to another coach (coach_id), or to nobody (null: the place decides what blocks them).
+export function updateAvailability(ctx, id, body) {
+  if (!ctx.db.get('SELECT id FROM availability WHERE id = ?', id)) throw notFound('Availability');
+  if (body.coach_id === undefined) throw badRequest('Send coach_id (or null to clear it).');
+  ctx.db.run('UPDATE availability SET coach_id = ? WHERE id = ?', coachInput(ctx, body.coach_id), id);
   return listAvailability(ctx).find((a) => a.id === id);
 }
 export function removeAvailability(ctx, id) {
@@ -411,27 +458,76 @@ export function removeAvailability(ctx, id) {
   ctx.db.run('DELETE FROM availability WHERE id = ?', id);
   return { id, deleted: true };
 }
-// Open slots are your availability minus what is already on the schedule at the same place and time. A one-off private or
-// evaluation whose bookings were all canceled doesn't take the time. One with no bookings yet does: that is a slot being
-// booked right now (the booking is saved after the card is charged) or one a coach put on the schedule.
-// (Which coach runs what comes later; until then the place decides.)
+
+// ---------- Time off (a coach, or the whole facility) ----------
+export function listTimeOff(ctx, { from, to } = {}) {
+  const where = [], p = [];
+  for (const [k, x] of [['from', from], ['to', to]]) if (x && !isDate(x)) throw badRequest(`${k} must look like 2026-10-05.`);
+  if (from) { where.push('t.end_date >= ?'); p.push(from); }
+  if (to) { where.push('t.start_date <= ?'); p.push(to); }
+  if (!from && !to) { where.push('t.end_date >= ?'); p.push(localDate(ctx.now(), tz(ctx))); }   // default: today on
+  return ctx.db.all(`SELECT t.*, u.name AS coach_name FROM time_off t LEFT JOIN users u ON u.id = t.user_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY t.start_date, u.name`, ...p);
+}
+// Coaches add their own days off; owners add anyone's, or the whole facility's (user_id null). Private and evaluation times
+// those days aren't offered. What the coach already leads on those days is listed so someone can cover it.
+export function addTimeOff(ctx, body, actor) {
+  const role = actor?.role ?? 'owner';
+  const userId = body.user_id === undefined ? (role === 'owner' ? null : actor.id) : body.user_id === null || body.user_id === '' ? null : v.str(body.user_id, 'user_id', { max: 64 });
+  if (role !== 'owner' && userId !== actor.id) throw new HttpError(403, 'forbidden', 'Coaches can only add their own time off. Ask the owner for anyone else or the whole facility.');
+  if (userId) {
+    const u = ctx.db.get('SELECT id, role FROM users WHERE id = ?', userId);
+    if (!u) throw notFound('Coach');
+    if (u.role === 'front_desk') throw badRequest('Time off is for coaches and owners who lead sessions.');
+  }
+  if (!isDate(body.start_date)) throw badRequest('start_date must look like 2026-10-05.');
+  const end = body.end_date == null || body.end_date === '' ? body.start_date : body.end_date;
+  if (!isDate(end)) throw badRequest('end_date must look like 2026-10-09.');
+  if (end < body.start_date) throw badRequest('end_date must be on or after start_date.');
+  if (addDaysToDate(body.start_date, 366) < end) throw badRequest('Time off can be at most a year at a time.');
+  const id = newId('off');
+  ctx.db.run('INSERT INTO time_off (id, user_id, start_date, end_date, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id, userId, body.start_date, end, v.str(body.note, 'note', { max: 200, optional: true }), actor?.name ?? 'API', ctx.now());
+  const zone = tz(ctx), from = zonedToUtc(body.start_date, '00:00', zone), to = zonedToUtc(addDaysToDate(end, 1), '00:00', zone);
+  const toCover = ctx.db.all(`SELECT s.id, s.name, s.starts_at, l.name AS location_name FROM class_sessions s JOIN locations l ON l.id = s.location_id
+    WHERE s.status = 'scheduled' AND s.starts_at >= ? AND s.starts_at < ? AND s.starts_at > ? ${userId ? 'AND s.coach_id = ?' : ''} ORDER BY s.starts_at`, from, to, ctx.now(), ...(userId ? [userId] : []));
+  return { ...listTimeOff(ctx, { from: body.start_date, to: end }).find((t) => t.id === id), sessions_to_cover: toCover };
+}
+export function removeTimeOff(ctx, id, actor) {
+  const t = ctx.db.get('SELECT * FROM time_off WHERE id = ?', id);
+  if (!t) throw notFound('Time off');
+  if ((actor?.role ?? 'owner') !== 'owner' && t.user_id !== actor.id) throw new HttpError(403, 'forbidden', 'Only the owner can remove someone else\'s time off.');
+  ctx.db.run('DELETE FROM time_off WHERE id = ?', id);
+  return { id, deleted: true };
+}
+
+// Open slots are your hours minus what is already on the schedule. Hours tied to a coach are taken by anything that coach
+// leads (at any place) and by anything at the same place with no coach; hours with no coach are taken by anything at the
+// same place. Hours of a coach whose account is turned off aren't offered, nor any on that coach's (or the facility's)
+// days off. A one-off private or evaluation whose bookings were all canceled doesn't take the time. One with no bookings
+// yet does: that is a slot being booked right now (the booking is saved after the card is charged) or one a coach put on
+// the schedule.
 export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
-  const blocks = ctx.db.all('SELECT a.*, l.name AS location_name FROM availability a JOIN locations l ON l.id = a.location_id WHERE a.kind = ?', kind);
+  const blocks = ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name FROM availability a JOIN locations l ON l.id = a.location_id
+    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR u.active = 1)`, kind);
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
-  const busy = ctx.db.all(`SELECT s.location_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
+  const busy = ctx.db.all(`SELECT s.location_id, s.coach_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
     AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)
       OR EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended','waitlisted')))`, ctx.now(), end);
+  const off = ctx.db.all('SELECT user_id, start_date, end_date FROM time_off WHERE end_date >= ? AND start_date <= ?', today, addDaysToDate(today, days));
+  const isOff = (a, d) => off.some((t) => t.start_date <= d && t.end_date >= d && (t.user_id == null || t.user_id === a.coach_id));
+  const takes = (a, b) => (a.coach_id ? b.coach_id === a.coach_id || (b.coach_id == null && b.location_id === a.location_id) : b.location_id === a.location_id);
   const minStart = new Date(Date.now() + 2 * 3600000).toISOString();            // at least 2 hours' notice
   const out = [];
   for (let d = today, i = 0; i <= days; d = addDaysToDate(d, 1), i++) {
     for (const a of blocks.filter((b) => b.weekday === weekdayOf(d))) {
+      if (isOff(a, d)) continue;
       const blockEnd = zonedToUtc(d, a.end_time, zone);
       for (let t = zonedToUtc(d, a.start_time, zone); Date.parse(t) + a.slot_minutes * 60000 <= Date.parse(blockEnd); t = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString()) {
         const tEnd = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString();
-        if (t < minStart || busy.some((b) => b.location_id === a.location_id && b.starts_at < tEnd && b.ends_at > t)) continue;
-        out.push({ kind, starts_at: t, ends_at: tEnd, location_id: a.location_id, location_name: a.location_name, price_cents: a.price_cents, availability_id: a.id });
+        if (t < minStart || busy.some((b) => takes(a, b) && b.starts_at < tEnd && b.ends_at > t)) continue;
+        out.push({ kind, starts_at: t, ends_at: tEnd, location_id: a.location_id, location_name: a.location_name, price_cents: a.price_cents, availability_id: a.id, coach_id: a.coach_id ?? null, coach_name: a.coach_name ?? null });
       }
     }
   }
@@ -440,11 +536,13 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
 export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId, clientId, pay, actor, isCoach = false }) {
   const slot = openSlots(ctx, { kind, days: 60 }).find((x) => x.starts_at === startsAt && x.availability_id === availabilityId);
   if (!slot) throw conflict('That time was just taken or is no longer available. Pick another.');
-  const c = ctx.db.get('SELECT name FROM clients WHERE id = ?', clientId);
+  const c = ctx.db.get('SELECT name, archived_at FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');
+  notArchived(c, isCoach);
+  // Saved before the card is charged, so a second booking of this time (or of this coach elsewhere) sees it taken.
   const id = newId('cls');
-  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, 1, ?, 'scheduled', ?)`,
-    id, `${kind === 'private' ? 'Private' : 'Evaluation'}: ${c.name}`, kind, slot.location_id, slot.starts_at, slot.ends_at, slot.price_cents, ctx.now());
+  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, coach_id, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, 1, ?, ?, 'scheduled', ?)`,
+    id, `${kind === 'private' ? 'Private' : 'Evaluation'}: ${c.name}`, kind, slot.location_id, slot.starts_at, slot.ends_at, slot.price_cents, slot.coach_id, ctx.now());
   try { return await book(ctx, { sessionId: id, clientId, pay, actor, isCoach }); }
   catch (e) { ctx.db.run('DELETE FROM class_sessions WHERE id = ?', id); throw e; }        // release the slot if payment fails
 }

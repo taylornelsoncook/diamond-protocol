@@ -77,6 +77,7 @@ struct SessionDetail: Decodable, Identifiable {
     let unpaidCount: Int
     let status: String
     let dropInCents: Int?
+    var coachName: String? = nil      // who leads it (empty when no coach is set)
     let roster: [RosterEntry]
     let team: TeamRoster?
     var start: Date { ISO.date(startsAt) ?? .now }

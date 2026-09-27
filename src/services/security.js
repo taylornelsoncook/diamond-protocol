@@ -15,10 +15,12 @@ const OWNER_ONLY = [
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|clients|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|clients|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
-  ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/], ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
+  ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
+  ['POST', /^\/v1\/clients\/:id\/notes$/], ['PATCH', /^\/v1\/client-notes\/:id$/], ['DELETE', /^\/v1\/client-notes\/:id$/],   // staff notes (never coach-only ones)
+  ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
   ['POST', /^\/v1\/clients\/:id\/subscription$/],   // start a membership at the counter (not change, pause or cancel)
   ['POST', /^\/v1\/families(\/:id\/(guardians|athletes))?$/],
   ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate))?$/], ['POST', /^\/v1\/terminal\//],

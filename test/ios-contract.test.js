@@ -49,7 +49,7 @@ test('Today and rosters', async () => {
   conforms(agenda, { date: 'string', timezone: 'string', sessions: 'array' }, 'Agenda');
   assert.ok(agenda.sessions.length >= 2);
   for (const x of agenda.sessions) {
-    conforms(x, { id: 'string', name: 'string', kind: 'string', starts_at: 'string', ends_at: 'string', location_name: 'string', capacity: 'number', booked_count: 'number', attended_count: 'number', unpaid_count: 'number', status: 'string', 'drop_in_cents?': 'number', roster: 'array', 'team?': 'object' }, 'SessionDetail');
+    conforms(x, { id: 'string', name: 'string', kind: 'string', starts_at: 'string', ends_at: 'string', location_name: 'string', capacity: 'number', booked_count: 'number', attended_count: 'number', unpaid_count: 'number', status: 'string', 'drop_in_cents?': 'number', 'coach_name?': 'string', roster: 'array', 'team?': 'object' }, 'SessionDetail');
     for (const r of x.roster) conforms(r, { id: 'string', status: 'string', coverage: 'string', client_id: 'string', name: 'string', 'age?': 'number', has_medical_notes: 'boolean', 'parent_phone?': 'string' }, 'RosterEntry');
     if (x.team) {
       conforms(x.team, { contract_id: 'string', team_name: 'string', org_name: 'string', athletes: 'array' }, 'TeamRoster');

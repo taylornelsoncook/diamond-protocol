@@ -229,21 +229,25 @@ export const routes = [
   ['DELETE', '/v1/leads/:id', 'session', 'Leads', 'Delete a lead and its details (owner only).', (ctx, r) => leads.deleteLead(ctx, r.params.id)],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
-  ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind= and ?location_id=.', (ctx, r) => {
+  ['GET', '/v1/coaches', 'any', 'Schedule', 'Staff who can lead sessions (active owners and coaches), for coach pickers.', (ctx) => list(schedule.listCoaches(ctx))],
+  ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind=, ?location_id= and ?coach_id= (me for your own).', (ctx, r) => {
     const from = r.query.from ? v.date(r.query.from, 'from') : new Date(Date.now() - 3600000).toISOString();
     const to = r.query.to ? v.date(r.query.to, 'to') : new Date(Date.now() + 14 * 86400000).toISOString();
-    return list(schedule.listSessions(ctx, { from, to, kind: r.query.kind, locationId: r.query.location_id, includeCanceled: r.query.include_canceled === 'true' }));
+    if (r.query.coach_id === 'me' && !r.user) throw badRequest('coach_id=me needs a staff sign-in. Pass a staff id instead.');
+    const coachId = r.query.coach_id === 'me' ? r.user.id : r.query.coach_id || undefined;
+    return list(schedule.listSessions(ctx, { from, to, kind: r.query.kind, locationId: r.query.location_id, coachId, includeCanceled: r.query.include_canceled === 'true' }));
   }],
   ['GET', '/v1/agenda', 'any', 'Schedule', 'One day (?date=YYYY-MM-DD, default today) with every roster.', (ctx, r) => schedule.agenda(ctx, r.query.date)],
   ['GET', '/v1/class-series', 'any', 'Schedule', 'Recurring classes, camps, clinics and team series.', (ctx, r) => list(schedule.listSeries(ctx, { kind: r.query.kind, includeInactive: r.query.include_inactive === 'true' }))],
-  ['POST', '/v1/class-series', 'any', 'Schedule', 'Create a class or camp: name, kind (group, camp, clinic, team, evaluation), location_id, weekdays [0-6], start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date.', (ctx, r) => schedule.createSeries(ctx, r.body), 201],
+  ['POST', '/v1/class-series', 'any', 'Schedule', 'Create a class or camp: name, kind (group, camp, clinic, team, evaluation), location_id, weekdays [0-6], start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, coach_id (who leads it).', (ctx, r) => schedule.createSeries(ctx, r.body), 201],
   ['GET', '/v1/class-series/:id', 'any', 'Schedule', 'A class or camp with who is enrolled.', (ctx, r) => schedule.getSeries(ctx, r.params.id)],
-  ['PATCH', '/v1/class-series/:id', 'any', 'Schedule', 'Change future sessions. active=false cancels the rest (credits returned, families emailed).', (ctx, r) => schedule.updateSeries(ctx, r.params.id, r.body)],
+  ['PATCH', '/v1/class-series/:id', 'any', 'Schedule', 'Change future sessions. active=false cancels the rest (credits returned, families emailed). coach_id hands the upcoming sessions to another coach, except ones given to a sub.', (ctx, r) => schedule.updateSeries(ctx, r.params.id, r.body)],
   ['POST', '/v1/class-series/:id/enroll', 'any', 'Schedule', 'Give a member a standing spot: client_id.', (ctx, r) => schedule.enroll(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), { isCoach: true })],
   ['DELETE', '/v1/class-series/:id/enroll/:client', 'any', 'Schedule', 'End a standing spot and release future bookings.', (ctx, r) => schedule.endEnrollment(ctx, r.params.id, r.params.client)],
   ['POST', '/v1/class-series/:id/register', 'any', 'Schedule', 'Register for a camp or clinic: client_id, pay (card_on_file, or omit to collect later).', (ctx, r) => schedule.registerCamp(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), { pay: r.body.pay, actor: r.user?.id, isCoach: true })],
-  ['POST', '/v1/sessions', 'any', 'Schedule', 'One-off session: name, kind, location_id, date, start_time, duration_min, capacity.', (ctx, r) => schedule.createSession(ctx, r.body), 201],
+  ['POST', '/v1/sessions', 'any', 'Schedule', 'One-off session: name, kind, location_id, date, start_time, duration_min, capacity, coach_id.', (ctx, r) => schedule.createSession(ctx, r.body), 201],
   ['GET', '/v1/sessions/:id', 'any', 'Schedule', 'A session with its roster and waitlist, and the workout on the weight-room screen.', (ctx, r) => { const s = schedule.getSession(ctx, r.params.id); return { ...s, workout: s.workout_id ? screen.workoutView(ctx, s.workout_id) : null }; }],
+  ['PATCH', '/v1/sessions/:id', 'any', 'Schedule', 'Change who leads this one session: coach_id (a sub; null for nobody).', (ctx, r) => schedule.updateSession(ctx, r.params.id, r.body)],
   ['PUT', '/v1/sessions/:id/workout', 'any', 'Schedule', 'Pick the workout the weight-room screen shows during this session: workout_id (null clears it).', (ctx, r) => screen.setSessionWorkout(ctx, r.params.id, r.body)],
   ['POST', '/v1/sessions/:id/cancel', 'any', 'Schedule', 'Cancel a session: credits back, paid drop-ins refunded, families emailed. Optional reason.', (ctx, r) => schedule.cancelSession(ctx, r.params.id, { reason: v.str(r.body.reason, 'reason', { max: 200, optional: true }) })],
   ['POST', '/v1/sessions/:id/bookings', 'any', 'Schedule', 'Add an athlete: client_id, optional pay=card_on_file, override_age. Coaches can book now and collect later.', (ctx, r) => schedule.book(ctx, { sessionId: r.params.id, clientId: v.str(r.body.client_id, 'client_id'), pay: r.body.pay, actor: r.user?.id, isCoach: true, overrideAge: !!r.body.override_age }), 201],
@@ -252,9 +256,13 @@ export const routes = [
   ['POST', '/v1/bookings/:id/pay', 'any', 'Schedule', 'Collect for an unpaid booking: method (card_on_file, cash, tap_to_pay, reader), reader_id.', (ctx, r) => schedule.payBooking(ctx, r.params.id, r.body, r.user?.id)],
   ['GET', '/v1/clients/:id/bookings', 'any', 'Schedule', 'A client\'s upcoming bookings (?past=true for history).', (ctx, r) => list(schedule.clientBookings(ctx, r.params.id, { upcoming: r.query.past !== 'true' }))],
   ['GET', '/v1/availability', 'any', 'Schedule', 'Your hours for privates and evaluations.', (ctx) => list(schedule.listAvailability(ctx))],
-  ['POST', '/v1/availability', 'any', 'Schedule', 'Add hours: kind (private or evaluation), location_id, weekday, start_time, end_time, slot_minutes, price_cents.', (ctx, r) => schedule.addAvailability(ctx, r.body), 201],
+  ['POST', '/v1/availability', 'any', 'Schedule', 'Add hours: kind (private or evaluation), location_id, weekday, start_time, end_time, slot_minutes, price_cents, coach_id (whose hours; anything that coach leads anywhere then blocks them).', (ctx, r) => schedule.addAvailability(ctx, r.body), 201],
+  ['PATCH', '/v1/availability/:id', 'any', 'Schedule', 'Hand hours to another coach: coach_id (null: nobody, so anything at that place blocks them).', (ctx, r) => schedule.updateAvailability(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/availability/:id', 'any', 'Schedule', 'Remove hours.', (ctx, r) => schedule.removeAvailability(ctx, r.params.id)],
-  ['GET', '/v1/slots', 'any', 'Schedule', 'Open private or evaluation times (?kind=, ?days=).', (ctx, r) => list(schedule.openSlots(ctx, { kind: r.query.kind === 'evaluation' ? 'evaluation' : 'private', days: v.int(r.query.days ?? 14, 'days', { min: 1, max: 60 }) }))],
+  ['GET', '/v1/time-off', 'any', 'Schedule', 'Coach and facility days off, from today on (or ?from= and ?to=, YYYY-MM-DD).', (ctx, r) => list(schedule.listTimeOff(ctx, { from: r.query.from, to: r.query.to }))],
+  ['POST', '/v1/time-off', 'any', 'Schedule', 'Add days off: start_date, end_date (YYYY-MM-DD, inclusive), note, user_id (a coach; empty for the whole facility, owners only). Coaches add their own. Private and evaluation times those days aren\'t offered; sessions_to_cover lists what that coach still leads then.', (ctx, r) => schedule.addTimeOff(ctx, r.body, r.user), 201],
+  ['DELETE', '/v1/time-off/:id', 'any', 'Schedule', 'Remove days off (coaches their own, owners any).', (ctx, r) => schedule.removeTimeOff(ctx, r.params.id, r.user)],
+  ['GET', '/v1/slots', 'any', 'Schedule', 'Open private or evaluation times (?kind=, ?days=), each with the coach whose hours they are.', (ctx, r) => list(schedule.openSlots(ctx, { kind: r.query.kind === 'evaluation' ? 'evaluation' : 'private', days: v.int(r.query.days ?? 14, 'days', { min: 1, max: 60 }) }))],
   ['POST', '/v1/slots/book', 'any', 'Schedule', 'Book an open slot: kind, starts_at, availability_id, client_id, optional pay.', (ctx, r) => schedule.bookSlot(ctx, { kind: r.body.kind, startsAt: v.str(r.body.starts_at, 'starts_at'), availabilityId: v.str(r.body.availability_id, 'availability_id'), clientId: v.str(r.body.client_id, 'client_id'), pay: r.body.pay, actor: r.user?.id, isCoach: true }), 201],
 
   // Team contracts: schools and clubs billed a monthly fee

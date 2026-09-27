@@ -181,17 +181,22 @@ export function updateGoal(ctx, id, body = {}) {
 }
 
 // ---------- Coach messages ----------
-export function messagesFor(ctx, clientId, limit = 30) {
+// Read state is the athlete's own, or with guardianId that parent's own.
+export function messagesFor(ctx, clientId, limit = 30, { guardianId } = {}) {
   const teams = teamsOf(ctx, clientId);
+  const reads = guardianId ? 'guardian_message_reads r ON r.message_id = m.id AND r.guardian_id = ?' : 'message_reads r ON r.message_id = m.id AND r.client_id = ?';
   return ctx.db.all(`SELECT m.id, m.body, m.created_at, m.contract_id, m.staff_name AS coach, m.from_kind, m.author_name, m.staff_read_at, r.read_at FROM coach_messages m
-      LEFT JOIN message_reads r ON r.message_id = m.id AND r.client_id = ?
-    WHERE m.client_id = ? OR m.contract_id IN (${inList(teams)}) ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`, clientId, clientId, ...teams, limit)
+      LEFT JOIN ${reads}
+    WHERE m.client_id = ? OR m.contract_id IN (${inList(teams)}) ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`, guardianId ?? clientId, clientId, ...teams, limit)
     .map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, from: m.from_kind, coach: m.from_kind === 'coach' ? m.coach : null, author: m.from_kind === 'coach' ? m.coach : m.author_name,
       team: !!m.contract_id, read: m.from_kind !== 'coach' || !!m.read_at, ...(m.from_kind !== 'coach' ? { seen_by_coach: !!m.staff_read_at } : {}) }));
 }
-export function markRead(ctx, clientId) {
-  const unread = messagesFor(ctx, clientId, 500).filter((m) => !m.read);
-  for (const m of unread) ctx.db.run('INSERT OR IGNORE INTO message_reads (message_id, client_id, read_at) VALUES (?, ?, ?)', m.id, clientId, ctx.now());
+export function markRead(ctx, clientId, { guardianId } = {}) {
+  const unread = messagesFor(ctx, clientId, 500, { guardianId }).filter((m) => !m.read);
+  for (const m of unread) {
+    if (guardianId) ctx.db.run('INSERT OR IGNORE INTO guardian_message_reads (message_id, guardian_id, read_at) VALUES (?, ?, ?)', m.id, guardianId, ctx.now());
+    else ctx.db.run('INSERT OR IGNORE INTO message_reads (message_id, client_id, read_at) VALUES (?, ?, ?)', m.id, clientId, ctx.now());
+  }
   return { read: unread.length };
 }
 // Emails the athlete (when they have their own address) and every parent, with a link to see it.
@@ -795,12 +800,12 @@ export function addStarterParentCourses(ctx) {
 }
 
 // ---------- The three tabs, as the athlete or a parent sees them ----------
-export function accountability(ctx, clientId) {
+export function accountability(ctx, clientId, { guardianId } = {}) {
   clientRow(ctx, clientId);
   const t = today(ctx), ws = weekStart(t), from = addDaysToDate(t, -27);
   const days = trainingDays(ctx, clientId, from, t);
   const checked = new Set(ctx.db.all('SELECT date FROM daily_checkins WHERE client_id = ? AND date BETWEEN ? AND ?', clientId, from, t).map((r) => r.date));
-  const messages = messagesFor(ctx, clientId);
+  const messages = messagesFor(ctx, clientId, 30, { guardianId });
   return {
     today: t, week_start: ws,
     streaks: { active_weeks: activeWeekStreak(ctx, clientId), checkin_days: checkinStreak(ctx, clientId) },
@@ -811,14 +816,14 @@ export function accountability(ctx, clientId) {
     goals: goalsFor(ctx, clientId), messages, unread: messages.filter((m) => !m.read).length
   };
 }
-export function athleteView(ctx, clientId, { parentView = false } = {}) {
+export function athleteView(ctx, clientId, { parentView = false, guardianId } = {}) {
   const c = clientRow(ctx, clientId);
   return { athlete: { id: c.id, athlete_id: c.athlete_id, name: c.name, first_name: firstName(c) },
-    accountability: accountability(ctx, c.id), performance: performance(ctx, c.id, { parentView }), education: education(ctx, c.id) };
+    accountability: accountability(ctx, c.id, { guardianId }), performance: performance(ctx, c.id, { parentView }), education: education(ctx, c.id) };
 }
 // A light summary for the parent portal's athlete list (dots on the tabs).
-export function badges(ctx, clientId) {
-  return { unread: messagesFor(ctx, clientId, 200).filter((m) => !m.read).length, open_assignments: education(ctx, clientId).assigned.filter((x) => !x.done).length,
+export function badges(ctx, clientId, { guardianId } = {}) {
+  return { unread: messagesFor(ctx, clientId, 200, { guardianId }).filter((m) => !m.read).length, open_assignments: education(ctx, clientId).assigned.filter((x) => !x.done).length,
     checked_in_today: !!ctx.db.get('SELECT 1 FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, today(ctx)) };
 }
 

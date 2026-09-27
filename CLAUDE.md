@@ -15,7 +15,7 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 ## Commands
 - `npm run seed`: sample data (sign in `coach@diamondprotocol.local` / `change-me-now`; parent `maria.lopez@example.com`, code shown on screen in test mode). Delete `data/` first to reseed.
 - `npm start`: http://localhost:3000
-- `npm test`: the full suite (197 tests). Run it before calling anything done.
+- `npm test`: the full suite (208 tests). Run it before calling anything done.
 - Node 22.13+ only. **Zero npm dependencies** (node:sqlite, node:http, node:test, built-in fetch/zlib/crypto). Keep it that way unless the owner agrees.
 
 ## Code map
@@ -30,7 +30,7 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 - **Athlete ID** (`AVALOP2026`: first 3 of first name + first 3 of last name + year joined, `-2` for duplicates) is permanent and ties all data together.
 - **Results only land in a profile by Athlete ID, our internal IDs, or a device ID the coach linked by hand. Never guess by name.** Everything else waits in the queue (`results_queue`) for manual linking.
 - **Uploads and imports are all or nothing:** check the whole file, list every problem by row and column, save nothing until clean, re-check at save time, save in one transaction. Unusual-but-possible values need explicit confirmation.
-- **Roles** (Owner, Coach, Front desk) are enforced server-side in `services/security.js`; coaches and front desk never see money. Update the rules there for new endpoints.
+- **Roles** (Owner, Coach, Front desk) are enforced server-side in `services/security.js`; coaches and front desk never see money (`hideMoney` removes amounts from what they read, apart from what the counter needs to take a payment). Update the rules there for new endpoints.
 - **Parents see test results only after a testing day is shared** (unless the setting says otherwise).
 - **Terms/privacy placeholders start with `[`** and are never shown to parents or required.
 - Deleting a family removes personal data but keeps payment records without names.

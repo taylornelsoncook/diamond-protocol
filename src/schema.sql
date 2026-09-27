@@ -856,6 +856,13 @@ CREATE TABLE IF NOT EXISTS message_reads (
   read_at TEXT NOT NULL,
   PRIMARY KEY (message_id, client_id)
 );
+-- Parents keep their own read state (version 30): a parent opening the messages doesn't clear them for the athlete.
+CREATE TABLE IF NOT EXISTS guardian_message_reads (
+  message_id TEXT NOT NULL REFERENCES coach_messages(id) ON DELETE CASCADE,
+  guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
+  read_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, guardian_id)
+);
 -- A coach's target for one test (the test's headline number), in that metric's unit.
 CREATE TABLE IF NOT EXISTS test_targets (
   id TEXT PRIMARY KEY,

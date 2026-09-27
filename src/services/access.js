@@ -1,9 +1,11 @@
-import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpError, addDays } from '../util.js';
+import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpError, addDays, startOfLocalDay } from '../util.js';
+import { getSetting } from './families.js';
 import { listEvents } from './events.js';
 import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
+import { OWNER_EVENTS, can } from './security.js';
 
 const SESSION_DAYS = 14;
 
@@ -114,7 +116,7 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   const teams = teamSummary(ctx);
   const overdueTeams = teams.overdue.map((r) => ({ kind: 'team_invoice_overdue', ...r }));
   const q = queueCount(ctx);
-  const waiting = q.n ? [{ kind: 'results_waiting', count: q.n, groups: q.groups }] : [];
+  const waiting = q.n ? [{ kind: 'results_waiting', count: q.n, groups: q.groups, can_link: can(role, 'GET', '/v1/queue') }] : [];   // front desk can't open the queue
   const fresh = db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ?`, weekAgo);
   if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
   const replies = unreadReplies(ctx);
@@ -125,15 +127,14 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
     return { today_sales: null, metrics: { paying_clients: active.n, trialing_clients: trialing, workouts_last_7_days: workouts }, teams: null,
       attention: [...waiting, ...quiet, ...(role === 'front_desk' ? pendingSales.map(({ amount_cents, ...x }) => x) : pendingSales)],
-      activity: listEvents(ctx, { limit: 12 }).filter((e) => !/^(invoice|subscription|team_invoice|sale\.refunded)/.test(e.type)) };
+      activity: listEvents(ctx, { limit: 12 }).filter((e) => !OWNER_EVENTS.test(e.type)) };
   }
   return {
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
-    today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfDay(ctx.now())),
+    today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfLocalDay(ctx.now(), getSetting(ctx, 'timezone'))),
     metrics: { mrr_cents: active.mrr, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },
     attention: [...ctx.db.all(`SELECT id AS request_id, family_id, family_name, requested_by, created_at FROM data_requests WHERE status = 'open' AND kind = 'delete'`).map((x) => ({ kind: 'deletion_request', ...x })), ...failed, ...overdueTeams, ...waiting, ...trials, ...quiet, ...pendingSales],
     activity: listEvents(ctx, { limit: 12 })
   };
 }
 
-function startOfDay(iso) { const d = new Date(iso); d.setHours(0, 0, 0, 0); return d.toISOString(); }

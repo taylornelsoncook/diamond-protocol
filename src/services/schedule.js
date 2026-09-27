@@ -200,11 +200,11 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor }) {
   if (session.kind === 'team') return { coverage: 'none' };                       // billed through the team contract
   if (type === 'group' && isMember(ctx, client.id)) return { coverage: 'membership' };
   if (type && commerce.creditBalance(ctx, client.id, type) > 0 && pay !== 'card_on_file') {
-    ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'booking', ?, ?)`, newId('cr'), client.id, type, `${session.name} ${session.starts_at.slice(0, 10)}`, ctx.now());
+    ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'booking', ?, ?)`, newId('cr'), client.id, type, `${session.name} ${localDate(session.starts_at, tz(ctx))}`, ctx.now());
     return { coverage: 'credit', credit_type: type };
   }
   if (pay === 'card_on_file' && session.drop_in_cents) {
-    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${session.starts_at.slice(0, 10)}`, amount_cents: session.drop_in_cents } }, actor);
+    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))}`, amount_cents: session.drop_in_cents } }, actor);
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
     return { coverage: 'paid', sale_id: sale.id };
   }
@@ -275,6 +275,11 @@ export async function cancelBooking(ctx, id, { isCoach = false, waive = false } 
   const late = b.status === 'booked' && Date.parse(b.starts_at) - Date.now() < hours * 3600000 && !(isCoach && waive);
   if (!isCoach && b.starts_at <= ctx.now()) throw conflict('This session has already started. Message your coach.');
   await releaseBooking(ctx, b, late ? 'late_canceled' : 'canceled');
+  // A private or evaluation booked from open hours exists only for this athlete: take it off the schedule so the time opens again.
+  if (['private', 'evaluation'].includes(b.kind) && !ctx.db.get('SELECT series_id FROM class_sessions WHERE id = ?', b.session_id).series_id
+    && !ctx.db.get(`SELECT 1 FROM bookings WHERE session_id = ? AND status IN ('booked','attended','waitlisted')`, b.session_id)) {
+    ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ? AND status = 'scheduled'`, b.session_id);
+  }
   emit(ctx, 'booking.canceled', { booking_id: id, session_id: b.session_id, session_name: b.session_name, client_id: b.client_id, client_name: b.client_name, late });
   if (b.status === 'booked') await promoteWaitlist(ctx, b.session_id);
   return { ...bookingDetail(ctx, id), late, message: late ? `Canceled less than ${hours} hours before the session, so the session is still used.` : 'Canceled.' };
@@ -406,13 +411,18 @@ export function removeAvailability(ctx, id) {
   ctx.db.run('DELETE FROM availability WHERE id = ?', id);
   return { id, deleted: true };
 }
-// Open slots are your availability minus anything already on your schedule (you can't be in two places).
+// Open slots are your availability minus what is already on the schedule at the same place and time. A one-off private or
+// evaluation whose bookings were all canceled doesn't take the time. One with no bookings yet does: that is a slot being
+// booked right now (the booking is saved after the card is charged) or one a coach put on the schedule.
+// (Which coach runs what comes later; until then the place decides.)
 export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
   const blocks = ctx.db.all('SELECT a.*, l.name AS location_name FROM availability a JOIN locations l ON l.id = a.location_id WHERE a.kind = ?', kind);
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
-  const busy = ctx.db.all(`SELECT starts_at, ends_at FROM class_sessions WHERE status = 'scheduled' AND ends_at > ? AND starts_at < ?`, ctx.now(), end);
+  const busy = ctx.db.all(`SELECT s.location_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
+    AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)
+      OR EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended','waitlisted')))`, ctx.now(), end);
   const minStart = new Date(Date.now() + 2 * 3600000).toISOString();            // at least 2 hours' notice
   const out = [];
   for (let d = today, i = 0; i <= days; d = addDaysToDate(d, 1), i++) {
@@ -420,7 +430,7 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
       const blockEnd = zonedToUtc(d, a.end_time, zone);
       for (let t = zonedToUtc(d, a.start_time, zone); Date.parse(t) + a.slot_minutes * 60000 <= Date.parse(blockEnd); t = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString()) {
         const tEnd = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString();
-        if (t < minStart || busy.some((b) => b.starts_at < tEnd && b.ends_at > t)) continue;
+        if (t < minStart || busy.some((b) => b.location_id === a.location_id && b.starts_at < tEnd && b.ends_at > t)) continue;
         out.push({ kind, starts_at: t, ends_at: tEnd, location_id: a.location_id, location_name: a.location_name, price_cents: a.price_cents, availability_id: a.id });
       }
     }

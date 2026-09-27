@@ -62,7 +62,7 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | --- | --- |
 | `PUBLIC_URL` | Your https address. Required. |
 | `DP_TEST_MODE` | `false` in production. |
-| `TRUST_PROXY` | `true` (set in the Dockerfile) so HTTPS behind the host's proxy is recognized. |
+| `TRUST_PROXY` | `true` (set in the Dockerfile) so HTTPS and visitors' addresses behind the host's proxy are recognized. `true` means one proxy (Render). If another proxy sits in front (for example Cloudflare with the orange cloud on), set the number of proxies instead, like `2`. |
 | `DB_FILE`, `BACKUP_DIR` | `/data/diamond.db`, `/data/backups` (set in the Dockerfile). |
 | `BACKUP_KEEP` | How many daily backups to keep (default 30). |
 | `BUSINESS_TZ` | Your time zone, e.g. `America/Chicago`. |

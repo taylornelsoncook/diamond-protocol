@@ -92,8 +92,8 @@ const EVENT_TEXT = {
   'invoice.payment_failed': (d) => `Payment of ${money(d.amount_cents)} failed for ${d.client_name}${d.final ? '. Membership canceled.' : ''}`,
   'program.assigned': (d) => `${d.client_name} started ${d.program_name}`,
   'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises)`,
-  'sale.completed': (d) => `${d.client_name} paid ${money(d.amount_cents)} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
-  'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment of ${money(d.amount_cents)} from ${d.client_name} didn't go through`,
+  'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
+  'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment${d.amount_cents == null ? '' : ` of ${money(d.amount_cents)}`} from ${d.client_name} didn't go through`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
   'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
@@ -158,13 +158,13 @@ async function viewToday(main) {
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is running low` : `${a.count} items are running low`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name}: ${x.on_hand <= 0 ? 'out' : `${x.on_hand} left`}`).join(' · '))),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/sell/inventory' }, 'Inventory'));
     if (a.kind === 'results_waiting') return h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until you link them.`)),
-      h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until ${a.can_link === false ? 'a coach links' : 'you link'} them.`)),
+      a.can_link === false ? null : h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
     if (a.kind === 'trial_ending') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `Free trial ends ${date(a.trial_ends_at)}. First charge ${money(a.amount_cents)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.client_id}` }, 'View client'));
     if (a.kind === 'sale_pending') return h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, `${money(a.amount_cents)} ${METHOD_LABEL[a.method]} payment at ${a.location_name} is still waiting.`)),
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, `${a.amount_cents == null ? '' : `${money(a.amount_cents)} `}${METHOD_LABEL[a.method]} payment at ${a.location_name} is still waiting.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/sell' }, 'Review'));
     return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `No workout logged since ${date(a.last_workout_at)}.`)),
@@ -367,7 +367,7 @@ async function viewClients(main) {
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
-  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), get(`/v1/athlete-links?client_id=${id}`)]);
+  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
   const [en, testLib, owed, products, badgeLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges')]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
@@ -381,7 +381,7 @@ async function viewClient(main, id) {
     sub ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Status'), h('dd', null, badge(sub.status))),
       h('div', null, h('dt', null, 'Plan'), h('dd', null, sub.plan_name)),
-      h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents))),
+      sub.price_cents == null ? null : h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents))),
       h('div', null, h('dt', null, sub.status === 'trialing' ? 'Trial ends' : 'Next charge'), h('dd', null, ['canceled', 'paused'].includes(sub.status) ? '—' : date(sub.current_period_end)))) : null,
     sub && sub.status !== 'canceled' ? h('div', { class: 'stack' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Change plan', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/plan`, { plan_id: planSel.value }); toast('Plan changed. New price applies from the next charge.'); render(); }), 'secondary')),
@@ -391,7 +391,7 @@ async function viewClient(main, id) {
       : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }))));
 
   const payments = panel('Payments', {}, inv.data.length ? inv.data.map((i) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow stack-tight' }, h('span', null, `${money(i.amount_cents)} · ${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
+    h('div', { class: 'grow stack-tight' }, h('span', null, `${i.amount_cents == null ? '' : `${money(i.amount_cents)} · `}${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
     badge(i.status),
     i.status === 'failed' ? btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Charge retried. Payment succeeded.') : toast('Charge declined again.', 'warn'); render(); }), 'outline') : null))
     : h('p', { class: 'muted' }, sub?.status === 'trialing' ? `No charges yet. The first charge happens when the trial ends on ${date(sub.trial_ends_at)}.` : 'No invoices yet.'));
@@ -578,7 +578,7 @@ function payLinksPanel(clientId, first, owed, products, render) {
 // Daily money checks: what the morning check found, newest day first.
 function moneyChecksPanel(checks, render) {
   const tone = { ok: ['All clear', 'good'], problems: ['To look at', 'warn'], error: ['Couldn\'t reach Stripe', 'warn'] };
-  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: new Date(Date.now() - 86400000).toISOString().slice(0, 10), style: 'width:170px' });
+  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: bizDate(-1), style: 'width:170px' });
   const run = (day) => (e) => busy(e.currentTarget, async () => {
     const c = await post('/v1/money-checks/run', { date: day });
     toast(c.status === 'ok' ? `Nothing unusual on ${ymd(c.date)}.` : c.status === 'error' ? c.error : `${c.problems} ${c.problems === 1 ? 'thing' : 'things'} to look at on ${ymd(c.date)}.`, c.status === 'ok' ? 'good' : 'warn'); render();
@@ -625,7 +625,7 @@ async function viewBilling(main) {
       btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
   filter.addEventListener('change', draw); draw();
 
-  const asOf = input({ type: 'date', value: new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10) });
+  const asOf = input({ type: 'date', value: bizDate(8) });
   const testPanel = state.testMode ? panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
     h('div', { class: 'row wrap' }, h('div', { style: 'width:200px' }, field('Run as of', asOf)),
       h('div', { style: 'align-self:flex-end' }, btn('Run billing', (e) => busy(e.currentTarget, async () => {
@@ -1139,6 +1139,8 @@ async function viewSetup(main) {
 const KIND_LABEL = { group: 'Group', camp: 'Camp', clinic: 'Clinic', team: 'Team', evaluation: 'Evaluation', private: 'Private' };
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 let tzName;
+// Today's date in the business's time zone (the browser's own zone until the settings have loaded), not UTC.
+const bizDate = (days = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: tzName, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + days * 86400000));
 const tzFmt = (iso, opts) => new Intl.DateTimeFormat('en-US', { timeZone: tzName, ...opts }).format(new Date(iso));
 const dayOf = (iso) => tzFmt(iso, { weekday: 'long', month: 'short', day: 'numeric' });
 const timeOf = (iso) => tzFmt(iso, { hour: 'numeric', minute: '2-digit' });
@@ -1163,7 +1165,7 @@ async function viewSchedule(main) {
   const f = { name: input(), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
     time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }), ageMin: input({ type: 'number', placeholder: 'Any' }), ageMax: input({ type: 'number', placeholder: 'Any' }),
     dropIn: input({ type: 'number', step: '0.01', placeholder: 'Not sold singly' }), reg: input({ type: 'number', step: '0.01', placeholder: 'Camps and clinics' }),
-    start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }) };
+    start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
@@ -1438,7 +1440,7 @@ async function viewNewTeam(main) {
   const orgs = await get('/v1/organizations');
   const orgSel = select([['', 'A new school or club…'], ...orgs.data.map((o) => [o.id, o.name])], { value: '' });
   const o = { name: input(), kind: select([['school', 'School'], ['club', 'Club'], ['other', 'Other']]), contact: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), address: textarea() };
-  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }), end: input({ type: 'date' }),
+  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
     terms: select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']]), po: input() };
   const orgBox = h('div', { class: 'stack' },
     h('div', { class: 'form-grid' }, field('School or club name', o.name), field('Type', o.kind)),
@@ -1496,12 +1498,12 @@ async function viewTeam(main, id) {
   const rosterPanel = panel(`Roster · ${c.roster.length}`, { subtitle: c.sessions_held ? `Attendance across ${c.sessions_held} ${c.sessions_held === 1 ? 'session' : 'sessions'} so far` : 'Check athletes in from each team session.' },
     c.roster.length ? c.roster.map((r) => h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, [r.athlete_id, r.position, r.grad_year ? `Class of ${r.grad_year}` : null].filter(Boolean).join(' · '))),
-      c.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${c.sessions_held} · ${Math.round((r.sessions_attended / c.sessions_held) * 100)}%`) : null,
+      r.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${r.sessions_held} · ${Math.round((r.sessions_attended / r.sessions_held) * 100)}%`) : null,
       btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/team-contracts/${id}/roster/${r.id}`); render(); }), 'ghost'))) : h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below.'),
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/team-contracts/${id}/roster`, { names: names.value }); toast(`Roster now has ${r.data.length} athletes.`); render(); }); } },
       names, h('div', null, btn('Add to roster', null, 'secondary', { type: 'submit' }))));
 
-  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }) };
+  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: bizDate() }) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const schedPanel = panel('Team sessions', { subtitle: c.series.filter((x) => x.active).map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${x.start_time}`).join(' · ') || 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
     ended || !locs.data.length ? null : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
@@ -1544,7 +1546,8 @@ const PRESETS = [
 ];
 
 async function viewTesting(main) {
-  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), get('/v1/integrations'), get('/v1/queue')]);
+  const desk = state.user?.role === 'front_desk';          // front desk can't open devices or the results queue
+  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations'), desk ? { n: 0 } : get('/v1/queue')]);
   const connected = integrations.data.filter((i) => i.connected);
   fill(main,
     waiting.n ? h('div', { class: 'test-banner row', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waiting.n} ${waiting.n === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
@@ -1558,7 +1561,7 @@ async function viewTesting(main) {
 
 async function viewNewTesting(main) {
   const [lib, clientsList, contracts] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts')]);
-  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: new Date().toISOString().slice(0, 10) });
+  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: bizDate() });
   const team = select([['', 'Individual athletes'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
   const picked = new Set();
   const testBoxes = new Map();
@@ -2008,7 +2011,7 @@ async function viewUpload(main) {
   const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px' });
   const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])]);
   const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const upDate = input({ type: 'date', value: new Date().toISOString().slice(0, 10), max: new Date().toISOString().slice(0, 10) });
+  const upDate = input({ type: 'date', value: bizDate(), max: bizDate() });
   async function doPreview() {
     const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDate.value || undefined };
     if (file.files[0]) {

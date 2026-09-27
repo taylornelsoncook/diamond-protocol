@@ -328,3 +328,21 @@ test('review fixes: a resent link says so, and archived clients do not count as 
   db.run('UPDATE athletes SET archived=1 WHERE id=?', a);
   assert.deepEqual(await count(), [0, 0]);
 });
+
+test('workout activity carries the sets logged and how hard it felt', async () => {
+  const c = await coach();
+  const pid = (await c.post('/api/programs', { name: 'Test effort', weeks: 1 })).data.id;
+  const day = (await c.post(`/api/programs/${pid}/days`, { week: 1, title: 'Only' })).data.id;
+  await c.post(`/api/program-days/${day}/items`, { exercise_id: exId('Goblet squat'), sets: '2', reps: '8' });
+  const a = db.insert('athletes', { code: 'TSTEFF2026', first_name: 'Effie', last_name: 'Test' });
+  await c.post(`/api/programs/${pid}/assign`, { athlete_id: a });
+  const token = db.get('SELECT workout_token FROM athletes WHERE id=?', a).workout_token;
+  const w = client();
+  const s = (await w.get(`/api/w/${token}`)).data;
+  const item = s.current.items[0];
+  for (const set_no of [1, 2]) assert.equal((await w.post(`/api/w/${token}/set`, { day_id: s.current.day_id, item_id: item.id, set_no, weight: 30, reps: 8, done: true })).status, 200);
+  assert.equal((await w.post(`/api/w/${token}/finish`, { day_id: s.current.day_id, rpe: 7 })).status, 200);
+  const row = (await c.get(`/api/programs/activity?program_id=${pid}`)).data.recent[0];
+  assert.equal(row.sets, 2);
+  assert.equal(row.rpe, 7);
+});

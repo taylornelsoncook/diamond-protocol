@@ -10,7 +10,7 @@ Needs Node 22.5 or newer.
 npm install
 npm run demo     # resets the database, loads demo data, starts on http://localhost:3000
 npm start        # starts with your real data (first visit asks you to create the owner account)
-npm test         # 74 automated tests
+npm test         # 318 automated tests
 ```
 
 Demo sign-ins:
@@ -26,9 +26,9 @@ Other demo parents: kurt.jensen@example.com (two kids), linh.nguyen@example.com 
 
 ## What's inside
 
-- **Coach dashboard** (`/app`): Today, Schedule, session rosters, Hours & settings, Point of sale, Clients, Teams, Testing (stopwatch, uploads, device linking, Hawkin), Billing, Programs, API & integrations, Staff & security. Menus and data follow the role: owners see everything, coaches never see money, front desk runs the floor.
-- **Parent portal** (`/parent`): emailed sign-in code, Home, Book, Progress, Programs, Family. Installable to a phone's home screen.
-- **Athlete workout app** (`/w/<private link>`), **progress report** (`/report/<Athlete ID>`), **school invoice** (`/invoice/<link>`), **API reference** (`/docs/api`).
+- **Coach dashboard** (`/app`): Today, Schedule, session rosters, Hours & settings, Point of sale, Clients, Teams, Testing (stopwatch, uploads with undo, device linking, Hawkin, test library, record boards and presets), Billing, Programs, Education (lessons, courses, assigning, reminders and read tracking), API & integrations, Staff & security. Menus and data follow the role: owners see everything, coaches never see money, front desk runs the floor.
+- **Parent portal** (`/parent`): emailed sign-in code, Home (with a calendar feed), Book (classes, camps, privates and evaluations with a note for the coach), Progress, Programs (membership changes by request), Family (card, payments and receipts). Installable to a phone's home screen.
+- **Athlete app** (`/w/<private link>`): Workout (set logging, rest timer, offline saving, effort), Accountability, Performance and Education tabs. **Progress report** (`/report/<Athlete ID>`, with share links), **school invoice** (`/invoice/<link>`), **API reference** (`/docs/api`).
 - **Background jobs**: sessions created 8 weeks ahead, membership renewals, declined-charge retries every 3 days, monthly school invoices, overdue reminders, Hawkin sync every 15 minutes, daily backups.
 
 The product spec is `docs/screen-guide.md`, the reference designs are in `docs/screenshots/`, the brand rules in `docs/brand.md`, and how the code is organized in `docs/ARCHITECTURE.md`.

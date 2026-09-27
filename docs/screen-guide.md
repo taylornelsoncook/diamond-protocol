@@ -137,7 +137,7 @@ _Where: Schedule, then a session_
 Run a session: check athletes in, see medical flags, missing waivers and parent phone numbers, and collect from anyone unpaid.
 
 - Tap Check in as each athlete arrives. Tap again to undo. The page stays where you are, so you can work down a long roster on a phone.
-- Each athlete shows how they're covered: Member, Credit, Paid, Registered or Unpaid. Rows flag allergies, injuries, medical notes, No waiver and a birthday today. After a session ends, anyone not checked in shows No-show.
+- Each athlete shows how they're covered: Member, Credit, Paid, Registered or Unpaid. Rows flag allergies, injuries, medical notes, No waiver and a birthday today, and show the note a family left when booking a private or evaluation. After a session ends, anyone not checked in shows No-show.
 - For Unpaid, tap Collect and choose card on file, cash or Tap to Pay. The booking is marked paid when the payment goes through; a declined card says so and the booking stays unpaid.
 - Add a walk-in: type a name, Athlete ID or email and tap the match, or press Enter when there's only one. A full session puts them on the waitlist, which moves up automatically when someone cancels. Move up books someone from the waitlist now, even over the spots (it asks first), and emails the family.
 - Email families sends a message to everyone booked (and the waitlist if you tick it), signed with your name: "Starting 10 minutes late", "Bring your cleats". Team sessions go to the whole team.
@@ -457,7 +457,7 @@ Training programs, how athletes are doing on them, and your exercise library.
 - At the top: workouts logged in the last 7 days, clients on a program, who needs a check-in and who has finished their program.
 - New program starts blank or as a copy of an existing program (it copies every workout in the weeks you keep). Search programs by name and filter by level. Each card shows weeks, level, days a week, clients and workouts logged in the last 7 days.
 - Need a check-in: clients on a program with no workout logged in 7 days or more, with how long it's been and their next workout. Finished their program: clients who logged every workout and need what comes next.
-- Recent workouts: what athletes logged in the workout app in the last 14 days, how many exercises they did, and their notes to the coach. Tap a name for the client, or the program to open that week.
+- Recent workouts: what athletes logged in the workout app in the last 14 days, how many exercises they did, the sets they logged, how hard it felt (effort 1 to 10) and their notes to the coach. Tap a name for the client, or the program to open that week.
 - Exercise library: search by name or cue, and filter by category (speed, power, lower body, upper body, core, arm care, mobility, conditioning), missing a video or not in a program. Each exercise shows its category, how many workouts use it and its video. Add or edit an exercise with a category, coaching cues and a demo video link (YouTube, Vimeo or a video file); the edit form lists the programs that use it. Exercises in use can't be deleted.
 
 > Note: Front desk can view programs and the library but not change them.

@@ -373,7 +373,7 @@ async function renderRoster(ctx) {
 
     const bookingRow = (b) => html`<div class="ro-row">
       ${checkBtn(b.id, b.checked_in_at)}
-      <div class="grow" style="flex:1;min-width:0">${who(b.athlete)}</div>
+      <div class="grow" style="flex:1;min-width:0">${who(b.athlete)}${b.note ? html`<div class="small muted">Note from the family: ${b.note}</div>` : ''}</div>
       <div class="ro-right">${past && !b.checked_in_at && !e.cancelled ? badge('off', 'No-show') : ''}${badge(b.coverage || 'open')}
         ${b.coverage === 'unpaid' && !e.cancelled ? html`<button class="btn btn-outline btn-sm" data-collect="${b.id}">Collect</button>` : ''}
         ${!e.cancelled ? html`<button class="btn btn-ghost btn-sm" data-remove="${b.id}" aria-label="Remove ${b.athlete.first_name} ${b.athlete.last_name}">Remove</button>` : ''}</div>

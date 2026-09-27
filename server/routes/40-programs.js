@@ -195,7 +195,7 @@ function routes(api) {
   api.get('/programs/activity', VIEW, (req, res) => {
     const pid = isBlank(req.query.program_id) ? null : Number(req.query.program_id);
     const days = Math.min(Math.max(Number(req.query.days) || 14, 1), 60);
-    const recent = all(`SELECT l.id, l.finished_at, l.done, l.note, d.week, d.day, d.title, p.id AS program_id, p.name AS program,
+    const recent = all(`SELECT l.id, l.finished_at, l.done, l.note, l.rpe, (SELECT COUNT(*) FROM workout_sets s WHERE s.log_id=l.id) AS sets, d.week, d.day, d.title, p.id AS program_id, p.name AS program,
         a.id AS athlete_id, a.first_name, a.last_name, a.code, (SELECT COUNT(*) FROM program_items i WHERE i.day_id=d.id) AS total
       FROM workout_logs l JOIN program_days d ON d.id=l.day_id JOIN programs p ON p.id=d.program_id JOIN athletes a ON a.id=l.athlete_id
       WHERE l.finished_at IS NOT NULL AND l.finished_at >= datetime('now', ?) AND a.archived=0 ${pid ? 'AND p.id=?' : ''}

@@ -390,3 +390,12 @@ test('Review fixes: editing one session logs only what changed; time off can be 
   const back = (await o.get(`/api/time-off?from=${addDays(past, -3)}&to=${addDays(past, 10)}`)).data;
   assert.ok(back.some((t) => t.note === 'Old holiday'), 'looking back shows it');
 });
+
+test('the roster shows the note a family left when booking a private', async () => {
+  const b = get("SELECT b.id, b.event_id FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.type IN ('private','evaluation') AND b.status='booked' AND e.cancelled=0 ORDER BY b.id LIMIT 1");
+  assert.ok(b, 'demo data has a booked private or evaluation');
+  run('UPDATE bookings SET note=? WHERE id=?', 'Working on first-step quickness.', b.id);
+  const c = await coach();
+  const r = (await c.get(`/api/events/${b.event_id}`)).data;
+  assert.equal(r.booked.find((x) => x.id === b.id).note, 'Working on first-step quickness.');
+});

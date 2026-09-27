@@ -36,7 +36,7 @@ function roster(e, role) {
   const on = e.starts_at.slice(0, 10);
   const rows = all("SELECT * FROM bookings WHERE event_id=? AND status IN ('booked','waitlist') ORDER BY id", e.id).map((b) => {
     const a = get('SELECT * FROM athletes WHERE id=?', b.athlete_id);
-    return { id: b.id, status: b.status, coverage: b.coverage, paid_cents: b.paid_cents, checked_in_at: b.checked_in_at, source: b.source, athlete: athleteCard(a, on) };
+    return { id: b.id, status: b.status, coverage: b.coverage, paid_cents: b.paid_cents, checked_in_at: b.checked_in_at, source: b.source, note: b.note || null, athlete: athleteCard(a, on) };
   });
   const booked = rows.filter((r) => r.status === 'booked').sort((x, y) => fullName(x.athlete).localeCompare(fullName(y.athlete)));
   const out = { booked, waitlist: rows.filter((r) => r.status === 'waitlist') };

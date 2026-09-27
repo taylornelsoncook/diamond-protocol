@@ -253,7 +253,7 @@ function activityRows(recent, { showProgram = true } = {}) {
       <div class="spread" style="gap:var(--space-2)"><a href="/app/clients/${r.athlete_id}" class="dpo-link">${fullName(r)}</a>
         <span class="dpo-meta">${relTime(r.finished_at)}</span></div>
       <div class="dpo-meta">${showProgram ? html`<a href="/app/programs/${r.program_id}?week=${r.week}" style="color:inherit">${r.program}</a> · ` : ''}Week ${r.week}, day ${r.day}: ${r.title || `Day ${r.day}`}</div>
-      <div class="dpo-meta ${r.done < r.total ? 'warn' : 'good'}">${r.done} of ${plural(r.total, 'exercise')} done</div>
+      <div class="dpo-meta ${r.done < r.total ? 'warn' : 'good'}">${r.done} of ${plural(r.total, 'exercise')} done${r.sets ? ` · ${plural(r.sets, 'set')} logged` : ''}${r.rpe ? ` · effort ${r.rpe} of 10` : ''}</div>
       ${r.note ? html`<p class="dpo-note">${r.note}</p>` : ''}
     </div></div>`);
 }

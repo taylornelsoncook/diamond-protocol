@@ -137,3 +137,12 @@ test('a parent reading coach messages doesn\'t mark them read for the athlete', 
   await req('POST', '/app/api/messages/read', null, { 'x-client-token': token });
   assert.equal((await athlete()).unread, 0);
 });
+
+test('front desk isn\'t offered a link to the results queue it can\'t open', async () => {
+  app.ctx.db.run(`INSERT INTO results_queue (id, provider, source, identity, athlete_ref, item, status, received_at) VALUES (?, 'generic', 'csv:test', 'Mystery Kid', '{"name":"Mystery Kid"}', '{}', 'pending', ?)`, newId('q'), new Date().toISOString());
+  const waiting = async (who) => (await who('GET', '/v1/dashboard')).body.attention.find((a) => a.kind === 'results_waiting');
+  assert.equal((await waiting(desk)).can_link, false);
+  assert.equal((await desk('GET', '/v1/queue')).status, 403);
+  assert.equal((await waiting(coach)).can_link, true);
+  assert.equal((await waiting(owner)).can_link, true);
+});

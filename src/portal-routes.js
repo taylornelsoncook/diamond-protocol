@@ -42,6 +42,7 @@ export const portalRoutes = [
   ['POST', '/portal/api/login', 'public', 'Email a 6-digit sign-in code.', (ctx, r) => families.requestCode(ctx, r.body)],
   ['GET', '/portal/api/public/info', 'public', 'Business name, whether sign-up is open, and whether terms and privacy are published.', (ctx) => signup.signupInfo(ctx)],
   ['POST', '/portal/api/public/inquiry', 'public', 'Ask about training: parent_name, email, phone, athlete_name, athlete_age, sport, message, texts_ok. We reply by email with next steps.', (ctx, r) => leads.submitInquiry(ctx, r.body)],
+  ['GET', '/portal/api/public/certificates/:token', 'public', 'A course certificate for its shareable page: athlete name, course, lessons and date. Nothing else.', (ctx, r) => engage.publicCertificate(ctx, r.params.token)],
   ['GET', '/portal/api/public/schedule', 'public', 'The Book now page: classes, clinics and camp days in the next 2 weeks with open spots, and the next evaluation times. No names.', (ctx) => booknow.publicSchedule(ctx)],
   ['GET', '/portal/api/public/legal', 'public', 'The current terms of service and privacy policy.', (ctx) => legal.legalDocs(ctx)],
   ['POST', '/portal/api/signup', 'public', 'New family: parent {name, email, phone}, athletes [{name, birth_date, sex, sport, school, medical_notes, emergency_name, emergency_phone}], accept_terms=true. Emails a code.', (ctx, r) => signup.startSignup(ctx, r.body, r.ip)],
@@ -122,6 +123,7 @@ export const portalRoutes = [
   ['POST', '/portal/api/athletes/:id/messages', 'guardian', 'Write to your athlete\'s coach: body.', (ctx, r) => engage.replyMessage(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { from: 'parent', name: r.guardian.name, guardianId: r.guardian.id }), 201],
   ['POST', '/portal/api/athletes/:id/messages/read', 'guardian', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, athleteOf(ctx, r, r.params.id).id)],
   ['GET', '/portal/api/athletes/:id/lessons/:lesson', 'guardian', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson)],
+  ['POST', '/portal/api/athletes/:id/lessons/:lesson/quiz', 'guardian', 'Take the lesson quiz with your athlete: answers (choice numbers from 0). 80% or more finishes the lesson.', (ctx, r) => engage.takeQuiz(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body)],
   ['POST', '/portal/api/athletes/:id/lessons/:lesson/complete', 'guardian', 'Mark a lesson done for your athlete (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body.done !== false)],
   ['GET', '/portal/api/store', 'guardian', 'Packs and memberships a parent can buy.', (ctx) => ({
     products: commerce.listProducts(ctx).filter((p) => ['session', 'pack'].includes(p.kind)),

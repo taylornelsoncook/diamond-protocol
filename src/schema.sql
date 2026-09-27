@@ -883,13 +883,34 @@ CREATE TABLE IF NOT EXISTS lessons (
   position INTEGER NOT NULL DEFAULT 0,
   published INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  quiz TEXT                                     -- JSON [{q, choices, answer}]; pass it to finish the lesson (version 24)
 );
 CREATE TABLE IF NOT EXISTS lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   completed_at TEXT NOT NULL,
   PRIMARY KEY (lesson_id, client_id)
+);
+-- Quiz tries (version 24). The latest passing try finishes the lesson.
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+  id TEXT PRIMARY KEY,
+  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  score INTEGER NOT NULL,
+  total INTEGER NOT NULL,
+  passed INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS quiz_attempts_client ON quiz_attempts(client_id, lesson_id);
+-- A certificate for finishing every lesson in a course (version 24). The token makes a shareable page at /certificate#<token>.
+CREATE TABLE IF NOT EXISTS course_certificates (
+  id TEXT PRIMARY KEY,
+  course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  issued_at TEXT NOT NULL,
+  UNIQUE (course_id, client_id)
 );
 -- A lesson or a course assigned to an athlete or a team roster, with an optional due date.
 CREATE TABLE IF NOT EXISTS lesson_assignments (

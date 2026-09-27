@@ -133,3 +133,10 @@
 .cl-badge{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-subtle)}
 .eg-badge--milestone{background:var(--surface);border-color:var(--line)}
 .eg-badge--milestone .eg-badge-icon{color:var(--amber)}
+/* Lesson quizzes. */
+.eg-quiz fieldset{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.eg-quiz legend{margin-bottom:6px;padding:0}
+.eg-q--wrong{border-left:3px solid var(--amber)!important;padding-left:10px!important}
+.eg-choice{display:flex;gap:10px;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer}
+.eg-choice input{width:20px;height:20px;accent-color:var(--green-bright)}
+.eg-choice:has(input:checked){border-color:var(--green-bright);background:var(--green-deep)}

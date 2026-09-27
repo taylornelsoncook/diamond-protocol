@@ -2,7 +2,7 @@
 // performance (test targets and opt-in rankings, on top of the testing results) and education
 // (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
 // team goals, messages and reading reach the roster athletes who are also clients.
-import { newId, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
+import { newId, token, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
@@ -457,7 +457,40 @@ export function badgesFor(ctx, clientId) {
 
 // ---------- Education ----------
 const doneSet = (ctx, clientId) => new Set(ctx.db.all('SELECT lesson_id FROM lesson_progress WHERE client_id = ?', clientId).map((r) => r.lesson_id));
-const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, course_id: l.course_id, done: done.has(l.id) });
+const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, done: done.has(l.id) });
+
+// ---------- Quizzes ----------
+// Coaches write a quiz as plain text: a question on one line, then its choices on the lines below, each starting with
+// "-", and the right one with "*". A blank line between questions. Athletes need 80% to finish the lesson.
+export const QUIZ_PASS_PCT = 80;
+export function parseQuiz(text) {
+  const blocks = String(text ?? '').replace(/\r/g, '').split(/\n\s*\n/).map((b) => b.split('\n').map((l) => l.trim()).filter(Boolean)).filter((b) => b.length);
+  if (!blocks.length) return null;
+  if (blocks.length > 10) throw badRequest('A quiz can have up to 10 questions.');
+  const problems = [];
+  const questions = blocks.map((lines, i) => {
+    const n = i + 1;
+    const [q, ...rest] = lines;
+    if (/^[-*]/.test(q)) problems.push(`Question ${n} starts with a choice. Put the question on the first line.`);
+    const choices = [], extra = [];
+    let answer = -1;
+    for (const l of rest) {
+      const m = l.match(/^([-*])\s*(.+)$/);
+      if (!m) { extra.push(l); continue; }
+      if (m[1] === '*') { if (answer >= 0) problems.push(`Question ${n} has more than one right answer. Mark only one with *.`); answer = choices.length; }
+      choices.push(m[2].slice(0, 200));
+    }
+    if (extra.length) problems.push(`Question ${n}: start each choice with - (or * for the right one): "${extra[0].slice(0, 40)}".`);
+    if (choices.length < 2 || choices.length > 6) problems.push(`Question ${n} needs 2 to 6 choices.`);
+    if (answer < 0) problems.push(`Question ${n} needs a right answer: start it with * instead of -.`);
+    return { q: q.replace(/^\d+[.)]\s*/, '').slice(0, 300), choices, answer };
+  });
+  if (problems.length) throw badRequest(problems.join(' '));
+  return questions;
+}
+export const quizText = (quiz) => (quiz ?? []).map((x) => [x.q, ...x.choices.map((c, i) => `${i === x.answer ? '*' : '-'} ${c}`)].join('\n')).join('\n\n');
+const quizOf = (l) => (l?.quiz ? JSON.parse(l.quiz) : null);
+const passedQuiz = (ctx, lessonId, clientId) => !!ctx.db.get('SELECT 1 FROM quiz_attempts WHERE lesson_id = ? AND client_id = ? AND passed = 1', lessonId, clientId);
 function assignmentRows(ctx, clientId) {
   const teams = teamsOf(ctx, clientId);
   return ctx.db.all(`SELECT * FROM lesson_assignments WHERE client_id = ? OR contract_id IN (${inList(teams)}) ORDER BY COALESCE(due_date, '9999-12-31'), created_at`, clientId, ...teams);
@@ -481,7 +514,7 @@ export function education(ctx, clientId) {
     if (!c) return null;
     return { id: x.id, type: 'course', course_id: c.id, title: c.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: c.complete, progress: `${c.done} of ${c.total}`, overdue: !c.complete && !!x.due_date && x.due_date < t };
   }).filter(Boolean);
-  return { assigned, courses, lessons: lessons.filter((l) => !l.course_id || !courses.some((c) => c.id === l.course_id)).map((l) => lessonItem(l, done)), completed: done.size };
+  return { assigned, courses, lessons: lessons.filter((l) => !l.course_id || !courses.some((c) => c.id === l.course_id)).map((l) => lessonItem(l, done)), completed: done.size, certificates: certificatesFor(ctx, clientId) };
 }
 export function lessonFor(ctx, clientId, lessonId) {
   clientRow(ctx, clientId);
@@ -490,15 +523,64 @@ export function lessonFor(ctx, clientId, lessonId) {
   const course = l.course_id ? ctx.db.get('SELECT id, title FROM courses WHERE id = ? AND published = 1', l.course_id) : null;
   const siblings = course ? ctx.db.all('SELECT id, title FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', course.id) : [];
   const i = siblings.findIndex((s) => s.id === l.id);
+  const quiz = quizOf(l), last = quiz && ctx.db.get('SELECT score, total, passed, created_at FROM quiz_attempts WHERE lesson_id = ? AND client_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1', l.id, clientId);
   return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: course ?? null,
+    quiz: quiz ? { questions: quiz.map((x) => ({ q: x.q, choices: x.choices })), pass_pct: QUIZ_PASS_PCT, passed: passedQuiz(ctx, l.id, clientId), last: last ? { ...last, passed: !!last.passed } : null } : null,
     done: !!ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId),
     next: i >= 0 ? siblings[i + 1] ?? null : null, position: i >= 0 ? { n: i + 1, of: siblings.length } : null };
 }
 export function completeLesson(ctx, clientId, lessonId, done = true) {
   const l = lessonFor(ctx, clientId, lessonId);
-  if (done) ctx.db.run('INSERT OR IGNORE INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', l.id, clientId, ctx.now());
-  else ctx.db.run('DELETE FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId);
+  if (done && l.quiz && !l.quiz.passed) throw conflict(`Pass the quiz at the end to finish this lesson (${QUIZ_PASS_PCT}% or more).`);
+  if (done) {
+    ctx.db.run('INSERT OR IGNORE INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', l.id, clientId, ctx.now());
+    if (l.course) issueCertificate(ctx, clientId, l.course.id);
+  } else ctx.db.run('DELETE FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId);
   return lessonFor(ctx, clientId, lessonId);
+}
+
+// Check the answers (the choice number for each question, from 0). Passing finishes the lesson. Tries are unlimited,
+// up to 20 a day, and the right answers are never sent: only which questions were wrong.
+export function takeQuiz(ctx, clientId, lessonId, body = {}) {
+  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ? AND published = 1', lessonId);
+  if (!l) throw notFound('Lesson');
+  const quiz = quizOf(l);
+  if (!quiz) throw conflict('This lesson has no quiz.');
+  const since = new Date(Date.parse(ctx.now()) - 86400000).toISOString();
+  if (ctx.db.get('SELECT COUNT(*) AS n FROM quiz_attempts WHERE lesson_id = ? AND client_id = ? AND created_at >= ?', l.id, clientId, since).n >= 20) throw new HttpError(429, 'too_many_tries', 'That\'s 20 tries today. Reread the lesson and try again tomorrow.');
+  const answers = Array.isArray(body.answers) ? body.answers : [];
+  if (answers.length !== quiz.length) throw badRequest(`Answer all ${quiz.length} questions.`);
+  const results = quiz.map((x, i) => ({ correct: Number(answers[i]) === x.answer }));
+  const score = results.filter((r) => r.correct).length;
+  const passed = score * 100 >= quiz.length * QUIZ_PASS_PCT;
+  ctx.db.run('INSERT INTO quiz_attempts (id, lesson_id, client_id, score, total, passed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', newId('qz'), l.id, clientId, score, quiz.length, passed ? 1 : 0, ctx.now());
+  const lesson = passed ? completeLesson(ctx, clientId, l.id, true) : lessonFor(ctx, clientId, l.id);
+  return { score, total: quiz.length, passed, results, lesson };
+}
+
+// ---------- Course certificates ----------
+// Finishing every published lesson in a course issues a certificate once, and emails the family its link.
+function issueCertificate(ctx, clientId, courseId) {
+  const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
+  const done = doneSet(ctx, clientId);
+  if (!ids.length || !ids.every((x) => done.has(x))) return null;
+  const tok = token(16);
+  if (!ctx.db.run('INSERT INTO course_certificates (id, course_id, client_id, token, issued_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(course_id, client_id) DO NOTHING', newId('cert'), courseId, clientId, tok, ctx.now()).changes) return null;
+  const c = clientRow(ctx, clientId), course = ctx.db.get('SELECT title FROM courses WHERE id = ?', courseId);
+  emit(ctx, 'course.completed', { client_id: c.id, client_name: c.name, course_id: courseId, course_title: course.title });
+  notifyAthlete(ctx, c, `${firstName(c)} finished ${course.title}`, `${firstName(c)} finished every lesson in "${course.title}". Here's the certificate to print or share: ${ctx.publicUrl ?? ''}/certificate#${tok}`);
+  return tok;
+}
+export function certificatesFor(ctx, clientId) {
+  return ctx.db.all('SELECT x.course_id, c.title, x.token, x.issued_at FROM course_certificates x JOIN courses c ON c.id = x.course_id WHERE x.client_id = ? ORDER BY x.issued_at DESC', clientId)
+    .map((x) => ({ course_id: x.course_id, title: x.title, issued_at: x.issued_at, url: `/certificate#${x.token}` }));
+}
+// The shareable certificate page: name, course and date only.
+export function publicCertificate(ctx, tok) {
+  const x = ctx.db.get(`SELECT x.issued_at, c.title, c.description, cl.name, (SELECT COUNT(*) FROM lessons l WHERE l.course_id = c.id AND l.published = 1) AS lessons
+    FROM course_certificates x JOIN courses c ON c.id = x.course_id JOIN clients cl ON cl.id = x.client_id WHERE x.token = ?`, String(tok ?? ''));
+  if (!x) throw notFound('Certificate');
+  return { name: x.name, course: x.title, description: x.description, lessons: x.lessons, issued_on: localDate(x.issued_at, zone(ctx)), business_name: getSetting(ctx, 'business_name') };
 }
 
 // Coach side: lessons and courses.
@@ -511,7 +593,8 @@ function lessonFields(ctx, body, cur = {}) {
     video_url: has('video_url') ? v.url(body.video_url, 'video_url', { optional: true }) : cur.video_url ?? null,
     minutes: has('minutes') ? v.int(body.minutes, 'minutes', { min: 1, max: 240, optional: true }) : cur.minutes ?? null,
     course_id: has('course_id') ? (blank(body.course_id) ? null : String(body.course_id)) : cur.course_id ?? null,
-    published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1
+    published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1,
+    quiz: has('quiz_text') ? (blank(body.quiz_text) ? null : JSON.stringify(parseQuiz(v.str(body.quiz_text, 'quiz_text', { max: 20000 })))) : cur.quiz ?? null
   };
   if (!out.title) throw badRequest('Give the lesson a title.');
   if (out.course_id && !ctx.db.get('SELECT id FROM courses WHERE id = ?', out.course_id)) throw notFound('Course');
@@ -520,22 +603,23 @@ function lessonFields(ctx, body, cur = {}) {
 export function getLesson(ctx, id) {
   const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', id);
   if (!l) throw notFound('Lesson');
-  return { ...l, published: !!l.published };
+  const quiz = quizOf(l);
+  return { ...l, published: !!l.published, quiz, quiz_text: quiz ? quizText(quiz) : '' };
 }
 export function createLesson(ctx, body = {}) {
   const f = lessonFields(ctx, body);
   const position = f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : 0;
   const id = newId('les');
-  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, ctx.now(), ctx.now());
+  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, quiz, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, ctx.now(), ctx.now());
   return getLesson(ctx, id);
 }
 export function updateLesson(ctx, id, body = {}) {
   const cur = getLesson(ctx, id);
-  const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0 });
+  const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0, quiz: cur.quiz ? JSON.stringify(cur.quiz) : null });
   const position = f.course_id !== cur.course_id && f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : cur.position;
-  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, updated_at = ? WHERE id = ?',
-    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, ctx.now(), id);
+  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, updated_at = ? WHERE id = ?',
+    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, ctx.now(), id);
   return getLesson(ctx, id);
 }
 export function deleteLesson(ctx, id) {
@@ -604,8 +688,9 @@ export function unassign(ctx, id) {
 // The Education screen: every course and lesson with completions, and each assignment with who has finished.
 export function educationReport(ctx) {
   const lessons = ctx.db.all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id = l.id) AS completions FROM lessons l ORDER BY l.position, l.created_at')
-    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
-  const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id) }));
+    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
+  const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
+    certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n }));
   const finishedCourse = (courseId, clientId) => {
     const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
     return ids.length > 0 && ids.every((lid) => ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', lid, clientId));

@@ -1,0 +1,20 @@
+/* Course certificate: dark on screen, black on white when printed. */
+body{background:var(--black)}
+.ct-page{padding:32px 16px;display:flex;flex-direction:column;align-items:center;gap:20px}
+.ct{width:100%;max-width:960px;aspect-ratio:11/8.5;box-sizing:border-box;padding:clamp(24px,5vw,64px);border:2px solid var(--green-mid);outline:1px solid var(--line);outline-offset:8px;border-radius:4px;background:var(--black);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:clamp(4px,1vw,12px)}
+.ct-logo{height:clamp(64px,11vw,120px);border-radius:6px}
+.ct-kicker{margin:clamp(8px,2vw,20px) 0 0;font:700 clamp(14px,2vw,22px)/1 var(--font-display);letter-spacing:.2em;text-transform:uppercase;color:var(--green-bright)}
+.ct-small{margin:0;color:var(--steel-muted);font-size:clamp(13px,1.6vw,18px)}
+.ct-name{margin:0;font:700 clamp(32px,6vw,72px)/1.05 var(--font-display);color:var(--steel)}
+.ct-course{margin:0;font:600 clamp(20px,3.4vw,40px)/1.15 var(--font-display);color:var(--steel)}
+.ct-desc{margin:0;max-width:640px;color:var(--steel-muted);font-size:clamp(12px,1.4vw,16px)}
+.ct-foot{margin-top:clamp(12px,3vw,40px);width:100%;max-width:640px;display:flex;justify-content:space-between;gap:16px;padding-top:12px;border-top:1px solid var(--line);color:var(--steel-muted);font-size:clamp(12px,1.4vw,16px)}
+.ct-actions{display:flex;gap:12px}
+@media print{
+  @page{size:letter landscape;margin:0.4in}
+  body{background:#fff}
+  .ct-page{padding:0}
+  .ct{max-width:none;height:7.6in;aspect-ratio:auto;background:#fff;border-color:#2F6B34;outline-color:#999}
+  .ct-kicker{color:#2F6B34}.ct-name,.ct-course{color:#000}.ct-small,.ct-desc,.ct-foot{color:#333}.ct-foot{border-color:#999}
+  .ct-actions{display:none}
+}

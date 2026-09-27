@@ -348,7 +348,7 @@ export const routes = [
   ['GET', '/v1/education', 'any', 'Education', 'Every course and lesson with completions, and each assignment with who has finished.', (ctx) => engage.educationReport(ctx)],
   ['GET', '/v1/lessons/:id', 'any', 'Education', 'One lesson with its full text.', (ctx, r) => engage.getLesson(ctx, r.params.id)],
   ['POST', '/v1/lessons', 'any', 'Education', 'Post a lesson: title, summary, body (plain text; blank lines start paragraphs), video_url (https), minutes, course_id, published.', (ctx, r) => engage.createLesson(ctx, r.body), 201],
-  ['PATCH', '/v1/lessons/:id', 'any', 'Education', 'Edit a lesson. published=false hides it from athletes.', (ctx, r) => engage.updateLesson(ctx, r.params.id, r.body)],
+  ['PATCH', '/v1/lessons/:id', 'any', 'Education', 'Edit a lesson. published=false hides it from athletes. quiz_text adds a quiz: a question per line followed by choices starting with - (the right one with *), a blank line between questions; empty removes it.', (ctx, r) => engage.updateLesson(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/lessons/:id', 'any', 'Education', 'Delete a lesson and its completions.', (ctx, r) => engage.deleteLesson(ctx, r.params.id)],
   ['POST', '/v1/courses', 'any', 'Education', 'Create a course: title, description, published.', (ctx, r) => engage.createCourse(ctx, r.body), 201],
   ['PATCH', '/v1/courses/:id', 'any', 'Education', 'Edit a course. published=false hides it from athletes.', (ctx, r) => engage.updateCourse(ctx, r.params.id, r.body)],
@@ -366,6 +366,7 @@ export const routes = [
   ['POST', '/app/api/messages/read', 'client', 'Client app', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, r.client.id)],
   ['POST', '/app/api/messages', 'client', 'Client app', 'Write back to your coach: body.', (ctx, r) => engage.replyMessage(ctx, r.client.id, r.body, { from: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/lessons/:id', 'client', 'Client app', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, r.client.id, r.params.id)],
+  ['POST', '/app/api/lessons/:id/quiz', 'client', 'Client app', 'Take the lesson quiz: answers (the choice number for each question, from 0). 80% or more finishes the lesson. Only says which questions were wrong.', (ctx, r) => engage.takeQuiz(ctx, r.client.id, r.params.id, r.body)],
   ['POST', '/app/api/lessons/:id/complete', 'client', 'Client app', 'Mark a lesson done (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, r.client.id, r.params.id, r.body.done !== false)],
   ...portalRoutes.map(([method, path, auth, summary, handler, status]) => [method, path, auth, 'Parent portal', summary, handler, status])
 ].map(([method, path, auth, tag, summary, handler, status = 200]) => ({

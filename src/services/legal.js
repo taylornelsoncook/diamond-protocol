@@ -64,6 +64,8 @@ export function exportFamily(ctx, familyId) {
       workouts: per(`SELECT w.title AS workout, l.completed_at, l.notes FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
       daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
+      quizzes: per(`SELECT l.title AS lesson, q.score, q.total, q.passed, q.created_at FROM quiz_attempts q JOIN lessons l ON l.id = q.lesson_id WHERE q.client_id = ? ORDER BY q.created_at`, k.id),
+      certificates: per(`SELECT c.title AS course, x.issued_at FROM course_certificates x JOIN courses c ON c.id = x.course_id WHERE x.client_id = ? ORDER BY x.issued_at`, k.id),
       skill_badges: per(`SELECT b.name AS badge, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id WHERE a.client_id = ? ORDER BY a.awarded_at`, k.id),
       messages: per(`SELECT CASE from_kind WHEN 'coach' THEN staff_name ELSE author_name END AS written_by, from_kind AS sender, body, created_at FROM coach_messages WHERE client_id = ? ORDER BY created_at`, k.id)
     }))
@@ -100,7 +102,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`DELETE FROM perf_results WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM athlete_links WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
-      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,

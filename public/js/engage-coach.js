@@ -224,11 +224,12 @@ async function lessonDialog(lesson, courses, preset = {}) {
   const l = lesson ? await get(`/v1/lessons/${lesson.id}`) : { published: true, course_id: preset.course_id ?? null };
   const f = { title: input({ value: l.title ?? '', maxlength: '160' }), summary: input({ value: l.summary ?? '', maxlength: '300' }), body: textarea(l.body ?? '', { style: 'min-height:200px' }),
     video_url: input({ type: 'url', value: l.video_url ?? '', placeholder: 'https://www.youtube.com/watch?v=…' }), minutes: input({ type: 'number', min: '1', max: '240', value: l.minutes ?? '' }),
-    course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, c.title])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }) };
+    course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, c.title])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }),
+    quiz: textarea(l.quiz_text ?? '', { style: 'min-height:140px;font-family:var(--font-mono);font-size:14px', placeholder: 'What should your knees do when you land?\n- Cave inward\n* Track over your toes\n- Lock straight' }) };
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
     try {
-      const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked };
+      const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked, quiz_text: f.quiz.value };
       if (lesson) await patch(`/v1/lessons/${lesson.id}`, body); else await post('/v1/lessons', body);
       d.close(); toast(lesson ? 'Lesson saved.' : f.published.checked ? 'Lesson posted. Athletes can read it now.' : 'Draft saved. Athletes won\'t see it until you publish it.'); deps.render();
     } catch (x) { err.textContent = x.message; }
@@ -238,6 +239,7 @@ async function lessonDialog(lesson, courses, preset = {}) {
     field('Lesson text', f.body, 'Plain text. Leave a blank line between paragraphs.'),
     h('div', { class: 'form-grid' }, field('Video link (optional)', f.video_url, 'YouTube, Vimeo or a direct .mp4 link, starting with https://'), field('Minutes to read or watch', f.minutes)),
     field('Course', f.course_id),
+    field('Quiz (optional)', f.quiz, 'A question on one line, then its choices below, each starting with - and the right one with *. A blank line between questions. Up to 10. Athletes need 80% to finish the lesson.'),
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, f.published, h('span', null, 'Published: athletes and parents can see it')),
     err, h('div', { class: 'row' }, btn(lesson ? 'Save lesson' : 'Post lesson', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   f.title.focus();
@@ -274,7 +276,7 @@ export async function viewEducation(main) {
   const lessonRow = (l, i, list, course) => h('div', { class: 'edu-row' },
     course ? h('span', { class: 'edu-n' }, i + 1) : null,
     h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'strong' }, l.title, l.published ? null : h('span', { class: 'small muted', style: 'font-weight:400' }, ' · draft')),
-      h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, `${plural(l.completions, 'athlete')} finished`].filter(Boolean).join(' · '))),
+      h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null, `${plural(l.completions, 'athlete')} finished`].filter(Boolean).join(' · '))),
     h('div', { class: 'edu-acts' },
       course && manage ? [btn('↑', (e) => move(e, course, i, -1), 'ghost', { 'aria-label': `Move ${l.title} up`, disabled: i === 0 }), btn('↓', (e) => move(e, course, i, 1), 'ghost', { 'aria-label': `Move ${l.title} down`, disabled: i === list.length - 1 })] : null,
       btn('Preview', () => previewLesson(l.id), 'ghost'),
@@ -288,7 +290,7 @@ export async function viewEducation(main) {
   }
   const coursesPanel = panel('Courses', { subtitle: 'Lessons in order. Athletes see the next lesson when they finish one.', action: manage ? btn('New course', () => courseDialog(null), 'secondary') : null },
     edu.courses.length ? edu.courses.map((c) => h('div', { class: 'edu-course' },
-      h('div', { class: 'row wrap' }, h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'edu-course-title' }, c.title), h('span', { class: 'small muted' }, `${plural(c.lessons.length, 'lesson')}${c.published ? '' : ' · draft, hidden from athletes'}${c.description ? ` · ${c.description}` : ''}`)),
+      h('div', { class: 'row wrap' }, h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'edu-course-title' }, c.title), h('span', { class: 'small muted' }, `${plural(c.lessons.length, 'lesson')}${c.certificates ? ` · ${plural(c.certificates, 'certificate')} earned` : ''}${c.published ? '' : ' · draft, hidden from athletes'}${c.description ? ` · ${c.description}` : ''}`)),
         manage ? h('div', { class: 'edu-acts' }, btn('Add lesson', () => lessonDialog(null, edu.courses, { course_id: c.id }), 'ghost'), c.published && c.lessons.some((l) => l.published) ? btn('Assign', () => assignDialog({ course_id: c.id }), 'ghost') : null, btn('Edit', () => courseDialog(c), 'ghost'),
           btn('Delete', (e) => { if (confirm(`Delete the course "${c.title}"? Its lessons stay in the library.`)) busy(e.currentTarget, async () => { await del(`/v1/courses/${c.id}`); toast('Course deleted. Its lessons are in the library.'); deps.render(); }); }, 'ghost')) : null),
       c.lessons.length ? h('div', null, c.lessons.map((l, i, list) => lessonRow(l, i, list, c))) : h('p', { class: 'muted small' }, 'No lessons yet.')))

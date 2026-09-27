@@ -235,7 +235,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
     return h('button', { type: 'button', class: 'eg-lesson', 'data-lesson': l.id, onClick: () => openLesson(l.id) },
       h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
       h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title),
-        h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.done ? 'Done' : null].filter(Boolean).join(' · ') || 'Lesson'),
+        h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null, l.done ? 'Done' : null].filter(Boolean).join(' · ') || 'Lesson'),
         l.summary ? h('span', { class: 'small muted' }, l.summary) : null));
   }
   function renderEducation() {
@@ -268,12 +268,37 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
           } }, h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.title), h('span', { class: 'small muted' }, `${c.done} of ${plural(c.total, 'lesson')} done${c.complete ? ' · Complete' : ''}`)), h('span', { class: 'eg-chev', 'aria-hidden': 'true' }, '›')),
           bar(c.total ? Math.round((c.done / c.total) * 100) : 0, `${c.title}: ${c.done} of ${c.total} done`), body);
       })) : null,
+      e.certificates?.length ? section('Certificates', `Courses ${parent ? `${name()} has` : 'you\'ve'} finished. Print one or share the link.`, h('div', { class: 'eg-list' }, e.certificates.map((x) => h('div', { class: 'eg-item row' },
+        h('span', { class: 'eg-badge-icon', 'aria-hidden': 'true' }, '◆'), h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title), h('span', { class: 'small muted' }, `Finished ${day(x.issued_at.slice(0, 10))}`)),
+        h('a', { class: 'dp-btn dp-btn--outline', href: x.url, target: '_blank', rel: 'noopener' }, 'Certificate'))))) : null,
       e.lessons.length ? section('Lesson library', null, h('div', { class: 'eg-list' }, e.lessons.map(lessonRow))) : null,
       !e.assigned.length && !e.courses.length && !e.lessons.length ? h('div', { class: 'empty' }, 'No lessons yet. When your coach posts one, it shows up here.') : null);
   }
+  let quizPick = {}, quizResult = null;
   async function openLesson(id) {
+    quizPick = {}; quizResult = null;
     try { reader = await api.get(`lessons/${id}`); rerender(); window.scrollTo(0, 0); el.querySelector('#eg-reader-h')?.focus(); }
     catch (x) { toast(x.message, 'warn'); }
+  }
+  // The quiz at the end of a lesson: one choice per question, 80% to finish. Wrong questions are marked, never the answer.
+  function quizForm(l) {
+    const qs = l.quiz.questions;
+    const wrong = new Set(quizResult ? quizResult.results.map((r, i) => (r.correct ? null : i)).filter((i) => i !== null) : []);
+    return h('form', { class: 'dp-panel stack eg-quiz', 'aria-labelledby': 'eg-quiz-h', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (qs.some((_, i) => quizPick[i] === undefined)) throw new Error(`Answer all ${qs.length} questions.`);
+      quizResult = await api.post(`lessons/${l.id}/quiz`, { answers: qs.map((_, i) => quizPick[i]) });
+      reader = quizResult.lesson;
+      if (quizResult.passed) { toast(`${quizResult.score} of ${quizResult.total}. Lesson done.`); quizPick = {}; await load().catch(() => {}); }
+      rerender();
+      el.querySelector(quizResult.passed ? '[data-done]' : '#eg-quiz-h')?.focus();
+    }); } },
+      h('h3', { class: 'strong', id: 'eg-quiz-h', tabindex: '-1', style: 'margin:0' }, 'Quiz'),
+      h('p', { class: 'small muted', style: 'margin:0' }, quizResult && !quizResult.passed ? h('span', { class: 'warn-text' }, `${quizResult.score} of ${quizResult.total} right. You need ${l.quiz.pass_pct}%. Look again at the ones marked below and try again.`)
+        : `Get ${l.quiz.pass_pct}% or more to finish this lesson. Try as many times as you need.`),
+      qs.map((q, i) => h('fieldset', { class: `eg-q${wrong.has(i) ? ' eg-q--wrong' : ''}` },
+        h('legend', { class: 'strong' }, `${i + 1}. ${q.q}`, wrong.has(i) ? h('span', { class: 'small warn-text', style: 'font-weight:400' }, ' · not quite') : null),
+        q.choices.map((c, j) => h('label', { class: 'eg-choice' }, h('input', { type: 'radio', name: `q${i}`, value: String(j), checked: quizPick[i] === j, onChange: () => { quizPick[i] = j; } }), h('span', null, c))))),
+      h('div', null, btn(quizResult ? 'Check again' : 'Check answers', null, 'primary', { type: 'submit' })));
   }
   function renderReader() {
     const l = reader;
@@ -291,7 +316,8 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
       l.minutes || l.done ? h('p', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.done ? 'Done' : null].filter(Boolean).join(' · ')) : null,
       l.video_url ? videoEmbed(l.video_url, l.title) : null,
       h('div', { class: 'eg-body' }, l.body ? paragraphs(l.body) : l.summary ? h('p', null, l.summary) : h('p', { class: 'muted' }, 'This lesson has no text yet.')),
-      h('div', { class: 'row wrap' }, done, l.next ? btn('Next lesson ›', () => openLesson(l.next.id), l.done ? 'primary' : 'secondary') : null),
+      l.quiz && !l.done ? quizForm(l) : null,
+      h('div', { class: 'row wrap' }, l.quiz && !l.done ? null : done, l.next ? btn('Next lesson ›', () => openLesson(l.next.id), l.done ? 'primary' : 'secondary') : null),
       l.next ? h('p', { class: 'small muted' }, `Up next: ${l.next.title}`) : l.course ? h('p', { class: 'small muted' }, `That's the last lesson in ${l.course.title}.`) : null));
   }
 

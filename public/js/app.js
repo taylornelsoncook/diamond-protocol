@@ -10,7 +10,7 @@ async function api(method, path, body) {
   return data;
 }
 const metric = (label, value, note, tone) => h('div', { class: 'dp-metric' }, h('div', { class: 'dp-metric-label' }, label), h('div', { class: `dp-metric-value${tone ? ' dp-metric-value--' + tone : ''}` }, value), h('div', { class: 'dp-metric-note' }, note));
-const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch = (p, b) => api('PATCH', p, b), del = (p, b) => api('DELETE', p, b);
+const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch = (p, b) => api('PATCH', p, b), del = (p, b) => api('DELETE', p, b), put = (p, b) => api('PUT', p, b);
 
 const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
 const state = { user: null, testMode: false, payments: {} };
@@ -1138,7 +1138,7 @@ async function viewSchedule(main) {
 }
 
 async function viewSession(main, id) {
-  const [x, clientsList, settings] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings')]);
+  const [x, clientsList, settings, progs] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs')]);
   tzName = settings.timezone;
   const active = x.roster.filter((r) => ['booked', 'attended', 'no_show'].includes(r.status));
   const waiting = x.roster.filter((r) => r.status === 'waitlisted');
@@ -1175,6 +1175,25 @@ async function viewSession(main, id) {
     render();
   }), 'secondary'));
 
+  // The workout on the weight-room screen (/tv) during this session.
+  const canPick = state.user?.role !== 'front_desk';
+  const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { 'aria-label': 'Program' });
+  const wkSel = select([['', 'Choose a workout']], { 'aria-label': 'Workout', disabled: true });
+  progSel.addEventListener('change', async () => {
+    wkSel.disabled = true;
+    if (!progSel.value) return fill(wkSel, h('option', { value: '' }, 'Choose a workout'));
+    const p = await get(`/v1/programs/${progSel.value}`);
+    fill(wkSel, h('option', { value: '' }, 'Choose a workout'), p.workouts.map((w) => h('option', { value: w.id }, `Week ${w.week} day ${w.day}: ${w.title}`)));
+    wkSel.disabled = false;
+  });
+  const screenPanel = panel('Weight-room screen', { subtitle: x.workout ? `Showing ${x.workout.title} (${x.workout.program_name}, week ${x.workout.week} day ${x.workout.day}) from 30 minutes before the start. Athletes tap their name to see their weights and log it.` : 'Pick a workout to show on the weight-room TV during this session. Athletes tap their name there to see their weights and log it. Set up the screen from Schedule → Hours & settings.' },
+    x.workout ? h('ol', { class: 'small', style: 'margin:0;padding-left:20px' }, x.workout.exercises.map((e) => h('li', null, `${e.name} · ${e.prescription || ''}${e.load ? ` · ${e.load}` : ''}`))) : null,
+    canPick && x.status === 'scheduled' ? h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (!wkSel.value) throw new Error('Choose a program, then a workout.');
+      await put(`/v1/sessions/${id}/workout`, { workout_id: wkSel.value }); toast('The screen shows it now.'); render();
+    }); } }, h('div', { class: 'grow' }, progSel), h('div', { class: 'grow' }, wkSel), btn(x.workout ? 'Change workout' : 'Show on screen', null, 'secondary', { type: 'submit' }),
+      x.workout ? btn('Clear', (e) => busy(e.currentTarget, async () => { await put(`/v1/sessions/${id}/workout`, { workout_id: null }); toast('Cleared.'); render(); }), 'ghost') : null) : null);
+
   fill(main, 
     header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
@@ -1189,6 +1208,7 @@ async function viewSession(main, id) {
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, [a.position, a.grad_year ? `Class of ${a.grad_year}` : null].filter(Boolean).join(' · '))))) : h('p', { class: 'muted' }, 'No roster yet. Add athletes on the team page.')) : null,
     x.team && !x.roster.length ? null : panel(`Roster · ${x.booked_count}/${x.capacity}`, { subtitle: `${x.attended_count} checked in${x.unpaid_count ? ` · ${x.unpaid_count} unpaid` : ''}${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}` },
       active.length ? active.map(row) : h('p', { class: 'muted' }, 'Nobody booked yet.'), x.status === 'scheduled' ? addForm : null),
+    screenPanel,
     waiting.length ? panel(`Waitlist · ${waiting.length}`, { subtitle: 'Moves up automatically when a spot opens.' }, waiting.map((r) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, r.name), btn('Remove', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); render(); }), 'ghost')))) : null,
     done.length ? panel('Canceled', {}, done.map((r) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, r.name), h('span', { class: 'muted' }, r.status === 'late_canceled' ? 'Late cancel (session used)' : 'Canceled')))) : null,
     x.status === 'scheduled' ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Cancel this session', (e) => {
@@ -1207,11 +1227,16 @@ function checkinPanel(locations, kiosks) {
   const tablet = (l) => async (e) => busy(e.currentTarget, async () => {
     const k = await post('/v1/kiosks', { location_id: l.id });
     if (!k.link.startsWith('http')) k.link = location.origin + k.link;
+    if (k.screen_link && !k.screen_link.startsWith('http')) k.screen_link = location.origin + k.screen_link;
     fill(shown, h('div', { class: 'dp-panel stack', style: 'background:var(--surface-2, transparent)' },
       h('div', { class: 'strong' }, `Tablet link for ${l.name}`),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Open this link once in the tablet\'s browser, then add it to the home screen. Anyone with the link can check athletes in here, so don\'t share it. It\'s only shown now.'),
       h('code', { style: 'word-break:break-all' }, k.link),
-      h('div', null, btn('Copy tablet link', async () => { await navigator.clipboard?.writeText(k.link).catch(() => {}); toast('Tablet link copied.'); }, 'secondary'))));
+      h('div', null, btn('Copy tablet link', async () => { await navigator.clipboard?.writeText(k.link).catch(() => {}); toast('Tablet link copied.'); }, 'secondary')),
+      k.screen_link ? [h('div', { class: 'strong', style: 'margin-top:8px' }, 'Weight-room screen link'),
+        h('p', { class: 'small muted', style: 'margin:0' }, 'The same key for a TV or shared tablet in the weight room: it shows the workout picked on the session page, and athletes tap their name to log it. Remove the tablet above to turn both off.'),
+        h('code', { style: 'word-break:break-all' }, k.screen_link),
+        h('div', null, btn('Copy screen link', async () => { await navigator.clipboard?.writeText(k.screen_link).catch(() => {}); toast('Screen link copied.'); }, 'secondary'))] : null));
   });
   return panel('Self check-in', { subtitle: 'Athletes check themselves in for sessions they\'re booked on, from 30 minutes before the start. The roster updates as they do.' },
     places.length ? places.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow strong' }, l.name),

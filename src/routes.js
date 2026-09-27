@@ -23,6 +23,7 @@ import * as insights from './services/insights.js';
 import * as leads from './services/leads.js';
 import * as paylinks from './services/paylinks.js';
 import * as checkin from './services/checkin.js';
+import * as screen from './services/screen.js';
 import * as inventory from './services/inventory.js';
 import * as reviews from './services/reviews.js';
 import * as campaigns from './services/campaigns.js';
@@ -119,6 +120,9 @@ export const routes = [
   ['POST', '/v1/kiosks', 'any', 'Schedule', 'Set up a check-in tablet: location_id, optional name. Returns the link to open on the tablet (shown once).', (ctx, r) => checkin.createKiosk(ctx, r.body, r.user?.name), 201],
   ['DELETE', '/v1/kiosks/:id', 'any', 'Schedule', 'Stop a tablet from checking athletes in.', (ctx, r) => checkin.revokeKiosk(ctx, r.params.id)],
   ['GET', '/kiosk-api/board', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): sessions open for check-in at its location and who is booked.', (ctx, r) => checkin.kioskBoard(ctx, r.kioskKey)],
+  ['GET', '/kiosk-api/screen', 'public', 'Schedule', 'Weight-room screen (x-kiosk-key header, the same key as a check-in tablet): sessions running now at its location, each with its workout and who can log it.', (ctx, r) => screen.screenBoard(ctx, r.kioskKey)],
+  ['POST', '/kiosk-api/screen/athlete', 'public', 'Schedule', 'Weight-room screen: one athlete\'s own weights for the session workout. session_id, ref (from the board).', (ctx, r) => screen.screenAthlete(ctx, r.kioskKey, r.body)],
+  ['POST', '/kiosk-api/screen/log', 'public', 'Schedule', 'Weight-room screen: log the session workout for one athlete and check them in. session_id, ref, optional exercise_ids.', (ctx, r) => screen.screenLog(ctx, r.kioskKey, r.body), 201],
   ['POST', '/kiosk-api/check-in', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): check in booking_id.', (ctx, r) => checkin.kioskCheckIn(ctx, r.kioskKey, r.body)],
   ['GET', '/here-api/:code', 'public', 'Schedule', 'The door poster\'s page: business and location name.', (ctx, r) => checkin.publicPlace(ctx, r.params.code)],
   ['PATCH', '/v1/locations/:id', 'any', 'Point of sale', 'Update a location. Set active=false to archive it.', (ctx, r) => commerce.updateLocation(ctx, r.params.id, r.body)],
@@ -221,7 +225,8 @@ export const routes = [
   ['DELETE', '/v1/class-series/:id/enroll/:client', 'any', 'Schedule', 'End a standing spot and release future bookings.', (ctx, r) => schedule.endEnrollment(ctx, r.params.id, r.params.client)],
   ['POST', '/v1/class-series/:id/register', 'any', 'Schedule', 'Register for a camp or clinic: client_id, pay (card_on_file, or omit to collect later).', (ctx, r) => schedule.registerCamp(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), { pay: r.body.pay, actor: r.user?.id, isCoach: true })],
   ['POST', '/v1/sessions', 'any', 'Schedule', 'One-off session: name, kind, location_id, date, start_time, duration_min, capacity.', (ctx, r) => schedule.createSession(ctx, r.body), 201],
-  ['GET', '/v1/sessions/:id', 'any', 'Schedule', 'A session with its roster and waitlist.', (ctx, r) => schedule.getSession(ctx, r.params.id)],
+  ['GET', '/v1/sessions/:id', 'any', 'Schedule', 'A session with its roster and waitlist, and the workout on the weight-room screen.', (ctx, r) => { const s = schedule.getSession(ctx, r.params.id); return { ...s, workout: s.workout_id ? screen.workoutView(ctx, s.workout_id) : null }; }],
+  ['PUT', '/v1/sessions/:id/workout', 'any', 'Schedule', 'Pick the workout the weight-room screen shows during this session: workout_id (null clears it).', (ctx, r) => screen.setSessionWorkout(ctx, r.params.id, r.body)],
   ['POST', '/v1/sessions/:id/cancel', 'any', 'Schedule', 'Cancel a session: credits back, paid drop-ins refunded, families emailed. Optional reason.', (ctx, r) => schedule.cancelSession(ctx, r.params.id, { reason: v.str(r.body.reason, 'reason', { max: 200, optional: true }) })],
   ['POST', '/v1/sessions/:id/bookings', 'any', 'Schedule', 'Add an athlete: client_id, optional pay=card_on_file, override_age. Coaches can book now and collect later.', (ctx, r) => schedule.book(ctx, { sessionId: r.params.id, clientId: v.str(r.body.client_id, 'client_id'), pay: r.body.pay, actor: r.user?.id, isCoach: true, overrideAge: !!r.body.override_age }), 201],
   ['POST', '/v1/bookings/:id/cancel', 'any', 'Schedule', 'Cancel a booking. waive=true skips the late-cancel rule.', (ctx, r) => schedule.cancelBooking(ctx, r.params.id, { isCoach: true, waive: !!r.body.waive })],

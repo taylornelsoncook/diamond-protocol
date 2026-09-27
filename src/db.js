@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -65,7 +65,9 @@ const ADDED_COLUMNS = {
   sale_items: ['variant_id TEXT'],                                        // version 17
   workout_exercises: ['load_test TEXT', 'load_pct INTEGER'],             // version 21: weights from tested maxes
   coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies
-  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL']       // version 4
+  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL'],      // version 4
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL'],           // version 23: weight-room screen
+  workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL']         // version 23 (then rebuilt so assignment_id can be empty)
 };
 
 function migrate(raw, schema) {
@@ -81,6 +83,7 @@ function migrate(raw, schema) {
   if (version < 3) rebuild(raw, schema, ['clients', 'products', 'session_credits'], ['families', 'guardians']);
   if (version < 9) rebuild(raw, schema, ['users']);                                   // staff roles and sign-in protection
   if (version < 15) rebuild(raw, schema, ['sales']);                                  // 'online' payment method for pay links
+  if (version < 23) rebuild(raw, schema, ['workout_logs']);                           // screen logs without a program assignment
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
 }
 // SQLite can't change constraints in place: create the new table, copy shared columns, swap.

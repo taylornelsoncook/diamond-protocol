@@ -11,7 +11,7 @@ import { setAttendance } from './schedule.js';
 // athlete whose session isn't paid for is still checked in and asked to see the front desk.
 
 const OPENS_MIN = 30;
-const nameOnBoard = (name) => { const [f, ...rest] = String(name).trim().split(/\s+/); return rest.length ? `${f} ${rest.at(-1)[0]}.` : f; };
+export const nameOnBoard = (name) => { const [f, ...rest] = String(name).trim().split(/\s+/); return rest.length ? `${f} ${rest.at(-1)[0]}.` : f; };
 const newCode = () => token(8).replace(/[-_]/g, '').slice(0, 10).padEnd(10, 'x');
 
 // ---------- Door poster ----------
@@ -33,15 +33,15 @@ export function publicPlace(ctx, code) {
 }
 
 // Sessions at a location open for check-in now, with who's booked.
-function openSessions(ctx, locationId, asOf = ctx.now()) {
+export function openSessions(ctx, locationId, asOf = ctx.now()) {
   const opens = new Date(Date.parse(asOf) + OPENS_MIN * 60000).toISOString();
   return ctx.db.all(`SELECT id, name, kind, starts_at, ends_at FROM class_sessions WHERE location_id = ? AND status = 'scheduled' AND starts_at <= ? AND ends_at > ? ORDER BY starts_at, name`, locationId, opens, asOf);
 }
-function bookingsIn(ctx, sessionId) {
+export function bookingsIn(ctx, sessionId) {
   return ctx.db.all(`SELECT b.id, b.status, b.coverage, b.client_id, c.name, c.family_id FROM bookings b JOIN clients c ON c.id = b.client_id
     WHERE b.session_id = ? AND b.status IN ('booked','attended') ORDER BY c.name`, sessionId);
 }
-function checkInBooking(ctx, bookingId) {
+export function checkInBooking(ctx, bookingId) {
   const b = ctx.db.get('SELECT status, coverage FROM bookings WHERE id = ?', bookingId);
   const already = b.status === 'attended';
   if (!already) setAttendance(ctx, bookingId, 'attended');
@@ -60,14 +60,14 @@ export function createKiosk(ctx, body, actor) {
   const key = token(24), id = newId('ksk');
   ctx.db.run('INSERT INTO kiosks (id, name, location_id, key_hash, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     id, v.str(body.name ?? `${loc.name} front desk`, 'name', { max: 60 }), loc.id, sha256(key), actor ?? null, ctx.now());
-  return { ...listKiosks(ctx).find((k) => k.id === id), link: `${ctx.publicUrl ?? ''}/kiosk#${key}` };
+  return { ...listKiosks(ctx).find((k) => k.id === id), link: `${ctx.publicUrl ?? ''}/kiosk#${key}`, screen_link: `${ctx.publicUrl ?? ''}/tv#${key}` };
 }
 export function revokeKiosk(ctx, id) {
   const r = ctx.db.run('UPDATE kiosks SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL', ctx.now(), id);
   if (!r.changes) throw notFound('Check-in tablet');
   return { ok: true };
 }
-function kioskFor(ctx, key) {
+export function kioskFor(ctx, key) {
   const k = key && ctx.db.get(`SELECT k.*, l.name AS location_name, l.active FROM kiosks k JOIN locations l ON l.id = k.location_id WHERE k.key_hash = ? AND k.revoked_at IS NULL`, sha256(String(key)));
   if (!k) throw new HttpError(401, 'kiosk_unknown', 'This tablet isn\'t set up for check-in any more. Open a new check-in link from Schedule → Hours & settings.');
   ctx.db.run('UPDATE kiosks SET last_seen_at = ? WHERE id = ?', ctx.now(), k.id);

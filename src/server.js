@@ -27,7 +27,7 @@ import { followCampaignLink } from './services/campaigns.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/book': 'book.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/book': 'book.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",

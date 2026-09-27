@@ -152,10 +152,11 @@ CREATE INDEX IF NOT EXISTS assignments_client ON assignments(client_id, active);
 CREATE TABLE IF NOT EXISTS workout_logs (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+  assignment_id TEXT REFERENCES assignments(id) ON DELETE CASCADE,   -- empty when logged on the weight-room screen by an athlete not on that program
   workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   notes TEXT,
-  completed_at TEXT NOT NULL
+  completed_at TEXT NOT NULL,
+  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL    -- logged on the weight-room screen during this session (version 23)
 );
 CREATE INDEX IF NOT EXISTS workout_logs_client ON workout_logs(client_id, completed_at);
 CREATE TABLE IF NOT EXISTS exercise_logs (
@@ -388,6 +389,7 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   drop_in_cents INTEGER,
   status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled','canceled')),
   created_at TEXT NOT NULL,
+  workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,   -- shown on the weight-room screen (version 23)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);

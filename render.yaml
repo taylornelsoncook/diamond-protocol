@@ -10,7 +10,8 @@ services:
     branch: main
     healthCheckPath: /healthz
     numInstances: 1          # SQLite: exactly one instance
-    autoDeploy: true
+    # Deploys each push to main only after the GitHub "Tests" check passes.
+    autoDeployTrigger: checksPass
     disk:
       name: data
       mountPath: /data

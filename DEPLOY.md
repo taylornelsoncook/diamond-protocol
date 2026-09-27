@@ -48,7 +48,7 @@ fly certs add app.yourdomain.com
 - **To restore:** stop the app, replace `/data/diamond.db` with the backup file (renamed to `diamond.db`), start the app.
 
 ## Updating
-Push changes to the repository; the host rebuilds and restarts. The database upgrades itself on start, and a backup is made on start before anything else runs each day.
+Push changes to the repository. GitHub runs the full test suite and checks the Docker image builds (the **Tests** check, `.github/workflows/tests.yml`). Staging deploys only after that check passes; production still waits for Manual Deploy. If staging was set up by hand rather than from the Blueprint, set it yourself: staging service → Settings → Auto-Deploy → **After CI Checks Pass**. The database upgrades itself on start, and a backup is made on start before anything else runs each day.
 
 ## Settings reference
 | Setting | What it's for |

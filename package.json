@@ -1,21 +1,13 @@
 {
   "name": "diamond-protocol",
-  "version": "1.0.0",
-  "description": "Diamond Protocol: coach dashboard, parent portal and athlete workout app",
-  "main": "server/index.js",
-  "scripts": {
-    "start": "node server/index.js",
-    "demo": "node server/seed.js --reset --demo && DP_DEMO=1 node server/index.js",
-    "seed": "node server/seed.js --reset --demo",
-    "test": "node --test test/*.test.js"
-  },
-  "license": "UNLICENSED",
-  "dependencies": {
-    "cookie-parser": "^1.4.7",
-    "express": "^5.2.1"
-  },
+  "version": "0.1.0",
   "private": true,
-  "engines": {
-    "node": ">=22.5"
+  "description": "Diamond Protocol coaching platform: clients, subscriptions and billing, workout programming with video, and an open API.",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env src/index.js",
+    "seed": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env src/seed.js",
+    "test": "node --no-warnings=ExperimentalWarning --test test/*.test.js"
   }
 }

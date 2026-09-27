@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key><string>DP Coach</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>DPServerURL</key><string>https://app.diamondprotocol.com</string>
+	<key>NSBluetoothAlwaysUsageDescription</key><string>DP Coach connects to Bluetooth card readers to take payments.</string>
+	<key>NSLocationWhenInUseUsageDescription</key><string>Stripe uses your location to protect card payments you take with this app.</string>
+	<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
+	<key>NSLocalNetworkUsageDescription</key><string>DP Coach connects to your Diamond Protocol server on this network while you're testing.</string>
+	<key>UILaunchScreen</key><dict/>
+	<key>UIUserInterfaceStyle</key><string>Dark</string>
+	<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
+</dict>
+</plist>

@@ -1,0 +1,41 @@
+# Generates the Xcode project: install XcodeGen (brew install xcodegen), then run `xcodegen` in this folder.
+name: DiamondCoach
+options:
+  bundleIdPrefix: com.diamondprotocol
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  StripeTerminal:
+    url: https://github.com/stripe/stripe-terminal-ios
+    from: 5.0.0
+targets:
+  DiamondCoach:
+    type: application
+    platform: iOS
+    sources: [DiamondCoach]
+    dependencies:
+      - package: StripeTerminal
+    entitlements:
+      path: DiamondCoach/DiamondCoach.entitlements
+      properties:
+        com.apple.developer.proximity-reader.payment.acceptance: true
+    info:
+      path: DiamondCoach/Info.plist
+      properties:
+        CFBundleDisplayName: DP Coach
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIUserInterfaceStyle: Dark
+        NSLocationWhenInUseUsageDescription: Stripe uses your location to protect card payments you take with this app.
+        NSBluetoothAlwaysUsageDescription: DP Coach connects to Bluetooth card readers to take payments.
+        DPServerURL: https://app.diamondprotocol.com
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: DP Coach connects to your Diamond Protocol server on this network while you're testing.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.diamondprotocol.coach
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

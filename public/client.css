@@ -1,0 +1,20 @@
+.c-wrap{max-width:520px;margin:0 auto;padding:calc(24px + env(safe-area-inset-top,0px)) 20px calc(32px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px}
+.c-mark{width:56px;height:auto}
+.c-title{font:700 38px/1 var(--font-display);letter-spacing:.05em;text-transform:uppercase;color:var(--steel)}
+.c-progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.c-progress>div{height:6px;background:var(--green-mid)}
+.c-cue{font-size:14px;line-height:20px;color:var(--steel-muted)}
+.c-done{font:700 34px/1 var(--font-display);text-transform:uppercase;letter-spacing:.04em}
+.toast-host{left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));max-width:none}
+/* Tab bar (Workout, Accountability, Performance, Education) sits at the bottom. */
+.c-wrap{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+.c-view{display:flex;flex-direction:column;gap:16px}
+.c-view .c-mark{width:44px}
+.toast-host{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+/* Readiness from today's check-in, above the workout. */
+.c-ready{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.c-ready--green{border-color:var(--green-mid)}
+.c-ready--green .strong{color:var(--green-bright)}
+.c-ready--yellow,.c-ready--red{border-color:var(--amber);background:var(--amber-deep)}
+.c-ready--yellow .strong,.c-ready--red .strong{color:var(--amber)}
+.c-ready--red{border-width:2px}

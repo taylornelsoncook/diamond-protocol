@@ -1,0 +1,168 @@
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createHmac } from 'node:crypto';
+import { createApp } from '../src/server.js';
+import { createUser } from '../src/services/access.js';
+import { createStripeProvider, encode } from '../src/payments/stripe-provider.js';
+
+// A tiny stand-in for api.stripe.com that records requests and keeps state.
+const SK = 'sk_test_fake', WHSEC = 'whsec_fake';
+const requests = [];
+const intents = new Map();
+let seq = 0;
+const nid = (p) => `${p}_${++seq}`;
+const fake = http.createServer((req, res) => {
+  let raw = '';
+  req.on('data', (c) => (raw += c));
+  req.on('end', () => {
+    const url = new URL(req.url, 'http://x');
+    const body = Object.fromEntries(new URLSearchParams(req.method === 'GET' ? url.search : raw));
+    requests.push({ method: req.method, path: url.pathname, body, headers: req.headers });
+    const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+    if (req.headers.authorization !== `Bearer ${SK}`) return send(401, { error: { type: 'invalid_request_error', message: 'Invalid API Key provided' } });
+    const p = url.pathname;
+    if (p === '/v1/customers') return send(200, { id: nid('cus') });
+    if (p === '/v1/terminal/locations') return send(200, { id: nid('tml') });
+    if (p === '/v1/terminal/connection_tokens') return send(200, { secret: 'pst_test_secret' });
+    if (p === '/v1/terminal/readers') return body.registration_code === 'good-code-here' ? send(200, { id: nid('tmr'), device_type: 'stripe_s710', label: body.label }) : send(400, { error: { message: 'Invalid registration code.' } });
+    if (/^\/v1\/terminal\/readers\/.+\/process_payment_intent$/.test(p)) return send(200, { id: 'tmr', action: { status: 'in_progress' } });
+    if (p === '/v1/refunds') return send(200, { id: nid('re') });
+    if (p === '/v1/checkout/sessions' && req.method === 'POST') return send(200, { id: 'cs_1', url: 'https://checkout.stripe.com/c/pay/cs_1' });
+    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444' } } } });
+    if (p === '/v1/payment_intents' && req.method === 'POST') {
+      if (body.off_session === 'true') {
+        if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.' } });
+        return send(200, { id: nid('pi'), status: 'succeeded' });
+      }
+      const pi = { id: nid('pi'), client_secret: 'pi_secret_x', status: 'requires_payment_method', body };
+      intents.set(pi.id, pi);
+      return send(200, pi);
+    }
+    const m = p.match(/^\/v1\/payment_intents\/([^/]+)(\/(capture|cancel))?$/);
+    if (m) {
+      const pi = intents.get(m[1]);
+      if (m[3] === 'cancel') pi.status = 'canceled';
+      if (m[3] === 'capture') pi.status = 'succeeded';
+      return send(200, { id: pi.id, status: pi.status, latest_charge: pi.charge ?? null, last_payment_error: null });
+    }
+    send(404, { error: { message: `No fake for ${req.method} ${p}` } });
+  });
+});
+
+let app, base, cookie;
+const call = async (method, path, body) => {
+  const headers = { cookie };
+  if (body) headers['content-type'] = 'application/json';
+  const res = await fetch(base + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  return { status: res.status, body: await res.json() };
+};
+const signed = (payload) => {
+  const t = Math.floor(Date.now() / 1000), raw = JSON.stringify(payload);
+  return { raw, sig: `t=${t},v1=${createHmac('sha256', WHSEC).update(`${t}.${raw}`).digest('hex')}` };
+};
+const webhook = (payload, sig) => fetch(base + '/stripe/webhook', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': sig ?? signed(payload).sig }, body: signed(payload).raw });
+
+before(async () => {
+  await new Promise((r) => fake.listen(0, r));
+  const payments = createStripeProvider({ secretKey: SK, webhookSecret: WHSEC, baseUrl: `http://localhost:${fake.address().port}` });
+  app = createApp({ testMode: true, jobs: false, payments });
+  createUser(app.ctx, { email: 'coach@test.dev', name: 'Coach', password: 'correct-horse-battery' });
+  await new Promise((r) => app.server.listen(0, r));
+  base = `http://localhost:${app.server.address().port}`;
+  const res = await fetch(base + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'coach@test.dev', password: 'correct-horse-battery' }) });
+  cookie = res.headers.get('set-cookie').split(';')[0];
+});
+after(() => { app.server.close(); fake.close(); });
+
+test('encodes nested parameters the way Stripe expects', () => {
+  assert.equal(decodeURIComponent(encode({ a: 1, b: { c: 'x' }, d: ['p', 'q'], e: undefined })), 'a=1&b[c]=x&d[0]=p&d[1]=q');
+});
+
+let loc, client, product;
+test('tap to pay creates a card-present payment that saves the card', async () => {
+  loc = (await call('POST', '/v1/locations', { name: 'Facility', kind: 'facility', address_line1: '1 Main', city: 'Austin', state: 'TX', postal_code: '78701' })).body;
+  assert.match(loc.stripe_location_id, /^tml_/);
+  const locReq = requests.find((r) => r.path === '/v1/terminal/locations');
+  assert.equal(locReq.body['address[line1]'], '1 Main');
+  assert.equal(locReq.body.display_name, 'Facility');
+
+  client = (await call('POST', '/v1/clients', { name: 'Maya Okafor', email: 'maya@example.com' })).body;
+  product = (await call('POST', '/v1/products', { name: '10-pack', kind: 'pack', price_cents: 70000, sessions: 10 })).body;
+  const sale = (await call('POST', '/v1/sales', { location_id: loc.id, method: 'tap_to_pay', client_id: client.id, items: [{ product_id: product.id }], save_card: true })).body;
+  assert.equal(sale.tap_to_pay.client_secret, 'pi_secret_x');
+  const piReq = requests.filter((r) => r.path === '/v1/payment_intents').pop();
+  assert.equal(piReq.body['payment_method_types[0]'], 'card_present');
+  assert.equal(piReq.body.setup_future_usage, 'off_session');
+  assert.match(piReq.body.customer, /^cus_/);
+  assert.equal(piReq.body.amount, '70000');
+  assert.equal(piReq.headers['idempotency-key'], `sale-${sale.id}`);
+
+  // The card is tapped on the iPhone; Stripe then sends a webhook.
+  const pi = intents.get(sale.payment_ref);
+  pi.status = 'succeeded';
+  pi.charge = { payment_method_details: { card_present: { brand: 'visa', last4: '1111', generated_card: 'pm_generated' } } };
+  assert.equal((await webhook({ type: 'payment_intent.succeeded', data: { object: { id: pi.id } } }, 't=1,v1=bad')).status, 400);
+  assert.equal((await webhook({ type: 'payment_intent.succeeded', data: { object: { id: pi.id } } })).status, 200);
+  const done = (await call('GET', `/v1/sales/${sale.id}`)).body;
+  assert.equal(done.status, 'succeeded');
+  assert.equal(done.card_last4, '1111');
+  const c = (await call('GET', `/v1/clients/${client.id}`)).body;
+  assert.deepEqual(c.card, { on_file: true, brand: 'visa', last4: '1111', owner: 'client' });
+  assert.equal(c.session_credits, 10);
+});
+
+test('card on file charges off-session and reports declines', async () => {
+  const ok = (await call('POST', '/v1/sales', { location_id: loc.id, method: 'card_on_file', client_id: client.id, custom: { description: 'Session', amount_cents: 8000 } })).body;
+  assert.equal(ok.status, 'succeeded');
+  const req = requests.filter((r) => r.path === '/v1/payment_intents').pop();
+  assert.equal(req.body.payment_method, 'pm_generated');
+  assert.equal(req.body.off_session, 'true');
+  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_declines' WHERE id = ?`, client.id);
+  const bad = (await call('POST', '/v1/sales', { location_id: loc.id, method: 'card_on_file', client_id: client.id, custom: { description: 'Session', amount_cents: 8000 } })).body;
+  assert.equal(bad.status, 'failed');
+  assert.equal(bad.failure_reason, 'Your card was declined.');
+});
+
+test('refunds and front-desk readers go through Stripe', async () => {
+  const s = (await call('GET', '/v1/sales?status=succeeded')).body.data.find((x) => x.method === 'tap_to_pay');
+  assert.equal((await call('POST', `/v1/sales/${s.id}/refund`, { amount_cents: 5000 })).body.status, 'partially_refunded');
+  const r = requests.filter((x) => x.path === '/v1/refunds').pop();
+  assert.equal(r.body.amount, '5000');
+  assert.equal((await call('POST', '/v1/readers', { registration_code: 'bad', label: 'Desk', location_id: loc.id })).status, 400);
+  const reader = (await call('POST', '/v1/readers', { registration_code: 'good-code-here', label: 'Desk', location_id: loc.id })).body;
+  const sale = (await call('POST', '/v1/sales', { location_id: loc.id, method: 'reader', reader_id: reader.id, custom: { description: 'Drop-in', amount_cents: 3000 } })).body;
+  assert.equal(sale.status, 'pending');
+  assert.ok(requests.some((x) => x.path.endsWith('/process_payment_intent') && x.body.payment_intent === sale.payment_ref));
+  assert.equal((await call('POST', '/v1/simulate-not-real')).status, 404);
+  assert.equal((await call('POST', `/v1/sales/${sale.id}/simulate`, {})).status, 409, 'no simulated taps with real Stripe');
+});
+
+test('clients add cards on Stripe\'s hosted page', async () => {
+  const link = (await call('POST', `/v1/clients/${client.id}/card/setup-link`)).body;
+  assert.equal(link.url, 'https://checkout.stripe.com/c/pay/cs_1');
+  globalThis.setupClient = client.id;
+  await webhook({ type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'setup' } } });
+  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', owner: 'client' });
+});
+
+test('schools pay team invoices online by card or bank account', async () => {
+  const c = (await call('POST', '/v1/team-contracts', { organization: { name: 'Westlake High', contact_email: 'ad@westlake.example' }, name: 'Varsity Football', monthly_cents: 180000 })).body;
+  const inv = c.invoices[0];
+  const pub = (await fetch(`${base}/invoice-api/${inv.link.split('/invoice/')[1]}`).then((r) => r.json()));
+  assert.equal(pub.can_pay_online, true);
+  const pay = await fetch(`${base}/invoice-api/${inv.link.split('/invoice/')[1]}/checkout`, { method: 'POST' }).then((r) => r.json());
+  assert.equal(pay.url, 'https://checkout.stripe.com/c/pay/cs_1');
+  const req = requests.filter((x) => x.path === '/v1/checkout/sessions').pop();
+  assert.equal(req.body.mode, 'payment');
+  assert.equal(req.body['payment_method_types[1]'], 'us_bank_account');
+  assert.equal(req.body['line_items[0][price_data][unit_amount]'], '180000');
+  assert.equal(req.body['metadata[team_invoice_id]'], inv.id);
+  // Bank payments complete later: first "completed but unpaid", then async success.
+  await webhook({ type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'payment', payment_status: 'unpaid', metadata: { team_invoice_id: inv.id } } } });
+  assert.equal((await call('GET', `/v1/team-invoices/${inv.id}`)).body.status, 'open');
+  await webhook({ type: 'checkout.session.async_payment_succeeded', data: { object: { id: 'cs_1', mode: 'payment', payment_status: 'paid', payment_intent: 'pi_ach', metadata: { team_invoice_id: inv.id } } } });
+  const paid = (await call('GET', `/v1/team-invoices/${inv.id}`)).body;
+  assert.equal(paid.status, 'paid');
+  assert.equal(paid.paid_reference, 'pi_ach');
+});

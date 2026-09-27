@@ -303,3 +303,80 @@ test('exercise video coverage counts playable links and lists what needs one, mo
   assert.equal(v.by_kind.youtube, before + 1 - v.by_kind.vimeo - v.by_kind.file);
   assert.ok(!v.attention.some((a) => a.id === sled.id));
 });
+
+// ---- review fixes ----
+test('review fixes: an empty access level never widens a key', async () => {
+  const o = await owner();
+  const k = (await o.post('/api/api-keys', { label: 'Read sheet', scope: 'read' })).data;
+  for (const scope of ['', null]) {
+    const r = await o.put(`/api/api-keys/${k.id}`, { scope });
+    assert.equal(r.status, 400, JSON.stringify(scope));
+  }
+  assert.equal(db.get('SELECT scope FROM api_keys WHERE id=?', k.id).scope, 'read');
+  await o.del(`/api/api-keys/${k.id}`);
+});
+
+test('review fixes: the same webhook URL with a trailing slash or other host case is a duplicate', async () => {
+  const o = await owner();
+  const w = (await o.post('/api/webhooks', { url: 'https://Hooks.Example.test/dp', events: ['pr.set'] })).data;
+  for (const url of ['https://hooks.example.test/dp/', 'https://HOOKS.example.test/dp']) {
+    assert.equal((await o.post('/api/webhooks', { url, events: ['pr.set'] })).status, 400, url);
+  }
+  const other = (await o.post('/api/webhooks', { url: 'https://hooks.example.test/dp2', events: ['pr.set'] })).data;
+  assert.equal((await o.put(`/api/webhooks/${other.id}`, { url: 'https://hooks.example.test/dp/' })).status, 400);
+  assert.equal((await o.put(`/api/webhooks/${w.id}`, { url: 'https://hooks.example.test/dp/' })).status, 200, 'its own URL is fine');
+  await o.del(`/api/webhooks/${w.id}`); await o.del(`/api/webhooks/${other.id}`);
+});
+
+test('review fixes: "since" is a local date in the business time zone', async () => {
+  const o = await owner();
+  const k = (await o.post('/api/api-keys', { label: 'Since reader', scope: 'read' })).data;
+  const auth = { authorization: `Bearer ${k.key}` };
+  const a = db.get("SELECT id, code FROM athletes WHERE first_name='Chidi'");
+  const t = db.get("SELECT id FROM tests WHERE name='Vertical jump'");
+  db.run('DELETE FROM results WHERE athlete_id=? AND test_id=?', a.id, t.id);
+  // Denver is UTC-6 in September: 03:00 UTC on Sep 1 is 9 pm on Aug 31 there; 07:00 UTC is 1 am on Sep 1.
+  db.insert('results', { athlete_id: a.id, test_id: t.id, value: 90, source: 'manual', recorded_at: '2026-09-01 03:00:00' });
+  db.insert('results', { athlete_id: a.id, test_id: t.id, value: 92, source: 'manual', recorded_at: '2026-09-01 07:00:00' });
+  const r = await client().get(`/api/v1/athletes/${a.code}/results?test=Vertical%20jump&since=2026-09-01`, auth);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data.data.map((x) => x.value), [92]);
+  await o.del(`/api/api-keys/${k.id}`);
+});
+
+test('review fixes: a delivery stuck as sending can be resent and is retried; overlapping retry runs send once', async () => {
+  const o = await owner();
+  const w = (await o.post('/api/webhooks', { url: `${hookBase}/stuck`, events: ['booking.created'] })).data;
+  const payload = JSON.stringify({ event: 'booking.created', created_at: new Date().toISOString(), data: { booking_id: 1 } });
+  const stuck = db.insert('webhook_deliveries', { webhook_id: w.id, event: 'booking.created', payload, status: null, attempts: 1 });
+  db.run("UPDATE webhook_deliveries SET last_attempt_at=datetime('now') WHERE id=?", stuck);
+  assert.equal((await o.post(`/api/webhooks/${w.id}/deliveries/${stuck}/resend`)).status, 400, 'really still sending');
+  db.run("UPDATE webhook_deliveries SET last_attempt_at=datetime('now','-10 minutes') WHERE id=?", stuck);
+  got.length = 0;
+  const r = await o.post(`/api/webhooks/${w.id}/deliveries/${stuck}/resend`);
+  assert.equal(r.status, 200); assert.equal(r.data.ok, true); assert.equal(got.length, 1);
+  // The retry job picks up a stuck delivery too.
+  const stuck2 = db.insert('webhook_deliveries', { webhook_id: w.id, event: 'booking.created', payload, status: null, attempts: 1 });
+  db.run("UPDATE webhook_deliveries SET last_attempt_at=datetime('now','-10 minutes') WHERE id=?", stuck2);
+  got.length = 0;
+  assert.equal(await hooks.retryDue(), 1);
+  assert.equal(db.get('SELECT status, attempts FROM webhook_deliveries WHERE id=?', stuck2).status, 200);
+  // Two failed deliveries, two overlapping runs of the job: each delivery is sent once.
+  const ids = [0, 1].map(() => db.insert('webhook_deliveries', { webhook_id: w.id, event: 'booking.created', payload, status: 500, attempts: 1 }));
+  for (const id of ids) db.run("UPDATE webhook_deliveries SET last_attempt_at=datetime('now','-10 minutes') WHERE id=?", id);
+  got.length = 0;
+  await Promise.all([hooks.retryDue(), hooks.retryDue()]);
+  assert.equal(got.length, 2);
+  assert.deepEqual(ids.map((id) => db.get('SELECT attempts FROM webhook_deliveries WHERE id=?', id).attempts), [2, 2]);
+  await o.del(`/api/webhooks/${w.id}`);
+});
+
+test('review fixes: a failed send-again is logged as a failure; messages without a status count as not sent', async () => {
+  const o = await owner();
+  const before = (await o.get('/api/outbox')).data.counts.logged;
+  const id = db.insert('outbox', { to_email: 'linh.nguyen@example.com', subject: 'Review fix check', body: 'x', status: null });
+  assert.equal((await o.get('/api/outbox')).data.counts.logged, before + 1);
+  assert.equal((await o.post(`/api/outbox/${id}/resend`)).status, 400);
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Email could not be sent again' AND detail LIKE 'Review fix check%'"));
+  assert.ok(!db.get("SELECT 1 FROM activity WHERE action='Sent an email again' AND detail LIKE 'Review fix check%'"));
+});

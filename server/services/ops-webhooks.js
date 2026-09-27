@@ -70,17 +70,37 @@ function redeliver(delivery) {
   return attempt(hook, delivery.id, delivery.payload, delivery.event);
 }
 
+// A delivery still marked "sending" this long after its last try never got an answer recorded (the server restarted
+// mid-send, say). It can be resent and is retried like a failure.
+const STUCK_SQL = "d.status IS NULL AND d.last_attempt_at < datetime('now','-2 minutes')";
+const FAILED_SQL = `((d.status IS NOT NULL AND (d.status<200 OR d.status>=300)) OR (${STUCK_SQL}))`;
+const isStuck = (d) => d.status == null && !!get(`SELECT 1 FROM webhook_deliveries d WHERE d.id=? AND ${STUCK_SQL}`, d.id);
+
 // Job: failed deliveries from the last day to active webhooks are tried again after 5 min, 30 min and 2 h.
-async function retryDue(now = Date.now()) {
-  const due = all(`SELECT d.* FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id
-    WHERE w.active=1 AND d.status IS NOT NULL AND (d.status<200 OR d.status>=300) AND COALESCE(d.attempts,1)<?
-      AND d.event<>'test.ping' AND d.created_at >= datetime('now','-1 day') ORDER BY d.id LIMIT 50`, MAX_ATTEMPTS)
-    .filter((d) => {
-      const last = Date.parse(String(d.last_attempt_at || d.created_at).replace(' ', 'T') + 'Z');
-      return now - last >= RETRY_AFTER_MIN[(d.attempts || 1) - 1] * 60e3;
-    });
-  for (const d of due) await redeliver(d);
-  return due.length;
+// One run at a time: a slow run (50 deliveries x 8 s) must not overlap the next and send the same delivery twice.
+let retrying = null;
+function retryDue(now = Date.now()) {
+  if (retrying) return retrying;
+  retrying = (async () => {
+    const due = all(`SELECT d.* FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id
+      WHERE w.active=1 AND ${FAILED_SQL} AND COALESCE(d.attempts,1)<?
+        AND d.event<>'test.ping' AND d.created_at >= datetime('now','-1 day') ORDER BY d.id LIMIT 50`, MAX_ATTEMPTS)
+      .filter((d) => {
+        const last = Date.parse(String(d.last_attempt_at || d.created_at).replace(' ', 'T') + 'Z');
+        return now - last >= RETRY_AFTER_MIN[(d.attempts || 1) - 1] * 60e3;
+      });
+    let sent = 0;
+    for (const d of due) {
+      // Re-read: a hand resend (or a paused webhook) since the list was taken means this one is no longer due.
+      const cur = get(`SELECT d.* FROM webhook_deliveries d JOIN webhooks w ON w.id=d.webhook_id WHERE d.id=? AND w.active=1 AND ${FAILED_SQL}
+        AND COALESCE(d.attempts,1)=?`, d.id, d.attempts || 1);
+      if (!cur) continue;
+      await redeliver(cur);
+      sent++;
+    }
+    return sent;
+  })().finally(() => { retrying = null; });
+  return retrying;
 }
 
 // How a webhook is doing: last answer, failures this week, and whether the last few all failed.
@@ -111,4 +131,4 @@ const EVENT_INFO = {
   'program.assigned': { about: 'A program is assigned to an athlete.', sample: { athlete_code: 'AVALOP2026', athlete: 'Ava Lopez', program_id: 3, program: 'Youth Speed Foundations', started: '2026-09-28', workout_url: 'https://your-site/w/abc123' } },
 };
 
-module.exports = { newSecret, sign, deliver, redeliver, retryDue, health, isOk, reason, EVENT_INFO, MAX_ATTEMPTS, RETRY_AFTER_MIN };
+module.exports = { newSecret, sign, deliver, redeliver, retryDue, health, isOk, isStuck, reason, EVENT_INFO, MAX_ATTEMPTS, RETRY_AFTER_MIN };

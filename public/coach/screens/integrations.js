@@ -98,7 +98,9 @@ async function render(ctx) {
     <div id="dpi-pane" role="tabpanel" class="dpi"></div>
   </div>`);
 
-  const el = ctx.el;
+  // Listeners go on this render's own wrapper, not ctx.el: #main is reused when the screen is opened again, and
+  // listeners left on it would keep firing with this render's stale state.
+  const el = ctx.el.querySelector('.dpi');
   const pane = el.querySelector('#dpi-pane');
   const sum = el.querySelector('#dpi-sum');
 
@@ -255,7 +257,7 @@ async function render(ctx) {
           ${hl.failed_7d && w.active ? html`<button type="button" class="btn btn-sm" data-act="hook-resend-failed" data-id="${w.id}">Resend failed (${hl.failed_7d})</button>` : ''}
         </div>
         <div class="btn-row">
-          <button type="button" class="btn btn-ghost btn-sm" data-act="hook-all" data-id="${w.id}">All ${plural(w.delivered, 'delivery', 'deliveries')}</button>
+          ${w.delivered ? html`<button type="button" class="btn btn-ghost btn-sm" data-act="hook-all" data-id="${w.id}">All ${plural(w.delivered, 'delivery', 'deliveries')}</button>` : ''}
           <button type="button" class="btn btn-ghost btn-sm" data-act="hook-edit" data-id="${w.id}">Edit</button>
           <button type="button" class="btn btn-ghost btn-sm" data-act="hook-toggle" data-id="${w.id}">${w.active ? 'Pause' : 'Resume'}</button>
           <button type="button" class="btn btn-ghost btn-sm" data-act="hook-rotate" data-id="${w.id}">New signing secret</button>

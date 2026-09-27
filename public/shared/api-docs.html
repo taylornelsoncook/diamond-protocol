@@ -132,7 +132,7 @@ pre code{background:none;padding:0}
       <p>One athlete's test results, newest first. Values are in the test's own unit. <code>best</code> is true on the best result for each test among those returned (lowest for timed tests, highest for the rest).</p>
       <div class="params-wrap"><table class="params"><thead><tr><th>Query</th><th>Description</th></tr></thead><tbody>
         <tr><td>test</td><td>Optional. Only this test, by its name in the test library (see <a href="#tests">List tests</a>).</td></tr>
-        <tr><td>since</td><td>Optional. Only results recorded on or after this date, <code>YYYY-MM-DD</code>.</td></tr>
+        <tr><td>since</td><td>Optional. Only results recorded on or after this date in the facility's time zone, <code>YYYY-MM-DD</code>.</td></tr>
         <tr><td>limit</td><td>Optional. 1–1,000, default 200.</td></tr>
       </tbody></table></div>
       <pre class="code">curl "<span class="base">https://your-site</span>/api/v1/athletes/AVALOP2026/results?test=Vertical%20jump" \

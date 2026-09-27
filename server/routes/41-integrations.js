@@ -3,7 +3,7 @@
 'use strict';
 const email = require('../email');
 const crypto = require('crypto');
-const { get, all, run, insert, update } = require('../db');
+const { get, all, run, insert, update, setting } = require('../db');
 const { h, bad, notFound, log, sha256, WEBHOOK_EVENTS, addDays, businessName, appUrl } = require('../lib');
 const { requireStaff, requireApiKey } = require('../auth');
 const hooks = require('../services/ops-webhooks');
@@ -38,19 +38,40 @@ function cleanEvents(list) {
   return [...new Set(ev)];
 }
 const cleanLabel = (v, max = 60) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-function cleanScope(v) {
-  if (v === undefined || v === null || v === '') return 'full';
+function cleanScope(v, { required = false } = {}) {
+  if (!required && (v === undefined || v === null || v === '')) return 'full';
   if (!Object.hasOwn(apiOps.SCOPES, v)) throw bad('Choose what the key can do: read only, or read and send results.');
   return v;
 }
+// The same address counts as a duplicate whatever the host's case or a trailing slash.
+function urlKey(s) {
+  try { const u = new URL(s); return `${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`; } catch { return String(s); }
+}
 function dupUrl(url, exceptId = 0) {
-  if (get('SELECT 1 FROM webhooks WHERE url=? AND id<>?', url, exceptId)) throw bad('A webhook already sends to that URL. Edit that one instead.');
+  const key = urlKey(url);
+  if (all('SELECT url FROM webhooks WHERE id<>?', exceptId).some((w) => urlKey(w.url) === key)) throw bad('A webhook already sends to that URL. Edit that one instead.');
 }
 const dateOnly = (v, fallback) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : fallback);
 const intIn = (v, dflt, min, max) => { const n = Number(v); return Math.min(Math.max(v !== '' && v != null && Number.isFinite(n) ? Math.trunc(n) : dflt, min), max); };
 const hookOr404 = (id) => { const w = get('SELECT * FROM webhooks WHERE id=?', Number(id)); if (!w) throw notFound('That webhook'); return w; };
 const keyOr404 = (id) => { const k = get('SELECT * FROM api_keys WHERE id=?', Number(id)); if (!k) throw notFound('That API key'); return k; };
 const hookName = (w) => w.label || w.url;
+
+// Start of a local day in the business time zone, as a UTC SQLite timestamp ("2026-09-01" → "2026-09-01 06:00:00" in Denver).
+// Results store recorded_at in UTC, so "since" a date means since local midnight, not UTC midnight.
+function localMidnightUtc(date) {
+  let tz = setting('timezone', 'America/Denver');
+  try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); } catch { tz = 'America/Denver'; }
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  const target = Date.parse(`${date}T00:00:00Z`);
+  let t = target;
+  for (let i = 0; i < 3; i++) { // the zone's offset at that moment; twice more covers a DST change near midnight
+    const p = Object.fromEntries(fmt.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    const wall = Date.parse(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}Z`);
+    t += target - wall;
+  }
+  return new Date(t).toISOString().slice(0, 19).replace('T', ' ');
+}
 
 // Exercise demo videos: how much of the library can play in the workout app, and what needs a link.
 function videoCoverage() {
@@ -77,7 +98,7 @@ function keyView(k, usage) {
 
 function mailCounts() {
   const counts = Object.fromEntries(MAIL_STATUSES.map((s) => [s, 0]));
-  for (const r of all('SELECT status, COUNT(*) AS n FROM outbox GROUP BY status')) counts[r.status || 'logged'] = r.n;
+  for (const r of all('SELECT status, COUNT(*) AS n FROM outbox GROUP BY status')) counts[r.status || 'logged'] = (counts[r.status || 'logged'] || 0) + r.n;
   return counts;
 }
 
@@ -116,7 +137,7 @@ function routes(api) {
     }
     if (req.body.scope !== undefined) {
       if (k.revoked_at) throw bad('That key is revoked. Create a new key instead.');
-      patch.scope = cleanScope(req.body.scope);
+      patch.scope = cleanScope(req.body.scope, { required: true }); // never widen a key by sending an empty value
     }
     if (!Object.keys(patch).length) throw bad('Nothing to change.');
     update('api_keys', k.id, patch);
@@ -216,7 +237,7 @@ function routes(api) {
     const w = hookOr404(req.params.id);
     const d = get('SELECT * FROM webhook_deliveries WHERE id=? AND webhook_id=?', Number(req.params.did), w.id);
     if (!d) throw notFound('That delivery');
-    if (d.status == null) throw bad('That delivery is still being sent. Try again in a few seconds.');
+    if (d.status == null && !hooks.isStuck(d)) throw bad('That delivery is still being sent. Try again in a few seconds.');
     const status = await hooks.redeliver(d);
     log(req, 'Resent webhook delivery', `${hookName(w)}: ${d.event} #${d.id} → ${status || 'no response'}`);
     res.json({ ok: hooks.isOk(status), status, delivery: get(`SELECT ${DELIVERY_COLS} FROM webhook_deliveries WHERE id=?`, d.id) });
@@ -269,7 +290,7 @@ function routes(api) {
     const to = String(req.body?.to || m.to_email).trim();
     if (!/^\S+@\S+\.\S+$/.test(to)) throw bad('Enter an email address.');
     const r = await email.sendEmailNow(to, m.subject, m.body);
-    log(req, 'Sent an email again', `${m.subject} → ${to}: ${r.ok ? 'delivered to the provider' : r.error}`);
+    log(req, r.ok ? 'Sent an email again' : 'Email could not be sent again', `${m.subject} → ${to}${r.ok ? '' : `: ${r.error}`}`);
     if (!r.ok) throw bad(r.error);
     res.json({ ok: true });
   }));
@@ -315,7 +336,7 @@ function routes(api) {
     if (req.query.since) {
       const since = dateOnly(req.query.since, null);
       if (!since) throw bad('"since" must be a date like 2026-09-01.');
-      where.push('r.recorded_at >= ?'); args.push(since);
+      where.push('r.recorded_at >= ?'); args.push(localMidnightUtc(since));
     }
     const rows = all(`SELECT r.id, t.name AS test, t.category, t.unit, t.lower_better, r.value, r.attempt, r.source, r.hand_timed, r.recorded_at, r.day_id, d.name AS testing_day
       FROM results r JOIN tests t ON t.id=r.test_id LEFT JOIN testing_days d ON d.id=r.day_id

@@ -232,6 +232,8 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
 
   // ======== Education ========
   function lessonRow(l) {
+    if (l.locked) return h('div', { class: 'eg-lesson', 'aria-disabled': 'true' }, h('span', { class: 'eg-lesson-i', 'aria-hidden': 'true' }, '🔒'),
+      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null].filter(Boolean).join(' · ') || 'Lesson')));
     return h('button', { type: 'button', class: 'eg-lesson', 'data-lesson': l.id, onClick: () => openLesson(l.id) },
       h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
       h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title),
@@ -260,12 +262,14 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
       }))) : null,
       e.courses.length ? h('div', { class: 'stack' }, h('h2', { class: 'eg-h2' }, 'Courses'), e.courses.map((c) => {
         const open = openCourses.has(c.id);
-        const body = h('div', { id: `eg-c-${c.id}`, hidden: !open }, c.description ? h('p', { class: 'small muted', style: 'margin-bottom:8px' }, c.description) : null, h('div', { class: 'eg-list' }, c.lessons.map(lessonRow)));
+        const body = h('div', { id: `eg-c-${c.id}`, hidden: !open }, c.description ? h('p', { class: 'small muted', style: 'margin-bottom:8px' }, c.description) : null,
+          c.locked ? h('p', { class: 'small', style: 'margin:0 0 8px' }, parent ? `This course is for sale. Buy it on the Programs tab to unlock it for ${name()}.` : 'This course is for sale. A parent can buy it on the Programs tab of the parent portal, or ask your coach.') : null,
+          h('div', { class: 'eg-list' }, c.lessons.map(lessonRow)));
         return h('div', { class: 'dp-panel eg-course' },
           h('button', { type: 'button', class: 'eg-course-h', 'aria-expanded': String(open), 'aria-controls': `eg-c-${c.id}`, onClick: (ev) => {
             const now = !openCourses.has(c.id); now ? openCourses.add(c.id) : openCourses.delete(c.id);
             ev.currentTarget.setAttribute('aria-expanded', String(now)); body.hidden = !now;
-          } }, h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.title), h('span', { class: 'small muted' }, `${c.done} of ${plural(c.total, 'lesson')} done${c.complete ? ' · Complete' : ''}`)), h('span', { class: 'eg-chev', 'aria-hidden': 'true' }, '›')),
+          } }, h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.title), h('span', { class: 'small muted' }, c.locked ? `Locked · ${plural(c.total, 'lesson')} · $${(c.price_cents / 100).toFixed(c.price_cents % 100 ? 2 : 0)}` : `${c.done} of ${plural(c.total, 'lesson')} done${c.complete ? ' · Complete' : ''}`)), h('span', { class: 'eg-chev', 'aria-hidden': 'true' }, '›')),
           bar(c.total ? Math.round((c.done / c.total) * 100) : 0, `${c.title}: ${c.done} of ${c.total} done`), body);
       })) : null,
       e.certificates?.length ? section('Certificates', `Courses ${parent ? `${name()} has` : 'you\'ve'} finished. Print one or share the link.`, h('div', { class: 'eg-list' }, e.certificates.map((x) => h('div', { class: 'eg-item row' },

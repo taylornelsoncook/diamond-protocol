@@ -13,6 +13,7 @@ import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
 import * as sms from './services/sms.js';
 import * as leads from './services/leads.js';
+import * as shop from './services/shop.js';
 
 const list = (data) => ({ data });
 function athleteOf(ctx, r, id) {
@@ -43,6 +44,7 @@ export const portalRoutes = [
   ['GET', '/portal/api/public/info', 'public', 'Business name, whether sign-up is open, and whether terms and privacy are published.', (ctx) => signup.signupInfo(ctx)],
   ['POST', '/portal/api/public/inquiry', 'public', 'Ask about training: parent_name, email, phone, athlete_name, athlete_age, sport, message, texts_ok. We reply by email with next steps.', (ctx, r) => leads.submitInquiry(ctx, r.body)],
   ['GET', '/portal/api/public/certificates/:token', 'public', 'A course certificate for its shareable page: athlete name, course, lessons and date. Nothing else.', (ctx, r) => engage.publicCertificate(ctx, r.params.token)],
+  ['GET', '/portal/api/public/shop', 'public', 'The online store page: programs and courses for sale with prices and what\'s inside. No names.', (ctx) => shop.publicShop(ctx)],
   ['GET', '/portal/api/public/schedule', 'public', 'The Book now page: classes, clinics and camp days in the next 2 weeks with open spots, and the next evaluation times. No names.', (ctx) => booknow.publicSchedule(ctx)],
   ['GET', '/portal/api/public/legal', 'public', 'The current terms of service and privacy policy.', (ctx) => legal.legalDocs(ctx)],
   ['POST', '/portal/api/signup', 'public', 'New family: parent {name, email, phone}, athletes [{name, birth_date, sex, sport, school, medical_notes, emergency_name, emergency_phone}], accept_terms=true. Emails a code.', (ctx, r) => signup.startSignup(ctx, r.body, r.ip)],
@@ -141,6 +143,12 @@ export const portalRoutes = [
     if (sale.status !== 'succeeded') throw conflict(`The card was declined: ${sale.failure_reason}`);
     return { sale, athlete: athleteSummary(ctx, c.id) };
   }],
+  ['GET', '/portal/api/shop', 'guardian', 'Programs and courses for sale, and what your athletes already have.', (ctx, r) => shop.familyShop(ctx, r.guardian.family_id)],
+  ['POST', '/portal/api/shop/buy', 'guardian', 'Buy a program or course for an athlete with the family card: kind (program or course), item_id, athlete_id. A program replaces their current one.', async (ctx, r) => {
+    legal.requireAgreements(ctx, r.guardian);
+    const c = athleteOf(ctx, r, r.body.athlete_id);
+    return { ...(await shop.buyForAthlete(ctx, r.guardian, c, r.body)), athlete: athleteSummary(ctx, c.id) };
+  }, 201],
   ['POST', '/portal/api/membership', 'guardian', 'Start a membership: plan_id, athlete_id. Needs a card on file.', async (ctx, r) => {
     requireWaiver(ctx, r);
     const c = athleteOf(ctx, r, r.body.athlete_id);

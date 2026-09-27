@@ -121,7 +121,9 @@ CREATE TABLE IF NOT EXISTS programs (
   description TEXT,
   level TEXT,
   weeks INTEGER NOT NULL DEFAULT 4 CHECK (weeks BETWEEN 1 AND 52),
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  for_sale INTEGER NOT NULL DEFAULT 0,   -- sold online in the parent portal and at /shop (version 26)
+  price_cents INTEGER
 );
 CREATE TABLE IF NOT EXISTS workouts (
   id TEXT PRIMARY KEY,
@@ -872,7 +874,10 @@ CREATE TABLE IF NOT EXISTS courses (
   published INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents')),   -- parent courses show in the parent portal (version 25)
-  age_min INTEGER, age_max INTEGER                                                           -- for parents of athletes this age (version 25)
+  age_min INTEGER,                                                                           -- for parents of athletes this age (version 25)
+  age_max INTEGER,
+  for_sale INTEGER NOT NULL DEFAULT 0,                                                       -- sold online; locked for athletes who haven't bought it (version 26)
+  price_cents INTEGER
 );
 CREATE TABLE IF NOT EXISTS lessons (
   id TEXT PRIMARY KEY,
@@ -894,6 +899,21 @@ CREATE TABLE IF NOT EXISTS lesson_progress (
   completed_at TEXT NOT NULL,
   PRIMARY KEY (lesson_id, client_id)
 );
+-- Programs and courses bought online (version 26). A refund of the sale ends access.
+CREATE TABLE IF NOT EXISTS purchases (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('program','course')),
+  item_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','refunded')),
+  created_at TEXT NOT NULL,
+  refunded_at TEXT
+);
+CREATE INDEX IF NOT EXISTS purchases_client ON purchases(client_id, item_kind, item_id);
 -- What each parent has read of the parent courses (version 25).
 CREATE TABLE IF NOT EXISTS guardian_lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,

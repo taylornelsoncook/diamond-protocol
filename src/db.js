@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 25;
+const SCHEMA_VERSION = 26;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -53,7 +53,8 @@ const ADDED_TABLES = {
   19: ['campaigns', 'campaign_recipients', 'email_optouts'],              // announcement emails
   22: ['skill_badges', 'badge_awards'],                                   // skill badges
   24: ['quiz_attempts', 'course_certificates'],                           // lesson quizzes and course certificates
-  25: ['guardian_lesson_progress']                                        // parent education
+  25: ['guardian_lesson_progress'],                                       // parent education
+  26: ['purchases']                                                       // programs and courses sold online
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))"],   // athlete_id: version 6, sex: version 10
@@ -71,7 +72,8 @@ const ADDED_COLUMNS = {
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL'],           // version 23: weight-room screen
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL'],        // version 23 (then rebuilt so assignment_id can be empty)
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
-  courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER']   // version 25: parent education
+  courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
+  programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER']                   // version 26: sold online
 };
 
 function migrate(raw, schema) {

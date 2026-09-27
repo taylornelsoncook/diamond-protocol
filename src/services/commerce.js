@@ -448,6 +448,11 @@ export async function refundSale(ctx, id, body = {}) {
     }
     // Gear comes back on the shelf with a full refund, unless it can't be sold again (restock: false).
     const restocked = full && body.restock !== false ? stockForSale(ctx, id, 1, 'refund') : 0;
+    // A program or course bought online ends with a full refund: the athlete comes off the program (or the course locks).
+    if (full) for (const b of ctx.db.all(`SELECT * FROM purchases WHERE sale_id = ? AND status = 'active'`, id)) {
+      ctx.db.run(`UPDATE purchases SET status = 'refunded', refunded_at = ? WHERE id = ?`, ctx.now(), b.id);
+      if (b.item_kind === 'program') ctx.db.run('UPDATE assignments SET active = 0 WHERE client_id = ? AND program_id = ? AND active = 1', b.client_id, b.item_id);
+    }
     emit(ctx, 'sale.refunded', { sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', amount_cents: amount, total_refunded_cents: total, full, sessions_removed: removed, items_restocked: restocked, method: s.method });
   });
   return getSale(ctx, id);

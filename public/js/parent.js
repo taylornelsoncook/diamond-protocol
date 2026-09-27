@@ -30,7 +30,14 @@ async function boot() {
   // From the public Book now page: open the Book tab on classes or evaluations.
   const book = new URLSearchParams(location.search).get('book');
   if (state.me && ['classes', 'private', 'evaluation'].includes(book)) { state.tab = 'book'; state.bookMode = book; history.replaceState(null, '', '/parent'); }
-  if (state.me && new URLSearchParams(location.search).has('welcome')) { state.tab = 'family'; history.replaceState(null, '', '/parent'); setTimeout(() => toast('Welcome! Sign the waiver and add a card, then you can book.'), 300); }
+  // From the store page (/shop): open Programs on what they came to buy. New families add a card first.
+  const buy = new URLSearchParams(location.search).get('buy');
+  const buying = state.me && /^(program|course):[\w-]+$/.test(buy ?? '');
+  if (buying) state.buy = buy;
+  if (state.me && new URLSearchParams(location.search).has('welcome')) {
+    state.tab = 'family'; history.replaceState(null, '', '/parent');
+    setTimeout(() => toast(buying ? 'Welcome! Add a card here, then buy it on the Programs tab.' : 'Welcome! Sign the waiver and add a card, then you can book.'), 300);
+  } else if (buying) { state.tab = 'programs'; history.replaceState(null, '', '/parent'); }
   render();
 }
 async function refresh() { state.me = await get('me'); render(); }
@@ -309,7 +316,7 @@ async function viewProgress(main) {
 // ---------- Programs: standing spots, camps, packs, memberships ----------
 async function viewPrograms(main) {
   const a = athlete();
-  const [{ data: progs }, store] = await Promise.all([get('programs'), get('store')]);
+  const [{ data: progs }, store, shop] = await Promise.all([get('programs'), get('store'), get('shop')]);
   // Only show what fits this athlete's age (when we know it).
   const fits = (p) => a?.age == null || ((p.age_min == null || a.age >= p.age_min) && (p.age_max == null || a.age <= p.age_max));
   const groups = progs.filter((p) => p.kind === 'group' && fits(p)), camps = progs.filter((p) => p.kind !== 'group' && fits(p));
@@ -343,7 +350,25 @@ async function viewPrograms(main) {
     ...store.products.map((p) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, p.kind === 'pack' ? `${p.sessions} ${p.credit_type} sessions` : `1 ${p.credit_type} session`)),
       buy('Buy', p.price_cents, async () => { await post('purchase', { product_id: p.id, athlete_id: a.id }); toast('Added to your account.'); await refresh(); }))));
 
-  fill(main, top('Programs'), banners(), athleteChips(() => render()), a ? [campPanel, groupPanel, storePanel] : h('div', { class: 'empty' }, 'Add an athlete on the Family tab first.'));
+  // Programs and courses sold online: pay once, it shows in the athlete's app.
+  const owns = (x) => shop.owned.some((o) => o.client_id === a?.id && o.item_kind === x.kind && o.item_id === x.id);
+  const onlineRow = (x) => {
+    const picked = state.buy === `${x.kind}:${x.id}`;
+    return h('div', { class: 'p-row', id: picked ? 'buy-pick' : null, style: picked ? 'outline:2px solid var(--green);outline-offset:4px;border-radius:var(--radius-md)' : null },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title),
+        h('span', { class: 'small muted' }, x.kind === 'program' ? `Training program · ${x.weeks} ${x.weeks === 1 ? 'week' : 'weeks'}${x.level ? ` · ${x.level}` : ''}` : `Course · ${x.lessons} ${x.lessons === 1 ? 'lesson' : 'lessons'}`),
+        x.description ? h('span', { class: 'small muted' }, x.description) : null),
+      owns(x) ? h('span', { class: 'dp-badge dp-badge--good' }, 'In the app') : buy('Buy', x.price_cents, async () => {
+        if (x.kind === 'program' && a.program && !confirm(`${x.title} replaces ${a.first_name}'s current program, ${a.program.name}. Buy it anyway?`)) return;
+        await post('shop/buy', { kind: x.kind, item_id: x.id, athlete_id: a.id });
+        state.buy = null;
+        toast(`${x.title} is in ${a.first_name}'s app now. We emailed you the link.`); await refresh();
+      }));
+  };
+  const onlinePanel = shop.items.length ? panel('Online programs & courses', { subtitle: `Pay once and ${a?.first_name ?? 'your athlete'} gets it in their app. No membership needed.` }, shop.items.map(onlineRow)) : null;
+
+  fill(main, top('Programs'), banners(), athleteChips(() => render()), a ? [state.buy ? onlinePanel : null, campPanel, groupPanel, storePanel, state.buy ? null : onlinePanel] : h('div', { class: 'empty' }, 'Add an athlete on the Family tab first.'));
+  document.getElementById('buy-pick')?.scrollIntoView({ block: 'center' });
 }
 // [1,2,3,4,5] -> "Mon–Fri", [1,3] -> "Mon & Wed"
 const dayList = (days) => {

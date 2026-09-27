@@ -182,7 +182,9 @@ export function clientHome(ctx, client) {
   const sub = ctx.db.get(`SELECT status FROM subscriptions WHERE client_id = ? ORDER BY (status = 'canceled'), created_at DESC LIMIT 1`, client.id);
   const status = sub?.status ?? 'none';
   const base = { client: { name: client.name, first_name: client.name.split(' ')[0] }, membership: status };
-  if (!ACCESS[status]) return { ...base, locked: true, message: status === 'paused' ? 'Your membership is paused. Message your coach to pick back up.' : 'You don\'t have an active membership. Message your coach to get started.' };
+  // A program bought online opens the app on its own, membership or not.
+  const bought = !ACCESS[status] && ctx.db.get(`SELECT a.id FROM assignments a JOIN purchases b ON b.client_id = a.client_id AND b.item_kind = 'program' AND b.item_id = a.program_id AND b.status = 'active' WHERE a.client_id = ? AND a.active = 1`, client.id);
+  if (!ACCESS[status] && !bought) return { ...base, locked: true, message: status === 'paused' ? 'Your membership is paused. Message your coach to pick back up.' : 'You don\'t have an active membership. Message your coach to get started.' };
   const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', client.id);
   if (!a) return { ...base, locked: false, program: null, message: 'Your coach is building your program. Check back soon.' };
   const program = getProgram(ctx, a.program_id);

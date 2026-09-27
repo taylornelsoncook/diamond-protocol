@@ -3,6 +3,7 @@
 // Owners and coaches manage; front desk sees everything read-only (the server enforces the same).
 import { h, fill, toast, busy, btn, field, input, select, panel, ago, videoEmbed } from './ui.js';
 import { sparkline, fmtResult } from './charts.js';
+import { saleForm } from './shop-admin.js';
 
 let deps = null;     // { api, render, header, role }
 export function initEngage(d) { deps = d; }
@@ -244,6 +245,12 @@ async function lessonDialog(lesson, courses, preset = {}) {
     err, h('div', { class: 'row' }, btn(lesson ? 'Save lesson' : 'Post lesson', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   f.title.focus();
 }
+// Owners: price a course and put it in the online store.
+async function saleDialog(courseId) {
+  const info = (await get('/v1/shop')).courses.find((x) => x.id === courseId);
+  const d = openDialog(h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, `Sell ${info.title} online`),
+    saleForm(put, 'course', info, () => { d.close(); deps.render(); }), h('div', null, btn('Close', () => d.close(), 'ghost'))));
+}
 function courseDialog(course) {
   const title = input({ value: course?.title ?? '', maxlength: '160' }), desc = textarea(course?.description ?? '', { rows: '3', style: 'min-height:72px' }), pub = h('input', { type: 'checkbox', checked: course ? course.published : true });
   const audience = select([['athletes', 'Athletes (and their parents with them)'], ['parents', 'Parents only: shows under For parents in the parent portal']], { value: course?.audience ?? 'athletes' });
@@ -298,8 +305,9 @@ export async function viewEducation(main) {
   const coursesPanel = panel('Courses', { subtitle: 'Lessons in order. Athletes see the next lesson when they finish one. Parent courses show in the parent portal.', action: manage ? btn('New course', () => courseDialog(null), 'secondary') : null },
     starter,
     edu.courses.length ? edu.courses.map((c) => h('div', { class: 'edu-course' },
-      h('div', { class: 'row wrap' }, h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'edu-course-title' }, c.title), h('span', { class: 'small muted' }, `${c.audience === 'parents' ? `For parents${c.age_min != null || c.age_max != null ? `, ages ${c.age_min ?? 'any'}–${c.age_max ?? 'any'}` : ''} · ${plural(c.parents_reading ?? 0, 'parent')} reading · ` : ''}${plural(c.lessons.length, 'lesson')}${c.certificates ? ` · ${plural(c.certificates, 'certificate')} earned` : ''}${c.published ? '' : ' · draft, hidden from athletes'}${c.description ? ` · ${c.description}` : ''}`)),
+      h('div', { class: 'row wrap' }, h('div', { class: 'edu-grow stack-tight' }, h('span', { class: 'edu-course-title' }, c.title), h('span', { class: 'small muted' }, `${c.audience === 'parents' ? `For parents${c.age_min != null || c.age_max != null ? `, ages ${c.age_min ?? 'any'}–${c.age_max ?? 'any'}` : ''} · ${plural(c.parents_reading ?? 0, 'parent')} reading · ` : ''}${plural(c.lessons.length, 'lesson')}${c.certificates ? ` · ${plural(c.certificates, 'certificate')} earned` : ''}${c.published ? '' : ' · draft, hidden from athletes'}${c.for_sale ? ' · for sale online' : ''}${c.description ? ` · ${c.description}` : ''}`)),
         manage ? h('div', { class: 'edu-acts' }, btn('Add lesson', () => lessonDialog(null, edu.courses, { course_id: c.id }), 'ghost'), c.audience !== 'parents' && c.published && c.lessons.some((l) => l.published) ? btn('Assign', () => assignDialog({ course_id: c.id }), 'ghost') : null, btn('Edit', () => courseDialog(c), 'ghost'),
+          deps.role() === 'owner' && c.audience !== 'parents' ? btn(c.for_sale ? 'For sale' : 'Sell online', (e) => busy(e.currentTarget, () => saleDialog(c.id)), 'ghost') : null,
           btn('Delete', (e) => { if (confirm(`Delete the course "${c.title}"? Its lessons stay in the library.`)) busy(e.currentTarget, async () => { await del(`/v1/courses/${c.id}`); toast('Course deleted. Its lessons are in the library.'); deps.render(); }); }, 'ghost')) : null),
       c.lessons.length ? h('div', null, c.lessons.map((l, i, list) => lessonRow(l, i, list, c))) : h('p', { class: 'muted small' }, 'No lessons yet.')))
       : h('p', { class: 'muted' }, 'No courses yet. A course is a short series of lessons, like "Recovery basics".'));

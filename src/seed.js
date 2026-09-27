@@ -16,6 +16,7 @@ import * as programs from './services/programs.js';
 import { createUser } from './services/access.js';
 import * as engage from './services/engage.js';
 import * as inventory from './services/inventory.js';
+import * as shop from './services/shop.js';
 import { addDays } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -241,6 +242,8 @@ engage.sendMessage(ctx, { clientId: cole.id }, { body: 'Saw your check-in: short
 // Parent courses: the starter drafts, two of them published.
 engage.addStarterParentCourses(ctx);
 for (const t of ['Growth spurts and training', 'Fueling a young athlete']) engage.updateCourse(ctx, ctx.db.get('SELECT id FROM courses WHERE title = ?', t).id, { published: true });
+// Online store: one program for sale at /shop and in the parent portal.
+shop.setForSale(ctx, 'program', strength.id, { for_sale: true, price_cents: 4900 });
 // Skill badges, with one earned by Ava.
 const sprintStart = engage.createBadge(ctx, { name: 'Sprint start', category: 'Speed', description: 'Drives out of a two-point start with a low, powerful first three steps.' });
 engage.createBadge(ctx, { name: 'Hinge pattern', category: 'Strength', description: 'Hinges at the hips with a flat back, ready for deadlifts and cleans.' });

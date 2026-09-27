@@ -497,14 +497,30 @@ function assignmentRows(ctx, clientId) {
 }
 // Lessons in parent courses never show to athletes.
 const ATHLETE_LESSON = `(course_id IS NULL OR course_id NOT IN (SELECT id FROM courses WHERE audience = 'parents'))`;
+// A course sold online is locked for an athlete until it's bought, a coach assigns it (to them or their team), or they
+// had already started it before it went on sale.
+function lockedCourses(ctx, clientId) {
+  const paid = ctx.db.all(`SELECT id FROM courses WHERE for_sale = 1 AND price_cents > 0 AND audience = 'athletes'`).map((r) => r.id);
+  if (!paid.length) return new Set();
+  const open = new Set([
+    ...ctx.db.all(`SELECT item_id FROM purchases WHERE client_id = ? AND item_kind = 'course' AND status = 'active'`, clientId).map((r) => r.item_id),
+    ...assignmentRows(ctx, clientId).map((x) => x.course_id ?? (x.lesson_id && ctx.db.get('SELECT course_id FROM lessons WHERE id = ?', x.lesson_id)?.course_id)).filter(Boolean),
+    ...ctx.db.all('SELECT DISTINCT l.course_id FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? AND l.course_id IS NOT NULL', clientId).map((r) => r.course_id)]);
+  return new Set(paid.filter((id) => !open.has(id)));
+}
+function requireOpen(ctx, clientId, l) {
+  if (l.course_id && lockedCourses(ctx, clientId).has(l.course_id)) throw conflict('This lesson is part of a course for sale. A parent can buy it on the Programs tab of the parent portal.');
+}
 // What the athlete (or their parent) sees: assigned reading first, then courses and the library. Unpublished lessons never show.
 export function education(ctx, clientId) {
   clientRow(ctx, clientId);
   const done = doneSet(ctx, clientId), t = today(ctx);
   const lessons = ctx.db.all(`SELECT * FROM lessons WHERE published = 1 AND ${ATHLETE_LESSON} ORDER BY position, created_at`);
+  const locked = lockedCourses(ctx, clientId);
   const courses = ctx.db.all(`SELECT * FROM courses WHERE published = 1 AND audience = 'athletes' ORDER BY created_at`).map((c) => {
-    const ls = lessons.filter((l) => l.course_id === c.id).map((l) => lessonItem(l, done));
-    return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
+    const ls = lessons.filter((l) => l.course_id === c.id).map((l) => (locked.has(c.id) ? { ...lessonItem(l, done), locked: true } : lessonItem(l, done)));
+    return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done),
+      ...(locked.has(c.id) ? { locked: true, price_cents: c.price_cents } : {}) };
   }).filter((c) => c.total > 0);
   const assigned = assignmentRows(ctx, clientId).map((x) => {
     if (x.lesson_id) {
@@ -522,6 +538,7 @@ export function lessonFor(ctx, clientId, lessonId) {
   clientRow(ctx, clientId);
   const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
   if (!l) throw notFound('Lesson');
+  requireOpen(ctx, clientId, l);
   const course = l.course_id ? ctx.db.get('SELECT id, title FROM courses WHERE id = ? AND published = 1', l.course_id) : null;
   const siblings = course ? ctx.db.all('SELECT id, title FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', course.id) : [];
   const i = siblings.findIndex((s) => s.id === l.id);
@@ -546,6 +563,7 @@ export function completeLesson(ctx, clientId, lessonId, done = true) {
 export function takeQuiz(ctx, clientId, lessonId, body = {}) {
   const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
   if (!l) throw notFound('Lesson');
+  requireOpen(ctx, clientId, l);
   const quiz = quizOf(l);
   if (!quiz) throw conflict('This lesson has no quiz.');
   const since = new Date(Date.parse(ctx.now()) - 86400000).toISOString();
@@ -702,7 +720,7 @@ export function educationReport(ctx) {
   const lessons = ctx.db.all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id = l.id) AS completions FROM lessons l ORDER BY l.position, l.created_at')
     .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
   const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
-    certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
+    certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, for_sale: !!c.for_sale && c.price_cents > 0, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
     parents_reading: c.audience === 'parents' ? ctx.db.get('SELECT COUNT(DISTINCT p.guardian_id) AS n FROM guardian_lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE l.course_id = ?', c.id).n : undefined }));
   const finishedCourse = (courseId, clientId) => {
     const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);

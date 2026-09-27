@@ -59,7 +59,8 @@ test.after(() => { server?.close(); });
 test('demo data: days, results and five waiting results', async () => {
   const r = await coach.get('/api/testing');
   assert.equal(r.status, 200);
-  assert.equal(r.data.days.length, 3);
+  assert.equal(r.data.days.length, 4); // three from the testing demo, plus the Winter retest planned ahead (parent demo)
+  assert.ok(r.data.days.some((d) => d.name === 'Winter retest' && d.status === 'open'));
   assert.ok(r.data.days.some((d) => d.status === 'shared' && d.note));
   assert.ok(r.data.days.some((d) => d.status === 'open'));
   assert.equal(r.data.pending.count, 5);
@@ -376,4 +377,361 @@ test('share with parents: status shared, families emailed, webhooks fire', async
   const kurt = await parent('kurt.jensen@example.com');
   const p = await kurt.get(`/api/parent/athletes/${athlete('Nate').id}/progress`);
   assert.equal(p.data.note.text, 'Strong day. Keep sprinting.');
+});
+
+// ---- Testing days: progress, previous bests, editing, removing, share preview and emailing again ----
+test('overview shows how many athlete-tests have a result; day detail carries previous bests', async () => {
+  const r = await desk.get('/api/testing');
+  const fall = r.data.days.find((d) => d.name === 'Fall combine');
+  assert.equal(fall.done, fall.athletes * fall.tests);
+  const oct = db.get("SELECT * FROM testing_days WHERE name='October youth testing'");
+  const d = await desk.get(`/api/testing/days/${oct.id}`);
+  const nate = athlete('Nate'), t40 = testId('40-yard dash');
+  const p = d.data.prev.find((x) => x.athlete_id === nate.id && x.test_id === t40);
+  const expected = db.get('SELECT MIN(r.value) v FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.athlete_id=? AND r.test_id=? AND d.date < ?', nate.id, t40, oct.date).v;
+  assert.equal(p.best, expected);
+  // Higher-is-better tests use the max
+  const tbj = testId('Standing broad jump');
+  const pj = d.data.prev.find((x) => x.athlete_id === nate.id && x.test_id === tbj);
+  assert.equal(pj.best, db.get('SELECT MAX(r.value) v FROM results r JOIN testing_days d ON d.id=r.day_id WHERE r.athlete_id=? AND r.test_id=? AND d.date < ?', nate.id, tbj, oct.date).v);
+});
+
+test('new testing day: real dates only, long names trimmed, archived athletes left out', async () => {
+  assert.equal((await coach.post('/api/testing/days', { name: 'X', date: '2026-02-30', test_ids: [testId('40-yard dash')] })).status, 400);
+  const gone = db.insert('athletes', { code: 'GONE2026', first_name: 'Gone', last_name: 'Away', archived: 1 });
+  const r = await coach.post('/api/testing/days', { name: 'N'.repeat(300), date: '2026-10-05', athlete_ids: [gone, athlete('Ava').id], test_ids: [testId('40-yard dash')] });
+  assert.equal(r.status, 200);
+  const day = db.get('SELECT * FROM testing_days WHERE id=?', r.data.id);
+  assert.equal(day.name.length, 120);
+  assert.equal(count('SELECT COUNT(*) n FROM testing_day_athletes WHERE day_id=?', day.id), 1);
+});
+
+test('edit and delete a testing day: coach and owner only, results need confirming, shared days need the owner', async () => {
+  const ava = athlete('Ava'), t40 = testId('40-yard dash');
+  const id = (await coach.post('/api/testing/days', { name: 'Mistake day', date: '2026-10-06', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  assert.equal((await desk.patch(`/api/testing/days/${id}`, { name: 'Nope' })).status, 403);
+  assert.equal((await coach.patch(`/api/testing/days/${id}`, { date: '2026-13-01' })).status, 400);
+  assert.equal((await coach.patch(`/api/testing/days/${id}`, { name: '   ' })).status, 400);
+  const ok = await coach.patch(`/api/testing/days/${id}`, { name: 'Wrong date day', date: '2026-10-07' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.day.name, 'Wrong date day');
+  assert.equal(ok.data.day.date, '2026-10-07');
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Updated testing day' AND detail LIKE 'Wrong date day%'"));
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.1 });
+  assert.equal((await desk.del(`/api/testing/days/${id}?confirm=1`)).status, 403);
+  const refused = await coach.del(`/api/testing/days/${id}`);
+  assert.equal(refused.status, 400);
+  assert.equal(refused.data.results, 1);
+  assert.ok(db.get('SELECT 1 FROM testing_days WHERE id=?', id), 'nothing deleted without confirm');
+  const del = await coach.del(`/api/testing/days/${id}?confirm=1`);
+  assert.equal(del.status, 200);
+  assert.equal(del.data.deleted_results, 1);
+  assert.equal(count('SELECT COUNT(*) n FROM results WHERE day_id=?', id), 0);
+  assert.ok(!db.get('SELECT 1 FROM testing_days WHERE id=?', id));
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Deleted testing day' AND detail LIKE 'Wrong date day%'"));
+  // Shared days: only the owner can delete
+  const sid = (await coach.post('/api/testing/days', { name: 'Shared once', date: '2026-10-08', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${sid}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.2 });
+  await coach.post(`/api/testing/days/${sid}/share`, {});
+  assert.equal((await coach.del(`/api/testing/days/${sid}?confirm=1`)).status, 403);
+  assert.equal((await owner.del(`/api/testing/days/${sid}?confirm=1`)).status, 200);
+});
+
+test('add and remove tests and athletes on a day', async () => {
+  const ava = athlete('Ava'), kevin = athlete('Kevin'), t40 = testId('40-yard dash'), tvj = testId('Vertical jump');
+  const id = (await coach.post('/api/testing/days', { name: 'Adjust day', date: '2026-10-09', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  // Adding a test returns it (with previous bests) so the screen can add a tab
+  assert.equal((await desk.post(`/api/testing/days/${id}/tests`, { test_id: tvj })).status, 403);
+  const add = await coach.post(`/api/testing/days/${id}/tests`, { test_id: tvj });
+  assert.equal(add.data.test.name, 'Vertical jump');
+  assert.ok(add.data.prev.some((p) => p.athlete_id === ava.id && p.test_id === tvj));
+  // Walk-ups come back with their previous bests too
+  const walk = await desk.post(`/api/testing/days/${id}/athletes`, { athlete_id: kevin.id });
+  assert.equal(walk.status, 200);
+  assert.ok(Array.isArray(walk.data.prev));
+  // Removing an athlete: front desk can't; results need confirming
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: kevin.id, test_id: t40, attempt: 1, value: 6.4 });
+  assert.equal((await desk.del(`/api/testing/days/${id}/athletes/${kevin.id}?confirm=1`)).status, 403);
+  const r1 = await coach.del(`/api/testing/days/${id}/athletes/${kevin.id}`);
+  assert.equal(r1.status, 400);
+  assert.equal(r1.data.results, 1);
+  assert.equal((await coach.del(`/api/testing/days/${id}/athletes/${kevin.id}?confirm=1`)).data.deleted_results, 1);
+  assert.ok(!db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, kevin.id));
+  assert.equal(count('SELECT COUNT(*) n FROM results WHERE day_id=? AND athlete_id=?', id, kevin.id), 0);
+  assert.equal((await coach.del(`/api/testing/days/${id}/athletes/${kevin.id}`)).status, 404);
+  // Removing a test: results need confirming, and the last test stays
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: tvj, attempt: 1, value: 20 });
+  assert.equal((await desk.del(`/api/testing/days/${id}/tests/${tvj}?confirm=1`)).status, 403);
+  assert.equal((await coach.del(`/api/testing/days/${id}/tests/${tvj}`)).status, 400);
+  assert.equal((await coach.del(`/api/testing/days/${id}/tests/${tvj}?confirm=1`)).status, 200);
+  assert.equal(count('SELECT COUNT(*) n FROM results WHERE day_id=? AND test_id=?', id, tvj), 0);
+  const last = await coach.del(`/api/testing/days/${id}/tests/${t40}`);
+  assert.equal(last.status, 400);
+  assert.match(last.data.error, /at least one test/);
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Removed athlete from testing day'"));
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Removed test from testing day'"));
+});
+
+test('share preview, then emailing only the families with results added since sharing', async () => {
+  const ava = athlete('Ava'), nate = athlete('Nate'), t40 = testId('40-yard dash');
+  const id = (await coach.post('/api/testing/days', { name: 'Late walk-up day', date: '2026-10-10', athlete_ids: [ava.id, nate.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.0 });
+  assert.equal((await desk.get(`/api/testing/days/${id}/share-preview`)).status, 403);
+  const pre = await coach.get(`/api/testing/days/${id}/share-preview`);
+  assert.equal(pre.status, 200);
+  assert.equal(pre.data.athletes, 2);
+  assert.equal(pre.data.with_results, 1);
+  assert.deepEqual(pre.data.without_results, ['Nate Jensen']);
+  const avaEmails = count("SELECT COUNT(*) n FROM parents WHERE family_id=? AND email IS NOT NULL AND email != ''", ava.family_id);
+  assert.equal(pre.data.emails, avaEmails);
+  assert.equal(pre.data.families, avaEmails ? 1 : 0);
+  // Nothing new before sharing
+  assert.equal((await coach.post(`/api/testing/days/${id}/share`, { only_new: true })).status, 200); // not shared yet: a normal share
+  assert.equal(db.get('SELECT status FROM testing_days WHERE id=?', id).status, 'shared');
+  assert.equal((await coach.post(`/api/testing/days/${id}/share`, { only_new: true })).status, 400);
+  // Nate tests late
+  await desk.put(`/api/testing/days/${id}/results`, { athlete_id: nate.id, test_id: t40, attempt: 1, value: 6.3 });
+  const day = await coach.get(`/api/testing/days/${id}`);
+  assert.equal(day.data.day.new_since_share, 1);
+  const pre2 = await coach.get(`/api/testing/days/${id}/share-preview`);
+  assert.deepEqual(pre2.data.new_since_share, ['Nate Jensen']);
+  const out = count('SELECT COUNT(*) n FROM outbox');
+  const avaMail = count("SELECT COUNT(*) n FROM outbox o JOIN parents p ON p.email=o.to_email WHERE p.family_id=?", ava.family_id);
+  const again = await coach.post(`/api/testing/days/${id}/share`, { note: 'Nate made it in.', only_new: true });
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  assert.equal(again.data.again, true);
+  assert.equal(again.data.athletes, 1);
+  const nateEmails = count("SELECT COUNT(*) n FROM parents WHERE family_id=? AND email IS NOT NULL AND email != ''", nate.family_id);
+  assert.equal(count('SELECT COUNT(*) n FROM outbox'), out + nateEmails);
+  assert.equal(count("SELECT COUNT(*) n FROM outbox o JOIN parents p ON p.email=o.to_email WHERE p.family_id=?", ava.family_id), avaMail, "Ava's family isn't emailed twice");
+  assert.equal(db.get('SELECT note FROM testing_days WHERE id=?', id).note, 'Nate made it in.');
+  assert.equal((await coach.get(`/api/testing/days/${id}`)).data.day.new_since_share, 0);
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Emailed families again' AND detail LIKE 'Late walk-up day%'"));
+});
+
+test('review fixes: emailing again counts families not athletes; archived athletes cannot be walk-ups', async () => {
+  const nate = athlete('Nate'), emma = athlete('Emma'), ava = athlete('Ava'), t40 = testId('40-yard dash');
+  assert.equal(nate.family_id, emma.family_id, 'Nate and Emma are siblings in the demo');
+  const id = (await coach.post('/api/testing/days', { name: 'Siblings late', date: '2026-10-11', athlete_ids: [ava.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: ava.id, test_id: t40, attempt: 1, value: 6.0 });
+  await coach.post(`/api/testing/days/${id}/share`, {});
+  for (const a of [nate, emma]) {
+    assert.equal((await desk.post(`/api/testing/days/${id}/athletes`, { athlete_id: a.id })).status, 200);
+    await desk.put(`/api/testing/days/${id}/results`, { athlete_id: a.id, test_id: t40, attempt: 1, value: 6.3 });
+  }
+  const pre = await coach.get(`/api/testing/days/${id}/share-preview`);
+  assert.equal(pre.data.new_since_share.length, 2);
+  const emails = count("SELECT COUNT(*) n FROM parents WHERE family_id=? AND email IS NOT NULL AND email != ''", nate.family_id);
+  assert.equal(pre.data.new_families, emails ? 1 : 0);
+  // Archived athletes stay off testing days
+  const gone = db.insert('athletes', { code: 'GONE2027', first_name: 'Old', last_name: 'Profile', archived: 1 });
+  const r = await desk.post(`/api/testing/days/${id}/athletes`, { athlete_id: gone });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /archived/);
+  assert.ok(!db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, gone));
+});
+
+test('review fixes: the screen range check matches the server for one-sided ranges', async () => {
+  const { outOfRange } = await import('../public/js/testing-format.js');
+  const minOnly = { min_value: 60, max_value: null }, maxOnly = { min_value: null, max_value: 10 }, both = { min_value: 4, max_value: 9 }, none = { min_value: null, max_value: null };
+  for (const [t, v] of [[minOnly, 75], [minOnly, 600], [maxOnly, 3], [both, 5.2], [none, 0.01]]) {
+    assert.equal(outOfRange(t, v), false, `${JSON.stringify(t)} ${v}`);
+    assert.equal(core.checkValue({ ...t, name: 'X', unit: 's' }, v, 's').error, undefined);
+  }
+  for (const [t, v] of [[minOnly, 30], [maxOnly, 12], [both, 0.09], [both, 9.5]]) {
+    assert.equal(outOfRange(t, v), true, `${JSON.stringify(t)} ${v}`);
+    assert.ok(core.checkValue({ ...t, name: 'X', unit: 's' }, v, 's').error);
+  }
+  assert.match(core.checkValue({ ...minOnly, name: 'Mile', unit: 's' }, 30, 's').error, /at least 60 s/);
+  // Through the API: a one-sided custom test rejects an impossible value with a 400, not a crash
+  const mile = (await coach.post('/api/tests', { name: 'Review mile', unit: 's', lower_better: 1, min_value: 60, timed: 1 })).data;
+  const id = (await coach.post('/api/testing/days', { name: 'Mile day', date: '2026-10-12', athlete_ids: [athlete('Ava').id], test_ids: [mile.id] })).data.id;
+  const bad = await desk.put(`/api/testing/days/${id}/results`, { athlete_id: athlete('Ava').id, test_id: mile.id, attempt: 1, value: 30, source: 'stopwatch' });
+  assert.equal(bad.status, 400);
+  assert.equal((await desk.put(`/api/testing/days/${id}/results`, { athlete_id: athlete('Ava').id, test_id: mile.id, attempt: 1, value: 400, source: 'stopwatch' })).status, 200);
+});
+
+// ---- Uploads, linking and devices: review preview, undo, device links ----
+test('upload review shows new, replaced and already-saved values; unchanged stopwatch times keep their source', async () => {
+  const kevin = athlete('Kevin'), mason = athlete('Mason');
+  const t40 = testId('40-yard dash'), tvj = testId('Vertical jump');
+  const id = (await coach.post('/api/testing/days', { name: 'Upload preview day', date: '2026-10-14', athlete_ids: [kevin.id, mason.id], test_ids: [t40, tvj] })).data.id;
+  await desk.put(`/api/testing/days/${id}/results`, { athlete_id: kevin.id, test_id: t40, attempt: 1, value: 5.5, source: 'stopwatch' });
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: mason.id, test_id: t40, attempt: 1, value: 5.9 });
+  const text = tsv([
+    ['Athlete ID', 'Name', '40-yard dash (s) #1', 'Vertical jump (in) #1'],
+    [kevin.code, 'Kevin Nguyen', '5.5', '20'], // 40 unchanged, vertical new
+    [mason.code, 'Mason Harper', '5.8', ''], // replaces 5.9
+  ]);
+  const c = await coach.post('/api/testing/upload/check', { text, day_id: id });
+  assert.equal(c.data.ok, true, JSON.stringify(c.data.problems));
+  assert.deepEqual({ created: c.data.summary.created, replacing: c.data.summary.replacing, unchanged: c.data.summary.unchanged }, { created: 1, replacing: 1, unchanged: 1 });
+  const kr = c.data.athletes.find((a) => a.id === kevin.id).results;
+  assert.equal(kr.find((r) => r.test === '40-yard dash').same, true);
+  const mr = c.data.athletes.find((a) => a.id === mason.id).results[0];
+  assert.equal(mr.replaces, 5.9);
+  assert.ok('prev_best' in mr && 'pr' in mr);
+  const s = await coach.post('/api/testing/upload/save', { text, day_id: id, filename: 'preview.tsv', confirmed: c.data.unusual.map((u) => u.key) });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+  assert.equal(s.data.created, 1); assert.equal(s.data.replaced, 1); assert.equal(s.data.unchanged, 1);
+  assert.ok(s.data.batch_id);
+  const sw = db.get('SELECT source, hand_timed FROM results WHERE day_id=? AND athlete_id=? AND test_id=?', id, kevin.id, t40);
+  assert.equal(sw.source, 'stopwatch');
+  assert.equal(sw.hand_timed, 1);
+  // The same sheet again changes nothing, so there is no new upload to undo
+  const again = await coach.post('/api/testing/upload/save', { text, day_id: id, filename: 'preview.tsv', confirmed: [] });
+  assert.equal(again.status, 200);
+  assert.equal(again.data.batch_id, null);
+  assert.equal(again.data.unchanged, 3);
+});
+
+test('recent uploads can be undone: new results removed, replaced values restored, changed ones left alone', async () => {
+  const kevin = athlete('Kevin'), mason = athlete('Mason'), emma = athlete('Emma');
+  const t40 = testId('40-yard dash'), tvj = testId('Vertical jump');
+  const id = (await coach.post('/api/testing/days', { name: 'Undo day', date: '2026-10-15', athlete_ids: [kevin.id], test_ids: [t40] })).data.id;
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: kevin.id, test_id: t40, attempt: 1, value: 5.6 });
+  const text = tsv([
+    ['Athlete ID', 'Name', '40-yard dash (s) #1', 'Vertical jump (in) #1'],
+    [kevin.code, 'Kevin Nguyen', '5.4', '21'],
+    [mason.code, 'Mason Harper', '5.7', ''], // not on the day yet: the upload adds him
+    [emma.code, 'Emma Jensen', '5.9', ''],
+  ]);
+  const c = await coach.post('/api/testing/upload/check', { text, day_id: id });
+  const s = await coach.post('/api/testing/upload/save', { text, day_id: id, filename: 'undo.tsv', confirmed: c.data.unusual.map((u) => u.key) });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+  assert.ok(db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, mason.id));
+  // Someone retypes Emma's time after the upload: undo must leave it
+  await coach.put(`/api/testing/days/${id}/results`, { athlete_id: emma.id, test_id: t40, attempt: 1, value: 5.95 });
+  // Listing: coach sees it, front desk can't
+  const list = await coach.get('/api/testing/uploads');
+  assert.equal(list.status, 200);
+  const b = list.data.find((x) => x.id === s.data.batch_id);
+  assert.equal(b.filename, 'undo.tsv');
+  assert.equal(b.day_name, 'Undo day');
+  assert.equal((await desk.get('/api/testing/uploads')).status, 403);
+  assert.equal((await desk.post(`/api/testing/uploads/${b.id}/undo`)).status, 403);
+  const u = await coach.post(`/api/testing/uploads/${b.id}/undo`);
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  assert.equal(u.data.restored, 1); // Kevin's 40 back to 5.6
+  assert.equal(u.data.removed, 2); // Kevin's vertical, Mason's 40
+  assert.equal(u.data.kept, 1); // Emma's retyped time
+  assert.equal(db.get('SELECT value FROM results WHERE day_id=? AND athlete_id=? AND test_id=?', id, kevin.id, t40).value, 5.6);
+  assert.ok(!db.get('SELECT 1 FROM results WHERE day_id=? AND athlete_id=? AND test_id=?', id, kevin.id, tvj));
+  assert.equal(db.get('SELECT value FROM results WHERE day_id=? AND athlete_id=? AND test_id=?', id, emma.id, t40).value, 5.95);
+  // Mason and the vertical jump column came off the day with their results; Emma stays (she has a result)
+  assert.ok(!db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, mason.id));
+  assert.ok(!db.get('SELECT 1 FROM testing_day_tests WHERE day_id=? AND test_id=?', id, tvj));
+  assert.ok(db.get('SELECT 1 FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', id, emma.id));
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Undid upload' AND detail LIKE 'undo.tsv%'"));
+  const twice = await coach.post(`/api/testing/uploads/${b.id}/undo`);
+  assert.equal(twice.status, 400);
+  assert.match(twice.data.error, /already undone/);
+  assert.equal((await coach.post('/api/testing/uploads/999999/undo')).status, 404);
+  assert.ok((await coach.get('/api/testing/uploads')).data.find((x) => x.id === b.id).undone_at);
+});
+
+test('undoing a device export drops results still waiting; linked ones keep where they came from', async () => {
+  const text = tsv([['Name', 'Test', 'Value', 'Date'], ['Ricky Q', 'Vertical jump', '19', '2026-09-21'], ['Tess W', 'Vertical jump', '18', '2026-09-21']]);
+  const s = await coach.post('/api/testing/upload/save', { text, filename: 'swift-export.csv' });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+  assert.equal(s.data.pending, 2);
+  // Link Ricky's before undoing: it becomes an upload result and stays
+  const ricky = db.get("SELECT id FROM pending_results WHERE sender_key='Ricky Q'");
+  const kevin = athlete('Kevin');
+  const l = await coach.post('/api/testing/pending/link', { ids: [ricky.id], athlete_id: kevin.id, remember: false });
+  assert.equal(l.status, 200);
+  assert.equal(db.get("SELECT source FROM results WHERE athlete_id=? AND value=19 AND source_ref LIKE 'upload:%'", kevin.id).source, 'upload');
+  const u = await coach.post(`/api/testing/uploads/${s.data.batch_id}/undo`);
+  assert.equal(u.data.pending_removed, 1);
+  assert.equal(u.data.kept, 1);
+  assert.ok(!db.get("SELECT 1 FROM pending_results WHERE sender_key='Tess W'"));
+  assert.ok(db.get("SELECT 1 FROM results WHERE athlete_id=? AND value=19 AND source_ref LIKE 'upload:%'", kevin.id));
+});
+
+test('device links: link ahead of time (waiting results follow), move, unlink; archived athletes refused; front desk blocked', async () => {
+  const ava = athlete('Ava'), nate = athlete('Nate');
+  db.insert('pending_results', { source: 'Freelap', sender_key: 'FL-900', sender_label: 'FL-900', test_id: testId('10-yard sprint'), test_name: '10-yard sprint', value: 1.9, unit: 's', recorded_at: '2026-09-22 16:00:00', source_ref: 'test:fl-900-1' });
+  assert.equal((await desk.post('/api/testing/links', { source: 'Freelap', sender_key: 'FL-900', athlete_id: ava.id })).status, 403);
+  const noSrc = await coach.post('/api/testing/links', { source: ' ', sender_key: 'FL-900', athlete_id: ava.id });
+  assert.equal(noSrc.status, 400);
+  assert.match(noSrc.data.error, /which system/);
+  assert.equal((await coach.post('/api/testing/links', { source: 'Freelap', sender_key: '', athlete_id: ava.id })).status, 400);
+  assert.equal((await coach.post('/api/testing/links', { source: 'Freelap', sender_key: 'FL-900', athlete_id: 999999 })).status, 400);
+  const gone = db.insert('athletes', { code: 'GONE2028', first_name: 'Past', last_name: 'Athlete', archived: 1 });
+  const arch = await coach.post('/api/testing/links', { source: 'Freelap', sender_key: 'FL-900', athlete_id: gone });
+  assert.equal(arch.status, 400);
+  assert.match(arch.data.error, /archived/);
+  const r = await coach.post('/api/testing/links', { source: 'freelap', sender_key: 'FL-900', athlete_id: ava.id });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.linked, 1);
+  assert.ok(!db.get("SELECT 1 FROM pending_results WHERE source_ref='test:fl-900-1'"));
+  assert.equal(db.get("SELECT athlete_id, source FROM results WHERE source_ref='test:fl-900-1'").athlete_id, ava.id);
+  // New results from the device now go straight in
+  const key = 'dp_test_links_' + Date.now();
+  db.insert('api_keys', { label: 'Gates', key_hash: sha256(key), last4: key.slice(-4) });
+  const api = await client().post('/api/v1/results', { source: 'Freelap', device_id: 'FL-900', test: '10-yard sprint', value: 1.88, ref: 'fl-900-2' }, { authorization: `Bearer ${key}` });
+  assert.equal(api.data.saved, 1);
+  // Move the link, then unlink it (the response carries enough to link it again)
+  const mv = await coach.patch(`/api/testing/links/${r.data.id}`, { athlete_id: nate.id });
+  assert.equal(mv.status, 200);
+  assert.equal(db.get('SELECT athlete_id FROM device_links WHERE id=?', r.data.id).athlete_id, nate.id);
+  assert.equal((await coach.patch(`/api/testing/links/${r.data.id}`, { athlete_id: gone })).status, 400);
+  assert.equal((await desk.patch(`/api/testing/links/${r.data.id}`, { athlete_id: ava.id })).status, 403);
+  const del = await coach.del(`/api/testing/links/${r.data.id}`);
+  assert.equal(del.data.link.sender_key, 'FL-900');
+  assert.equal(del.data.link.athlete_id, nate.id);
+  assert.ok(db.get("SELECT 1 FROM activity WHERE action='Unlinked device' AND detail LIKE 'FL-900 (%from Nate Jensen'"));
+  const back = await coach.post('/api/testing/links', del.data.link);
+  assert.equal(back.status, 200);
+  const dev = await coach.get('/api/testing/devices');
+  assert.ok(dev.data.links.some((x) => x.sender_key === 'FL-900' && x.athlete_id === nate.id));
+  assert.ok(dev.data.sources.includes('Freelap'));
+  // Linking waiting results to an archived athlete is refused too
+  const p = db.insert('pending_results', { source: 'OVR', sender_key: 'Arch Test', sender_label: 'Arch Test', test_id: testId('Vertical jump'), test_name: 'Vertical jump', value: 18, unit: 'in', source_ref: 'test:arch-1' });
+  const la = await coach.post('/api/testing/pending/link', { ids: [p], athlete_id: gone });
+  assert.equal(la.status, 400);
+  assert.match(la.data.error, /archived/);
+  // Discarding results that are already gone says so
+  await coach.post('/api/testing/pending/discard', { ids: [p] });
+  const d2 = await coach.post('/api/testing/pending/discard', { ids: [p] });
+  assert.equal(d2.status, 400);
+});
+
+// ---- Review fixes: undo leaves retyped results alone, device link labels, big discard lists ----
+test('review fixes: undo leaves a result retyped with the same value alone', async () => {
+  const kevin = athlete('Kevin'), mason = athlete('Mason');
+  const t40 = testId('40-yard dash');
+  const id = (await coach.post('/api/testing/days', { name: 'Retype day', date: '2026-10-16', athlete_ids: [kevin.id, mason.id], test_ids: [t40] })).data.id;
+  const text = tsv([['Athlete ID', 'Name', '40-yard dash (s) #1'], [kevin.code, 'Kevin Nguyen', '5.5'], [mason.code, 'Mason Harper', '5.7']]);
+  const c = await coach.post('/api/testing/upload/check', { text, day_id: id });
+  const s = await coach.post('/api/testing/upload/save', { text, day_id: id, filename: 'retype.tsv', confirmed: c.data.unusual.map((u) => u.key) });
+  assert.equal(s.status, 200, JSON.stringify(s.data));
+  // Kevin is re-timed on the stopwatch and gets the same 5.50: it's now a hand-timed result, not the upload's
+  await desk.put(`/api/testing/days/${id}/results`, { athlete_id: kevin.id, test_id: t40, attempt: 1, value: 5.5, source: 'stopwatch' });
+  const u = await coach.post(`/api/testing/uploads/${s.data.batch_id}/undo`);
+  assert.equal(u.status, 200, JSON.stringify(u.data));
+  assert.equal(u.data.removed, 1);
+  assert.equal(u.data.kept, 1);
+  const kr = db.get('SELECT value, source, hand_timed FROM results WHERE day_id=? AND athlete_id=? AND test_id=?', id, kevin.id, t40);
+  assert.deepEqual({ ...kr }, { value: 5.5, source: 'stopwatch', hand_timed: 1 });
+  assert.ok(!db.get('SELECT 1 FROM results WHERE day_id=? AND athlete_id=?', id, mason.id));
+});
+
+test('review fixes: linking a device ahead of time keeps the name the device uses', async () => {
+  const ava = athlete('Ava');
+  db.insert('pending_results', { source: 'Swift', sender_key: 'SW-77', sender_label: 'Swift gate SW-77', test_id: testId('10-yard sprint'), test_name: '10-yard sprint', value: 1.95, unit: 's', recorded_at: '2026-09-22 16:00:00', source_ref: 'test:sw-77-1' });
+  const r = await coach.post('/api/testing/links', { source: 'Swift', sender_key: 'SW-77', athlete_id: ava.id });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.linked, 1);
+  assert.equal(db.get('SELECT sender_label FROM device_links WHERE id=?', r.data.id).sender_label, 'Swift gate SW-77');
+  // With nothing waiting, the device ID is the label
+  const r2 = await coach.post('/api/testing/links', { source: 'Swift', sender_key: 'SW-78', athlete_id: ava.id });
+  assert.equal(db.get('SELECT sender_label FROM device_links WHERE id=?', r2.data.id).sender_label, 'SW-78');
+});
+
+test('review fixes: discarding a very long list of ids answers cleanly', async () => {
+  const many = Array.from({ length: 40000 }, (_, i) => 5000000 + i);
+  const r = await coach.post('/api/testing/pending/discard', { ids: many });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /already linked or discarded/);
 });

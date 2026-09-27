@@ -4,15 +4,20 @@
 // (GET /api/parent/athletes/:id/progress lives in the testing area.)
 'use strict';
 const { get, all, run, insert, update, tx, setting } = require('../db');
-const { h, bad, notFound, log, makeAthleteCode, randomToken, sendEmail, payments, addDays, ageOn, money, businessName, appUrl } = require('../lib');
+const { h, bad, notFound, log, makeAthleteCode, randomToken, sha256, sendEmail, payments, addDays, ageOn, money, businessName, appUrl } = require('../lib');
 const { requireParent } = require('../auth');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
-const { luhnValid, cardBrand, parseExpiry } = require('../services/parent-card');
+const { luhnValid, cardBrand, parseExpiry, localDay, familyPayments, paidThisYear, pastDue, cardRemovalBlock, phoneOk, PARENT_RETRY_MAX } = require('../services/parent-card');
+const cal = require('../services/parent-calendar');
+const { endAt, bookedBetween, clashIn, clashText, whenText } = require('../services/parent-book');
+const programs = require('../services/parent-programs');
 
 const ATHLETE_FIELDS = ['first_name', 'last_name', 'birthday', 'sex', 'sport', 'position', 'school', 'allergies', 'injuries', 'medical_notes', 'emergency_name', 'emergency_phone'];
 const BOOKABLE_TYPES = ['class', 'camp', 'clinic'];
 const WINDOW_DAYS = 21;
+const NOTE_MAX = 500;
+const MAX_PARENTS = 6, MAX_ATHLETES = 12, NAME_MAX = 80;
 
 // ---- helpers ----
 function family(req) { return get('SELECT * FROM families WHERE id=?', req.parent.family_id); }
@@ -27,6 +32,22 @@ const athleteName = (a) => `${a.first_name} ${a.last_name}`;
 const locName = (id) => (id ? get('SELECT name FROM locations WHERE id=?', id)?.name || null : null);
 const voidInvoice = (id) => { if (id) run("UPDATE invoices SET status='void', next_retry=NULL WHERE id=? AND status='failed'", id); };
 const leftOf = (n) => (n === Infinity ? 'unlimited' : n);
+const firstName = (n) => (n ? String(n).split(' ')[0] : null);
+const lateHours = () => Number(setting('late_cancel_hours', 12));
+// Privates and evaluations belong to one coach: tell them when a family books or cancels one.
+function tellCoach(coachId, subject, body) {
+  const c = coachId ? get('SELECT name, email FROM staff WHERE id=? AND active=1', coachId) : null;
+  if (c?.email) sendEmail(c.email, subject, `Hi ${firstName(c.name)},\n\n${body}`);
+}
+
+// Account changes (card, parents) are emailed to the family's other parents, so nobody is surprised.
+function tellOtherParents(req, subject, body) {
+  for (const p of all('SELECT name, email FROM parents WHERE family_id=? AND id<>?', req.parent.family_id, req.parent.id)) {
+    sendEmail(p.email, subject, `Hi ${firstName(p.name)},\n\n${body}\n\nIf you didn't expect this, tell the front desk at ${businessName()}.`);
+  }
+}
+// Waiver copies by email: a few an hour for each parent.
+const waiverCopies = new Map();
 
 function membershipOf(a) {
   const m = billing.activeMembership(a.id);
@@ -42,6 +63,22 @@ function athleteSummary(a) {
     membership: membershipOf(a), member_left: leftOf(billing.memberSessionsLeft(a.id, booking.todayLocal())),
   };
 }
+// Sessions attended (checked in) in the last 30 days and the latest one, for Home.
+function attendanceOf(athleteId) {
+  const now = booking.nowLocal();
+  const since = addDays(now.slice(0, 10), -30) + 'T00:00';
+  const r = get(`SELECT COUNT(*) n, MAX(e.starts_at) last FROM bookings b JOIN events e ON e.id=b.event_id
+    WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND e.starts_at<=? AND e.starts_at>=?`, athleteId, now, since);
+  const last = r.last || get('SELECT MAX(e.starts_at) s FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND e.starts_at<=?', athleteId, now)?.s || null;
+  return { last_30: r.n, last_at: last };
+}
+// Link the calendar apps use; the portal's own address when the app URL isn't configured.
+const origin = (req) => (process.env.DP_APP_URL || process.env.RENDER_EXTERNAL_URL ? appUrl() : `${req.protocol}://${req.get('host')}`);
+function feedLinks(req, token) {
+  const url = `${origin(req)}/api/calendar/${token}.ics`;
+  return { url, webcal: url.replace(/^https?:/, 'webcal:'), google: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(url.replace(/^https?:/, 'webcal:'))}` };
+}
+
 function familyAthletes(req) {
   return all('SELECT * FROM athletes WHERE family_id=? AND archived=0 ORDER BY birthday IS NULL, birthday, id', req.parent.family_id);
 }
@@ -65,9 +102,10 @@ function routes(api) {
         id: f.id, name: f.name, card_brand: f.card_brand, card_last4: f.card_last4, card_exp: f.card_exp, card_label: cardLabel(f),
         waiver_version: f.waiver_version, waiver_signed_at: f.waiver_signed_at, waiver_signed_by: f.waiver_signed_by,
         waiver_current: f.waiver_version != null && Number(f.waiver_version) >= current,
+        past_due_cents: pastDue(f.id).reduce((n, i) => n + i.amount_cents, 0),
       },
       parents: all('SELECT id, name, email, phone FROM parents WHERE family_id=? ORDER BY is_self DESC, id', f.id),
-      athletes: familyAthletes(req).map(athleteSummary),
+      athletes: familyAthletes(req).map((a) => ({ ...athleteSummary(a), attendance: attendanceOf(a.id) })),
       settings: {
         business_name: businessName(), late_cancel_hours: Number(setting('late_cancel_hours', 12)), waiver_version: current,
         waiver_text: setting('waiver_text', ''), payments_mode: payments.mode(),
@@ -78,10 +116,47 @@ function routes(api) {
   // ---- bookings ----
   api.get('/parent/bookings', h(async (req, res) => {
     const lateH = Number(setting('late_cancel_hours', 12));
-    const rows = all(`SELECT b.id, b.athlete_id, b.status, b.coverage, b.paid_cents, e.id AS event_id, e.name, e.type, e.starts_at, e.duration_min, e.location_id, l.name AS location
-      FROM bookings b JOIN events e ON e.id=b.event_id JOIN athletes a ON a.id=b.athlete_id LEFT JOIN locations l ON l.id=e.location_id
-      WHERE a.family_id=? AND b.status IN ('booked','waitlist') AND e.cancelled=0 AND e.starts_at>=? ORDER BY e.starts_at, b.id`, req.parent.family_id, booking.nowLocal());
-    res.json(rows.map((r) => ({ ...r, late: r.status === 'booked' && booking.hoursUntil(r.starts_at) < lateH })));
+    // Sessions that have started but not finished stay listed until they end.
+    const rows = all(`SELECT b.id, b.athlete_id, b.status, b.coverage, b.paid_cents, b.checked_in_at, b.note, e.id AS event_id, e.name, e.type, e.starts_at, e.duration_min, e.location_id,
+        l.name AS location, l.address, s.name AS coach,
+        (SELECT COUNT(*) FROM bookings w WHERE w.event_id=b.event_id AND w.status='waitlist' AND w.id<=b.id) AS waitlist_pos
+      FROM bookings b JOIN events e ON e.id=b.event_id JOIN athletes a ON a.id=b.athlete_id LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN staff s ON s.id=e.coach_id
+      WHERE a.family_id=? AND a.archived=0 AND b.status IN ('booked','waitlist') AND e.cancelled=0 AND e.starts_at>=? ORDER BY e.starts_at, b.id`, req.parent.family_id, addDays(booking.todayLocal(), -1) + 'T00:00');
+    const now = booking.nowLocal();
+    const endOf = (r) => { const d = new Date(r.starts_at + ':00Z'); d.setUTCMinutes(d.getUTCMinutes() + (r.duration_min || 60)); return d.toISOString().slice(0, 16); };
+    res.json(rows.filter((r) => endOf(r) > now).map((r) => ({
+      ...r, coach: r.coach ? r.coach.split(' ')[0] : null, waitlist_pos: r.status === 'waitlist' ? r.waitlist_pos : null,
+      started: r.starts_at <= now, checked_in: !!r.checked_in_at, checked_in_at: undefined,
+      late: r.status === 'booked' && booking.hoursUntil(r.starts_at) < lateH,
+    })));
+  }));
+
+  // One session as a calendar file ("Add to calendar").
+  api.get('/parent/bookings/:id/ics', h(async (req, res) => {
+    const body = cal.oneBooking(Number(req.params.id) || 0, req.parent.family_id, `${origin(req)}/parent`);
+    if (!body) throw notFound('That booking');
+    res.set({ 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="session-${Number(req.params.id)}.ics"`, 'Cache-Control': 'no-store' });
+    res.send(body);
+  }));
+
+  // ---- calendar feed: a private link phone calendars subscribe to ----
+  api.get('/parent/calendar', h(async (req, res) => {
+    const { token, created } = cal.tokenFor(req.parent.family_id);
+    if (created) log(req, 'Turned on calendar link', family(req).name);
+    res.json(feedLinks(req, token));
+  }));
+  api.post('/parent/calendar/reset', h(async (req, res) => {
+    const { token } = cal.tokenFor(req.parent.family_id, { reset: true });
+    log(req, 'Reset calendar link', `${family(req).name}: the old link stopped working`);
+    res.json(feedLinks(req, token));
+  }));
+  // Public by design (calendar apps can't sign in): the unguessable token is the key, and it can be reset.
+  api.get('/calendar/:file', h(async (req, res) => {
+    const token = String(req.params.file || '').replace(/\.ics$/i, '');
+    const f = cal.familyByToken(token);
+    if (!f) throw notFound('That calendar');
+    res.set({ 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': 'inline; filename="sessions.ics"', 'Cache-Control': 'private, max-age=900', 'X-Robots-Tag': 'noindex' });
+    res.send(cal.familyFeed(f.id, addDays(booking.todayLocal(), -30) + 'T00:00', `${origin(req)}/parent`));
   }));
 
   api.post('/parent/bookings', h(async (req, res) => {
@@ -90,8 +165,11 @@ function routes(api) {
     if (!e || e.cancelled || !BOOKABLE_TYPES.includes(e.type)) throw notFound('That session');
     const cls = e.class_id ? get('SELECT * FROM classes WHERE id=?', e.class_id) : null;
     if (cls?.reg_price_cents && !get(`SELECT 1 FROM bookings b JOIN events x ON x.id=b.event_id WHERE x.class_id=? AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'`, cls.id, a.id)) {
-      throw bad(`${e.name} takes one registration for every day. Register on the Programs tab.`, { needs_registration: true, class_id: cls.id });
+      throw bad(`${e.name} takes one registration for every day. Register for it first.`, { needs_registration: true, class_id: cls.id });
     }
+    // One place at a time: a waitlist spot counts too, since it books itself when a spot opens.
+    const clash = clashIn(bookedBetween(a.id, e.starts_at, endAt(e.starts_at, e.duration_min)), e.starts_at, e.duration_min, e.id);
+    if (clash) throw bad(`${a.first_name} is already ${clashText(clash)} at that time (${whenText(clash.starts_at)}). Cancel that first, or pick another session.`, { clash_event_id: clash.id });
     const pay = req.body.pay === 'card' ? 'card' : null;
     const full = e.capacity && e.booked >= e.capacity;
     if (!full) {
@@ -107,46 +185,108 @@ function routes(api) {
   }));
 
   api.delete('/parent/bookings/:id', h(async (req, res) => {
-    const b = get(`SELECT b.*, e.name, e.starts_at, a.first_name, a.last_name FROM bookings b JOIN athletes a ON a.id=b.athlete_id JOIN events e ON e.id=b.event_id
+    const b = get(`SELECT b.*, e.name, e.type, e.starts_at, e.coach_id, a.first_name, a.last_name FROM bookings b JOIN athletes a ON a.id=b.athlete_id JOIN events e ON e.id=b.event_id
       WHERE b.id=? AND a.family_id=?`, Number(req.params.id) || 0, req.parent.family_id);
     if (!b) throw notFound('That booking');
-    const r = booking.cancelBooking(b.id, { byParent: true });
+    if (b.status === 'booked' && (b.checked_in_at || b.starts_at <= booking.nowLocal())) throw bad('That session has already started, so it can’t be cancelled here. Talk to the front desk.');
+    // A private or evaluation is its own session: with nobody left on it, the time opens up again for booking.
+    let freed = false;
+    const r = tx(() => {
+      const out = booking.cancelBooking(b.id, { byParent: true });
+      if (['private', 'evaluation'].includes(b.type) && !get("SELECT 1 FROM bookings WHERE event_id=? AND status IN ('booked','waitlist')", b.event_id)) {
+        run("UPDATE events SET cancelled=1, cancel_reason='Cancelled by the family' WHERE id=? AND cancelled=0", b.event_id);
+        freed = true;
+      }
+      return out;
+    });
+    if (freed) {
+      tellCoach(b.coach_id, `Cancelled: ${b.first_name} ${b.last_name}, ${whenText(b.starts_at)}`,
+        `${b.first_name} ${b.last_name}'s ${b.type} on ${whenText(b.starts_at)} was cancelled by the family.${r.late ? ' It was inside the late-cancel window, so the session still counts as used.' : ''} The time is open again for booking.`);
+    }
     log(req, r.late ? 'Late cancel' : 'Cancelled booking', `${b.first_name} ${b.last_name}: ${b.name}, ${b.starts_at.replace('T', ' ')}`);
-    res.json({ ok: true, late: r.late });
+    res.json({ ok: true, late: r.late, freed });
   }));
 
   // ---- classes, three weeks ahead ----
   api.get('/parent/classes', h(async (req, res) => {
     const a = ownAthlete(req, req.query.athlete_id);
-    const until = addDays(booking.todayLocal(), WINDOW_DAYS);
-    const rows = all(`SELECT e.id, e.class_id, e.type, e.name, e.starts_at, e.duration_min, e.capacity, e.price_cents, e.location_id, l.name AS location,
-        c.min_age, c.max_age, c.reg_price_cents,
+    const T = booking.todayLocal(), now = booking.nowLocal();
+    const until = addDays(T, WINDOW_DAYS);
+    const lateH = lateHours();
+    const rows = all(`SELECT e.id, e.class_id, e.type, e.name, e.starts_at, e.duration_min, e.capacity, e.price_cents, e.location_id, l.name AS location, l.address,
+        s.name AS coach, c.min_age, c.max_age, c.reg_price_cents, c.reg_deadline,
         (SELECT COUNT(*) FROM bookings b WHERE b.event_id=e.id AND b.status='booked') AS booked,
-        (SELECT b.id FROM bookings b WHERE b.event_id=e.id AND b.athlete_id=? AND b.status IN ('booked','waitlist')) AS my_booking_id,
-        (SELECT b.status FROM bookings b WHERE b.event_id=e.id AND b.athlete_id=? AND b.status IN ('booked','waitlist')) AS my_status
-      FROM events e LEFT JOIN classes c ON c.id=e.class_id LEFT JOIN locations l ON l.id=e.location_id
+        (SELECT COUNT(*) FROM bookings b WHERE b.event_id=e.id AND b.status='waitlist') AS waitlisted,
+        m.id AS my_booking_id, m.status AS my_status, m.coverage AS my_coverage, m.paid_cents AS my_paid_cents,
+        (SELECT COUNT(*) FROM bookings w WHERE w.event_id=e.id AND w.status='waitlist' AND w.id<=m.id) AS my_waitlist_pos
+      FROM events e LEFT JOIN classes c ON c.id=e.class_id LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN staff s ON s.id=e.coach_id
+        LEFT JOIN bookings m ON m.id=(SELECT b.id FROM bookings b WHERE b.event_id=e.id AND b.athlete_id=? AND b.status IN ('booked','waitlist') ORDER BY b.id LIMIT 1)
       WHERE e.type IN ('class','camp','clinic') AND e.cancelled=0 AND e.starts_at>=? AND e.starts_at<? ORDER BY e.starts_at, e.name`,
-    a.id, a.id, booking.nowLocal(), until);
+    a.id, now, until);
     const leftByMonth = {};
     const memberLeft = (d) => (leftByMonth[d.slice(0, 7)] ??= billing.memberSessionsLeft(a.id, d));
     const registered = new Set(all(`SELECT DISTINCT e.class_id FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.coverage='registered' AND b.status='booked'`, a.id).map((r) => r.class_id));
-    const events = rows.filter((r) => ageFits(r, a, r.starts_at.slice(0, 10))).map((r) => ({
-      id: r.id, class_id: r.class_id, type: r.type, name: r.name, starts_at: r.starts_at, duration_min: r.duration_min, location: r.location,
-      price_cents: r.price_cents, capacity: r.capacity, booked: r.booked, spots_left: r.capacity ? Math.max(0, r.capacity - r.booked) : null,
-      full: !!(r.capacity && r.booked >= r.capacity), my_booking_id: r.my_booking_id, my_status: r.my_status,
-      needs_registration: !!(r.reg_price_cents && !registered.has(r.class_id)), reg_price_cents: r.reg_price_cents,
-      covered: !r.price_cents || memberLeft(r.starts_at.slice(0, 10)) > 0 || a.group_credits > 0,
-    }));
+    // Camp days left to register for (the whole camp, not just the three weeks shown).
+    const campDays = {};
+    const daysOf = (classId) => (campDays[classId] ??= get('SELECT COUNT(*) n FROM events WHERE class_id=? AND cancelled=0 AND starts_at>=?', classId, now).n);
+    const busy = bookedBetween(a.id, now, until);
+    const events = rows.filter((r) => ageFits(r, a, r.starts_at.slice(0, 10))).map((r) => {
+      const needsReg = !!(r.reg_price_cents && !registered.has(r.class_id));
+      const clash = r.my_status ? null : clashIn(busy, r.starts_at, r.duration_min, r.id);
+      return {
+        id: r.id, class_id: r.class_id, type: r.type, name: r.name, starts_at: r.starts_at, duration_min: r.duration_min,
+        location: r.location, address: r.address, coach: firstName(r.coach), ages: ageLabel(r),
+        price_cents: r.price_cents, capacity: r.capacity, booked: r.booked, waitlisted: r.waitlisted,
+        spots_left: r.capacity ? Math.max(0, r.capacity - r.booked) : null, full: !!(r.capacity && r.booked >= r.capacity),
+        my_booking_id: r.my_booking_id, my_status: r.my_status, my_coverage: r.my_coverage, my_paid_cents: r.my_paid_cents || 0,
+        waitlist_pos: r.my_status === 'waitlist' ? r.my_waitlist_pos : null,
+        late: booking.hoursUntil(r.starts_at) < lateH,
+        clash: clash ? { name: clash.name, starts_at: clash.starts_at, status: clash.status } : null,
+        needs_registration: needsReg, reg_price_cents: r.reg_price_cents,
+        reg_days: r.reg_price_cents ? daysOf(r.class_id) : null,
+        reg_closed: !!(needsReg && r.reg_deadline && r.reg_deadline < T),
+        covered: !r.price_cents || memberLeft(r.starts_at.slice(0, 10)) > 0 || a.group_credits > 0,
+      };
+    });
     const f = family(req);
-    res.json({ athlete: athleteSummary(a), card_label: cardLabel(f), events });
+    res.json({
+      athlete: athleteSummary(a), card_label: cardLabel(f), late_cancel_hours: lateH,
+      waiver_current: f.waiver_version != null && Number(f.waiver_version) >= Number(setting('waiver_version', 1)),
+      events,
+    });
   }));
 
   // ---- privates and evaluations ----
+  // Open times from the hours in settings, each with its coach; times the athlete is already booked elsewhere are left out.
+  function slotsFor(kind, a) {
+    const T = booking.todayLocal();
+    const busy = bookedBetween(a.id, booking.nowLocal(), addDays(T, WINDOW_DAYS + 1));
+    const coachName = {};
+    const nameOf = (id) => (id ? (coachName[id] ??= get('SELECT name FROM staff WHERE id=?', id)?.name || null) : null);
+    const seen = new Set();
+    const out = [];
+    for (const s of booking.openSlots(kind, T, WINDOW_DAYS)) {
+      const key = `${s.starts_at}|${s.coach_id || ''}`;
+      if (seen.has(key) || clashIn(busy, s.starts_at, s.duration_min)) continue;
+      seen.add(key);
+      out.push({ starts_at: s.starts_at, duration_min: s.duration_min, location: locName(s.location_id), price_cents: s.price_cents, coach_id: s.coach_id || null, coach: firstName(nameOf(s.coach_id)) });
+    }
+    return out;
+  }
+
   api.get('/parent/slots', h(async (req, res) => {
     const kind = req.query.kind === 'evaluation' ? 'evaluation' : 'private';
     const a = ownAthlete(req, req.query.athlete_id);
-    const slots = booking.openSlots(kind, booking.todayLocal(), WINDOW_DAYS).map((s) => ({ starts_at: s.starts_at, duration_min: s.duration_min, location: locName(s.location_id), price_cents: s.price_cents }));
-    res.json({ kind, athlete: athleteSummary(a), card_label: cardLabel(family(req)), slots });
+    const slots = slotsFor(kind, a);
+    const coaches = [...new Map(slots.filter((s) => s.coach_id).map((s) => [s.coach_id, { id: s.coach_id, name: s.coach }])).values()];
+    const lateH = lateHours();
+    // What this athlete already has booked of this kind, so it can be seen and cancelled here.
+    const booked = all(`SELECT b.id, b.status, b.coverage, b.paid_cents, b.note, e.starts_at, e.duration_min, l.name AS location, l.address, s.name AS coach
+      FROM bookings b JOIN events e ON e.id=b.event_id LEFT JOIN locations l ON l.id=e.location_id LEFT JOIN staff s ON s.id=e.coach_id
+      WHERE b.athlete_id=? AND e.type=? AND b.status='booked' AND e.cancelled=0 AND e.starts_at>=? ORDER BY e.starts_at`, a.id, kind, booking.nowLocal())
+      .map((b) => ({ ...b, coach: firstName(b.coach), late: booking.hoursUntil(b.starts_at) < lateH }));
+    const single = kind === 'private' ? get("SELECT id, name, price_cents FROM products WHERE kind='private_pack' AND credits=1 AND archived=0 ORDER BY price_cents LIMIT 1") : null;
+    res.json({ kind, athlete: athleteSummary(a), card_label: cardLabel(family(req)), late_cancel_hours: lateH, coaches, booked, single_private: single || null, slots });
   }));
 
   api.post('/parent/slots', h(async (req, res) => {
@@ -155,10 +295,21 @@ function routes(api) {
     const a = ownAthlete(req, req.body.athlete_id);
     const starts_at = String(req.body.starts_at || '');
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(starts_at)) throw bad('Pick a time.');
+    const coachId = req.body.coach_id == null || req.body.coach_id === '' ? null : Number(req.body.coach_id);
+    if (coachId !== null && !(Number.isInteger(coachId) && coachId > 0)) throw bad('Pick a coach from the list.');
+    const note = String(req.body.note ?? '').trim().replace(/\r\n/g, '\n');
+    if (note.length > NOTE_MAX) throw bad(`Keep the note for the coach under ${NOTE_MAX} characters.`);
     if (kind === 'evaluation') needCard(family(req));
-    const b = booking.bookSlot(kind, starts_at, a.id, { source: 'parent' });
-    log(req, kind === 'private' ? 'Booked private' : 'Booked evaluation', `${athleteName(a)}: ${starts_at.replace('T', ' ')}`);
-    res.json(b);
+    const slotLen = booking.openSlots(kind, starts_at.slice(0, 10), 1).find((s) => s.starts_at === starts_at && (!coachId || s.coach_id === coachId))?.duration_min || 60;
+    const clash = clashIn(bookedBetween(a.id, starts_at, addDays(starts_at.slice(0, 10), 1) + 'T00:00'), starts_at, slotLen);
+    if (clash) throw bad(`${a.first_name} is already ${clashText(clash)} at that time. Pick another time.`, { clash_event_id: clash.id });
+    const b = booking.bookSlot(kind, starts_at, a.id, { source: 'parent', coachId });
+    if (note) update('bookings', b.id, { note });
+    const ev = get('SELECT coach_id FROM events WHERE id=?', b.event_id);
+    tellCoach(ev?.coach_id, `New ${kind}: ${athleteName(a)}, ${whenText(starts_at)}`,
+      `${req.parent.name} booked ${kind === 'private' ? 'a private' : 'an evaluation'} for ${athleteName(a)} on ${whenText(starts_at)}.${note ? `\n\nNote from the family:\n${note}` : ''}`);
+    log(req, kind === 'private' ? 'Booked private' : 'Booked evaluation', `${athleteName(a)}: ${starts_at.replace('T', ' ')}${note ? ' (with a note for the coach)' : ''}`);
+    res.json({ ...b, note: note || null });
   }));
 
   // ---- programs: camps, standing spots, packs, plans ----
@@ -170,26 +321,32 @@ function routes(api) {
         (SELECT MAX(starts_at) FROM events e WHERE e.class_id=c.id AND e.cancelled=0 AND e.starts_at>=?) AS last_at,
         (SELECT COUNT(*) FROM events e WHERE e.class_id=c.id AND e.cancelled=0 AND e.starts_at>=?) AS days
       FROM classes c LEFT JOIN locations l ON l.id=c.location_id
-      WHERE c.archived=0 AND c.type IN ('camp','clinic') AND c.reg_price_cents>0 AND (c.end_date IS NULL OR c.end_date>=?) AND (c.reg_deadline IS NULL OR c.reg_deadline>=?)
-      ORDER BY COALESCE(c.start_date, ''), c.name`, now, now, now, T, T)
+      WHERE c.archived=0 AND c.type IN ('camp','clinic') AND c.reg_price_cents>0 AND (c.end_date IS NULL OR c.end_date>=?)
+        AND (c.reg_deadline IS NULL OR c.reg_deadline>=? OR EXISTS (SELECT 1 FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=c.id AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'))
+      ORDER BY COALESCE(c.start_date, ''), c.name`, now, now, now, T, T, a.id)
       .map((c) => ({
         id: c.id, name: c.name, type: c.type, weekdays: c.weekdays, start_time: c.start_time, duration_min: c.duration_min, location: c.location,
         start_date: c.first_at?.slice(0, 10) || c.start_date, end_date: c.last_at?.slice(0, 10) || c.end_date, days: c.days, ages: ageLabel(c),
         reg_price_cents: c.reg_price_cents, reg_deadline: c.reg_deadline, eligible: ageFits(c, a, (c.first_at || T).slice(0, 10)),
         registered: !!get(`SELECT 1 FROM bookings b JOIN events e ON e.id=b.event_id WHERE e.class_id=? AND b.athlete_id=? AND b.coverage='registered' AND b.status='booked'`, c.id, a.id),
+        spots_left: programs.campSpots(c.id), siblings: programs.siblingsRegistered(c.id, a.family_id, a.id),
       }));
     const spots = new Map(all('SELECT id, class_id FROM standing_spots WHERE athlete_id=?', a.id).map((s) => [s.class_id, s.id]));
     const classes = all(`SELECT c.*, l.name AS location FROM classes c LEFT JOIN locations l ON l.id=c.location_id
       WHERE c.archived=0 AND c.type='class' AND (c.end_date IS NULL OR c.end_date>=?) ORDER BY c.name`, T)
       .filter((c) => ageFits(c, a, T) || spots.has(c.id))
-      .map((c) => ({ id: c.id, name: c.name, weekdays: c.weekdays, start_time: c.start_time, duration_min: c.duration_min, location: c.location, ages: ageLabel(c), standing_id: spots.get(c.id) || null }));
+      .map((c) => ({ id: c.id, name: c.name, weekdays: c.weekdays, start_time: c.start_time, duration_min: c.duration_min, location: c.location, ages: ageLabel(c), standing_id: spots.get(c.id) || null,
+        eligible: ageFits(c, a, T), ...programs.classNext(c.id, a.id) }));
     const m = membershipOf(a);
+    const fam = family(req);
     res.json({
-      athlete: athleteSummary(a), card_label: cardLabel(family(req)),
+      athlete: athleteSummary(a), card_label: cardLabel(fam), card_exp: fam.card_exp || null, request: m ? programs.lastRequest(a.id) : null,
       is_member: !!m && ['active', 'trial'].includes(m.status), camps, classes,
       packs: all("SELECT id, name, kind, price_cents, credits FROM products WHERE archived=0 AND kind IN ('group_pack','private_pack') ORDER BY kind, price_cents"),
       plans: all('SELECT id, name, price_cents, trial_days, group_per_month, private_per_month FROM plans WHERE active=1 ORDER BY price_cents'),
-      membership: m,
+      membership: m ? { ...m, member_left: leftOf(billing.memberSessionsLeft(a.id, T)) } : null,
+      // The usual drop-in price of a group class, so packs can show what they save.
+      drop_in_cents: get("SELECT price_cents p FROM classes WHERE archived=0 AND type='class' AND price_cents>0 GROUP BY price_cents ORDER BY COUNT(*) DESC, price_cents LIMIT 1")?.p || null,
     });
   }));
 
@@ -200,6 +357,7 @@ function routes(api) {
     const first = get('SELECT MIN(starts_at) s FROM events WHERE class_id=? AND cancelled=0 AND starts_at>=?', c.id, booking.nowLocal())?.s;
     if (!ageFits(c, a, (first || booking.todayLocal()).slice(0, 10))) throw bad(`${c.name} is for ${(ageLabel(c) || 'other ages').toLowerCase()}.`);
     if (!first) throw bad('There are no days left to register for.');
+    if (programs.campSpots(c.id) === 0) throw bad(`${c.name} is full. Ask the front desk to be told if a spot opens.`, { full: true });
     needCard(family(req));
     const lastInvoice = get('SELECT MAX(id) m FROM invoices').m || 0;
     let r;
@@ -282,6 +440,14 @@ function routes(api) {
     res.json({ ok: true, id: r.id, trial: !!r.trial, trial_days: r.trial ? plan.trial_days : 0 });
   }));
 
+  // Ask the facility to switch plans, pause or cancel: the owners are emailed and it's in Recent activity.
+  api.post('/parent/membership/request', h(async (req, res) => {
+    const a = ownAthlete(req, req.body.athlete_id);
+    const r = programs.request({ athlete: a, membership: billing.activeMembership(a.id), parent: req.parent, kind: String(req.body.kind || ''), plan_id: req.body.plan_id, note: req.body.note });
+    log(req, 'Asked to change membership', `${athleteName(a)}: ${r.what}${r.note ? ' (with a note)' : ''}`);
+    res.json(r);
+  }));
+
   // ---- family: card, waiver, athletes, parents ----
   api.put('/parent/card', h(async (req, res) => {
     if (payments.mode() === 'live') throw bad('Cards are added on Stripe’s secure page in live mode.');
@@ -299,9 +465,12 @@ function routes(api) {
     const card = { card_brand: cardBrand(number), card_last4: number.slice(-4), card_exp: exp.label };
     update('families', f.id, card);
     log(req, f.card_last4 ? 'Replaced card' : 'Added card', `${card.card_brand} ending ${card.card_last4}`);
-    // Past-due membership charges are retried on the new card.
+    tellOtherParents(req, `Card on file changed for the ${f.name}`,
+      `${req.parent.name} ${f.card_last4 ? `replaced the ${cardLabel(f)} with` : 'added'} a ${card.card_brand} ending ${card.card_last4} (expires ${card.card_exp}). It pays for memberships, packs, camps and drop-ins for everyone in the family.`);
+    // Past-due membership charges are retried on the new card, however many times the old one was tried
+    // (the Family tab and the card page both promise this).
     let retried = 0, paid = 0;
-    for (const inv of all("SELECT id FROM invoices WHERE family_id=? AND status='failed' AND kind='membership' AND attempts<4", f.id)) {
+    for (const inv of all("SELECT id FROM invoices WHERE family_id=? AND status='failed' AND kind='membership'", f.id)) {
       const r = billing.retryFailed({ invoiceId: inv.id }); retried += r.tried; paid += r.paid;
     }
     res.json({ ok: true, ...card, card_label: `${card.card_brand} ending ${card.card_last4}`, retried, paid });
@@ -310,6 +479,7 @@ function routes(api) {
   api.post('/parent/waiver', h(async (req, res) => {
     const name = String(req.body.name || '').trim().replace(/\s+/g, ' ');
     if (name.length < 3 || !name.includes(' ')) throw bad('Type your full name to sign.');
+    if (name.length > NAME_MAX) throw bad('Keep your name under 80 characters.');
     if (!req.body.agree) throw bad('Tick the box to agree to the waiver.');
     const f = family(req);
     const version = Number(setting('waiver_version', 1));
@@ -328,6 +498,8 @@ function routes(api) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(new Date(v + 'T12:00:00')) || v > booking.todayLocal() || v < '1920-01-01') throw bad('Enter a real birthday.');
       }
       if (k === 'sex' && v && !['M', 'F'].includes(v)) throw bad('Choose M or F, or leave it blank.');
+      if (k === 'emergency_phone' && !phoneOk(v)) throw bad('Enter the emergency phone with its area code, like 801-555-0142.');
+      if ((k === 'first_name' || k === 'last_name') && v.length > NAME_MAX) throw bad('Keep names under 80 characters.');
       out[k] = v || null;
     }
     if (requireName || 'first_name' in out || 'last_name' in out) {
@@ -337,9 +509,17 @@ function routes(api) {
     return out;
   }
 
+  // One family can't hold the same athlete name twice (case doesn't matter). The message uses the name as it's saved.
+  function sameNameCheck(familyId, first, last, exceptId = 0) {
+    const twin = get('SELECT first_name, last_name FROM athletes WHERE family_id=? AND archived=0 AND id<>? AND first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE',
+      familyId, exceptId, first, last);
+    if (twin) throw bad(`${twin.first_name} ${twin.last_name} is already on your account. Open their details below to update them.`);
+  }
+
   api.put('/parent/athletes/:id', h(async (req, res) => {
     const a = ownAthlete(req, req.params.id);
     const patch = cleanAthlete(req.body || {});
+    if ('first_name' in patch || 'last_name' in patch) sameNameCheck(a.family_id, patch.first_name ?? a.first_name, patch.last_name ?? a.last_name, a.id);
     update('athletes', a.id, patch);
     log(req, 'Updated athlete', `${athleteName({ ...a, ...patch })}: ${Object.keys(patch).join(', ')}`);
     res.json(athleteSummary(get('SELECT * FROM athletes WHERE id=?', a.id)));
@@ -348,6 +528,8 @@ function routes(api) {
   api.post('/parent/athletes', h(async (req, res) => {
     const d = cleanAthlete(req.body || {}, { requireName: true });
     const f = family(req);
+    sameNameCheck(f.id, d.first_name, d.last_name);
+    if (get('SELECT COUNT(*) n FROM athletes WHERE family_id=? AND archived=0', f.id).n >= MAX_ATHLETES) throw bad('That is the most athletes one account can hold. Ask the front desk to add more.');
     const id = insert('athletes', { ...d, code: makeAthleteCode(d.first_name, d.last_name), family_id: f.id, workout_token: randomToken(12) });
     const a = get('SELECT * FROM athletes WHERE id=?', id);
     log(req, 'Added athlete', `${athleteName(a)} (${a.code}) to ${f.name}`);
@@ -359,14 +541,100 @@ function routes(api) {
     const email = String(req.body.email || '').trim().toLowerCase();
     const phone = String(req.body.phone || '').trim() || null;
     if (!name) throw bad('Enter their name.');
-    if (!/^\S+@\S+\.\S+$/.test(email)) throw bad('Enter their email address.');
-    if (get('SELECT 1 FROM parents WHERE email=?', email)) throw bad('That email already has a parent account. Ask your coach to link it.');
+    if (name.length > NAME_MAX) throw bad('Keep the name under 80 characters.');
+    if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 200) throw bad('Enter their email address.');
+    if (!phoneOk(phone)) throw bad('Enter the phone with its area code, like 801-555-0142.');
+    const taken = get('SELECT family_id FROM parents WHERE email=?', email);
+    if (taken?.family_id === req.parent.family_id) throw bad('That parent is already on your account.');
+    if (taken) throw bad('That email already has a parent account. Ask your coach to link it.');
     const f = family(req);
+    if (get('SELECT COUNT(*) n FROM parents WHERE family_id=?', f.id).n >= MAX_PARENTS) throw bad('That is the most parents one account can hold. Ask the front desk for help.');
     const id = insert('parents', { family_id: f.id, name, email, phone });
     sendEmail(email, `You've been added to the ${f.name} at ${businessName()}`,
       `Hi ${name.split(' ')[0]},\n\n${req.parent.name} added you to the ${f.name} account. You can book sessions, see progress and manage the family.\n\nSign in at ${appUrl()}/parent with this email. We'll send you a code; there's no password.`);
     log(req, 'Added parent', `${name} (${email}) to ${f.name}`);
+    tellOtherParents(req, `${name} was added to the ${f.name} account`,
+      `${req.parent.name} added ${name} (${email}) to the ${f.name} account. They can book sessions, pay with the card on file and see progress.`);
     res.json({ id, name, email, phone });
+  }));
+
+  // Your own name and phone. The email is how you sign in, so the front desk changes that.
+  api.put('/parent/parents/me', h(async (req, res) => {
+    const name = String(req.body?.name ?? req.parent.name).trim().replace(/\s+/g, ' ');
+    const phone = String(req.body?.phone ?? req.parent.phone ?? '').trim() || null;
+    if (!name) throw bad('Enter your name.');
+    if (name.length > NAME_MAX) throw bad('Keep your name under 80 characters.');
+    if (!phoneOk(phone)) throw bad('Enter your phone with its area code, like 801-555-0142.');
+    update('parents', req.parent.id, { name, phone });
+    log(req, 'Updated parent details', `${name}${phone ? `, ${phone}` : ''}`);
+    res.json({ id: req.parent.id, name, email: req.parent.email, phone });
+  }));
+
+  // ---- family account: payments and receipts, retrying a declined charge, removing the card ----
+  api.get('/parent/account', h(async (req, res) => {
+    const f = family(req);
+    const pay = familyPayments(f.id, 100);
+    const due = pastDue(f.id);
+    const others = get(`SELECT COUNT(*) n FROM auth_sessions WHERE kind='parent' AND user_id=? AND expires_at>? AND token_hash<>?`,
+      req.parent.id, new Date().toISOString(), sha256(req.cookies?.dp_parent || '')).n;
+    res.json({
+      payments: pay.items, more_payments: pay.more, paid_this_year_cents: paidThisYear(f.id),
+      past_due: due.map((i) => ({ id: i.id, description: i.description, athlete: i.athlete_first, amount_cents: i.amount_cents, issued_at: i.issued_at, can_retry: i.attempts < PARENT_RETRY_MAX })),
+      card_remove_block: f.card_last4 ? cardRemovalBlock(f.id) : null,
+      other_sessions: others,
+    });
+  }));
+
+  api.post('/parent/payments/:id/retry', h(async (req, res) => {
+    const f = family(req);
+    const inv = get('SELECT * FROM invoices WHERE id=? AND family_id=?', Number(req.params.id) || 0, f.id);
+    if (!inv) throw notFound('That payment');
+    if (inv.status === 'paid') throw bad('That payment is already paid.');
+    if (inv.status !== 'failed' || inv.kind !== 'membership') throw bad('Ask the front desk about that payment.');
+    if (inv.attempts >= PARENT_RETRY_MAX) throw bad('That payment has been tried too many times. Replace the card, or ask the front desk to take it.');
+    needCard(f);
+    const exp = parseExpiry(f.card_exp);
+    if (exp?.expired) throw bad(`The ${cardLabel(f)} has expired. Replace the card and it's tried right away.`, { needs_card: true });
+    const r = billing.retryFailed({ invoiceId: inv.id });
+    log(req, r.paid ? 'Paid past-due charge' : 'Retried charge, declined', `${inv.number}, ${money(inv.amount_cents)} on the ${cardLabel(f)}`);
+    res.json({ ok: true, paid: r.paid > 0, amount_cents: inv.amount_cents, card_label: cardLabel(f) });
+  }));
+
+  api.delete('/parent/card', h(async (req, res) => {
+    if (payments.mode() === 'live') throw bad('Ask the front desk to remove a card in live mode.');
+    const f = family(req);
+    if (!f.card_last4) throw bad('There is no card on file.');
+    const block = cardRemovalBlock(f.id);
+    if (block) throw bad(block);
+    update('families', f.id, { card_brand: null, card_last4: null, card_exp: null });
+    log(req, 'Removed card', cardLabel(f));
+    tellOtherParents(req, `Card removed from the ${f.name}`, `${req.parent.name} removed the ${cardLabel(f)} from the ${f.name} account. Drop-ins, packs and camps need a card before they can be paid in the app.`);
+    res.json({ ok: true });
+  }));
+
+  // A copy of the signed waiver, by email to the parent asking.
+  api.post('/parent/waiver/copy', h(async (req, res) => {
+    const f = family(req);
+    const current = Number(setting('waiver_version', 1));
+    if (f.waiver_version == null || Number(f.waiver_version) < current) throw bad('Sign the current waiver first.');
+    const now = Date.now();
+    const recent = (waiverCopies.get(req.parent.id) || []).filter((t) => now - t < 36e5);
+    if (recent.length >= 3) throw bad('We sent a few copies already. Check your email, or try again in an hour.');
+    waiverCopies.set(req.parent.id, [...recent, now]);
+    // The day it was signed in the business time zone (waiver_signed_at is UTC ISO; older rows are plain dates).
+    const day = localDay(f.waiver_signed_at);
+    const when = day ? ` on ${new Date(`${day}T12:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}` : '';
+    sendEmail(req.parent.email, `Your signed waiver: ${businessName()}`,
+      `Hi ${firstName(req.parent.name)},\n\nHere is the waiver for the ${f.name}, signed by ${f.waiver_signed_by}${when} (version ${f.waiver_version}).\n\n${setting('waiver_text', '')}\n\nSigned: ${f.waiver_signed_by}\n\n${businessName()}`);
+    log(req, 'Emailed waiver copy', `${f.name} to ${req.parent.email}`);
+    res.json({ ok: true, email: req.parent.email });
+  }));
+
+  // Sign out of every other phone and browser, keeping this one.
+  api.post('/parent/sessions/others/end', h(async (req, res) => {
+    const r = run(`DELETE FROM auth_sessions WHERE kind='parent' AND user_id=? AND token_hash<>?`, req.parent.id, sha256(req.cookies?.dp_parent || ''));
+    log(req, 'Signed out other devices', `${req.parent.name}: ${r.changes}`);
+    res.json({ ok: true, ended: Number(r.changes) });
   }));
 }
 

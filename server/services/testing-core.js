@@ -63,7 +63,8 @@ function fmtValue(v, unit) {
 }
 function fmtRange(t) {
   const u = t.unit === 's' ? ' s' : ' ' + t.unit;
-  return `${trim(t.min_value, 2)}–${trim(t.max_value, 2)}${u}`;
+  if (t.min_value != null && t.max_value != null) return `${trim(t.min_value, 2)}–${trim(t.max_value, 2)}${u}`;
+  return t.min_value != null ? `at least ${trim(t.min_value, 2)}${u}` : `at most ${trim(t.max_value, 2)}${u}`;
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -238,9 +239,15 @@ function pendingGroups() {
   }
   return [...groups.values()].map((g) => ({ ...g, suggestions: suggest(g.sender_label).concat(g.sender_label !== g.sender_key ? suggest(g.sender_key) : []).filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i).slice(0, 3) }));
 }
+// A waiting result keeps where it came from once linked: an uploaded file, the open API, or a device.
+function pendingSource(ref) {
+  const pre = String(ref || '').split(':')[0];
+  return pre === 'upload' ? 'upload' : pre === 'api' ? 'api' : 'device';
+}
 function linkPending(ids, athleteId, remember, req) {
   const a = get('SELECT * FROM athletes WHERE id=?', athleteId);
   if (!a) return { error: 'Pick an athlete to link these results to.' };
+  if (a.archived) return { error: `${athleteName(a)} is archived. Restore the profile first, or pick someone else.` };
   const rows = ids.map((id) => get('SELECT * FROM pending_results WHERE id=?', id)).filter(Boolean);
   if (!rows.length) return { error: 'Those results were already linked or discarded.' };
   let prs = 0;
@@ -248,7 +255,7 @@ function linkPending(ids, athleteId, remember, req) {
     for (const p of rows) {
       const t = get('SELECT * FROM tests WHERE id=?', p.test_id) || findTest(p.test_name);
       if (!t) continue;
-      const r = saveResult({ athlete_id: a.id, test: t, value: p.value, unit_entered: p.unit, source: 'device', source_ref: p.source_ref || `pending:${p.id}`, recorded_at: p.recorded_at }, { req });
+      const r = saveResult({ athlete_id: a.id, test: t, value: p.value, unit_entered: p.unit, source: pendingSource(p.source_ref), source_ref: p.source_ref || `pending:${p.id}`, recorded_at: p.recorded_at }, { req });
       if (r.pr) prs++;
       run('DELETE FROM pending_results WHERE id=?', p.id);
     }
@@ -279,34 +286,39 @@ function decimalAge(birthday, on) {
 
 // ---- progress -----------------------------------------------------------------
 // view: 'staff' (every result, flags unshared) or 'parent' (honours results_visibility).
-function progress(athleteId, { view = 'staff', visibility = 'shared' } = {}) {
+// from/to (YYYY-MM-DD, optional) limit the report to a period, like this season.
+function progress(athleteId, { view = 'staff', visibility = 'shared', from = null, to = null } = {}) {
   const a = get('SELECT id, code, first_name, last_name, birthday, sex, sport, position, school FROM athletes WHERE id=?', athleteId);
   if (!a) return null;
   const onlyShared = view === 'parent' && visibility !== 'immediate';
-  const rows = all(`SELECT r.value, r.test_id, r.day_id, r.hand_timed, COALESCE(d.date, substr(r.recorded_at,1,10)) AS date, d.status AS day_status, d.name AS day_name,
+  const DATE = 'COALESCE(d.date, substr(r.recorded_at,1,10))';
+  const range = `${from ? ` AND ${DATE} >= ?` : ''}${to ? ` AND ${DATE} <= ?` : ''}`;
+  const rangeArgs = [from, to].filter(Boolean);
+  const rows = all(`SELECT r.value, r.test_id, r.day_id, r.hand_timed, ${DATE} AS date, d.status AS day_status, d.name AS day_name,
       t.name, t.category, t.unit, t.lower_better
     FROM results r JOIN tests t ON t.id=r.test_id LEFT JOIN testing_days d ON d.id=r.day_id
-    WHERE r.athlete_id=? ${onlyShared ? "AND (r.day_id IS NULL OR d.status='shared')" : ''}
-    ORDER BY date, r.id`, a.id);
+    WHERE r.athlete_id=? ${onlyShared ? "AND (r.day_id IS NULL OR d.status='shared')" : ''}${range}
+    ORDER BY date, r.id`, a.id, ...rangeArgs);
   const unshared = view === 'staff' && rows.some((r) => r.day_id && r.day_status !== 'shared');
   const byTest = new Map();
   for (const r of rows) {
     if (!byTest.has(r.test_id)) byTest.set(r.test_id, { t: { id: r.test_id, name: r.name, category: r.category, unit: r.unit, lower_better: r.lower_better }, byDate: new Map(), hand: false });
     const g = byTest.get(r.test_id);
     if (r.hand_timed) g.hand = true;
+    if (view === 'staff' && r.day_id && r.day_status !== 'shared') g.unshared = true;
     const cur = g.byDate.get(r.date);
     if (cur == null || better(g.t, r.value, cur)) g.byDate.set(r.date, r.value);
   }
   const lastDate = rows.length ? rows[rows.length - 1].date : null;
   const tests = [], improvements = [], prs = [];
   const pctOf = (t, first, latest) => (first ? round(((t.lower_better ? first - latest : latest - first) / Math.abs(first)) * 100, 1) : 0);
-  for (const { t, byDate, hand } of byTest.values()) {
+  for (const { t, byDate, hand, unshared: notShared } of byTest.values()) {
     const history = [...byDate.entries()].sort((x, y) => x[0].localeCompare(y[0])).map(([date, value]) => ({ date, value }));
     const first = history[0].value, latest = history[history.length - 1].value;
     const best = bestOf(t, history.map((h) => h.value));
     const change = round(latest - first);
     tests.push({ test_id: t.id, name: t.name, category: t.category, unit: t.unit, lower_better: !!t.lower_better, best, first, latest, change,
-      pct: history.length > 1 ? pctOf(t, first, latest) : null, count: history.length, hand_timed: hand, history });
+      pct: history.length > 1 ? pctOf(t, first, latest) : null, count: history.length, hand_timed: hand, history, ...(notShared ? { unshared: true } : {}) });
     if (t.category === 'Body' || history.length < 2) continue;
     const pct = pctOf(t, first, latest);
     if (pct > 0) improvements.push({ test: t.name, unit: t.unit, first, latest, change, pct });
@@ -323,7 +335,8 @@ function progress(athleteId, { view = 'staff', visibility = 'shared' } = {}) {
   const note = get(`SELECT d.note AS text, d.name AS day_name, d.date FROM testing_days d
     WHERE d.note IS NOT NULL AND d.note != '' ${onlyShared || view === 'parent' ? "AND d.status='shared'" : ''}
       AND (EXISTS (SELECT 1 FROM testing_day_athletes x WHERE x.day_id=d.id AND x.athlete_id=?) OR EXISTS (SELECT 1 FROM results r WHERE r.day_id=d.id AND r.athlete_id=?))
-    ORDER BY d.date DESC, d.id DESC LIMIT 1`, a.id, a.id) || null;
+      ${from ? 'AND d.date >= ?' : ''} ${to ? 'AND d.date <= ?' : ''}
+    ORDER BY d.date DESC, d.id DESC LIMIT 1`, a.id, a.id, ...rangeArgs) || null;
 
   // Growth
   let growth = null;
@@ -336,7 +349,7 @@ function progress(athleteId, { view = 'staff', visibility = 'shared' } = {}) {
     growth = { height: H.value, seated_height: S.value, weight: W.value, date: on, age: round(age, 1), ...est };
   }
   const days = all(`SELECT DISTINCT d.id, d.name, d.date, d.status FROM testing_days d JOIN results r ON r.day_id=d.id
-    WHERE r.athlete_id=? ${onlyShared ? "AND d.status='shared'" : ''} ORDER BY d.date DESC`, a.id);
+    WHERE r.athlete_id=? ${onlyShared ? "AND d.status='shared'" : ''} ${from ? 'AND d.date >= ?' : ''} ${to ? 'AND d.date <= ?' : ''} ORDER BY d.date DESC`, a.id, ...rangeArgs);
   return {
     athlete: { id: a.id, code: a.code, first_name: a.first_name, last_name: a.last_name, birthday: a.birthday, sex: a.sex, sport: a.sport, position: a.position, school: a.school },
     note, improvements: improvements.slice(0, 3), prs, tests, growth, unshared, days,
@@ -346,5 +359,5 @@ function progress(athleteId, { view = 'staff', visibility = 'shared' } = {}) {
 
 module.exports = {
   unitsFor, normUnit, convert, parseEntry, fmtValue, fmtRange, round, findTest, inRange, better, bestOf, checkValue,
-  previousBest, saveResult, emitResult, ingest, suggest, nameScore, pendingGroups, linkPending, growthEstimate, decimalAge, progress, athleteName,
+  previousBest, saveResult, emitResult, ingest, suggest, nameScore, pendingGroups, linkPending, pendingSource, growthEstimate, decimalAge, progress, athleteName,
 };

@@ -1,10 +1,13 @@
 // Demo data for Testing & results: three testing days over about three months (two shared with coach notes,
 // one still open), realistic improving results for the family athletes (incl. height, seated height and weight
-// for the growth estimate), and five results from two unknown senders waiting to be linked.
+// for the growth estimate), five results from two unknown senders waiting to be linked, one linked timing chip,
+// one past timing-gate upload under Recent uploads, a custom test with a protocol and a shared report link for Ava.
 'use strict';
 const { all, get, insert, tx } = require('../db');
 const { addDays, today } = require('../lib');
 const core = require('../services/testing-core');
+require('../services/testing-upload'); // creates the upload_batches tables
+require('../services/testing-library'); // creates report_links and the tests.description column
 
 const DAY_TESTS = ['40-yard dash', '20-yard sprint', 'Pro agility (5-10-5)', 'Standing broad jump', 'Vertical jump', 'Seated chest pass', 'Height', 'Seated height', 'Weight'];
 
@@ -104,6 +107,38 @@ function seed() {
     pend('OVR', 'Olivia P', 'Olivia P', '10-yard sprint', 1.98, 'ovr-3');
     pend('Jump mat', 'JM-2291', 'Jump mat JM-2291', 'Vertical jump', 17.5, 'jm-1');
     pend('Jump mat', 'JM-2291', 'Jump mat JM-2291', 'Vertical jump', 18, 'jm-2');
+
+    // A timing gate lane someone already linked, so its results go straight in.
+    const chidiLink = byName('Chidi');
+    if (chidiLink) insert('device_links', { source: 'Freelap', sender_key: 'FL-104', sender_label: 'Freelap chip FL-104', athlete_id: chidiLink.id, created_at: `${days[1].date} 16:00:00` });
+
+    // A Freelap timing export uploaded last week, listed under Recent uploads (and undoable).
+    const ten = get("SELECT * FROM tests WHERE name='10-yard sprint'");
+    const upDate = addDays(T, -9);
+    const sprinters = kids.slice(0, 4);
+    if (ten && sprinters.length) {
+      const batch = insert('upload_batches', { filename: 'freelap-10yd-sprints.csv', source: 'Freelap', format: 'long', saved: sprinters.length, created_count: sprinters.length,
+        athletes: sprinters.length, created_by: coach?.id, created_at: `${upDate} 18:20:00` });
+      sprinters.forEach((a, i) => {
+        const value = Math.round(Math.min(2.4, Math.max(1.6, 2.25 - (core.decimalAge(a.birthday, upDate) - 11) * 0.05 + i * 0.02)) * 100) / 100;
+        const rid = insert('results', { athlete_id: a.id, test_id: ten.id, attempt: 1, value, unit_entered: 's', source: 'upload',
+          source_ref: `upload:demo-freelap-${a.id}`, recorded_at: `${upDate} 12:00:00`, created_by: coach?.id });
+        insert('upload_batch_items', { batch_id: batch, result_id: rid, athlete_id: a.id, test_id: ten.id, value, created: 1 });
+      });
+      act('Uploaded results', `${sprinters.length} results (freelap-10yd-sprints.csv)`, `${upDate} 18:20:00`);
+    }
+
+    // Test library: one custom test with a written protocol, and a report link Ava's family can see was opened.
+    if (!get("SELECT 1 FROM tests WHERE name='Med ball scoop toss (6 lb)'")) {
+      insert('tests', { name: 'Med ball scoop toss (6 lb)', category: 'Baseball', unit: 'ft', lower_better: 0, attempts: 3, min_value: 5, max_value: 90, custom: 1,
+        description: 'Side-on like a hitter, 6 lb ball. Load the back hip and scoop toss through the target. Best of three each side.' });
+    }
+    const ava = byName('Ava');
+    if (ava) {
+      insert('report_links', { athlete_id: ava.id, token: `demo-${ava.code.toLowerCase()}-recruiting`, label: 'BYU recruiting', created_by: 'Chris Maddox',
+        created_at: `${addDays(T, -6)} 17:05:00`, expires_at: `${addDays(T, 24)} 17:05:00`, views: 2, last_viewed_at: `${addDays(T, -2)} 20:14:00` });
+      act('Shared progress report link', 'Ava Lopez, for BYU recruiting', `${addDays(T, -6)} 17:05:00`);
+    }
   });
 }
 

@@ -25,33 +25,88 @@
 .wo-cue{margin:0;color:var(--steel-muted);line-height:24px}
 .wo-cue b{color:var(--steel)}
 .wo-list{display:flex;flex-direction:column;gap:var(--space-3)}
-.wo-ex{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);cursor:pointer}
-.wo-ex[aria-current="true"]{border:2px solid var(--green-mid);padding:calc(var(--space-3) - 1px) calc(var(--space-4) - 1px)}
+.wo-ex{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md)}
+.wo-ex.open{border-color:var(--green-mid);box-shadow:0 0 0 1px var(--green-mid)}
+.wo-ex-head{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3) var(--space-4)}
+.wo-ex-toggle{flex:1;min-width:0;min-height:52px;display:flex;align-items:center;gap:var(--space-3);background:none;border:0;padding:0;text-align:left;cursor:pointer}
+.wo-ex-txt{min-width:0}
 .wo-ex.done .wo-name{color:var(--steel-muted)}
-.wo-thumb{width:56px;height:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--black);border-radius:var(--radius-sm);color:var(--steel)}
+.wo-thumb{width:48px;height:48px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:var(--black);border-radius:var(--radius-sm);color:var(--steel-muted);font:600 18px/1 var(--font-display)}
 .wo-ex.done .wo-thumb{color:var(--green-bright)}
-.wo-ex .grow{flex:1;min-width:0;background:none;border:0;padding:0;text-align:left;cursor:pointer}
 .wo-name{font:600 18px/24px var(--font-sans);color:var(--steel);display:block}
 .wo-sr{color:var(--steel-muted);font-size:15px;line-height:22px}
-.wo-log{min-width:84px;min-height:52px;border-radius:var(--radius-sm);font:600 16px/1 var(--font-sans);background:var(--surface);color:var(--steel);border:1px solid var(--control-border);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.wo-log{min-width:84px;min-height:52px;border-radius:var(--radius-sm);font:600 16px/1 var(--font-sans);background:var(--surface);color:var(--steel);border:1px solid var(--control-border);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0}
 .wo-log[aria-pressed="true"]{background:var(--green);border-color:var(--green-mid);color:var(--on-green)}
+.wo-ex-body{display:flex;flex-direction:column;gap:var(--space-3);padding:0 var(--space-4) var(--space-4)}
+.wo-last{margin:0;color:var(--steel-muted);font-size:14px;line-height:20px}
+.wo-last-v{color:var(--steel)}
+.wo-sets{display:flex;flex-direction:column;gap:6px}
+.wo-set{display:grid;grid-template-columns:28px minmax(0,1fr) minmax(0,1fr) 52px;gap:8px;align-items:center}
+.wo-set-head{font:500 11px/16px var(--font-sans);letter-spacing:.12em;text-transform:uppercase;color:var(--steel-muted);text-align:center}
+.wo-set-n{font:600 16px/1 var(--font-display);color:var(--steel-muted);text-align:center}
+.wo-set .wo-in{min-height:48px;padding:8px;text-align:center;font-size:17px}
+.wo-set .wo-in::placeholder{color:var(--steel-muted);opacity:.7}
+.wo-set.logged .wo-in{border-color:var(--green-mid)}
+.wo-set.logged .wo-set-n{color:var(--green-bright)}
+.wo-set-target{color:var(--steel-muted);text-align:center;font-size:15px;line-height:20px}
+.wo-set-ok{width:52px;min-height:48px;border-radius:var(--radius-sm);border:1px solid var(--control-border);background:var(--surface-raised);color:var(--steel-muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.wo-set-ok[aria-pressed="true"]{background:var(--green);border-color:var(--green-mid);color:var(--on-green)}
+.wo-link{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0;background:none;border:0;color:var(--green-bright);font:500 15px/1.2 var(--font-sans);cursor:pointer;text-align:left}
+.wo-link.wo-inline{min-height:44px;font-size:inherit}
+.wo-link[data-resttoggle][aria-pressed="false"]{color:var(--steel-muted)}
+.wo-bar{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);flex-wrap:wrap;margin-bottom:-8px}
+.wo-help{margin:0}
+.wo-rpe{border:0;margin:0;padding:0;min-width:0;display:flex;flex-direction:column;gap:8px}
+.wo-rpe legend{padding:0;margin-bottom:8px}
+.wo-rpe-grid button{min-height:52px}
+.wo-offline{justify-content:flex-start}
+.wo-reopen{margin:0}
+.wo-bests{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;font-size:16px;line-height:24px;color:var(--green-bright)}
+.wo-up{display:flex;flex-direction:column}
+.wo-up>div{padding:12px 0;border-top:1px solid var(--line-subtle);font-size:15px}
+.wo-up>div:first-child{border-top:0}
+.wo-hist-row{border-top:1px solid var(--line-subtle)}
+.wo-hist-row:first-child{border-top:0}
+.wo-hist-b{display:grid;grid-template-columns:minmax(0,1fr) auto 16px;gap:12px;align-items:center;width:100%;min-height:48px;padding:10px 0;background:none;border:0;text-align:left;cursor:pointer;font-size:15px;line-height:21px}
+.wo-hist-m{white-space:nowrap}
+.wo-chev{display:inline-flex;color:var(--steel-muted);transition:transform .15s}
+.wo-hist-b[aria-expanded="true"] .wo-chev{transform:rotate(90deg)}
+.wo-hist-d{display:flex;flex-direction:column;gap:8px;padding:0 0 14px}
+.wo-hist-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:14px;line-height:20px}
+.wo-hist-items li{display:flex;justify-content:space-between;gap:12px}
+.wo-hist-items li>.muted{text-align:right}
+.wo-hist-i{display:inline-flex;align-items:baseline;gap:6px}
+.wo-hist-i svg{color:var(--green-bright);flex-shrink:0;align-self:center}
+.wo-skip{color:var(--steel-muted);width:14px;text-align:center}
+.wo-hist-note{margin:0;font-size:14px;line-height:20px;color:var(--steel)}
+.wo-rest{position:fixed;left:0;right:0;bottom:env(safe-area-inset-bottom);z-index:61;padding:0 16px 8px}
+body.eg-has-tabbar .wo-rest{bottom:calc(61px + env(safe-area-inset-bottom));padding-top:8px}
+.wo-rest-in{max-width:528px;margin:0 auto;display:flex;align-items:center;gap:8px;padding:8px 8px 8px 16px;background:var(--surface-raised);border:1px solid var(--green-mid);border-radius:var(--radius-md)}
+.wo-rest-l{flex:1;display:flex;align-items:baseline;gap:10px;min-width:0}
+.wo-rest-k{font:500 11px/1 var(--font-sans);letter-spacing:.14em;text-transform:uppercase;color:var(--steel-muted)}
+.wo-rest-t{font:700 28px/1 var(--font-display);color:var(--steel);font-variant-numeric:tabular-nums}
+.wo-rest.done .wo-rest-t{color:var(--green-bright)}
+.wo-rest-b{min-height:44px;min-width:56px;padding:0 10px;border-radius:var(--radius-sm);border:1px solid var(--control-border);background:var(--surface);color:var(--steel);font:600 14px/1 var(--font-sans);cursor:pointer}
+body.wo-resting .wo{padding-bottom:calc(176px + env(safe-area-inset-bottom))}
+body.wo-resting .toasts{bottom:calc(150px + env(safe-area-inset-bottom))}
+@media (prefers-reduced-motion:reduce){.wo-chev{transition:none}}
 .wo-finish{min-height:56px;font-size:17px}
 .wo-done{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6);background:var(--surface);border:1px solid var(--green-mid);border-radius:var(--radius-md)}
 .wo-done .icon{width:48px;height:48px;border-radius:50%;background:var(--green-deep);color:var(--green-soft);display:flex;align-items:center;justify-content:center}
 .wo-done p{margin:0;font-size:17px;line-height:26px}
 .wo-h2{font:700 18px/1.2 var(--font-display);letter-spacing:.06em;text-transform:uppercase;color:var(--steel);margin:var(--space-4) 0 0}
 .wo-hist{display:flex;flex-direction:column}
-.wo-hist>div{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line-subtle);font-size:15px}
-.wo-hist>div:first-child{border-top:0}
 .wo-foot{margin-top:var(--space-6);text-align:center;font:500 10px/14px var(--font-sans);letter-spacing:.18em;text-transform:uppercase;color:var(--steel-muted)}
 @media (min-width:600px){.wo-title{font-size:48px}}
 </style>
 </head>
 <body>
 <main id="app">
-<div class="wo" id="root" aria-live="polite"><p class="muted">Loading your workout…</p></div>
+<div class="wo" id="root"><p class="muted" role="status">Loading your workout…</p></div>
 <div class="wo" id="engage" hidden></div>
 </main>
+<div class="wo-rest" id="rest" role="timer" aria-label="Rest between sets" hidden></div>
+<p class="sr-only" id="wo-live" role="status" aria-live="polite"></p>
 <nav class="eg-tabbar" id="tabbar" aria-label="Sections" hidden></nav>
 <script type="module" src="/workout/app.js"></script>
 </body>

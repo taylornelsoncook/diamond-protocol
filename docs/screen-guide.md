@@ -49,12 +49,13 @@ The jobs you'll do most, step by step. Each step links to its screen.
 
 - Upload resultsDownload the sheet with every Athlete ID filled in.
 - Upload resultsFill it in during testing, then upload it.
-- Upload: a sheet with mistakesFix anything it finds and upload again. Nothing is saved until the sheet is clean.
-- Upload: review and saveConfirm unusual values and save everything at once.
+- Upload: a sheet with mistakesFix anything it finds and check again. Nothing is saved until the sheet is clean.
+- Upload: review and saveSee what's new, what replaces an earlier value and any PRs, confirm unusual values and save everything at once.
+- Upload resultsSaved the wrong sheet? Undo it from Recent uploads.
 
 ### Device results into profiles
 
-- Devices & importsConnect Hawkin, or export from OVR or another system.
+- Devices & importsConnect Hawkin, or export from OVR or another system. Link a device ahead of time if you know whose it is.
 - Upload resultsResults carrying an Athlete ID go straight to the right profile.
 - Waiting to be linkedAnything else waits. Link it once with Remember on.
 - Devices & importsFrom then on, that device's results go straight in.
@@ -304,8 +305,9 @@ _Where: Testing_
 Your testing days, and every way results come in.
 
 - Open a testing day to run it, or start a New testing day.
+- Filter the list to Open or Shared days, or find one by name or team. Open days show how many athlete-tests have a result so far.
 - Upload results for paper or spreadsheet sheets, Devices for Hawkin, OVR and other systems, and the Test library to see or add tests.
-- A banner appears when results are waiting to be linked to an athlete.
+- A banner appears when results are waiting to be linked to an athlete. Front desk sees it too, with a note that a coach links them.
 
 ### New testing day
 
@@ -315,9 +317,10 @@ _Where: Testing, then New testing day_
 
 Plan a combine, evaluation day or team testing.
 
-- Name it and pick the date.
-- Choose a team (brings in the whole roster) or tick individual athletes.
-- Start from a preset (Combine, Force plate, Baseball, Basketball, Hockey, Soccer, Youth), then add or remove tests.
+- Name it and pick the date. The name fills in from the preset, team or retested day until you type your own.
+- Retest a past day (optional) to bring in the same athletes and tests, so the comparison is like for like. A testing day's Edit day menu has the same shortcut: Retest these athletes.
+- Choose a team (brings in the whole roster) or tick individual athletes. Find athletes by name or ID, Tick all shown, or Clear.
+- Start from a preset (Combine, Force plate, Baseball, Basketball, Hockey, Soccer, Youth), then add or remove tests. Find a test by name. Selected tests show in the order they'll run, each with a remove button.
 - Start testing day.
 
 ### Testing day
@@ -328,13 +331,16 @@ _Where: Testing, then a testing day_
 
 Run the tests: one test at a time, every athlete, every attempt.
 
-- Pick a test from the tabs across the top.
-- For timed tests, tap Start, then Stop. The time saves to the athlete marked Up and moves to the next athlete. Tap Time beside anyone to switch.
-- Or type results into the attempt boxes; they save as you type. Choose another unit (like cm) if that's what you measured.
-- A toast celebrates each new PR. Add walk-ups with the menu at the bottom.
-- When you're done: Share with parents (with an optional note), Download sheet for paper backup, or Upload results.
+- Pick a test from the tabs across the top. Each tab shows how many athletes have a result (3/4), with a check when everyone does. Arrow keys move between tabs. Owners and coaches can Add test.
+- For timed tests, tap Start, then Stop. The time saves to the athlete marked Up and moves to the next athlete. Tap Time beside anyone to switch. Cancel run (or Esc) stops a false start without saving. Undo removes the last time and puts that athlete back up. If a time can't be saved it stays on screen with Save again. On a phone the stopwatch stays pinned at the top while you scroll.
+- Or type results into the attempt boxes; they save as you type, and Enter moves down the column. Choose another unit (like cm) if that's what you measured. The + adds another attempt.
+- Each athlete shows their previous best, and a PR badge when today beats it. A toast celebrates each new PR.
+- Rankings shows today's best for the test, fastest or furthest first, with each athlete's change from their previous best.
+- Find an athlete by name or ID on big days. Add walk-ups with the menu at the bottom. Owners and coaches can remove an athlete (their results on this day go too, after a confirmation).
+- Edit day (owners and coaches): rename or re-date the day, remove tests, retest these athletes, or delete the day. Deleting a day with results asks first; only the owner can delete a day that's been shared.
+- When you're done: Share with parents shows who has results, who doesn't, and anyone with no parent email before you send (with an optional note). If results are added after sharing, a banner offers to email just those families. Download sheet for paper backup, or Upload results.
 
-> Note: Hand times are labeled hand-timed so they're never confused with electronic gates.
+> Note: Hand times are labeled hand-timed so they're never confused with electronic gates. Front desk enters results and adds walk-ups; sharing, editing and removing are for owners and coaches.
 
 ### Upload results
 
@@ -344,9 +350,10 @@ _Where: Testing, then Upload results_
 
 Get paper or spreadsheet results into profiles, safely.
 
-- Get the sheet: pick a testing day (or a team and a preset) and download Excel or CSV. Every athlete's ID is already filled in, with a column for each test and attempt.
+- Get the sheet: pick a testing day (or a team and a preset) and download Excel or CSV. Every athlete's ID is already filled in, with a column for each test and attempt. A testing day's sheet also carries the results already entered, so it doubles as a backup. Picking a day here also points the upload at it.
 - Fill it in on paper, a laptop or a phone.
-- Upload it (or paste rows from Excel or Google Sheets), choose the testing day, and Check the sheet.
+- Upload it: drop the file on the box or choose it (Excel or CSV, up to 3.5 MB), or paste rows from Excel or Google Sheets. Choose the testing day (rows then take the day's date; otherwise set the date for rows without one). Where it's from is worked out from the file, or pick OVR, VALD, Swift, Freelap and the rest so device links match. For a device file with a single value column, pick its test under One-test device export. Then Check the sheet.
+- Recent uploads lists the last ten uploads with who saved them, the testing day and the counts. Undo takes one back out: new results are removed, values it replaced go back to what they were, and results it sent to waiting are dropped. Anything changed or linked since the upload is left alone (including a value typed or timed again, even if it's the same), and the undo is recorded on the list and in the activity log.
 
 > Note: All or nothing: a sheet is saved only when every row matches a real Athlete ID and every value fits its test.
 
@@ -358,9 +365,8 @@ _Where: Upload results, after checking_
 
 If anything is wrong, nothing is saved, and you see exactly what to fix.
 
-- Read the list: spreadsheet row, column, athlete and the problem. For example, an ID that belongs to someone else, a broad jump typed in the 40 column, or a word where a number goes.
-- Fix the sheet and save it.
-- Upload the fixed sheet.
+- Read the list: spreadsheet row, column, athlete and the problem. For example, an ID that belongs to someone else, a broad jump typed in the 40 column, or a word where a number goes. On a phone each problem is its own card. Download this list saves it as a CSV to work from.
+- Fix and check again, right below the list: pasted rows can be fixed in place; for a file, fix and save it, then choose it again. The testing day and other options stay as they were (Change options goes back to them).
 
 ### Upload: review and save
 
@@ -370,9 +376,10 @@ _Where: Upload results, after checking_
 
 A clean sheet, sorted by athlete, ready to save in one go.
 
-- Check the results under each athlete.
-- Tick each unusual value that's right, such as a time far better than the athlete's best. If one is a mistake, fix the sheet instead.
-- Save. Every result lands in each profile and on the testing day at once. Uploading the same sheet again never double-counts.
+- The summary says how many results are new, how many replace an earlier value, how many are already saved, how many are PRs, and how the file was read (our sheet, or a named export).
+- Check the results under each athlete. Each shows the athlete's previous best, a PR badge, "was …" when it replaces a different value, and Already saved when nothing would change. On big sheets, show only what Needs a look (unusual or replacing) or PRs, or find an athlete.
+- Tick each unusual value that's right, such as a time far better than the athlete's best (Tick all appears when there are three or more). If one is a mistake, fix the sheet instead.
+- Save. Every result lands in each profile and on the testing day at once. Values already saved are left exactly as they were, so a stopwatch time keeps its hand-timed label. Uploading the same sheet again never double-counts. After saving, open the day, link any waiting results, or Undo this upload.
 
 ### Waiting to be linked
 
@@ -382,11 +389,11 @@ _Where: Testing, then the waiting banner_
 
 Results that arrived without an Athlete ID or a device you've linked. None of them are in a profile yet.
 
-- Each card is one sender, like "Coley P" from OVR or a jump mat's device ID, with every result it sent.
-- Tap a suggested name, or type a name or Athlete ID and pick from the list.
-- Untick any result that doesn't belong, or keep them all.
+- Each card is one sender, like "Coley P" from OVR or a jump mat's device ID, with every result it sent. With more than three senders, filter by source or find a sender, device ID or test.
+- Tap a suggested name, or type a name or Athlete ID and pick from the list (Enter picks the first match; arrow keys move through it).
+- Untick any result that doesn't belong, or keep them all (Tick all and Untick all switch them at once).
 - Leave Remember on to send that device's future results straight to this athlete.
-- Link, or Discard results you don't want.
+- Link (the button names the athlete), or Discard results you don't want after a confirmation. The card goes away when it's done and the rest of the page stays as it is. Linked results keep where they came from (upload, API or device). Archived athletes can't be linked.
 
 ### Devices & imports
 
@@ -396,10 +403,11 @@ _Where: Testing, then Devices_
 
 How results get in automatically.
 
-- Hawkin Dynamics: paste an integration token once (owner only). New force plate tests sync every 15 minutes.
-- Import a file: exports from OVR, VALD, Swift, Freelap and others go through Upload results.
-- Send results from any system: the open API example for timing systems and scripts.
-- Linked device IDs: every device ID or name you've linked to an athlete, with Unlink.
+- Waiting to be linked: a shortcut to the results still waiting, when there are any.
+- Hawkin Dynamics: paste an integration token once (owner only). New force plate tests sync every 15 minutes; owners can Sync now. When a sync fails the badge says Needs attention and the owner can paste a new token. Put each athlete's Athlete ID in Hawkin as their External ID and results go straight in.
+- Import a file: exports from OVR, VALD, Swift, Freelap and others go through Upload results, and can be undone there.
+- Send results from any system: the open API example for timing systems and scripts, with Copy.
+- Linked device IDs: every device ID or name you've linked to an athlete. Link a device adds one ahead of time (system, device ID or name, athlete) and links anything already waiting from it, keeping the name the device uses. If the device is already linked it says to whom, and linking it again moves it. Change moves a link to another athlete; Unlink asks first and offers Undo. Find a device when the list is long.
 
 ### Test library
 
@@ -407,12 +415,17 @@ _Where: Testing, then Test library_
 
 [Owner] [Coach] [Front desk] 
 
-All 78 tests, grouped by category, with their units and whether lower or higher is better.
+All 78 tests and your presets. Each test shows its unit, whether lower or higher is better, attempts, possible range, how it's run, and how much it's used.
 
-- Hide tests you don't use so they stay out of your menus.
-- Add your own test with its unit and scoring.
+- Tests tab: find a test by name, unit or protocol, pick a category, sort by category, most used or A to Z, and show All, In menus, Hidden or Custom. When nothing matches, Clear the filters, or Add the search as a new test.
+- Select a test to see how to run it (a written protocol for every built-in test), its unit, scoring, attempts, possible range, how many results, athletes and testing days use it, which presets include it, and its record board: each athlete's best, top 10, for Everyone, Male or Female and by age group (the athlete's age when the result was set). Names open the client profile.
+- Hide tests you don't use so they stay out of your menus; Show brings them back. Hidden tests stay on the list with a Hidden badge.
+- Add a test with its category, unit, scoring, attempts, possible range, stopwatch timing and how to run it.
+- Edit a test: built-in tests keep their name, unit and scoring (device imports and past results rely on them) but their attempts, range, category and protocol can change. A custom test's unit and scoring lock once it has results. Renaming a custom test updates the presets that use it.
+- Delete a custom test that has never been used (no results, waiting results, testing days or targets), after a confirmation. It leaves any presets too. Anything else can be hidden.
+- Presets tab: every preset with its tests in the order they run (hidden tests are marked; they're skipped when you plan a day). New preset, Edit (rename, find and add tests, move them earlier or later, remove), Copy, Delete after a confirmation, and Plan a day with it, which opens New testing day with that preset picked.
 
-> Note: Front desk can view the library; owners and coaches change it.
+> Note: Front desk can view the library, protocols, record boards and presets; owners and coaches change them. Every change is in the activity log.
 
 ### Billing
 
@@ -468,6 +481,26 @@ Build a program week by week, day by day, and follow the clients on it.
 
 > Note: Front desk can view programs and send a client their workout link again, but not change programs.
 
+### Education
+
+_Where: Education_
+
+[Owner] [Coach] 
+
+Short lessons and courses athletes read in their app and the parent portal. Assign them, remind anyone who hasn't read them, and see who has finished.
+
+- Four numbers across the top: open assignments, overdue, lessons finished in the last 7 days (and by how many athletes), and published lessons (with drafts).
+- **Assigned** lists every assignment, overdue first, then by due date. Search by athlete, team or lesson; filter Open, Overdue, Finished or All. Each row shows who it's for, the due date, who assigned it and when, the note, when a reminder last went out, and how many have finished. For one athlete you see where they are (Not started, Opened, Started 2 of 4, Finished); for a team, open "Where everyone is" to see each athlete's status with links to their profiles.
+- Assign lesson: pick a published lesson or course, then add as many athletes as you like (Enter picks the first match) or choose a team with an active contract (everyone on the roster, including athletes added later). Set a due date, or tap In 3 days, In a week or In 2 weeks, and add a note. Athletes and their parents are emailed a link. Anyone who already has it is skipped and named, so nobody is assigned twice.
+- Remind emails only the athletes (and their parents) who haven't finished, with the due date and course progress. Remind overdue does the same for every overdue assignment at once. Each assignment can be reminded at most once every 12 hours. An assignment for an archived athlete or an empty roster is never counted as overdue.
+- Change moves the due date or edits the note (nobody is emailed). Remove takes it off their list; anything finished stays finished.
+- **Library** shows courses (lessons in order) and standalone lessons. Search by title, summary or course, and filter All, Published or Drafts. Each lesson shows minutes, video, how many finished and how many opened it without finishing. Reorder a course with the arrows; Add lesson on a course writes a new lesson at its end; drafts have a Publish button.
+- Tap a lesson's title to see who finished it and when, who opened it but hasn't finished, and where it's assigned, with Preview, Edit, Duplicate (saved as a draft copy), Delete and Assign.
+- **Recent** lists the latest lessons athletes marked done, newest first.
+- The lesson editor keeps unsaved text: a click outside the dialog or Escape won't close it while there are changes; press Cancel to discard them.
+
+> Note: Front desk can view everything here but can't create, assign, remind or change anything. Only published lessons and courses (with at least one published lesson) can be assigned.
+
 ### API & integrations
 
 _Where: API & integrations_
@@ -512,7 +545,9 @@ _Where: app address /parent_
 
 Parents sign in with the email you have on file. No password to remember.
 
-- Enter their email and tap Email me a sign-in code.
+- Enter their email and tap Email me a sign-in code. The email is remembered on that phone for next time.
+- New families are set up by the facility first; the screen says to ask at the front desk.
+- Codes are limited to 10 an hour for each email (and 60 an hour from one network), the same for every address so nobody can test which emails are on file.
 
 ### Sign-in code
 
@@ -520,8 +555,10 @@ _Where: after asking for a code_
 
 A 6-digit code arrives by email and works once, for 10 minutes.
 
-- Enter the code (phones fill it in from the email).
-- Parents stay signed in on that phone for 30 days.
+- Enter the code (phones fill it in from the email; pasting the whole email line keeps just the code). It signs in as soon as the sixth digit is in.
+- Send a new code unlocks after 30 seconds; the old code stops working. No email? explains where to look and who to ask.
+- Five wrong tries end a code, and 15 wrong tries in an hour across codes lock sign-in for that email for the hour. Wrong codes get the same answers whether or not the email is on file.
+- Parents stay signed in on that phone for 30 days. Every parent sign-in is in the activity log.
 
 > Note: In test mode the code shows on screen, as here. Once email is connected it only goes to the parent's inbox.
 
@@ -529,64 +566,86 @@ A 6-digit code arrives by email and works once, for 10 minutes.
 
 _Where: Home tab_
 
-Each athlete at a glance.
+Each athlete at a glance, with Overview, Accountability, Performance and Education tabs (the last three are the athlete app views, with an athlete switcher and dots for new messages or work assigned).
 
-- See membership status, group and private sessions left, and the Athlete ID.
-- Coming up lists every booking, with Cancel. Inside the late-cancel window the session is still used.
+- See membership status with the renewal or trial end date, group classes left (this month for capped plans, plus pack sessions), privates left, the Athlete ID, and sessions attended in the last 30 days with the latest.
+- Needs a look: new messages from the coach, lessons to do (amber when overdue) and no check-in yet today, each with a button straight to the right tab for that athlete.
+- Coming up lists every booking with Today or Tomorrow, the time, place and coach; the first four show, with Show all. Waitlist spots show their place in line, sessions inside the late-cancel window say so, and a session that's on now shows On now or Checked in (and can't be cancelled here).
+- Tap a session for details: time range, address with Directions, coach, how it's paid, Add to calendar, and Cancel. Cancel asks first; inside the late-cancel window the session is still used.
+- Sessions in your calendar: subscribe Apple or Google Calendar (or copy the link) to a private feed of every family booking that updates itself. Reset link makes a new one and stops the old one.
 - Book a session, or open the athlete's workouts.
-- Banners ask for the waiver or a card until they're done.
+- Banners ask for the waiver or a card until they're done, and warn when a membership payment failed or the card has expired or expires this month or next.
+- Put this on your home screen: the install button where the browser offers one, or the Share, Add to Home Screen steps on iPhone. Not now hides it on that phone. Coming back to the app after 5 minutes shows fresh data, and a bar says when there's no connection.
 
 ### Book: classes
 
 _Where: Book tab_
 
-Every class and clinic the athlete is old enough for, three weeks ahead.
+Every class, clinic and camp the athlete is old enough for, three weeks ahead.
 
-- Pick the athlete, then Classes.
-- Tap Book, or Waitlist if it's full. A waitlist spot moves up automatically and the family is emailed.
-- With no sessions left, they can pay the drop-in price with the card on file, or buy a pack.
+- Pick the athlete, then Classes. Switching athlete, Classes, Private or Evaluation redraws in place; Show narrows the list to one class (remembered while the app is open) with a count of sessions.
+- Each row shows the time, place, coach, spots left (or Full and how many are waiting) and the drop-in price when no session covers it. Today and Tomorrow are labelled.
+- Tap Book, or Waitlist if it's full. A waitlist spot moves up automatically and the family is emailed. Rows then show Booked, or Waitlist with the place in line, and a Cancel or Leave button. Cancel asks first, says what comes back (the pack session, the drop-in refund) and warns inside the late-cancel window that the session still counts as used. The list stays where you were after booking or cancelling.
+- Tap a class for details: time range, address with Directions, coach, ages, spots, how it's paid (or would be), the late-cancel note, Add to calendar once booked, and Book, Join waitlist, Register or Cancel.
+- With no sessions left, they can pay the drop-in price with the card on file, or buy a pack. A missing or declined card opens Add a card or Update card, and saving the card comes straight back to Book.
+- A camp they haven't registered for shows once, with its days, price and Register. Register charges the card once and books every day, right from Book; camp days show Registered. A camp past its registration deadline says Registration closed.
+- An athlete can't be booked in two places at once: a class that overlaps something already booked or waitlisted says so and has no Book button, and the server refuses it. Waitlist spots count both ways, since they book themselves when a spot opens.
+- Until the waiver is signed, a banner asks for it (booking still works).
 
 ### Book: privates and evaluations
 
 _Where: Book tab, Private or Evaluation_
 
-Open times from your hours.
+Open times from your hours, each with its coach.
 
-- Pick Private or Evaluation, then a time.
-- Privates use a private session from their pack; evaluations charge the card on file.
+- Pick Private or Evaluation. When more than one coach has hours, pick Any coach or one coach; each time shows the coach's name. The first six days show, with Show later dates. Times the athlete is already booked or waitlisted elsewhere are left out. One coach's private doesn't take another coach's hours at the same time.
+- Pick a time, add an optional note for the coach (up to 500 characters), and confirm. The coach is emailed with the note, and the note shows in the session details on Home and Book.
+- Privates use one of the athlete's private sessions (from a pack or the membership). With none left and a card on file, Pay and book buys a single private and books the time in one step; otherwise See packs.
+- Evaluations charge the card on file. No card opens Add a card, which comes back here; a declined card says nothing was booked or charged.
+- Booked for (athlete) lists upcoming privates or evaluations with the coach and note; tap one for details and Add to calendar, or Cancel. Cancelling returns the private session or refunds the evaluation (outside the late-cancel window), tells the coach, and opens the time for other families.
 
 ### Progress
 
 _Where: Progress tab_
 
-Shared test results, in plain language.
+Shared test results, in plain language. Only results from testing days the coach has shared are shown. Archived athletes don't show, and the family can't open or share their report.
 
-- Your note from the latest testing day.
-- Biggest improvements and new PRs.
-- Every test with its best result, change since the first test and a trend line.
-- Growth, with the growth-spurt estimate when birthday, sex, height, seated height and weight are known.
-- Open the printable report.
+- Next testing day, when the athlete is on one that's planned (by name or through their team); on the day it says Testing day today.
+- Tests, new PRs and the last testing date across the top, then your coach's note from the latest testing day.
+- Showing: All results, Last 12 months, or Since an earlier testing day, so you can look at one season. Change since: First test or Last test. Both are remembered while the app is open, and the page stays where you were.
+- Biggest improvements (percent, with the from and to results) and new PRs with their dates. PRs are always best-ever results, whatever the period. Height, weight and other body measurements are never counted as improvements or marked better or worse.
+- Targets set by the coach, with progress and how far there is to go, and How they compare (when rankings are on): best results only, no names.
+- Every test grouped by category, with the best result, the change and a trend line; PR marks new bests. Tap a test to see what it measures, every result by date with the change from the one before and the best marked, and how it's tested (the coach's protocol). Hand-timed results say so.
+- Growth: height and weight with the change since the first measurement and a trend line, and the growth-spurt estimate when birthday, sex, height, seated height and weight are known.
+- Printable report (for the period shown), and Share a link: name who it's for, pick 7, 30, 90 days or a year, then Copy or Send (on phones). Working links show when they expire, how often they've been opened and who made them; Turn off stops one at once.
+- No results yet: says when the next testing day is, or offers Book an evaluation.
 
 ### Programs
 
 _Where: Programs tab_
 
-Camps, standing spots, packs and memberships.
+The athlete's membership, camps, standing spots, packs and plans.
 
-- Register for a camp or clinic in one tap; the card on file is charged and every day is booked.
-- Members can hold a standing weekly spot in a group class.
-- Buy session packs or start a membership.
+- Which card payments go on, with Change card. No card, or an expired one, shows a banner with Add a card or Update card; buying without a card opens Add a card, which comes straight back here. A declined card says nothing was charged and offers Update card.
+- The athlete's membership: plan and status, the trial end or next charge, group classes left this month (or unlimited) and privates a month. A failed payment shows in amber with Update card. Ask to change, pause or cancel sends the owners an email (switch to which plan, pause or cancel, plus an optional note up to 500 characters), shows "You asked to ..." for two weeks and is in Recent activity. Nothing changes until the front desk does it; up to three requests a day. A paused membership can ask to switch or cancel, not to pause again. Other plans show Ask to switch.
+- Register for a camp or clinic in one tap after confirming the days and price; the card on file is charged and every day is booked. Rows show spots left (amber when 3 or fewer), the registration deadline (amber in the last 3 days) and which brothers or sisters are already registered. A full camp says so and is refused before any charge. Registered camps stay listed, with a link to the days on Home.
+- Members can hold a standing weekly spot in a group class. Each class shows its next session; a held spot shows the next booked session and how many are booked. Holding asks first and explains what it uses (on a capped plan, the month's group classes; never pack sessions). Non-members get an explanation and a way to the plans.
+- Start a membership (free trial or first month), or buy session packs. Packs show the price a session and what they save against singles or the drop-in price. After any change the page comes back to the section you were in.
 
 ### Family
 
 _Where: Family tab_
 
-The family account.
+The family account: what's left to finish, the card and payments, the waiver, each athlete, the parents and where you're signed in. Each part saves on its own, so an athlete you have open stays open.
 
-- Add or replace the card on Stripe's secure page. It pays for every athlete in the family.
-- Read and sign the waiver.
-- Update each athlete: birthday, sport, position, school, sex, medical notes and emergency contact.
-- Add another athlete, see the parents on the account, and sign out.
+- To finish lists anything still missing, each with a button straight to it: the waiver (or a new version of it), a card (or one that has expired), a declined membership payment, and each athlete's emergency contact and birthday (Book uses the birthday for class ages). It disappears once everything is done.
+- Card on file: brand, last 4 and expiry, in amber when it has expired or expires this month or next. Add or replace the card on Stripe's secure page; it pays for every athlete in the family. A declined membership payment shows in amber with the amount, what it was for and Try again, which charges the card on file (up to 8 tries in all; after that Try again goes away and a new card or the front desk takes it). Saving a new card tries every past-due membership payment right away, however often the old card was tried, and the card page says how much is past due. Remove card asks first, and isn't allowed while a membership is paid with the card or a payment is past due (it explains why and offers Replace card). The other parents on the account are emailed when the card is added, replaced or removed.
+- Payments: every charge and refund for the family, newest first and dated in the business time zone, with the athlete, invoice number, amount and Declined or Due where it applies, and the total paid this year (net of refunds). Paid charges open a printable receipt. The first five show, with Show all.
+- Waiver: read and sign it (tick to agree for the athletes named, then type your full name). Once signed it shows who signed and when, keeps the text under Read the waiver, and Email me a copy sends the signed waiver to you (three an hour).
+- Athletes: each shows age, sport and position, membership, and Needs birthday or emergency contact in amber. Open one to see the Athlete ID (with Copy), the membership with its status and renewal or trial end (Manage goes to Programs), and to update birthday, sex, sport, position, school, allergies, injuries, medical notes and emergency contact. Use a brother's or sister's emergency contact in one tap. Save turns on once something has changed; mistakes (a birthday in the future, a phone without enough digits) show under the form.
+- Add another athlete (up to 12). The same name twice in one family is refused.
+- Parents: everyone on the account. Edit changes your own name and phone (the sign-in email is changed at the front desk). Add a parent (up to six): they're emailed how to sign in, and the other parents are told.
+- Signed in: which email you're signed in as, how many other phones or browsers are signed in, Sign out everywhere else (asks first; they need a new code), and Sign out. Every change here is in the activity log.
 
 ## Shared pages
 
@@ -594,15 +653,19 @@ Pages people outside your staff open from a link.
 
 ### Printable progress report
 
-_Where: from the client profile or the parent Progress tab_
+_Where: from the client profile, the parent Progress tab, or a share link_
 
-A branded report you can hand to a parent or save as a PDF.
+A branded report you can hand to a parent, send to a college coach or save as a PDF.
 
-- Opens from the athlete's profile (coach view) or the Progress tab (parent view).
-- Shows the coach's note, biggest improvements, new PRs, every test with first, latest, best and change, and growth.
+- Opens from the athlete's profile (coach view) or the Progress tab (family view). Anyone with a share link sees the family view without signing in.
+- Shows the coach's note, biggest improvements, new PRs, every test grouped by category with first, latest, best, change and a trend line (screen readers hear each date and value), and growth.
+- Period: All results, Last 12 months, or Since any earlier testing day, so a report can cover one season. Change since first test or since the last test (the choice is remembered and printed in the footer).
+- Coach view: tests with results not yet shared are marked Not shared yet. Family view previews exactly what the family (and a share link) sees.
+- Share a link (owners, coaches and the athlete's family): name who it's for and pick 7, 30, 90 days or a year, then Copy. Working links show when they expire, how often they've been opened and who made them; Turn off stops a link at once. Links show only shared results and the athlete's age but never the date of birth, count an open once (changing the period on the page isn't another open), and stop working when the athlete is archived.
+- Email to family (owners and coaches): sends each parent a summary of improvements and PRs, an optional note and the report link. Tick Include a link to let them open it without signing in (a 90-day share link).
 - Print or save as PDF. The print version uses white paper and dark ink.
 
-> Note: The coach view includes results not yet shared with the family, and says so at the top.
+> Note: The coach view includes results not yet shared with the family, and says so at the top. Front desk sees the coach view but can't share or email it. Sharing, turning off and emailing are in the activity log.
 
 ### School invoice
 
@@ -618,11 +681,51 @@ What the school's athletic director or treasurer sees.
 
 _Where: each athlete's private link_
 
-Where athletes do their program.
+Where athletes do their program, on their phone.
 
-- Opens to the next workout: week and day, and progress through the program.
-- Each exercise shows sets, reps, cues and a demo video.
-- Tap Log as each exercise is done, add a note for the coach, and Finish workout.
+- Opens to the next workout: week and day, and progress through the program. The first exercise still to do is open.
+- Tap an exercise to open it: demo video, cues, what they lifted last time and their best weight, and a row per set.
+- Log each set with its weight (lb) and reps. Left blank, a set takes last time's weight and the target reps (the low end of a range like 8-10). Timed and distance sets just get a tick. Add a set if they do more; edit or clear a logged set by changing it or tapping its tick again.
+- Logging the last set marks the exercise done and opens the next one. Log marks a whole exercise done without numbers.
+- A rest timer runs after each set (90 seconds to start; −15 s, +15 s or Skip, and it buzzes when rest is over). It can be turned off.
+- No signal in the gym: logs are kept on the phone and sent when the connection is back. Finish workout waits until they're sent.
+- Before finishing: rate how hard it was from 1 to 10 (optional) and add a note for the coach. Finishing with exercises left asks first and shows them as skipped.
+- The done screen shows exercises, sets, time taken, effort and any new best weights, then what's next. Finished by mistake? Reopen this workout, from the done screen or the latest finished workout, for 2 hours and until the next workout is started.
+- Coming up lists the next three workouts. Finished workouts open to show every exercise, the sets logged, effort and the note.
+- The coach sees each finished workout in Recent activity with effort, sets and new bests; the workout.completed webhook carries the sets too.
+
+### Athlete app: Accountability
+
+_Where: each athlete's private link, Accountability tab. Parents see the same view in Home, Accountability, with an athlete switcher._
+
+Streaks, the daily check-in, weekly goals and messages from the coach.
+
+- New messages show a banner at the top; tap it to jump to them. Opening the tab marks them read for whoever is looking: a parent reading them doesn't clear them for the athlete, and the coach's "Read" means the athlete read them.
+- Streaks: active weeks in a row (2 or more training days a week) and check-in days in a row, with the best check-in run.
+- Today's check-in: hours of sleep and 1 to 5 for hydration, soreness, energy and mood, plus a note for the coach. Same as yesterday fills in yesterday's answers to change and save. Short sleep, high soreness or low scores show calm advice and flag the athlete on the coach's Today.
+- This week's goals, Monday to Sunday: workouts, sessions and check-ins count themselves; custom goals are ticked off with Done today, or on the day strip for an earlier day this week that was missed (never a future day or last week). Each goal shows last week's result and how many weeks in a row it was met.
+- From the coach: newest first, five at a time with Show older. Reply to any message; the reply shows under the message, the coach who wrote it gets it by email, and it's in Recent activity under the athlete or parent who wrote it. Up to 20 replies a day. Replies aren't shown on the coach's client profile yet.
+- Last 4 weeks: a calendar of training days and check-ins. Tap a day to see the workouts finished, sessions attended and that day's check-in.
+- Recent check-ins: the last week of answers side by side, with anything that needs a look in amber. Counts for this week and this month.
+
+### Athlete app: Performance
+
+_Where: each athlete's private link, Performance tab (also in the parent Home). Parents only see results from shared testing days._
+
+- Tests, new PRs and the last testing date across the top, then the coach's note from the latest testing day.
+- Targets set by the coach: best result, target and date, progress from the first test, and how far there is to go ("0.13 s to go"). A target past its date shows in amber.
+- How they compare, when rankings are on: rank or percentile among their age group and sex, team and everyone at the facility, from best results only. No names are shown.
+- Every test grouped by category with best result, change and a trend line; PR marks the tests with a new best. Tap a test to see every result by date, with the change from the one before and the best marked.
+- Open the printable report.
+
+### Athlete app: Education
+
+_Where: each athlete's private link, Education tab (also in the parent Home)._
+
+- Assigned: open work first, with due dates and anything overdue in amber, the coach's note, and course progress. Buttons say what happens: Read lesson, Start course, or Continue with the name of the next lesson. Finished work folds away behind Show finished.
+- Search lessons (when there are 6 or more) across courses and the library.
+- Courses open to show their lessons in order with what's done; the lessons library lists the rest.
+- The reader shows the video (YouTube, Vimeo or a video file) and text, Mark as done, and Next lesson inside a course. Once a lesson with nothing after it is done, Back to Education takes its place, and finishing every lesson in a course says so. The coach sees who opened and finished each lesson.
 
 ## iPhone app: DP Coach
 

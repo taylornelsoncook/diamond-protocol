@@ -1,6 +1,6 @@
 // Demo accountability, performance and education content.
 'use strict';
-const { get, all, insert, setSetting } = require('../db');
+const { get, all, run, insert, setSetting } = require('../db');
 const { addDays } = require('../lib');
 const { todayLocal } = require('../services/booking');
 const e = require('../services/engage');
@@ -29,6 +29,23 @@ function seed() {
     insert('lesson_progress', { lesson_id: lessons[0], athlete_id: ava.id });
   }
   if (coach && team) e.assign({ lesson_id: fuel, team_id: team.id, due_date: addDays(T, 3) }, coach);
+  const mindset = get("SELECT id FROM lessons WHERE title='Mindset: next play'").id;
+  insert('lessons', { title: 'Arm care between outings', summary: 'Band work and recovery for pitchers.', body: 'Draft: band routine and throwing-day plan.', minutes: 5, published: 0 });
+
+  // Who has read what: part of the team finished the fuel lesson, a few opened it; one overdue assignment.
+  // UTC timestamps like datetime('now'), some hours or days in the past.
+  const ago = (days, hours = 0) => new Date(Date.now() - (days * 24 + hours) * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+  if (ava) insert('lesson_views', { lesson_id: lessons[1], athlete_id: ava.id, opened_at: ago(0, 3) });
+  if (team) {
+    const roster = all('SELECT id FROM athletes WHERE team_id=? AND archived=0 ORDER BY id', team.id);
+    roster.slice(0, 3).forEach((a, i) => insert('lesson_progress', { lesson_id: fuel, athlete_id: a.id, completed_at: ago(i, 2 + i * 3) }));
+    roster.slice(3, 5).forEach((a, i) => insert('lesson_views', { lesson_id: fuel, athlete_id: a.id, opened_at: ago(i, 5) }));
+  }
+  if (coach && chidi) {
+    const late = e.assign({ lesson_id: mindset, athlete_id: chidi.id, note: 'Two minutes. Read it before your next game.' }, coach);
+    run('UPDATE assignments SET due_date=?, created_at=? WHERE id=?', addDays(T, -2), ago(6), late);
+  }
+  if (emma) { insert('lesson_progress', { lesson_id: mindset, athlete_id: emma.id, completed_at: ago(1, 2) }); insert('lesson_progress', { lesson_id: lessons[0], athlete_id: emma.id, completed_at: ago(2, 4) }); }
 
   // Daily check-ins over the last 10 days, a few with red flags.
   const rows = [
@@ -60,7 +77,20 @@ function seed() {
         if (t) e.setTarget({ athlete_id: ava.id, test_id: t.id, target, due_date: addDays(T, 60) }, coach.id);
       }
     }
-    if (chidi) insert('coach_messages', { athlete_id: chidi.id, staff_id: coach.id, body: 'Saw your check-in: short on sleep this week. Lights out by 10 before Friday.' });
+    if (chidi) {
+      const m = insert('coach_messages', { athlete_id: chidi.id, staff_id: coach.id, body: 'Saw your check-in: short on sleep this week. Lights out by 10 before Friday.' });
+      insert('message_replies', { message_id: m, athlete_id: chidi.id, body: 'Got it. Finals week, it should be better after Wednesday.', created_at: ago(0, 1) });
+    }
+    // Ava's mobility goal has run for a few weeks, so she can see last week's result and a streak.
+    if (ava) {
+      const ws = e.weekStart(T);
+      const mobility = get("SELECT id FROM goals WHERE athlete_id=? AND kind='custom'", ava.id);
+      if (mobility) {
+        run('UPDATE goals SET created_at=? WHERE id=?', `${addDays(ws, -21)} 15:00:00`, mobility.id);
+        for (const w of [-21, -14, -7]) for (const d of [0, 2, 3, 5]) run('INSERT OR IGNORE INTO goal_checks (goal_id, athlete_id, date) VALUES (?,?,?)', mobility.id, ava.id, addDays(ws, w + d));
+        for (let d = 0; d < 7 && addDays(ws, d) < T; d += 2) run('INSERT OR IGNORE INTO goal_checks (goal_id, athlete_id, date) VALUES (?,?,?)', mobility.id, ava.id, addDays(ws, d));
+      }
+    }
   }
   void all;
 }

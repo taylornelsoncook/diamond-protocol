@@ -1,8 +1,24 @@
 // Upload results: read a sheet, check every cell (all or nothing), flag unusual values, then save in one transaction.
 'use strict';
-const { get, run, insert, tx } = require('../db');
+const { db, all, get, run, insert, tx } = require('../db');
 const { sha256, today, log } = require('../lib');
 const core = require('./testing-core');
+
+// Every saved upload is a batch, so it can be listed and undone. Items remember what each result was before.
+// day_id and result_id are plain integers (no foreign keys) so deleting a testing day never trips over a batch.
+db.exec(`
+CREATE TABLE IF NOT EXISTS upload_batches (
+  id INTEGER PRIMARY KEY, filename TEXT, source TEXT, format TEXT, day_id INTEGER, day_name TEXT,
+  saved INTEGER DEFAULT 0, created_count INTEGER DEFAULT 0, replaced_count INTEGER DEFAULT 0, pending INTEGER DEFAULT 0, prs INTEGER DEFAULT 0, athletes INTEGER DEFAULT 0,
+  added_athletes TEXT DEFAULT '[]', added_tests TEXT DEFAULT '[]',
+  created_by INTEGER, created_at TEXT DEFAULT (datetime('now')), undone_at TEXT, undone_by INTEGER, undo_summary TEXT);
+CREATE TABLE IF NOT EXISTS upload_batch_items (
+  id INTEGER PRIMARY KEY, batch_id INTEGER NOT NULL REFERENCES upload_batches(id) ON DELETE CASCADE,
+  result_id INTEGER, pending_id INTEGER, athlete_id INTEGER, test_id INTEGER, value REAL, created INTEGER DEFAULT 1,
+  prev_value REAL, prev_unit_entered TEXT, prev_hand_timed INTEGER, prev_source TEXT, prev_recorded_at TEXT, prev_created_by INTEGER);
+CREATE INDEX IF NOT EXISTS upload_batch_items_batch ON upload_batch_items(batch_id);
+`);
+const SOURCES = ['OVR', 'VALD', 'Swift', 'Freelap', 'Hawkin', 'Brower', 'Dashr', 'Rapsodo', 'Import'];
 
 const ID_RE = /^(athlete\s*id|athlete_id|athleteid|id|athlete\s*code|code|dp\s*id)$/i;
 const NAME_RE = /^(name|athlete|athlete\s*name|full\s*name|player|player\s*name)$/i;
@@ -169,11 +185,18 @@ function checkSheet(rows, opts = {}) {
   // Wide sheets without a day still need a stable reference so re-uploading doesn't double-count.
   for (const it of items) if (!day && !it.ref) it.ref = `upload:${sha256(['sheet', it.athlete.id, it.test.id, it.date, it.attempt].join('|')).slice(0, 32)}`;
 
+  // What each result would do: new, replace a different value, or change nothing. Plus PR context.
   // Unusual values: much better than the athlete's best, or at the edge of what's possible.
   const unusual = [];
   for (const it of items) {
     const t = it.test;
+    const existing = day ? get('SELECT id, value FROM results WHERE athlete_id=? AND test_id=? AND day_id=? AND attempt=?', it.athlete.id, t.id, day.id, it.attempt)
+      : get('SELECT id, value FROM results WHERE source_ref=?', it.ref);
+    it.existing = existing || null;
+    it.same = !!existing && Math.abs(existing.value - it.value) < 1e-9;
     const prev = core.previousBest(t, it.athlete.id, { day_id: day ? day.id : null, attempt: it.attempt, source_ref: it.ref });
+    it.prev_best = prev;
+    it.pr = prev != null && core.better(t, it.value, prev);
     let msg = null;
     if (prev != null && prev !== 0) {
       const imp = (t.lower_better ? prev - it.value : it.value - prev) / Math.abs(prev);
@@ -183,42 +206,120 @@ function checkSheet(rows, opts = {}) {
       const span = t.max_value - t.min_value;
       if (it.value < t.min_value + span * 0.05 || it.value > t.max_value - span * 0.05) msg = `${core.fmtValue(it.value, t.unit)} is at the edge of what's possible for ${t.name} (${core.fmtRange(t)}).`;
     }
-    if (msg) { it.unusual = msg; unusual.push({ key: it.key, row: it.row, column: it.column, athlete: it.athlete.code, message: msg }); }
+    if (msg && !it.same) { it.unusual = msg; unusual.push({ key: it.key, row: it.row, column: it.column, athlete: it.athlete.code, message: msg }); }
   }
   const groups = new Map();
   for (const it of items) {
     if (!groups.has(it.athlete.id)) groups.set(it.athlete.id, { id: it.athlete.id, code: it.athlete.code, name: core.athleteName(it.athlete), results: [] });
-    groups.get(it.athlete.id).results.push({ key: it.key, row: it.row, column: it.column, test: it.test.name, unit: it.test.unit, attempt: it.attempt, value: it.value, date: it.date, unusual: it.unusual || null });
+    groups.get(it.athlete.id).results.push({ key: it.key, row: it.row, column: it.column, test: it.test.name, unit: it.test.unit, lower_better: !!it.test.lower_better, attempt: it.attempt, value: it.value, date: it.date,
+      unusual: it.unusual || null, replaces: it.existing && !it.same ? it.existing.value : null, same: it.same, prev_best: it.prev_best, pr: it.pr && !it.same });
   }
+  const summary = {
+    created: items.filter((it) => !it.existing).length,
+    replacing: items.filter((it) => it.existing && !it.same).length,
+    unchanged: items.filter((it) => it.same).length,
+    prs: items.filter((it) => it.pr && !it.same).length,
+  };
   return {
     ok: true, format, source, day: day ? { id: day.id, name: day.name, date: day.date } : null,
-    count: items.length, athletes: [...groups.values()], unusual,
+    count: items.length, athletes: [...groups.values()], unusual, summary,
     pending: pending.map((p) => ({ row: p.row, sender: p.sender_label, test: p.test.name, unit: p.test.unit, value: p.value, date: p.date })),
     _items: items, _pending: pending,
   };
 }
 
-function saveSheet(check, confirmed, req) {
+function saveSheet(check, confirmed, req, meta = {}) {
   const need = check.unusual.filter((u) => !confirmed.includes(u.key));
   if (need.length) return { error: `Confirm ${need.length} unusual ${need.length === 1 ? 'value' : 'values'} before saving, or fix the sheet.`, need: need.map((u) => u.key) };
   const dayId = check.day?.id ?? null;
-  let saved = 0, prs = 0, pendingAdded = 0, skipped = 0;
+  let saved = 0, prs = 0, pendingAdded = 0, skipped = 0, unchanged = 0, created = 0, replaced = 0;
+  const batchItems = [], addedAthletes = [], addedTests = [];
+  let batchId = null;
   tx(() => {
     for (const it of check._items) {
-      if (dayId) run('INSERT OR IGNORE INTO testing_day_athletes (day_id, athlete_id) VALUES (?,?)', dayId, it.athlete.id);
-      if (dayId) run('INSERT OR IGNORE INTO testing_day_tests (day_id, test_id, ord) VALUES (?,?,(SELECT COALESCE(MAX(ord),0)+1 FROM testing_day_tests WHERE day_id=?))', dayId, it.test.id, dayId);
+      if (dayId && run('INSERT OR IGNORE INTO testing_day_athletes (day_id, athlete_id) VALUES (?,?)', dayId, it.athlete.id).changes) addedAthletes.push(it.athlete.id);
+      if (dayId && run('INSERT OR IGNORE INTO testing_day_tests (day_id, test_id, ord) VALUES (?,?,(SELECT COALESCE(MAX(ord),0)+1 FROM testing_day_tests WHERE day_id=?))', dayId, it.test.id, dayId).changes) addedTests.push(it.test.id);
+      const before = dayId ? get('SELECT * FROM results WHERE athlete_id=? AND test_id=? AND day_id=? AND attempt=?', it.athlete.id, it.test.id, dayId, it.attempt)
+        : get('SELECT * FROM results WHERE source_ref=?', it.ref);
+      // The same value is already saved: leave it alone, so a stopwatch time keeps its source and hand-timed label.
+      if (before && Math.abs(before.value - it.value) < 1e-9) { unchanged++; saved++; continue; }
       const r = core.saveResult({ athlete_id: it.athlete.id, test: it.test, day_id: dayId, attempt: it.attempt, value: it.value, unit_entered: it.unit_entered,
         source: 'upload', source_ref: dayId ? null : it.ref, recorded_at: `${it.date} 12:00:00`, created_by: req?.staff?.id }, { req });
       saved++; if (r.pr) prs++;
+      if (before) replaced++; else created++;
+      batchItems.push({ result_id: r.id, athlete_id: it.athlete.id, test_id: it.test.id, value: it.value, created: before ? 0 : 1,
+        prev_value: before?.value ?? null, prev_unit_entered: before?.unit_entered ?? null, prev_hand_timed: before?.hand_timed ?? null,
+        prev_source: before?.source ?? null, prev_recorded_at: before?.recorded_at ?? null, prev_created_by: before?.created_by ?? null });
     }
     for (const p of check._pending) {
       if (get('SELECT 1 FROM results WHERE source_ref=?', p.ref) || get('SELECT 1 FROM pending_results WHERE source_ref=?', p.ref)) { skipped++; continue; }
-      insert('pending_results', { source: p.source, sender_key: p.sender_key, sender_label: p.sender_label, test_id: p.test.id, test_name: p.test.name, value: p.value, unit: p.test.unit, recorded_at: `${p.date} 12:00:00`, source_ref: p.ref });
+      const pid = insert('pending_results', { source: p.source, sender_key: p.sender_key, sender_label: p.sender_label, test_id: p.test.id, test_name: p.test.name, value: p.value, unit: p.test.unit, recorded_at: `${p.date} 12:00:00`, source_ref: p.ref });
+      batchItems.push({ pending_id: pid, test_id: p.test.id, value: p.value });
       pendingAdded++;
     }
+    if (batchItems.length) {
+      batchId = insert('upload_batches', { filename: String(meta.filename || '').slice(0, 200) || null, source: check.source, format: check.format, day_id: dayId, day_name: check.day?.name ?? null,
+        saved, created_count: created, replaced_count: replaced, pending: pendingAdded, prs, athletes: check.athletes.length,
+        added_athletes: JSON.stringify(addedAthletes), added_tests: JSON.stringify(addedTests), created_by: req?.staff?.id ?? null });
+      for (const b of batchItems) insert('upload_batch_items', { batch_id: batchId, ...b });
+    }
   });
-  log(req, 'Uploaded results', `${saved} result${saved === 1 ? '' : 's'}${check.day ? ' to ' + check.day.name : ''}${pendingAdded ? `, ${pendingAdded} waiting to be linked` : ''}`);
-  return { saved, prs, pending: pendingAdded, skipped, athletes: check.athletes.length };
+  const changed = created + replaced;
+  log(req, 'Uploaded results', `${saved} result${saved === 1 ? '' : 's'}${check.day ? ' to ' + check.day.name : ''}${unchanged && changed ? ` (${unchanged} already saved)` : !changed && saved ? ' (all already saved)' : ''}${pendingAdded ? `, ${pendingAdded} waiting to be linked` : ''}`);
+  return { saved, created, replaced, unchanged, prs, pending: pendingAdded, skipped, athletes: check.athletes.length, batch_id: batchId };
 }
 
-module.exports = { checkSheet, saveSheet, parseDate, nameMatches, parseHeader, guessSource, fmtNum };
+// Recent uploads for the Upload screen.
+function recentBatches(limit = 10) {
+  return all(`SELECT b.id, b.filename, b.source, b.format, b.day_id, COALESCE(d.name, b.day_name) AS day_name, (d.id IS NOT NULL) AS day_exists,
+      b.saved, b.created_count AS created, b.replaced_count AS replaced, b.pending, b.prs, b.athletes, b.created_at, b.undone_at, b.undo_summary,
+      s.name AS by_name, u.name AS undone_by_name
+    FROM upload_batches b LEFT JOIN testing_days d ON d.id=b.day_id LEFT JOIN staff s ON s.id=b.created_by LEFT JOIN staff u ON u.id=b.undone_by
+    ORDER BY b.id DESC LIMIT ?`, limit).map((b) => ({ ...b, day_exists: !!b.day_exists }));
+}
+
+// Undo one upload: remove the results it added, put back the values it replaced, and drop results still waiting
+// to be linked. Anything changed since the upload (retyped, relinked, deleted) is left alone.
+function undoBatch(id, req) {
+  const b = get('SELECT * FROM upload_batches WHERE id=?', id);
+  if (!b) return { notFound: true };
+  if (b.undone_at) return { error: 'This upload was already undone.' };
+  let removed = 0, restored = 0, kept = 0, pendingRemoved = 0;
+  tx(() => {
+    for (const it of all('SELECT * FROM upload_batch_items WHERE batch_id=? ORDER BY id DESC', b.id)) {
+      if (it.pending_id) {
+        if (run('DELETE FROM pending_results WHERE id=?', it.pending_id).changes) pendingRemoved++; else kept++;
+        continue;
+      }
+      const r = get('SELECT id, value, source FROM results WHERE id=? AND athlete_id=? AND test_id=?', it.result_id, it.athlete_id, it.test_id);
+      if (!r) continue; // already gone, e.g. the testing day was deleted
+      // Retyped since (a different value, or the same value typed or timed again) means it isn't the upload's any more.
+      if (Math.abs(r.value - it.value) > 1e-9 || r.source !== 'upload') { kept++; continue; }
+      if (it.created) { run('DELETE FROM results WHERE id=?', r.id); removed++; }
+      else {
+        run('UPDATE results SET value=?, unit_entered=?, hand_timed=?, source=?, recorded_at=?, created_by=? WHERE id=?',
+          it.prev_value, it.prev_unit_entered, it.prev_hand_timed ?? 0, it.prev_source || 'manual', it.prev_recorded_at, it.prev_created_by, r.id);
+        restored++;
+      }
+    }
+    // Athletes and tests the upload put on the testing day come off again if they have no results there now.
+    if (b.day_id && get('SELECT 1 FROM testing_days WHERE id=?', b.day_id)) {
+      for (const aid of JSON.parse(b.added_athletes || '[]')) {
+        if (!get('SELECT 1 FROM results WHERE day_id=? AND athlete_id=?', b.day_id, aid)) run('DELETE FROM testing_day_athletes WHERE day_id=? AND athlete_id=?', b.day_id, aid);
+      }
+      for (const tid of JSON.parse(b.added_tests || '[]')) {
+        if (!get('SELECT 1 FROM results WHERE day_id=? AND test_id=?', b.day_id, tid)) run('DELETE FROM testing_day_tests WHERE day_id=? AND test_id=?', b.day_id, tid);
+      }
+    }
+    const parts = [];
+    if (removed) parts.push(`${removed} removed`);
+    if (restored) parts.push(`${restored} put back to the earlier value`);
+    if (pendingRemoved) parts.push(`${pendingRemoved} waiting result${pendingRemoved === 1 ? '' : 's'} dropped`);
+    if (kept) parts.push(`${kept} left alone because ${kept === 1 ? 'it was' : 'they were'} changed or linked since`);
+    run("UPDATE upload_batches SET undone_at=datetime('now'), undone_by=?, undo_summary=? WHERE id=?", req?.staff?.id ?? null, parts.join(', ') || 'Nothing to change', b.id);
+  });
+  log(req, 'Undid upload', `${b.filename || 'Pasted rows'}${b.day_name ? ` (${b.day_name})` : ''}: ${removed} removed, ${restored} restored${pendingRemoved ? `, ${pendingRemoved} waiting dropped` : ''}${kept ? `, ${kept} left alone` : ''}`);
+  return { removed, restored, pending_removed: pendingRemoved, kept };
+}
+
+module.exports = { checkSheet, saveSheet, recentBatches, undoBatch, SOURCES, parseDate, nameMatches, parseHeader, guessSource, fmtNum };

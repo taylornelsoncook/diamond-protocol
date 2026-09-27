@@ -199,7 +199,10 @@ function openSlots(kind, fromDate, days = 21) {
         const starts_at = `${d}T${t}`;
         if (starts_at <= now) continue;
         const endM = m + h.slot_min;
-        const clash = all(`SELECT starts_at, duration_min FROM events WHERE cancelled=0 AND substr(starts_at,1,10)=? AND (? IS NULL OR coach_id IS NULL OR coach_id=?)`, d, h.coach_id, h.coach_id)
+        // Anything on this coach's schedule (or nobody's) blocks the time; another coach's private does not.
+        // Hours with no coach set are blocked by any private or evaluation, as before.
+        const clash = all(`SELECT starts_at, duration_min FROM events WHERE cancelled=0 AND substr(starts_at,1,10)=?
+            AND (coach_id IS NULL OR coach_id=? OR (? IS NULL AND type IN ('private','evaluation')))`, d, h.coach_id, h.coach_id)
           .some((e) => { const s = toMin(e.starts_at.slice(11, 16)); return s < endM && s + e.duration_min > m; });
         if (!clash) out.push({ starts_at, duration_min: h.slot_min, location_id: h.location_id, price_cents: h.price_cents, coach_id: h.coach_id, availability_id: h.id });
       }
@@ -209,8 +212,8 @@ function openSlots(kind, fromDate, days = 21) {
 }
 
 // Book a private or evaluation into an open slot: creates the session, then the booking.
-function bookSlot(kind, starts_at, athleteId, { source = 'parent' } = {}) {
-  const slot = openSlots(kind, starts_at.slice(0, 10), 1).find((s) => s.starts_at === starts_at);
+function bookSlot(kind, starts_at, athleteId, { source = 'parent', coachId = null } = {}) {
+  const slot = openSlots(kind, starts_at.slice(0, 10), 1).find((s) => s.starts_at === starts_at && (!coachId || s.coach_id === coachId));
   if (!slot) throw bad('That time was just taken. Pick another.');
   const a = get('SELECT * FROM athletes WHERE id=?', athleteId);
   if (kind === 'private' && a.private_credits < 1) throw bad('No private sessions left. Buy a private pack first.');

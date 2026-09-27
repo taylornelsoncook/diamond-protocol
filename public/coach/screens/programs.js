@@ -28,7 +28,7 @@ const STYLE = html`<style>
 .dpo-tools select.input{width:auto;max-width:190px}
 .dpo-lib .dpo-tools{grid-template-columns:minmax(0,3fr) minmax(0,2fr)}.dpo-lib .dpo-tools select.input{width:100%;max-width:none}
 .dpo-weeks{display:flex;gap:4px;overflow-x:auto;scrollbar-width:thin;border-bottom:1px solid var(--line)}
-.dpo-weeks{position:relative}.dpo-weeks button{position:relative;min-height:44px;min-width:44px;padding:0 14px;background:transparent;border:0;border-bottom:2px solid transparent;color:var(--steel-muted);font-weight:600;font-size:15px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0}
+.dpo-weeks{position:relative}.dpo-weeks [role=tablist]{display:flex;gap:4px;flex-shrink:0}.dpo-weeks button{position:relative;min-height:44px;min-width:44px;padding:0 14px;background:transparent;border:0;border-bottom:2px solid transparent;color:var(--steel-muted);font-weight:600;font-size:15px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;flex-shrink:0}
 .dpo-weeks button:hover{color:var(--steel)}
 .dpo-weeks [aria-selected="true"]{color:var(--steel);border-bottom-color:var(--green-mid)}
 .dpo-weeks .n{font-size:12px;font-weight:500;color:var(--steel-muted)}
@@ -39,15 +39,16 @@ const STYLE = html`<style>
 .dpo-day{padding:var(--space-4);gap:var(--space-2)}
 .dpo-day-label{font-size:12px;color:var(--steel-muted);line-height:16px}
 .dpo-day-title{display:block;font-weight:600;font-size:15px;line-height:22px;background:none;border:0;padding:0;text-align:left;color:var(--steel);min-height:24px}
-button.dpo-day-title{cursor:pointer}button.dpo-day-title:hover{text-decoration:underline;text-decoration-color:var(--steel-muted)}
+button.dpo-day-title{cursor:pointer;min-height:44px;width:100%}button.dpo-day-title:hover{text-decoration:underline;text-decoration-color:var(--steel-muted)}
 .dpo-item{display:flex;align-items:center;gap:10px;padding:4px 0}
 .dpo-item .grow{flex:1;min-width:0}
 .dpo-item-name{display:block;background:none;border:0;padding:0;text-align:left;font-size:15px;color:var(--steel);line-height:20px;overflow-wrap:anywhere}
-button.dpo-item-name{cursor:pointer}button.dpo-item-name:hover{text-decoration:underline;text-decoration-color:var(--steel-muted)}
+.dpo-item-btn{display:flex;flex-direction:column;justify-content:center;width:100%;min-height:44px;background:none;border:0;padding:2px 0;text-align:left;cursor:pointer;font:inherit;color:inherit}
+.dpo-item-btn:hover .dpo-item-name{text-decoration:underline;text-decoration-color:var(--steel-muted)}
 .dpo-item-tools{display:flex;align-items:center;flex-shrink:0}
 .dpo-icon{min-height:44px;min-width:44px;padding:0;font-size:17px}
 .dpo-day-foot{border-top:1px solid var(--line);padding-top:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center}
-.dpo-day-foot .btn{min-height:44px}
+.dpo-day-foot .btn{min-height:44px}.dpo-day-foot .btn-ghost,.dpo-client .btn-ghost{padding:0 8px}
 .dpo-day-foot .push{margin-left:auto}
 .dpo-video{position:relative;aspect-ratio:16/9;background:var(--black);border-radius:var(--radius-sm);overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--steel-muted);text-align:center;padding:0}
 .dpo-video iframe,.dpo-video video{position:absolute;inset:0;width:100%;height:100%;border:0}
@@ -156,7 +157,7 @@ function addExercise(categories, preset = {}) {
 
 function editExercise(ex, categories) {
   const actions = [{ label: 'Cancel', value: null }];
-  if (!ex.uses) actions.unshift({ label: 'Delete', kind: 'ghost', onClick: async () => {
+  if (!ex.uses) actions.unshift({ label: 'Delete exercise', kind: 'ghost', onClick: async () => {
     if (!(await confirmDialog('Delete exercise', `Delete ${ex.name} from the library?`, 'Delete exercise', 'warn'))) return false;
     await api.del(`/exercises/${ex.id}`); toast(`${ex.name} deleted.`); return 'deleted';
   } });
@@ -284,7 +285,7 @@ async function renderList(ctx) {
       ${programs.length ? html`<div class="dpo-cards" id="pcards">${programs.map((p) => html`<a class="panel dpo-card" href="/app/programs/${p.id}" data-name="${norm(`${p.name} ${p.description || ''} ${p.level || ''}`)}" data-level="${p.level || ''}">
         <span class="dpo-card-title">${p.name}</span>
         <span class="dpo-meta">${[plural(p.weeks, 'week'), p.level, p.days_per_week ? daysAWeek(p.days_per_week) : 'No workouts yet'].filter(Boolean).join(' · ')}</span>
-        <span class="dpo-meta ${p.logged_7d ? 'good' : ''}">${p.clients ? plural(p.clients, 'client') : 'No clients yet'}${p.logged_7d ? ` · ${plural(p.logged_7d, 'workout')} logged this week` : ''}</span></a>`)}</div>
+        <span class="dpo-meta ${p.logged_7d ? 'good' : ''}">${p.clients ? plural(p.clients, 'client') : 'No clients yet'}${p.logged_7d ? ` · ${plural(p.logged_7d, 'workout')} logged in the last 7 days` : ''}</span></a>`)}</div>
         <div class="empty" id="pnone" hidden>No programs match. Clear the search to see them all.</div>`
         : html`<div class="empty">No programs yet.${edit ? html` <button class="btn btn-sm" id="newp2" style="margin-left:8px">Create your first program</button>` : ''}</div>`}
       ${quiet.length ? html`<section class="panel" aria-labelledby="qt">
@@ -492,8 +493,9 @@ async function renderBuilder(ctx) {
     ${d.items.length ? html`<div class="list">${d.items.map((it, n) => html`<div class="dpo-item">
       ${thumb(it, it.id)}
       <div class="grow">
-        ${edit ? html`<button type="button" class="dpo-item-name" data-edititem="${it.id}" title="Edit sets, reps and cue">${it.name}</button>` : html`<span class="dpo-item-name">${it.name}</span>`}
-        <div class="dpo-meta">${setsReps(it)}${it.cue ? html` · ${it.cue}` : ''}</div>
+        ${edit ? html`<button type="button" class="dpo-item-btn" data-edititem="${it.id}" title="Edit sets, reps and cue"><span class="dpo-item-name">${it.name}</span>
+          <span class="dpo-meta">${setsReps(it)}${it.cue ? html` · ${it.cue}` : ''}</span></button>`
+        : html`<span class="dpo-item-name">${it.name}</span><div class="dpo-meta">${setsReps(it)}${it.cue ? html` · ${it.cue}` : ''}</div>`}
       </div>
       ${edit ? html`<div class="dpo-item-tools">
         <button class="btn btn-ghost dpo-icon" data-move="${it.id}" data-dir="-1" aria-label="Move ${it.name} up" ${n === 0 ? raw('disabled') : ''}>↑</button>
@@ -510,14 +512,14 @@ async function renderBuilder(ctx) {
   const weekBody = () => {
     const days = byWeek(week);
     return html`<div class="dpo-week-head">
-      <h2 class="dpo-week-title" id="wk-title">
+      <h2 class="dpo-week-title">
         <button class="btn btn-ghost dpo-icon" data-go="${week - 1}" aria-label="Previous week" ${week === 1 ? raw('disabled') : ''}>${icon('back', 18)}</button>
-        <span>Week ${week}</span>
+        <span id="wk-name">Week ${week}</span>
         <button class="btn btn-ghost dpo-icon" data-go="${week + 1}" aria-label="Next week" ${week === weeksN ? raw('disabled') : ''}>${icon('chevron', 18)}</button></h2>
       ${edit ? html`<div class="btn-row">
-        <button class="btn btn-sm" data-addday="${week}" ${days.length >= 7 ? raw('disabled') : ''}>${icon('plus', 16)} Add day</button>
-        ${days.length ? html`<button class="btn btn-ghost btn-sm" data-copyweek="${week}">Copy week</button>
-          <button class="btn btn-ghost btn-sm" data-delweek="${week}">Delete week</button>` : ''}</div>` : ''}</div>
+        ${days.length ? html`<button class="btn btn-sm" data-addday="${week}" ${days.length >= 7 ? raw('disabled') : ''}>${icon('plus', 16)} Add day</button>
+          <button class="btn btn-ghost btn-sm" data-copyweek="${week}">Copy week</button>` : ''}
+        ${days.length || (week === weeksN && weeksN > 1) ? html`<button class="btn btn-ghost btn-sm" data-delweek="${week}">Delete week</button>` : ''}</div>` : ''}</div>
     ${days.length ? html`<div class="dpo-days">${days.map(dayPanel)}</div>`
       : html`<div class="empty">No workouts in week ${week} yet.${edit ? html`<div class="btn-row" style="justify-content:center;margin-top:var(--space-3)">
           ${week > 1 && byWeek(week - 1).length ? html`<button class="btn btn-sm" data-copyinto="${week - 1}">Copy week ${week - 1} here</button>` : ''}
@@ -550,11 +552,11 @@ async function renderBuilder(ctx) {
   ${!edit ? html`<div class="banner info">Front desk can view this program and resend workout links. An owner or coach makes changes.</div>` : ''}
   <div class="dpo-layout">
     <div class="stack" style="gap:var(--space-4)">
-      <div class="dpo-weeks" role="tablist" aria-label="Weeks">
-        ${range(1, weeksN).map((w) => { const n = byWeek(w).length; return html`<button type="button" role="tab" data-week="${w}" aria-selected="${String(w === week)}" tabindex="${w === week ? 0 : -1}" aria-controls="week-body" class="${n ? '' : 'empty-wk'}">Week ${w} <span class="n">${n}<span class="sr-only"> ${n === 1 ? 'day' : 'days'}</span></span></button>`; })}
+      <div class="dpo-weeks"><div role="tablist" aria-label="Weeks">
+        ${range(1, weeksN).map((w) => { const n = byWeek(w).length; return html`<button type="button" role="tab" data-week="${w}" aria-selected="${String(w === week)}" tabindex="${w === week ? 0 : -1}" aria-controls="week-body" class="${n ? '' : 'empty-wk'}">Week ${w} <span class="n">${n}<span class="sr-only"> ${n === 1 ? 'day' : 'days'}</span></span></button>`; })}</div>
         ${edit && weeksN < 52 ? html`<button type="button" id="addweek">${icon('plus', 16)} Add week</button>` : ''}
       </div>
-      <div id="week-body" role="tabpanel" aria-labelledby="wk-title" class="stack" style="gap:var(--space-3)">${weekBody()}</div>
+      <div id="week-body" role="tabpanel" aria-labelledby="wk-name" class="stack" style="gap:var(--space-3)">${weekBody()}</div>
     </div>
     <div class="stack">
       ${clientsPanel()}
@@ -760,7 +762,9 @@ async function renderBuilder(ctx) {
     if (ds.delweek) {
       const w = Number(ds.delweek);
       const days = byWeek(w), logs = days.reduce((s, d) => s + d.logs, 0);
-      if (!(await confirmDialog(`Delete week ${w}`, `Delete all ${plural(days.length, 'workout')} in week ${w}?${logs ? ` ${plural(logs, 'athlete log')} of them will be removed too.` : ''}`, `Delete week ${w}`, 'warn'))) return;
+      const ask = days.length ? `Delete all ${plural(days.length, 'workout')} in week ${w}?${logs ? ` ${plural(logs, 'athlete log')} of them will be removed too.` : ''}`
+        : `Week ${w} has no workouts. Take it off the end of ${p.name}?`;
+      if (!(await confirmDialog(`Delete week ${w}`, ask, `Delete week ${w}`, 'warn'))) return;
       return act(async () => { await api.del(`/programs/${p.id}/weeks/${w}`); if (w === weeksN) week = Math.max(1, w - 1); }, `Week ${w} deleted.`);
     }
   }

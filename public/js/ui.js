@@ -129,7 +129,8 @@ export function modal({ title, body, actions = [{ label: 'Close', value: null }]
       <div class="modal-body stack">${body}</div>
       <div class="btn-row modal-actions">${actions.map((a, i) => html`<button class="btn ${a.kind ? 'btn-' + a.kind : ''}" data-i="${i}">${a.label}</button>`)}</div></div>`);
     const close = (v) => { back.remove(); document.removeEventListener('keydown', onKey); prevFocus?.focus?.(); resolve(v); };
-    const onKey = (e) => { if (e.key === 'Escape') close(null); };
+    // Escape closes only the top modal (a confirm or a quick add can open over another one).
+    const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-back')].pop() === back) close(null); };
     document.addEventListener('keydown', onKey);
     back.addEventListener('click', async (e) => {
       if (e.target === back || e.target.closest('[data-close]')) return close(null);

@@ -43,6 +43,7 @@ function client() {
   };
   return {
     get: (p, h) => req('GET', p, undefined, h), post: (p, b = {}, h) => req('POST', p, b, h), put: (p, b = {}) => req('PUT', p, b), del: (p) => req('DELETE', p),
+    bare: (m, p) => req(m, p, undefined), // no body at all
     login: async (email, password) => req('POST', '/api/auth/staff/login', { email, password }),
   };
 }
@@ -282,4 +283,48 @@ test('front desk can view but not change the new program tools', async () => {
     ['put', `/api/programs/${pid}`, { weeks: 9 }], ['post', `/api/programs/${pid}/unassign`, { athlete_id: 1 }]]) {
     assert.equal((await d[m](p, b)).status, 403, `${m} ${p}`);
   }
+});
+
+test('review fixes: requests without a body get a plain 400, an empty last week can be deleted', async () => {
+  const c = await coach();
+  const pid = (await c.post('/api/programs', { name: 'Test no body', weeks: 1 })).data.id;
+  const day = (await c.post(`/api/programs/${pid}/days`, { week: 1, title: 'A' })).data.id;
+  const item = (await c.post(`/api/program-days/${day}/items`, { exercise_id: exId('Push-up'), sets: '3', reps: '8' })).data.id;
+  // no JSON body at all (req.body is undefined): a sentence, not a server error
+  for (const [m, p] of [['POST', `/api/programs/${pid}/assign`], ['POST', `/api/programs/${pid}/unassign`], ['POST', `/api/programs/${pid}/days`],
+    ['POST', `/api/program-days/${day}/items`], ['PUT', `/api/program-days/${day}`], ['POST', `/api/programs/${pid}/send-link`]]) {
+    const r = await c.bare(m, p);
+    assert.equal(r.status, 400, `${m} ${p}: ${JSON.stringify(r.data)}`);
+    assert.ok(!/went wrong/.test(r.data.error), r.data.error);
+  }
+  // no body on move: moves down (the default), no crash; PUT with no body keeps the item as it is
+  assert.equal((await c.bare('POST', `/api/program-items/${item}/move`)).status, 200);
+  assert.equal((await c.bare('PUT', `/api/program-items/${item}`)).status, 200);
+  assert.equal(db.get('SELECT sets FROM program_items WHERE id=?', item).sets, '3');
+  // Add week by mistake, then delete the empty week: the program is one week again
+  assert.equal((await c.put(`/api/programs/${pid}`, { weeks: 2 })).data.weeks, 2);
+  const r = await c.del(`/api/programs/${pid}/weeks/2`);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.weeks, 1);
+  assert.equal(r.data.days.length, 1, 'week 1 untouched');
+});
+
+test('review fixes: a resent link says so, and archived clients do not count as logged this week', async () => {
+  const c = await coach();
+  const pid = (await c.post('/api/programs', { name: 'Test resend', weeks: 1 })).data.id;
+  const day = (await c.post(`/api/programs/${pid}/days`, { week: 1, title: 'Only' })).data.id;
+  await c.post(`/api/program-days/${day}/items`, { exercise_id: exId('Push-up'), sets: '1', reps: '5' });
+  const a = db.insert('athletes', { code: 'TSTRES2026', first_name: 'Resa', last_name: 'Test', email: 'resa.test@example.com' });
+  assert.equal((await c.post(`/api/programs/${pid}/assign`, { athlete_id: a })).status, 200);
+  assert.match(db.get("SELECT subject FROM outbox WHERE to_email='resa.test@example.com' ORDER BY id DESC LIMIT 1").subject, /new program: Test resend/);
+  assert.equal((await c.post(`/api/programs/${pid}/send-link`, { athlete_id: a })).status, 200);
+  const mail = db.get("SELECT * FROM outbox WHERE to_email='resa.test@example.com' ORDER BY id DESC LIMIT 1");
+  assert.match(mail.subject, /workout app link: Test resend/);
+  assert.match(mail.body, /Resa is on Test resend/);
+  // log a finished workout, then archive the client: the program's count drops with them
+  db.run("INSERT INTO workout_logs (athlete_id, day_id, done, finished_at) VALUES (?, ?, '[]', datetime('now','-1 day'))", a, day);
+  const count = async () => [(await c.get('/api/programs')).data.find((p) => p.id === pid).logged_7d, (await c.get(`/api/programs/${pid}`)).data.logged_7d];
+  assert.deepEqual(await count(), [1, 1]);
+  db.run('UPDATE athletes SET archived=1 WHERE id=?', a);
+  assert.deepEqual(await count(), [0, 0]);
 });

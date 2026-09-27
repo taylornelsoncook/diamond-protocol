@@ -78,8 +78,8 @@ function programDetail(id) {
   }));
   const athletes = clientProgress({ programId: p.id });
   const maxWeek = days.reduce((m, d) => Math.max(m, d.week), 0);
-  const logged7 = get(`SELECT COUNT(*) AS n FROM workout_logs l JOIN program_days d ON d.id=l.day_id
-    WHERE d.program_id=? AND l.finished_at >= datetime('now','-7 days')`, p.id).n;
+  const logged7 = get(`SELECT COUNT(*) AS n FROM workout_logs l JOIN program_days d ON d.id=l.day_id JOIN athletes a ON a.id=l.athlete_id
+    WHERE d.program_id=? AND a.archived=0 AND l.finished_at >= datetime('now','-7 days')`, p.id).n;
   return { ...p, weeks_shown: Math.max(p.weeks || 1, maxWeek), days, athletes, logged_7d: logged7 };
 }
 
@@ -116,12 +116,13 @@ function copyProgram(src, fields) {
   });
 }
 
-function workoutEmail(a, p, token) {
+// The workout app link, to the athlete or their parents. resend: the same program, link sent again.
+function workoutEmail(a, p, token, { resend = false } = {}) {
   const link = `${appUrl()}/w/${token}`;
   const to = a.email ? [a.email] : all('SELECT email FROM parents WHERE family_id=?', a.family_id || 0).map((r) => r.email);
   for (const email of to) {
-    sendEmail(email, `${a.first_name}'s new program: ${p.name}`,
-      `${a.first_name} is now on ${p.name}${p.level ? ` (${p.level})` : ''}.\n\nOpen the workout app on a phone to see each workout, the demo videos and to log what's done:\n${link}\n\nKeep this link private. It opens ${a.first_name}'s workouts without a password.\n\n${businessName()}`);
+    sendEmail(email, resend ? `${a.first_name}'s workout app link: ${p.name}` : `${a.first_name}'s new program: ${p.name}`,
+      `${a.first_name} ${resend ? 'is on' : 'is now on'} ${p.name}${p.level ? ` (${p.level})` : ''}.\n\nOpen the workout app on a phone to see each workout, the demo videos and to log what's done:\n${link}\n\nKeep this link private. It opens ${a.first_name}'s workouts without a password.\n\n${businessName()}`);
   }
   return { link, to };
 }
@@ -172,7 +173,8 @@ function routes(api) {
     res.json(all(`SELECT p.*, (SELECT COUNT(*) FROM program_days d WHERE d.program_id=p.id) AS workouts,
       (SELECT COUNT(*) FROM athletes a WHERE a.program_id=p.id AND a.archived=0) AS clients,
       (SELECT MAX(n) FROM (SELECT COUNT(*) AS n FROM program_days d WHERE d.program_id=p.id GROUP BY d.week)) AS days_per_week,
-      (SELECT COUNT(*) FROM workout_logs l JOIN program_days d ON d.id=l.day_id WHERE d.program_id=p.id AND l.finished_at >= datetime('now','-7 days')) AS logged_7d
+      (SELECT COUNT(*) FROM workout_logs l JOIN program_days d ON d.id=l.day_id JOIN athletes a ON a.id=l.athlete_id
+        WHERE d.program_id=p.id AND a.archived=0 AND l.finished_at >= datetime('now','-7 days')) AS logged_7d
       FROM programs p WHERE p.archived=0 ORDER BY p.name COLLATE NOCASE`));
   });
   api.post('/programs', EDIT, h(async (req, res) => {
@@ -245,12 +247,12 @@ function routes(api) {
   // ---- days (workouts) ----
   api.post('/programs/:id/days', EDIT, h(async (req, res) => {
     const p = programOr404(req.params.id);
-    const week = intIn(req.body.week, 1, 52, 'Choose a week between 1 and 52.');
+    const week = intIn(req.body?.week, 1, 52, 'Choose a week between 1 and 52.');
     const next = get('SELECT COALESCE(MAX(day),0)+1 AS n FROM program_days WHERE program_id=? AND week=?', p.id, week).n;
-    if (isBlank(req.body.day) && next > 7) throw bad(`Week ${week} already has 7 days.`);
-    const day = isBlank(req.body.day) ? next : intIn(req.body.day, 1, 7, 'Choose a day between 1 and 7.');
+    if (isBlank(req.body?.day) && next > 7) throw bad(`Week ${week} already has 7 days.`);
+    const day = isBlank(req.body?.day) ? next : intIn(req.body?.day, 1, 7, 'Choose a day between 1 and 7.');
     if (get('SELECT 1 FROM program_days WHERE program_id=? AND week=? AND day=?', p.id, week, day)) throw bad(`Week ${week} already has a day ${day}. Pick another day.`);
-    const title = text(req.body.title, 60) || `Day ${day}`;
+    const title = text(req.body?.title, 60) || `Day ${day}`;
     const id = insert('program_days', { program_id: p.id, week, day, title });
     if (week > (p.weeks || 0)) update('programs', p.id, { weeks: week });
     log(req, 'Added workout', `${p.name}: week ${week}, day ${day} (${title})`);
@@ -258,7 +260,7 @@ function routes(api) {
   }));
   api.put('/program-days/:id', EDIT, h(async (req, res) => {
     const d = dayOr404(req.params.id);
-    const title = text(req.body.title, 60);
+    const title = text(req.body?.title, 60);
     if (!title) throw bad('Give the workout a title.');
     update('program_days', d.id, { title });
     log(req, 'Renamed workout', `${d.program_name}: week ${d.week}, day ${d.day} → ${title}`);
@@ -276,7 +278,7 @@ function routes(api) {
     const week = intIn(req.body?.week ?? d.week, 1, 52, 'Choose a week between 1 and 52.');
     const next = get('SELECT COALESCE(MAX(day),0)+1 AS n FROM program_days WHERE program_id=? AND week=?', d.program_id, week).n;
     if (isBlank(req.body?.day) && next > 7) throw bad(`Week ${week} already has 7 days.`);
-    const day = isBlank(req.body?.day) ? next : intIn(req.body.day, 1, 7, 'Choose a day between 1 and 7.');
+    const day = isBlank(req.body?.day) ? next : intIn(req.body?.day, 1, 7, 'Choose a day between 1 and 7.');
     if (get('SELECT 1 FROM program_days WHERE program_id=? AND week=? AND day=?', d.program_id, week, day)) throw bad(`Week ${week} already has a day ${day}. Pick another day.`);
     const title = text(req.body?.title, 60) || d.title || `Day ${day}`;
     const id = tx(() => {
@@ -329,11 +331,11 @@ function routes(api) {
   // ---- items (exercises in a workout) ----
   api.post('/program-days/:id/items', EDIT, h(async (req, res) => {
     const d = dayOr404(req.params.id);
-    const ex = exerciseOr400(req.body.exercise_id);
-    const it = cleanItem(req.body);
+    const ex = exerciseOr400(req.body?.exercise_id);
+    const it = cleanItem(req.body || {});
     if (!it.sets && !it.reps) throw bad('Add sets and reps, like 3 and 10.');
     const list = all('SELECT id FROM program_items WHERE day_id=? ORDER BY ord, id', d.id).map((r) => r.id);
-    const at = isBlank(req.body.position) ? list.length : Math.min(intIn(req.body.position, 0, 200, 'Choose where the exercise goes.'), list.length);
+    const at = isBlank(req.body?.position) ? list.length : Math.min(intIn(req.body?.position, 0, 200, 'Choose where the exercise goes.'), list.length);
     const id = tx(() => {
       const nid = insert('program_items', { day_id: d.id, exercise_id: ex.id, ...it, ord: at });
       list.splice(at, 0, nid);
@@ -348,8 +350,8 @@ function routes(api) {
     const it = cleanItem({ ...i, ...req.body });
     if (!it.sets && !it.reps) throw bad('Add sets and reps, like 3 and 10.');
     let exName = i.exercise_name;
-    if (!isBlank(req.body.exercise_id) && Number(req.body.exercise_id) !== i.exercise_id) {
-      const ex = exerciseOr400(req.body.exercise_id);
+    if (!isBlank(req.body?.exercise_id) && Number(req.body?.exercise_id) !== i.exercise_id) {
+      const ex = exerciseOr400(req.body?.exercise_id);
       it.exercise_id = ex.id; exName = ex.name;
     }
     update('program_items', i.id, it);
@@ -366,7 +368,7 @@ function routes(api) {
   }));
   api.post('/program-items/:id/move', EDIT, h(async (req, res) => {
     const i = itemOr404(req.params.id);
-    const dir = Number(req.body.dir) < 0 ? -1 : 1;
+    const dir = Number(req.body?.dir) < 0 ? -1 : 1;
     const list = all('SELECT id FROM program_items WHERE day_id=? ORDER BY ord, id', i.day_id).map((r) => r.id);
     const at = list.indexOf(i.id), to = at + dir;
     if (to >= 0 && to < list.length) {
@@ -388,7 +390,7 @@ function routes(api) {
   });
   api.post('/programs/:id/assign', EDIT, h(async (req, res) => {
     const p = programOr404(req.params.id);
-    const a = get('SELECT * FROM athletes WHERE id=? AND archived=0', Number(req.body.athlete_id));
+    const a = get('SELECT * FROM athletes WHERE id=? AND archived=0', Number(req.body?.athlete_id));
     if (!a) throw bad('Choose a client to assign.');
     const name = athleteName(a);
     if (a.program_id === p.id) throw bad(`${name} is already on ${p.name}. Use Send link to email the workout app again.`);
@@ -410,13 +412,13 @@ function routes(api) {
     if (!a.workout_token) update('athletes', a.id, { workout_token: token });
     const has = a.email || get('SELECT 1 FROM parents WHERE family_id=?', a.family_id || 0);
     if (!has) throw bad(`There's no email on file for ${athleteName(a)} or their parents. Add one on the client profile.`);
-    const { to } = workoutEmail(a, p, token);
+    const { to } = workoutEmail(a, p, token, { resend: true });
     log(req, 'Sent workout link', `${athleteName(a)}: ${p.name} → ${to.join(', ')}`);
     res.json({ ok: true, sent_to: to });
   }));
   api.post('/programs/:id/unassign', EDIT, h(async (req, res) => {
     const p = programOr404(req.params.id);
-    const a = get('SELECT * FROM athletes WHERE id=? AND program_id=?', Number(req.body.athlete_id), p.id);
+    const a = get('SELECT * FROM athletes WHERE id=? AND program_id=?', Number(req.body?.athlete_id), p.id);
     if (!a) throw bad("That client isn't on this program.");
     update('athletes', a.id, { program_id: null, program_started: null });
     log(req, 'Removed from program', `${athleteName(a)} ← ${p.name}`);

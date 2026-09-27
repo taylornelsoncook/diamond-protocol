@@ -69,7 +69,7 @@ function render(home) {
 
   const rows = w.exercises.map((x) => h('div', { class: `dp-ex${x.id === state.playing ? ' dp-ex--current' : ''}` },
     h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => { state.playing = x.id; render(home); window.scrollTo({ top: 0, behavior: 'smooth' }); } }, playIcon()),
-    h('div', { class: 'dp-ex-body' }, h('div', { class: 'dp-ex-name' }, x.name), h('div', { class: 'dp-ex-sets' }, x.prescription)),
+    h('div', { class: 'dp-ex-body' }, h('div', { class: 'dp-ex-name' }, x.name), h('div', { class: 'dp-ex-sets' }, x.prescription), x.load ? h('div', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : 'color:var(--green-bright)' }, x.load.text) : null),
     h('button', { type: 'button', class: 'dp-ex-log', 'aria-pressed': String(state.done.has(x.id)), 'aria-label': `${state.done.has(x.id) ? 'Logged' : 'Log'} ${x.name}`, onClick: (e) => {
       // Update in place so a playing video and typed notes are left alone.
       const on = !state.done.has(x.id);

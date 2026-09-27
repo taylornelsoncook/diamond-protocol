@@ -105,7 +105,8 @@ export const routes = [
   ['POST', '/v1/programs/:id/workouts', 'any', 'Training', 'Add a workout: week, day, title.', (ctx, r) => programs.addWorkout(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/assign', 'any', 'Training', 'Put client_id on this program. Replaces their current program.', (ctx, r) => programs.assign(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), r.body.start_date), 201],
   ['DELETE', '/v1/workouts/:id', 'any', 'Training', 'Delete a workout.', (ctx, r) => programs.deleteWorkout(ctx, r.params.id)],
-  ['POST', '/v1/workouts/:id/exercises', 'any', 'Training', 'Add exercise_id to a workout with a prescription like "3 × 10".', (ctx, r) => programs.addWorkoutExercise(ctx, r.params.id, r.body), 201],
+  ['POST', '/v1/workouts/:id/exercises', 'any', 'Training', 'Add exercise_id to a workout with a prescription like "3 × 10". Optional load_test and load_pct set the weight from the athlete\'s latest tested max.', (ctx, r) => programs.addWorkoutExercise(ctx, r.params.id, r.body), 201],
+  ['PATCH', '/v1/workout-exercises/:id', 'any', 'Training', 'Change an exercise\'s prescription, or its weight: load_test (squat_1rm, bench_1rm, power_clean_1rm, or null) and load_pct (30 to 110).', (ctx, r) => programs.updateWorkoutExercise(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/workout-exercises/:id', 'any', 'Training', 'Remove an exercise from a workout.', (ctx, r) => programs.removeWorkoutExercise(ctx, r.params.id)],
   ['GET', '/v1/completions', 'any', 'Training', 'Completed workouts across all clients. ?since= to filter.', (ctx, r) => list(programs.listCompletions(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined }))],
 

@@ -136,7 +136,9 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   exercise_id TEXT NOT NULL REFERENCES exercises(id),
   position INTEGER NOT NULL,
-  prescription TEXT NOT NULL
+  prescription TEXT NOT NULL,
+  load_test TEXT,                                -- version 21: weight as a percent of this tested max (squat_1rm...)
+  load_pct INTEGER
 );
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,

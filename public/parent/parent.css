@@ -223,3 +223,50 @@ details.panel:not([open]){gap:0}
   .offer.stackable .pg-state{flex-direction:row;align-items:center;width:100%;justify-content:space-between}
   .offer.stackable .pg-note{max-width:none;text-align:left}
 }
+
+/* ---- Family (to finish, card, payments, waiver, athletes, parents, sign-in) ---- */
+.fm-sec{display:contents}
+.fm-card{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--ground)}
+.fm-card .grow{flex:1;min-width:0}
+.fm-card-ic{display:inline-flex;color:var(--steel-muted);flex-shrink:0}
+.fm-due{display:flex;align-items:center;gap:12px;padding:10px 10px 10px 14px;border:1px solid var(--amber);border-left-width:3px;border-radius:var(--radius-sm);background:var(--amber-deep);color:var(--amber)}
+.fm-due .grow{flex:1;min-width:0}
+.fm-due .strong{color:var(--amber)}
+.fm-due .btn{flex-shrink:0}
+.fm-pay{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.fm-pay-row{display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--line-subtle)}
+.fm-pay-row:first-child{border-top:0}
+.fm-pay-date{font:600 14px/1.25 var(--font-sans);color:var(--steel)}
+.fm-pay-date span{display:block;font-weight:500;font-size:12px;color:var(--steel-muted)}
+.fm-pay-desc{line-height:20px;overflow-wrap:anywhere}
+.fm-pay-amt{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-weight:600;white-space:nowrap}
+.fm-receipt{color:var(--green-bright);font-weight:500;font-size:14px;min-height:44px;display:inline-flex;align-items:center;margin:-10px 0}
+.fm-read > summary{cursor:pointer;min-height:44px;display:flex;align-items:center;color:var(--green-bright);font-weight:500;width:max-content}
+.fm-read[open] > summary{margin-bottom:8px}
+.fm-group{display:flex;flex-direction:column;gap:12px}
+.fm-group legend{font:600 13px/18px var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--steel-muted)}
+.fm-ath > summary{align-items:center}
+.fm-ath-h{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.fm-ath-name{font-weight:600;font-size:16px;line-height:22px}
+.fm-ath-meta{font-weight:400;font-size:13px;line-height:18px;color:var(--steel-muted);overflow-wrap:anywhere}
+.fm-ath-flag{flex-shrink:0}
+.fm-ath > summary{min-height:44px}
+.fm-ath-top{display:flex;flex-direction:column;gap:6px;padding:10px 0 4px;border-top:1px solid var(--line-subtle)}
+.fm-id{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fm-id .mono{color:var(--steel)}
+.fm-mem{display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:20px}
+.fm-mem a{color:var(--green-bright);min-height:44px;display:inline-flex;align-items:center;margin:-12px 0}
+.fm-save{align-items:center}
+.fm-save [data-dirty][hidden]{display:none}
+.fm-contact{overflow-wrap:anywhere}
+.fm-add-parent > summary{list-style:none;display:inline-flex;width:max-content}
+.fm-add-parent > summary::-webkit-details-marker{display:none}
+.fm-me{align-items:flex-start}
+#todo-h:focus,#card-h:focus,#waiver-h:focus{outline:none}
+@media (max-width:480px){
+  .fm-ath > summary{flex-wrap:wrap}
+  .fm-ath-flag{flex-basis:100%;padding-left:17px}
+  .fm-due{flex-wrap:wrap}
+  .fm-due .btn{width:100%}
+  .fm-pay-row{grid-template-columns:48px minmax(0,1fr) auto;gap:10px}
+}

@@ -1,6 +1,6 @@
 // Hosted card page (test mode). Live mode sends parents to Stripe Checkout instead.
 // Only brand, last 4 and expiry are kept; the full number and CVC never leave this request.
-import { html, mount, api, toast } from '/js/ui.js';
+import { html, mount, api, toast, money } from '/js/ui.js';
 import { lockIcon } from '../common.js';
 
 export function luhn(num) {
@@ -23,6 +23,7 @@ export async function render(ctx) {
       <span class="secure-head">${lockIcon}Secure card entry</span></div>
     <div><h1 class="page-title" style="font-size:28px">${fam.card_last4 ? 'Replace card' : 'Add a card'}</h1>
       <p class="page-sub">For the ${fam.name}. It pays for every athlete in the family.${fam.card_last4 ? ` Replaces the ${fam.card_label}.` : ''}</p></div>
+    ${fam.past_due_cents ? html`<div class="banner" role="note">${money(fam.past_due_cents)} in membership payments is past due. Saving the card tries it again right away.</div>` : ''}
     ${live ? html`<div class="banner">Cards are added on Stripe's secure page. Ask your coach for the link.</div>` : html`
     <div class="card-fields">
       <div class="field span-3"><label class="label" for="cc-num">Card number <span class="muted" id="brand"></span></label>
@@ -54,6 +55,8 @@ export async function render(ctx) {
     exp.value = d.length > 2 || (d.length === 2 && e.inputType !== 'deleteContentBackward') ? `${d.slice(0, 2)}/${d.slice(2)}` : d;
   });
   f.cvc.addEventListener('input', () => { f.cvc.value = f.cvc.value.replace(/\D/g, '').slice(0, 4); });
+  // A fixed field stops showing as wrong as soon as it's edited.
+  f.addEventListener('input', (e) => { if (e.target.getAttribute('aria-invalid')) { e.target.removeAttribute('aria-invalid'); err.textContent = ''; } });
 
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -63,7 +66,10 @@ export async function render(ctx) {
     const fail = (el, msg) => { el.setAttribute('aria-invalid', 'true'); el.focus(); err.textContent = msg; };
     if (!luhn(n)) return fail(num, "That card number isn't valid. Check the digits.");
     if (!/^(0[1-9]|1[0-2])\/\d{2}$/.test(exp.value)) return fail(exp, 'Enter the expiry as MM/YY.');
-    if (!/^\d{3,4}$/.test(f.cvc.value)) return fail(f.cvc, 'Enter the 3 or 4 digit security code.');
+    const now = new Date(), [mm, yy] = exp.value.split('/').map(Number);
+    if (2000 + yy < now.getFullYear() || (2000 + yy === now.getFullYear() && mm < now.getMonth() + 1)) return fail(exp, 'That card has expired. Check the date or use another card.');
+    const amex = brandOf(n) === 'Amex';
+    if (amex ? !/^\d{4}$/.test(f.cvc.value) : !/^\d{3,4}$/.test(f.cvc.value)) return fail(f.cvc, amex ? 'Amex cards have a 4 digit security code on the front.' : 'Enter the 3 or 4 digit security code.');
     if (!/^\d{5}(-\d{4})?$/.test(f.zip.value.trim())) return fail(f.zip, 'Enter the billing ZIP code.');
     const btn = document.getElementById('save'); btn.disabled = true;
     try {

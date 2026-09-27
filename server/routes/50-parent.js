@@ -4,11 +4,11 @@
 // (GET /api/parent/athletes/:id/progress lives in the testing area.)
 'use strict';
 const { get, all, run, insert, update, tx, setting } = require('../db');
-const { h, bad, notFound, log, makeAthleteCode, randomToken, sendEmail, payments, addDays, ageOn, money, businessName, appUrl } = require('../lib');
+const { h, bad, notFound, log, makeAthleteCode, randomToken, sha256, sendEmail, payments, addDays, ageOn, money, businessName, appUrl } = require('../lib');
 const { requireParent } = require('../auth');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
-const { luhnValid, cardBrand, parseExpiry } = require('../services/parent-card');
+const { luhnValid, cardBrand, parseExpiry, familyPayments, paidThisYear, pastDue, cardRemovalBlock, phoneOk, PARENT_RETRY_MAX } = require('../services/parent-card');
 const cal = require('../services/parent-calendar');
 const { endAt, bookedBetween, clashIn, clashText, whenText } = require('../services/parent-book');
 const programs = require('../services/parent-programs');
@@ -17,6 +17,7 @@ const ATHLETE_FIELDS = ['first_name', 'last_name', 'birthday', 'sex', 'sport', '
 const BOOKABLE_TYPES = ['class', 'camp', 'clinic'];
 const WINDOW_DAYS = 21;
 const NOTE_MAX = 500;
+const MAX_PARENTS = 6, MAX_ATHLETES = 12, NAME_MAX = 80;
 
 // ---- helpers ----
 function family(req) { return get('SELECT * FROM families WHERE id=?', req.parent.family_id); }
@@ -38,6 +39,15 @@ function tellCoach(coachId, subject, body) {
   const c = coachId ? get('SELECT name, email FROM staff WHERE id=? AND active=1', coachId) : null;
   if (c?.email) sendEmail(c.email, subject, `Hi ${firstName(c.name)},\n\n${body}`);
 }
+
+// Account changes (card, parents) are emailed to the family's other parents, so nobody is surprised.
+function tellOtherParents(req, subject, body) {
+  for (const p of all('SELECT name, email FROM parents WHERE family_id=? AND id<>?', req.parent.family_id, req.parent.id)) {
+    sendEmail(p.email, subject, `Hi ${firstName(p.name)},\n\n${body}\n\nIf you didn't expect this, tell the front desk at ${businessName()}.`);
+  }
+}
+// Waiver copies by email: a few an hour for each parent.
+const waiverCopies = new Map();
 
 function membershipOf(a) {
   const m = billing.activeMembership(a.id);
@@ -92,6 +102,7 @@ function routes(api) {
         id: f.id, name: f.name, card_brand: f.card_brand, card_last4: f.card_last4, card_exp: f.card_exp, card_label: cardLabel(f),
         waiver_version: f.waiver_version, waiver_signed_at: f.waiver_signed_at, waiver_signed_by: f.waiver_signed_by,
         waiver_current: f.waiver_version != null && Number(f.waiver_version) >= current,
+        past_due_cents: pastDue(f.id).reduce((n, i) => n + i.amount_cents, 0),
       },
       parents: all('SELECT id, name, email, phone FROM parents WHERE family_id=? ORDER BY is_self DESC, id', f.id),
       athletes: familyAthletes(req).map((a) => ({ ...athleteSummary(a), attendance: attendanceOf(a.id) })),
@@ -454,6 +465,8 @@ function routes(api) {
     const card = { card_brand: cardBrand(number), card_last4: number.slice(-4), card_exp: exp.label };
     update('families', f.id, card);
     log(req, f.card_last4 ? 'Replaced card' : 'Added card', `${card.card_brand} ending ${card.card_last4}`);
+    tellOtherParents(req, `Card on file changed for the ${f.name}`,
+      `${req.parent.name} ${f.card_last4 ? `replaced the ${cardLabel(f)} with` : 'added'} a ${card.card_brand} ending ${card.card_last4} (expires ${card.card_exp}). It pays for memberships, packs, camps and drop-ins for everyone in the family.`);
     // Past-due membership charges are retried on the new card.
     let retried = 0, paid = 0;
     for (const inv of all("SELECT id FROM invoices WHERE family_id=? AND status='failed' AND kind='membership' AND attempts<4", f.id)) {
@@ -465,6 +478,7 @@ function routes(api) {
   api.post('/parent/waiver', h(async (req, res) => {
     const name = String(req.body.name || '').trim().replace(/\s+/g, ' ');
     if (name.length < 3 || !name.includes(' ')) throw bad('Type your full name to sign.');
+    if (name.length > NAME_MAX) throw bad('Keep your name under 80 characters.');
     if (!req.body.agree) throw bad('Tick the box to agree to the waiver.');
     const f = family(req);
     const version = Number(setting('waiver_version', 1));
@@ -483,6 +497,8 @@ function routes(api) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || isNaN(new Date(v + 'T12:00:00')) || v > booking.todayLocal() || v < '1920-01-01') throw bad('Enter a real birthday.');
       }
       if (k === 'sex' && v && !['M', 'F'].includes(v)) throw bad('Choose M or F, or leave it blank.');
+      if (k === 'emergency_phone' && !phoneOk(v)) throw bad('Enter the emergency phone with its area code, like 801-555-0142.');
+      if ((k === 'first_name' || k === 'last_name') && v.length > NAME_MAX) throw bad('Keep names under 80 characters.');
       out[k] = v || null;
     }
     if (requireName || 'first_name' in out || 'last_name' in out) {
@@ -503,6 +519,10 @@ function routes(api) {
   api.post('/parent/athletes', h(async (req, res) => {
     const d = cleanAthlete(req.body || {}, { requireName: true });
     const f = family(req);
+    if (get('SELECT 1 FROM athletes WHERE family_id=? AND archived=0 AND first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE', f.id, d.first_name, d.last_name)) {
+      throw bad(`${d.first_name} ${d.last_name} is already on your account. Open their details below to update them.`);
+    }
+    if (get('SELECT COUNT(*) n FROM athletes WHERE family_id=? AND archived=0', f.id).n >= MAX_ATHLETES) throw bad('That is the most athletes one account can hold. Ask the front desk to add more.');
     const id = insert('athletes', { ...d, code: makeAthleteCode(d.first_name, d.last_name), family_id: f.id, workout_token: randomToken(12) });
     const a = get('SELECT * FROM athletes WHERE id=?', id);
     log(req, 'Added athlete', `${athleteName(a)} (${a.code}) to ${f.name}`);
@@ -514,14 +534,99 @@ function routes(api) {
     const email = String(req.body.email || '').trim().toLowerCase();
     const phone = String(req.body.phone || '').trim() || null;
     if (!name) throw bad('Enter their name.');
-    if (!/^\S+@\S+\.\S+$/.test(email)) throw bad('Enter their email address.');
-    if (get('SELECT 1 FROM parents WHERE email=?', email)) throw bad('That email already has a parent account. Ask your coach to link it.');
+    if (name.length > NAME_MAX) throw bad('Keep the name under 80 characters.');
+    if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 200) throw bad('Enter their email address.');
+    if (!phoneOk(phone)) throw bad('Enter the phone with its area code, like 801-555-0142.');
+    const taken = get('SELECT family_id FROM parents WHERE email=?', email);
+    if (taken?.family_id === req.parent.family_id) throw bad('That parent is already on your account.');
+    if (taken) throw bad('That email already has a parent account. Ask your coach to link it.');
     const f = family(req);
+    if (get('SELECT COUNT(*) n FROM parents WHERE family_id=?', f.id).n >= MAX_PARENTS) throw bad('That is the most parents one account can hold. Ask the front desk for help.');
     const id = insert('parents', { family_id: f.id, name, email, phone });
     sendEmail(email, `You've been added to the ${f.name} at ${businessName()}`,
       `Hi ${name.split(' ')[0]},\n\n${req.parent.name} added you to the ${f.name} account. You can book sessions, see progress and manage the family.\n\nSign in at ${appUrl()}/parent with this email. We'll send you a code; there's no password.`);
     log(req, 'Added parent', `${name} (${email}) to ${f.name}`);
+    tellOtherParents(req, `${name} was added to the ${f.name} account`,
+      `${req.parent.name} added ${name} (${email}) to the ${f.name} account. They can book sessions, pay with the card on file and see progress.`);
     res.json({ id, name, email, phone });
+  }));
+
+  // Your own name and phone. The email is how you sign in, so the front desk changes that.
+  api.put('/parent/parents/me', h(async (req, res) => {
+    const name = String(req.body?.name ?? req.parent.name).trim().replace(/\s+/g, ' ');
+    const phone = String(req.body?.phone ?? req.parent.phone ?? '').trim() || null;
+    if (!name) throw bad('Enter your name.');
+    if (name.length > NAME_MAX) throw bad('Keep your name under 80 characters.');
+    if (!phoneOk(phone)) throw bad('Enter your phone with its area code, like 801-555-0142.');
+    update('parents', req.parent.id, { name, phone });
+    log(req, 'Updated parent details', `${name}${phone ? `, ${phone}` : ''}`);
+    res.json({ id: req.parent.id, name, email: req.parent.email, phone });
+  }));
+
+  // ---- family account: payments and receipts, retrying a declined charge, removing the card ----
+  api.get('/parent/account', h(async (req, res) => {
+    const f = family(req);
+    const pay = familyPayments(f.id, 100);
+    const due = pastDue(f.id);
+    const others = get(`SELECT COUNT(*) n FROM auth_sessions WHERE kind='parent' AND user_id=? AND expires_at>? AND token_hash<>?`,
+      req.parent.id, new Date().toISOString(), sha256(req.cookies?.dp_parent || '')).n;
+    res.json({
+      payments: pay.items, more_payments: pay.more, paid_this_year_cents: paidThisYear(f.id),
+      past_due: due.map((i) => ({ id: i.id, description: i.description, athlete: i.athlete_first, amount_cents: i.amount_cents, issued_at: i.issued_at })),
+      card_remove_block: f.card_last4 ? cardRemovalBlock(f.id) : null,
+      other_sessions: others,
+    });
+  }));
+
+  api.post('/parent/payments/:id/retry', h(async (req, res) => {
+    const f = family(req);
+    const inv = get('SELECT * FROM invoices WHERE id=? AND family_id=?', Number(req.params.id) || 0, f.id);
+    if (!inv) throw notFound('That payment');
+    if (inv.status === 'paid') throw bad('That payment is already paid.');
+    if (inv.status !== 'failed' || inv.kind !== 'membership') throw bad('Ask the front desk about that payment.');
+    if (inv.attempts >= PARENT_RETRY_MAX) throw bad('That payment has been tried too many times. Replace the card, or ask the front desk to take it.');
+    needCard(f);
+    const exp = parseExpiry(f.card_exp);
+    if (exp?.expired) throw bad(`The ${cardLabel(f)} has expired. Replace the card and it's tried right away.`, { needs_card: true });
+    const r = billing.retryFailed({ invoiceId: inv.id });
+    log(req, r.paid ? 'Paid past-due charge' : 'Retried charge, declined', `${inv.number}, ${money(inv.amount_cents)} on the ${cardLabel(f)}`);
+    res.json({ ok: true, paid: r.paid > 0, amount_cents: inv.amount_cents, card_label: cardLabel(f) });
+  }));
+
+  api.delete('/parent/card', h(async (req, res) => {
+    if (payments.mode() === 'live') throw bad('Ask the front desk to remove a card in live mode.');
+    const f = family(req);
+    if (!f.card_last4) throw bad('There is no card on file.');
+    const block = cardRemovalBlock(f.id);
+    if (block) throw bad(block);
+    update('families', f.id, { card_brand: null, card_last4: null, card_exp: null });
+    log(req, 'Removed card', cardLabel(f));
+    tellOtherParents(req, `Card removed from the ${f.name}`, `${req.parent.name} removed the ${cardLabel(f)} from the ${f.name} account. Drop-ins, packs and camps need a card before they can be paid in the app.`);
+    res.json({ ok: true });
+  }));
+
+  // A copy of the signed waiver, by email to the parent asking.
+  api.post('/parent/waiver/copy', h(async (req, res) => {
+    const f = family(req);
+    const current = Number(setting('waiver_version', 1));
+    if (f.waiver_version == null || Number(f.waiver_version) < current) throw bad('Sign the current waiver first.');
+    const now = Date.now();
+    const recent = (waiverCopies.get(req.parent.id) || []).filter((t) => now - t < 36e5);
+    if (recent.length >= 3) throw bad('We sent a few copies already. Check your email, or try again in an hour.');
+    waiverCopies.set(req.parent.id, [...recent, now]);
+    const signed = String(f.waiver_signed_at || '');
+    const when = new Date(signed.length === 10 ? `${signed}T12:00:00` : signed).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    sendEmail(req.parent.email, `Your signed waiver: ${businessName()}`,
+      `Hi ${firstName(req.parent.name)},\n\nHere is the waiver for the ${f.name}, signed by ${f.waiver_signed_by} on ${when} (version ${f.waiver_version}).\n\n${setting('waiver_text', '')}\n\nSigned: ${f.waiver_signed_by}\n\n${businessName()}`);
+    log(req, 'Emailed waiver copy', `${f.name} to ${req.parent.email}`);
+    res.json({ ok: true, email: req.parent.email });
+  }));
+
+  // Sign out of every other phone and browser, keeping this one.
+  api.post('/parent/sessions/others/end', h(async (req, res) => {
+    const r = run(`DELETE FROM auth_sessions WHERE kind='parent' AND user_id=? AND token_hash<>?`, req.parent.id, sha256(req.cookies?.dp_parent || ''));
+    log(req, 'Signed out other devices', `${req.parent.name}: ${r.changes}`);
+    res.json({ ok: true, ended: Number(r.changes) });
   }));
 }
 

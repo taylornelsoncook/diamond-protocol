@@ -14,7 +14,7 @@ You need **Node.js 22.13 or newer** (check with `node -v`; download from nodejs.
 cp .env.example .env      # then change ADMIN_PASSWORD
 npm run seed              # creates your login plus sample plans, programs and clients
 npm start                 # open http://localhost:3000
-npm test                  # runs the full test suite (107 tests)
+npm test                  # runs the full test suite (113 tests)
 ```
 
 The seed prints your login and a sample client app link. To start over, delete the `data` folder and seed again.
@@ -143,7 +143,7 @@ Use `sk_test_...` keys until you've run real test payments end to end. The serve
 - **Staff accounts:** owners add staff under Staff & security. Each gets a one-time password by email and must choose their own at first sign-in. Owners can change roles, turn accounts off (signed out everywhere at once), reset passwords and unlock accounts. There is always at least one owner.
 - **Sign-in protection:** five wrong passwords lock an account for 15 minutes; sign-in attempts and overall requests are rate-limited per address; parent sign-in codes are limited too.
 - **Activity log:** every change, refused attempt and sign-in by staff, API keys and parents: who, what, which record, when, from where. Request contents are never stored.
-- **Backups:** a full copy of the database every day (last 30 kept), plus "Back up now" and downloads for the owner. Keep downloaded copies off the server.
+- **Backups:** a full copy of the database every day (last 30 kept), plus "Back up now" and downloads for the owner. Once off-site storage is set up (DEPLOY.md → Backups), each day's copy is also encrypted, sent to S3-compatible storage (Cloudflare R2, Backblaze B2, AWS S3) and read back to prove it restores; Staff & security shows whether that is working.
 
 ## Parent progress reports
 

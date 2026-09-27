@@ -15,6 +15,7 @@ import { syncLibrary } from './services/performance.js';
 import { assignMissingIds } from './services/athlete-ids.js';
 import { can, audit, rateLimit, roleName } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
+import { sendNewest as sendBackupOffsite } from './services/offsite.js';
 import { syncAll as syncDevices, migratePending } from './services/perf-import.js';
 import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
@@ -118,7 +119,10 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     runTeamBilling(ctx, { baseUrl: ctx.publicUrl }).catch((e) => console.error('team billing', e));
     timers.push(setInterval(() => syncDevices(ctx), 15 * 60 * 1000));
     if (dbFile !== ':memory:') {
-      const backup = () => { try { const b = dailyBackup(ctx); if (b) console.log(`Backup saved: ${b.name}`); } catch (e) { console.error('backup', e.message); } };
+      const backup = () => {
+        try { const b = dailyBackup(ctx); if (b) console.log(`Backup saved: ${b.name}`); } catch (e) { console.error('backup', e.message); }
+        sendBackupOffsite(ctx).then((r) => { if (r) console[r.ok ? 'log' : 'error'](r.ok ? `Backup sent off-site: ${r.key}` : `off-site backup: ${r.error}`); }).catch((e) => console.error('off-site backup', e.message));
+      };
       timers.push(setInterval(backup, 60 * 60 * 1000));
       backup();
     }

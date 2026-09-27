@@ -13,6 +13,7 @@ import * as uploads from './services/uploads.js';
 import * as queue from './services/queue.js';
 import * as security from './services/security.js';
 import * as backups from './services/backups.js';
+import * as offsite from './services/offsite.js';
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
@@ -245,8 +246,11 @@ export const routes = [
   ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change role, rename, turn an account off (active=false) or unlock it (unlock=true).', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
   ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
   ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in: who, what, when, from where. ?actor_id, ?target, ?failures=true, ?limit.', (ctx, r) => list(security.listAudit(ctx, r.query).map((a) => ({ ...a, description: describeAction(a.action) })))],
-  ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept).', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx) })],
-  ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now.', (ctx) => backups.createBackup(ctx), 201],
+  ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept) and the off-site copy status.', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx), offsite: offsite.status(ctx) })],
+  ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now, and send it off-site when that is set up.', async (ctx) => {
+    const b = backups.createBackup(ctx);
+    return { ...b, offsite: await offsite.sendNewest(ctx) };
+  }, 201],
   ['GET', '/v1/backups/:name', 'session', 'Admin', 'Download a backup file.', (ctx, r) => ({ __file: backups.backupFile(ctx, r.params.name) })],
 
   // Integrations (coach login only)

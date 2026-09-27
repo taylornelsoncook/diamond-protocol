@@ -93,7 +93,8 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Run one real session: roster check-in and collecting from someone unpaid.
 - [ ] Run one small testing day, share it, and check the parent report.
 - [ ] Send one school invoice to yourself and pay it online.
-- [ ] Download a backup and confirm it opens (Claude Code can check it with you).
+- [ ] Set up off-site backups (DEPLOY.md → Backups) and confirm Staff & security shows **Off-site: OK**.
+- [ ] Restore one off-site copy with `src/restore-backup.js` and confirm it opens (Claude Code can check it with you).
 - [ ] Write down anything confusing and send it to me.
 
 ## 10. Public launch
@@ -106,7 +107,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 ## 11. After launch: your routine
 
 - **Daily:** Today screen (failed payments, overdue invoices, results waiting to be linked, new sign-ups, deletion requests).
-- **Weekly:** download a backup and store it off the server; glance at the activity log for refused or failed sign-ins.
+- **Weekly:** check Staff & security shows **Off-site: OK** for backups; glance at the activity log for refused or failed sign-ins.
 - **Monthly:** review staff accounts (turn off anyone who left), check Stripe payouts against Billing, and ask me for updates.
 
 ## Still on my side (next builds)

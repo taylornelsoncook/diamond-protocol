@@ -1,8 +1,10 @@
 import { newId, v, notFound, badRequest, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
-import { sendText, normalizePhone } from './sms.js';
+import { sendText, normalizePhone, numberStopped } from './sms.js';
 import { emit } from './events.js';
+
+const US_MOBILE = /^\+1\d{10}$/;
 
 // Leads: families who asked about training but aren't signed up yet. They come from the public "Ask about training"
 // form (/start), from sign-ups started but never finished, or are added by staff. Each lead gets a short, automatic
@@ -48,11 +50,14 @@ export async function submitInquiry(ctx, body) {
   const out = { ok: true, message: 'Thanks! We\'ll be in touch soon. Check your email for next steps.' };
   if (body.website) return out;                                     // hidden field only bots fill in
   const data = leadInput(body);
-  const textsOk = body.texts_ok === true && !!data.phone;
+  // Texts only go to US numbers that haven't texted STOP: a public form must not be usable to text strangers abroad.
+  const textsOk = body.texts_ok === true && US_MOBILE.test(data.phone ?? '') && !numberStopped(ctx, data.phone);
   const existing = openLeadFor(ctx, data.email);
   if (existing) {                                                    // asked twice: keep one lead, add the new note
-    ctx.db.run('UPDATE leads SET message = ?, phone = COALESCE(?, phone), texts_ok = MAX(texts_ok, ?), updated_at = ? WHERE id = ?',
-      [existing.message, data.message].filter(Boolean).join('\n\n').slice(0, 4000) || null, data.phone, textsOk ? 1 : 0, ctx.now(), existing.id);
+    // Anyone can type someone else's email, so a repeat inquiry never changes the phone number or text setting.
+    const note = [data.message, data.phone && data.phone !== existing.phone ? `(Gave phone ${data.phone} on a later inquiry.)` : null].filter(Boolean).join(' ');
+    ctx.db.run('UPDATE leads SET message = ?, updated_at = ? WHERE id = ?',
+      [existing.message, note].filter(Boolean).join('\n\n').slice(0, 4000) || null, ctx.now(), existing.id);
     return out;
   }
   if (ctx.db.get('SELECT id FROM guardians WHERE email = ?', data.email)) {
@@ -140,7 +145,7 @@ export async function runFollowUps(ctx, { asOf = ctx.now(), only = null } = {}) 
     const step = lead.follow_up_step;
     const m = followUpMessage(ctx, lead, step);
     await sendEmail(ctx, { to: lead.email, subject: m.subject, text: m.text });
-    const phone = lead.texts_ok ? normalizePhone(lead.phone) : null;
+    const phone = lead.texts_ok && US_MOBILE.test(normalizePhone(lead.phone) ?? '') && !numberStopped(ctx, normalizePhone(lead.phone)) ? normalizePhone(lead.phone) : null;
     if (phone && m.sms) await sendText(ctx, { to: phone, kind: 'lead', body: `${biz(ctx)}: ${m.sms}` }).catch((e) => console.error('text', e.message));
     const nextStep = step + 1;
     const next = nextStep < FOLLOW_UP_DAYS.length ? new Date(Date.parse(lead.created_at) + FOLLOW_UP_DAYS[nextStep] * 86400000).toISOString() : null;

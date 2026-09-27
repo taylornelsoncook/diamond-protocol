@@ -1,4 +1,4 @@
-import { newId, v, notFound, badRequest, conflict, addDays, addMonths } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, addDays, addMonths, withLock } from '../util.js';
 import { emit } from './events.js';
 import { payerFor } from './families.js';
 import { membershipReceipt, paymentFailed, trialReminders } from './notify.js';
@@ -164,7 +164,9 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
   return attemptCharge(ctx, id, asOf);
 }
 
-export async function attemptCharge(ctx, invoiceId, asOf = ctx.now()) {
+// One charge or payment per invoice at a time: a retry waiting on Stripe and a pay link paid meanwhile can't both land.
+export function attemptCharge(ctx, invoiceId, asOf = ctx.now()) { return withLock(`invoice:${invoiceId}`, () => chargeInvoice(ctx, invoiceId, asOf)); }
+async function chargeInvoice(ctx, invoiceId, asOf) {
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status === 'paid') return inv;
   if (inv.status === 'void') throw conflict('This invoice was voided and cannot be charged.');
@@ -203,7 +205,8 @@ function recordPaid(ctx, inv, s, { attempts = inv.attempts, ref }) {
   if (['past_due', 'trialing'].includes(s.status)) setStatus(ctx, s.id, 'active');
 }
 // A parent paid a failed or open invoice some other way (a pay link). Returns false if it was already paid or voided.
-export async function markInvoicePaid(ctx, invoiceId, ref, { how } = {}) {
+export function markInvoicePaid(ctx, invoiceId, ref, opts = {}) { return withLock(`invoice:${invoiceId}`, () => recordInvoicePayment(ctx, invoiceId, ref, opts)); }
+async function recordInvoicePayment(ctx, invoiceId, ref, { how } = {}) {
   const inv = getInvoice(ctx, invoiceId);
   if (!['failed', 'open'].includes(inv.status)) return false;
   ctx.db.tx(() => recordPaid(ctx, inv, getSubscription(ctx, inv.subscription_id), { ref }));

@@ -19,6 +19,12 @@ export const TEXT_KINDS = {
 const STOP_WORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'REVOKE', 'OPTOUT'];
 const START_WORDS = ['START', 'UNSTOP', 'YES'];
 
+// Has this number texted STOP (and not START since)? Checked before texting anyone who isn't a signed-in parent.
+export function numberStopped(ctx, phone) {
+  const last = ctx.db.all(`SELECT body FROM texts WHERE direction = 'in' AND phone = ? ORDER BY created_at DESC LIMIT 20`, phone)
+    .map((t) => t.body.toUpperCase().replace(/[^A-Z]/g, '')).find((w) => STOP_WORDS.includes(w) || START_WORDS.includes(w));
+  return !!last && STOP_WORDS.includes(last);
+}
 // US numbers in any common format become +15125550100. Numbers with a + and country code are kept.
 export function normalizePhone(raw) {
   const s = String(raw ?? '').trim();

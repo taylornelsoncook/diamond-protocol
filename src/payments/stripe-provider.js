@@ -136,6 +136,10 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       });
       return { id: s.id, url: s.url };
     },
+    // Close an unpaid hosted payment page so it can't be paid later. Already paid or expired: nothing to do.
+    async expireCheckoutSession(id) {
+      try { await call('POST', `/v1/checkout/sessions/${encodeURIComponent(id)}/expire`, {}); return true; } catch { return false; }
+    },
     // Hosted payment page for a team invoice: card, or US bank account (ACH) when billing in USD. Pay links pass cardOnly.
     async checkoutPayment({ amountCents, description, email, metadata, successUrl, cancelUrl, idempotencyKey, cardOnly = false }) {
       const s = await call('POST', '/v1/checkout/sessions', {

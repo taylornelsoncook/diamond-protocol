@@ -1,4 +1,4 @@
-import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localDate, weekdayOf, addDaysToDate, ageOn, isTime, isDate } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localDate, weekdayOf, addDaysToDate, ageOn, isTime, isDate, withLock } from '../util.js';
 import { emit } from './events.js';
 import { getSetting, payerFor } from './families.js';
 import { notifyFamily } from './mail.js';
@@ -229,7 +229,9 @@ async function releaseBooking(ctx, b, status) {
   ctx.db.run('UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?', status, ctx.now(), b.id);
 }
 
-export async function book(ctx, { sessionId, clientId, pay, actor, isCoach = false, overrideAge = false }) {
+// Bookings for one session go one at a time, so a double tap can't charge twice and two families can't both take the last spot.
+export function book(ctx, args) { return withLock(`book:${args.sessionId}`, () => bookNow(ctx, args)); }
+async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, overrideAge = false }) {
   const s = getSession(ctx, sessionId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');

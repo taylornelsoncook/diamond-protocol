@@ -1,4 +1,4 @@
-import { newId, v, notFound, conflict, badRequest } from '../util.js';
+import { newId, v, notFound, conflict, badRequest, withLock } from '../util.js';
 import { getSetting, payerFor } from './families.js';
 import { createSale, onlineLocation } from './commerce.js';
 import { assign } from './programs.js';
@@ -88,6 +88,10 @@ export function familyShop(ctx, familyId) {
 // Buy for one athlete with the family card. The program replaces the athlete's current one.
 export async function buyForAthlete(ctx, guardian, client, body = {}) {
   const kind = v.oneOf(body.kind, 'kind', KINDS);
+  // A second tap waits for the first, then finds the purchase and stops before charging.
+  return withLock(`buy:${client.id}:${kind}:${body.item_id}`, () => buyNow(ctx, guardian, client, kind, body));
+}
+async function buyNow(ctx, guardian, client, kind, body) {
   const item = forSale(ctx, kind, v.str(body.item_id, 'item_id'));
   if (ctx.db.get(`SELECT id FROM purchases WHERE client_id = ? AND item_kind = ? AND item_id = ? AND status = 'active'`, client.id, kind, item.id)) throw conflict(`${first(client.name)} already has ${item.title}.`);
   if (kind === 'program' && ctx.db.get('SELECT id FROM assignments WHERE client_id = ? AND program_id = ? AND active = 1', client.id, item.id)) throw conflict(`${first(client.name)} is already on ${item.title}.`);

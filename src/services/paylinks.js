@@ -1,4 +1,4 @@
-import { newId, token, v, notFound, badRequest, conflict, addDays } from '../util.js';
+import { newId, token, v, notFound, badRequest, conflict, addDays, withLock } from '../util.js';
 import { getSetting, payerFor } from './families.js';
 import { sendEmail } from './mail.js';
 import { sendText, familyPhones } from './sms.js';
@@ -172,6 +172,8 @@ export async function checkoutPayLink(ctx, tok) {
   if (ctx.payments.name !== 'stripe') throw conflict('Paying online needs Stripe. In test mode, use "Simulate payment".');
   const email = l.client_id ? payerFor(ctx, l.client_id).email : null;
   const url = payUrl(ctx, l);
+  // Only one Stripe page per link at a time: close the last one, so a second tab can't pay again.
+  if (l.checkout_ref && ctx.payments.expireCheckoutSession) await ctx.payments.expireCheckoutSession(l.checkout_ref);
   const s = await ctx.payments.checkoutPayment({ amountCents: l.amount_cents, description: `${biz(ctx)}: ${l.description}`, email, cardOnly: true,
     metadata: { pay_link_id: l.id }, successUrl: `${url}?paid=1`, cancelUrl: url, idempotencyKey: `pay-link-${l.id}-${Date.now().toString(36)}` });
   ctx.db.run('UPDATE pay_links SET checkout_ref = ?, checkout_started_at = ? WHERE id = ?', s.id, ctx.now(), l.id);
@@ -194,26 +196,42 @@ export async function simulatePayLink(ctx, tok) {
   return publicPayLink(ctx, tok);
 }
 
-// Money arrived. Fulfil what the link was for, once; if it was already paid another way, refund.
-export async function completePayLink(ctx, id, ref) {
+// Money arrived. Fulfil what the link was for, once; if it was already paid (this link or another way), refund.
+// One at a time per link, so two payments landing together can't slip past each other.
+export function completePayLink(ctx, id, ref) { return withLock(`paylink:${id}`, () => completeNow(ctx, id, ref)); }
+async function completeNow(ctx, id, ref) {
   const l = ctx.db.get('SELECT * FROM pay_links WHERE id = ?', id);
-  if (!l || l.status === 'paid' || (l.payment_ref && l.payment_ref === ref)) return;
+  if (!l || (l.payment_ref && l.payment_ref === ref)) return;
+  // Paid twice through the same link (two tabs, or Back and pay again): the second payment goes back.
+  if (l.status === 'paid') return refundExtra(ctx, l, ref, 'a second time');
   if (!stillOwed(ctx, l) || l.status === 'canceled') {
-    const r = await ctx.payments.refund({ paymentRef: ref, amountCents: l.amount_cents, idempotencyKey: `pay-link-refund-${l.id}` });
     ctx.db.run(`UPDATE pay_links SET status = CASE WHEN status = 'canceled' THEN 'canceled' ELSE 'settled' END, payment_ref = ? WHERE id = ?`, ref, l.id);
-    for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
-      sendEmail(ctx, { to: o.email, subject: r.ok ? `Refunded a double payment: ${money(l.amount_cents)}` : `Refund needed: ${money(l.amount_cents)} paid twice`,
-        text: `${l.description} was paid by pay link after it had already been paid${l.status === 'canceled' ? ' (or after you canceled the link)' : ''}.\n\n${r.ok ? `The ${money(l.amount_cents)} was refunded automatically.` : `The automatic refund didn't work (${r.error}). Refund payment ${ref} in Stripe.`}` }).catch(() => {});
-    }
-    return;
+    return refundExtra(ctx, l, ref, `after it had already been paid${l.status === 'canceled' ? ' (or after you canceled the link)' : ''}`);
   }
-  const claimed = ctx.db.run(`UPDATE pay_links SET status = 'paid', paid_at = ?, payment_ref = ? WHERE id = ? AND status = 'open'`, ctx.now(), ref, l.id);
-  if (!claimed.changes) return;                                  // the webhook and the return page raced; the other one did it
+  ctx.db.run(`UPDATE pay_links SET status = 'paid', paid_at = ?, payment_ref = ? WHERE id = ? AND status = 'open'`, ctx.now(), ref, l.id);
   let saleId = null;                                             // sale lines don't carry the athlete's name
-  if (l.kind === 'invoice') await markInvoicePaid(ctx, l.invoice_id, ref, { how: 'card online' });
-  else saleId = recordOnlineSale(ctx, { clientId: l.client_id, productId: l.product_id, description: l.kind === 'custom' ? l.description : l.description.replace(/ for [^,]+/, ''), amountCents: l.amount_cents, note: l.booking_id ? `booking:${l.booking_id}` : `Pay link ${l.id}`, paymentRef: ref });
+  try {
+    if (l.kind === 'invoice') {
+      // A membership retry may have charged the card while this payment was on its way.
+      if (!(await markInvoicePaid(ctx, l.invoice_id, ref, { how: 'card online' }))) {
+        ctx.db.run(`UPDATE pay_links SET status = 'settled', paid_at = NULL WHERE id = ?`, l.id);
+        return refundExtra(ctx, l, ref, 'after it had already been paid');
+      }
+    } else saleId = recordOnlineSale(ctx, { clientId: l.client_id, productId: l.product_id, description: l.kind === 'custom' ? l.description : l.description.replace(/ for [^,]+/, ''), amountCents: l.amount_cents, note: l.booking_id ? `booking:${l.booking_id}` : `Pay link ${l.id}`, paymentRef: ref });
+  } catch (e) {
+    // Recording failed: open the link again so Stripe's retry of the webhook (or the return page) records it next time.
+    ctx.db.run(`UPDATE pay_links SET status = 'open', paid_at = NULL, payment_ref = NULL WHERE id = ? AND payment_ref = ?`, l.id, ref);
+    throw e;
+  }
   if (saleId) ctx.db.run('UPDATE pay_links SET sale_id = ? WHERE id = ?', saleId, l.id);
   emit(ctx, 'pay_link.paid', { pay_link_id: l.id, client_id: l.client_id, kind: l.kind, amount_cents: l.amount_cents, sale_id: saleId, invoice_id: l.invoice_id });
+}
+async function refundExtra(ctx, l, ref, when) {
+  const r = await ctx.payments.refund({ paymentRef: ref, amountCents: l.amount_cents, idempotencyKey: `pay-link-refund-${l.id}-${ref}` });
+  for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
+    sendEmail(ctx, { to: o.email, subject: r.ok ? `Refunded a double payment: ${money(l.amount_cents)}` : `Refund needed: ${money(l.amount_cents)} paid twice`,
+      text: `${l.description} was paid by pay link ${when}.\n\n${r.ok ? `The ${money(l.amount_cents)} was refunded automatically.` : `The automatic refund didn't work (${r.error}). Refund payment ${ref} in Stripe.`}` }).catch(() => {});
+  }
 }
 // Stripe webhook for a pay link's checkout. Returns false when the session isn't a pay link's.
 export async function handlePayLinkCheckout(ctx, type, obj) {

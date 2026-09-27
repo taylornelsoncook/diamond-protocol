@@ -1,4 +1,4 @@
-import { newId, v, notFound, badRequest, conflict, HttpError } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, HttpError, withLock } from '../util.js';
 import { emit } from './events.js';
 import { payerFor } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
@@ -425,7 +425,9 @@ export async function cancelSale(ctx, id) {
   return getSale(ctx, id);
 }
 
-export async function refundSale(ctx, id, body = {}) {
+// One refund per sale at a time, so two presses can't put stock back or take credits away twice.
+export function refundSale(ctx, id, body = {}) { return withLock(`sale:${id}`, () => refundNow(ctx, id, body)); }
+async function refundNow(ctx, id, body) {
   const s = getSale(ctx, id);
   if (!['succeeded', 'partially_refunded'].includes(s.status)) throw conflict('Only a completed sale can be refunded.');
   const remaining = s.amount_cents - s.refunded_cents;

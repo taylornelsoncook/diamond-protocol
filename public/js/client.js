@@ -1,4 +1,5 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
+import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 const params = new URLSearchParams(location.search);
@@ -17,12 +18,36 @@ const api = async (method, path, body) => {
   return data;
 };
 
-const state = { done: new Set(), playing: null, notes: '' };
+const state = { done: new Set(), playing: null, notes: '', tab: 'workout', home: null };
+// The page: the current tab's view, and a tab bar for Workout, Accountability, Performance and Education.
+const view = h('div', { class: 'c-view' });
+const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), post: (p, b) => api('POST', `/app/api/${p}`, b ?? {}) }, onData: () => drawTabs() });
+const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
+function drawTabs() {
+  const dots = engageDots(engage.data);
+  fill(tabs, [['workout', 'Workout'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
+    tabIcon(k), label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
+}
+function show(tab) {
+  state.tab = tab;
+  drawTabs();
+  window.scrollTo(0, 0);
+  if (tab === 'workout') return state.home ? render(state.home) : load();
+  const where = h('div', { class: 'eg-view' });
+  fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, ENGAGE_TABS.find(([k]) => k === tab)[1])), where);
+  engage.render(where, tab);
+}
 
 async function load() {
   if (!tokenValue) return message('Open the link your coach sent you to see your workouts.');
-  try { render(await api('GET', '/app/api/home')); }
-  catch (e) { message(e.message); }
+  let home;
+  try { home = await api('GET', '/app/api/home'); }
+  catch (e) { return message(e.message); }
+  fill(root, view, tabs);
+  state.home = home;
+  drawTabs();
+  if (state.tab === 'workout') render(home);
+  engage.load().then(() => { if (state.tab !== 'workout') show(state.tab); }).catch(() => {});
 }
 
 function message(text, extra) {
@@ -30,9 +55,11 @@ function message(text, extra) {
 }
 
 function render(home) {
+  state.home = home;
   const top = [h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' })];
   if (home.locked || !home.workout) {
-    fill(root, ...top, h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), h('div', { class: 'dp-panel' }, h('p', null, home.message)));
+    fill(view, ...top, h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), h('div', { class: 'dp-panel' }, h('p', null, home.message)),
+      h('p', { class: 'small muted' }, 'Check in, see your goals, results and lessons with the tabs below.'));
     return;
   }
   const w = home.workout;
@@ -59,14 +86,16 @@ function render(home) {
   const finish = btn('Finish workout', (e) => busy(e.currentTarget, async () => {
     const r = await api('POST', `/app/api/workouts/${w.id}/complete`, { exercise_ids: [...state.done], notes: notes.value || undefined });
     state.done.clear(); state.playing = null; state.notes = '';
-    fill(root, ...top,
+    state.home = r.next;
+    engage.load().catch(() => {});
+    fill(view, ...top,
       h('div', { class: 'dp-panel stack' }, h('div', { class: 'c-done' }, 'Workout logged'),
         h('p', { class: 'muted' }, 'Your coach can see it now.'),
         r.next.workout ? h('p', null, `Next up: ${r.next.workout.title}, week ${r.next.workout.week} day ${r.next.workout.day}.`) : h('p', null, r.next.message ?? ''),
         r.next.workout ? btn('See next workout', () => render(r.next), 'secondary') : null));
   }), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' });
 
-  fill(root, ...top,
+  fill(view, ...top,
     h('div', { class: 'stack-tight' },
       h('div', { class: 'small muted' }, `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title)),

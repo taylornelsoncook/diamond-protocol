@@ -1,4 +1,5 @@
 import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel, videoEmbed, playIcon } from './ui.js';
+import { initEngage, clientPanels, flagsPanel, rankingsPanel, teamPanel, viewEducation } from './engage-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -13,11 +14,12 @@ const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch
 
 const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
-const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
+const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'testing', 'programs'], front_desk: ['today', 'schedule', 'sell', 'clients', 'testing'] };
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'testing', 'education'] };
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
+initEngage({ api, render, header, role: () => state.user?.role });
 
 // ---------- Shell ----------
 async function boot() {
@@ -47,7 +49,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : viewSell, clients: id ? viewClient : viewClients, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, integrations: viewIntegrations };
+  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : viewSell, clients: id ? viewClient : viewClients, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -117,7 +119,7 @@ const EVENT_TEXT = {
 const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash' };
 
 async function viewToday(main) {
-  const [d, rev, ag] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda')]);
+  const [d, rev, ag, flags] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null)]);
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
@@ -165,6 +167,7 @@ async function viewToday(main) {
       metric('Payments failed', m.past_due_clients, `${money(m.at_risk_cents)} at risk this month`, m.past_due_clients ? 'warn' : null),
       metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
     agendaPanel,
+    flags,
     h('div', { class: 'grid grid-2' },
       panel('Needs your attention', {}, attention.length ? attention : h('p', { class: 'muted' }, 'Nothing waiting. Every client is paid up and training.')),
       panel('Recent activity', {}, d.activity.length ? d.activity.map((ev) => h('div', { class: 'list-item' },
@@ -202,6 +205,8 @@ async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), get(`/v1/athlete-links?client_id=${id}`)]);
+  const [en, testLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests')]);
+  const eng = clientPanels(c, en, testLib.data);
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
@@ -329,7 +334,7 @@ async function viewClient(main, id) {
   fill(main,
     header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id)), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients')),
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, membership, sessionsPanel, payments), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, perfPanel, training, account)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.education, training, account)));
 }
 
 async function viewNewClient(main) {
@@ -976,7 +981,7 @@ async function viewScheduleSetup(main) {
   const emailPanel = panel('Automatic emails', { subtitle: 'Sent from your email address once email is connected. Every email also appears in the outbox under API & integrations.' },
     emailBoxes.map(([, cb, label]) => h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, cb, h('span', null, label))),
     h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { emails_off: emailBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'primary')));
-  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms and emails.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, setPanel,
+  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms and emails.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, setPanel, rankingsPanel(settings),
     isOwner() ? [signupPanel, legalPanel, emailPanel] : null);
 }
 
@@ -1058,7 +1063,7 @@ async function viewNewTeam(main) {
 }
 
 async function viewTeam(main, id) {
-  const [c, locs, settings] = await Promise.all([get(`/v1/team-contracts/${id}`), get('/v1/locations'), get('/v1/settings')]);
+  const [c, locs, settings, engPanel] = await Promise.all([get(`/v1/team-contracts/${id}`), get('/v1/locations'), get('/v1/settings'), teamPanel(id)]);
   tzName = settings.timezone;
   const ended = c.status === 'ended';
   const fee = input({ type: 'number', step: '0.01', value: (c.monthly_cents / 100).toFixed(2) }), end = input({ type: 'date', value: c.end_date ?? '' }), po = input({ value: c.po_number ?? '' });
@@ -1110,7 +1115,7 @@ async function viewTeam(main, id) {
     header(`${c.org.name}`, `${c.name} · ${money(c.monthly_cents)}/month${ended ? ' · ended' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')),
     c.org.contact_email ? null : h('div', { class: 'test-banner', role: 'note' }, `Add a billing email for ${c.org.name} so invoices and reminders can be emailed.`),
     invoicesPanel,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, contractPanel, schedPanel), h('div', { class: 'stack', style: 'gap:24px' }, rosterPanel)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, contractPanel, schedPanel), h('div', { class: 'stack', style: 'gap:24px' }, engPanel, rosterPanel)));
 }
 
 // ---------- Athlete ID ----------

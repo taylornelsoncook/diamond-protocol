@@ -6,3 +6,8 @@
 .c-cue{font-size:14px;line-height:20px;color:var(--steel-muted)}
 .c-done{font:700 34px/1 var(--font-display);text-transform:uppercase;letter-spacing:.04em}
 .toast-host{left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));max-width:none}
+/* Tab bar (Workout, Accountability, Performance, Education) sits at the bottom. */
+.c-wrap{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+.c-view{display:flex;flex-direction:column;gap:16px}
+.c-view .c-mark{width:44px}
+.toast-host{bottom:calc(76px + env(safe-area-inset-bottom,0px))}

@@ -1,5 +1,6 @@
 import { h, fill, toast, money, busy, btn, field, input, select, panel } from './ui.js';
 import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
+import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -11,7 +12,7 @@ async function api(method, path, body) {
 }
 const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b);
 
-const state = { me: null, tab: 'home', athleteId: null };
+const state = { me: null, tab: 'home', athleteId: null, homeTab: 'overview' };
 const root = document.getElementById('root');
 const athlete = () => state.me.athletes.find((a) => a.id === state.athleteId) ?? state.me.athletes[0];
 const fmt = (iso, opts) => new Intl.DateTimeFormat('en-US', { timeZone: state.me?.timezone, ...opts }).format(new Date(iso));
@@ -99,8 +100,34 @@ function renderSignIn() {
   }
 }
 
-// ---------- Home ----------
+// ---------- Home: overview, plus each athlete's Accountability, Performance and Education ----------
+const engages = new Map();
+function engageFor(a) {
+  if (!engages.has(a.id)) engages.set(a.id, createEngage({ audience: 'parent',
+    api: { get: (p) => get(`athletes/${a.id}/${p}`), post: (p, b) => post(`athletes/${a.id}/${p}`, b ?? {}) },
+    onData: (d) => { a.engagement = { ...a.engagement, unread: d.accountability.unread, open_assignments: d.education.assigned.filter((x) => !x.done).length }; drawSubtabs(); } }));
+  return engages.get(a.id);
+}
+let subtabs = null;
+function drawSubtabs() {
+  if (!subtabs?.isConnected) return;
+  const a = athlete(), dots = a ? engageDots(a.engagement) : {};
+  fill(subtabs, [['overview', 'Overview'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; render(); } },
+    label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
+}
 async function viewHome(main) {
+  subtabs = h('nav', { class: 'p-subtabs', 'aria-label': 'Home sections' });
+  if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
+  const a = athlete(), eng = engageFor(a);
+  const where = h('div', { class: 'eg-view' });
+  fill(main, top(ENGAGE_TABS.find(([k]) => k === state.homeTab)[1]), subtabs, athleteChips(() => render()), where);
+  drawSubtabs();
+  const had = !!eng.data;
+  if (!had) { fill(where, h('p', { class: 'muted' }, 'Loading…')); await eng.load(); }
+  eng.render(where, state.homeTab);
+  if (had) eng.load().then(() => eng.rerender()).catch(() => {});      // show what we have, then refresh
+}
+async function viewOverview(main) {
   const cards = state.me.athletes.map((a) => {
     const m = a.membership;
     return panel(null, {},
@@ -117,10 +144,14 @@ async function viewHome(main) {
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, u.session_name), h('span', { class: 'small muted' }, `${fmt(u.starts_at, { month: 'short', day: 'numeric' })} · ${u.location_name}${u.status === 'waitlisted' ? ' · Waitlist' : ''}`)),
         u.kind === 'camp' ? null : btn('Cancel', (e) => cancelBooking(e.currentTarget, u), 'ghost'))))
         : h('p', { class: 'muted small' }, 'Nothing booked yet.'),
+      a.engagement ? h('div', { class: 'row wrap small' },
+        h('span', { class: 'grow muted' }, [a.engagement.checked_in_today ? 'Checked in today' : 'No check-in yet today', a.engagement.unread ? `${a.engagement.unread} new ${a.engagement.unread === 1 ? 'message' : 'messages'}` : null, a.engagement.open_assignments ? `${a.engagement.open_assignments} to read` : null].filter(Boolean).join(' · ')),
+        btn(a.engagement.checked_in_today ? 'Accountability' : 'Check in', () => { state.athleteId = a.id; state.homeTab = 'accountability'; render(); }, 'outline')) : null,
       h('div', { class: 'row wrap' }, btn('Book a session', () => { state.athleteId = a.id; state.tab = 'book'; render(); }, 'secondary'),
         a.app_link ? h('a', { class: 'dp-btn dp-btn--ghost', href: a.app_link }, 'Open workouts') : null));
   });
-  fill(main, top('Home'), banners(), state.me.athletes.length ? cards : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
+  fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(), state.me.athletes.length ? cards : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
+  drawSubtabs();
 }
 
 async function cancelBooking(button, u) {

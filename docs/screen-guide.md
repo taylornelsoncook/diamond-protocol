@@ -420,6 +420,26 @@ Build a program week by week, day by day.
 - Add days to each week and exercises to each day with sets, reps and cues.
 - Assign the program to a client. It appears in their workout app immediately.
 
+### Education
+
+_Where: Education_
+
+[Owner] [Coach] 
+
+Short lessons and courses athletes read in their app and the parent portal. Assign them, remind anyone who hasn't read them, and see who has finished.
+
+- Four numbers across the top: open assignments, overdue, lessons finished this week (and by how many athletes), and published lessons (with drafts).
+- **Assigned** lists every assignment, overdue first, then by due date. Search by athlete, team or lesson; filter Open, Overdue, Finished or All. Each row shows who it's for, the due date, who assigned it and when, the note, when a reminder last went out, and how many have finished. For one athlete you see where they are (Not started, Opened, Started 2 of 4, Finished); for a team, open "Where everyone is" to see each athlete's status with links to their profiles.
+- Assign lesson: pick a published lesson or course, then add as many athletes as you like (Enter picks the first match) or choose a team (everyone on the roster, including athletes added later). Set a due date, or tap In 3 days, In a week or In 2 weeks, and add a note. Athletes and their parents are emailed a link. Anyone who already has it is skipped and named, so nobody is assigned twice.
+- Remind emails only the athletes (and their parents) who haven't finished, with the due date and course progress. Remind overdue does the same for every overdue assignment at once. Each assignment can be reminded at most once every 12 hours.
+- Change moves the due date or edits the note (nobody is emailed). Remove takes it off their list; anything finished stays finished.
+- **Library** shows courses (lessons in order) and standalone lessons. Search by title, summary or course, and filter All, Published or Drafts. Each lesson shows minutes, video, how many finished and how many opened it without finishing. Reorder a course with the arrows; Add lesson on a course writes a new lesson at its end; drafts have a Publish button.
+- Tap a lesson's title to see who finished it and when, who opened it but hasn't finished, and where it's assigned, with Preview, Edit, Duplicate (saved as a draft copy), Delete and Assign.
+- **Recent** lists the latest lessons athletes marked done, newest first.
+- The lesson editor keeps unsaved text: a click outside the dialog or Escape won't close it while there are changes; press Cancel to discard them.
+
+> Note: Front desk can view everything here but can't create, assign, remind or change anything. Only published lessons and courses (with at least one published lesson) can be assigned.
+
 ### API & integrations
 
 _Where: API & integrations_

@@ -28,17 +28,25 @@ const toInt = (v) => (v == null || v === '' ? null : Number(v));
 
 function lessonBody(b) {
   const row = {};
-  if ('title' in b) { row.title = String(b.title || '').trim(); if (!row.title) throw bad('Give the lesson a title.'); }
+  if ('title' in b) {
+    row.title = String(b.title || '').trim(); if (!row.title) throw bad('Give the lesson a title.');
+    if (row.title.length > 120) throw bad('Keep the title under 120 characters.');
+  }
   if ('summary' in b) row.summary = String(b.summary || '').trim().slice(0, 300) || null;
   if ('body' in b) row.body = String(b.body || '').slice(0, 50000) || null;
   if ('video_url' in b) {
     row.video_url = String(b.video_url || '').trim() || null;
     if (row.video_url && !/^https:\/\//i.test(row.video_url)) throw bad('Video links must start with https://');
   }
-  if ('minutes' in b) row.minutes = toInt(b.minutes);
-  if ('course_id' in b) row.course_id = toInt(b.course_id);
-  if (row.course_id && !get('SELECT 1 FROM courses WHERE id=?', row.course_id)) throw bad('That course no longer exists.');
-  if ('ord' in b) row.ord = toInt(b.ord) || 0;
+  if ('minutes' in b) {
+    row.minutes = toInt(b.minutes);
+    if (row.minutes != null && !(Number.isInteger(row.minutes) && row.minutes >= 1 && row.minutes <= 120)) throw bad('Enter minutes to read as a whole number from 1 to 120.');
+  }
+  if ('course_id' in b) {
+    row.course_id = toInt(b.course_id);
+    if (row.course_id != null && !(Number.isInteger(row.course_id) && get('SELECT 1 FROM courses WHERE id=?', row.course_id))) throw bad('That course no longer exists.');
+  }
+  if ('ord' in b) { const o = toInt(b.ord) || 0; row.ord = Number.isInteger(o) ? Math.max(0, Math.min(o, 9999)) : 0; }
   if ('published' in b) row.published = b.published ? 1 : 0;
   return row;
 }
@@ -49,7 +57,7 @@ function routes(api) {
   api.post('/w/:token/checkin', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.saveCheckin(a.id, req.body)); }));
   api.post('/w/:token/goals/:gid/check', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.checkGoal(a.id, Number(req.params.gid), req.body.done !== false)); }));
   api.post('/w/:token/messages/read', h(async (req, res) => { const a = byToken(req.params.token); e.markRead(a.id); res.json({ ok: true }); }));
-  api.get('/w/:token/lessons/:lid', (req, res) => { noStore(res); res.json(e.lessonFor(byToken(req.params.token).id, Number(req.params.lid))); });
+  api.get('/w/:token/lessons/:lid', (req, res) => { noStore(res); const a = byToken(req.params.token); const l = e.lessonFor(a.id, Number(req.params.lid)); e.recordView(a.id, l.id); res.json(l); });
   api.post('/w/:token/lessons/:lid/complete', h(async (req, res) => { const a = byToken(req.params.token); res.json(e.completeLesson(a.id, Number(req.params.lid), req.body.done !== false)); }));
 
   // ---- parent portal (a parent sees and helps their own athletes) ----
@@ -57,7 +65,7 @@ function routes(api) {
   api.post('/parent/athletes/:id/checkin', requireParent, h(async (req, res) => { res.json(e.saveCheckin(familyAthlete(req).id, req.body)); }));
   api.post('/parent/athletes/:id/goals/:gid/check', requireParent, h(async (req, res) => { res.json(e.checkGoal(familyAthlete(req).id, Number(req.params.gid), req.body.done !== false)); }));
   api.post('/parent/athletes/:id/messages/read', requireParent, h(async (req, res) => { e.markRead(familyAthlete(req).id); res.json({ ok: true }); }));
-  api.get('/parent/athletes/:id/lessons/:lid', requireParent, (req, res) => { noStore(res); res.json(e.lessonFor(familyAthlete(req).id, Number(req.params.lid))); });
+  api.get('/parent/athletes/:id/lessons/:lid', requireParent, (req, res) => { noStore(res); const a = familyAthlete(req); const l = e.lessonFor(a.id, Number(req.params.lid)); e.recordView(a.id, l.id); res.json(l); });
   api.post('/parent/athletes/:id/lessons/:lid/complete', requireParent, h(async (req, res) => { res.json(e.completeLesson(familyAthlete(req).id, Number(req.params.lid), req.body.done !== false)); }));
 
   // ---- coach side: one athlete ----
@@ -139,11 +147,22 @@ function routes(api) {
     log(req, 'Posted a lesson', row.title);
     res.status(201).json({ id });
   }));
+  // Who finished a lesson, who opened it, and where it is assigned.
+  api.get('/lessons/:id/progress', STAFF, (req, res) => res.json(e.lessonProgress(Number(req.params.id))));
   api.put('/lessons/:id', COACH, h(async (req, res) => {
     const l = get('SELECT * FROM lessons WHERE id=?', Number(req.params.id)); if (!l) throw notFound('That lesson');
-    update('lessons', l.id, lessonBody(req.body));
-    log(req, 'Edited a lesson', l.title);
+    const row = lessonBody(req.body);
+    // Moved into a different course without an order: it goes to the end of that course.
+    if (row.course_id && row.course_id !== l.course_id && !('ord' in req.body)) row.ord = (get('SELECT MAX(ord) m FROM lessons WHERE course_id=?', row.course_id).m ?? -1) + 1;
+    update('lessons', l.id, row);
+    const verb = Object.keys(row).length === 1 && 'published' in row ? (row.published ? 'Published a lesson' : 'Unpublished a lesson') : 'Edited a lesson';
+    log(req, verb, row.title || l.title);
     res.json({ ok: true });
+  }));
+  api.post('/lessons/:id/duplicate', COACH, h(async (req, res) => {
+    const r = e.duplicateLesson(Number(req.params.id));
+    log(req, 'Duplicated a lesson', r.title);
+    res.status(201).json(r);
   }));
   api.delete('/lessons/:id', COACH, h(async (req, res) => {
     const l = get('SELECT * FROM lessons WHERE id=?', Number(req.params.id)); if (!l) throw notFound('That lesson');
@@ -153,6 +172,7 @@ function routes(api) {
   }));
   api.post('/courses', COACH, h(async (req, res) => {
     const title = String(req.body.title || '').trim(); if (!title) throw bad('Give the course a title.');
+    if (title.length > 120) throw bad('Keep the title under 120 characters.');
     const id = insert('courses', { title, description: String(req.body.description || '').trim() || null, published: req.body.published === false ? 0 : 1 });
     log(req, 'Created a course', title);
     res.status(201).json({ id });
@@ -163,6 +183,7 @@ function routes(api) {
     if ('title' in req.body) { patch.title = String(req.body.title || '').trim(); if (!patch.title) throw bad('Give the course a title.'); }
     if ('description' in req.body) patch.description = String(req.body.description || '').trim() || null;
     if ('published' in req.body) patch.published = req.body.published ? 1 : 0;
+    if (patch.title && patch.title.length > 120) throw bad('Keep the title under 120 characters.');
     update('courses', c.id, patch);
     log(req, 'Edited a course', c.title);
     res.json({ ok: true });
@@ -178,19 +199,49 @@ function routes(api) {
   api.put('/courses/:id/order', COACH, h(async (req, res) => {
     const c = get('SELECT * FROM courses WHERE id=?', Number(req.params.id)); if (!c) throw notFound('That course');
     const ids = Array.isArray(req.body.lesson_ids) ? req.body.lesson_ids.map(Number) : [];
+    const mine = new Set(all('SELECT id FROM lessons WHERE course_id=?', c.id).map((r) => r.id));
+    if (!ids.length || new Set(ids).size !== ids.length || ids.some((id) => !mine.has(id))) throw bad('That order doesn\'t match the lessons in this course. Reload the page and try again.');
     tx(() => ids.forEach((id, i) => run('UPDATE lessons SET ord=? WHERE id=? AND course_id=?', i, id, c.id)));
     log(req, 'Reordered a course', c.title);
     res.json({ ok: true });
   }));
   api.post('/assignments', COACH, h(async (req, res) => {
     const b = req.body || {};
+    if (Array.isArray(b.athlete_ids)) {
+      const r = e.assignMany({ lesson_id: toInt(b.lesson_id), course_id: toInt(b.course_id), athlete_ids: b.athlete_ids, due_date: b.due_date || null, note: b.note || null }, req.staff);
+      log(req, 'Assigned reading', `${r.title} to ${r.assigned.join(', ')}`);
+      return res.status(201).json(r);
+    }
     const id = e.assign({ lesson_id: toInt(b.lesson_id), course_id: toInt(b.course_id), athlete_id: toInt(b.athlete_id), team_id: toInt(b.team_id), due_date: b.due_date || null, note: b.note || null }, req.staff);
     const x = get('SELECT COALESCE(l.title, c.title) AS t FROM assignments a LEFT JOIN lessons l ON l.id=a.lesson_id LEFT JOIN courses c ON c.id=a.course_id WHERE a.id=?', id);
     const who = b.athlete_id ? get("SELECT first_name || ' ' || last_name AS n FROM athletes WHERE id=?", toInt(b.athlete_id))?.n : get('SELECT team_name AS n FROM team_contracts WHERE id=?', toInt(b.team_id))?.n;
     log(req, 'Assigned reading', `${x?.t} to ${who}`);
     res.status(201).json({ id });
   }));
-  api.delete('/assignments/:id', COACH, h(async (req, res) => { run('DELETE FROM assignments WHERE id=?', Number(req.params.id)); log(req, 'Removed an assignment'); res.json({ ok: true }); }));
+  const assignmentLabel = (id) => get(`SELECT COALESCE(l.title, c.title) AS title, COALESCE(a.first_name || ' ' || a.last_name, t.team_name) AS who FROM assignments x
+    LEFT JOIN lessons l ON l.id=x.lesson_id LEFT JOIN courses c ON c.id=x.course_id LEFT JOIN athletes a ON a.id=x.athlete_id LEFT JOIN team_contracts t ON t.id=x.team_id WHERE x.id=?`, id);
+  api.put('/assignments/:id', COACH, h(async (req, res) => {
+    const x = e.updateAssignment(Number(req.params.id), req.body || {});
+    const n = assignmentLabel(x.id);
+    log(req, 'Changed an assignment', `${n.title} for ${n.who}`);
+    res.json({ ok: true });
+  }));
+  api.post('/assignments/remind-overdue', COACH, h(async (req, res) => {
+    const r = e.remindOverdue(req.staff);
+    if (r.assignments) log(req, 'Sent overdue reading reminders', `${r.assignments} assignments, ${r.athletes} athletes`);
+    res.json(r);
+  }));
+  api.post('/assignments/:id/remind', COACH, h(async (req, res) => {
+    const r = e.remindAssignment(Number(req.params.id), req.staff);
+    log(req, 'Sent a reading reminder', `${r.title} to ${r.names.join(', ')}`);
+    res.json(r);
+  }));
+  api.delete('/assignments/:id', COACH, h(async (req, res) => {
+    const n = assignmentLabel(Number(req.params.id)); if (!n) throw notFound('That assignment');
+    run('DELETE FROM assignments WHERE id=?', Number(req.params.id));
+    log(req, 'Removed an assignment', `${n.title} for ${n.who}`);
+    res.json({ ok: true });
+  }));
 }
 
 module.exports = { routes };

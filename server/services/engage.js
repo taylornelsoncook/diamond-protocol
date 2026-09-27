@@ -32,7 +32,10 @@ CREATE TABLE IF NOT EXISTS assignments (
   id INTEGER PRIMARY KEY, lesson_id INTEGER REFERENCES lessons(id) ON DELETE CASCADE, course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
   athlete_id INTEGER REFERENCES athletes(id), team_id INTEGER REFERENCES team_contracts(id), due_date TEXT,
   note TEXT, created_by INTEGER REFERENCES staff(id), created_at TEXT DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS lesson_views (lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE, athlete_id INTEGER NOT NULL REFERENCES athletes(id), opened_at TEXT DEFAULT (datetime('now')), PRIMARY KEY (lesson_id, athlete_id));
 `);
+// Added after launch: when a coach last sent a reminder for an assignment.
+if (!all('PRAGMA table_info(assignments)').some((c) => c.name === 'reminded_at')) run('ALTER TABLE assignments ADD COLUMN reminded_at TEXT');
 
 const SCALE = ['hydration', 'soreness', 'energy', 'mood']; // 1–5
 const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
@@ -290,17 +293,87 @@ function completeLesson(athleteId, lessonId, done = true) {
   else run('DELETE FROM lesson_progress WHERE lesson_id=? AND athlete_id=?', lessonId, athleteId);
   return lessonFor(athleteId, lessonId);
 }
-function assign({ lesson_id = null, course_id = null, athlete_id = null, team_id = null, due_date = null, note = null }, staff) {
+// A real calendar date in YYYY-MM-DD form.
+const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')) && new Date(`${d}T12:00:00Z`).toISOString().slice(0, 10) === d;
+const shortDate = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const firstName = (staff) => String(staff?.name || 'Your coach').split(' ')[0];
+
+// What is being assigned: a published lesson, or a published course with at least one published lesson.
+function assignable(lesson_id, course_id) {
   if (!lesson_id === !course_id) throw bad('Choose a lesson or a course.');
+  if (lesson_id) {
+    const l = get('SELECT id, title, published FROM lessons WHERE id=?', lesson_id);
+    if (!l) throw notFound('That lesson');
+    if (!l.published) throw bad('Publish that lesson before you assign it. Athletes only see published lessons.');
+    return l;
+  }
+  const c = get('SELECT id, title, published FROM courses WHERE id=?', course_id);
+  if (!c) throw notFound('That course');
+  if (!c.published || !get('SELECT 1 FROM lessons WHERE course_id=? AND published=1', c.id)) throw bad('Publish the course and at least one of its lessons before you assign it.');
+  return c;
+}
+function cleanDue(due_date) {
+  if (due_date == null || due_date === '') return null;
+  if (!isDate(due_date)) throw bad('Pick a due date.');
+  return due_date;
+}
+const cleanNote = (note) => (note ? String(note).trim().slice(0, 500) || null : null);
+const already = (lesson_id, course_id, col, id) => get(`SELECT id FROM assignments WHERE ${lesson_id ? 'lesson_id=?' : 'course_id=?'} AND ${col}=?`, lesson_id || course_id, id);
+
+function assign({ lesson_id = null, course_id = null, athlete_id = null, team_id = null, due_date = null, note = null }, staff) {
+  const item = assignable(lesson_id, course_id);
   if (!athlete_id === !team_id) throw bad('Choose an athlete or a team.');
-  const item = lesson_id ? get('SELECT title FROM lessons WHERE id=?', lesson_id) : get('SELECT title FROM courses WHERE id=?', course_id);
-  if (!item) throw notFound(lesson_id ? 'That lesson' : 'That course');
-  if (due_date && !/^\d{4}-\d{2}-\d{2}$/.test(due_date)) throw bad('Pick a due date.');
-  const id = insert('assignments', { lesson_id, course_id, athlete_id, team_id, due_date: due_date || null, note: note ? String(note).slice(0, 500) : null, created_by: staff.id });
-  const targets = athlete_id ? [athleteRow(athlete_id)].filter(Boolean) : all('SELECT * FROM athletes WHERE team_id=? AND archived=0', team_id);
-  const due = due_date ? ` by ${new Date(due_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : '';
-  for (const a of targets) notify(a, `New ${lesson_id ? 'lesson' : 'course'} for ${a.first_name}: ${item.title}`, `${staff.name.split(' ')[0]} assigned "${item.title}" to ${a.first_name}${due}.${note ? `\n\n${note}` : ''}`);
+  let targets, who;
+  if (athlete_id) {
+    const a = athleteRow(athlete_id);
+    if (!a) throw notFound('That athlete');
+    targets = [a]; who = `${a.first_name} ${a.last_name}`;
+  } else {
+    const t = get('SELECT * FROM team_contracts WHERE id=?', team_id);
+    if (!t) throw notFound('That team');
+    targets = all('SELECT * FROM athletes WHERE team_id=? AND archived=0', team_id); who = t.team_name;
+  }
+  if (already(lesson_id, course_id, athlete_id ? 'athlete_id' : 'team_id', athlete_id || team_id)) throw bad(`${who} already has "${item.title}". Change the due date on that assignment instead.`);
+  const due = cleanDue(due_date), text = cleanNote(note);
+  const id = insert('assignments', { lesson_id, course_id, athlete_id, team_id, due_date: due, note: text, created_by: staff.id });
+  const by = due ? ` by ${shortDate(due)}` : '';
+  for (const a of targets) notify(a, `New ${lesson_id ? 'lesson' : 'course'} for ${a.first_name}: ${item.title}`, `${firstName(staff)} assigned "${item.title}" to ${a.first_name}${by}.${text ? `\n\n${text}` : ''}`);
   return id;
+}
+// Assign to several athletes at once. Athletes who already have it are skipped, not doubled up.
+function assignMany({ athlete_ids = [], ...rest }, staff) {
+  const ids = [...new Set((Array.isArray(athlete_ids) ? athlete_ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) throw bad('Choose at least one athlete.');
+  if (ids.length > 100) throw bad('Assign to 100 athletes or fewer at a time, or assign it to a team.');
+  const item = assignable(rest.lesson_id, rest.course_id);
+  cleanDue(rest.due_date);
+  const athletes = ids.map((id) => athleteRow(id));
+  if (athletes.some((a) => !a)) throw notFound('One of those athletes');
+  const skipped = athletes.filter((a) => already(rest.lesson_id, rest.course_id, 'athlete_id', a.id));
+  const todo = athletes.filter((a) => !skipped.includes(a));
+  if (!todo.length) throw bad(skipped.length === 1 ? `${skipped[0].first_name} ${skipped[0].last_name} already has "${item.title}".` : `They all already have "${item.title}".`);
+  const created = tx(() => todo.map((a) => assign({ ...rest, athlete_id: a.id, team_id: null }, staff)));
+  return { ids: created, title: item.title, assigned: todo.map((a) => `${a.first_name} ${a.last_name}`), skipped: skipped.map((a) => `${a.first_name} ${a.last_name}`) };
+}
+function updateAssignment(id, b = {}) {
+  const x = get('SELECT * FROM assignments WHERE id=?', id);
+  if (!x) throw notFound('That assignment');
+  const patch = {};
+  if ('due_date' in b) patch.due_date = cleanDue(b.due_date);
+  if ('note' in b) patch.note = cleanNote(b.note);
+  if (Object.keys(patch).length) update('assignments', x.id, patch);
+  return x;
+}
+// Someone opened a lesson (the athlete, or a parent reading it with them). First open is kept.
+function recordView(athleteId, lessonId) {
+  run('INSERT OR IGNORE INTO lesson_views (lesson_id, athlete_id) VALUES (?,?)', lessonId, athleteId);
+}
+function duplicateLesson(id) {
+  const l = get('SELECT * FROM lessons WHERE id=?', id);
+  if (!l) throw notFound('That lesson');
+  const ord = l.course_id ? (get('SELECT MAX(ord) m FROM lessons WHERE course_id=?', l.course_id).m ?? -1) + 1 : 0;
+  const title = `${l.title} (copy)`.slice(0, 120);
+  return { id: insert('lessons', { title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course_id: l.course_id, ord, published: 0 }), title };
 }
 
 // ---- the three tabs, as the athlete (or their parent) sees them ----
@@ -351,27 +424,125 @@ function recentFlags() {
     .filter((c, i, arr) => c.flags.length && arr.findIndex((x) => x.athlete_id === c.athlete_id) === i);
 }
 
+// Everything needed to say who has finished what, loaded once: completions, opens, published course lessons, team rosters.
+function progressContext() {
+  const done = new Map(), seen = new Map();
+  for (const r of all('SELECT lesson_id, athlete_id, completed_at FROM lesson_progress')) { if (!done.has(r.athlete_id)) done.set(r.athlete_id, new Map()); done.get(r.athlete_id).set(r.lesson_id, r.completed_at); }
+  for (const r of all('SELECT lesson_id, athlete_id FROM lesson_views')) { if (!seen.has(r.athlete_id)) seen.set(r.athlete_id, new Set()); seen.get(r.athlete_id).add(r.lesson_id); }
+  const courseLessons = new Map();
+  for (const r of all('SELECT id, course_id FROM lessons WHERE published=1 AND course_id IS NOT NULL ORDER BY ord, id')) { if (!courseLessons.has(r.course_id)) courseLessons.set(r.course_id, []); courseLessons.get(r.course_id).push(r.id); }
+  const rosters = new Map();
+  for (const a of all('SELECT * FROM athletes WHERE team_id IS NOT NULL AND archived=0 ORDER BY last_name, first_name')) { if (!rosters.has(a.team_id)) rosters.set(a.team_id, []); rosters.get(a.team_id).push(a); }
+  return { done, seen, courseLessons, rosters };
+}
+// Where one athlete is on one assignment: finished, started (opened or part way), or not started.
+function personStatus(ctx, x, a) {
+  const mine = ctx.done.get(a.id) || new Map(), opened = ctx.seen.get(a.id) || new Set();
+  const base = { id: a.id, name: `${a.first_name} ${a.last_name}` };
+  if (x.lesson_id) {
+    const at = mine.get(x.lesson_id);
+    return { ...base, status: at ? 'finished' : opened.has(x.lesson_id) ? 'started' : 'not_started', completed_at: at || null };
+  }
+  const ids = ctx.courseLessons.get(x.course_id) || [];
+  const dates = ids.map((id) => mine.get(id)).filter(Boolean);
+  const finished = ids.length > 0 && dates.length === ids.length;
+  return { ...base, status: finished ? 'finished' : dates.length || ids.some((id) => opened.has(id)) ? 'started' : 'not_started',
+    done: dates.length, of: ids.length, completed_at: finished ? dates.sort().at(-1) : null };
+}
+function assignmentView(ctx, x, T = todayLocal()) {
+  const who = x.athlete_id ? [athleteRow(x.athlete_id)].filter(Boolean) : ctx.rosters.get(x.team_id) || [];
+  const people = who.map((a) => personStatus(ctx, x, a));
+  const finished = people.filter((p) => p.status === 'finished').length;
+  const complete = people.length > 0 && finished === people.length;
+  const status = complete ? 'finished' : x.due_date && x.due_date < T ? 'overdue' : 'open';
+  const order = { not_started: 0, started: 1, finished: 2 };
+  people.sort((p, q) => order[p.status] - order[q.status] || p.name.localeCompare(q.name));
+  return {
+    id: x.id, title: x.lesson_title || x.course_title, type: x.lesson_id ? 'lesson' : 'course', lesson_id: x.lesson_id, course_id: x.course_id,
+    assigned_to: x.athlete_id ? (x.first_name ? `${x.first_name} ${x.last_name}` : null) : x.team_name, athlete_id: x.athlete_id, team_id: x.team_id,
+    due_date: x.due_date, note: x.note, created_at: x.created_at, reminded_at: x.reminded_at || null, assigned_by: x.assigned_by || null,
+    finished, total: people.length, started: people.filter((p) => p.status === 'started').length, status,
+    not_finished: people.filter((p) => p.status !== 'finished').map((p) => p.name).slice(0, 30), people,
+  };
+}
+const ASSIGNMENT_SQL = `SELECT x.*, l.title AS lesson_title, c.title AS course_title, a.first_name, a.last_name, t.team_name, s.name AS assigned_by FROM assignments x
+  LEFT JOIN lessons l ON l.id=x.lesson_id LEFT JOIN courses c ON c.id=x.course_id LEFT JOIN athletes a ON a.id=x.athlete_id
+  LEFT JOIN team_contracts t ON t.id=x.team_id LEFT JOIN staff s ON s.id=x.created_by`;
+
 // Completion report for the Education screen.
 function educationReport() {
-  const lessons = all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id=l.id) AS completions FROM lessons l ORDER BY l.course_id, l.ord, l.id');
-  const courses = all('SELECT * FROM courses ORDER BY id').map((c) => ({ ...c, lessons: lessons.filter((l) => l.course_id === c.id) }));
-  const assignments = all(`SELECT x.*, l.title AS lesson_title, c.title AS course_title, a.first_name, a.last_name, t.team_name FROM assignments x
-    LEFT JOIN lessons l ON l.id=x.lesson_id LEFT JOIN courses c ON c.id=x.course_id LEFT JOIN athletes a ON a.id=x.athlete_id LEFT JOIN team_contracts t ON t.id=x.team_id
-    ORDER BY x.id DESC LIMIT 200`).map((x) => {
-    const who = x.athlete_id ? [athleteRow(x.athlete_id)].filter(Boolean) : all('SELECT * FROM athletes WHERE team_id=? AND archived=0', x.team_id);
-    const finished = who.filter((a) => {
-      if (x.lesson_id) return !!get('SELECT 1 FROM lesson_progress WHERE lesson_id=? AND athlete_id=?', x.lesson_id, a.id);
-      const ids = all('SELECT id FROM lessons WHERE course_id=? AND published=1', x.course_id).map((r) => r.id);
-      return ids.length && ids.every((id) => get('SELECT 1 FROM lesson_progress WHERE lesson_id=? AND athlete_id=?', id, a.id));
-    });
-    return { id: x.id, title: x.lesson_title || x.course_title, type: x.lesson_id ? 'lesson' : 'course', lesson_id: x.lesson_id, course_id: x.course_id,
-      assigned_to: x.athlete_id ? `${x.first_name} ${x.last_name}` : x.team_name, athlete_id: x.athlete_id, team_id: x.team_id, due_date: x.due_date, note: x.note,
-      finished: finished.length, total: who.length, not_finished: who.filter((a) => !finished.includes(a)).map((a) => `${a.first_name} ${a.last_name}`).slice(0, 30) };
+  const T = todayLocal();
+  const ctx = progressContext();
+  const lessons = all(`SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id=l.id) AS completions,
+      (SELECT COUNT(*) FROM lesson_views v WHERE v.lesson_id=l.id AND NOT EXISTS (SELECT 1 FROM lesson_progress p WHERE p.lesson_id=v.lesson_id AND p.athlete_id=v.athlete_id)) AS opened,
+      (SELECT COUNT(*) FROM assignments x WHERE x.lesson_id=l.id) AS assigned
+    FROM lessons l ORDER BY l.course_id, l.ord, l.id`);
+  const courses = all('SELECT c.*, (SELECT COUNT(*) FROM assignments x WHERE x.course_id=c.id) AS assigned FROM courses c ORDER BY c.id').map((c) => {
+    const ids = ctx.courseLessons.get(c.id) || [];
+    const finishers = ids.length ? [...ctx.done.values()].filter((m) => ids.every((id) => m.has(id))).length : 0;
+    return { ...c, finishers, lessons: lessons.filter((l) => l.course_id === c.id) };
   });
-  return { courses, lessons: lessons.filter((l) => !l.course_id), assignments };
+  const assignments = all(`${ASSIGNMENT_SQL} ORDER BY x.id DESC LIMIT 500`).map((x) => assignmentView(ctx, x, T));
+  const recent = all(`SELECT p.completed_at, p.athlete_id, a.first_name || ' ' || a.last_name AS name, l.id AS lesson_id, l.title, c.title AS course
+    FROM lesson_progress p JOIN athletes a ON a.id=p.athlete_id AND a.archived=0 JOIN lessons l ON l.id=p.lesson_id LEFT JOIN courses c ON c.id=l.course_id
+    ORDER BY p.completed_at DESC, p.rowid DESC LIMIT 40`);
+  const stats = {
+    open: assignments.filter((x) => x.status !== 'finished').length,
+    overdue: assignments.filter((x) => x.status === 'overdue').length,
+    finished: assignments.filter((x) => x.status === 'finished').length,
+    finished_week: get("SELECT COUNT(*) n FROM lesson_progress WHERE completed_at >= datetime('now','-7 days')").n,
+    readers_week: get("SELECT COUNT(DISTINCT athlete_id) n FROM lesson_progress WHERE completed_at >= datetime('now','-7 days')").n,
+    published: lessons.filter((l) => l.published).length, drafts: lessons.filter((l) => !l.published).length,
+  };
+  return { courses, lessons: lessons.filter((l) => !l.course_id), assignments, recent, stats, today: T };
+}
+
+// Who finished one lesson, who opened it but hasn't finished, and where it is assigned.
+function lessonProgress(lessonId) {
+  const l = get('SELECT l.*, c.title AS course FROM lessons l LEFT JOIN courses c ON c.id=l.course_id WHERE l.id=?', lessonId);
+  if (!l) throw notFound('That lesson');
+  const finished = all(`SELECT a.id AS athlete_id, a.first_name || ' ' || a.last_name AS name, p.completed_at FROM lesson_progress p JOIN athletes a ON a.id=p.athlete_id AND a.archived=0
+    WHERE p.lesson_id=? ORDER BY p.completed_at DESC`, l.id);
+  const opened = all(`SELECT a.id AS athlete_id, a.first_name || ' ' || a.last_name AS name, v.opened_at FROM lesson_views v JOIN athletes a ON a.id=v.athlete_id AND a.archived=0
+    WHERE v.lesson_id=? AND NOT EXISTS (SELECT 1 FROM lesson_progress p WHERE p.lesson_id=v.lesson_id AND p.athlete_id=v.athlete_id) ORDER BY v.opened_at DESC`, l.id);
+  const assignments = all(`SELECT x.id, x.due_date, COALESCE(a.first_name || ' ' || a.last_name, t.team_name) AS assigned_to, x.athlete_id, x.team_id FROM assignments x
+    LEFT JOIN athletes a ON a.id=x.athlete_id LEFT JOIN team_contracts t ON t.id=x.team_id WHERE x.lesson_id=? OR (x.course_id IS NOT NULL AND x.course_id=?) ORDER BY x.id DESC`, l.id, l.course_id ?? -1);
+  return { id: l.id, title: l.title, course: l.course, published: !!l.published, finished, opened, assignments };
+}
+
+// Email everyone on an assignment who hasn't finished it. At most once every 12 hours per assignment.
+const REMIND_GAP = '-12 hours';
+function remindAssignment(id, staff, ctx = progressContext()) {
+  const x = get(`${ASSIGNMENT_SQL} WHERE x.id=?`, id);
+  if (!x) throw notFound('That assignment');
+  if (x.reminded_at && get('SELECT ? > datetime(\'now\', ?) AS recent', x.reminded_at, REMIND_GAP).recent) throw bad('A reminder went out less than 12 hours ago. Give them time to read it.');
+  const v = assignmentView(ctx, x);
+  const todo = v.people.filter((p) => p.status !== 'finished');
+  if (!v.people.length) throw bad('Nobody on this assignment can be reminded. The athlete is archived or the roster is empty.');
+  if (!todo.length) throw bad('Everyone has finished it. There is nobody to remind.');
+  const T = todayLocal();
+  for (const p of todo) {
+    const a = athleteRow(p.id);
+    const progress = v.type === 'course' && p.done ? ` (${p.done} of ${p.of} lessons done)` : '';
+    const due = x.due_date ? (x.due_date < T ? ` It was due ${shortDate(x.due_date)}.` : ` It's due ${shortDate(x.due_date)}.`) : '';
+    notify(a, `Reminder for ${a.first_name}: ${v.title}`, `${firstName(staff)} is checking in: ${a.first_name} hasn't finished "${v.title}" yet${progress}.${due}${x.note ? `\n\n${x.note}` : ''}`);
+  }
+  run("UPDATE assignments SET reminded_at=datetime('now') WHERE id=?", x.id);
+  return { sent: todo.length, names: todo.map((p) => p.name), title: v.title };
+}
+// Remind every overdue assignment that hasn't had a reminder in the last 12 hours.
+function remindOverdue(staff) {
+  const T = todayLocal();
+  const ctx = progressContext();
+  const due = all(`${ASSIGNMENT_SQL} WHERE x.due_date IS NOT NULL AND x.due_date < ? AND (x.reminded_at IS NULL OR x.reminded_at <= datetime('now', ?))`, T, REMIND_GAP)
+    .filter((x) => assignmentView(ctx, x, T).status === 'overdue');
+  let athletes = 0;
+  for (const x of due) athletes += remindAssignment(x.id, staff, ctx).sent;
+  return { assignments: due.length, athletes };
 }
 
 module.exports = {
   GOAL_KINDS, weekStart, flagsOf, saveCheckin, checkinStreak, activeWeekStreak, goalsFor, checkGoal, createGoal, messagesFor, markRead, sendMessage,
   performance, targetsFor, setTarget, rankings, education, lessonFor, completeLesson, assign, accountability, staffOverview, recentFlags, educationReport, athleteRow,
+  assignMany, updateAssignment, recordView, duplicateLesson, lessonProgress, remindAssignment, remindOverdue, isDate,
 };

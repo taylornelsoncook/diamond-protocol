@@ -244,3 +244,40 @@ test('the education report never carries money, and front desk sees it read-only
   assert.equal((await call('POST', '/courses', { title: 'Nope' }, desk)).status, 403);
   assert.equal((await call('PUT', `/lessons/${r.data.lessons[0].id}`, { published: false }, desk)).status, 403);
 });
+
+test('an archived athlete or ended team never blocks the overdue sweep and cannot be newly assigned', async () => {
+  const l = await call('POST', '/lessons', { title: 'Sweep safety' }, coach);
+  const ethan = A('Ethan'), jaylen = A('Jaylen');
+  const gone = await call('POST', '/assignments', { lesson_id: l.data.id, athlete_id: ethan.id }, coach);
+  const live = await call('POST', '/assignments', { lesson_id: l.data.id, athlete_id: jaylen.id }, coach);
+  run('UPDATE assignments SET due_date=?, reminded_at=NULL WHERE id IN (?,?)', addDays(todayLocal(), -4), gone.data.id, live.data.id);
+  run('UPDATE athletes SET archived=1 WHERE id=?', ethan.id);
+  try {
+    const rep = (await call('GET', '/education', null, coach)).data;
+    assert.equal(rep.assignments.find((y) => y.id === gone.data.id).status, 'open', 'nobody can read it, so it is not overdue');
+    assert.equal(rep.assignments.find((y) => y.id === live.data.id).status, 'overdue');
+    const before = outboxTop();
+    const sweep = await call('POST', '/assignments/remind-overdue', {}, coach);
+    assert.equal(sweep.status, 200);
+    assert.ok(outboxSince(before).some((m) => m.subject === 'Reminder for Jaylen: Sweep safety'));
+    assert.equal(get('SELECT reminded_at FROM assignments WHERE id=?', gone.data.id).reminded_at, null);
+  } finally { run('UPDATE athletes SET archived=0 WHERE id=?', ethan.id); }
+
+  const t = get("SELECT * FROM team_contracts WHERE status='active' LIMIT 1");
+  run("UPDATE team_contracts SET status='ended' WHERE id=?", t.id);
+  try {
+    const r = await call('POST', '/assignments', { lesson_id: l.data.id, team_id: t.id }, coach);
+    assert.equal(r.status, 400);
+    assert.match(r.data.error, /contract has ended/);
+  } finally { run("UPDATE team_contracts SET status='active' WHERE id=?", t.id); }
+});
+
+test('publishing a course is logged as publishing', async () => {
+  const c = await call('POST', '/courses', { title: 'Hitting plan', published: false }, coach);
+  await call('PUT', `/courses/${c.data.id}`, { published: true }, coach);
+  assert.equal(lastActivity().action, 'Published a course');
+  await call('PUT', `/courses/${c.data.id}`, { published: false }, coach);
+  assert.equal(lastActivity().action, 'Unpublished a course');
+  await call('PUT', `/courses/${c.data.id}`, { title: 'Hitting plan 2' }, coach);
+  assert.deepEqual([lastActivity().action, lastActivity().detail], ['Edited a course', 'Hitting plan 2']);
+});

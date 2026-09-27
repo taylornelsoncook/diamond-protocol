@@ -331,6 +331,7 @@ function assign({ lesson_id = null, course_id = null, athlete_id = null, team_id
   } else {
     const t = get('SELECT * FROM team_contracts WHERE id=?', team_id);
     if (!t) throw notFound('That team');
+    if (t.status !== 'active') throw bad(`${t.team_name}'s contract has ended. Assign it to the athletes one by one instead.`);
     targets = all('SELECT * FROM athletes WHERE team_id=? AND archived=0', team_id); who = t.team_name;
   }
   if (already(lesson_id, course_id, athlete_id ? 'athlete_id' : 'team_id', athlete_id || team_id)) throw bad(`${who} already has "${item.title}". Change the due date on that assignment instead.`);
@@ -454,7 +455,8 @@ function assignmentView(ctx, x, T = todayLocal()) {
   const people = who.map((a) => personStatus(ctx, x, a));
   const finished = people.filter((p) => p.status === 'finished').length;
   const complete = people.length > 0 && finished === people.length;
-  const status = complete ? 'finished' : x.due_date && x.due_date < T ? 'overdue' : 'open';
+  // Overdue only when someone can still read it: an archived athlete or an empty roster is never overdue.
+  const status = complete ? 'finished' : people.length && x.due_date && x.due_date < T ? 'overdue' : 'open';
   const order = { not_started: 0, started: 1, finished: 2 };
   people.sort((p, q) => order[p.status] - order[q.status] || p.name.localeCompare(q.name));
   return {
@@ -490,8 +492,8 @@ function educationReport() {
     open: assignments.filter((x) => x.status !== 'finished').length,
     overdue: assignments.filter((x) => x.status === 'overdue').length,
     finished: assignments.filter((x) => x.status === 'finished').length,
-    finished_week: get("SELECT COUNT(*) n FROM lesson_progress WHERE completed_at >= datetime('now','-7 days')").n,
-    readers_week: get("SELECT COUNT(DISTINCT athlete_id) n FROM lesson_progress WHERE completed_at >= datetime('now','-7 days')").n,
+    finished_week: get("SELECT COUNT(*) n FROM lesson_progress p JOIN athletes a ON a.id=p.athlete_id AND a.archived=0 WHERE p.completed_at >= datetime('now','-7 days')").n,
+    readers_week: get("SELECT COUNT(DISTINCT p.athlete_id) n FROM lesson_progress p JOIN athletes a ON a.id=p.athlete_id AND a.archived=0 WHERE p.completed_at >= datetime('now','-7 days')").n,
     published: lessons.filter((l) => l.published).length, drafts: lessons.filter((l) => !l.published).length,
   };
   return { courses, lessons: lessons.filter((l) => !l.course_id), assignments, recent, stats, today: T };
@@ -535,7 +537,7 @@ function remindOverdue(staff) {
   const T = todayLocal();
   const ctx = progressContext();
   const due = all(`${ASSIGNMENT_SQL} WHERE x.due_date IS NOT NULL AND x.due_date < ? AND (x.reminded_at IS NULL OR x.reminded_at <= datetime('now', ?))`, T, REMIND_GAP)
-    .filter((x) => assignmentView(ctx, x, T).status === 'overdue');
+    .filter((x) => { const v = assignmentView(ctx, x, T); return v.status === 'overdue' && v.people.some((p) => p.status !== 'finished'); });
   let athletes = 0;
   for (const x of due) athletes += remindAssignment(x.id, staff, ctx).sent;
   return { assignments: due.length, athletes };

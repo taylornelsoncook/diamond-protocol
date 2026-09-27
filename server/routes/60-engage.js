@@ -185,7 +185,8 @@ function routes(api) {
     if ('published' in req.body) patch.published = req.body.published ? 1 : 0;
     if (patch.title && patch.title.length > 120) throw bad('Keep the title under 120 characters.');
     update('courses', c.id, patch);
-    log(req, 'Edited a course', c.title);
+    const verb = Object.keys(patch).length === 1 && 'published' in patch ? (patch.published ? 'Published a course' : 'Unpublished a course') : 'Edited a course';
+    log(req, verb, patch.title || c.title);
     res.json({ ok: true });
   }));
   api.delete('/courses/:id', COACH, h(async (req, res) => {

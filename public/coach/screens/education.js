@@ -38,7 +38,8 @@ const STYLE = html`<style>
 @media (max-width:600px){.edu .edu-acts{width:100%}.edu .edu-acts>.stack-sm{flex-basis:100%;margin-bottom:4px}.edu .edu-bar{width:100%}.edu .btn-sm{min-height:44px}
   .edu .edu-tools .seg{flex-wrap:nowrap}.edu .edu-tools .seg button{padding:0 8px;font-size:13px}.edu .tabs button{padding:0 12px}
   .edu .metrics{grid-template-columns:1fr 1fr;gap:var(--space-2)}.edu .metric{padding:var(--space-3)}.edu .metric-value{font-size:28px}
-  .edu .edu-tools .edu-q{max-width:none;flex-basis:100%}.edu .edu-tools .seg{width:100%}.edu .edu-tools .seg button{flex:1 1 auto;min-height:44px}}
+  .edu .edu-tools .edu-q{max-width:none;flex-basis:100%}.edu .edu-tools .seg{width:100%}.edu .edu-tools .seg button{flex:1 1 auto;min-height:44px}
+  .edu .edu-acts .btn-sm{padding:0 10px}.edu .edu-mv{min-width:44px}.edu .edu-title .edu-link{display:inline-flex;align-items:center;min-height:44px}}
 .edu-prev{display:flex;flex-direction:column;gap:var(--space-3);background:var(--ground);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4)}
 .edu-prev .edu-prev-kicker{font-size:13px;color:var(--steel-muted)}
 .edu-prev h3{font:700 24px/1.1 var(--font-display);letter-spacing:.04em;text-transform:uppercase;color:var(--steel)}
@@ -383,7 +384,7 @@ async function renderEducation(ctx) {
         ${solo && solo.status !== 'finished' ? html`<div class="edu-sub" style="margin-top:4px">${PERSON[solo.status](solo)}</div>` : ''}
         ${!solo && x.people.length ? html`<details class="edu-who"><summary>Where everyone is (${x.started ? `${x.started} started, ` : ''}${unfinished} not finished)</summary>
           <ul class="edu-people">${x.people.map((p) => html`<li><span class="grow"><a href="/app/clients/${p.id}">${p.name}</a></span>${PERSON[p.status](p)}${p.completed_at ? html`<span class="small muted">${fmtDate(p.completed_at, { year: false })}</span>` : ''}</li>`)}</ul></details>` : ''}
-        ${!solo && !x.people.length ? html`<div class="edu-sub">Nobody is on this roster yet.</div>` : ''}</div>
+        ${!solo && !x.people.length ? html`<div class="edu-sub">${x.athlete_id ? 'This athlete is archived, so nobody can read it.' : 'Nobody is on this roster yet.'}</div>` : ''}</div>
       <div class="edu-acts"><div class="stack-sm" style="gap:4px"><span class="small ${x.status === 'finished' ? 'good-text' : late ? 'warn-text' : ''}">${x.finished} of ${x.total} finished</span><div class="bar edu-bar" role="progressbar" aria-label="${x.title}: ${x.finished} of ${x.total} finished" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div></div>
         ${manage && unfinished > 0 ? html`<button class="btn btn-ghost btn-sm" data-act="remind" data-id="${x.id}" ${recent ? raw('disabled title="A reminder went out in the last 12 hours"') : ''}>${recent ? 'Reminded' : 'Remind'}</button>` : ''}
         ${manage ? html`<button class="btn btn-ghost btn-sm" data-act="change" data-id="${x.id}">Change</button><button class="btn btn-ghost btn-sm" data-act="unassign" data-id="${x.id}">Remove</button>` : ''}</div></div>`;
@@ -495,7 +496,7 @@ async function renderEducation(ctx) {
       <div class="metrics">
         <div class="metric"><span class="metric-label">Open assignments</span><span class="metric-value">${s.open}</span><span class="metric-note">${s.finished} finished by everyone</span></div>
         <div class="metric"><span class="metric-label">Overdue</span><span class="metric-value ${s.overdue ? 'warn' : ''}">${s.overdue}</span><span class="metric-note">Past due, not finished</span></div>
-        <div class="metric"><span class="metric-label">Finished this week</span><span class="metric-value ${s.finished_week ? 'good' : ''}">${s.finished_week}</span><span class="metric-note">${s.readers_week ? `By ${plural(s.readers_week, 'athlete')}` : 'Lessons marked done'}</span></div>
+        <div class="metric"><span class="metric-label">Finished, last 7 days</span><span class="metric-value ${s.finished_week ? 'good' : ''}">${s.finished_week}</span><span class="metric-note">${s.readers_week ? `By ${plural(s.readers_week, 'athlete')}` : 'Lessons marked done'}</span></div>
         <div class="metric"><span class="metric-label">Published lessons</span><span class="metric-value">${s.published}</span><span class="metric-note">${s.drafts ? `${plural(s.drafts, 'draft')}` : 'No drafts'}</span></div>
       </div>
       <section class="panel stack">
@@ -526,7 +527,10 @@ async function renderEducation(ctx) {
       case 'preview': return lessonPreview(l, course?.title);
       case 'edit': if (await editLesson(l, d.courses)) await refresh(); return;
       case 'assign': if (await assignDialog({ lesson_id: l.id })) await refresh(); return;
-      case 'publish': await api.put(`/lessons/${l.id}`, { published: true }); toast('Published. Athletes can read it now.'); return refresh();
+      case 'publish':
+        await api.put(`/lessons/${l.id}`, { published: true });
+        toast(course && !course.published ? `Published. Athletes see it once "${course.title}" is published.` : 'Published. Athletes can read it now.');
+        return refresh();
       case 'duplicate': {
         const r = await api.post(`/lessons/${l.id}/duplicate`);
         toast(`Saved "${r.title}" as a draft.`);

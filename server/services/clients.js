@@ -32,16 +32,18 @@ function notesFor(athleteId, staff) {
     .map((n) => ({ ...n, pinned: !!n.pinned, coach_only: !!n.coach_only, mine: n.staff_id === staff.id, can_delete: n.staff_id === staff.id || staff.role === 'owner' }));
 }
 
-// Visits: past booked sessions. Attended = checked in; no-show = booked, not checked in, session not cancelled.
+// Visits: past booked sessions. Attended = checked in; no-show = booked, not checked in, and the session is over
+// (someone in a session that's still running may just not be checked in yet).
 function visits(athleteId, nowLocal) {
   const today = nowLocal.slice(0, 10);
   const day = (n) => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+  const ended = "strftime('%Y-%m-%dT%H:%M', e.starts_at, '+' || COALESCE(e.duration_min, 60) || ' minutes')";
   const past = `FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND e.cancelled=0 AND e.starts_at<?`;
-  const count = (extra, since) => get(`SELECT COUNT(*) n ${past} ${extra} AND e.starts_at>=?`, athleteId, nowLocal, since).n;
+  const count = (extra, since) => get(`SELECT COUNT(*) n ${past} ${extra} AND e.starts_at>=?`, athleteId, nowLocal, ...(extra.includes('?') ? [nowLocal] : []), since).n;
   const attended = "AND b.status='booked' AND b.checked_in_at IS NOT NULL";
-  const noShow = "AND b.status='booked' AND b.checked_in_at IS NULL";
+  const noShow = `AND b.status='booked' AND b.checked_in_at IS NULL AND ${ended}<=?`;
   const history = all(`SELECT b.id, b.status, b.coverage, b.checked_in_at, e.id AS event_id, e.name, e.starts_at, e.type
-    ${past} AND b.status IN ('booked','late_cancel') ORDER BY e.starts_at DESC LIMIT 12`, athleteId, nowLocal)
+    ${past} AND (b.status='late_cancel' OR (b.status='booked' AND (b.checked_in_at IS NOT NULL OR ${ended}<=?))) ORDER BY e.starts_at DESC LIMIT 12`, athleteId, nowLocal, nowLocal)
     .map((r) => ({ ...r, outcome: r.status === 'late_cancel' ? 'late_cancel' : r.checked_in_at ? 'attended' : 'no_show' }));
   return {
     summary: {

@@ -25,7 +25,7 @@ const STYLE = html`<style>
 .cl-list .col-last{white-space:nowrap}
 .cl-list .cl-more{display:flex;justify-content:center;padding:var(--space-4) 0 0}
 @media (max-width:700px){.cl-list .cl-views{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 calc(-1 * var(--space-6));padding:0 var(--space-6)}.cl-list .cl-view{flex:0 0 auto}}
-@media (pointer:coarse){.cl-list .cl-view,.cl-pro .btn-sm,.cl-new .btn-sm{min-height:44px}}
+@media (pointer:coarse){.cl-list .cl-view,.cl-pro .btn-sm,.cl-new .btn-sm,.cl-pro .check{min-height:44px}.cl-pro .check{align-items:center}}
 .cl-new{max-width:640px}
 .cl-new details summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:8px;color:var(--steel);font-weight:500;list-style:none}.cl-new details summary::-webkit-details-marker{display:none}
 .cl-new details summary::before{content:'';flex:0 0 auto;width:0;height:0;border:5px solid transparent;border-left:7px solid currentColor;border-right:0;transition:transform .15s}.cl-new details[open] summary::before{transform:rotate(90deg)}
@@ -33,6 +33,7 @@ const STYLE = html`<style>
 .cl-new .cl-section{font:500 14px/20px var(--font-sans);color:var(--steel-muted);margin:4px 0 -4px}
 .cl-pro .cl-code{font:600 12px/1 var(--font-mono);padding:6px 10px;border-radius:var(--radius-pill);background:var(--surface-raised);color:var(--steel);vertical-align:middle;letter-spacing:.02em;border:0;cursor:pointer;min-height:28px}
 .cl-pro .cl-code:hover{background:var(--line)}
+@media (pointer:coarse){.cl-pro .cl-code{min-height:44px;padding:0 14px}}
 .cl-pro .cl-quick{margin-top:10px}
 .cl-pro .cl-contact a{color:var(--steel-muted);text-decoration:none;overflow-wrap:anywhere}.cl-pro .cl-contact a:hover{color:var(--steel);text-decoration:underline}
 .cl-pro .banner.medical a{color:var(--amber);white-space:nowrap}
@@ -104,7 +105,8 @@ const SORTS = [{ id: 'name', name: 'Name, A to Z' }, { id: 'last_seen', name: 'L
 const LIVE = ['trial', 'active', 'past_due', 'paused'];
 const PAGE = 100;
 
-function csvCell(v) { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
+// Cells a spreadsheet would run as a formula (=, @, or +/- that isn't just a phone number) get a leading apostrophe.
+function csvCell(v) { let s = String(v ?? ''); if (/^[=@\t\r]/.test(s) || /^[+-](?![\d\s().-]*$)/.test(s)) s = `'${s}`; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 function downloadCsv(rows) {
   const head = ['Name', 'Athlete ID', 'Status', 'Plan', 'Program', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Athlete email', 'Athlete phone', 'Sport', 'School', 'Grad year', 'Waiver', 'Last visit', 'Last workout', 'Client since'];
   const status = (c) => (VIEWS.find((v) => v.id === c.status)?.name || c.status);
@@ -147,12 +149,12 @@ async function renderList(ctx) {
       <div id="cl-table" aria-live="polite"><div class="muted" aria-busy="true">Loading clients…</div></div>
     </div></div>`);
   const qEl = ctx.el.querySelector('#cl-q'), sortEl = ctx.el.querySelector('#cl-sort');
-  let view = status, seq = 0, data = null, shown = PAGE;
+  let view = status, seq = 0, data = null, shown = PAGE, loadedQ = null;
 
   function drawViews() {
     const c = data?.counts || {};
     mount(ctx.el.querySelector('#cl-views'), html`${VIEWS.filter((v) => v.id === '' || v.id === view || c[v.id]).map((v) => html`<button type="button" class="cl-view" data-view="${v.id}" aria-pressed="${v.id === view ? 'true' : 'false'}">${v.name}
-      <span class="cl-n">${v.id === '' ? (view === 'archived' ? '' : data?.total ?? '') : c[v.id] ?? 0}</span></button>`)}`);
+      <span class="cl-n">${v.id === '' ? data?.total ?? '' : c[v.id] ?? 0}</span></button>`)}`);
   }
   function drawTable() {
     const box = ctx.el.querySelector('#cl-table');
@@ -190,7 +192,7 @@ async function renderList(ctx) {
     try {
       const d = await api.get('/clients?' + params);
       if (my !== seq || !ctx.isCurrent()) return;
-      data = d; shown = PAGE;
+      data = d; shown = PAGE; loadedQ = params.get('q') || '';
       drawViews(); drawTable();
     } catch (e) {
       if (my !== seq || !ctx.isCurrent()) return;
@@ -199,7 +201,14 @@ async function renderList(ctx) {
   }
   qEl.addEventListener('input', debounce(() => load(), 200));
   qEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && data?.clients.length === 1) { e.preventDefault(); ctx.go(`/app/clients/${data.clients[0].id}`); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // The list may still be catching up with the last keystrokes: open the only match of what's typed now.
+      (async () => {
+        if (loadedQ !== qEl.value.trim()) await load();
+        if (loadedQ === qEl.value.trim() && data?.clients.length === 1 && ctx.isCurrent()) ctx.go(`/app/clients/${data.clients[0].id}`);
+      })();
+    }
     if (e.key === 'Escape' && qEl.value) { qEl.value = ''; load(); }
   });
   sortEl.addEventListener('change', () => load());
@@ -298,7 +307,9 @@ async function renderNew(ctx) {
   async function submit(allowDuplicate = false) {
     const d = formData(f);
     const err = f.querySelector('#nc-err'); err.textContent = '';
-    const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+    const btn = f.querySelector('button[type=submit]'), again = dupBox.querySelector('[data-act]');
+    if (btn.disabled) return;
+    btn.disabled = true; if (again) again.disabled = true;
     try {
       const r = await api.post('/clients', { ...d, with_parent: !!d.with_parent, allow_duplicate: allowDuplicate });
       if (r.membership && !r.membership.ok) toast(`Account created as ${r.code}. The first charge didn't go through (${r.membership.error || 'declined'}); the membership is past due until a card is added.`, 'warn');
@@ -308,7 +319,7 @@ async function renderNew(ctx) {
       if (ex.data?.duplicates) { mount(dupBox, duplicateBox(ex.data.duplicates)); dupBox.querySelector('[data-act]').focus(); }
       else if (ex.data?.existing) mount(err, html`${ex.message.replace(/ Open .*$/, '')} <a href="/app/clients/${ex.data.existing.athlete_id}?add=sibling">Open ${ex.data.existing.name} to add a sibling</a>`);
       else err.textContent = ex.message;
-    } finally { btn.disabled = false; }
+    } finally { btn.disabled = false; if (again?.isConnected) again.disabled = false; }
   }
   f.addEventListener('submit', (e) => { e.preventDefault(); submit(false); });
   dupBox.addEventListener('click', (e) => { if (e.target.closest('[data-act="create-anyway"]')) submit(true); });
@@ -445,7 +456,10 @@ function restore(root, snap) {
   for (const [id, v] of Object.entries(snap.values)) {
     const el = root.querySelector('#' + CSS.escape(id));
     if (!el) continue;
-    if ('checked' in v) el.checked = v.checked; else el.value = v.value;
+    if ('checked' in v) el.checked = v.checked;
+    // A choice that's gone after the redraw (a session just checked in to) falls back to the new default.
+    else if (el.tagName === 'SELECT' && ![...el.options].some((o) => o.value === v.value)) continue;
+    else el.value = v.value;
   }
   for (const id of snap.open) root.querySelector('#' + CSS.escape(id))?.setAttribute('open', '');
 }

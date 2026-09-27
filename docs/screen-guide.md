@@ -203,12 +203,12 @@ _Where: Clients_
 
 Everyone you train, with their plan, status, program and when you last saw them.
 
-- Search by name, Athlete ID, email, phone or family name. Press Enter when only one client matches to open them; Escape clears the search.
+- Search by name, Athlete ID, email, phone (any format, like 8015550142) or family name. Press Enter when only one client matches to open them; Escape clears the search.
 - Views with counts: All, Active, Trial, Past due, Paused, No plan, Team only, No waiver and Archived. Views with nobody in them are hidden.
 - Sort by name, by longest since last seen (who has gone quiet), or newest clients first. The search, view and sort stay in the address.
 - Each row flags what needs attention: Medical (allergies, injuries or medical notes), No waiver, No card (members only) and pinned notes. Grad year shows next to the Athlete ID.
 - Last seen is the latest check-in or workout, and says which.
-- Archived clients live in the Archived view; a search that only matches archived clients offers to search there.
+- Archived clients live in the Archived view (the other views keep counting current clients); a search that only matches archived clients offers to search there.
 - Owners can Export CSV of the current view (contacts, plan, program, waiver, last visit and workout; no money).
 - Open anyone to see their full profile, or Add client. Long lists show 100 at a time with Show more.
 
@@ -244,7 +244,7 @@ Everything about one athlete in one place, tied together by their Athlete ID.
 - Family: parents with tap-to-call and email links, waiver status, add a sibling or parent, and copy the portal link. Edit a parent to fix their name, email or phone, email them the portal sign-in link again, or remove a second parent (a family always keeps one sign-in). When the waiver isn't signed, Record a paper waiver saves who signed it at the desk.
 - Membership (owner): start, pause, resume, change or cancel. Coaches and the front desk see the plan and status, never the price.
 - Card & sessions: the card on file, group and private sessions left, walk-in check-in, and Sell. Coaches never see a drop-in price.
-- Attendance: visits, no-shows and late cancels in the last 30 days, visits in 90 days, last check-in, and the recent sessions with Attended, No-show or Late cancel.
+- Attendance: visits, no-shows and late cancels in the last 30 days, visits in 90 days, last check-in, and the recent sessions with Attended, No-show or Late cancel. A booking only counts as a no-show once the session is over.
 - Upcoming sessions: Book a session (group sessions in the next two weeks, searchable; full ones join the waitlist) and Cancel a booking (credits come back, drop-ins are refunded, the waitlist moves up).
 - Notes: dated staff notes with who wrote them. Pin a note to the top of the profile; coaches and owners can mark a note Coaches only, which the front desk never sees. The author can edit a note; the author or an owner can delete it.
 - Accountability, weekly goals, coach messages, test targets and education (see the athlete app).

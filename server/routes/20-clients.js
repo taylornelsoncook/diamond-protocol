@@ -27,7 +27,12 @@ function athleteNames(b) {
   return splitName(b.name);
 }
 const validDate = (d) => (d == null || d === '' ? null : /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d ? d : (() => { throw bad('Use a real date.'); })());
-const birthDate = (d) => { const v = validDate(d); if (v && v > today()) throw bad('The birthday is in the future. Check the year.'); return v; };
+const birthDate = (d) => {
+  const v = validDate(d);
+  if (v && v > today()) throw bad('The birthday is in the future. Check the year.');
+  if (v && v < '1900-01-01') throw bad('That birthday is too long ago. Check the year.');
+  return v;
+};
 const sex = (s) => (s === 'M' || s === 'F' ? s : null);
 const LIST_SORTS = ['name', 'last_seen', 'newest'];
 const noProgramsForDesk = (req, programId) => {
@@ -81,15 +86,22 @@ function routes(api) {
     const q = String(req.query.q || '').trim();
     const status = String(req.query.status || '');
     const sort = LIST_SORTS.includes(req.query.sort) ? req.query.sort : 'name';
-    const where = [status === 'archived' ? 'a.archived=1' : 'a.archived=0'];
+    // Archived and current clients come back together: the views always count current clients, and the
+    // Archived view (or a search that only finds archived clients) uses the rest.
+    const where = ['1=1'];
     const p = [];
     if (q) {
       const like = `%${q}%`;
+      // Phone numbers match on digits too, so 8015550142 finds 801-555-0142.
+      const digits = /^[\d\s().+-]+$/.test(q) ? q.replace(/\D/g, '') : '';
+      const phoneDigits = (col) => `replace(replace(replace(replace(replace(replace(${col},'-',''),' ',''),'(',''),')',''),'.',''),'+','')`;
+      const byDigits = digits.length >= 4 ? ` OR ${phoneDigits('a.phone')} LIKE ? OR EXISTS (SELECT 1 FROM parents py WHERE py.family_id=a.family_id AND ${phoneDigits('py.phone')} LIKE ?)` : '';
       where.push(`(a.first_name || ' ' || a.last_name LIKE ? OR a.code LIKE ? OR a.email LIKE ? OR f.name LIKE ? OR a.phone LIKE ?
-        OR EXISTS (SELECT 1 FROM parents px WHERE px.family_id=a.family_id AND (px.email LIKE ? OR px.name LIKE ? OR px.phone LIKE ?)))`);
+        OR EXISTS (SELECT 1 FROM parents px WHERE px.family_id=a.family_id AND (px.email LIKE ? OR px.name LIKE ? OR px.phone LIKE ?))${byDigits})`);
       p.push(like, like, like, like, like, like, like, like);
+      if (byDigits) p.push(`%${digits}%`, `%${digits}%`);
     }
-    const rows = all(`SELECT a.id, a.code, a.first_name, a.last_name, a.email, a.phone, a.sport, a.school, a.grad_year, a.team_id, a.family_id, a.created_at,
+    const rows = all(`SELECT a.id, a.code, a.first_name, a.last_name, a.email, a.phone, a.sport, a.school, a.grad_year, a.team_id, a.family_id, a.created_at, a.archived,
         f.name AS family, f.card_last4, f.waiver_version,
         (a.allergies IS NOT NULL AND a.allergies<>'') OR (a.injuries IS NOT NULL AND a.injuries<>'') OR (a.medical_notes IS NOT NULL AND a.medical_notes<>'') AS medical,
         (SELECT email FROM parents px WHERE px.family_id=a.family_id ORDER BY is_self DESC, id LIMIT 1) AS parent_email,
@@ -104,8 +116,8 @@ function routes(api) {
       LEFT JOIN plans pl ON pl.id=m.plan_id LEFT JOIN programs pr ON pr.id=a.program_id LEFT JOIN team_contracts t ON t.id=a.team_id
       WHERE ${where.join(' AND ')} ORDER BY a.first_name COLLATE NOCASE, a.last_name COLLATE NOCASE`, ...p);
     const wv = waiverVersion();
-    const list = rows.map(({ card_last4, waiver_version, ...r }) => ({
-      ...r, medical: !!r.medical,
+    const all_ = rows.map(({ card_last4, waiver_version, archived, ...r }) => ({
+      ...r, medical: !!r.medical, archived: !!archived,
       status: r.membership_status || (r.team_id && !r.family_id ? 'team' : 'none'),
       waiver_missing: !!r.family_id && Number(waiver_version || 0) < wv,
       no_card: !!r.family_id && !card_last4,
@@ -113,10 +125,10 @@ function routes(api) {
       const visit = utcIso(r.last_visit), workout = utcIso(r.last_workout);
       return { ...r, last_seen: [visit, workout].filter(Boolean).sort().pop() || null, last_seen_kind: visit || workout ? ((visit || '') >= (workout || '') ? 'visit' : 'workout') : null };
     });
+    const list = all_.filter((r) => !r.archived), archivedList = all_.filter((r) => r.archived);
     const counts = list.reduce((o, r) => { o[r.status] = (o[r.status] || 0) + 1; if (r.waiver_missing) o.no_waiver = (o.no_waiver || 0) + 1; return o; }, {});
-    if (status !== 'archived') counts.archived = get(`SELECT COUNT(*) n FROM athletes a LEFT JOIN families f ON f.id=a.family_id WHERE a.archived=1${q ? ` AND ${where[1]}` : ''}`, ...p).n;
-    else counts.archived = list.length;
-    let out = status === 'no_waiver' ? list.filter((r) => r.waiver_missing) : status && status !== 'archived' ? list.filter((r) => r.status === status) : list;
+    counts.archived = archivedList.length;
+    let out = status === 'archived' ? archivedList : status === 'no_waiver' ? list.filter((r) => r.waiver_missing) : status ? list.filter((r) => r.status === status) : list;
     if (sort === 'last_seen') out = [...out].sort((x, y) => (x.last_seen || '').localeCompare(y.last_seen || ''));
     else if (sort === 'newest') out = [...out].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)) || y.id - x.id);
     res.json({ total: list.length, counts, clients: out });
@@ -250,19 +262,23 @@ function routes(api) {
     const restore = req.body?.restore === true;
     if (!restore && a.archived) throw bad(`${a.first_name} is already archived.`);
     if (restore && !a.archived) throw bad(`${a.first_name} isn't archived.`);
-    let cancelled = 0;
-    if (!restore) {
-      // Upcoming bookings go too, so archived clients don't sit on rosters and waitlists; credits come back.
-      const upcoming = all(`SELECT b.id FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.status IN ('booked','waitlist')
-        AND e.cancelled=0 AND e.starts_at>=?`, a.id, booking.nowLocal());
-      for (const b of upcoming) {
-        booking.cancelBooking(b.id, { byParent: false });
-        run("UPDATE sales SET status='refunded', refunded_cents=total_cents WHERE booking_id=? AND status IN ('paid','partial_refund')", b.id);
-        cancelled++;
+    // One transaction: the bookings, the credits and the archive flag all change together, or none do.
+    const cancelled = tx(() => {
+      let n = 0;
+      if (!restore) {
+        // Upcoming bookings go too, so archived clients don't sit on rosters and waitlists; credits come back.
+        const upcoming = all(`SELECT b.id FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.status IN ('booked','waitlist')
+          AND e.cancelled=0 AND e.starts_at>=?`, a.id, booking.nowLocal());
+        for (const b of upcoming) {
+          booking.cancelBooking(b.id, { byParent: false });
+          run("UPDATE sales SET status='refunded', refunded_cents=total_cents WHERE booking_id=? AND status IN ('paid','partial_refund')", b.id);
+          n++;
+        }
       }
-    }
-    update('athletes', a.id, { archived: restore ? 0 : 1 });
-    if (!restore) run("DELETE FROM standing_spots WHERE athlete_id=?", a.id);
+      update('athletes', a.id, { archived: restore ? 0 : 1 });
+      if (!restore) run("DELETE FROM standing_spots WHERE athlete_id=?", a.id);
+      return n;
+    });
     log(req, restore ? 'Restored client' : 'Archived client', `${a.first_name} ${a.last_name} (${a.code})${cancelled ? `, ${cancelled} upcoming booking${cancelled === 1 ? '' : 's'} cancelled` : ''}`);
     res.json({ ok: true, cancelled });
   }));
@@ -309,7 +325,11 @@ function routes(api) {
     }
     if ('phone' in b) patch.phone = clean(b.phone);
     if (!Object.keys(patch).length) throw bad('Nothing to save.');
-    update('parents', p.id, patch);
+    tx(() => {
+      update('parents', p.id, patch);
+      // An adult who pays for themselves signs in with their own email: keep their athlete email in step.
+      if (p.is_self && patch.email && patch.email !== p.email) run('UPDATE athletes SET email=? WHERE family_id=? AND email=?', patch.email, p.family_id, p.email);
+    });
     const fam = get('SELECT name FROM families WHERE id=?', p.family_id);
     const changed = Object.keys(patch).map((k) => (k === 'email' && patch.email !== p.email ? `email ${p.email} to ${patch.email}` : k === 'email' ? null : k)).filter(Boolean);
     log(req, 'Updated parent', `${patch.name || p.name}, ${fam?.name || 'family'}${changed.length ? ` (${changed.join(', ')})` : ''}`);

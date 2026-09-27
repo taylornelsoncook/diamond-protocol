@@ -258,3 +258,46 @@ test('walk-in: coaches never see the drop-in price; front desk does', async () =
   const d = await desk.post(`/athletes/${a2}/walk-in`, { event_id: mk('Desk clinic') });
   assert.equal(d.data.price_cents, 3500);
 });
+
+test('review fixes: archived view counts current clients, phone digits, old birthdays, sessions in progress, adult email', async () => {
+  const main = (await desk.get('/clients')).data;
+  const arch = (await desk.get('/clients?status=archived')).data;
+  assert.ok(arch.clients.length >= 1 && arch.clients.every((c) => c.archived));
+  const { archived: _a, ...mainCounts } = main.counts;
+  const { archived: _b, ...archCounts } = arch.counts;
+  assert.deepEqual(archCounts, mainCounts, 'the other views still count current clients while Archived is open');
+  assert.equal(arch.total, main.total);
+  assert.equal(arch.counts.archived, arch.clients.length);
+  assert.ok(main.clients.every((c) => !c.archived));
+
+  assert.ok((await owner.get('/clients?q=8015550142')).data.clients.some((c) => c.first_name === 'Ava'), 'parent phone by digits');
+  assert.deepEqual((await owner.get('/clients?q=(385) 555-0288')).data.clients.map((c) => c.first_name), ['Daniel'], 'athlete phone, other format');
+  assert.equal((await owner.get('/clients?q=0142')).data.clients.some((c) => c.first_name === 'Ava'), true);
+
+  assert.equal((await desk.post('/clients', { name: 'Old Timer', birthday: '0999-01-01', parent_name: 'P', parent_email: 'old.timer@example.com' })).status, 400);
+
+  // Booked into a session that is running right now and not checked in yet: not a no-show (yet).
+  const id = athleteId('Emma', 'Jensen');
+  const now = booking.nowLocal();
+  const T = booking.todayLocal();
+  const hm = now.slice(11);
+  if (hm > '00:05' && hm < '23:00') {
+    const startMin = Math.max(0, +hm.slice(0, 2) * 60 + +hm.slice(3, 5) - 5);
+    const start = `${T}T${String(Math.floor(startMin / 60)).padStart(2, '0')}:${String(startMin % 60).padStart(2, '0')}`;
+    const running = insert('events', { name: 'Running clinic', type: 'clinic', starts_at: start, duration_min: 60, capacity: 10 });
+    insert('bookings', { event_id: running, athlete_id: id, status: 'booked', coverage: 'member' });
+    const before = (await desk.get(`/athletes/${id}`)).data.visits;
+    assert.equal(before.history.some((h) => h.event_id === running), false, 'in progress, not listed as a no-show');
+    const over = insert('events', { name: 'Finished clinic', type: 'clinic', starts_at: `${addDays(T, -2)}T09:00`, duration_min: 60, capacity: 10 });
+    insert('bookings', { event_id: over, athlete_id: id, status: 'booked', coverage: 'member' });
+    const after = (await desk.get(`/athletes/${id}`)).data.visits;
+    assert.ok(after.history.some((h) => h.event_id === over && h.outcome === 'no_show'));
+    assert.equal(after.summary.no_shows_30, before.summary.no_shows_30 + 1);
+  }
+
+  const adult = await desk.post('/clients', { with_parent: false, name: 'Adult Mover', email: 'adult.mover@example.com' });
+  assert.equal(adult.status, 201);
+  const self = get('SELECT id FROM parents WHERE email=?', 'adult.mover@example.com');
+  assert.equal((await desk.put(`/parents/${self.id}`, { email: 'adult.moved@example.com' })).status, 200);
+  assert.equal(get('SELECT email FROM athletes WHERE id=?', adult.data.id).email, 'adult.moved@example.com', 'their own athlete email follows the sign-in');
+});

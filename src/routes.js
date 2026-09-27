@@ -19,6 +19,7 @@ import * as clientImport from './services/client-import.js';
 import * as engage from './services/engage.js';
 import { listOutbox, sendEmail, mailMode } from './services/mail.js';
 import * as sms from './services/sms.js';
+import * as insights from './services/insights.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -41,6 +42,9 @@ export const routes = [
 
   // Dashboard
   ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner' })],
+  ['GET', '/v1/at-risk', 'any', 'Dashboard', 'Athletes who may be drifting away: a score (40 to 100) and the reasons, from attendance, bookings, check-ins and (owners only) payments.', (ctx, r) => list(insights.atRisk(ctx, { role: r.user?.role ?? 'owner' }))],
+  ['GET', '/v1/digest', 'any', 'Dashboard', 'This week\'s owner summary: money in, members, athletes to check on, open spots and suggested actions. Includes the email text.', (ctx) => { const d = insights.buildDigest(ctx); return { ...d, text: insights.digestText(ctx, d) }; }],
+  ['POST', '/v1/digest/send', 'session', 'Dashboard', 'Email this week\'s summary to the owners now.', (ctx) => insights.sendDigest(ctx)],
   ['GET', '/v1/events', 'any', 'Dashboard', 'Recent events, newest first. Filter with ?type=.', (ctx, r) => list(events.listEvents(ctx, { type: r.query.type, limit: v.int(r.query.limit ?? 50, 'limit', { min: 1, max: 200 }) }))],
 
   // Clients

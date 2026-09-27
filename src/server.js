@@ -20,6 +20,7 @@ import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
 import { handleStripeEvent } from './services/commerce.js';
 import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
+import { weeklyDigest } from './services/insights.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -126,6 +127,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     }
     timers.push(setInterval(() => extendSchedule(ctx).catch((e) => console.error('schedule', e)), 6 * 60 * 60 * 1000));
     timers.push(setInterval(() => sendReminders(ctx).catch((e) => console.error('reminders', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => weeklyDigest(ctx).catch((e) => console.error('weekly digest', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }

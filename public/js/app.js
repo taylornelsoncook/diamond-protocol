@@ -119,7 +119,7 @@ const EVENT_TEXT = {
 const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash' };
 
 async function viewToday(main) {
-  const [d, rev, ag, flags] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null)]);
+  const [d, rev, ag, flags, risk] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), state.user.role !== 'front_desk' ? get('/v1/at-risk').catch(() => null) : null]);
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
@@ -168,6 +168,10 @@ async function viewToday(main) {
       metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
     agendaPanel,
     flags,
+    risk?.data.length ? panel('Athletes to check on', { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick message usually brings them back.' },
+      risk.data.slice(0, 6).map((r) => h('div', { class: 'list-item' },
+        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name, r.family_name ? h('span', { class: 'small muted' }, ` · ${r.family_name}`) : null), h('span', { class: 'small muted' }, r.reasons.join(' · '))),
+        h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${r.client_id}` }, 'Check in')))) : null,
     h('div', { class: 'grid grid-2' },
       panel('Needs your attention', {}, attention.length ? attention : h('p', { class: 'muted' }, 'Nothing waiting. Every client is paid up and training.')),
       panel('Recent activity', {}, d.activity.length ? d.activity.map((ev) => h('div', { class: 'list-item' },
@@ -999,8 +1003,17 @@ async function viewScheduleSetup(main) {
   const textPanel = panel('Automatic texts', { subtitle: 'Only sent to parents who turn texts on in the parent portal. Every text also appears under API & integrations → Texts.' },
     textBoxes.map(([, cb, label]) => h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, cb, h('span', null, label))),
     h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { texts_off: textBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'primary')));
+  const digestOn = h('input', { type: 'checkbox', checked: settings.weekly_digest !== 'off' });
+  const digestOut = h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' });
+  const digestPanel = panel('Weekly summary email', { subtitle: 'Every Monday at 7 am: money in, members, athletes to check on, open spots and three things worth doing this week. Sent to every owner.' },
+    h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, digestOn, h('span', null, 'Send me the weekly summary')),
+    h('div', { class: 'row wrap' },
+      btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { weekly_digest: digestOn.checked ? 'on' : 'off' }); toast('Saved.'); }), 'primary'),
+      btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
+      btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
+    digestOut);
   fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, setPanel, rankingsPanel(settings),
-    isOwner() ? [signupPanel, legalPanel, emailPanel, textPanel] : null);
+    isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
 }
 
 // ---------- Teams (school and club contracts) ----------

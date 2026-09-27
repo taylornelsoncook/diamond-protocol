@@ -16,7 +16,7 @@ import * as backups from './services/backups.js';
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
-import { listOutbox } from './services/mail.js';
+import { listOutbox, sendEmail, mailMode } from './services/mail.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -136,7 +136,15 @@ export const routes = [
   ['GET', '/v1/families/:id/agreements', 'any', 'Families', 'Terms and privacy acceptances for a family.', (ctx, r) => list(legal.familyConsents(ctx, r.params.id))],
   ['GET', '/v1/settings', 'any', 'Families', 'Business settings: time zone, late-cancel window, waiver text.', (ctx) => families.getSettings(ctx)],
   ['PATCH', '/v1/settings', 'session', 'Families', 'Update settings. Changing the waiver text asks every family to sign again.', (ctx, r) => families.updateSettings(ctx, r.body)],
-  ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged.', (ctx) => list(listOutbox(ctx))],
+  ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, and how email is set up (mode: test, restricted or live).', (ctx) => ({ ...list(listOutbox(ctx)), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
+  ['POST', '/v1/outbox/test', 'session', 'Families', 'Send a test email (to) and wait for the email service to answer.', async (ctx, r) => {
+    const to = v.email(r.body?.to ?? r.user.email);
+    if (mailMode(ctx) === 'test') throw badRequest('No email service is connected. Set RESEND_API_KEY on the server.');
+    const out = await sendEmail(ctx, { to, subject: 'Test email from Diamond Protocol', text: `This is a test from your Diamond Protocol server${ctx.publicUrl ? ` at ${ctx.publicUrl}` : ''}.\n\nIf you're reading this, email is working: sign-in codes, invoices and receipts will arrive like this one.` });
+    if (out.status === 'held') throw badRequest(`This server only delivers to ${ctx.mail.onlyTo}.`);
+    if (out.status !== 'sent') throw badRequest(out.error || 'The email service refused the message.');
+    return { ok: true };
+  }],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
   ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind= and ?location_id=.', (ctx, r) => {

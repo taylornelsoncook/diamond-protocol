@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { newId, token, sha256, v, notFound, badRequest, conflict, HttpError, addDays, safeEqual } from '../util.js';
 import { emit } from './events.js';
-import { sendEmail } from './mail.js';
+import { sendEmail, willDeliver } from './mail.js';
 
 // ---------- Settings (waiver text, cancellation window, time zone) ----------
 const DEFAULTS = {
@@ -165,7 +165,7 @@ export async function requestCode(ctx, body) {
   const code = String(randomInt(0, 1000000)).padStart(6, '0');
   ctx.db.run('INSERT INTO login_codes (id, guardian_id, code_hash, expires_at) VALUES (?, ?, ?, ?)', newId('lc'), g.id, sha256(`${g.id}:${code}`), new Date(Date.now() + CODE_MINUTES * 60000).toISOString());
   await sendEmail(ctx, { to: g.email, subject: `Your ${getSetting(ctx, 'business_name')} sign-in code: ${code}`, text: `Your sign-in code is ${code}. It expires in ${CODE_MINUTES} minutes.\n\nIf you didn't ask for this, you can ignore this email.` });
-  if (ctx.testMode && !ctx.mail?.resendKey) out.dev_code = code;       // test mode with no email service: show the code so you can sign in
+  if (ctx.testMode && !willDeliver(ctx, g.email)) out.dev_code = code; // test mode and the email won't really arrive: show the code so you can sign in
   return out;
 }
 export function verifyCode(ctx, body) {

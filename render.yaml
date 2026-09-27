@@ -1,23 +1,56 @@
-# Render blueprint: New → Blueprint → pick this repository. Fill in the secret values in the dashboard.
+# Render Blueprint: two copies of the app, each with its own disk for the database and backups.
+# In Render: New > Blueprint > pick this repo. Secret values are set in the dashboard, never in this file.
 services:
+  # Staging: sample data and built-in test payments. Try every change here first.
   - type: web
-    name: diamond-protocol
+    name: diamond-protocol-staging
     runtime: docker
-    plan: starter            # persistent disks need a paid instance
-    region: ohio
+    plan: starter
+    region: oregon
+    branch: main
     healthCheckPath: /healthz
     numInstances: 1          # SQLite: exactly one instance
+    autoDeploy: true
     disk:
       name: data
       mountPath: /data
-      sizeGB: 5
+      sizeGB: 1
+    envVars:
+      - key: DP_TEST_MODE
+        value: "true"
+      - key: DP_DEMO
+        value: "1"
+      - key: BUSINESS_TZ
+        value: America/Denver
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      # Staging only delivers email to these addresses (e.g. your own); demo families never get real email.
+      - key: EMAIL_ONLY_TO
+        sync: false
+
+  # Production: real families. Deploys only when you press Manual Deploy.
+  - type: web
+    name: diamond-protocol
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    healthCheckPath: /healthz
+    numInstances: 1
+    autoDeploy: false
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: DP_TEST_MODE
         value: "false"
-      - key: PUBLIC_URL
-        sync: false           # e.g. https://app.diamondprotocol.com
       - key: BUSINESS_TZ
-        value: America/Chicago
+        value: America/Denver
+      - key: PUBLIC_URL
+        sync: false           # https://app.diamondprotocol.org
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
@@ -29,4 +62,6 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_REPLY_TO
         sync: false

@@ -552,8 +552,18 @@ async function viewIntegrations(main) {
       `curl ${location.origin}/v1/clients \\\n  -H "Authorization: Bearer dp_live_…"\n\ncurl -X POST ${location.origin}/v1/clients \\\n  -H "Authorization: Bearer dp_live_…" \\\n  -H "Content-Type: application/json" \\\n  -d '{"name":"Jordan Lee","email":"jordan@example.com","plan_id":"plan_…"}'`));
 
   const outbox = await get('/v1/outbox');
-  const outPanel = panel('Email outbox', { subtitle: 'Sign-in codes, booking confirmations and cancellations. Until an email service is connected, messages are logged here instead of sent.' },
-    outbox.data.length ? outbox.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.to_email} · ${m.subject}${m.status === 'logged' ? ' (logged)' : m.status === 'failed' ? ' (failed)' : ''}`), h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No emails yet.'));
+  const modeText = { test: 'No email service is connected, so messages stay here and are not sent. Add RESEND_API_KEY on the server to start sending.',
+    restricted: `Sending through Resend, but only to ${outbox.only_to}. Everything else is held here.`, live: `Sending through Resend${outbox.from ? ` as ${outbox.from}` : ''}.` };
+  const statusText = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '' };
+  const testTo = input({ type: 'email', value: state.user?.email || '', 'aria-label': 'Send a test email to' });
+  const outPanel = panel('Email outbox', { subtitle: 'Every email the platform sends: sign-in codes, welcome emails, booking changes, invoices and receipts.' },
+    h('p', { class: 'small', style: `margin:0;color:${outbox.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, modeText[outbox.mode] || ''),
+    h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, testTo, btn('Send test email', async (e) => {
+      e.target.disabled = true;
+      try { await post('/v1/outbox/test', { to: testTo.value }); toast('Test email sent. Check the inbox.'); render(); }
+      catch (err) { toast(err.message, 'warn'); } finally { e.target.disabled = false; }
+    }, 'outline')),
+    outbox.data.length ? outbox.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.to_email} · ${m.subject}${statusText[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No emails yet.'));
   fill(main, header('API & integrations', 'Connect Diamond Protocol to your other systems.'), h('div', { class: 'grid grid-2' }, keysPanel, hooksPanel), docs, outPanel);
 }
 

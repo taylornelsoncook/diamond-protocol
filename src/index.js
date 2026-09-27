@@ -3,6 +3,13 @@ import { createStripeProvider } from './payments/stripe-provider.js';
 import { createTestProvider } from './payments/test-provider.js';
 import { createUser } from './services/access.js';
 
+// Accept the setting names used by the first deployment, so existing hosts keep working.
+const env = process.env;
+env.PUBLIC_URL ||= env.DP_APP_URL || env.RENDER_EXTERNAL_URL || '';
+env.EMAIL_FROM ||= env.DP_EMAIL_FROM || '';
+env.EMAIL_REPLY_TO ||= env.DP_EMAIL_REPLY_TO || '';
+env.EMAIL_ONLY_TO ||= env.DP_EMAIL_ONLY_TO || '';
+
 const port = Number(process.env.PORT || 3000);
 const testMode = process.env.DP_TEST_MODE === 'true';
 const payments = process.env.STRIPE_SECRET_KEY
@@ -22,7 +29,7 @@ if (!testMode) {
 if (problems.length) { console.error(`Refusing to start:\n- ${problems.join('\n- ')}`); process.exit(1); }
 for (const w of warnings) console.warn(`Warning: ${w}`);
 const { server, ctx } = createApp({ dbFile: process.env.DB_FILE || 'data/diamond.db', testMode, payments, publicUrl: process.env.PUBLIC_URL,
-  mail: { resendKey: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM || 'Diamond Protocol <coach@example.com>' } });
+  mail: { resendKey: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM || 'Diamond Protocol <onboarding@resend.dev>', replyTo: process.env.EMAIL_REPLY_TO, onlyTo: process.env.EMAIL_ONLY_TO } });
 
 // First start on a new server: create the owner from ADMIN_EMAIL / ADMIN_PASSWORD, who must change it on first sign-in.
 if (!ctx.db.get('SELECT COUNT(*) AS n FROM users').n && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD !== 'change-me-now') {

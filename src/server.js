@@ -20,18 +20,25 @@ import { syncAll as syncDevices, migratePending } from './services/perf-import.j
 import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
 import { handleStripeEvent } from './services/commerce.js';
+import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
+import { weeklyDigest } from './services/insights.js';
+import { runFollowUps } from './services/leads.js';
+import { runReviewRequests, followReviewLink } from './services/reviews.js';
+import { runSlotFilling } from './services/spots.js';
+import { runMoneyChecks } from './services/moneychecks.js';
+import { followCampaignLink } from './services/campaigns.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
   "frame-src https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
 
-export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, jobs = true, hawkinBaseUrl } = {}) {
-  const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, hawkinBaseUrl, now: () => new Date().toISOString() };
+export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, sms = {}, jobs = true, hawkinBaseUrl } = {}) {
+  const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, sms, hawkinBaseUrl, now: () => new Date().toISOString() };
   syncLibrary(ctx);
   assignMissingIds(ctx);
   migratePending(ctx);
@@ -55,6 +62,24 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       const baseUrl = ctx.publicUrl || `${url.protocol.replace(':', '')}://${url.host}`;
       if (url.pathname === '/v1/openapi.json') return json(res, 200, openApiSpec(baseUrl));
       if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(ctx, req, res);
+      // The review link in the email: count the click and go on to Google (or stop asking, with ?stop=1).
+      // Links in announcement emails work the same way: /c/<token>/<n> counts the click, /c/<token>?stop=1 stops them.
+      const review = url.pathname.match(/^\/r\/([\w-]{8,40})$/), camp = url.pathname.match(/^\/c\/([\w-]{8,40})(?:\/(\d{1,3}))?$/);
+      if ((review || camp) && (req.method === 'GET' || req.method === 'POST')) {
+        rateLimit(`link:${clientIp(req)}`, 60, 15 * 60000);
+        const stop = url.searchParams.has('stop') || (camp && camp[2] === undefined);
+        const page = (text, form = '') => {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store' });
+          return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your emails</title><link rel="stylesheet" href="/styles.css"><body style="padding:48px 16px;text-align:center"><p style="font-size:18px">${text.replace(/[<>&]/g, '')}</p>${form}</body>`);
+        };
+        // Stopping takes a button press, so email scanners that open every link can't unsubscribe anyone.
+        if (stop && req.method === 'GET') return page('Stop these emails?', `<form method="post" action="${url.pathname}?stop=1"><button class="dp-btn dp-btn--primary" type="submit">Yes, stop them</button></form>`);
+        if (req.method === 'POST' && !stop) throw new HttpError(405, 'method_not_allowed', 'That method is not allowed here.');
+        const out = review ? followReviewLink(ctx, review[1], { stop }) : followCampaignLink(ctx, camp[1], camp[2], { stop });
+        if (out.redirect) { res.writeHead(302, { location: out.redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
+        return page(out.page);
+      }
+      if (url.pathname === '/sms/inbound' && req.method === 'POST') return smsInbound(ctx, req, res, `${baseUrl}/sms/inbound`);
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
       if (!route) {
         if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(res, url.pathname);
@@ -65,10 +90,18 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview'].includes(url.pathname) ? 30_000_000 : 1_000_000);
       const ip = clientIp(req);
       r.ip = ip;
+      r.kioskKey = req.headers['x-kiosk-key'];
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
+      if (route.path === '/portal/api/public/inquiry') rateLimit(`inquiry:${ip}`, 10, 60 * 60000);
+      if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
+      if (route.path.startsWith('/here-api/')) rateLimit(`here:${ip}`, 60, 15 * 60000);
+      if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
+      if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
+      if (route.path === '/portal/api/public/shop') rateLimit(`shop:${ip}`, 120, 15 * 60000);
+      if (route.path.startsWith('/portal/api/public/spot/')) rateLimit(`spot:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
       catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
@@ -127,6 +160,12 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       backup();
     }
     timers.push(setInterval(() => extendSchedule(ctx).catch((e) => console.error('schedule', e)), 6 * 60 * 60 * 1000));
+    timers.push(setInterval(() => sendReminders(ctx).catch((e) => console.error('reminders', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => weeklyDigest(ctx).catch((e) => console.error('weekly digest', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runFollowUps(ctx).catch((e) => console.error('lead follow-up', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runReviewRequests(ctx).catch((e) => console.error('review requests', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runSlotFilling(ctx).catch((e) => console.error('open spots', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runMoneyChecks(ctx).catch((e) => console.error('money checks', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }
@@ -197,6 +236,19 @@ async function stripeWebhook(ctx, req, res) {
   catch (e) { console.error('stripe webhook', e); return json(res, 500, { error: { code: 'server_error', message: 'Could not process the event.' } }); }
 }
 
+// Twilio calls this when a parent replies to a text. Signed with the Twilio auth token; answered with TwiML.
+async function smsInbound(ctx, req, res, url) {
+  const raw = await readRaw(req, 100_000);
+  if (smsMode(ctx) === 'test') return json(res, 404, { error: { code: 'not_found', message: 'Texting is not set up on this server.' } });
+  const params = Object.fromEntries(new URLSearchParams(raw));
+  if (!verifyTwilio(ctx, url, params, req.headers['x-twilio-signature'])) return json(res, 403, { error: { code: 'bad_signature', message: 'This request was not signed by Twilio.' } });
+  let reply = null;
+  try { reply = await handleInbound(ctx, params); } catch (e) { console.error('sms inbound', e); }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  res.writeHead(200, { 'content-type': 'text/xml; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(`<?xml version="1.0" encoding="UTF-8"?><Response>${reply ? `<Message>${esc(reply)}</Message>` : ''}</Response>`);
+}
+
 async function readJson(req, limit = 1_000_000) {
   const chunks = []; let size = 0;
   for await (const c of req) {
@@ -214,14 +266,17 @@ async function readJson(req, limit = 1_000_000) {
 }
 
 async function serveStatic(res, pathname) {
-  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : pathname.slice(1));
+  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });
   try {
     if (!(await stat(full)).isFile()) throw new Error();
     const body = await readFile(full);
     const type = MIME[extname(full)] || 'application/octet-stream';
-    res.writeHead(200, { 'content-type': type, 'content-security-policy': CSP, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : 'public, max-age=300' });
+    // The Book now page is made to sit inside the business's own website, so any site may frame it. It only shows
+    // public information and every button opens the parent portal in a new tab.
+    const csp = file === 'book.html' ? CSP.replace("frame-ancestors 'none'", 'frame-ancestors *') : CSP;
+    res.writeHead(200, { 'content-type': type, 'content-security-policy': csp, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : 'public, max-age=300' });
     res.end(body);
   } catch {
     json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });

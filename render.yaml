@@ -10,7 +10,8 @@ services:
     branch: main
     healthCheckPath: /healthz
     numInstances: 1          # SQLite: exactly one instance
-    autoDeploy: true
+    # Deploys each push to main only after the GitHub "Tests" check passes.
+    autoDeployTrigger: checksPass
     disk:
       name: data
       mountPath: /data
@@ -28,6 +29,15 @@ services:
         sync: false
       # Staging only delivers email to these addresses (e.g. your own); demo families never get real email.
       - key: EMAIL_ONLY_TO
+        sync: false
+      # Text messages (optional; see DEPLOY.md). SMS_ONLY_TO: your own mobile, so demo families are never texted.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: SMS_ONLY_TO
         sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT
@@ -77,6 +87,16 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: EMAIL_REPLY_TO
+        sync: false
+      # Text messages (optional; see DEPLOY.md). Without them texts are only logged.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      # Optional: Claude rewords progress notes for parents (coaches still approve each one).
+      - key: ANTHROPIC_API_KEY
         sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT

@@ -28,6 +28,8 @@ Everything that needs your identity, your money, your hardware or your decisions
 - [ ] **VALD (if you use it):** email support@vald.com with your organization ID from VALD Hub to request external API access. Until then, export files from VALD Hub and import them.
 - [ ] **Card-saving consent.** The app asks you to get the client's OK before saving a tapped card. Decide what you'll say, or add a line to your client agreement.
 
+- [ ] **Text messages (optional):** a Twilio account, a local number, and US texting registration (A2P 10DLC) for your business. Carriers block unregistered texts and approval can take a week or two. Steps in DEPLOY.md → Connect the outside services. Until then, texts are only logged.
+
 ## 3. Equipment
 
 - [ ] **A Mac** with Xcode 16 or newer to build the iPhone app. Any recent Mac works; a Mac mini is the cheapest option.
@@ -100,6 +102,8 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 ## 10. Public launch
 
 - [ ] Put the sign-up link (`https://your-domain/join`, copy it from Hours & settings) on your website, Instagram bio and a QR code at the facility. Any free QR code generator works.
+- [ ] Print the check-in QR poster for the facility door and set up a check-in tablet if you have one (Schedule → Hours & settings → Self check-in).
+- [ ] Put the "Ask about training" link (`https://your-domain/start`) next to it for families who aren't ready to sign up. Send yourself a test inquiry and check the thank-you email and the Leads tab.
 - [ ] Email your current families their portal link with a short "how to book" note.
 - [ ] Announce your class schedule and camps.
 - [ ] **TestFlight:** install the iPhone app on your staff's phones (it doesn't need to be on the public App Store).
@@ -116,7 +120,7 @@ Done: family self sign-up, client import from a spreadsheet, terms and privacy w
 
 Next:
 - Online programs for sale in the parent portal.
-- Pay links and text-message reminders.
+- Pay links.
 - Sales tax, once you know your rules.
 - Private video uploads for exercise demos.
 - Confirm the OVR import against a real export file.

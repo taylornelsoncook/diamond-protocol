@@ -26,11 +26,13 @@ if (!testMode) {
   if (!process.env.STRIPE_SECRET_KEY) warnings.push('No STRIPE_SECRET_KEY: payments use the built-in test provider and nothing is charged.');
   if (!process.env.RESEND_API_KEY) warnings.push('No RESEND_API_KEY: emails (parent sign-in codes!) are only logged, not sent.');
   if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_WEBHOOK_SECRET) warnings.push('No STRIPE_WEBHOOK_SECRET: Stripe events will be rejected.');
+  if (!process.env.TWILIO_ACCOUNT_SID) warnings.push('No TWILIO_ACCOUNT_SID: text messages are only logged, not sent.');
 }
 if (problems.length) { console.error(`Refusing to start:\n- ${problems.join('\n- ')}`); process.exit(1); }
 for (const w of warnings) console.warn(`Warning: ${w}`);
 const { server, ctx } = createApp({ dbFile: process.env.DB_FILE || 'data/diamond.db', testMode, payments, publicUrl: process.env.PUBLIC_URL,
-  mail: { resendKey: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM || 'Diamond Protocol <onboarding@resend.dev>', replyTo: process.env.EMAIL_REPLY_TO, onlyTo: process.env.EMAIL_ONLY_TO } });
+  mail: { resendKey: process.env.RESEND_API_KEY, from: process.env.EMAIL_FROM || 'Diamond Protocol <onboarding@resend.dev>', replyTo: process.env.EMAIL_REPLY_TO, onlyTo: process.env.EMAIL_ONLY_TO },
+  sms: { accountSid: process.env.TWILIO_ACCOUNT_SID, authToken: process.env.TWILIO_AUTH_TOKEN, from: process.env.TWILIO_FROM, onlyTo: process.env.SMS_ONLY_TO } });
 
 // First start on a new server: create the owner from ADMIN_EMAIL / ADMIN_PASSWORD, who must change it on first sign-in.
 if (!ctx.db.get('SELECT COUNT(*) AS n FROM users').n && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD !== 'change-me-now') {

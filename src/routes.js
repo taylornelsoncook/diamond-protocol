@@ -19,6 +19,19 @@ import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
 import * as engage from './services/engage.js';
 import { listOutbox, sendEmail, mailMode } from './services/mail.js';
+import * as sms from './services/sms.js';
+import * as insights from './services/insights.js';
+import * as leads from './services/leads.js';
+import * as paylinks from './services/paylinks.js';
+import * as checkin from './services/checkin.js';
+import * as screen from './services/screen.js';
+import * as inventory from './services/inventory.js';
+import * as reviews from './services/reviews.js';
+import * as campaigns from './services/campaigns.js';
+import * as shop from './services/shop.js';
+import * as spots from './services/spots.js';
+import * as notes from './services/notes.js';
+import * as moneychecks from './services/moneychecks.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -41,6 +54,9 @@ export const routes = [
 
   // Dashboard
   ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner' })],
+  ['GET', '/v1/at-risk', 'any', 'Dashboard', 'Athletes who may be drifting away: a score (40 to 100) and the reasons, from attendance, bookings, check-ins and (owners only) payments.', (ctx, r) => list(insights.atRisk(ctx, { role: r.user?.role ?? 'owner' }))],
+  ['GET', '/v1/digest', 'any', 'Dashboard', 'This week\'s owner summary: money in, members, athletes to check on, open spots and suggested actions. Includes the email text.', (ctx) => { const d = insights.buildDigest(ctx); return { ...d, text: insights.digestText(ctx, d) }; }],
+  ['POST', '/v1/digest/send', 'session', 'Dashboard', 'Email this week\'s summary to the owners now.', (ctx) => insights.sendDigest(ctx)],
   ['GET', '/v1/events', 'any', 'Dashboard', 'Recent events, newest first. Filter with ?type=.', (ctx, r) => list(events.listEvents(ctx, { type: r.query.type, limit: v.int(r.query.limit ?? 50, 'limit', { min: 1, max: 200 }) }))],
 
   // Clients
@@ -64,6 +80,19 @@ export const routes = [
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
   ['GET', '/v1/invoices', 'any', 'Billing', 'List invoices. Filter with ?status= (open, paid, failed, void).', (ctx, r) => list(billing.listInvoices(ctx, { status: r.query.status }))],
   ['POST', '/v1/invoices/:id/retry', 'any', 'Billing', 'Charge a failed invoice again now.', (ctx, r) => billing.retryInvoice(ctx, r.params.id)],
+  ['GET', '/v1/money-checks', 'any', 'Billing', 'Daily money checks, newest first (?limit=, default 14): possible double charges, refund spikes, stuck payments and, with Stripe connected, card payments matched one by one.', (ctx, r) => moneychecks.listChecks(ctx, { limit: r.query.limit })],
+  ['POST', '/v1/money-checks/run', 'any', 'Billing', 'Check a day now: date (YYYY-MM-DD, default yesterday). Replaces that day\'s check.', (ctx, r) => moneychecks.runCheck(ctx, r.body, r.user)],
+  ['PATCH', '/v1/money-checks/:id', 'any', 'Billing', 'Mark a day\'s findings as looked at (reviewed: true; false undoes it).', (ctx, r) => moneychecks.markReviewed(ctx, r.params.id, r.body, r.user)],
+  ['GET', '/v1/pay-links', 'any', 'Billing', 'Pay links, newest first. Filter with ?status= (open, paid, settled, canceled) or ?client_id=.', (ctx, r) => paylinks.listPayLinks(ctx, { status: r.query.status, clientId: r.query.client_id })],
+  ['POST', '/v1/pay-links', 'any', 'Billing', 'Make a pay link: kind (invoice with invoice_id, booking with booking_id, product with client_id and product_id, custom with client_id, description and amount_cents); send=true emails parents and texts those who turned texts on.', (ctx, r) => paylinks.createPayLink(ctx, r.body, r.user?.name ?? 'API'), 201],
+  ['GET', '/v1/pay-links/:id', 'any', 'Billing', 'A pay link and its public URL.', (ctx, r) => paylinks.getPayLink(ctx, r.params.id)],
+  ['POST', '/v1/pay-links/:id/send', 'any', 'Billing', 'Email and text the link to the family again.', (ctx, r) => paylinks.sendPayLink(ctx, r.params.id)],
+  ['POST', '/v1/pay-links/:id/cancel', 'any', 'Billing', 'Stop a link from being paid.', (ctx, r) => paylinks.cancelPayLink(ctx, r.params.id)],
+  ['GET', '/v1/clients/:id/owed', 'any', 'Billing', 'What a client owes now (failed membership payments, unpaid sessions) and their open pay links.', (ctx, r) => { clients.getClient(ctx, r.params.id); return paylinks.owedBy(ctx, r.params.id); }],
+  ['GET', '/pay-api/:token', 'public', 'Billing', 'The parent\'s pay page (the link in the email or text).', (ctx, r) => paylinks.publicPayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/checkout', 'public', 'Billing', 'Start paying by card on Stripe\'s secure page.', (ctx, r) => paylinks.checkoutPayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/confirm', 'public', 'Billing', 'Back from Stripe: record the payment if it went through.', (ctx, r) => paylinks.confirmPayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/simulate', 'public', 'Billing', 'Test mode only: mark the link paid.', (ctx, r) => paylinks.simulatePayLink(ctx, r.params.token)],
   ['POST', '/v1/billing/run', 'any', 'Billing', 'Run renewals and scheduled retries now. In test mode, pass as_of to run for a future date.', (ctx, r) => {
     let asOf = ctx.now();
     if (r.body.as_of !== undefined) {
@@ -85,13 +114,30 @@ export const routes = [
   ['POST', '/v1/programs/:id/workouts', 'any', 'Training', 'Add a workout: week, day, title.', (ctx, r) => programs.addWorkout(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/assign', 'any', 'Training', 'Put client_id on this program. Replaces their current program.', (ctx, r) => programs.assign(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), r.body.start_date), 201],
   ['DELETE', '/v1/workouts/:id', 'any', 'Training', 'Delete a workout.', (ctx, r) => programs.deleteWorkout(ctx, r.params.id)],
-  ['POST', '/v1/workouts/:id/exercises', 'any', 'Training', 'Add exercise_id to a workout with a prescription like "3 × 10".', (ctx, r) => programs.addWorkoutExercise(ctx, r.params.id, r.body), 201],
+  ['POST', '/v1/workouts/:id/exercises', 'any', 'Training', 'Add exercise_id to a workout with a prescription like "3 × 10". Optional load_test and load_pct set the weight from the athlete\'s latest tested max.', (ctx, r) => programs.addWorkoutExercise(ctx, r.params.id, r.body), 201],
+  ['PATCH', '/v1/workout-exercises/:id', 'any', 'Training', 'Change an exercise\'s prescription, or its weight: load_test (squat_1rm, bench_1rm, power_clean_1rm, or null) and load_pct (30 to 110).', (ctx, r) => programs.updateWorkoutExercise(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/workout-exercises/:id', 'any', 'Training', 'Remove an exercise from a workout.', (ctx, r) => programs.removeWorkoutExercise(ctx, r.params.id)],
+  ['GET', '/v1/open-spots', 'any', 'Schedule', 'Group classes and clinics in the next 2 days with open spots and nobody waiting, with how many families fit each and the offers sent so far.', (ctx) => spots.openSpots(ctx)],
+  ['POST', '/v1/sessions/:id/offer-spots', 'any', 'Schedule', 'Email (and text, if they turned texts on) families who fit this session that a spot is open. First to tap the link gets it. Up to 4 families per open spot.', (ctx, r) => spots.sendOffers(ctx, r.params.id, { actor: r.user?.name ?? 'API' })],
+  ['GET', '/v1/shop', 'any', 'Training', 'Owners: every program and athlete course with its online price, whether it shows in the store, and what sold.', (ctx) => shop.shopAdmin(ctx)],
+  ['PUT', '/v1/shop/programs/:id', 'any', 'Training', 'Owners: sell a program online: for_sale (true or false) and price_cents ($1 to $1,000).', (ctx, r) => shop.setForSale(ctx, 'program', r.params.id, r.body)],
+  ['PUT', '/v1/shop/courses/:id', 'any', 'Training', 'Owners: sell an athlete course online: for_sale and price_cents. Athletes need to buy it (or be assigned it) to open its lessons.', (ctx, r) => shop.setForSale(ctx, 'course', r.params.id, r.body)],
   ['GET', '/v1/completions', 'any', 'Training', 'Completed workouts across all clients. ?since= to filter.', (ctx, r) => list(programs.listCompletions(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined }))],
 
   // Point of sale: in-person payments at the facility, in parks and at clients' homes
   ['GET', '/v1/locations', 'any', 'Point of sale', 'Places you train. card_ready shows whether card payments are set up there.', (ctx, r) => list(commerce.listLocations(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['POST', '/v1/locations', 'any', 'Point of sale', 'Add a location: name, kind (facility, mobile, park, client_home, other) and street address for card payments.', (ctx, r) => commerce.createLocation(ctx, r.body), 201],
+  ['GET', '/v1/locations/:id/check-in-code', 'any', 'Schedule', 'The door poster for self check-in at this location: code, url (what the QR code opens) and poster_url (printable).', (ctx, r) => checkin.checkinCode(ctx, r.params.id)],
+  ['POST', '/v1/locations/:id/check-in-code/reset', 'any', 'Schedule', 'Make a new door code; old posters stop working.', (ctx, r) => checkin.checkinCode(ctx, r.params.id, { reset: true })],
+  ['GET', '/v1/kiosks', 'any', 'Schedule', 'Check-in tablets in use.', (ctx) => list(checkin.listKiosks(ctx))],
+  ['POST', '/v1/kiosks', 'any', 'Schedule', 'Set up a check-in tablet: location_id, optional name. Returns the link to open on the tablet (shown once).', (ctx, r) => checkin.createKiosk(ctx, r.body, r.user?.name), 201],
+  ['DELETE', '/v1/kiosks/:id', 'any', 'Schedule', 'Stop a tablet from checking athletes in.', (ctx, r) => checkin.revokeKiosk(ctx, r.params.id)],
+  ['GET', '/kiosk-api/board', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): sessions open for check-in at its location and who is booked.', (ctx, r) => checkin.kioskBoard(ctx, r.kioskKey)],
+  ['GET', '/kiosk-api/screen', 'public', 'Schedule', 'Weight-room screen (x-kiosk-key header, the same key as a check-in tablet): sessions running now at its location, each with its workout and who can log it.', (ctx, r) => screen.screenBoard(ctx, r.kioskKey)],
+  ['POST', '/kiosk-api/screen/athlete', 'public', 'Schedule', 'Weight-room screen: one athlete\'s own weights for the session workout. session_id, ref (from the board).', (ctx, r) => screen.screenAthlete(ctx, r.kioskKey, r.body)],
+  ['POST', '/kiosk-api/screen/log', 'public', 'Schedule', 'Weight-room screen: log the session workout for one athlete and check them in. session_id, ref, optional exercise_ids.', (ctx, r) => screen.screenLog(ctx, r.kioskKey, r.body), 201],
+  ['POST', '/kiosk-api/check-in', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): check in booking_id.', (ctx, r) => checkin.kioskCheckIn(ctx, r.kioskKey, r.body)],
+  ['GET', '/here-api/:code', 'public', 'Schedule', 'The door poster\'s page: business and location name.', (ctx, r) => checkin.publicPlace(ctx, r.params.code)],
   ['PATCH', '/v1/locations/:id', 'any', 'Point of sale', 'Update a location. Set active=false to archive it.', (ctx, r) => commerce.updateLocation(ctx, r.params.id, r.body)],
   ['GET', '/v1/readers', 'any', 'Point of sale', 'Front-desk card readers.', (ctx) => list(commerce.listReaders(ctx))],
   ['POST', '/v1/readers', 'any', 'Point of sale', 'Register a smart reader with the code on its screen: registration_code, label, location_id.', (ctx, r) => commerce.registerReader(ctx, r.body), 201],
@@ -99,6 +145,21 @@ export const routes = [
   ['GET', '/v1/products', 'any', 'Point of sale', 'What you sell in person: sessions, packs, gear.', (ctx, r) => list(commerce.listProducts(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['POST', '/v1/products', 'any', 'Point of sale', 'Add a product: name, kind (session, pack, gear, other), price_cents, sessions (for packs).', (ctx, r) => commerce.createProduct(ctx, r.body), 201],
   ['PATCH', '/v1/products/:id', 'any', 'Point of sale', 'Update a product. Set active=false to stop selling it.', (ctx, r) => commerce.updateProduct(ctx, r.params.id, r.body)],
+  ['GET', '/v1/campaigns', 'any', 'Leads', 'Announcement emails: drafts and sent, with how many got each and clicked a link.', (ctx) => list(campaigns.listCampaigns(ctx))],
+  ['POST', '/v1/campaigns/preview', 'any', 'Leads', 'How many people an audience reaches: {audience: {group (everyone, members, lapsed, no_membership, leads), age_min, age_max, sport}}.', (ctx, r) => campaigns.previewAudience(ctx, r.body.audience)],
+  ['POST', '/v1/campaigns', 'any', 'Leads', 'Draft an announcement email: subject, body ({first_name} is the parent\'s first name), audience.', (ctx, r) => campaigns.createCampaign(ctx, r.body, r.user?.name ?? 'API'), 201],
+  ['GET', '/v1/campaigns/:id', 'any', 'Leads', 'One announcement email and its numbers.', (ctx, r) => campaigns.getCampaign(ctx, r.params.id)],
+  ['PATCH', '/v1/campaigns/:id', 'any', 'Leads', 'Change a draft.', (ctx, r) => campaigns.updateCampaign(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/campaigns/:id', 'any', 'Leads', 'Delete a draft.', (ctx, r) => campaigns.deleteCampaign(ctx, r.params.id)],
+  ['POST', '/v1/campaigns/:id/copy', 'any', 'Leads', 'Start a new draft from an email.', (ctx, r) => campaigns.copyCampaign(ctx, r.params.id, r.user?.name ?? 'API'), 201],
+  ['POST', '/v1/campaigns/:id/test', 'session', 'Leads', 'Send the draft to yourself.', (ctx, r) => campaigns.sendTest(ctx, r.params.id, r.user)],
+  ['POST', '/v1/campaigns/:id/send', 'any', 'Leads', 'Send now: confirm_count must equal the number of people it goes to.', (ctx, r) => campaigns.sendCampaign(ctx, r.params.id, r.body)],
+  ['GET', '/v1/review-requests', 'any', 'Leads', 'Google review requests: the review link, whether they\'re on, the last 90 days (sent, clicked, stopped), the 10 most recent and a sample email.', (ctx) => reviews.reviewSummary(ctx)],
+  ['GET', '/v1/inventory', 'any', 'Point of sale', 'Gear that counts its stock: what\'s on hand per size, and what\'s running low.', (ctx) => inventory.inventory(ctx)],
+  ['POST', '/v1/products/:id/variants', 'any', 'Point of sale', 'Add a size or color to a product: name (like M or Youth L), sku.', (ctx, r) => inventory.addVariant(ctx, r.params.id, r.body), 201],
+  ['PATCH', '/v1/products/:id/variants/:vid', 'any', 'Point of sale', 'Rename a size or stop selling it (active=false).', (ctx, r) => inventory.updateVariant(ctx, r.params.id, r.params.vid, r.body)],
+  ['POST', '/v1/products/:id/stock', 'any', 'Point of sale', 'Change stock: reason received (quantity arrived), count (quantity on the shelf) or adjust (+/-), with variant_id for a size and an optional note.', (ctx, r) => inventory.recordStock(ctx, r.params.id, r.body, r.user?.name ?? 'API'), 201],
+  ['GET', '/v1/products/:id/stock', 'any', 'Point of sale', 'Stock history for a product, newest first.', (ctx, r) => list(inventory.stockHistory(ctx, r.params.id))],
   ['GET', '/v1/sales', 'any', 'Point of sale', 'In-person sales, newest first. Filter with ?location_id=, ?client_id=, ?status=, ?since=.', (ctx, r) => list(commerce.listSales(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined, locationId: r.query.location_id, clientId: r.query.client_id, status: r.query.status }))],
   ['POST', '/v1/sales', 'any', 'Point of sale', 'Start a sale: location_id, method (tap_to_pay, reader, card_on_file, cash), items [{product_id, quantity}] and/or custom {description, amount_cents}, optional client_id, save_card, reader_id. For tap_to_pay the response includes tap_to_pay.client_secret and tap_to_pay.location_ref for the iPhone app.', (ctx, r) => commerce.createSale(ctx, r.body, r.user?.id ?? r.apiKey?.id), 201],
   ['GET', '/v1/sales/:id', 'any', 'Point of sale', 'A sale with its items.', (ctx, r) => commerce.getSale(ctx, r.params.id, { withSecret: true })],
@@ -139,6 +200,13 @@ export const routes = [
   ['GET', '/v1/settings', 'any', 'Families', 'Business settings: time zone, late-cancel window, waiver text.', (ctx) => families.getSettings(ctx)],
   ['PATCH', '/v1/settings', 'session', 'Families', 'Update settings. Changing the waiver text asks every family to sign again.', (ctx, r) => families.updateSettings(ctx, r.body)],
   ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, and how email is set up (mode: test, restricted or live).', (ctx) => ({ ...list(listOutbox(ctx)), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
+  ['GET', '/v1/texts', 'session', 'Families', 'Text messages sent to parents and their replies, and how texting is set up (mode: test, restricted or live).', (ctx) => ({ ...list(sms.listTexts(ctx)), mode: sms.smsMode(ctx), only_to: ctx.sms?.onlyTo || null, kinds: sms.TEXT_KINDS })],
+  ['POST', '/v1/texts/test', 'session', 'Families', 'Send a test text to a phone number (to) and wait for the text service to answer.', async (ctx, r) => {
+    if (sms.smsMode(ctx) === 'test') throw badRequest('No text service is connected. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM on the server.');
+    const out = await sms.sendText(ctx, { to: v.str(r.body?.to, 'to', { max: 40 }), kind: 'test', body: `Test text from ${families.getSetting(ctx, 'business_name')}. Texting is working.` });
+    if (out.status !== 'sent') throw badRequest(out.error || 'The text service refused the message.');
+    return out;
+  }],
   ['POST', '/v1/outbox/test', 'session', 'Families', 'Send a test email (to) and wait for the email service to answer.', async (ctx, r) => {
     const to = v.email(r.body?.to ?? r.user.email);
     if (mailMode(ctx) === 'test') throw badRequest('No email service is connected. Set RESEND_API_KEY on the server.');
@@ -147,6 +215,13 @@ export const routes = [
     if (out.status !== 'sent') throw badRequest(out.error || 'The email service refused the message.');
     return { ok: true };
   }],
+
+  // Leads
+  ['GET', '/v1/leads', 'any', 'Leads', 'Families who asked about training, newest first, with counts by stage. Filter with ?status= (new, contacted, signed_up, evaluation, member, lost).', (ctx, r) => leads.listLeads(ctx, { status: r.query.status ? v.oneOf(r.query.status, 'status', leads.STAGES) : undefined })],
+  ['POST', '/v1/leads', 'any', 'Leads', 'Add a lead: parent_name, email and/or phone, athlete_name, athlete_age, sport, message, source (manual, phone, walk_in, event, referral), texts_ok, follow_up=false to skip the automatic emails.', (ctx, r) => leads.addLead(ctx, r.body, r.user ?? r.apiKey), 201],
+  ['GET', '/v1/leads/:id', 'any', 'Leads', 'A lead.', (ctx, r) => leads.getLead(ctx, r.params.id)],
+  ['PATCH', '/v1/leads/:id', 'any', 'Leads', 'Update a lead: status, notes, lost_reason, contacted=true (you reached out), follow_up=false (stop automatic follow-up).', (ctx, r) => leads.updateLead(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/leads/:id', 'session', 'Leads', 'Delete a lead and its details (owner only).', (ctx, r) => leads.deleteLead(ctx, r.params.id)],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
   ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind= and ?location_id=.', (ctx, r) => {
@@ -163,7 +238,8 @@ export const routes = [
   ['DELETE', '/v1/class-series/:id/enroll/:client', 'any', 'Schedule', 'End a standing spot and release future bookings.', (ctx, r) => schedule.endEnrollment(ctx, r.params.id, r.params.client)],
   ['POST', '/v1/class-series/:id/register', 'any', 'Schedule', 'Register for a camp or clinic: client_id, pay (card_on_file, or omit to collect later).', (ctx, r) => schedule.registerCamp(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), { pay: r.body.pay, actor: r.user?.id, isCoach: true })],
   ['POST', '/v1/sessions', 'any', 'Schedule', 'One-off session: name, kind, location_id, date, start_time, duration_min, capacity.', (ctx, r) => schedule.createSession(ctx, r.body), 201],
-  ['GET', '/v1/sessions/:id', 'any', 'Schedule', 'A session with its roster and waitlist.', (ctx, r) => schedule.getSession(ctx, r.params.id)],
+  ['GET', '/v1/sessions/:id', 'any', 'Schedule', 'A session with its roster and waitlist, and the workout on the weight-room screen.', (ctx, r) => { const s = schedule.getSession(ctx, r.params.id); return { ...s, workout: s.workout_id ? screen.workoutView(ctx, s.workout_id) : null }; }],
+  ['PUT', '/v1/sessions/:id/workout', 'any', 'Schedule', 'Pick the workout the weight-room screen shows during this session: workout_id (null clears it).', (ctx, r) => screen.setSessionWorkout(ctx, r.params.id, r.body)],
   ['POST', '/v1/sessions/:id/cancel', 'any', 'Schedule', 'Cancel a session: credits back, paid drop-ins refunded, families emailed. Optional reason.', (ctx, r) => schedule.cancelSession(ctx, r.params.id, { reason: v.str(r.body.reason, 'reason', { max: 200, optional: true }) })],
   ['POST', '/v1/sessions/:id/bookings', 'any', 'Schedule', 'Add an athlete: client_id, optional pay=card_on_file, override_age. Coaches can book now and collect later.', (ctx, r) => schedule.book(ctx, { sessionId: r.params.id, clientId: v.str(r.body.client_id, 'client_id'), pay: r.body.pay, actor: r.user?.id, isCoach: true, overrideAge: !!r.body.override_age }), 201],
   ['POST', '/v1/bookings/:id/cancel', 'any', 'Schedule', 'Cancel a booking. waive=true skips the late-cancel rule.', (ctx, r) => schedule.cancelBooking(ctx, r.params.id, { isCoach: true, waive: !!r.body.waive })],
@@ -221,6 +297,10 @@ export const routes = [
   ['GET', '/v1/testing-sessions/:id', 'any', 'Performance', 'A testing day with every athlete\'s results.', (ctx, r) => perf.getSession(ctx, r.params.id)],
   ['PATCH', '/v1/testing-sessions/:id', 'any', 'Performance', 'Change the name, date, tests or athletes.', (ctx, r) => perf.updateSession(ctx, r.params.id, r.body)],
   ['POST', '/v1/testing-sessions/:id/share', 'any', 'Performance', 'Share a testing day with families: results appear in the parent portal and parents are emailed. Optional parent_note; notify=false to skip emails.', (ctx, r) => reports.shareSession(ctx, r.params.id, r.body, r.baseUrl)],
+  ['GET', '/v1/testing-sessions/:id/notes', 'any', 'Performance', 'Progress notes for parents on this testing day: one per athlete with results, drafted or approved.', (ctx, r) => notes.sessionNotes(ctx, r.params.id)],
+  ['POST', '/v1/testing-sessions/:id/notes/draft', 'any', 'Performance', 'Draft a plain-English note for each athlete without one, from their results. client_ids redoes those drafts. Approved notes are never replaced.', (ctx, r) => notes.draftNotes(ctx, r.params.id, r.body)],
+  ['POST', '/v1/testing-sessions/:id/notes/approve', 'any', 'Performance', 'Approve every draft on this testing day. Parents see approved notes once the day is shared.', (ctx, r) => notes.approveAll(ctx, r.params.id, r.user)],
+  ['PATCH', '/v1/progress-notes/:id', 'any', 'Performance', 'Edit a progress note (body) or approve it (approved: true; false takes it back).', (ctx, r) => notes.updateNote(ctx, r.params.id, r.body, r.user)],
   ['DELETE', '/v1/testing-sessions/:id/share', 'any', 'Performance', 'Hide a testing day from families again.', (ctx, r) => reports.unshareSession(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/report', 'any', 'Performance', 'Progress report: best, first and latest for every test, top improvements, growth and growth-spurt estimate. ?parent_view=true shows exactly what the family sees.', (ctx, r) => reports.athleteReport(ctx, r.params.id, { parentView: r.query.parent_view === 'true' })],
   ['GET', '/v1/athlete-links', 'any', 'Performance', 'Device IDs and names you\'ve linked to athletes (?provider=, ?client_id=, ?roster_id=).', (ctx, r) => list(perf.listLinks(ctx, r.query))],
@@ -267,6 +347,8 @@ export const routes = [
   // Accountability, performance targets and education. Owners and coaches manage; front desk views.
   ['GET', '/v1/clients/:id/engagement', 'any', 'Engagement', 'Accountability for one athlete: streaks, this week, 30-day check-in averages and flags, goals, messages, test targets, rankings and assigned reading.', (ctx, r) => engage.staffOverview(ctx, clients.getClient(ctx, r.params.id).id)],
   ['POST', '/v1/clients/:id/goals', 'any', 'Engagement', 'Set a weekly goal: kind (workouts, sessions, checkins, custom), target (1-14 a week), optional title.', (ctx, r) => engage.createGoal(ctx, { clientId: clients.getClient(ctx, r.params.id).id }, r.body, r.user ?? r.apiKey), 201],
+  ['GET', '/v1/replies', 'any', 'Engagement', 'Replies from athletes and parents that no coach has seen yet, one row per athlete.', (ctx) => list(engage.unreadReplies(ctx))],
+  ['POST', '/v1/clients/:id/messages/seen', 'any', 'Engagement', 'Mark an athlete\'s replies as seen by the coaches.', (ctx, r) => engage.markRepliesSeen(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/messages', 'any', 'Engagement', 'Send the athlete a message: body. The athlete and their parents are emailed a copy.', (ctx, r) => engage.sendMessage(ctx, { clientId: clients.getClient(ctx, r.params.id).id }, r.body, r.user ?? r.apiKey), 201],
   ['POST', '/v1/clients/:id/targets', 'any', 'Engagement', 'Set a test target: test (key), target (like 84, 6\'5" or 1:05), optional due_date. Replaces an existing target for that test.', (ctx, r) => engage.setTarget(ctx, clients.getClient(ctx, r.params.id).id, r.body, r.user ?? r.apiKey), 201],
   ['DELETE', '/v1/targets/:id', 'any', 'Engagement', 'Remove a test target. Results stay.', (ctx, r) => engage.removeTarget(ctx, r.params.id)],
@@ -276,14 +358,20 @@ export const routes = [
   ['POST', '/v1/teams/:id/goals', 'any', 'Engagement', 'Set a weekly goal for everyone on the roster: kind, target, optional title.', (ctx, r) => engage.createGoal(ctx, { contractId: r.params.id }, r.body, r.user ?? r.apiKey), 201],
   ['POST', '/v1/teams/:id/messages', 'any', 'Engagement', 'Message the whole roster: body. Athletes and parents are emailed.', (ctx, r) => engage.sendMessage(ctx, { contractId: r.params.id }, r.body, r.user ?? r.apiKey), 201],
   ['GET', '/v1/daily-check-ins/flags', 'any', 'Engagement', 'Athletes whose latest daily check-in (today or yesterday) needs a look: short sleep, high soreness, low energy, mood or hydration.', (ctx) => list(engage.recentFlags(ctx))],
-  ['GET', '/v1/engagement/settings', 'any', 'Engagement', 'Whether rankings are on.', (ctx) => ({ rankings: engage.rankingsOn(ctx) ? 'on' : 'off' })],
-  ['PATCH', '/v1/engagement/settings', 'any', 'Engagement', 'Turn rankings on or off: rankings ("on" or "off"). Athletes and parents see where a best result ranks, never anyone else\'s name.', (ctx, r) => engage.setRankings(ctx, r.body)],
+  ['GET', '/v1/skill-badges', 'any', 'Engagement', 'Skill badges coaches can award, with how many athletes have each. all=1 includes removed ones.', (ctx, r) => list(engage.listBadges(ctx, { all: r.query.all === '1' }))],
+  ['POST', '/v1/skill-badges', 'any', 'Engagement', 'Add a skill badge: name, description, category (Speed, Strength, Power, Mobility, Skill or Mindset).', (ctx, r) => engage.createBadge(ctx, r.body), 201],
+  ['PATCH', '/v1/skill-badges/:id', 'any', 'Engagement', 'Change a skill badge: name, description, category, archived (true takes it off the list; badges already earned stay).', (ctx, r) => engage.updateBadge(ctx, r.params.id, r.body)],
+  ['POST', '/v1/skill-badges/:id/awards', 'any', 'Engagement', 'Award a badge: client_ids (or client_id), note. Athletes who already have it are skipped. Each family gets an email.', (ctx, r) => engage.awardBadge(ctx, r.params.id, r.body, r.user ?? r.apiKey)],
+  ['DELETE', '/v1/badge-awards/:id', 'any', 'Engagement', 'Take back a badge awarded by mistake.', (ctx, r) => engage.removeAward(ctx, r.params.id)],
+  ['GET', '/v1/engagement/settings', 'any', 'Engagement', 'Whether rankings and readiness-adjusted weights are on.', (ctx) => engage.engagementSettings(ctx)],
+  ['PATCH', '/v1/engagement/settings', 'any', 'Engagement', 'Turn rankings ("on" or "off": athletes and parents see where a best result ranks, never anyone else\'s name) or readiness_adjust ("on" or "off": after a rough daily check-in, weights set from a tested max come down 10 or 20 points of the max in the athlete app) on or off.', (ctx, r) => engage.setRankings(ctx, r.body)],
   ['GET', '/v1/education', 'any', 'Education', 'Every course and lesson with completions, and each assignment with who has finished.', (ctx) => engage.educationReport(ctx)],
   ['GET', '/v1/lessons/:id', 'any', 'Education', 'One lesson with its full text.', (ctx, r) => engage.getLesson(ctx, r.params.id)],
   ['POST', '/v1/lessons', 'any', 'Education', 'Post a lesson: title, summary, body (plain text; blank lines start paragraphs), video_url (https), minutes, course_id, published.', (ctx, r) => engage.createLesson(ctx, r.body), 201],
-  ['PATCH', '/v1/lessons/:id', 'any', 'Education', 'Edit a lesson. published=false hides it from athletes.', (ctx, r) => engage.updateLesson(ctx, r.params.id, r.body)],
+  ['PATCH', '/v1/lessons/:id', 'any', 'Education', 'Edit a lesson. published=false hides it from athletes. quiz_text adds a quiz: a question per line followed by choices starting with - (the right one with *), a blank line between questions; empty removes it.', (ctx, r) => engage.updateLesson(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/lessons/:id', 'any', 'Education', 'Delete a lesson and its completions.', (ctx, r) => engage.deleteLesson(ctx, r.params.id)],
-  ['POST', '/v1/courses', 'any', 'Education', 'Create a course: title, description, published.', (ctx, r) => engage.createCourse(ctx, r.body), 201],
+  ['POST', '/v1/courses', 'any', 'Education', 'Create a course: title, description, published, audience (athletes or parents), and for parent courses age_min and age_max (parents of athletes that age see it).', (ctx, r) => engage.createCourse(ctx, r.body), 201],
+  ['POST', '/v1/courses/starter-parent', 'any', 'Education', 'Add three starter parent courses as drafts (growth spurts, fueling, recruiting basics) to read, edit and publish.', (ctx) => engage.addStarterParentCourses(ctx), 201],
   ['PATCH', '/v1/courses/:id', 'any', 'Education', 'Edit a course. published=false hides it from athletes.', (ctx, r) => engage.updateCourse(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/courses/:id', 'any', 'Education', 'Delete a course. Its lessons stay in the library.', (ctx, r) => engage.deleteCourse(ctx, r.params.id)],
   ['PUT', '/v1/courses/:id/order', 'any', 'Education', 'Reorder a course\'s lessons: lesson_ids in the new order.', (ctx, r) => engage.reorderCourse(ctx, r.params.id, r.body)],
@@ -297,7 +385,9 @@ export const routes = [
   ['POST', '/app/api/daily-check-in', 'client', 'Client app', 'Today\'s check-in: sleep_hours (0-16), hydration, soreness, energy, mood (1-5), note. Saving again today updates it.', (ctx, r) => engage.saveCheckin(ctx, r.client.id, r.body)],
   ['POST', '/app/api/goals/:id/check', 'client', 'Client app', 'Tick a custom goal for today (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, r.client.id, r.params.id, r.body.done !== false)],
   ['POST', '/app/api/messages/read', 'client', 'Client app', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, r.client.id)],
+  ['POST', '/app/api/messages', 'client', 'Client app', 'Write back to your coach: body.', (ctx, r) => engage.replyMessage(ctx, r.client.id, r.body, { from: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/lessons/:id', 'client', 'Client app', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, r.client.id, r.params.id)],
+  ['POST', '/app/api/lessons/:id/quiz', 'client', 'Client app', 'Take the lesson quiz: answers (the choice number for each question, from 0). 80% or more finishes the lesson. Only says which questions were wrong.', (ctx, r) => engage.takeQuiz(ctx, r.client.id, r.params.id, r.body)],
   ['POST', '/app/api/lessons/:id/complete', 'client', 'Client app', 'Mark a lesson done (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, r.client.id, r.params.id, r.body.done !== false)],
   ...portalRoutes.map(([method, path, auth, summary, handler, status]) => [method, path, auth, 'Parent portal', summary, handler, status])
 ].map(([method, path, auth, tag, summary, handler, status = 200]) => ({

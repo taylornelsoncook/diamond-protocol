@@ -1,5 +1,6 @@
 import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel, videoEmbed, playIcon } from './ui.js';
-import { initEngage, clientPanels, flagsPanel, rankingsPanel, teamPanel, viewEducation } from './engage-coach.js';
+import { saleForm } from './shop-admin.js';
+import { initEngage, clientPanels, flagsPanel, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -10,13 +11,14 @@ async function api(method, path, body) {
   return data;
 }
 const metric = (label, value, note, tone) => h('div', { class: 'dp-metric' }, h('div', { class: 'dp-metric-label' }, label), h('div', { class: `dp-metric-value${tone ? ' dp-metric-value--' + tone : ''}` }, value), h('div', { class: 'dp-metric-note' }, note));
-const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch = (p, b) => api('PATCH', p, b), del = (p, b) => api('DELETE', p, b);
+const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch = (p, b) => api('PATCH', p, b), del = (p, b) => api('DELETE', p, b), put = (p, b) => api('PUT', p, b);
 
+const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
 const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
-const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
+const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'testing', 'education'] };
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'education'] };
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
@@ -49,7 +51,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : viewSell, clients: id ? viewClient : viewClients, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -93,7 +95,10 @@ const EVENT_TEXT = {
   'sale.completed': (d) => `${d.client_name} paid ${money(d.amount_cents)} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
   'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment of ${money(d.amount_cents)} from ${d.client_name} didn't go through`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
+  'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
+  'purchase.completed': (d) => `${d.client_name} got ${d.title} from the online store`,
+  'spots.offered': (d) => `Open spots in ${d.session_name} offered to ${d.families} ${d.families === 1 ? 'family' : 'families'}`,
   'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
   'booking.waitlisted': (d) => `${d.client_name} joined the waitlist for ${d.session_name}`,
   'booking.canceled': (d) => `${d.client_name} canceled ${d.session_name}${d.late ? ' (late)' : ''}`,
@@ -116,10 +121,11 @@ const EVENT_TEXT = {
   'integration.synced': (d) => `${d.results} results synced from ${d.provider === 'hawkin' ? 'Hawkin Dynamics' : d.provider}`,
   'client.card_updated': (d) => d.card_last4 ? `${d.client_name} saved a card ending ${d.card_last4}` : `${d.client_name}'s saved card was removed`
 };
-const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash' };
+const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Pay link' };
 
 async function viewToday(main) {
-  const [d, rev, ag, flags] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null)]);
+  const staff = state.user.role !== 'front_desk';
+  const [d, rev, ag, flags, risk, spots] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null, staff ? get('/v1/open-spots').catch(() => null) : null]);
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
@@ -142,6 +148,15 @@ async function viewToday(main) {
     if (a.kind === 'deletion_request') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.family_name} asked for their data to be deleted`), h('span', { class: 'small muted' }, `Requested by ${a.requested_by.split(' <')[0]} ${ago(a.created_at)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/staff' }, 'Review'));
+    if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
+    if (a.kind === 'replies') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].author ?? a.items[0].name} wrote back about ${a.items[0].name.split(' ')[0]}` : `${a.count} athletes have new replies`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name} (${x.count})`).join(' · '))),
+      h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}` }, 'Read'));
+    if (a.kind === 'low_stock') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is running low` : `${a.count} items are running low`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name}: ${x.on_hand <= 0 ? 'out' : `${x.on_hand} left`}`).join(' · '))),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/sell/inventory' }, 'Inventory'));
     if (a.kind === 'results_waiting') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until you link them.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
@@ -167,13 +182,161 @@ async function viewToday(main) {
       metric('Payments failed', m.past_due_clients, `${money(m.at_risk_cents)} at risk this month`, m.past_due_clients ? 'warn' : null),
       metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
     agendaPanel,
+    spots?.data.length ? spotsPanel(spots) : null,
     flags,
+    risk?.data.length ? panel('Athletes to check on', { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick message usually brings them back.' },
+      risk.data.slice(0, 6).map((r) => h('div', { class: 'list-item' },
+        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name, r.family_name ? h('span', { class: 'small muted' }, ` · ${r.family_name}`) : null), h('span', { class: 'small muted' }, r.reasons.join(' · '))),
+        h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${r.client_id}` }, 'Check in')))) : null,
     h('div', { class: 'grid grid-2' },
       panel('Needs your attention', {}, attention.length ? attention : h('p', { class: 'muted' }, 'Nothing waiting. Every client is paid up and training.')),
       panel('Recent activity', {}, d.activity.length ? d.activity.map((ev) => h('div', { class: 'list-item' },
         h('div', { class: 'small muted', style: 'width:92px;flex-shrink:0' }, ago(ev.created_at)),
         h('div', { class: 'grow' }, (EVENT_TEXT[ev.type] || (() => ev.type))(ev.data)))) : h('p', { class: 'muted' }, 'Activity shows up here as clients join, pay and train.'))),
     revPanel);
+}
+
+// Classes in the next 2 days with open spots and nobody waiting. One tap offers the spots to families who fit.
+function spotsPanel(spots) {
+  const auto = spots.mode === 'auto';
+  const mode = isOwner() ? select([['suggest', 'Send offers when I tap'], ['auto', 'Send offers automatically'], ['off', 'Don\'t show this']], { value: spots.mode, 'aria-label': 'Open spot offers', style: 'width:auto' }) : null;
+  if (mode) mode.addEventListener('change', () => busy(mode, async () => { await patch('/v1/settings', { open_spot_offers: mode.value }); toast(mode.value === 'auto' ? 'Offers go out on their own between 10 am and 7 pm.' : 'Saved.'); render(); }));
+  return panel('Classes with open spots', { subtitle: auto ? 'Offers go out on their own between 10 am and 7 pm, a day ahead. First family to tap the link gets the spot.' : 'Offer the spots to families who fit: regulars of the class first, then members and recent athletes. First to tap the link gets it.', action: mode },
+    spots.data.map((x) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('a', { href: `#/schedule/${x.id}`, class: 'strong', style: 'color:var(--steel)' }, x.name),
+        h('span', { class: 'small muted' }, `${new Intl.DateTimeFormat('en-US', { timeZone: tzName, weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(x.starts_at))} · ${x.location_name} · ${x.spots_left} of ${x.capacity} open`),
+        h('span', { class: 'small muted' }, [x.offers.sent ? `${x.offers.sent} offered, ${x.offers.opened} opened, ${x.offers.booked} booked` : null, x.families_who_fit ? `${x.families_who_fit} more ${x.families_who_fit === 1 ? 'family fits' : 'families fit'}` : 'No more families who fit'].filter(Boolean).join(' · '))),
+      x.families_who_fit ? btn(`Offer to ${Math.min(x.families_who_fit, x.spots_left * 4, 30)} ${Math.min(x.families_who_fit, x.spots_left * 4, 30) === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => {
+        const r = await post(`/v1/sessions/${x.id}/offer-spots`); toast(`Offered to ${r.sent} ${r.sent === 1 ? 'family' : 'families'}. First to tap gets it.`); render();
+      }), 'outline') : null)));
+}
+
+// ---------- Leads ----------
+const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['signed_up', 'Signed up'], ['evaluation', 'Evaluation booked'], ['member', 'Member'], ['lost', 'Not now']];
+const LEAD_SOURCE = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event', referral: 'Referral' };
+async function viewLeads(main) {
+  const filter = new URLSearchParams(location.hash.split('?')[1] ?? '').get('status') ?? '';
+  const [res, settings, reviews] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), get('/v1/review-requests')]);
+  const chips = h('div', { class: 'row wrap', style: 'gap:8px' }, [['', 'All open'], ...LEAD_STAGES].map(([k, label]) => h('a', { class: `dp-btn dp-btn--${filter === k ? 'secondary' : 'ghost'}`, href: `#/leads${k ? `?status=${k}` : ''}` }, k ? `${label} (${res.counts[k] ?? 0})` : label)));
+  const rows = (filter ? res.data : res.data.filter((l) => !['member', 'lost'].includes(l.status))).map((l) => {
+    const stage = select(LEAD_STAGES, { value: l.status, 'aria-label': 'Stage' });
+    const notes = h('textarea', { class: 'dp-input', placeholder: 'Notes: when you called, what they need, best times' }); notes.value = l.notes ?? '';
+    const save = (body, msg) => (e) => busy(e.currentTarget, async () => { await patch(`/v1/leads/${l.id}`, body); toast(msg); render(); });
+    return h('details', { class: 'list-item', style: 'display:block' },
+      h('summary', { style: 'cursor:pointer;list-style:none' }, h('div', { class: 'row wrap', style: 'gap:12px' },
+        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.parent_name, l.athlete_name ? h('span', { class: 'muted' }, ` for ${l.athlete_name}${l.athlete_age ? `, ${l.athlete_age}` : ''}`) : null),
+          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null].filter(Boolean).join(' · '))),
+        h('span', { class: `dp-badge dp-badge--${{ new: 'warn', contacted: 'neutral', signed_up: 'good', evaluation: 'good', member: 'good', lost: 'muted' }[l.status]}` }, LEAD_STAGES.find(([k]) => k === l.status)?.[1] ?? l.status))),
+      h('div', { class: 'stack', style: 'margin-top:12px' },
+        h('p', { class: 'small', style: 'margin:0' }, [l.email, phoneText(l.phone), l.texts_ok ? 'OK to text' : null].filter(Boolean).join(' · ')),
+        l.message ? h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, `"${l.message}"`) : null,
+        l.family_id ? h('p', { class: 'small', style: 'margin:0' }, `Signed up as the ${l.family_name ?? 'family'}.`) : null,
+        field('Notes', notes),
+        h('div', { class: 'row wrap', style: 'gap:8px' }, stage,
+          btn('Save', save({ status: stage.value, notes: notes.value }, 'Saved.'), 'primary'),
+          ['new', 'contacted'].includes(l.status) ? btn('I reached out', save({ contacted: true, notes: notes.value }, 'Marked as contacted.'), 'outline') : null,
+          l.follow_up === 'on' ? btn('Stop automatic follow-up', save({ follow_up: false }, 'Automatic follow-up stopped.'), 'ghost') : null,
+          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null)));
+  });
+  const f = { parent_name: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), athlete_name: input(), athlete_age: input({ type: 'number', inputmode: 'numeric' }), sport: input(), message: h('textarea', { class: 'dp-input' }) };
+  const source = select([['phone', 'Phone call'], ['walk_in', 'Walk-in'], ['event', 'Event'], ['referral', 'Referral'], ['manual', 'Other']]);
+  const followUp = h('input', { type: 'checkbox', checked: true });
+  const addPanel = h('details', { class: 'dp-panel' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:32px' }, '+ Add a lead'),
+    h('form', { class: 'stack', style: 'margin-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      await post('/v1/leads', { ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value || undefined])), athlete_age: f.athlete_age.value ? Number(f.athlete_age.value) : undefined, source: source.value, follow_up: followUp.checked });
+      toast('Lead added.'); render();
+    }); } },
+      h('div', { class: 'form-grid' }, field('Parent name', f.parent_name), field('How they found you', source)),
+      h('div', { class: 'form-grid' }, field('Email', f.email), field('Phone', f.phone)),
+      h('div', { class: 'form-grid' }, field('Athlete name', f.athlete_name), field('Athlete age', f.athlete_age)),
+      field('Sport', f.sport), field('What they\'re looking for', f.message),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, followUp, h('span', null, 'Send the automatic follow-up emails')),
+      h('div', null, btn('Add lead', null, 'primary', { type: 'submit' }))));
+  const followToggle = h('input', { type: 'checkbox', checked: settings.lead_follow_up !== 'off' });
+  const howPanel = panel('How follow-up works', { subtitle: 'Every lead with an email gets a thank-you with your sign-up link right away, a nudge after 2 days and a last note after 7. It stops as soon as they sign up, you mark them, or they reply STOP to a text.' },
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/start`),
+      btn('Copy inquiry form link', async () => { await navigator.clipboard?.writeText(`${location.origin}/start`).catch(() => {}); toast('Link copied. Put it on your website and Instagram.'); }, 'secondary')),
+    isOwner() ? h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, followToggle, h('span', null, 'Send automatic follow-up'), btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { lead_follow_up: followToggle.checked ? 'on' : 'off' }); toast('Saved.'); }), 'ghost')) : null);
+  // The public Book now page, for the website and Instagram bio.
+  const embedCode = `<script src="${location.origin}/embed.js" async></script>`;
+  const copy = (text, msg) => async () => { await navigator.clipboard?.writeText(text).catch(() => {}); toast(msg); };
+  const schedToggle = h('input', { type: 'checkbox', checked: settings.public_schedule !== 'off' });
+  const bookPanel = panel('Book now page', { subtitle: 'Your upcoming classes with open spots and the next evaluation times, for your website, Instagram bio and Google profile. Families sign in (or sign up) to book. No names are shown.' },
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/book`),
+      btn('Copy link', copy(`${location.origin}/book`, 'Link copied. Put it in your Instagram bio and on Google.'), 'secondary'),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '/book', target: '_blank', rel: 'noopener' }, 'Open it')),
+    h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Show the schedule on your website'),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'Paste this where the schedule should appear (in Squarespace or Wix, use a Code or Embed block). For a single "Book now" button instead, add data-button="Book now" inside the tag.'),
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { class: 'small', style: 'word-break:break-all' }, embedCode), btn('Copy code', copy(embedCode, 'Code copied. Paste it into your website.'), 'secondary')),
+    isOwner() ? h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, schedToggle, h('span', null, 'Show the Book now page'), btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_schedule: schedToggle.checked ? 'on' : 'off' }); toast('Saved.'); }), 'ghost')) : null);
+  // Google review requests: one friendly email after a 10th session or a personal best.
+  const reviewUrl = input({ type: 'url', placeholder: 'https://g.page/r/.../review', value: reviews.review_url, 'aria-label': 'Google review link' });
+  const reviewOn = h('input', { type: 'checkbox', checked: reviews.on });
+  const r90 = reviews.last_90_days;
+  const REVIEW_WHY = { milestone: (x) => `${x.detail}`, pr: (x) => `personal best${x.detail ? ` (${x.detail})` : ''}` };
+  const reviewPanel = panel('Google review requests', { subtitle: 'After an athlete\'s 10th session, or a personal best on a testing day the family can see, we email the parent once asking for a Google review. At most once every 6 months per family, never to a family behind on a payment, and only between 10 am and 7 pm.' },
+    !reviews.review_url ? h('p', { class: 'warn-text', style: 'margin:0' }, 'Off until you add your Google review link. Find it in your Google Business Profile under "Ask for reviews".') :
+      h('p', { style: 'margin:0' }, `Last 90 days: ${r90.sent} asked, ${r90.clicked} opened the review page${r90.stopped ? `, ${r90.stopped} asked us to stop` : ''}.`),
+    isOwner() ? h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      try { await patch('/v1/settings', { review_url: reviewUrl.value, review_requests: reviewOn.checked ? 'on' : 'off' }); toast('Saved.'); render(); } catch (err) { toast(err.message, 'warn'); }
+    }); } },
+      field('Google review link', reviewUrl),
+      h('div', { class: 'row wrap', style: 'gap:12px' }, h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, reviewOn, h('span', null, 'Send review requests')), btn('Save', null, 'secondary', { type: 'submit' }))) : null,
+    reviews.recent.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Recent'), ...reviews.recent.map((x) => h('div', { class: 'row small', style: 'gap:10px' },
+      h('span', { class: 'grow' }, `${x.family_name ?? 'Deleted family'} · ${x.athlete_name ?? ''}: ${REVIEW_WHY[x.reason](x)}`), h('span', { class: 'muted' }, ago(x.sent_at)),
+      x.opted_out_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Stop asking') : x.clicked_at ? h('span', { class: 'dp-badge dp-badge--good' }, 'Opened') : h('span', { class: 'dp-badge dp-badge--neutral' }, 'Sent')))) : null,
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'See the email'),
+      h('p', { class: 'strong small', style: 'margin:8px 0 4px' }, reviews.sample.subject), h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, reviews.sample.text)));
+  fill(main, header('Leads', `${res.last_30_days.leads} ${res.last_30_days.leads === 1 ? 'family' : 'families'} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.`, isOwner() ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/leads/campaigns' }, 'Email a group') : null),
+    chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel, reviewPanel);
+}
+
+const LOAD_LIFT = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_clean_1rm: 'power clean' };
+// ---------- Announcement emails ----------
+const GROUPS = [['everyone', 'All families'], ['members', 'Members'], ['lapsed', 'Lapsed members (canceled in the last year)'], ['no_membership', 'Families without a membership'], ['leads', 'Families who asked about training']];
+async function viewCampaigns(main) {
+  const [{ data }, settings] = await Promise.all([get('/v1/campaigns'), get('/v1/settings')]);
+  let editing = null, reach = null;
+  const f = { subject: input({ maxlength: '120', placeholder: 'Summer camp registration is open' }), body: h('textarea', { class: 'dp-input', rows: '10', placeholder: 'Hi {first_name},\n\nSummer camp runs June 9 to 13...' }),
+    group: select(GROUPS, { 'aria-label': 'Who it goes to' }), age_min: input({ type: 'number', min: '3', max: '99', inputmode: 'numeric', placeholder: 'Any', style: 'width:90px' }), age_max: input({ type: 'number', min: '3', max: '99', inputmode: 'numeric', placeholder: 'Any', style: 'width:90px' }), sport: input({ placeholder: 'Any sport' }) };
+  const audience = () => ({ group: f.group.value, age_min: f.age_min.value || null, age_max: f.age_max.value || null, sport: f.sport.value || undefined });
+  const body = () => ({ subject: f.subject.value, body: f.body.value, audience: audience() });
+  const reachBox = h('p', { class: 'small', style: 'margin:0' }), err = h('div', { class: 'dp-error', role: 'alert' });
+  const sendBtn = btn('Send', (e) => send(e.currentTarget), 'primary');
+  let t;
+  const refreshReach = () => { clearTimeout(t); t = setTimeout(async () => {
+    try { reach = await post('/v1/campaigns/preview', { audience: audience() }); reachBox.className = 'small'; fill(reachBox, h('span', { class: 'strong' }, `Goes to ${reach.count} ${reach.count === 1 ? 'person' : 'people'}`), reach.sample.length ? `: ${reach.sample.join(', ')}${reach.count > reach.sample.length ? ' and more' : ''}.` : '.'); sendBtn.textContent = `Send to ${reach.count}`; sendBtn.disabled = !reach.count; }
+    catch (e) { reach = null; reachBox.className = 'small warn-text'; reachBox.textContent = e.message; sendBtn.disabled = true; }
+  }, 250); };
+  for (const el of [f.group, f.age_min, f.age_max, f.sport]) { el.addEventListener('input', refreshReach); el.addEventListener('change', refreshReach); }
+  const save = async () => { editing = editing ? await patch(`/v1/campaigns/${editing.id}`, body()) : await post('/v1/campaigns', body()); return editing; };
+  async function send(button) {
+    err.textContent = '';
+    if (!reach?.count) return;
+    if (!confirm(`Send "${f.subject.value}" to ${reach.count} ${reach.count === 1 ? 'person' : 'people'} now? This can't be undone.`)) return;
+    await busy(button, async () => {
+      try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/send`, { confirm_count: reach.count }); toast(`Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}.`); editing = null; render(); }
+      catch (e) { err.textContent = e.message; }
+    });
+  }
+  const load = (c) => { editing = c.status === 'draft' ? c : null; f.subject.value = c.subject; f.body.value = c.body; f.group.value = c.audience.group; f.age_min.value = c.audience.age_min ?? ''; f.age_max.value = c.audience.age_max ?? ''; f.sport.value = c.audience.sport ?? ''; refreshReach(); main.scrollIntoView({ behavior: 'smooth' }); };
+  const compose = panel('New email', { subtitle: 'For news every family should hear: camp registration, a closure, a new class. Receipts and booking emails go out on their own. Write {first_name} for the parent\'s first name. Links are counted when clicked, and every email ends with your address and a "stop these emails" link.' },
+    settings.business_address ? null : h('p', { class: 'warn-text', style: 'margin:0' }, 'Add your mailing address in Schedule → Hours & settings first. US law (CAN-SPAM) requires it at the bottom of announcement emails.'),
+    field('Subject', f.subject), field('Message', f.body),
+    h('div', { class: 'form-grid' }, field('Who it goes to', f.group), field('Sport (optional)', f.sport)),
+    h('div', { class: 'row wrap', style: 'gap:12px' }, field('Athlete age from', f.age_min), field('to', f.age_max)),
+    reachBox, err,
+    h('div', { class: 'row wrap', style: 'gap:8px' }, sendBtn,
+      btn('Send me a test', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/test`); toast(`Test sent to ${r.sent_to}.`); } catch (x) { err.textContent = x.message; } }), 'secondary'),
+      btn('Save draft', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { await save(); toast('Draft saved.'); render(); } catch (x) { err.textContent = x.message; } }), 'ghost')));
+  const rows = data.map((c) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, c.subject), h('span', { class: 'small muted' }, `${c.audience_text} · ${c.status === 'draft' ? `draft, ${ago(c.created_at)}` : `sent ${date(c.sent_at)}`}`)),
+    c.status === 'draft' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Draft') : h('span', { class: 'small' }, `${c.sent} sent · ${c.clicked} clicked${c.stopped ? ` · ${c.stopped} stopped` : ''}`),
+    c.status === 'draft' ? btn('Edit', () => load(c), 'ghost') : btn('Copy', (e) => busy(e.currentTarget, async () => load(await post(`/v1/campaigns/${c.id}/copy`))), 'ghost'),
+    c.status === 'draft' ? btn('Delete', (e) => { if (confirm('Delete this draft?')) busy(e.currentTarget, async () => { await api('DELETE', `/v1/campaigns/${c.id}`); render(); }); }, 'ghost') : null));
+  fill(main, header('Email a group', 'Announcements to families, narrowed by membership, age and sport.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/leads' }, 'Back to leads')),
+    compose, panel('Sent and drafts', {}, rows.length ? rows : h('p', { class: 'muted' }, 'Nothing sent yet.')));
+  refreshReach();
 }
 
 // ---------- Clients ----------
@@ -205,8 +368,8 @@ async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), get(`/v1/athlete-links?client_id=${id}`)]);
-  const [en, testLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests')]);
-  const eng = clientPanels(c, en, testLib.data);
+  const [en, testLib, owed, products, badgeLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges')]);
+  const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
@@ -232,6 +395,8 @@ async function viewClient(main, id) {
     badge(i.status),
     i.status === 'failed' ? btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Charge retried. Payment succeeded.') : toast('Charge declined again.', 'warn'); render(); }), 'outline') : null))
     : h('p', { class: 'muted' }, sub?.status === 'trialing' ? `No charges yet. The first charge happens when the trial ends on ${date(sub.trial_ends_at)}.` : 'No invoices yet.'));
+
+  const payLinks = owed ? payLinksPanel(id, first, owed, products.data, render) : null;
 
   const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { value: c.program?.id ?? '', 'aria-label': 'Program' });
   const appUrl = location.origin + c.app_link;
@@ -307,7 +472,7 @@ async function viewClient(main, id) {
       busy(e.currentTarget, async () => { await del(`/v1/families/${fam.id}`, { confirm: typed }); toast('Family data deleted.'); location.hash = '#/clients'; });
     }, 'ghost')) : null;
   const familyPanel = fam ? panel(fam.name, { subtitle: fam.waiver.signed ? `Waiver signed ${date(fam.waiver.signed_at)} by ${fam.waiver.signed_by?.split(' <')[0]}` : 'Waiver not signed yet. Parents sign it in the portal before booking.' },
-      ...fam.guardians.map((g) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, g.name, g.is_primary ? h('span', { class: 'small muted' }, ' (primary)') : null), h('span', { class: 'small muted' }, [g.email, g.phone].filter(Boolean).join(' · '))),
+      ...fam.guardians.map((g) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, g.name, g.is_primary ? h('span', { class: 'small muted' }, ' (primary)') : null), h('span', { class: 'small muted' }, [g.email, g.phone, { on: 'Gets texts', stopped: 'Replied STOP to texts' }[g.texts]].filter(Boolean).join(' · '))),
         btn('Copy portal link', async () => { await navigator.clipboard.writeText(`${location.origin}/parent`).catch(() => {}); toast(`Portal link copied. ${g.name.split(' ')[0]} signs in with ${g.email}.`); }, 'ghost'))),
       fam.siblings.length ? h('p', { class: 'small' }, 'Siblings: ', ...fam.siblings.map((x, i) => [i ? ', ' : '', h('a', { href: `#/clients/${x.id}` }, x.name)])) : null,
       famData,
@@ -334,7 +499,7 @@ async function viewClient(main, id) {
   fill(main,
     header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id)), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients')),
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.education, training, account)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
 }
 
 async function viewNewClient(main) {
@@ -378,8 +543,64 @@ async function viewNewClient(main) {
 }
 
 // ---------- Billing ----------
+// ---------- Pay links ----------
+const sentText = (l) => (l.emailed || l.texted ? `Pay link sent${l.emailed ? ` by email${l.texted ? ' and text' : ''}` : ' by text'}.` : 'Pay link ready.');
+const copyLink = async (url) => { await navigator.clipboard?.writeText(url).catch(() => {}); toast('Pay link copied. Paste it into a text or email.'); };
+function payLinkActions(l, render) {
+  return h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
+    btn('Copy', () => copyLink(l.url), 'outline'),
+    btn('Send again', (e) => busy(e.currentTarget, async () => { toast(sentText(await post(`/v1/pay-links/${l.id}/send`))); render(); }), 'ghost'),
+    btn('Cancel', (e) => busy(e.currentTarget, async () => { await post(`/v1/pay-links/${l.id}/cancel`); toast('Link canceled. It can\'t be paid now.'); render(); }), 'ghost'));
+}
+function payLinksPanel(clientId, first, owed, products, render) {
+  const make = (body, send) => (e) => busy(e.currentTarget, async () => {
+    const l = await post('/v1/pay-links', { ...body, send });
+    if (send) toast(sentText(l)); else await copyLink(l.url);
+    render();
+  });
+  const kind = select([['custom', 'A set amount'], ...products.filter((p) => p.active !== false).map((p) => [p.id, `${p.name} (${money(p.price_cents)})`])], { 'aria-label': 'What to charge for' });
+  const desc = input({ placeholder: 'What it\'s for, e.g. Summer camp deposit', maxlength: '80' }), amount = input({ type: 'number', min: '1', step: '0.01', inputmode: 'decimal', placeholder: 'Amount ($)' });
+  const custom = h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr' }, desc, amount);
+  kind.addEventListener('change', () => { custom.hidden = kind.value !== 'custom'; });
+  const body = () => (kind.value === 'custom' ? { kind: 'custom', client_id: clientId, description: desc.value, amount_cents: Math.round(Number(amount.value) * 100) } : { kind: 'product', client_id: clientId, product_id: kind.value });
+  const openFor = (o) => owed.open_links.find((l) => (o.invoice_id && l.invoice_id === o.invoice_id) || (o.booking_id && l.booking_id === o.booking_id));
+  return panel('Pay links', { subtitle: `Send ${first}'s family a link to pay by card, no sign-in needed. Emails go to every parent; texts go to parents who turned them on.` },
+    owed.data.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Owed now'), owed.data.map((o) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, o.description), h('span', { class: 'small muted' }, `${money(o.amount_cents)}${openFor(o)?.sent_at ? ` · link sent ${ago(openFor(o).sent_at)}` : ''}`)),
+      btn('Send pay link', make(o, true), 'outline'), btn('Copy link', make(o, false), 'ghost')))) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing owed right now.'),
+    owed.open_links.filter((l) => l.kind === 'product' || l.kind === 'custom').map((l) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, l.description), h('span', { class: 'small muted' }, `${money(l.amount_cents)} · ${l.sent_at ? `sent ${ago(l.sent_at)}` : 'not sent yet'}`)), payLinkActions(l, render))),
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer' }, 'Ask for something else'),
+      h('div', { class: 'stack', style: 'margin-top:12px' }, kind, custom,
+        h('div', { class: 'row wrap' }, btn('Send pay link', (e) => make(body(), true)(e), 'secondary'), btn('Copy link', (e) => make(body(), false)(e), 'ghost')))));
+}
+
+// Daily money checks: what the morning check found, newest day first.
+function moneyChecksPanel(checks, render) {
+  const tone = { ok: ['All clear', 'good'], problems: ['To look at', 'warn'], error: ['Couldn\'t reach Stripe', 'warn'] };
+  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: new Date(Date.now() - 86400000).toISOString().slice(0, 10), style: 'width:170px' });
+  const run = (day) => (e) => busy(e.currentTarget, async () => {
+    const c = await post('/v1/money-checks/run', { date: day });
+    toast(c.status === 'ok' ? `Nothing unusual on ${ymd(c.date)}.` : c.status === 'error' ? c.error : `${c.problems} ${c.problems === 1 ? 'thing' : 'things'} to look at on ${ymd(c.date)}.`, c.status === 'ok' ? 'good' : 'warn'); render();
+  });
+  const row = (c) => h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight' },
+      h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'strong' }, ymd(c.date)), c.reviewed_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Looked at') : h('span', { class: `dp-badge dp-badge--${tone[c.status][1]}` }, tone[c.status][0])),
+      h('span', { class: 'small muted' }, `${c.totals.card_payments} card ${c.totals.card_payments === 1 ? 'payment' : 'payments'}, ${money(c.totals.recorded_cents)}${c.stripe_checked ? `. Stripe: ${money(c.totals.stripe_cents)}` : ''}`),
+      c.error ? h('span', { class: 'small' }, `${c.error} Tried ${c.attempts} ${c.attempts === 1 ? 'time' : 'times'}.`) : null,
+      c.findings.map((f) => h('div', { class: 'stack-tight', style: 'margin-top:6px' }, h('span', null, f.title), h('span', { class: 'small muted' }, f.detail))),
+      c.reviewed_at ? h('span', { class: 'small muted' }, `Marked as looked at by ${c.reviewed_by}, ${ago(c.reviewed_at).toLowerCase()}.`) : null),
+    c.status !== 'ok' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
+      c.reviewed_at ? null : btn('Mark as looked at', (e) => busy(e.currentTarget, async () => { await patch(`/v1/money-checks/${c.id}`, { reviewed: true }); toast('Marked as looked at.'); render(); }), 'outline'),
+      btn('Check again', run(c.date), 'ghost')) : null);
+  return panel('Daily money checks', {
+    subtitle: `Each morning the app checks the day before for double charges, refund spikes and payments stuck waiting${checks.stripe_connected ? ', and matches every card payment with Stripe' : '. Matching every card payment with Stripe starts once Stripe is connected'}. Anything it finds is emailed to you.` },
+    checks.data.length ? checks.data.map(row) : h('p', { class: 'muted', style: 'margin:0' }, 'The first check runs tomorrow morning.'),
+    h('div', { class: 'row wrap', style: 'gap:8px;margin-top:12px' }, pick, btn('Check a day', (e) => run(pick.value)(e), 'ghost')));
+}
+
 async function viewBilling(main) {
-  const [plans, inv] = await Promise.all([get('/v1/plans?include_inactive=true'), get('/v1/invoices')]);
+  const [plans, inv, links, checks] = await Promise.all([get('/v1/plans?include_inactive=true'), get('/v1/invoices'), get('/v1/pay-links'), get('/v1/money-checks')]);
   const pname = input(), price = input({ type: 'number', min: '0', step: '1', inputmode: 'decimal' }), trial = input({ type: 'number', min: '0', max: '90', value: '7' });
   const addPlan = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     await post('/v1/plans', { name: pname.value, price_cents: Math.round(Number(price.value) * 100), trial_days: Number(trial.value) }); toast('Plan created.'); render();
@@ -399,7 +620,9 @@ async function viewBilling(main) {
   const draw = () => fill(tbody, ...inv.data.filter((i) => !filter.value || i.status === filter.value).map((i) => h('tr', null,
     h('td', null, h('a', { href: `#/clients/${i.client_id}`, style: 'color:var(--steel)', class: 'strong' }, i.client_name)), h('td', null, i.plan_name), h('td', null, money(i.amount_cents)),
     h('td', { class: 'muted' }, date(i.created_at)), h('td', null, badge(i.status)),
-    h('td', null, i.status === 'failed' ? btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Payment succeeded.') : toast('Declined again.', 'warn'); render(); }), 'outline') : null))));
+    h('td', null, i.status === 'failed' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
+      btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Payment succeeded.') : toast('Declined again.', 'warn'); render(); }), 'outline'),
+      btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
   filter.addEventListener('change', draw); draw();
 
   const asOf = input({ type: 'date', value: new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10) });
@@ -412,14 +635,21 @@ async function viewBilling(main) {
 
   fill(main, 
     header('Billing', 'Plans, invoices and failed payments.'),
+    checks.needs_look ? moneyChecksPanel(checks, render) : null,
     plansPanel,
+    panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },
+      links.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['For', 'Client', 'Amount', 'Sent', 'Status', ''].map((t) => h('th', null, t)))),
+        h('tbody', null, links.data.slice(0, 25).map((l) => h('tr', null, h('td', null, l.description), h('td', null, l.client_id ? h('a', { href: `#/clients/${l.client_id}`, style: 'color:var(--steel)' }, l.client_name) : '—'),
+          h('td', null, money(l.amount_cents)), h('td', { class: 'muted small' }, l.sent_at ? ago(l.sent_at) : l.created_by === 'Automatic' ? 'With the failed-payment email' : 'Not sent'),
+          h('td', null, badge(l.paid_at ? 'paid' : l.status)), h('td', null, l.status === 'open' ? payLinkActions(l, render) : null)))))) : h('p', { class: 'muted' }, 'No pay links yet.')),
     panel('Invoices', { action: filter }, inv.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Client', 'Plan', 'Amount', 'Date', 'Status', ''].map((t) => h('th', null, t)))), tbody)) : h('p', { class: 'muted' }, 'No invoices yet. They appear when trials end and memberships renew.')),
+    checks.needs_look ? null : moneyChecksPanel(checks, render),
     testPanel);
 }
 
 // ---------- Programs ----------
 async function viewPrograms(main) {
-  const [progs, exs] = await Promise.all([get('/v1/programs'), get('/v1/exercises')]);
+  const [progs, exs, shop] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), isOwner() ? get('/v1/shop') : null]);
   const name = input(), weeks = input({ type: 'number', min: '1', max: '52', value: '8' }), level = select([['Beginner', 'Beginner'], ['Intermediate', 'Intermediate'], ['Advanced', 'Advanced'], ['All levels', 'All levels']]);
   const create = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const p = await post('/v1/programs', { name: name.value, weeks: Number(weeks.value), level: level.value }); toast('Program created. Add its first workout.'); location.hash = `#/programs/${p.id}`;
@@ -437,13 +667,26 @@ async function viewPrograms(main) {
         progs.data.length ? h('div', { class: 'workouts' }, progs.data.map((p) => h('a', { href: `#/programs/${p.id}`, class: 'dp-panel', style: 'text-decoration:none;color:inherit' },
           h('div', { class: 'week-title', style: 'color:var(--steel)' }, p.name),
           h('div', { class: 'small muted' }, `${p.weeks} weeks · ${p.level ?? 'Any level'} · ${p.workout_count} ${p.workout_count === 1 ? 'workout' : 'workouts'} · ${p.client_count} ${p.client_count === 1 ? 'client' : 'clients'}`)))) : h('div', { class: 'empty' }, 'No programs yet. Create your first one below.'),
-        panel('New program', {}, create)),
+        panel('New program', {}, create),
+        shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${exs.data.length} exercises` },
         h('div', null, exs.data.map((x) => h('div', { class: 'list-item' },
           h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon()),
           h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, x.video_url ? 'Has demo video' : 'No video yet')),
           btn('Edit', () => editExercise(x), 'ghost')))),
         addEx)));
+}
+
+// Owners: what's in the online store and the link to share.
+function storePanel(shop) {
+  const listed = [...shop.programs, ...shop.courses].filter((x) => x.listed);
+  const link = `${location.origin}/shop`;
+  return panel('Online store', { subtitle: listed.length ? `${listed.length} for sale · ${shop.last_30_days.sold} sold in the last 30 days (${money(shop.last_30_days.cents)})` : 'Nothing for sale yet. Open a program and use Sell online, or a course on the Education tab.' },
+    listed.map((x) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title), h('span', { class: 'small muted' }, `${x.kind === 'program' ? 'Program' : 'Course'} · ${money(x.price_cents)} · ${x.sold} sold`)),
+      x.kind === 'program' ? h('a', { class: 'dp-btn dp-btn--ghost', href: `#/programs/${x.id}` }, 'Open') : null)),
+    h('div', { class: 'row wrap' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
+      btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website and Instagram.')), 'ghost'),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '/shop', target: '_blank', rel: 'noopener' }, 'View')));
 }
 
 function showVideo(x) {
@@ -466,7 +709,7 @@ function editExercise(x) {
 }
 
 async function viewProgram(main, id) {
-  const [p, exs, clients] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), get('/v1/clients')]);
+  const [p, exs, clients, shop] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), get('/v1/clients'), isOwner() ? get('/v1/shop') : null]);
   const who = select([['', 'Choose a client'], ...clients.data.filter((c) => !['canceled'].includes(c.status)).map((c) => [c.id, c.name])], { 'aria-label': 'Client to assign' });
   const assign = h('div', { class: 'row' }, h('div', { style: 'width:220px' }, who), btn('Assign program', (e) => busy(e.currentTarget, async () => {
     if (!who.value) throw new Error('Choose a client first.');
@@ -477,18 +720,21 @@ async function viewProgram(main, id) {
   const workoutCard = (w) => {
     const exSel = select([['', 'Choose exercise'], ...exs.data.map((x) => [x.id, x.name])], { 'aria-label': `Exercise for ${w.title}` });
     const rx = input({ placeholder: 'Sets × reps, e.g. 3 × 10', 'aria-label': 'Sets and reps' });
+    const lt = select([['', 'Weight: coach sets it'], ['squat_1rm', '% of back squat max'], ['bench_1rm', '% of bench press max'], ['power_clean_1rm', '% of power clean max']], { 'aria-label': 'Weight from a tested max' });
+    const lp = input({ type: 'number', min: '30', max: '110', inputmode: 'numeric', placeholder: '%', 'aria-label': 'Percent of max', style: 'width:80px' });
     return h('div', { class: 'workout' },
       h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}`), h('span', { class: 'strong' }, w.title)),
         btn('Delete', (e) => { if (confirm(`Delete ${w.title}?`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`); toast('Workout deleted.'); render(); }); }, 'ghost')),
       w.exercises.length ? w.exercises.map((x) => h('div', { class: 'row' },
         h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon()),
-        h('div', { class: 'grow stack-tight' }, h('span', null, x.name), h('span', { class: 'small muted' }, x.prescription)),
+        h('div', { class: 'grow stack-tight' }, h('span', null, x.name), h('span', { class: 'small muted' }, `${x.prescription}${x.load_test ? ` · ${x.load_pct}% of ${LOAD_LIFT[x.load_test]} max` : ''}`)),
         h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `Remove ${x.name}`, onClick: (e) => busy(e.currentTarget, async () => { await del(`/v1/workout-exercises/${x.id}`); render(); }) }, 'Remove')))
         : h('p', { class: 'small muted' }, 'No exercises yet.'),
       h('form', { class: 'row wrap', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!exSel.value) throw new Error('Choose an exercise to add.');
-        await post(`/v1/workouts/${w.id}/exercises`, { exercise_id: exSel.value, prescription: rx.value }); render();
-      }); } }, h('div', { style: 'flex:1 1 100%' }, exSel), h('div', { class: 'grow' }, rx), btn('Add exercise', null, 'secondary', { type: 'submit' })));
+        await post(`/v1/workouts/${w.id}/exercises`, { exercise_id: exSel.value, prescription: rx.value, load_test: lt.value || undefined, load_pct: lt.value ? Number(lp.value) : undefined }); render();
+      }); } }, h('div', { style: 'flex:1 1 100%' }, exSel), h('div', { class: 'grow' }, rx), lt, lp, btn('Add exercise', null, 'secondary', { type: 'submit' })),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'A weight from a max updates itself each time the athlete tests again, rounded to 5 lb.'));
   };
 
   const wk = input({ type: 'number', min: '1', max: String(p.weeks), value: String(weeks.length ? Math.max(...weeks) : 1) }), dy = input({ type: 'number', min: '1', max: '7', value: '1' }), title = input({ placeholder: 'Lower body' });
@@ -501,6 +747,7 @@ async function viewProgram(main, id) {
     ...weeks.map((n) => h('section', { class: 'stack' }, h('h2', { class: 'week-title' }, `Week ${n}`), h('div', { class: 'workouts' }, p.workouts.filter((w) => w.week === n).map(workoutCard)))),
     weeks.length ? null : h('div', { class: 'empty' }, 'No workouts yet. Add the first one below.'),
     panel('Add a workout', {}, addWorkout),
+    shop ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => render())) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
       btn('Delete program', (e) => { if (confirm(`Delete ${p.name}? This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost')));
 }
@@ -569,7 +816,18 @@ async function viewIntegrations(main) {
       catch (err) { toast(err.message, 'warn'); } finally { e.target.disabled = false; }
     }, 'outline')),
     outbox.data.length ? outbox.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.to_email} · ${m.subject}${statusText[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No emails yet.'));
-  fill(main, header('API & integrations', 'Connect Diamond Protocol to your other systems.'), h('div', { class: 'grid grid-2' }, keysPanel, hooksPanel), docs, outPanel);
+  const texts = await get('/v1/texts');
+  const textMode = { test: 'No text service is connected, so texts stay here and are not sent. Add your Twilio settings on the server to start sending.',
+    restricted: `Sending through Twilio, but only to ${texts.only_to}. Everything else is held here.`, live: 'Sending through Twilio.' };
+  const textStatus = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '', received: '' };
+  const testPhone = input({ type: 'tel', placeholder: '(512) 555-0100', 'aria-label': 'Send a test text to' });
+  const textPanel = panel('Texts', { subtitle: 'Every text sent to parents, and their replies. Parents turn texts on in the parent portal and can reply STOP at any time.' },
+    h('p', { class: 'small', style: `margin:0;color:${texts.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, textMode[texts.mode] || ''),
+    texts.mode === 'test' ? null : h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, testPhone, btn('Send test text', (e) => busy(e.currentTarget, async () => {
+      try { await post('/v1/texts/test', { to: testPhone.value }); toast('Test text sent.'); render(); } catch (err) { toast(err.message, 'warn'); }
+    }), 'outline')),
+    texts.data.length ? texts.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.direction === 'in' ? 'From' : 'To'} ${phoneText(m.phone)}${textStatus[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No texts yet.'));
+  fill(main, header('API & integrations', 'Connect Diamond Protocol to your other systems.'), h('div', { class: 'grid grid-2' }, keysPanel, hooksPanel), docs, outPanel, textPanel);
 }
 
 // ---------- Point of sale ----------
@@ -585,7 +843,8 @@ async function viewSell(main) {
     return;
   }
   const preClient = new URLSearchParams(location.hash.split('?')[1] || '').get('client');
-  const cart = new Map();                                       // product_id -> quantity
+  const cart = new Map();                                       // "product_id" or "product_id:size_id" -> quantity
+  const cartItem = (key) => { const [pid, vid] = key.split(':'); const p = prods.data.find((x) => x.id === pid); const size = vid && p.variants.find((x) => x.id === vid); return { p, vid, name: size ? `${p.name} (${size.name})` : p.name }; };
   let custom = null;
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { value: remember.get('dp_location') || locs.data[0].id, 'aria-label': 'Location' });
   locSel.addEventListener('change', () => { remember.set('dp_location', locSel.value); draw(); });
@@ -600,16 +859,16 @@ async function viewSell(main) {
   const progress = h('div');
 
   const client = () => clients.data.find((c) => c.id === cliSel.value);
-  const total = () => [...cart].reduce((t, [id, q]) => t + prods.data.find((p) => p.id === id).price_cents * q, 0) + (custom?.amount_cents || 0);
+  const total = () => [...cart].reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (custom?.amount_cents || 0);
 
   function draw() {
     const c = client();
     fill(cartBox, ...[...cart].map(([id, q]) => {
-      const p = prods.data.find((x) => x.id === id);
-      return h('div', { class: 'row' }, h('span', { class: 'grow' }, p.name), 
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One fewer ${p.name}`, onClick: () => { q > 1 ? cart.set(id, q - 1) : cart.delete(id); draw(); } }, '−'),
+      const { p, name } = cartItem(id);
+      return h('div', { class: 'row' }, h('span', { class: 'grow' }, name), 
+        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One fewer ${name}`, onClick: () => { q > 1 ? cart.set(id, q - 1) : cart.delete(id); draw(); } }, '−'),
         h('span', { style: 'min-width:24px;text-align:center' }, q),
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One more ${p.name}`, onClick: () => { cart.set(id, q + 1); draw(); } }, '+'),
+        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One more ${name}`, onClick: () => { cart.set(id, q + 1); draw(); } }, '+'),
         h('span', { style: 'min-width:80px;text-align:right' }, money(p.price_cents * q)));
     }), custom ? h('div', { class: 'row' }, h('span', { class: 'grow' }, custom.description), btn('Remove', () => { custom = null; draw(); }, 'ghost'), h('span', { style: 'min-width:80px;text-align:right' }, money(custom.amount_cents))) : null);
     if (!cart.size && !custom) cartBox.append(h('p', { class: 'muted' }, 'Tap a product to add it.'));
@@ -633,7 +892,7 @@ async function viewSell(main) {
 
   async function startSale() {
     err.textContent = '';
-    const body = { location_id: locSel.value, method: method.value, client_id: cliSel.value || undefined, items: [...cart].map(([product_id, quantity]) => ({ product_id, quantity })), custom: custom || undefined,
+    const body = { location_id: locSel.value, method: method.value, client_id: cliSel.value || undefined, items: [...cart].map(([key, quantity]) => { const [product_id, variant_id] = key.split(':'); return { product_id, variant_id, quantity }; }), custom: custom || undefined,
       save_card: saveCard.checked && !!cliSel.value, reader_id: method.value === 'reader' ? readerSel.value : undefined };
     await busy(charge, async () => {
       try { const sale = await post('/v1/sales', body); follow(sale); }
@@ -646,7 +905,7 @@ async function viewSell(main) {
     clearTimeout(timer);
     if (sale.status === 'succeeded') {
       toast(`${money(sale.amount_cents)} paid${sale.card_last4 ? ` with card ending ${sale.card_last4}` : ''}.`);
-      cart.clear(); custom = null; fill(progress); draw(); refreshRecent(); return;
+      cart.clear(); custom = null; fill(progress); draw(); refreshRecent(); refreshStock(); return;
     }
     if (sale.status !== 'pending') {
       fill(progress, h('div', { class: 'dp-panel', style: 'border-color:var(--amber)' }, h('p', { class: 'warn-text strong' }, sale.status === 'canceled' ? 'Payment canceled.' : `Payment didn't go through. ${sale.failure_reason ?? ''}`), h('p', { class: 'small muted' }, 'Nothing was charged. Fix the issue and charge again.')));
@@ -688,8 +947,27 @@ async function viewSell(main) {
       : [h('p', { class: 'muted' }, 'No sales in the last 7 days.')]));
   }
 
-  const productGrid = h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px' }, prods.data.map((p) => h('button', { type: 'button', class: 'dp-panel', style: 'text-align:left;cursor:pointer;padding:14px;gap:4px', onClick: () => { cart.set(p.id, (cart.get(p.id) || 0) + 1); draw(); } },
-    h('span', { class: 'strong' }, p.name), h('span', { style: 'font:600 22px/1 var(--font-display);color:var(--green-bright)' }, money(p.price_cents)), p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null)));
+  // Gear with sizes asks which size; stock left shows on the tile (selling past zero is allowed: the shelf is the truth).
+  const sizeBox = h('div');
+  const addToCart = (key) => { cart.set(key, (cart.get(key) || 0) + 1); fill(sizeBox); draw(); };
+  const left = (n) => (n <= 0 ? h('span', { class: 'small warn-text' }, 'Out of stock') : h('span', { class: `small ${n <= 3 ? 'warn-text' : 'muted'}` }, `${n} left`));
+  const pickSize = (p, sizes) => fill(sizeBox, h('div', { class: 'dp-panel', style: 'gap:10px' },
+    h('div', { class: 'row' }, h('span', { class: 'grow strong' }, `Which size of ${p.name}?`), btn('Cancel', () => fill(sizeBox), 'ghost')),
+    h('div', { class: 'row wrap', style: 'gap:8px' }, sizes.map((x) => h('button', { type: 'button', class: 'dp-btn dp-btn--secondary', style: 'min-height:52px;min-width:72px;flex-direction:column;gap:2px', onClick: () => addToCart(`${p.id}:${x.id}`) },
+      h('span', { class: 'strong' }, x.name), p.track_stock ? left(x.on_hand) : null)))));
+  const productGrid = h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px' });
+  function drawProducts() {
+    fill(productGrid, ...prods.data.map((p) => {
+      const sizes = (p.variants ?? []).filter((x) => x.active);
+      return h('button', { type: 'button', class: 'dp-panel', style: 'text-align:left;cursor:pointer;padding:14px;gap:4px', onClick: () => (sizes.length > 1 ? pickSize(p, sizes) : addToCart(sizes.length ? `${p.id}:${sizes[0].id}` : p.id)) },
+        h('span', { class: 'strong' }, p.name), h('span', { style: 'font:600 22px/1 var(--font-display);color:var(--green-bright)' }, money(p.price_cents)),
+        p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null,
+        sizes.length > 1 ? h('span', { class: 'small muted' }, sizes.map((x) => x.name).join(' · ')) : null,
+        p.track_stock ? left(p.on_hand) : null);
+    }));
+  }
+  async function refreshStock() { if (!prods.data.some((p) => p.track_stock)) return; prods.data = (await get('/v1/products')).data; drawProducts(); }
+  drawProducts();
   // Monthly memberships renew on the card saved for the client (or their family), so starting one needs that card.
   const memberBox = h('div');
   function startMembership(p) {
@@ -725,11 +1003,11 @@ async function viewSell(main) {
     h('div', { class: 'grow' }, customDesc), customAmt, btn('Add', null, 'secondary', { type: 'submit' }));
 
   fill(main, 
-    header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', setupLink()),
+    header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', h('div', { class: 'row wrap' }, prods.data.some((p) => p.track_stock) ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Inventory') : null, setupLink())),
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         panel(null, {}, h('div', { class: 'form-grid' }, field('Where', locSel), field('Who', cliSel))),
-        panel('Products', {}, productGrid, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
+        panel('Products', {}, productGrid, sizeBox, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
         planGrid ? panel('Monthly memberships', { subtitle: 'Choose who it\'s for above, then tap a membership. It renews on their saved card.' }, planGrid) : null,
         memberBox),
       h('div', { class: 'stack', style: 'gap:24px' },
@@ -737,6 +1015,57 @@ async function viewSell(main) {
         panel('Sale', {}, cartBox, h('div', { class: 'row', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' }, h('span', { class: 'grow muted' }, 'Total'), totalBox), methodBox, err, charge))),
     panel('Recent sales', { subtitle: 'Last 7 days' }, recent));
   draw(); drawRecent(sales.data);
+}
+
+// ---------- Inventory ----------
+const MOVE_TEXT = { sale: 'Sold', refund: 'Refunded, back on the shelf', received: 'Delivery', count: 'Shelf count', adjust: 'Adjusted' };
+async function viewInventory(main) {
+  const [inv, prods] = await Promise.all([get('/v1/inventory'), get('/v1/products')]);
+  const manage = state.user.role !== 'front_desk';
+  const ask = (text, fallback = '') => { const a = prompt(text, fallback); if (a === null || a.trim() === '') return null; return a.trim(); };
+  const move = (p, x, reason) => (e) => {
+    const label = x ? `${p.name} (${x.name})` : p.name;
+    const a = ask({ received: `How many ${label} arrived?`, count: `How many ${label} are on the shelf right now?`, adjust: `Add or take off how many ${label}? Use a minus for fewer, like -1.` }[reason]);
+    if (a === null) return;
+    const note = reason === 'adjust' ? prompt('Why? (Optional, like "Damaged" or "Gave to a coach")') ?? '' : '';
+    busy(e.currentTarget, async () => {
+      try { const r = await post(`/v1/products/${p.id}/stock`, { reason, variant_id: x?.id, quantity: Number(a), note: note || undefined }); toast(`${label}: ${r.on_hand} on hand.`); render(); }
+      catch (err) { toast(err.message, 'warn'); }
+    });
+  };
+  const count = (n, low) => h('span', { class: `dp-badge dp-badge--${n <= 0 || low ? 'warn' : 'good'}`, style: 'min-width:56px;text-align:center' }, n <= 0 ? (n < 0 ? `${n} (recount)` : 'Out') : `${n}`);
+  const history = (p) => {
+    const box = h('div', { class: 'stack-tight' });
+    return h('details', { onToggle: async (e) => { if (!e.target.open || box.childElementCount) return; const { data } = await get(`/v1/products/${p.id}/stock`);
+      fill(box, ...(data.length ? data.map((m) => h('div', { class: 'row small', style: 'gap:10px' }, h('span', { class: 'muted', style: 'width:92px;flex-shrink:0' }, ago(m.created_at)), h('span', { class: 'grow' }, `${MOVE_TEXT[m.reason]}${m.size ? ` · ${m.size}` : ''}${m.note ? ` · ${m.note}` : ''}${m.created_by ? ` · ${m.created_by}` : ''}`), h('span', { class: 'strong', style: 'min-width:40px;text-align:right' }, m.delta > 0 ? `+${m.delta}` : `${m.delta}`)))
+        : [h('p', { class: 'small muted' }, 'No changes yet.')])); } },
+    h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'Recent changes'), box);
+  };
+  const cards = inv.data.map((p) => {
+    const sizes = p.variants.filter((x) => x.active);
+    const rows = sizes.length ? sizes.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('span', { class: 'grow strong', style: 'flex:1 1 110px' }, x.name, x.sku ? h('span', { class: 'small muted' }, ` · ${x.sku}`) : null), count(x.on_hand, x.low),
+      btn('Delivery', move(p, x, 'received'), 'outline'), btn('Count', move(p, x, 'count'), 'ghost'), btn('Adjust', move(p, x, 'adjust'), 'ghost'),
+      manage ? btn('Stop selling', (e) => { if (confirm(`Stop selling ${p.name} in ${x.name}?`)) busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}/variants/${x.id}`, { active: false }); render(); }); }, 'ghost') : null))
+      : [h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('span', { class: 'grow strong' }, 'On hand'), count(p.on_hand, p.low), btn('Delivery', move(p, null, 'received'), 'outline'), btn('Count', move(p, null, 'count'), 'ghost'), btn('Adjust', move(p, null, 'adjust'), 'ghost'))];
+    const sizeName = input({ placeholder: 'Like M or Youth L', 'aria-label': `New size for ${p.name}`, style: 'max-width:180px' });
+    return panel(p.name, { subtitle: `${p.on_hand} on hand${sizes.length ? ` across ${sizes.length} sizes` : ''} · ${p.low_stock_at == null ? 'No low-stock warning' : `Warns at ${p.low_stock_at} or fewer${sizes.length ? ' in a size' : ''}`}` },
+      ...rows,
+      p.unsized_on_hand ? h('p', { class: 'small muted' }, `${p.unsized_on_hand} counted before sizes were added. Count each size to set the real numbers.`) : null,
+      manage ? h('form', { class: 'row wrap', style: 'gap:8px;border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        try { await post(`/v1/products/${p.id}/variants`, { name: sizeName.value }); toast(`${sizeName.value} added. Record a delivery or count to set how many you have.`); render(); } catch (err) { toast(err.message, 'warn'); }
+      }); } }, sizeName, btn('Add size', null, 'secondary', { type: 'submit' }),
+        h('span', { class: 'grow' }),
+        btn('Low-stock warning', (e) => { const a = prompt(`Warn on Today when ${p.name}${sizes.length ? ' in any size' : ''} is down to how many? Leave blank to turn it off.`, p.low_stock_at ?? ''); if (a === null) return; busy(e.currentTarget, async () => { try { await patch(`/v1/products/${p.id}`, { low_stock_at: a.trim() === '' ? null : Number(a) }); render(); } catch (err) { toast(err.message, 'warn'); } }); }, 'ghost'),
+        btn('Stop counting', (e) => { if (confirm(`Stop counting stock for ${p.name}? Its history is kept.`)) busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { track_stock: false }); render(); }); }, 'ghost')) : null,
+      history(p));
+  });
+  const untracked = prods.data.filter((p) => !p.track_stock && ['gear', 'other'].includes(p.kind));
+  const pick = select(untracked.map((p) => [p.id, p.name]), { 'aria-label': 'Product to count' });
+  const startPanel = manage && untracked.length ? panel('Count another product', { subtitle: 'For gear you keep on a shelf. Sessions and packs don\'t need counting.' },
+    h('div', { class: 'row wrap', style: 'gap:8px' }, pick, btn('Start counting', (e) => busy(e.currentTarget, async () => { await patch(`/v1/products/${pick.value}`, { track_stock: true, low_stock_at: 2 }); toast('Now add its sizes (if any) and record what\'s on the shelf.'); render(); }), 'secondary'))) : null;
+  fill(main, header('Inventory', inv.low.length ? `${inv.low.length} running low: ${inv.low.map((x) => x.name).join(', ')}.` : 'What\'s on the shelf. Sales take stock out and full refunds put it back.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'Back to point of sale')),
+    ...(cards.length ? cards : [h('div', { class: 'empty' }, h('p', null, manage ? 'Nothing is counted yet. Choose a product below to start.' : 'Nothing is counted yet. Ask the owner to turn on stock counting for gear.'))]),
+    startPanel);
 }
 
 async function viewSetup(main) {
@@ -758,21 +1087,24 @@ async function viewSetup(main) {
       h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('City', f.city), field('State', f.state), field('ZIP', f.zip)),
       h('div', null, btn('Add location', null, 'primary', { type: 'submit' }))));
 
-  const pf = { name: input(), kind: select([['session', 'Single session'], ['pack', 'Session pack'], ['gear', 'Gear'], ['other', 'Other']]), price: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), sessions: input({ type: 'number', min: '2', value: '10' }), type: select([['private', 'Private sessions'], ['group', 'Group classes']]) };
+  const pf = { name: input(), kind: select([['session', 'Single session'], ['pack', 'Session pack'], ['gear', 'Gear'], ['other', 'Other']]), price: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), sessions: input({ type: 'number', min: '2', value: '10' }), type: select([['private', 'Private sessions'], ['group', 'Group classes']]), stock: h('input', { type: 'checkbox', checked: true }) };
   const sessionsField = field('Sessions in pack', pf.sessions), typeField = field('Counts as', pf.type);
-  const syncKind = () => { sessionsField.style.display = pf.kind.value === 'pack' ? '' : 'none'; typeField.style.display = ['pack', 'session'].includes(pf.kind.value) ? '' : 'none'; };
+  const stockField = h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, pf.stock, h('span', null, 'Count stock (sizes and deliveries in Inventory)'));
+  const syncKind = () => { sessionsField.style.display = pf.kind.value === 'pack' ? '' : 'none'; typeField.style.display = ['pack', 'session'].includes(pf.kind.value) ? '' : 'none'; stockField.style.display = pf.kind.value === 'gear' ? '' : 'none'; };
   pf.kind.addEventListener('change', syncKind); syncKind();
   const prodPanel = panel('Products', { subtitle: 'Sessions and packs add session credits to the client. Members check in on their membership.' },
     ...prods.data.map((p) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (not sold)')), h('span', { class: 'small muted' }, `${money(p.price_cents)}${p.kind === 'pack' ? ` · ${p.sessions} ${p.credit_type} sessions` : p.kind === 'session' ? ` · 1 ${p.credit_type} session` : ''}`)),
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (not sold)')), h('span', { class: 'small muted' }, `${money(p.price_cents)}${p.kind === 'pack' ? ` · ${p.sessions} ${p.credit_type} sessions` : p.kind === 'session' ? ` · 1 ${p.credit_type} session` : ''}${p.track_stock ? ` · ${p.on_hand} on hand` : ''}`)),
+      p.track_stock ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Stock') : null,
       btn('Price', (e) => { const a = prompt(`New price for ${p.name}?`, (p.price_cents / 100).toFixed(2)); if (a === null) return; busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { price_cents: Math.round(Number(a) * 100) }); toast('Price updated.'); render(); }); }, 'ghost'),
       btn(p.active ? 'Stop selling' : 'Sell again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { active: !p.active }); render(); }), 'ghost'))),
     h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/products', { name: pf.name.value, kind: pf.kind.value, price_cents: Math.round(Number(pf.price.value) * 100), sessions: pf.kind.value === 'pack' ? Number(pf.sessions.value) : undefined, credit_type: pf.type.value });
-      toast('Product added.'); render();
+      await post('/v1/products', { name: pf.name.value, kind: pf.kind.value, price_cents: Math.round(Number(pf.price.value) * 100), sessions: pf.kind.value === 'pack' ? Number(pf.sessions.value) : undefined, credit_type: pf.type.value, track_stock: pf.kind.value === 'gear' && pf.stock.checked, low_stock_at: pf.kind.value === 'gear' && pf.stock.checked ? 2 : undefined });
+      toast(pf.kind.value === 'gear' && pf.stock.checked ? 'Product added. Add sizes and what\'s on the shelf in Inventory.' : 'Product added.'); render();
     }); } },
       h('div', { class: 'form-grid' }, field('Product name', pf.name), field('Type', pf.kind)),
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Price ($)', pf.price), sessionsField, typeField),
+      stockField,
       h('div', null, btn('Add product', null, 'primary', { type: 'submit' }))));
 
   const rf = { code: input({ placeholder: 'three-words-code', autocapitalize: 'none' }), label: input({ placeholder: 'Front desk' }), loc: select(locs.data.filter((l) => l.active).map((l) => [l.id, l.name])) };
@@ -866,7 +1198,7 @@ async function viewSchedule(main) {
 }
 
 async function viewSession(main, id) {
-  const [x, clientsList, settings] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings')]);
+  const [x, clientsList, settings, progs] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs')]);
   tzName = settings.timezone;
   const active = x.roster.filter((r) => ['booked', 'attended', 'no_show'].includes(r.status));
   const waiting = x.roster.filter((r) => r.status === 'waitlisted');
@@ -903,6 +1235,25 @@ async function viewSession(main, id) {
     render();
   }), 'secondary'));
 
+  // The workout on the weight-room screen (/tv) during this session.
+  const canPick = state.user?.role !== 'front_desk';
+  const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { 'aria-label': 'Program' });
+  const wkSel = select([['', 'Choose a workout']], { 'aria-label': 'Workout', disabled: true });
+  progSel.addEventListener('change', async () => {
+    wkSel.disabled = true;
+    if (!progSel.value) return fill(wkSel, h('option', { value: '' }, 'Choose a workout'));
+    const p = await get(`/v1/programs/${progSel.value}`);
+    fill(wkSel, h('option', { value: '' }, 'Choose a workout'), p.workouts.map((w) => h('option', { value: w.id }, `Week ${w.week} day ${w.day}: ${w.title}`)));
+    wkSel.disabled = false;
+  });
+  const screenPanel = panel('Weight-room screen', { subtitle: x.workout ? `Showing ${x.workout.title} (${x.workout.program_name}, week ${x.workout.week} day ${x.workout.day}) from 30 minutes before the start. Athletes tap their name to see their weights and log it.` : 'Pick a workout to show on the weight-room TV during this session. Athletes tap their name there to see their weights and log it. Set up the screen from Schedule → Hours & settings.' },
+    x.workout ? h('ol', { class: 'small', style: 'margin:0;padding-left:20px' }, x.workout.exercises.map((e) => h('li', null, `${e.name} · ${e.prescription || ''}${e.load ? ` · ${e.load}` : ''}`))) : null,
+    canPick && x.status === 'scheduled' ? h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (!wkSel.value) throw new Error('Choose a program, then a workout.');
+      await put(`/v1/sessions/${id}/workout`, { workout_id: wkSel.value }); toast('The screen shows it now.'); render();
+    }); } }, h('div', { class: 'grow' }, progSel), h('div', { class: 'grow' }, wkSel), btn(x.workout ? 'Change workout' : 'Show on screen', null, 'secondary', { type: 'submit' }),
+      x.workout ? btn('Clear', (e) => busy(e.currentTarget, async () => { await put(`/v1/sessions/${id}/workout`, { workout_id: null }); toast('Cleared.'); render(); }), 'ghost') : null) : null);
+
   fill(main, 
     header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
@@ -917,6 +1268,7 @@ async function viewSession(main, id) {
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, [a.position, a.grad_year ? `Class of ${a.grad_year}` : null].filter(Boolean).join(' · '))))) : h('p', { class: 'muted' }, 'No roster yet. Add athletes on the team page.')) : null,
     x.team && !x.roster.length ? null : panel(`Roster · ${x.booked_count}/${x.capacity}`, { subtitle: `${x.attended_count} checked in${x.unpaid_count ? ` · ${x.unpaid_count} unpaid` : ''}${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}` },
       active.length ? active.map(row) : h('p', { class: 'muted' }, 'Nobody booked yet.'), x.status === 'scheduled' ? addForm : null),
+    screenPanel,
     waiting.length ? panel(`Waitlist · ${waiting.length}`, { subtitle: 'Moves up automatically when a spot opens.' }, waiting.map((r) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, r.name), btn('Remove', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); render(); }), 'ghost')))) : null,
     done.length ? panel('Canceled', {}, done.map((r) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, r.name), h('span', { class: 'muted' }, r.status === 'late_canceled' ? 'Late cancel (session used)' : 'Canceled')))) : null,
     x.status === 'scheduled' ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Cancel this session', (e) => {
@@ -926,8 +1278,39 @@ async function viewSession(main, id) {
     }, 'ghost')) : null);
 }
 
+// Self check-in: a QR poster for the door and check-in tablets for the front desk.
+function checkinPanel(locations, kiosks) {
+  const places = locations.filter((l) => l.active && ['facility', 'park', 'other'].includes(l.kind) && l.name !== 'Online');   // places with a door
+  const shown = h('div');
+  const canManage = state.user?.role !== 'front_desk';
+  const poster = (l) => async (e) => busy(e.currentTarget, async () => { const c = await get(`/v1/locations/${l.id}/check-in-code`); window.open(c.poster_url || `/poster.html?code=${c.code}`, '_blank'); });
+  const tablet = (l) => async (e) => busy(e.currentTarget, async () => {
+    const k = await post('/v1/kiosks', { location_id: l.id });
+    if (!k.link.startsWith('http')) k.link = location.origin + k.link;
+    if (k.screen_link && !k.screen_link.startsWith('http')) k.screen_link = location.origin + k.screen_link;
+    fill(shown, h('div', { class: 'dp-panel stack', style: 'background:var(--surface-2, transparent)' },
+      h('div', { class: 'strong' }, `Tablet link for ${l.name}`),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Open this link once in the tablet\'s browser, then add it to the home screen. Anyone with the link can check athletes in here, so don\'t share it. It\'s only shown now.'),
+      h('code', { style: 'word-break:break-all' }, k.link),
+      h('div', null, btn('Copy tablet link', async () => { await navigator.clipboard?.writeText(k.link).catch(() => {}); toast('Tablet link copied.'); }, 'secondary')),
+      k.screen_link ? [h('div', { class: 'strong', style: 'margin-top:8px' }, 'Weight-room screen link'),
+        h('p', { class: 'small muted', style: 'margin:0' }, 'The same key for a TV or shared tablet in the weight room: it shows the workout picked on the session page, and athletes tap their name to log it. Remove the tablet above to turn both off.'),
+        h('code', { style: 'word-break:break-all' }, k.screen_link),
+        h('div', null, btn('Copy screen link', async () => { await navigator.clipboard?.writeText(k.screen_link).catch(() => {}); toast('Screen link copied.'); }, 'secondary'))] : null));
+  });
+  return panel('Self check-in', { subtitle: 'Athletes check themselves in for sessions they\'re booked on, from 30 minutes before the start. The roster updates as they do.' },
+    places.length ? places.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow strong' }, l.name),
+      btn('Door poster', poster(l), 'outline'), btn('Set up a tablet', tablet(l), 'ghost'),
+      canManage ? btn('New door code', (e) => { if (confirm(`Make a new code for ${l.name}? Printed posters there stop working.`)) busy(e.currentTarget, async () => { await post(`/v1/locations/${l.id}/check-in-code/reset`); toast('New code made. Print the poster again.'); }); }, 'ghost') : null))
+      : h('p', { class: 'muted', style: 'margin:0' }, 'Add a location in Point of sale first.'),
+    shown,
+    kiosks.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Tablets in use'), kiosks.map((k) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, k.name), h('span', { class: 'small muted' }, k.last_seen_at ? `Last used ${ago(k.last_seen_at)}` : 'Not opened yet')),
+      canManage ? btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/kiosks/${k.id}`); toast('That tablet can\'t check anyone in now.'); render(); }), 'ghost') : null))) : null);
+}
+
 async function viewScheduleSetup(main) {
-  const [av, locs, settings] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings')]);
+  const [av, locs, settings, kiosks] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks')]);
   const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }) };
   const hours = panel('Your hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Anything else on your schedule blocks the time.' },
     ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
@@ -962,6 +1345,10 @@ async function viewScheduleSetup(main) {
       btn('Copy link', async () => { await navigator.clipboard?.writeText(joinUrl).catch(() => {}); toast('Sign-up link copied. Put it on your website, Instagram and a QR code at the facility.'); }, 'secondary'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: '/join', target: '_blank' }, 'Open')),
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, signupToggle, h('span', null, 'Sign-up is open')),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'Not ready to sign up? The "Ask about training" form collects their details as a lead and follows up automatically (Leads).'),
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/start`),
+      btn('Copy link', async () => { await navigator.clipboard?.writeText(`${location.origin}/start`).catch(() => {}); toast('Inquiry form link copied.'); }, 'secondary'),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '/start', target: '_blank' }, 'Open')),
     h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_signup: signupToggle.checked ? 'on' : 'off' }); toast(signupToggle.checked ? 'Sign-up is open.' : 'Sign-up is closed.'); render(); }), 'primary')));
   const terms = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); terms.value = settings.terms_text;
   const privacy = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); privacy.value = settings.privacy_text;
@@ -981,8 +1368,23 @@ async function viewScheduleSetup(main) {
   const emailPanel = panel('Automatic emails', { subtitle: 'Sent from your email address once email is connected. Every email also appears in the outbox under API & integrations.' },
     emailBoxes.map(([, cb, label]) => h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, cb, h('span', null, label))),
     h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { emails_off: emailBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'primary')));
-  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms and emails.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, setPanel, rankingsPanel(settings),
-    isOwner() ? [signupPanel, legalPanel, emailPanel] : null);
+  const TEXTS = { reminder: 'Reminder the day before a booked session', waitlist: 'When an athlete moves off the waitlist', canceled: 'When you cancel a session', payment_failed: 'When a membership payment doesn\'t go through' };
+  const textsOff = new Set((settings.texts_off ?? '').split(',').filter(Boolean));
+  const textBoxes = Object.entries(TEXTS).map(([k, label]) => [k, h('input', { type: 'checkbox', checked: !textsOff.has(k) }), label]);
+  const textPanel = panel('Automatic texts', { subtitle: 'Only sent to parents who turn texts on in the parent portal. Every text also appears under API & integrations → Texts.' },
+    textBoxes.map(([, cb, label]) => h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, cb, h('span', null, label))),
+    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { texts_off: textBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'primary')));
+  const digestOn = h('input', { type: 'checkbox', checked: settings.weekly_digest !== 'off' });
+  const digestOut = h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' });
+  const digestPanel = panel('Weekly summary email', { subtitle: 'Every Monday at 7 am: money in, members, athletes to check on, open spots and three things worth doing this week. Sent to every owner.' },
+    h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, digestOn, h('span', null, 'Send me the weekly summary')),
+    h('div', { class: 'row wrap' },
+      btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { weekly_digest: digestOn.checked ? 'on' : 'off' }); toast('Saved.'); }), 'primary'),
+      btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
+      btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
+    digestOut);
+  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
+    isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
 }
 
 // ---------- Teams (school and club contracts) ----------
@@ -1186,7 +1588,7 @@ async function viewNewTesting(main) {
 let testingState = { testKey: null, athleteIdx: 0 };
 let stopwatchRunning = false;
 async function viewTestingDay(main, id) {
-  const [day, clientsList] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients')]);
+  const [day, clientsList, notes] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients'), get(`/v1/testing-sessions/${id}/notes`).catch(() => null)]);
   if (!day.tests.length) return fill(main, header(day.name, ymd(day.date)), h('div', { class: 'empty' }, 'No tests on this day.'));
   if (!day.tests.some((t) => t.key === testingState.testKey)) testingState = { testKey: day.tests[0].key, athleteIdx: 0 };
   const test = day.tests.find((t) => t.key === testingState.testKey);
@@ -1264,7 +1666,35 @@ async function viewTestingDay(main, id) {
       action: h('div', { class: 'row' }, test.timed ? h('label', { class: 'row small', style: 'gap:6px' }, hand, 'Hand-timed') : null, h('div', { style: 'width:110px' }, unitSel)) },
       test.description ? h('p', { class: 'small muted' }, test.description) : null,
       athletes.length ? rows : h('p', { class: 'muted' }, 'No athletes yet.'),
-      h('div', { style: 'max-width:360px;margin-top:8px' }, add)));
+      h('div', { style: 'max-width:360px;margin-top:8px' }, add)),
+    notes?.data.length ? notesPanel(id, notes) : null);
+}
+
+// A short note per athlete for parents: drafted from the results, read and approved by a coach.
+function notesPanel(id, notes) {
+  const manage = state.user.role !== 'front_desk';
+  const missing = notes.data.filter((x) => !x.note).length, drafts = notes.data.filter((x) => x.note && !x.note.approved).length;
+  const redraw = () => { const y = window.scrollY; render(); setTimeout(() => window.scrollTo(0, y), 300); };
+  const edit = (x) => {
+    const d = document.getElementById('dialog'), text = textarea(x.note.body, { rows: '8', style: 'min-height:180px', 'aria-label': `Note for ${x.name}` });
+    const save = (approved) => (e) => busy(e.currentTarget, async () => { await patch(`/v1/progress-notes/${x.note.id}`, { body: text.value, ...(approved ? { approved: true } : {}) }); d.close(); toast(approved ? 'Approved.' : 'Saved.'); redraw(); });
+    fill(d, h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, `Note for ${x.name.split(' ')[0]}'s parents`),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Check every number against the results, and add anything only you know.'), text,
+      h('div', { class: 'row wrap' }, x.note.approved ? null : btn('Save and approve', save(true), 'primary'), btn('Save', save(false), x.note.approved ? 'primary' : 'secondary'), btn('Cancel', () => d.close(), 'ghost'))));
+    d.addEventListener('close', () => fill(d), { once: true });
+    d.showModal();
+  };
+  return panel('Notes for parents', { subtitle: `A few sentences per athlete on what improved and what's next, drafted from the results${notes.ai ? ' and worded by Claude' : ''}. Read and approve each one; parents see approved notes ${notes.shared ? 'on their report now' : 'once you share this day'}.`,
+    action: manage ? h('div', { class: 'row wrap' },
+      missing ? btn(`Draft ${missing === notes.data.length ? 'notes' : `${missing} more`}`, (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/testing-sessions/${id}/notes/draft`); toast(`Drafted ${r.drafted} ${r.drafted === 1 ? 'note' : 'notes'}. Read each one before approving.`); redraw(); }), 'secondary') : null,
+      drafts ? btn(drafts === 1 ? 'Approve draft' : 'Approve all', (e) => { if (confirm(`Approve ${drafts} ${drafts === 1 ? 'note' : 'notes'}? Only do this after reading them.`)) busy(e.currentTarget, async () => { await post(`/v1/testing-sessions/${id}/notes/approve`); toast('Approved.'); redraw(); }); }, 'outline') : null) : null },
+    notes.data.map((x) => h('div', { class: 'list-item', style: 'align-items:flex-start' },
+      h('div', { class: 'grow stack-tight' },
+        h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'strong' }, x.name), x.note ? h('span', { class: `dp-badge dp-badge--${x.note.approved ? 'good' : 'warn'}` }, x.note.approved ? 'Approved' : 'Draft') : h('span', { class: 'small muted' }, 'No note yet')),
+        x.note ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, x.note.body) : null),
+      manage && x.note ? h('div', { class: 'row' }, btn('Edit', () => edit(x), 'ghost'),
+        !x.note.approved ? btn('Redo', (e) => busy(e.currentTarget, async () => { await post(`/v1/testing-sessions/${id}/notes/draft`, { client_ids: [x.client_id] }); redraw(); }), 'ghost') : null,
+        !x.note.approved ? btn('Approve', (e) => busy(e.currentTarget, async () => { await patch(`/v1/progress-notes/${x.note.id}`, { approved: true }); redraw(); }), 'secondary') : null) : null)));
 }
 
 async function viewLibrary(main) {

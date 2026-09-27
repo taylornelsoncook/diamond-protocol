@@ -22,7 +22,15 @@ const DEFAULTS = {
   privacy_updated: '',
   public_signup: 'on',
   rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
-  emails_off: ''                          // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
+  readiness_adjust: 'on',                 // lighter weights in the athlete app after a rough daily check-in
+  emails_off: '',                         // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
+  texts_off: '',                          // comma list of automatic texts turned off: reminder, waitlist, canceled, payment_failed
+  weekly_digest: 'on',                    // Monday summary email to the owners
+  lead_follow_up: 'on',                   // automatic follow-up emails (and texts, if they asked) to new leads
+  public_schedule: 'on',                  // the public Book now page (/book) and website widget
+  review_url: '',                         // Google review link; review requests stay off until it's set
+  review_requests: 'on',                  // ask happy families for a review after a 10th session or a personal best
+  open_spot_offers: 'suggest'             // light classes: 'suggest' shows them on Today to send offers by hand, 'auto' sends them, 'off' hides them
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
 export function getSettings(ctx) { return Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, getSetting(ctx, k)])); }
@@ -47,12 +55,28 @@ export function updateSettings(ctx, body) {
     const text = v.str(body[`${kind}_text`], `${kind}_text`, { max: 100000 });
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version
   }
+  if (body.readiness_adjust !== undefined) next.readiness_adjust = body.readiness_adjust === true || body.readiness_adjust === 'on' ? 'on' : 'off';
   if (body.rankings !== undefined) next.rankings = body.rankings === true || body.rankings === 'on' ? 'on' : 'off';
+  if (body.review_url !== undefined) {
+    const url = v.str(body.review_url, 'review_url', { max: 500, optional: true }) ?? '';
+    if (url && !/^https:\/\/\S+$/.test(url)) throw badRequest('Paste the full review link from your Google Business Profile. It starts with https://');
+    next.review_url = url;
+  }
+  if (body.review_requests !== undefined) next.review_requests = body.review_requests === true || body.review_requests === 'on' ? 'on' : 'off';
+  if (body.public_schedule !== undefined) next.public_schedule = body.public_schedule === true || body.public_schedule === 'on' ? 'on' : 'off';
+  if (body.open_spot_offers !== undefined) next.open_spot_offers = v.oneOf(body.open_spot_offers, 'open_spot_offers', ['off', 'suggest', 'auto']);
+  if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
+  if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';
   if (body.emails_off !== undefined) {
     const list = (Array.isArray(body.emails_off) ? body.emails_off : String(body.emails_off).split(',')).map((x) => String(x).trim()).filter(Boolean);
     for (const x of list) v.oneOf(x, 'emails_off', ['welcome', 'receipts', 'trial_ending', 'payment_failed']);
     next.emails_off = [...new Set(list)].join(',');
+  }
+  if (body.texts_off !== undefined) {
+    const list = (Array.isArray(body.texts_off) ? body.texts_off : String(body.texts_off).split(',')).map((x) => String(x).trim()).filter(Boolean);
+    for (const x of list) v.oneOf(x, 'texts_off', ['reminder', 'waitlist', 'canceled', 'payment_failed']);
+    next.texts_off = [...new Set(list)].join(',');
   }
   for (const [k, val] of Object.entries(next)) ctx.db.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', k, val);
   return getSettings(ctx);
@@ -84,7 +108,8 @@ export function getFamily(ctx, id) {
     id: f.id, name: f.name, created_at: f.created_at,
     card: f.card_payment_method ? { on_file: true, brand: f.card_brand, last4: f.card_last4 } : { on_file: false },
     waiver: { signed: Number(f.waiver_version) === Number(getSetting(ctx, 'waiver_version')), signed_by: f.waiver_signed_by, signed_at: f.waiver_signed_at, version_signed: f.waiver_version },
-    guardians: ctx.db.all('SELECT id, name, email, phone, relationship, is_primary FROM guardians WHERE family_id = ? ORDER BY is_primary DESC, created_at', id).map((g) => ({ ...g, is_primary: !!g.is_primary })),
+    guardians: ctx.db.all('SELECT id, name, email, phone, relationship, is_primary, sms_opt_in_at, sms_opt_out_at FROM guardians WHERE family_id = ? ORDER BY is_primary DESC, created_at', id)
+      .map(({ sms_opt_in_at, sms_opt_out_at, ...g }) => ({ ...g, is_primary: !!g.is_primary, texts: !sms_opt_in_at ? 'off' : sms_opt_out_at ? 'stopped' : 'on' })),
     athlete_ids: ctx.db.all('SELECT id FROM clients WHERE family_id = ? ORDER BY name', id).map((r) => r.id)
   };
 }

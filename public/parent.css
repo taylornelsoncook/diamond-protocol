@@ -25,3 +25,4 @@
 .toast-host{left:16px;right:16px;bottom:calc(76px + env(safe-area-inset-bottom,0px));max-width:none}
 details.dp-panel{display:block}
 details.dp-panel > summary{list-style-position:inside}
+@media print{.no-print{display:none!important}.poster{color:#000}.poster .p-title{color:#000}body{background:#fff}}

@@ -1,14 +1,29 @@
 // School and club contracts: monthly invoices, emails, payments and overdue reminders.
 'use strict';
-const { get, all, run, insert, update, tx, setting } = require('../db');
+const { db, get, all, run, insert, update, tx, setting } = require('../db');
 const { nextInvoiceNumber, sendEmail, emit, today, addDays, addMonths, money, businessName, appUrl, randomToken, bad } = require('../lib');
 
 const REMIND_EVERY_DAYS = 7;
 
+// Added after launch: school or club type and phone, the contract's billing phone and internal notes, and
+// bill_from (no invoices for months before it: set when a contract restarts or when months were billed elsewhere).
+// Idempotent, so an existing database upgrades in place on start.
+const schoolCols = all('PRAGMA table_info(schools)').map((c) => c.name);
+if (!schoolCols.includes('kind')) db.exec("ALTER TABLE schools ADD COLUMN kind TEXT DEFAULT 'school'");
+if (!schoolCols.includes('contact_phone')) db.exec('ALTER TABLE schools ADD COLUMN contact_phone TEXT');
+const contractCols = all('PRAGMA table_info(team_contracts)').map((c) => c.name);
+if (!contractCols.includes('billing_phone')) db.exec('ALTER TABLE team_contracts ADD COLUMN billing_phone TEXT');
+if (!contractCols.includes('notes')) db.exec('ALTER TABLE team_contracts ADD COLUMN notes TEXT');
+if (!contractCols.includes('bill_from')) db.exec('ALTER TABLE team_contracts ADD COLUMN bill_from TEXT');
+// The day an athlete joined their current team (business date). Team attendance counts from here, so a client who
+// has been around for a year and joins today isn't marked absent for every earlier session.
+if (!all('PRAGMA table_info(athletes)').some((c) => c.name === 'team_since')) db.exec('ALTER TABLE athletes ADD COLUMN team_since TEXT');
+
 const fmtLong = (d) => (d ? new Date(d.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '');
 
 function contractWithSchool(id) {
-  return get('SELECT t.*, s.name AS school_name, s.contact_name, s.contact_email, s.address AS school_address FROM team_contracts t JOIN schools s ON s.id=t.school_id WHERE t.id=?', id);
+  return get(`SELECT t.*, s.name AS school_name, s.kind AS school_kind, s.contact_name, s.contact_email, s.contact_phone, s.address AS school_address
+    FROM team_contracts t JOIN schools s ON s.id=t.school_id WHERE t.id=?`, id);
 }
 const billTo = (c) => c.billing_email || c.contact_email || null;
 const invoiceUrl = (inv) => `${appUrl()}/invoice/${inv.view_token}`;
@@ -22,6 +37,7 @@ function periodStarts(c, asOf) {
     const p = addMonths(c.start_date, k);
     if (p > asOf) break;
     if (c.end_date && p > c.end_date) break;
+    if (c.bill_from && p < c.bill_from) continue;
     out.push(p);
   }
   return out;
@@ -31,7 +47,7 @@ function nextInvoiceDate(c, asOf = today()) {
   for (let k = 0; k < 240; k++) {
     const p = addMonths(c.start_date, k);
     if (c.end_date && p > c.end_date) return null;
-    if (p > asOf) return p;
+    if (p > asOf && !(c.bill_from && p < c.bill_from)) return p;
   }
   return null;
 }
@@ -102,6 +118,14 @@ function sendOverdueReminders(asOf = today()) {
   return sent;
 }
 
+// A real calendar day in YYYY-MM-DD (Date.parse quietly turns Feb 30 into Mar 2).
+function realDate(d) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d));
+  if (!m) return false;
+  const t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return t.getUTCFullYear() === +m[1] && t.getUTCMonth() === +m[2] - 1 && t.getUTCDate() === +m[3];
+}
+
 function markPaid(invoiceId, { method, check_number = null, paid_on = null, charge_id = null }) {
   const inv = get('SELECT * FROM invoices WHERE id=?', invoiceId);
   if (!inv) throw bad("That invoice wasn't found.");
@@ -109,6 +133,8 @@ function markPaid(invoiceId, { method, check_number = null, paid_on = null, char
   if (inv.status === 'void') throw bad('That invoice was voided.');
   if (!['check', 'cash', 'ach', 'card', 'other'].includes(method)) throw bad('Choose how it was paid.');
   if (method === 'check' && !String(check_number || '').trim()) throw bad('Enter the check number.');
+  if (paid_on && !realDate(paid_on)) throw bad('Choose the date the payment arrived.');
+  if (paid_on && paid_on > addDays(today(), 1)) throw bad('The payment date can\'t be in the future.');
   update('invoices', inv.id, {
     status: 'paid', pay_method: method, check_number: method === 'check' ? String(check_number).trim() : null,
     paid_at: paid_on ? new Date(paid_on + 'T12:00:00').toISOString() : new Date().toISOString(), charge_id, next_retry: null,
@@ -116,6 +142,33 @@ function markPaid(invoiceId, { method, check_number = null, paid_on = null, char
   if (inv.membership_id) run("UPDATE memberships SET status='active' WHERE id=? AND status='past_due'", inv.membership_id);
   emit('invoice.paid', { invoice_id: inv.id, number: inv.number, amount_cents: inv.amount_cents, method, contract_id: inv.contract_id });
   return get('SELECT * FROM invoices WHERE id=?', inv.id);
+}
+
+// A statement of everything the school owes on one contract: each open invoice with its link, and the total.
+function emailStatement(contractId) {
+  const c = contractWithSchool(contractId);
+  if (!c) throw bad("That contract wasn't found.");
+  const to = billTo(c);
+  if (!to) throw bad('Add a billing email to the contract first.');
+  const open = all("SELECT * FROM invoices WHERE contract_id=? AND status='open' ORDER BY due_date, id", c.id);
+  if (!open.length) throw bad('Nothing is unpaid on this contract, so there is no statement to send.');
+  const total = open.reduce((s, i) => s + i.amount_cents, 0);
+  const T = today();
+  const lines = open.map((i) => `${i.number}  ${money(i.amount_cents)}  ${i.due_date ? `${i.due_date < T ? 'was due' : 'due'} ${fmtLong(i.due_date)}` : ''}\n${i.description || ''}\n${invoiceUrl(i)}`).join('\n\n');
+  const who = String(c.billing_name || c.contact_name || c.school_name).split(' ')[0];
+  sendEmail(to, `Statement from ${businessName()}: ${money(total)} open for ${c.team_name}`,
+    `Hi ${who},\n\nHere is where the ${c.team_name} account stands. ${open.length === 1 ? 'One invoice is' : `${open.length} invoices are`} open, ${money(total)} in all.\n\n${lines}\n\nEach link lets you view, print or pay that invoice online.\n\n${setting('pay_instructions', '') || ''}\n\nThank you,\n${businessName()}`);
+  return { to, count: open.length, total_cents: total };
+}
+
+// Owner's "Email reminders now": every overdue school invoice with a billing email, whatever the weekly timer says.
+function remindOverdueNow(asOf = today()) {
+  const list = all("SELECT * FROM invoices WHERE kind='school' AND status='open' AND due_date < ? ORDER BY due_date, id", asOf);
+  let sent = 0, skipped = 0;
+  for (const inv of list) {
+    try { emailInvoice(inv.id, { reminder: true }); sent++; update('invoices', inv.id, { last_reminder: asOf }); } catch { skipped++; }
+  }
+  return { sent, skipped };
 }
 
 function voidInvoice(invoiceId) {
@@ -127,4 +180,4 @@ function voidInvoice(invoiceId) {
   return inv;
 }
 
-module.exports = { contractWithSchool, periodStarts, periodEnd, nextInvoiceDate, emailInvoice, emailedAt, createSchoolInvoice, invoiceContract, runSchoolInvoicing, sendOverdueReminders, markPaid, voidInvoice, fmtLong, billTo };
+module.exports = { contractWithSchool, periodStarts, periodEnd, nextInvoiceDate, emailInvoice, emailedAt, createSchoolInvoice, invoiceContract, runSchoolInvoicing, sendOverdueReminders, markPaid, voidInvoice, fmtLong, billTo, emailStatement, remindOverdueNow };

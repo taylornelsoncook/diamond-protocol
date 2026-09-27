@@ -68,9 +68,10 @@ The jobs you'll do most, step by step. Each step links to its screen.
 
 ### Adding staff
 
-- Staff & securityAdd them with a role: Coach or Front desk.
-- Sign inThey sign in with the one-time password from their email and choose their own.
+- Staff & securityAdd staff member: name, email and a role (Coach, Front desk or Owner), with what each role can do shown as you choose. They get a one-time password by email.
+- Sign inThey sign in with the one-time password from their email and choose their own (it must be different from the one-time password). If it never arrived, Manage → Resend invite.
 - TodayThey see only what their role allows; everything they do appears in the activity log.
+- Staff & securityWhen someone leaves, Manage → Turn off account signs them out everywhere and hands their upcoming sessions, weekly classes and private hours to another coach (or leaves them unassigned).
 
 ## Coach dashboard
 
@@ -84,9 +85,12 @@ _Where: app address_
 
 Every staff member signs in with their own email and password.
 
-- Enter your email and password.
-- New staff sign in with the one-time password from their welcome email, then choose their own.
-- After five wrong passwords the account locks for 15 minutes. An owner can unlock it sooner in Staff & security.
+- Enter your email and password. Show reveals what you typed; a warning appears if Caps Lock is on.
+- New staff sign in with the one-time password from their welcome email, then choose their own (at least 10 characters, not the one-time password). Not them? Sign out from that screen.
+- Forgot your password? Enter your email and we send a link to choose a new one. It works once, for 30 minutes, then signs you in and signs you out everywhere else. The answer is the same whether or not the email has an account, and at most three links an hour are sent. A link stops working once a new password is set any other way: an owner resets it, the account's email changes, it's turned off, or you change it yourself.
+- After five wrong passwords the account locks for 15 minutes. An owner can unlock it sooner in Staff & security, or a reset link clears it.
+- First run: with no staff yet, the page asks for the business name and creates the owner account (password typed twice).
+- Account (bottom of the menu, every role): change your password (needs your current one; your other devices are signed out and you get an email), see every device you're signed in on and sign any of them out, and check your recent sign-ins.
 
 ### Today
 
@@ -260,9 +264,10 @@ _Where: Teams_
 
 School and club contracts billed a flat monthly fee.
 
-- See monthly contract revenue, what's waiting on payment, and what's overdue.
+- See monthly contract revenue, what's waiting on payment, what's overdue and athletes on rosters.
+- Contracts: Active, Ended or All, with counts; search by school, team or PO number once there are more than a few. Each row shows the fee, terms, roster size, team attendance, the next invoice date, and flags a missing billing email.
 - Open a contract, or add a New team contract.
-- Unpaid invoices can be recorded as paid (check number and all), emailed again or voided right from this list.
+- Unpaid invoices can be recorded as paid (check number and all), emailed again or voided right from this list. Overdue ones say how many days late they are; Email overdue reminders sends every overdue school a reminder now instead of waiting for the weekly one. The panel shows what was collected in the last 30 days.
 
 ### Team contract
 
@@ -270,12 +275,12 @@ _Where: Teams, then a team_
 
 [Owner] 
 
-One school's team: invoices, contract terms, roster and practice schedule.
+One school's team: invoices, contract terms, roster and practice schedule. A section bar jumps to Invoices, Roster, Team sessions, Contract and Accountability, and stays in reach on a phone.
 
-- Invoices: view the one the school sees, record a payment, email it again, void a mistake, or bill something extra.
-- Contract: change the monthly fee (applies from the next invoice), end date, payment terms, PO number and billing contact.
-- Team sessions: put the team on your schedule by day and time.
-- Roster: paste the team list, one athlete per line. Each player gets an Athlete ID, and attendance rates build up as you check them in.
+- Invoices: unpaid and paid-to-date totals; view the one the school sees, record a payment, email it again, void a mistake, or bill something extra. Record one payment for several covers the common case of one check paying several months. Email statement sends the billing contact one email listing every open invoice with its link and the total. Older invoices fold behind Show all.
+- Contract: team name, school or club, monthly fee (applies from the next invoice), end date, payment terms, PO number, billing contact (name, phone with tap to call, email) and staff-only notes. Unsaved changes are flagged. Team sessions follow the end date: a shorter contract takes later sessions off the schedule, a longer one brings them back. Ending a contract takes future team sessions off the schedule. An ended contract restarts when its end date is cleared or moved later; billing picks up on the next billing day and the months it was ended aren't billed.
+- Team sessions: put the team on your schedule by day, time, place and coach; times show as 3:30 PM.
+- Roster: team attendance, the last session's check-ins and a bar for each of the last eight sessions (amber under 60%). Find a player, sort by name, lowest attendance or grad year, and export the roster as CSV. Add an existing client (search by name or Athlete ID; moving someone from another team asks first). Paste the team list, one athlete per line (Name, position, grad year; spreadsheet rows, list numbers and jersey numbers work, and a header row is skipped). Lines are checked first: problems are listed before anything is saved, and names that match a client you already have can be linked instead of creating a duplicate. Each new player gets an Athlete ID, rows show Class of and last time here, and Remove has Undo. Attendance counts from the day someone joins the team, so a client added from elsewhere isn't marked absent for earlier sessions.
 
 ### New team contract
 
@@ -285,9 +290,10 @@ _Where: Teams, then New team contract_
 
 Set up a school or club in one step.
 
-- Choose an existing school or club, or add a new one with its billing contact and address.
+- Choose an existing school or club (its billing contact, phone and address fill in), or add a new one with its type, billing contact, phone and address.
 - Enter the team, monthly fee, start date, optional end date, payment terms and PO number.
-- Create contract. If it has started, the first month is invoiced and emailed immediately; each month after goes out on the same day.
+- A summary says exactly what happens on save: how many invoices go out now, their total, and when the next one follows. If the start date is in the past, choose whether to invoice every month so far, only the current month, or none of them (already billed another way).
+- Create contract. Mistakes point at the field to fix; a second active contract for the same school and team is refused. Each month after the first goes out on the same day.
 
 ### Testing
 
@@ -414,10 +420,18 @@ _Where: Billing_
 
 [Owner] 
 
-Membership plans and every invoice.
+Money in, money owed, and who is on which plan.
 
-- Plans show price, free trial, subscribers and monthly revenue. Create or change a plan here; price changes apply from each member's next charge.
-- Invoices list every charge. Retry a declined one; declines also retry automatically every 3 days.
+- Four numbers at the top: monthly recurring revenue (memberships plus team contracts), collected this month net of refunds, failed payments with the amount at risk, and open invoices with how much is overdue. Tap one to jump to the matching list. A bar under them jumps to each section.
+- Needs attention lists every declined charge (card on file, how many tries, the next automatic retry or that retries have run out, when the family was last reminded) and every overdue school invoice. Retry a charge (it asks first, showing the amount and card), email the family a card reminder with a link to the parent portal, or record a payment. Retry all declined charges at once, or email every family with a declined card; families already reminded today are skipped, and each family gets one email listing everything due.
+- Invoices list every charge, newest first, with views for All, Failed, Unpaid, Overdue, Paid, Refunds and Void (each with its count), a kind filter (a refund counts as the kind it refunds), a date range (this month, last month, last 90 days, this year) and search by name, invoice number, school or item. The line under the title gives the count and total for the current filter. Export CSV downloads exactly what the filter shows, for the bookkeeper.
+- Tap an invoice for its details and what can be done now: retry, record a payment taken by check, cash, card in person or bank transfer, email a card reminder, refund, email the invoice, view or print it, or void it. Voiding a declined charge writes it off: no more retries, and a membership held past due only by that charge becomes active again. Paid invoices can't be voided; refund them instead.
+- Refund all or part of a paid invoice, with an optional reason and a refund receipt emailed to the family. Billing shows how much has already been refunded and won't refund more than was paid. Refunds of counter sales stay in step with Point of sale, and a full refund takes back unused session credits.
+- Memberships list everyone on a plan with price, status, next charge or trial end, and card on file. Views: All members, Renewing this week, Free trial, Past due, Paused and Cancelled lately, plus search and a plan filter. The line under the title says how many renewals are due in the next 7 days and how much they bring in. Manage a membership to change plan (from the next charge), pause, resume or cancel it.
+- Plans show price, free trial, members and monthly revenue. Tap a plan's member count to see its members. Add a plan or edit one; price changes apply from each member's next charge and nobody is charged when you save. Retire a plan to stop new sign-ups; current members keep it. Two live plans can't share a name, trials are up to 90 days and session allowances up to 100 a month.
+- Declines retry automatically every 3 days, up to 4 tries. In test mode, the billing clock runs billing as of a later date and shows what happened.
+
+> Note: Owner only. Coaches and front desk can't open Billing, and refunds, reminders and write-offs stay out of their activity feed.
 
 ### Programs
 
@@ -425,12 +439,15 @@ _Where: Programs_
 
 [Owner] [Coach] 
 
-Training programs and your exercise library.
+Training programs, how athletes are doing on them, and your exercise library.
 
-- Open a program to build it, or create a new one.
-- Add exercises to the library with coaching cues and a demo video link (YouTube, Vimeo or a video file).
+- At the top: workouts logged in the last 7 days, clients on a program, who needs a check-in and who has finished their program.
+- New program starts blank or as a copy of an existing program (it copies every workout in the weeks you keep). Search programs by name and filter by level. Each card shows weeks, level, days a week, clients and workouts logged in the last 7 days.
+- Need a check-in: clients on a program with no workout logged in 7 days or more, with how long it's been and their next workout. Finished their program: clients who logged every workout and need what comes next.
+- Recent workouts: what athletes logged in the workout app in the last 14 days, how many exercises they did, and their notes to the coach. Tap a name for the client, or the program to open that week.
+- Exercise library: search by name or cue, and filter by category (speed, power, lower body, upper body, core, arm care, mobility, conditioning), missing a video or not in a program. Each exercise shows its category, how many workouts use it and its video. Add or edit an exercise with a category, coaching cues and a demo video link (YouTube, Vimeo or a video file); the edit form lists the programs that use it. Exercises in use can't be deleted.
 
-> Note: Front desk can view programs but not change them.
+> Note: Front desk can view programs and the library but not change them.
 
 ### Program builder
 
@@ -438,10 +455,18 @@ _Where: Programs, then a program_
 
 [Owner] [Coach] 
 
-Build a program week by week, day by day.
+Build a program week by week, day by day, and follow the clients on it.
 
-- Add days to each week and exercises to each day with sets, reps and cues.
-- Assign the program to a client. It appears in their workout app immediately.
+- One week at a time: tap a week tab (each shows how many days it has; empty weeks show 0 in amber) or use the arrows. Left and right arrow keys move between weeks. The week stays in the address, so a reload or a shared link opens the same week. Add week adds one to the end.
+- Add day (up to 7 a week) with a title and day number. Copy week copies every workout into another week or a run of weeks (for example weeks 2 through 4); if those weeks already have workouts it asks before replacing them. An empty week offers to copy the week before. Delete week removes its workouts; the last week also comes off the program length, so an empty week added by mistake can be taken off the end.
+- Add exercise: search the library, pick one (sets and reps start from the last time it was used in this program), set sets, reps and an optional cue, and use Add and add another to keep going. An exercise that isn't in the library yet can be added from the same search.
+- Tap an exercise to change its sets, reps and cue, or swap in a different exercise in the same place. Move exercises up and down. Remove shows Undo for a few seconds. The play button shows the demo video, cues and this workout's sets and reps.
+- Copy a workout to another week and day, rename it by tapping its title, or delete it (it says how many athlete logs go with it).
+- Assign program: search clients by name, Athlete ID or family. Each result shows the program they're on now; moving someone says so before you confirm, and clients already on this program can't be picked twice. It appears in their workout app immediately and the link is emailed to them or their parents.
+- Clients on this program: workouts done out of the total, the next workout, when they last logged one (amber after 7 days), a progress bar, and buttons to open their workout app, send the link again, or remove them. Recent workouts shows the last 14 days on this program with notes.
+- Edit details (name, weeks, level, description), Duplicate program (copies every week; clients stay on the original) and Delete program (only once nobody is on it).
+
+> Note: Front desk can view programs and send a client their workout link again, but not change programs.
 
 ### API & integrations
 
@@ -449,12 +474,17 @@ _Where: API & integrations_
 
 [Owner] 
 
-Connect Diamond Protocol to other software.
+Connect Diamond Protocol to other software, and see at a glance whether those connections are working.
 
-- Create API keys for other systems (shown once; revoke any time).
-- Add webhooks to be notified of bookings, payments, PRs and more, and see every delivery.
-- The API reference documents every endpoint.
-- Email outbox: every email the platform has sent or logged.
+- A status strip at the top shows API keys (active, errors in 30 days), webhooks (active, paused, failing), email (sending or not connected, failed this week) and exercise video coverage. Amber means something needs a look; each tile opens its tab.
+- Tabs: API keys, Webhooks, Email outbox, Exercise video. The tab is kept in the address (`?tab=webhooks`) and arrow keys move between tabs.
+- **API keys.** Create a key with a label and an access level: Read only (athletes, results, tests, programs, sessions) or Read and send results. The key is shown once. Each key shows when it was last used and its requests and errors in the last 30 days; Requests opens the log (method, path, answer, error, time) kept for 30 days. Edit renames a key or changes its access level without changing the key. Revoke asks first; revoked keys fold away under Revoked keys. A read-only key that tries to send data gets a 403 with a plain reason.
+- **Quick start** shows copyable curl examples (list athletes, an athlete's results, send a result) using this site's address, and links to the API reference.
+- **Webhooks.** Add a webhook with an optional name, a URL and the events to send; every event is listed with what it means, with Select all and Clear. The signing secret is shown once, then you're offered a test.ping. Each webhook shows its events, last 7 days sent and failed, the secret hint and its recent deliveries; a webhook whose last 3 deliveries failed is marked Failing with an amber banner. Send test event sends test.ping or a realistic sample of any subscribed event (marked `"test": true`). A delivery opens to show the answer code, time taken, the plain reason for a failure (like "Connection refused"), their response body, what was sent, tries so far and when it will be tried next, with Resend. All deliveries lists every delivery with Failed and Delivered filters and an event filter. Resend failed sends every failed delivery from the last 7 days again. Edit changes name, URL and events; Pause stops sending; New signing secret replaces the secret (shown once); Delete asks first. The same URL can't be added twice (a trailing slash or different capitals in the address don't make it a different URL).
+- Failed deliveries are retried automatically after 5 minutes, 30 minutes and 2 hours (four tries within a day), but not while the webhook is paused. A delivery left showing sending after a restart is treated as failed: it can be resent and is retried. Every request carries `x-dp-signature`, `x-dp-event` and `x-dp-delivery` (the same on retries, so receivers can skip repeats).
+- **Email outbox.** Every email the platform has sent or logged, newest first, with a banner saying whether email is really sent (and through what). Filter by All, Failed, Held, Not sent and Sent with counts; search matches address, subject and text. Each email opens to show its text, any error and how many times it was tried, with Copy text (to send it yourself while no email service is connected), Send again and Send to another address (both send a new copy and keep the original; only when an email service is connected). Send test email checks the connection.
+- **Exercise video.** How many exercises have a demo video that plays in the workout app, how many exercises in programs have none, and where videos are hosted. Exercises that need a video are listed most-used first (only those in a program by default), with links that can't play marked Can't play; paste a YouTube, Vimeo or video-file link and Save right there. Links go to the exercise library.
+- The API reference (/docs/api) documents every endpoint (athletes, an athlete's results, the test library, programs, sessions, send results), access levels, errors, webhook headers, events, retries and signature checks, with a Copy button on every example.
 
 ### Staff & security
 
@@ -464,10 +494,13 @@ _Where: Staff & security_
 
 Who can sign in, what they can do, what happened, and your backups.
 
-- Add a staff member with a role: Owner, Coach or Front desk. They get a one-time password by email.
-- Change a role, reset a password, unlock a locked account, or turn an account off (signed out everywhere at once).
-- Backups: a full copy every day. Back up now and download copies to keep off the server.
-- Activity log: every change, refused attempt and sign-in, with who, when and from where.
+- Summary tiles: staff who can sign in (and who hasn't signed in yet), locked accounts, failed sign-ins in the last 24 hours with refused attempts this week, and when the last backup ran. Amber means look at it; tap a tile to jump to it.
+- Add staff member: name, email and role (Owner, Coach or Front desk). They get a one-time password by email. An email that belongs to a turned-off account says so, so you turn them back on instead.
+- Each person shows their role, status (invited, locked, turned off) and last sign-in. Manage opens their details: edit name and email, change role (making someone an owner asks first), the devices they're signed in on with sign out everywhere, their recent activity, reset password or resend invite, unlock, and turn off.
+- Turning off an account, or moving a coach to front desk, offers to hand their upcoming sessions, weekly classes and private hours to another coach or owner, or to leave them unassigned. Past sessions keep their coach. Private hours left with a turned-off coach aren't offered to parents. Turned-off accounts sit under a fold; one still leading sessions is flagged with Hand over their sessions.
+- What each role can do: a table of the jobs each role can and can't do.
+- Backups: a full copy every day, the last 30 kept. Back up now, download any copy to keep off the server (every download is logged). Amber if the daily backup hasn't run in over a day.
+- Activity log: every change, refused attempt and sign-in, newest first, with who, when and from where. Filter by type, who (staff, parents, athletes, API keys, system), staff member and dates, search, and download what you see as CSV. Failed sign-ins show the email that was typed.
 
 ## Parent portal
 
@@ -577,9 +610,9 @@ _Where: the link in each invoice email_
 
 What the school's athletic director or treasurer sees.
 
-- Invoice number, dates, PO, who it's billed to, what it covers and the amount due.
-- Pay online by card or bank transfer, or follow your check instructions.
-- Print or save as PDF. Paid invoices show a Paid stamp.
+- Invoice number, dates, PO, team, who it's billed to, what it covers and the amount due.
+- How to pay: online by card or bank transfer, or by check with your instructions and the invoice number to write on the memo. Past-due invoices say how many days late they are.
+- Print or save as PDF. Paid invoices show a Paid stamp. Questions go back by replying to the invoice email.
 
 ### Athlete workout app
 

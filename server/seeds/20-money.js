@@ -34,6 +34,12 @@ function seed() {
   }
   if (parkOlivia) run("UPDATE memberships SET status='past_due' WHERE id=?", parkOlivia.id);
 
+  // ---- contract details added after launch: billing phones, a club, staff notes ----
+  run("UPDATE team_contracts SET billing_phone='(801) 555-0142', notes='Dana wants the PO number on every invoice. Checks come from the district office, usually in the first week.' WHERE team_name='Riverside Varsity Football'");
+  run("UPDATE team_contracts SET billing_phone='(801) 555-0187' WHERE team_name='Summit Elite 16U'");
+  run("UPDATE schools SET kind='club', contact_phone='(801) 555-0187' WHERE name='Summit Elite Baseball Club'");
+  run("UPDATE schools SET contact_phone='(801) 555-0142' WHERE name='Riverside High School'");
+
   // ---- school invoices ----
   const contracts = all('SELECT * FROM team_contracts ORDER BY id');
   const plans = {
@@ -83,6 +89,19 @@ function seed() {
         });
         n++;
       }
+    }
+    // ---- a partial refund and a card reminder, so Billing's Refunds view and reminders have something to show ----
+    const chidi = get(`SELECT i.id FROM invoices i JOIN athletes a ON a.id=i.athlete_id WHERE a.first_name='Chidi' AND a.last_name='Okafor'
+      AND i.kind='membership' AND i.status='paid' ORDER BY i.id DESC LIMIT 1`);
+    if (chidi) {
+      require('../services/billing').refundInvoice(chidi.id, 5000);
+      insert('activity', { actor: 'System', action: 'Refunded invoice', detail: 'Chidi Okafor · $50 · missed a week for a tournament', kind: 'change' });
+    }
+    const kevin = get(`SELECT i.id, i.family_id, i.amount_cents FROM invoices i JOIN athletes a ON a.id=i.athlete_id WHERE a.first_name='Kevin' AND a.last_name='Nguyen' AND i.status='failed' LIMIT 1`);
+    const kevinEmail = kevin && get('SELECT email FROM parents WHERE family_id=? ORDER BY is_self DESC, id LIMIT 1', kevin.family_id)?.email;
+    if (kevinEmail) {
+      run('UPDATE invoices SET last_reminder=? WHERE id=?', addDays(T, -2), kevin.id);
+      insert('outbox', { to_email: kevinEmail, subject: `Please update your card: ${money(kevin.amount_cents)} didn't go through`, body: `Hi,\n\nWe couldn't charge your card, so this payment is still due.\n\nTo add or update your card, sign in to the parent portal and open the Family tab:\n${appUrl()}/parent\n\n${businessName()}`, created_at: `${addDays(T, -2)} 16:00:00` });
     }
     insert('activity', { actor: 'System', action: 'Demo billing loaded', detail: `${rows.length} invoices`, kind: 'change' });
   });

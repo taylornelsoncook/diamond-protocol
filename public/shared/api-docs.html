@@ -34,6 +34,9 @@ pre code{background:none;padding:0}
 .params td{padding:8px 10px;border-bottom:1px solid var(--line-subtle);vertical-align:top}
 .params td:first-child{font-family:var(--font-mono);font-size:13px;white-space:nowrap}
 .params-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.code-wrap{position:relative}
+.code-wrap .copy{position:absolute;top:6px;right:6px;opacity:.85}
+.code-wrap pre.code{padding-right:84px}
 @media (max-width:900px){.ad{grid-template-columns:1fr;padding:20px 16px 60px;gap:var(--space-4)}.ad-nav{position:static;flex-direction:row;flex-wrap:wrap}.ad-nav .grp{width:100%;padding-top:6px}}
 </style>
 </head>
@@ -42,22 +45,33 @@ pre code{background:none;padding:0}
   <nav class="ad-nav" aria-label="API reference">
     <a class="ad-brand" href="/app/integrations"><img src="/img/mark-64.png" alt=""><span>DIAMOND<br>PROTOCOL</span></a>
     <span class="grp">Basics</span>
-    <a href="#auth">Authentication</a><a href="#errors">Errors</a>
+    <a href="#auth">Authentication</a><a href="#access">Access levels</a><a href="#errors">Errors</a>
     <span class="grp">Endpoints</span>
-    <a href="#athletes">List athletes</a><a href="#athlete">Get an athlete</a><a href="#programs">List programs</a><a href="#events">List sessions</a><a href="#results">Send results</a>
+    <a href="#athletes">List athletes</a><a href="#athlete">Get an athlete</a><a href="#athlete-results">Athlete results</a><a href="#tests">List tests</a><a href="#programs">List programs</a><a href="#events">List sessions</a><a href="#results">Send results</a>
     <span class="grp">Webhooks</span>
-    <a href="#webhooks">Payload</a><a href="#events-list">Events</a><a href="#verify">Verify signatures</a>
+    <a href="#webhooks">Payload</a><a href="#events-list">Events</a><a href="#retries">Retries</a><a href="#verify">Verify signatures</a>
   </nav>
 
   <main class="ad-main">
     <div class="page-header"><div><h1 class="page-title">API reference</h1>
-      <p class="page-sub">Read athletes, programs and sessions, and send test results from devices and other systems. Base URL: <code class="base">https://your-site</code>/api/v1</p></div></div>
+      <p class="page-sub">Read athletes, results, programs and sessions, and send test results from devices and other systems. Base URL: <code class="base">https://your-site</code>/api/v1</p></div></div>
 
     <section class="ep" id="auth">
       <h2>Authentication</h2>
       <p>Create a key in <a href="/app/integrations">API &amp; integrations</a>. It's shown once. Send it with every request as a bearer token. Revoke a key there at any time; it stops working immediately.</p>
       <pre class="code">Authorization: Bearer dp_live_…</pre>
       <p>All requests and responses are JSON (<code>Content-Type: application/json</code>). Use HTTPS in production. Keep keys on your server, never in a web page or app that others can read.</p>
+      <p>Every request made with a key is listed under that key (<em>Requests</em>) for 30 days, with the answer it got, so you can see what another system is doing.</p>
+    </section>
+
+    <section class="ep" id="access">
+      <h2>Access levels</h2>
+      <p>Each key has one of two access levels, chosen when you create it and changeable later:</p>
+      <div class="params-wrap"><table class="params"><thead><tr><th>Level</th><th>Can do</th></tr></thead><tbody>
+        <tr><td>Read only</td><td>Every <code>GET</code> endpoint: athletes, results, tests, programs and sessions. Best for spreadsheets and dashboards.</td></tr>
+        <tr><td>Read and send results</td><td>Everything above, plus <code>POST /api/v1/results</code>.</td></tr>
+      </tbody></table></div>
+      <p>A read-only key that tries to send data gets <code>403</code>.</p>
     </section>
 
     <section class="ep" id="errors">
@@ -68,6 +82,7 @@ pre code{background:none;padding:0}
       <div class="params-wrap"><table class="params"><thead><tr><th>Status</th><th>Meaning</th></tr></thead><tbody>
         <tr><td>400</td><td>Something in the request needs fixing. The <code>error</code> says what.</td></tr>
         <tr><td>401</td><td>Missing, wrong or revoked API key.</td></tr>
+        <tr><td>403</td><td>The key is read-only and the request tries to send data.</td></tr>
         <tr><td>404</td><td>No record with that ID.</td></tr>
         <tr><td>500</td><td>Something went wrong on our side. Try again.</td></tr>
       </tbody></table></div>
@@ -112,6 +127,38 @@ pre code{background:none;padding:0}
 }</pre>
     </section>
 
+    <section class="ep" id="athlete-results">
+      <div class="ep-head"><span class="verb">GET</span><span class="path">/api/v1/athletes/:code/results</span></div>
+      <p>One athlete's test results, newest first. Values are in the test's own unit. <code>best</code> is true on the best result for each test among those returned (lowest for timed tests, highest for the rest).</p>
+      <div class="params-wrap"><table class="params"><thead><tr><th>Query</th><th>Description</th></tr></thead><tbody>
+        <tr><td>test</td><td>Optional. Only this test, by its name in the test library (see <a href="#tests">List tests</a>).</td></tr>
+        <tr><td>since</td><td>Optional. Only results recorded on or after this date in the facility's time zone, <code>YYYY-MM-DD</code>.</td></tr>
+        <tr><td>limit</td><td>Optional. 1–1,000, default 200.</td></tr>
+      </tbody></table></div>
+      <pre class="code">curl "<span class="base">https://your-site</span>/api/v1/athletes/AVALOP2026/results?test=Vertical%20jump" \
+  -H "Authorization: Bearer dp_live_…"
+
+{
+  "athlete_code": "AVALOP2026",
+  "data": [
+    { "id": 812, "test": "Vertical jump", "category": "Power", "unit": "in", "value": 21.5, "attempt": 1,
+      "source": "manual", "hand_timed": false, "recorded_at": "2026-09-20 16:05:00",
+      "testing_day": { "id": 4, "name": "September combine" }, "best": true }
+  ]
+}</pre>
+    </section>
+
+    <section class="ep" id="tests">
+      <div class="ep-head"><span class="verb">GET</span><span class="path">/api/v1/tests</span></div>
+      <p>The test library: every name you can use in <code>test</code> when you send or read results.</p>
+      <pre class="code">{
+  "data": [
+    { "name": "10-yard sprint", "category": "Speed", "unit": "s", "lower_is_better": true },
+    { "name": "Vertical jump", "category": "Power", "unit": "in", "lower_is_better": false }
+  ]
+}</pre>
+    </section>
+
     <section class="ep" id="programs">
       <div class="ep-head"><span class="verb">GET</span><span class="path">/api/v1/programs</span></div>
       <p>Training programs, with the number of workouts in each.</p>
@@ -145,7 +192,7 @@ pre code{background:none;padding:0}
 
     <section class="ep" id="results">
       <div class="ep-head"><span class="verb post">POST</span><span class="path">/api/v1/results</span></div>
-      <p>Send test results from a device or another system: one result, or an array of up to 1,000. A result with an Athlete ID goes straight to that athlete's profile. Anything else waits in <em>Waiting to be linked</em> on the dashboard; once staff link a device there with Remember on, its results go straight in from then on.</p>
+      <p>Needs a key that can read and send results. Send test results from a device or another system: one result, or an array of up to 1,000. A result with an Athlete ID goes straight to that athlete's profile. Anything else waits in <em>Waiting to be linked</em> on the dashboard; once staff link a device there with Remember on, its results go straight in from then on.</p>
       <div class="params-wrap"><table class="params"><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody>
         <tr><td>athlete_code</td><td>The Athlete ID, like <code>AVALOP2026</code>. Send this, or <code>device_id</code>/<code>device_name</code>.</td></tr>
         <tr><td>device_id</td><td>Your system's ID for the athlete or device, used to remember the link.</td></tr>
@@ -175,10 +222,19 @@ pre code{background:none;padding:0}
 
     <h2 id="webhooks">Webhooks</h2>
     <section class="ep">
-      <p>Add a webhook in <a href="/app/integrations">API &amp; integrations</a> with the events you want. When one happens we <code>POST</code> JSON to your URL straight away. Answer with any 2xx status within 8 seconds. Every delivery and its status is listed under the webhook; use <em>Send test event</em> to try your endpoint (it sends <code>test.ping</code>).</p>
+      <p>Add a webhook in <a href="/app/integrations">API &amp; integrations</a> with the events you want. When one happens we <code>POST</code> JSON to your URL straight away. Answer with any 2xx status within 8 seconds. Every delivery is listed under the webhook with what we sent and what your server answered.</p>
+      <p><em>Send test event</em> sends <code>test.ping</code>, or a realistic sample of any event you subscribe to, with <code>"test": true</code> in its <code>data</code>, so you can build and check your handler before real events arrive.</p>
+      <div class="params-wrap"><table class="params"><thead><tr><th>Header</th><th>Description</th></tr></thead><tbody>
+        <tr><td>x-dp-signature</td><td>Hex HMAC-SHA256 of the raw body with your signing secret. See <a href="#verify">Verify signatures</a>.</td></tr>
+        <tr><td>x-dp-event</td><td>The event name, like <code>booking.created</code>.</td></tr>
+        <tr><td>x-dp-delivery</td><td>The delivery ID. It stays the same when a delivery is retried or resent, so use it to ignore repeats.</td></tr>
+        <tr><td>user-agent</td><td><code>DiamondProtocol-Webhooks/1.0</code></td></tr>
+      </tbody></table></div>
       <pre class="code">POST /your/hook
 Content-Type: application/json
 x-dp-signature: 5f1c0d…e93a
+x-dp-event: workout.completed
+x-dp-delivery: 4821
 
 {
   "event": "workout.completed",
@@ -208,6 +264,13 @@ x-dp-signature: 5f1c0d…e93a
       </tbody></table></div>
     </section>
 
+    <section class="ep" id="retries">
+      <h3>Retries</h3>
+      <p>If your server doesn't answer with a 2xx (or doesn't answer within 8 seconds), we try the same delivery again after 5 minutes, 30 minutes and 2 hours: four tries in all, within a day of the event. Retries wait while a webhook is paused. Redirects count as failures, so give the final URL.</p>
+      <p>You can also resend any delivery by hand, or resend every failed delivery from the last 7 days at once after fixing your server. A resend carries the same body and <code>x-dp-delivery</code>, signed with the current secret.</p>
+      <p>If you need a new signing secret, use <em>New signing secret</em> on the webhook. The old secret stops being used straight away.</p>
+    </section>
+
     <section class="ep" id="verify">
       <h3>Verify signatures</h3>
       <p><code>x-dp-signature</code> is the hex HMAC-SHA256 of the raw request body, keyed with the webhook's signing secret (shown once when you add it, starting <code>whsec_</code>). Compute it over the exact bytes you received, before parsing the JSON, and compare in constant time. Reject the request if it doesn't match.</p>
@@ -226,13 +289,25 @@ app.post('/hooks/dp', express.raw({ type: 'application/json' }), (req, res) =&gt
 def is_valid(raw_body: bytes, signature: str, secret: str) -&gt; bool:
     expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature or "")</pre>
-      <p>Deliveries aren't retried automatically, and the same event can in rare cases arrive twice, so make your handler safe to run twice.</p>
+      <p>Because of retries and resends the same delivery can arrive more than once. Keep the <code>x-dp-delivery</code> IDs you've handled and skip repeats, or make your handler safe to run twice.</p>
     </section>
   </main>
 </div>
 <script>
   // Show this site's own address in the examples.
   document.querySelectorAll('.base').forEach(function (el) { el.textContent = location.origin; });
+  // A copy button on every code sample.
+  document.querySelectorAll('pre.code').forEach(function (pre) {
+    var wrap = document.createElement('div'); wrap.className = 'code-wrap';
+    pre.parentNode.insertBefore(wrap, pre); wrap.appendChild(pre);
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-sm copy'; b.textContent = 'Copy';
+    b.setAttribute('aria-label', 'Copy this example');
+    b.addEventListener('click', function () {
+      navigator.clipboard.writeText(pre.textContent).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); },
+        function () { b.textContent = 'Select and copy'; });
+    });
+    wrap.appendChild(b);
+  });
 </script>
 </body>
 </html>

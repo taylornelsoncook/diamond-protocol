@@ -494,4 +494,4 @@ function routes(api) {
   }));
 }
 
-module.exports = { routes };
+module.exports = { routes, refundSale };

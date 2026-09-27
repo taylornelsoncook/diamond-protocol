@@ -26,7 +26,8 @@
 .iv-lines .amt{text-align:right;font-family:var(--font-mono);font-size:13px;white-space:nowrap;padding-left:16px}
 .iv-due{display:flex;justify-content:flex-end;align-items:baseline;gap:18px}
 .iv-due .k{color:var(--steel-muted)} .iv-due .v{font:700 30px/1 var(--font-display)}
-.iv-how .k{font-size:13px;margin-bottom:2px}.iv-how p{margin:0;color:var(--steel-muted)}
+.iv-how{display:flex;flex-direction:column;gap:4px}.iv-how .k{font-size:13px;margin-bottom:2px}.iv-how p{margin:0;color:var(--steel-muted)}.iv-how .iv-how-k{color:var(--steel)}
+.iv-team{font-family:var(--font-sans)!important;max-width:220px}
 .iv-stamp{position:absolute;top:52px;left:50%;transform:translateX(-50%) rotate(-12deg);border:3px solid var(--green-bright);color:var(--green-bright);padding:6px 16px;border-radius:6px;text-align:center;font:700 34px/1 var(--font-display);letter-spacing:.14em;pointer-events:none;opacity:.9}
 .iv-stamp small{display:block;font:600 11px/1.4 var(--font-sans);letter-spacing:.06em;margin-top:4px}
 .iv-stamp.void{border-color:var(--steel-muted);color:var(--steel-muted)}
@@ -39,7 +40,8 @@
   .iv{border:0;padding:0;background:#fff;color:#111}
   .iv-stamp{color:#2F6B34;border-color:#2F6B34}
   .iv-stamp.void{color:#666;border-color:#666}
-  .iv-parties .addr,.iv-how p,.iv-meta dt,.iv-due .k,.iv-lines th{color:#444}
+  .iv-parties .addr,.iv-how p,.iv-meta dt,.iv-due .k,.iv-lines th,.iv-note{color:#444}
+  .iv-how .iv-how-k{color:#111}
   .iv-lines th,.iv-lines td{border-color:#bbb}
 }
 </style>

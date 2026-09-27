@@ -35,6 +35,7 @@ function startSession(res, kind, userId) {
   res.cookie(kind === 'staff' ? STAFF_COOKIE : PARENT_COOKIE, token, {
     httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', expires, path: '/',
   });
+  return token;
 }
 function sessionUser(req, kind) {
   const token = req.cookies?.[kind === 'staff' ? STAFF_COOKIE : PARENT_COOKIE];
@@ -55,7 +56,7 @@ function loadUser(req, _res, next) {
   const sid = sessionUser(req, 'staff');
   if (sid) {
     const s = get('SELECT id,name,email,role,must_change,active FROM staff WHERE id=?', sid);
-    if (s && s.active) req.staff = s;
+    if (s && s.active) { req.staff = s; require('./services/ops-staff').seen(req, req.cookies?.[STAFF_COOKIE]); }
   }
   const pid = sessionUser(req, 'parent');
   if (pid) {
@@ -88,6 +89,12 @@ function requireApiKey(req, _res, next) {
   if (!k) return next(new HttpError(401, 'That API key is not valid or was revoked.'));
   run("UPDATE api_keys SET last_used=datetime('now') WHERE id=?", k.id);
   req.apiKey = k;
+  // Every request with a key is logged for API & integrations; read-only keys can't send data.
+  const apiOps = require('./services/ops-api');
+  apiOps.track(req, _res, k);
+  if (apiOps.scopeOf(k) === 'read' && !['GET', 'HEAD'].includes(req.method)) {
+    return next(new HttpError(403, 'This API key is read-only. Create a key with "Read and send results" to send data.'));
+  }
   next();
 }
 
@@ -109,7 +116,8 @@ router.post('/staff/login', h(async (req, res) => {
     fail(lock ? `Too many wrong passwords. Your account is locked for ${LOCK_MIN} minutes.` : 'That email and password don\'t match.');
   }
   update('staff', s.id, { failed_count: 0, locked_until: null });
-  startSession(res, 'staff', s.id);
+  const token = startSession(res, 'staff', s.id);
+  require('./services/ops-staff').noteSignIn(req, s.id, token);
   req.staff = s;
   log(req, 'Signed in', null, 'signin');
   res.json({ ok: true, must_change: !!s.must_change });
@@ -125,8 +133,19 @@ router.get('/staff/me', (req, res) => {
 router.post('/staff/password', requireStaff(), h(async (req, res) => {
   const pw = String(req.body.password || '');
   if (pw.length < 10) throw bad('Use at least 10 characters.');
+  // Changing a known password needs the current one (an unlocked screen isn't enough); choosing the first one doesn't.
+  const row = get('SELECT pw_hash FROM staff WHERE id=?', req.staff.id);
+  if (!req.staff.must_change && !checkPassword(req.body.current_password || '', row.pw_hash)) {
+    log(req, 'Password change failed', 'current password did not match', 'refused');
+    throw bad("Your current password doesn't match.");
+  }
+  if (checkPassword(pw, row.pw_hash)) throw bad(req.staff.must_change ? 'Choose a password different from your one-time password.' : "That's your current password. Choose a new one.");
   update('staff', req.staff.id, { pw_hash: hashPassword(pw), must_change: 0 });
-  log(req, 'Changed password');
+  const ops = require('./services/ops-staff');
+  const others = ops.endSessions(req.staff.id, req.staffSession || null);
+  ops.cancelResets(req.staff.id); // a reset link asked for earlier can't undo the new password
+  if (!req.staff.must_change) ops.passwordChangedEmail(req.staff, 'on the Account page');
+  log(req, req.staff.must_change ? 'Chose a password' : 'Changed password', others ? `other devices signed out (${others})` : null);
   res.json({ ok: true });
 }));
 

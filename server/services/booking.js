@@ -184,7 +184,8 @@ function checkIn(bookingId, on = true) {
 
 // Open private/evaluation times from the hours in settings, minus anything already on the schedule.
 function openSlots(kind, fromDate, days = 21) {
-  const hours = all('SELECT * FROM availability WHERE kind=?', kind);
+  // Hours of a turned-off coach aren't offered (Staff & security flags them to hand over).
+  const hours = all('SELECT a.* FROM availability a LEFT JOIN staff s ON s.id=a.coach_id WHERE a.kind=? AND (a.coach_id IS NULL OR s.active=1)', kind);
   const now = nowLocal();
   const out = [];
   for (let i = 0; i < days; i++) {

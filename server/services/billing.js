@@ -11,6 +11,18 @@ const saleCols = all('PRAGMA table_info(sales)').map((c) => c.name);
 if (!saleCols.includes('discount_cents')) db.exec('ALTER TABLE sales ADD COLUMN discount_cents INTEGER DEFAULT 0');
 if (!saleCols.includes('receipt_sent_at')) db.exec('ALTER TABLE sales ADD COLUMN receipt_sent_at TEXT');
 
+// Refunds point back at the invoice they refund, so Billing knows how much of a charge is left to refund.
+// Older refund rows (RF-…) are matched to their original once, by family, athlete and description.
+const invCols = all('PRAGMA table_info(invoices)').map((c) => c.name);
+if (!invCols.includes('refund_of')) {
+  db.exec('ALTER TABLE invoices ADD COLUMN refund_of INTEGER REFERENCES invoices(id)');
+  db.exec(`UPDATE invoices SET refund_of=(SELECT o.id FROM invoices o WHERE o.amount_cents>0 AND o.id<invoices.id
+      AND o.description=substr(invoices.description, 9) AND COALESCE(o.family_id,0)=COALESCE(invoices.family_id,0)
+      AND COALESCE(o.athlete_id,0)=COALESCE(invoices.athlete_id,0) ORDER BY o.id DESC LIMIT 1)
+    WHERE number LIKE 'RF-%' AND amount_cents<0 AND description LIKE 'Refund: %'`);
+}
+db.exec('CREATE INDEX IF NOT EXISTS invoices_refund_of ON invoices(refund_of) WHERE refund_of IS NOT NULL');
+
 function familyOf(athleteId) {
   const a = get('SELECT family_id FROM athletes WHERE id=?', athleteId);
   return a?.family_id ? get('SELECT * FROM families WHERE id=?', a.family_id) : null;
@@ -38,9 +50,15 @@ function refundInvoice(invoiceId, amount_cents) {
   const inv = get('SELECT * FROM invoices WHERE id=?', invoiceId);
   if (!inv || inv.status !== 'paid') return { ok: false };
   const r = payments.refund({ charge_id: inv.charge_id, amount_cents: amount_cents ?? inv.amount_cents });
-  insert('invoices', { number: nextInvoiceNumber('RF'), kind: 'charge', family_id: inv.family_id, athlete_id: inv.athlete_id, description: `Refund: ${inv.description}`,
-    amount_cents: -(amount_cents ?? inv.amount_cents), status: 'paid', paid_at: new Date().toISOString(), pay_method: inv.pay_method, charge_id: r.refund_id, view_token: randomToken(16) });
-  return { ok: true };
+  const id = insert('invoices', { number: nextInvoiceNumber('RF'), kind: 'charge', family_id: inv.family_id, athlete_id: inv.athlete_id, description: `Refund: ${inv.description}`,
+    amount_cents: -(amount_cents ?? inv.amount_cents), status: 'paid', paid_at: new Date().toISOString(), pay_method: inv.pay_method, charge_id: r.refund_id, view_token: randomToken(16),
+    refund_of: inv.amount_cents > 0 ? inv.id : null });
+  return { ok: true, refund_invoice_id: id };
+}
+
+// How much of a paid invoice has been refunded so far (positive cents).
+function refundedCents(invoiceId) {
+  return -get('SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE refund_of=?', invoiceId).c;
 }
 
 // Pack and session products add credits to an athlete.
@@ -141,4 +159,4 @@ function retryFailed({ invoiceId = null } = {}) {
   return { tried: list.length, paid };
 }
 
-module.exports = { charge, refundInvoice, applyProduct, activeMembership, startMembership, setMembershipStatus, changePlan, memberSessionsLeft, renewDue, retryFailed, familyOf, billingEmail, businessName };
+module.exports = { RETRY_DAYS, MAX_ATTEMPTS, charge, refundInvoice, refundedCents, applyProduct, activeMembership, startMembership, setMembershipStatus, changePlan, memberSessionsLeft, renewDue, retryFailed, familyOf, billingEmail, businessName };

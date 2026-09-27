@@ -129,7 +129,8 @@ export function modal({ title, body, actions = [{ label: 'Close', value: null }]
       <div class="modal-body stack">${body}</div>
       <div class="btn-row modal-actions">${actions.map((a, i) => html`<button class="btn ${a.kind ? 'btn-' + a.kind : ''}" data-i="${i}">${a.label}</button>`)}</div></div>`);
     const close = (v) => { back.remove(); document.removeEventListener('keydown', onKey); prevFocus?.focus?.(); resolve(v); };
-    const onKey = (e) => { if (e.key === 'Escape') close(null); };
+    // Escape closes only the top modal (a confirm or a quick add can open over another one).
+    const onKey = (e) => { if (e.key === 'Escape' && [...document.querySelectorAll('.modal-back')].pop() === back) close(null); };
     document.addEventListener('keydown', onKey);
     back.addEventListener('click', async (e) => {
       if (e.target === back || e.target.closest('[data-close]')) return close(null);
@@ -174,4 +175,30 @@ export function sparkline(values, { w = 120, h = 32 } = {}) {
   const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
   const pts = values.map((v, i) => `${(i / (values.length - 1)) * (w - 4) + 2},${h - 2 - ((v - min) / span) * (h - 4)}`).join(' ');
   return raw(`<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(--green-mid)" stroke-width="2"/></svg>`);
+}
+
+// ---- password fields: a Show/Hide button and a Caps Lock warning; call bindPasswordFields(root) after mount ----
+export function passwordField({ id, name, label, autocomplete = 'current-password', hint = '', minlength }) {
+  return html`<div class="field"><label class="label" for="${id}">${label}</label>
+    <div class="pw-wrap"><input class="input" id="${id}" name="${name}" type="password" autocomplete="${autocomplete}" ${minlength ? raw(`minlength="${Number(minlength)}"`) : ''} aria-describedby="${id}-hint ${id}-caps">
+    <button type="button" class="pw-show" data-pw-for="${id}" aria-pressed="false" aria-label="Show ${label.toLowerCase()}">Show</button></div>
+    <span class="hint" id="${id}-hint">${hint}</span><span class="error" id="${id}-caps" role="status" hidden>Caps Lock is on.</span></div>`;
+}
+export function bindPasswordFields(root) {
+  root.querySelectorAll('[data-pw-for]').forEach((b) => {
+    const input = root.querySelector('#' + b.dataset.pwFor);
+    if (!input) return;
+    b.addEventListener('click', () => {
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      b.textContent = show ? 'Hide' : 'Show';
+      b.setAttribute('aria-pressed', String(show));
+      input.focus();
+    });
+    const caps = root.querySelector('#' + b.dataset.pwFor + '-caps');
+    const check = (e) => { if (caps && e.getModifierState) caps.hidden = !e.getModifierState('CapsLock'); };
+    input.addEventListener('keydown', check);
+    input.addEventListener('keyup', check);
+    input.addEventListener('blur', () => { if (caps) caps.hidden = true; });
+  });
 }

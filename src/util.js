@@ -24,6 +24,19 @@ export const badRequest = (message, code = 'invalid_request') => new HttpError(4
 export const notFound = (what) => new HttpError(404, 'not_found', `${what} not found.`);
 export const conflict = (message) => new HttpError(409, 'conflict', message);
 
+// One at a time per key, within this server: a second tap on "Buy" or "Book" waits for the first to finish
+// (card charge included) and then sees its result, instead of charging again. The app runs as one process.
+const locks = new Map();
+export async function withLock(key, fn) {
+  const prev = locks.get(key) ?? Promise.resolve();
+  let release;
+  const mine = new Promise((r) => { release = r; });
+  const chain = prev.then(() => mine);
+  locks.set(key, chain);
+  await prev;
+  try { return await fn(); } finally { release(); if (locks.get(key) === chain) locks.delete(key); }
+}
+
 export function addDays(iso, n) { return new Date(new Date(iso).getTime() + n * 86400000).toISOString(); }
 export function addMonths(iso, n) {
   const d = new Date(iso);

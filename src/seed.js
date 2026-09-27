@@ -15,6 +15,8 @@ import * as clients from './services/clients.js';
 import * as programs from './services/programs.js';
 import { createUser } from './services/access.js';
 import * as engage from './services/engage.js';
+import * as inventory from './services/inventory.js';
+import * as shop from './services/shop.js';
 import { addDays } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -99,7 +101,8 @@ const park = await commerce.createLocation(ctx, { name: 'Sample Park', kind: 'pa
 const single = commerce.createProduct(ctx, { name: 'Single session', kind: 'session', price_cents: 8000 });
 const five = commerce.createProduct(ctx, { name: '5-session pack', kind: 'pack', price_cents: 37500, sessions: 5 });
 commerce.createProduct(ctx, { name: '10-session pack', kind: 'pack', price_cents: 70000, sessions: 10 });
-const shirt = commerce.createProduct(ctx, { name: 'DP T-shirt', kind: 'gear', price_cents: 3000 });
+const shirt = commerce.createProduct(ctx, { name: 'DP T-shirt', kind: 'gear', price_cents: 3000, track_stock: true, low_stock_at: 2 });
+for (const [size, n] of [['Youth M', 6], ['S', 5], ['M', 8], ['L', 2]]) inventory.recordStock(ctx, shirt.id, { reason: 'received', variant_id: inventory.addVariant(ctx, shirt.id, { name: size }).id, quantity: n }, 'Sample data');
 await commerce.registerReader(ctx, { registration_code: 'simulated-wpe', label: 'Front desk', location_id: facility.id });
 const walkIn = await clients.createClient(ctx, { name: 'Jordan Lee', email: 'jordan.lee@example.com', program_id: strength.id });
 async function sell(body, outcome = 'approved') {
@@ -108,7 +111,7 @@ async function sell(body, outcome = 'approved') {
 }
 await sell({ location_id: park.id, method: 'tap_to_pay', client_id: walkIn.id, items: [{ product_id: five.id }], save_card: true });
 await sell({ location_id: mobile.id, method: 'tap_to_pay', client_id: made['Priya Nair'].id, items: [{ product_id: single.id }] });
-await sell({ location_id: facility.id, method: 'cash', items: [{ product_id: shirt.id }] });
+await sell({ location_id: facility.id, method: 'cash', items: [{ product_id: shirt.id, variant_id: inventory.activeVariants(ctx, shirt.id).find((x) => x.name === 'M').id }] });
 commerce.checkIn(ctx, walkIn.id, { location_id: park.id, credit_type: 'private' });
 commerce.checkIn(ctx, made['Maya Okafor'].id, { location_id: facility.id });
 
@@ -236,6 +239,16 @@ engage.createGoal(ctx, { clientId: cole.id }, { kind: 'checkins', target: 6, tit
 engage.sendMessage(ctx, { contractId: hillCountry }, { body: 'Great energy at practice. Hydrate before Thursday; it will be hot on the field.' }, coachUser);
 engage.sendMessage(ctx, { clientId: lopez.id }, { body: 'Your broad jump is up 5 inches since summer. Keep the landings quiet and we will chase 6 feet 8.' }, coachUser);
 engage.sendMessage(ctx, { clientId: cole.id }, { body: 'Saw your check-in: short on sleep and a tight hamstring. Easy warm-up today and tell me how it feels.' }, coachUser);
+// Parent courses: the starter drafts, two of them published.
+engage.addStarterParentCourses(ctx);
+for (const t of ['Growth spurts and training', 'Fueling a young athlete']) engage.updateCourse(ctx, ctx.db.get('SELECT id FROM courses WHERE title = ?', t).id, { published: true });
+// Online store: one program for sale at /shop and in the parent portal.
+shop.setForSale(ctx, 'program', strength.id, { for_sale: true, price_cents: 4900 });
+// Skill badges, with one earned by Ava.
+const sprintStart = engage.createBadge(ctx, { name: 'Sprint start', category: 'Speed', description: 'Drives out of a two-point start with a low, powerful first three steps.' });
+engage.createBadge(ctx, { name: 'Hinge pattern', category: 'Strength', description: 'Hinges at the hips with a flat back, ready for deadlifts and cleans.' });
+engage.createBadge(ctx, { name: 'Quiet landings', category: 'Power', description: 'Lands jumps softly with knees tracking over toes.' });
+engage.awardBadge(ctx, sprintStart.id, { client_id: lopez.id, note: 'Your first step is so much quicker than in the summer.' }, coachUser);
 engage.setTarget(ctx, lopez.id, { test: 'broad_jump', target: '6\'8"', due_date: addDaysToDate(today, 60) }, coachUser);
 engage.setTarget(ctx, lopez.id, { test: 'dash_40yd', target: '5.75', due_date: addDaysToDate(today, 60) }, coachUser);
 engage.setTarget(ctx, cole.id, { test: 'vertical_standing', target: '28', due_date: addDaysToDate(today, 90) }, coachUser);
@@ -248,7 +261,7 @@ const lessons = [
   ['Soreness or pain?', 'When to push and when to tell a coach.', 'Soreness is dull, in the muscle, and eases as you warm up. Pain is sharp, in a joint, or gets worse as you move.\n\nIf it is pain, stop and tell your coach.', 3],
   ['The 10-minute cool-down', 'What to do right after a hard session.', 'Walk for 3 minutes, then hips, calves and upper back for 2 minutes each.\n\nThen eat something with protein within an hour.', 5]
 ].map(([title, summary, body, minutes]) => engage.createLesson(ctx, { title, summary, body, minutes, course_id: recovery.id }));
-const fuel = engage.createLesson(ctx, { title: 'Fuel before a game', summary: 'What to eat 3 hours, 1 hour and 15 minutes out.', body: '3 hours out: a real meal with carbs and protein.\n\n1 hour out: something small and easy, like a banana.\n\n15 minutes out: water only.', minutes: 4 });
+const fuel = engage.createLesson(ctx, { title: 'Fuel before a game', summary: 'What to eat 3 hours, 1 hour and 15 minutes out.', body: '3 hours out: a real meal with carbs and protein.\n\n1 hour out: something small and easy, like a banana.\n\n15 minutes out: water only.', minutes: 4 , quiz_text: 'What should you eat about 3 hours before a game?\n* A real meal with carbs and protein\n- Nothing at all\n- A big bag of candy\n\nWhat is best 15 minutes before a game?\n- An energy drink\n* Water\n- A burger' });
 const mindset = engage.createLesson(ctx, { title: 'Mindset: next play', summary: 'How great athletes reset after a mistake.', body: 'Name it, let it go, and focus on your next job.\n\nTake one breath and pick one cue word you say to yourself.', minutes: 3 });
 engage.assign(ctx, { course_id: recovery.id, client_id: lopez.id, due_date: addDaysToDate(today, 7), note: 'Start with sleep. Takes 15 minutes in total.' }, coachUser);
 ctx.db.run('INSERT INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', lessons[0].id, lopez.id, ctx.now());

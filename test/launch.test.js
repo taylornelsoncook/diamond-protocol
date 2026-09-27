@@ -181,7 +181,7 @@ test('receipts, trial reminders and failed-payment emails; each can be turned of
   await call('POST', '/v1/billing/run', { as_of: new Date(Date.now() + 6 * 86400000).toISOString() }, owner);
   for (const who of ['rosa@example.com', 'luis@example.com']) {
     const failed = await mailTo(who, /Payment didn't go through/);
-    assert.ok(failed && failed.body.includes('Update the card in the parent portal') && failed.body.includes('try again on'), who);
+    assert.ok(failed && /update the card in the parent portal/i.test(failed.body) && failed.body.includes('/pay/') && failed.body.includes('try again on'), who);
   }
   // Turn receipts off.
   await call('PATCH', '/v1/settings', { emails_off: ['receipts'] }, owner);

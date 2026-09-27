@@ -25,3 +25,4 @@ body{background:var(--ground)}
   body{background:#fff}.rp{padding:0;max-width:none}.rp-sheet{border:0;padding:0}.rp-actions{display:none}
   .rp-head img{filter:invert(1) grayscale(1)} .rp-card{break-inside:avoid} tr{break-inside:avoid}
 }
+.rp-note + .rp-note{margin-top:8px}

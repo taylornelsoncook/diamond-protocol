@@ -4,7 +4,7 @@ Your pocket point of sale. Sign in, pick where you are and who you're with, tap 
 
 **Screens:**
 - **Today:** today's sessions (or any day). Open one for its roster: tap to check athletes in, medical flags, parent phone numbers, and Collect for unpaid bookings by Tap to Pay, card on file or cash. Team sessions show the team roster with "Everyone's here".
-- **Charge:** Tap to Pay, card on file, cash.
+- **Charge:** Tap to Pay, card on file, cash. Gear that comes in more than one size sells from the web point of sale for now: the app doesn't ask for a size yet, and the server will say so.
 - **Testing:** testing days from the dashboard. A big stopwatch saves the time to the athlete's next attempt (marked hand-timed) and moves to the next athlete; type in gate times, jumps and measurements; left and right sides; Undo for a stray tap.
 - **Clients:** search by name, Athlete ID or email, and check in.
 - **Settings:** your role, payment mode, simulated reader, sign out.

@@ -203,6 +203,16 @@ function checkinFlags(T, sessions, snoozed) {
   }).filter((f) => !snoozed.has(f.key));
 }
 
+// CRM tasks assigned to this person that are overdue or due today (owners and front desk; coaches have no CRM).
+function crmTasks(staff, T) {
+  if (!['owner', 'frontdesk'].includes(staff.role)) return [];
+  return require('../services/crm').dueTasksFor(staff.id, T).map((t) => ({
+    kind: 'crm_task', title: t.title, href: t.href, phone: t.lead?.phone || null,
+    detail: `${t.overdue ? `Overdue: was due ${fmtDay(t.due_date)}` : 'Due today'}${t.lead ? ` · Lead: ${t.lead.name}` : t.family ? ` · ${t.family.name}` : ''}.`,
+    action: { label: 'Mark done', post: `/crm/tasks/${t.id}/done` },
+  }));
+}
+
 // What a follow-up is about, in words, for the hidden list.
 function describeSnooze(s) {
   const a = s.athlete_id ? get('SELECT first_name, last_name FROM athletes WHERE id=?', s.athlete_id) : null;
@@ -223,7 +233,7 @@ function routes(api) {
     const clients = activeClients(T);
     const tomorrowList = eventsBetween(addDays(T, 1), addDays(T, 1), { includeCancelled: false });
     const out = {
-      date: T, now, role, sessions, flags, attention: attention(role, T, sessions, snoozed),
+      date: T, now, role, sessions, flags, attention: [...crmTasks(req.staff, T), ...attention(role, T, sessions, snoozed)],
       arrivals: arrivals(T, sessions, flagsBy), birthdays: birthdays(T), snoozed: snoozes.map(describeSnooze),
       tomorrow: { date: addDays(T, 1), count: tomorrowList.length, first_at: tomorrowList[0]?.starts_at || null, booked: tomorrowList.reduce((n, e) => n + e.booked, 0) },
     };

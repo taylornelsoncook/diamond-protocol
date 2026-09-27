@@ -48,6 +48,9 @@ app.get('/w/:token', page('workout/index.html'));
 app.get('/report/:code', page('shared/report.html'));
 app.get('/invoice/:token', page('shared/invoice.html'));
 app.get('/docs/api', page('shared/api-docs.html'));
+// The website enquiry form can be embedded in the business's own site (an iframe), so it may be framed anywhere.
+app.get('/enquire', (req, res) => { res.removeHeader('X-Frame-Options'); res.set('Content-Security-Policy', 'frame-ancestors *'); res.sendFile(path.join(pub, 'shared/enquire.html')); });
+app.get('/unsubscribe/:token', page('shared/unsubscribe.html'));
 app.get(['/', '/app', '/app/*splat'], page('coach/index.html'));
 // Health check for the host: answers only when the database is reachable.
 app.get('/healthz', (_req, res) => { require('./db').get('SELECT 1'); res.json({ ok: true }); });

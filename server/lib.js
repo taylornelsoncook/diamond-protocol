@@ -36,7 +36,7 @@ function log(req, action, detail, kind = 'change') {
 }
 
 // ---- Webhooks: fire-and-forget, every delivery recorded ----
-const WEBHOOK_EVENTS = ['client.created', 'booking.created', 'booking.cancelled', 'checkin.created', 'payment.succeeded', 'payment.failed', 'invoice.paid', 'result.created', 'pr.set', 'workout.completed', 'program.assigned'];
+const WEBHOOK_EVENTS = ['client.created', 'booking.created', 'booking.cancelled', 'checkin.created', 'payment.succeeded', 'payment.failed', 'invoice.paid', 'result.created', 'pr.set', 'workout.completed', 'program.assigned', 'lead.created', 'lead.stage_changed'];
 function emit(event, payload) {
   const hooks = all('SELECT * FROM webhooks WHERE active=1');
   for (const w of hooks) {

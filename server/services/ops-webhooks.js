@@ -129,6 +129,8 @@ const EVENT_INFO = {
   'pr.set': { about: 'A result is a personal record.', sample: { id: 812, athlete: { id: 101, code: 'AVALOP2026', name: 'Ava Lopez' }, test: 'Vertical jump', unit: 'in', value: 21.5, attempt: 1, day_id: null, source: 'api', hand_timed: false } },
   'workout.completed': { about: 'An athlete finishes a workout in the workout app.', sample: { athlete_code: 'AVALOP2026', athlete: 'Ava Lopez', program: 'Youth Speed Foundations', week: 2, day: 2, title: 'Strength', exercises_done: 4, exercises_total: 4, note: 'Felt strong today.', finished_at: '2026-09-26 23:12:04' } },
   'program.assigned': { about: 'A program is assigned to an athlete.', sample: { athlete_code: 'AVALOP2026', athlete: 'Ava Lopez', program_id: 3, program: 'Youth Speed Foundations', started: '2026-09-28', workout_url: 'https://your-site/w/abc123' } },
+  'lead.created': { about: 'A new lead is added: website form, staff, import or the API.', sample: { id: 57, parent_name: 'Sarah Miller', email: 'sarah.miller@example.com', phone: '+18015550188', athletes: [{ name: 'Jake', age: 13, grad_year: 2031 }], sport: 'Baseball', source: 'website', source_detail: null, interest: 'evaluation', stage: 'new', first_contact: '2026-09-27', family_id: null } },
+  'lead.stage_changed': { about: 'A lead moves to another stage in the pipeline, by staff or automatically.', sample: { id: 57, parent_name: 'Sarah Miller', from: 'contacted', to: 'evaluation', lost_reason: null, auto: true, family_id: null } },
 };
 
 module.exports = { newSecret, sign, deliver, redeliver, retryDue, health, isOk, isStuck, reason, EVENT_INFO, MAX_ATTEMPTS, RETRY_AFTER_MIN };

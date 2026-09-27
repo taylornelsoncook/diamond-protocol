@@ -39,17 +39,20 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
-  12: ['daily_checkins', 'goals', 'goal_checks', 'coach_messages', 'message_reads', 'test_targets', 'courses', 'lessons', 'lesson_progress', 'lesson_assignments']   // accountability, targets, education
+  12: ['daily_checkins', 'goals', 'goal_checks', 'coach_messages', 'message_reads', 'test_targets', 'courses', 'lessons', 'lesson_progress', 'lesson_assignments'],   // accountability, targets, education
+  13: ['texts']                                                           // text messages
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))"],   // athlete_id: version 6, sex: version 10
   team_roster: ['athlete_id TEXT'],
   perf_sessions: ['shared_at TEXT', 'parent_note TEXT'],                 // version 10
   subscriptions: ['trial_reminded_at TEXT'],                              // version 11
+  guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT'],               // version 13
+  bookings: ['reminded_at TEXT'],                                         // version 13
   class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL']       // version 4
 };
 

@@ -9,6 +9,7 @@ import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
+import * as sms from './services/sms.js';
 
 const list = (data) => ({ data });
 function athleteOf(ctx, r, id) {
@@ -52,6 +53,7 @@ export const portalRoutes = [
   ['GET', '/portal/api/export', 'guardian', 'Download everything we hold about your family, as a file.', (ctx, r) => ({ __file: { filename: `family-data-${new Date().toISOString().slice(0, 10)}.json`, type: 'application/json', body: Buffer.from(JSON.stringify(legal.exportFamily(ctx, r.guardian.family_id), null, 2)) } })],
   ['POST', '/portal/api/deletion-request', 'guardian', 'Ask for your family\'s account and data to be deleted. Optional note.', (ctx, r) => legal.requestDeletion(ctx, r.guardian, r.body), 201],
   ['POST', '/portal/api/verify', 'public', 'Exchange the code for a session.', (ctx, r) => families.verifyCode(ctx, r.body)],
+  ['PATCH', '/portal/api/texts', 'guardian', 'Turn text messages on or off: texts (true or false), phone (your mobile number, needed to turn them on).', (ctx, r) => sms.setTextPrefs(ctx, r.guardian, r.body)],
   ['POST', '/portal/api/logout', 'guardian', 'Sign out.', (ctx, r) => { families.portalLogout(ctx, r.familyToken); return { ok: true }; }],
 
   ['GET', '/portal/api/me', 'guardian', 'Family, athletes, card, waiver.', (ctx, r) => {
@@ -59,7 +61,7 @@ export const portalRoutes = [
     const settings = families.getSettings(ctx);
     const agreements = legal.consentStatus(ctx, r.guardian.id);
     return {
-      guardian: { id: r.guardian.id, name: r.guardian.name, email: r.guardian.email },
+      guardian: { id: r.guardian.id, name: r.guardian.name, email: r.guardian.email, phone: r.guardian.phone, texts: sms.textStatus(r.guardian) },
       agreements, open_deletion_request: !!ctx.db.get(`SELECT 1 FROM data_requests WHERE family_id = ? AND kind = 'delete' AND status = 'open'`, r.guardian.family_id),
       family: fam, athletes: fam.athlete_ids.map((id) => athleteSummary(ctx, id)),
       waiver_text: settings.waiver_text, late_cancel_hours: Number(settings.late_cancel_hours), business_name: settings.business_name, timezone: settings.timezone,

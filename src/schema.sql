@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS guardians (
   phone TEXT,
   relationship TEXT,
   is_primary INTEGER NOT NULL DEFAULT 0,
+  sms_opt_in_at TEXT,                    -- the parent turned texts on in the portal (phone is then stored as +15125550100)
+  sms_opt_out_at TEXT,                   -- the parent replied STOP; no texts until they reply START or turn texts on again
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS clients (
@@ -332,6 +334,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   sale_id TEXT REFERENCES sales(id),
   enrollment_id TEXT REFERENCES enrollments(id) ON DELETE SET NULL,
   booked_by TEXT,
+  reminded_at TEXT,                      -- reminder text handled (sent, or skipped because nobody in the family gets texts)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (session_id, client_id)
@@ -372,6 +375,20 @@ CREATE TABLE IF NOT EXISTS outbox (
   error TEXT,
   created_at TEXT NOT NULL
 );
+-- Text messages sent to parents (out) and their replies (in). Without Twilio settings they're only logged here.
+CREATE TABLE IF NOT EXISTS texts (
+  id TEXT PRIMARY KEY,
+  direction TEXT NOT NULL CHECK (direction IN ('out','in')),
+  phone TEXT NOT NULL,
+  family_id TEXT REFERENCES families(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('logged','sent','failed','held','received')),
+  error TEXT,
+  provider_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS texts_family ON texts(family_id);
 
 -- ---- Team contracts: schools and clubs pay a monthly fee; athletes are on a roster ----
 CREATE TABLE IF NOT EXISTS organizations (

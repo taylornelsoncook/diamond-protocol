@@ -1,5 +1,6 @@
 import { getSetting, payerFor } from './families.js';
 import { sendEmail } from './mail.js';
+import { textFamily } from './sms.js';
 
 // Automatic emails. Each kind can be turned off in Hours & settings; everything lands in the outbox either way.
 export const EMAIL_KINDS = {
@@ -75,7 +76,6 @@ export async function trialReminders(ctx, asOf = ctx.now()) {
 
 // ---------- Failed payments ----------
 export async function paymentFailed(ctx, invoiceId) {
-  if (!on(ctx, 'payment_failed')) return;
   const inv = ctx.db.get(`SELECT i.*, p.name AS plan_name, c.name AS client_name, c.family_id, s.status AS sub_status FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
   if (!inv || !['failed', 'void'].includes(inv.status)) return;
   const payer = payerFor(ctx, inv.client_id);
@@ -84,5 +84,8 @@ export async function paymentFailed(ctx, invoiceId) {
     ? `Hi ${first(payer.name)},\n\nWe tried several times but couldn't charge ${money(inv.amount_cents)} for ${inv.client_name}'s ${inv.plan_name}, so the membership has been canceled.\n\nTo start again, ${payer.table === 'families' ? `add a working card at ${base(ctx)}/parent and choose a membership under Programs` : 'reply to this email'}.\n\n${biz(ctx)}`
     : `Hi ${first(payer.name)},\n\nThe ${money(inv.amount_cents)} payment for ${inv.client_name}'s ${inv.plan_name} didn't go through${inv.last_error ? ` (${inv.last_error})` : ''}. ${fix}\n\nWe'll try again on ${day(ctx, inv.next_retry_at)}. Training continues in the meantime.\n\n${biz(ctx)}`;
   const recipients = inv.family_id ? familyEmails(ctx, inv.family_id).map((g) => g.email) : [payer.email];
-  for (const to of recipients) await send(ctx, to, inv.status === 'void' ? `${first(inv.client_name)}'s membership was canceled` : `Payment didn't go through for ${first(inv.client_name)}'s membership`, text);
+  if (on(ctx, 'payment_failed')) for (const to of recipients) await send(ctx, to, inv.status === 'void' ? `${first(inv.client_name)}'s membership was canceled` : `Payment didn't go through for ${first(inv.client_name)}'s membership`, text);
+  if (inv.family_id) textFamily(ctx, inv.family_id, 'payment_failed', inv.status === 'void' || inv.sub_status === 'canceled'
+    ? `We couldn't charge ${money(inv.amount_cents)} for ${first(inv.client_name)}'s ${inv.plan_name}, so the membership was canceled. To start again, add a working card in the parent portal: ${base(ctx)}/parent`
+    : `The ${money(inv.amount_cents)} payment for ${first(inv.client_name)}'s ${inv.plan_name} didn't go through. Update your card: ${base(ctx)}/parent (Family tab). We'll try again ${day(ctx, inv.next_retry_at)}.`);
 }

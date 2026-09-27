@@ -28,6 +28,8 @@ Everything that needs your identity, your money, your hardware or your decisions
 - [ ] **VALD (if you use it):** email support@vald.com with your organization ID from VALD Hub to request external API access. Until then, export files from VALD Hub and import them.
 - [ ] **Card-saving consent.** The app asks you to get the client's OK before saving a tapped card. Decide what you'll say, or add a line to your client agreement.
 
+- [ ] **Text messages (optional):** a Twilio account, a local number, and US texting registration (A2P 10DLC) for your business. Carriers block unregistered texts and approval can take a week or two. Steps in DEPLOY.md → Connect the outside services. Until then, texts are only logged.
+
 ## 3. Equipment
 
 - [ ] **A Mac** with Xcode 16 or newer to build the iPhone app. Any recent Mac works; a Mac mini is the cheapest option.
@@ -115,7 +117,7 @@ Done: family self sign-up, client import from a spreadsheet, terms and privacy w
 
 Next:
 - Online programs for sale in the parent portal.
-- Pay links and text-message reminders.
+- Pay links.
 - Sales tax, once you know your rules.
 - Private video uploads for exercise demos.
 - Confirm the OVR import against a real export file.

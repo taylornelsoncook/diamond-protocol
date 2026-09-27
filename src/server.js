@@ -19,6 +19,7 @@ import { syncAll as syncDevices, migratePending } from './services/perf-import.j
 import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
 import { handleStripeEvent } from './services/commerce.js';
+import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -29,8 +30,8 @@ const CSP = [
   "frame-src https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
 
-export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, jobs = true, hawkinBaseUrl } = {}) {
-  const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, hawkinBaseUrl, now: () => new Date().toISOString() };
+export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, sms = {}, jobs = true, hawkinBaseUrl } = {}) {
+  const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, sms, hawkinBaseUrl, now: () => new Date().toISOString() };
   syncLibrary(ctx);
   assignMissingIds(ctx);
   migratePending(ctx);
@@ -54,6 +55,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       const baseUrl = ctx.publicUrl || `${url.protocol.replace(':', '')}://${url.host}`;
       if (url.pathname === '/v1/openapi.json') return json(res, 200, openApiSpec(baseUrl));
       if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(ctx, req, res);
+      if (url.pathname === '/sms/inbound' && req.method === 'POST') return smsInbound(ctx, req, res, `${baseUrl}/sms/inbound`);
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
       if (!route) {
         if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(res, url.pathname);
@@ -123,6 +125,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       backup();
     }
     timers.push(setInterval(() => extendSchedule(ctx).catch((e) => console.error('schedule', e)), 6 * 60 * 60 * 1000));
+    timers.push(setInterval(() => sendReminders(ctx).catch((e) => console.error('reminders', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }
@@ -191,6 +194,19 @@ async function stripeWebhook(ctx, req, res) {
   catch (e) { return json(res, 400, { error: { code: 'bad_signature', message: e.message } }); }
   try { return json(res, 200, await handleStripeEvent(ctx, event)); }
   catch (e) { console.error('stripe webhook', e); return json(res, 500, { error: { code: 'server_error', message: 'Could not process the event.' } }); }
+}
+
+// Twilio calls this when a parent replies to a text. Signed with the Twilio auth token; answered with TwiML.
+async function smsInbound(ctx, req, res, url) {
+  const raw = await readRaw(req, 100_000);
+  if (smsMode(ctx) === 'test') return json(res, 404, { error: { code: 'not_found', message: 'Texting is not set up on this server.' } });
+  const params = Object.fromEntries(new URLSearchParams(raw));
+  if (!verifyTwilio(ctx, url, params, req.headers['x-twilio-signature'])) return json(res, 403, { error: { code: 'bad_signature', message: 'This request was not signed by Twilio.' } });
+  let reply = null;
+  try { reply = await handleInbound(ctx, params); } catch (e) { console.error('sms inbound', e); }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  res.writeHead(200, { 'content-type': 'text/xml; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(`<?xml version="1.0" encoding="UTF-8"?><Response>${reply ? `<Message>${esc(reply)}</Message>` : ''}</Response>`);
 }
 
 async function readJson(req, limit = 1_000_000) {

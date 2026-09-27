@@ -14,7 +14,7 @@ You need **Node.js 22.13 or newer** (check with `node -v`; download from nodejs.
 cp .env.example .env      # then change ADMIN_PASSWORD
 npm run seed              # creates your login plus sample plans, programs and clients
 npm start                 # open http://localhost:3000
-npm test                  # runs the full test suite (107 tests)
+npm test                  # runs the full test suite (115 tests)
 ```
 
 The seed prints your login and a sample client app link. To start over, delete the `data` folder and seed again.
@@ -52,6 +52,8 @@ The seed prints your login and a sample client app link. To start over, delete t
 - Age limits are enforced for parents; coaches can override.
 
 **Email:** sign-in codes, booking confirmations, waitlist moves and cancellations. With `RESEND_API_KEY` set they're sent through Resend; without it they're logged to API & integrations → Email outbox, and in test mode the sign-in code is shown on screen.
+
+**Text messages:** parents turn texts on in the parent portal (Family tab) with their mobile number and get a confirmation text. Then they get a reminder the day before each booked session (one per family, skipped for bookings made less than a day ahead), a text when an athlete moves off the waitlist, when you cancel a session, and when a membership payment doesn't go through. Replying STOP turns texts off, START turns them back on, HELP gets a short answer, and any other reply is emailed to the owners. Each kind can be turned off in Hours & settings. With `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM` set they're sent through Twilio; without them they're only logged under API & integrations → Texts. `SMS_ONLY_TO` limits real texts on a staging copy.
 
 **DP Coach iPhone app** (`ios/`): your pocket point of sale with Tap to Pay on iPhone. See `ios/README.md` to build it.
 

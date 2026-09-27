@@ -18,6 +18,7 @@ import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
 import * as engage from './services/engage.js';
 import { listOutbox, sendEmail, mailMode } from './services/mail.js';
+import * as sms from './services/sms.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -138,6 +139,13 @@ export const routes = [
   ['GET', '/v1/settings', 'any', 'Families', 'Business settings: time zone, late-cancel window, waiver text.', (ctx) => families.getSettings(ctx)],
   ['PATCH', '/v1/settings', 'session', 'Families', 'Update settings. Changing the waiver text asks every family to sign again.', (ctx, r) => families.updateSettings(ctx, r.body)],
   ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, and how email is set up (mode: test, restricted or live).', (ctx) => ({ ...list(listOutbox(ctx)), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
+  ['GET', '/v1/texts', 'session', 'Families', 'Text messages sent to parents and their replies, and how texting is set up (mode: test, restricted or live).', (ctx) => ({ ...list(sms.listTexts(ctx)), mode: sms.smsMode(ctx), only_to: ctx.sms?.onlyTo || null, kinds: sms.TEXT_KINDS })],
+  ['POST', '/v1/texts/test', 'session', 'Families', 'Send a test text to a phone number (to) and wait for the text service to answer.', async (ctx, r) => {
+    if (sms.smsMode(ctx) === 'test') throw badRequest('No text service is connected. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM on the server.');
+    const out = await sms.sendText(ctx, { to: v.str(r.body?.to, 'to', { max: 40 }), kind: 'test', body: `Test text from ${families.getSetting(ctx, 'business_name')}. Texting is working.` });
+    if (out.status !== 'sent') throw badRequest(out.error || 'The text service refused the message.');
+    return out;
+  }],
   ['POST', '/v1/outbox/test', 'session', 'Families', 'Send a test email (to) and wait for the email service to answer.', async (ctx, r) => {
     const to = v.email(r.body?.to ?? r.user.email);
     if (mailMode(ctx) === 'test') throw badRequest('No email service is connected. Set RESEND_API_KEY on the server.');

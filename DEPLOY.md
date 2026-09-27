@@ -36,6 +36,13 @@ fly certs add app.yourdomain.com
 ## 4. Connect the outside services
 - **Stripe webhook:** Stripe Dashboard → Developers → Webhooks → add `https://app.yourdomain.com/stripe/webhook` with the events listed in CHECKLIST.md. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
 - **Email:** in Resend, verify your domain (add the DNS records it gives you). Test by signing in to `/parent` as a parent.
+- **Text messages (optional):** until these are set, texts are only logged under API & integrations → Texts.
+  1. Create a Twilio account at twilio.com and buy a local number with SMS.
+  2. Register for US texting in Twilio: **Messaging → Regulatory Compliance → A2P 10DLC**. Register your business (brand) and one campaign of type "Customer care / account notifications". Use your EIN, and describe the opt-in: "Parents turn texts on in our parent portal at https://app.yourdomain.com/parent". US carriers block texts from unregistered numbers, and approval can take a week or two.
+  3. In Render → **diamond-protocol → Environment** set `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` (Twilio Console home page) and `TWILIO_FROM` (your number, or the `MG…` Messaging Service ID if you made one).
+  4. In Twilio → your number → **Messaging configuration**, set "A message comes in" to Webhook `https://app.yourdomain.com/sms/inbound` (HTTP POST). This records STOP, START and HELP and emails you any other reply.
+  5. After Render redeploys, open **API & integrations → Texts** and send yourself a test text.
+  On staging, also set `SMS_ONLY_TO` to your own mobile number so demo families are never texted.
 - **iPhone app:** set the server address in the app to `https://app.yourdomain.com`.
 
 ## 5. Check it's healthy
@@ -62,3 +69,5 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | First start only. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CURRENCY` | Payments. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Email. |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | Text messages (see section 4). Without them texts are only logged. |
+| `SMS_ONLY_TO` | Staging: only these phone numbers (comma list) are really texted; the rest are held in the log. |

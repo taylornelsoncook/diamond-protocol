@@ -348,6 +348,17 @@ async function viewFamily(main) {
       const a = await post('athletes', { name: newName.value, birth_date: newBirth.value || undefined, sport: newSport.value || undefined }); state.athleteId = a.id; toast(`${a.first_name} added.`); await refresh();
     }); } }, field('Full name', newName), h('div', { class: 'form-grid' }, field('Birthday', newBirth), field('Sport', newSport)), btn('Add athlete', null, 'secondary', { type: 'submit' })));
 
+  const me = state.me.guardian;
+  const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
+  const phone = input({ type: 'tel', autocomplete: 'tel', inputmode: 'tel', value: phoneText(me.phone) ?? '', placeholder: '(512) 555-0100' });
+  const textsPanel = panel('Text messages', { subtitle: me.texts === 'on' ? `On for ${phoneText(me.phone)}. Reminders the day before a session, waitlist spots, cancellations and payment problems.` : 'Get a reminder the day before each session, and a text when a spot opens, a session is canceled or a payment doesn\'t go through.' },
+    me.texts === 'stopped' ? h('p', { class: 'small warn-text' }, 'You replied STOP, so texts are off. Turn them on again below, or reply START to our number.') : null,
+    me.texts === 'on' ? null : field('Mobile number', phone),
+    h('div', { class: 'row wrap' }, me.texts === 'on'
+      ? btn('Turn off texts', (e) => busy(e.currentTarget, async () => { await api('PATCH', 'texts', { texts: false }); toast('Texts turned off.'); await refresh(); }), 'secondary')
+      : btn('Turn on texts', (e) => busy(e.currentTarget, async () => { await api('PATCH', 'texts', { texts: true, phone: phone.value }); toast('Texts are on. We just sent a confirmation.'); await refresh(); }), 'primary')),
+    h('p', { class: 'small muted' }, 'Message and data rates may apply. Message frequency varies. Reply STOP to stop, HELP for help.'));
+
   const needs = state.me.agreements?.needs ?? [];
   const agreeBox = h('input', { type: 'checkbox' });
   const LABEL = { terms: 'terms of service', privacy: 'privacy policy' };
@@ -372,7 +383,7 @@ async function viewFamily(main) {
         }, 'ghost')),
     h('p', { class: 'small muted' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
 
-  fill(main, top('Family'), agreementsPanel, cardPanel, waiverPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, addAthlete,
+  fill(main, top('Family'), agreementsPanel, cardPanel, waiverPanel, textsPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, addAthlete,
     panel('Parents', {}, f.guardians.map((g) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', null, g.name), h('span', { class: 'small muted' }, g.email)))), h('p', { class: 'small muted' }, 'To add another parent, ask your coach.')),
     dataPanel,
     btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.me = null; render(); }), 'ghost'));

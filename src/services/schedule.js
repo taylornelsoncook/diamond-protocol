@@ -2,6 +2,7 @@ import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localD
 import { emit } from './events.js';
 import { getSetting, payerFor } from './families.js';
 import { notifyFamily } from './mail.js';
+import { textFamily } from './sms.js';
 import * as commerce from './commerce.js';
 import { teamRosterFor } from './teams.js';
 
@@ -177,6 +178,7 @@ export async function cancelSession(ctx, id, { reason } = {}) {
     const fam = ctx.db.get('SELECT family_id FROM clients WHERE id = ?', b.client_id).family_id;
     notifyFamily(ctx, fam, `Canceled: ${s.name} on ${when(ctx, s.starts_at)}`,
       `${s.name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''} ${first(b.name)}'s ${b.coverage === 'credit' ? 'session credit has been returned' : b.coverage === 'paid' ? 'payment has been refunded' : 'spot has been released'}.`);
+    textFamily(ctx, fam, 'canceled', `${s.name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''} Details are in your email.`);
   }
   emit(ctx, 'session.canceled', { session_id: id, name: s.name, starts_at: s.starts_at, reason: reason ?? null });
   return getSession(ctx, id);
@@ -288,6 +290,7 @@ export async function promoteWaitlist(ctx, sessionId) {
     emit(ctx, 'booking.created', { booking_id: next.id, session_id: sessionId, session_name: s.name, starts_at: s.starts_at, client_id: next.client_id, client_name: next.name, coverage: r.coverage, from_waitlist: true });
     notifyFamily(ctx, next.family_id, `A spot opened: ${s.name}, ${when(ctx, s.starts_at)}`,
       `Good news: ${first(next.name)} moved off the waitlist and is booked for ${s.name}, ${when(ctx, s.starts_at)}.${r.coverage === 'unpaid' ? ' Payment is due at the session. If you can\'t make it, cancel from the parent portal.' : ''}`);
+    textFamily(ctx, next.family_id, 'waitlist', `A spot opened. ${first(next.name)} is now booked for ${s.name}, ${when(ctx, s.starts_at)}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/parent`);
     s = getSession(ctx, sessionId);
   }
 }

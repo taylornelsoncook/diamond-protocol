@@ -30,6 +30,15 @@ services:
       # Staging only delivers email to these addresses (e.g. your own); demo families never get real email.
       - key: EMAIL_ONLY_TO
         sync: false
+      # Text messages (optional; see DEPLOY.md). SMS_ONLY_TO: your own mobile, so demo families are never texted.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      - key: SMS_ONLY_TO
+        sync: false
 
   # Production: real families. Deploys only when you press Manual Deploy.
   - type: web
@@ -65,4 +74,11 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: EMAIL_REPLY_TO
+        sync: false
+      # Text messages (optional; see DEPLOY.md). Without them texts are only logged.
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
         sync: false

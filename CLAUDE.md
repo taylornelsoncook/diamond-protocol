@@ -15,14 +15,14 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 ## Commands
 - `npm run seed`: sample data (sign in `coach@diamondprotocol.local` / `change-me-now`; parent `maria.lopez@example.com`, code shown on screen in test mode). Delete `data/` first to reseed.
 - `npm start`: http://localhost:3000
-- `npm test`: the full suite (107 tests). Run it before calling anything done.
+- `npm test`: the full suite (115 tests). Run it before calling anything done.
 - Node 22.13+ only. **Zero npm dependencies** (node:sqlite, node:http, node:test, built-in fetch/zlib/crypto). Keep it that way unless the owner agrees.
 
 ## Code map
 - `src/server.js` HTTP, auth, roles check, audit log, rate limits, static pages, jobs. `src/index.js` startup and production safety checks.
 - `src/routes.js` coach and public API (+ OpenAPI). `src/portal-routes.js` parent API.
 - `src/schema.sql` all tables. `src/db.js` versioned migrations (`SCHEMA_VERSION`, `ADDED_COLUMNS`, table rebuilds). New columns go in **both** the CREATE TABLE and `ADDED_COLUMNS`, and bump the version.
-- `src/services/`: billing, clients, families (settings, waiver, parent sign-in), commerce (point of sale, cards, credits), schedule, teams, performance + test-library + units + perf-import + uploads + queue + reports, athlete-ids, security (roles, staff, audit, rate limits), backups, legal (terms/privacy, data export/deletion), signup, client-import, notify (automatic emails), mail (Resend + outbox), xlsx (Excel read/write), events (webhooks).
+- `src/services/`: billing, clients, families (settings, waiver, parent sign-in), commerce (point of sale, cards, credits), schedule, teams, performance + test-library + units + perf-import + uploads + queue + reports, athlete-ids, security (roles, staff, audit, rate limits), backups, legal (terms/privacy, data export/deletion), signup, client-import, notify (automatic emails), mail (Resend + outbox), sms (Twilio texts, parent opt-in, STOP replies, day-before reminders), xlsx (Excel read/write), events (webhooks).
 - `src/payments/` test provider and Stripe (REST via fetch). Test provider refuses charges with no saved card, like Stripe.
 - `public/` plain JS modules (`js/ui.js` helpers `h`, `fill`, `btn`, `panel`...). Brand: black, steel `#E4E7E5`, forest green `#2F6B34`/`#7DBA70`, Chakra Petch + IBM Plex Sans.
 
@@ -38,10 +38,10 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 - Plain-English UI copy, sentence case, active voice. Errors say what to fix.
 
 ## Status
-Done: everything above, with tests, plus Accountability / Performance / Education (daily check-ins, streaks, weekly goals, coach messages, test targets, opt-in rankings, lessons, courses and assigned reading; `services/engage.js`, `public/js/engage-view.js`, `public/js/engage-coach.js`) and monthly memberships at the counter.
+Done: everything above, with tests, text messages (Twilio, simulated until keys are set), plus Accountability / Performance / Education (daily check-ins, streaks, weekly goals, coach messages, test targets, opt-in rankings, lessons, courses and assigned reading; `services/engage.js`, `public/js/engage-view.js`, `public/js/engage-coach.js`) and monthly memberships at the counter.
 
 **Deployed on Render** from `main` (see `render.yaml`): `diamond-protocol-staging` (demo data, test mode, auto-deploys; email limited by `EMAIL_ONLY_TO`) and `diamond-protocol` (production at https://app.diamondprotocol.org, deploys only on Manual Deploy). Email via Resend from `hello@diamondprotocol.org`; DNS on Cloudflare. The database is `/data/dp.db` (the first version of the app left an unused `/data/diamond.db`; never point `DB_FILE` at it). Older setting names `DP_APP_URL`, `DP_EMAIL_FROM`, `DP_EMAIL_REPLY_TO`, `DP_EMAIL_ONLY_TO` still work. `DP_DEMO=1` seeds an empty database and implies test mode.
 
 **How changes ship:** build and test here, push to `main` → GitHub runs the **Tests** check (`.github/workflows/tests.yml`) → staging updates only if it passes → the owner checks staging → the owner presses Manual Deploy on production.
 Owner's side (see CHECKLIST.md): lawyer-written waiver/terms/privacy, Stripe live + Terminal + Tap to Pay entitlement (Apple), Resend email with domain DNS, domain, hosting (Render via `render.yaml`), GitHub repo, a Mac for the iPhone app, real prices/schedule, one real OVR export to confirm the import.
-Next builds: online programs for sale, pay links + text reminders, sales tax (after the owner's accountant weighs in), private video uploads, confirm OVR import against a real file.
+Next builds: online programs for sale, pay links, sales tax (after the owner's accountant weighs in), private video uploads, confirm OVR import against a real file.

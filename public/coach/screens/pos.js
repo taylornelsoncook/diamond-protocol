@@ -4,6 +4,8 @@ import { html, raw, mount, api, money, toCents, relTime, badge, toast, toastErro
 const KIND_LABEL = { session: 'Single group session', group_pack: 'Group class pack', private_pack: 'Private session pack', gear: 'Gear', other: 'Other' };
 const LOC_KIND = { facility: 'Facility', mobile: 'Mobile (clients\' homes)', park: 'Park', school: 'School' };
 const credit = (p) => (p.kind === 'group_pack' || p.kind === 'session' ? plural(p.credits || 1, 'group session') : p.kind === 'private_pack' ? plural(p.credits || 1, 'private session') : '');
+const planInfo = (p) => [p.group_per_month == null ? 'Unlimited group sessions' : plural(p.group_per_month, 'group session') + ' a month',
+  p.private_per_month ? plural(p.private_per_month, 'private session') + ' a month' : '', p.trial_days ? `${p.trial_days}-day free trial` : ''].filter(Boolean).join(' · ');
 const STATUS = { paid: 'paid', refunded: ['Refunded', 'muted'], partial_refund: ['Part refunded', 'neutral'], failed: 'failed' };
 const saleBadge = (s) => (Array.isArray(STATUS[s]) ? html`<span class="badge badge-${STATUS[s][1]}">${STATUS[s][0]}</span>` : badge(STATUS[s] || s));
 
@@ -37,7 +39,7 @@ const STYLE = html`<style>
 // ---------------------------------------------------------------- sale screen
 async function renderPos(ctx) {
   const owner = ctx.me.role === 'owner', setup = ctx.me.role !== 'frontdesk';
-  const [locations, products, readers, sales] = await Promise.all([api.get('/locations'), api.get('/products'), api.get('/readers'), api.get('/sales?days=7')]);
+  const [locations, products, readers, sales, plans] = await Promise.all([api.get('/locations'), api.get('/products'), api.get('/readers'), api.get('/sales?days=7'), api.get('/pos/memberships')]);
   if (!ctx.isCurrent()) return;
   const mode = ctx.settings?.payments_mode || 'test';
   let remembered = null;
@@ -62,6 +64,10 @@ async function renderPos(ctx) {
           ${products.length ? html`<div class="pos-products">${products.map((p) => html`<button type="button" class="pos-tile" data-p="${p.id}">
             <span class="n">${p.name}</span><span class="p">${money(p.price_cents)}</span>${credit(p) ? html`<span class="small muted">${credit(p)}</span>` : ''}</button>`)}</div>`
             : html`<p class="muted" style="margin:0">No products yet.${setup ? html` <a href="/app/pos/setup">Add products</a>.` : ''}</p>`}
+          ${plans.length ? html`<div class="stack-sm"><span class="label">Monthly memberships</span>
+            <div class="pos-products">${plans.map((p) => html`<button type="button" class="pos-tile" data-plan="${p.id}">
+              <span class="n">${p.name}</span><span class="p">${money(p.price_cents)}<span class="small muted" style="font:400 13px var(--font-sans)"> /month</span></span>
+              <span class="small muted">${planInfo(p)}</span></button>`)}</div></div>` : ''}
           <form id="custom" class="stack-sm" novalidate><span class="label">Custom amount</span>
             <div class="row" style="flex-wrap:nowrap"><input class="input" name="name" placeholder="Description" aria-label="Description" style="flex:2">
               <input class="input" name="amount" inputmode="decimal" placeholder="$" aria-label="Amount in dollars" style="flex:1;min-width:80px">
@@ -157,6 +163,41 @@ async function renderPos(ctx) {
     const p = products.find((x) => x.id === +b.dataset.p);
     add({ product_id: p.id, name: p.name, price_cents: p.price_cents, kind: p.kind });
   }));
+  ctx.el.querySelectorAll('[data-plan]').forEach((b) => b.addEventListener('click', () => sellMembership(plans.find((x) => x.id === +b.dataset.plan))));
+
+  // Memberships are sold on their own: they need a client, and the card is saved to bill every month.
+  async function sellMembership(plan) {
+    const who = state.who, l = loc();
+    if (!who) { toast('Choose who the membership is for first.', 'warn'); $('#who-q')?.focus(); return; }
+    if (!l?.cards_ready) { toast(`Card payments need an address for ${l?.name || 'this location'}. Add one in setup.`, 'warn'); return; }
+    const methods = [
+      who.card ? { v: 'card', t: `Card on file (${who.card.brand} ••${who.card.last4})` } : null,
+      { v: 'tap', t: 'Tap to Pay on iPhone' },
+      readers.length ? { v: 'reader', t: `Front-desk reader (${readers[0].label})` } : null,
+    ].filter(Boolean);
+    const first = plan.trial_days ? `Free for ${plural(plan.trial_days, 'day')}, then ${money(plan.price_cents)} every month.` : `${money(plan.price_cents)} today, then every month.`;
+    const r = await modal({
+      title: `Start ${plan.name}`,
+      body: html`<p style="margin:0"><span class="strong">${who.first_name} ${who.last_name}</span> · ${planInfo(plan)}</p>
+        <p class="display" style="font-size:32px;margin:0">${money(plan.price_cents)}<span class="muted" style="font-size:16px"> /month</span></p>
+        <p style="margin:0">${first}</p>
+        <fieldset><legend>Card to bill each month</legend>
+          ${methods.map((m, i) => html`<label class="pay-opt"><input type="radio" name="mm" value="${m.v}" ${i === 0 ? raw('checked') : ''}><span>${m.t}</span></label>`)}
+        </fieldset>
+        <p class="hint" style="margin:0">A tapped card is saved to the ${who.family || 'family'} account for the monthly charge.${mode === 'test' ? ' Test mode: the card is simulated as Visa ••4242.' : ''}</p>
+        <div class="error" id="mm-err" role="alert"></div>`,
+      actions: [{ label: 'Cancel', value: null }, { label: plan.trial_days ? 'Start free trial' : `Charge ${money(plan.price_cents)}`, kind: 'primary', onClick: async (body) => {
+        const method = body.querySelector('input[name=mm]:checked').value;
+        try { return await api.post('/sales/membership', { location_id: state.location, athlete_id: who.id, plan_id: plan.id, method }); }
+        catch (e) { body.querySelector('#mm-err').textContent = e.message; return false; }
+      } }],
+    });
+    if (!r) return;
+    toast(r.message);
+    state.who = await api.get(`/pos/client/${who.id}`).catch(() => who);
+    renderWho(); renderSale();
+  }
+
   $('#custom').addEventListener('submit', (e) => {
     e.preventDefault();
     const f = e.target, cents = toCents(f.amount.value);
@@ -220,9 +261,11 @@ async function refundModal(s, after) {
 
 // ---------------------------------------------------------------- setup
 async function renderSetup(ctx) {
-  const [locations, products, readers] = await Promise.all([api.get('/locations'), api.get('/products'), api.get('/readers')]);
+  const owner = ctx.me.role === 'owner';
+  const [locations, products, readers, plans] = await Promise.all([api.get('/locations'), api.get('/products'), api.get('/readers'), api.get('/plans')]);
   if (!ctx.isCurrent()) return;
   const mode = ctx.settings?.payments_mode || 'test';
+  const livePlans = plans.filter((p) => p.active);
   mount(ctx.el, html`${STYLE}
     <header class="page-header">
       <div><h1 class="page-title">Point of sale setup</h1><p class="page-sub">Where you train, what you sell and your card readers.</p></div>
@@ -249,15 +292,24 @@ async function renderSetup(ctx) {
       </section>
       <div class="stack">
         <section class="panel">
-          <div><h2 class="panel-title">Products</h2><p class="panel-sub">Sessions and packs add session credits to the client. Members check in on their membership.</p></div>
+          <div><h2 class="panel-title">Products</h2><p class="panel-sub">Sessions and packs add session credits to the client. Monthly memberships bill the family's card every month.</p></div>
+          ${livePlans.length ? html`<div class="list">${livePlans.map((p) => html`<div class="list-row"><div class="grow"><div class="strong">${p.name} ${badge('open', 'Monthly')}</div>
+            <div class="small muted">${owner ? html`${money(p.price_cents)} a month · ` : ''}${planInfo(p)}${owner ? ` · ${plural(p.subscribers || 0, 'member')}` : ''}</div></div>
+            ${owner ? html`<button class="btn btn-ghost btn-sm" data-plan-edit="${p.id}">Price</button><button class="btn btn-ghost btn-sm" data-plan-stop="${p.id}">Stop selling</button>` : ''}</div>`)}</div>` : ''}
           <div class="list">${products.map((p) => html`<div class="list-row"><div class="grow"><div class="strong">${p.name}</div>
             <div class="small muted">${money(p.price_cents)}${credit(p) ? ` · ${credit(p)}` : ` · ${KIND_LABEL[p.kind]}`}</div></div>
             <button class="btn btn-ghost btn-sm" data-price="${p.id}">Price</button><button class="btn btn-ghost btn-sm" data-stop="${p.id}">Stop selling</button></div>`)}</div>
           <form id="pf" class="stack" novalidate style="border-top:1px solid var(--line-subtle);padding-top:var(--space-4)">
             <div class="form-grid"><div class="field"><label class="label" for="pf-n">Product name</label><input class="input" id="pf-n" name="name" required></div>
-              <div class="field"><label class="label" for="pf-k">Type</label><select class="input" id="pf-k" name="kind">${Object.entries(KIND_LABEL).map(([k, v]) => html`<option value="${k}">${v}</option>`)}</select></div></div>
-            <div class="form-grid"><div class="field"><label class="label" for="pf-p">Price ($)</label><input class="input" id="pf-p" name="price" inputmode="decimal"></div>
+              <div class="field"><label class="label" for="pf-k">Type</label><select class="input" id="pf-k" name="kind">${Object.entries(KIND_LABEL).map(([k, v]) => html`<option value="${k}">${v}</option>`)}
+                ${owner ? html`<option value="monthly">Monthly membership</option>` : ''}</select></div></div>
+            <div class="form-grid"><div class="field"><label class="label" for="pf-p" id="pf-p-l">Price ($)</label><input class="input" id="pf-p" name="price" inputmode="decimal"></div>
               <div class="field" id="pf-cr-f" hidden><label class="label" for="pf-cr">Sessions in the pack</label><input class="input" id="pf-cr" name="credits" type="number" min="1" max="200" value="10"></div></div>
+            <div class="form-grid" id="pf-m" hidden>
+              <div class="field"><label class="label" for="pf-g">Group sessions a month</label><input class="input" id="pf-g" name="group_per_month" type="number" min="0" placeholder="Unlimited"><span class="hint">Leave blank for unlimited.</span></div>
+              <div class="field"><label class="label" for="pf-pr">Private sessions a month</label><input class="input" id="pf-pr" name="private_per_month" type="number" min="0" value="0"></div>
+              <div class="field"><label class="label" for="pf-t">Free trial (days)</label><input class="input" id="pf-t" name="trial_days" type="number" min="0" value="0"><span class="hint">0 charges the first month right away.</span></div>
+            </div>
             <div class="error" id="pf-err" role="alert"></div>
             <div><button class="btn btn-primary">Add product</button></div>
           </form>
@@ -288,10 +340,35 @@ async function renderSetup(ctx) {
     catch (x) { err.textContent = x.message; btn.disabled = false; }
   });
   submit('#lf', '#lf-err', (d) => api.post('/locations', d), 'Location added.');
-  submit('#pf', '#pf-err', (d) => api.post('/products', { name: d.name, kind: d.kind, price_cents: toCents(d.price), credits: Number(d.credits) }), 'Product added.');
+  submit('#pf', '#pf-err', (d) => (d.kind === 'monthly'
+    ? api.post('/plans', { name: d.name, price_cents: toCents(d.price), group_per_month: d.group_per_month, private_per_month: d.private_per_month, trial_days: d.trial_days })
+    : api.post('/products', { name: d.name, kind: d.kind, price_cents: toCents(d.price), credits: Number(d.credits) })), 'Product added.');
   submit('#rf', '#rf-err', (d) => api.post('/readers', d), 'Reader registered.');
   const kindSel = $('#pf-k');
-  kindSel.addEventListener('change', () => { $('#pf-cr-f').hidden = !['group_pack', 'private_pack'].includes(kindSel.value); });
+  kindSel.addEventListener('change', () => {
+    const monthly = kindSel.value === 'monthly';
+    $('#pf-cr-f').hidden = !['group_pack', 'private_pack'].includes(kindSel.value);
+    $('#pf-m').hidden = !monthly;
+    $('#pf-p-l').textContent = monthly ? 'Monthly price ($)' : 'Price ($)';
+  });
+  ctx.el.querySelectorAll('[data-plan-edit]').forEach((b) => b.addEventListener('click', async () => {
+    const p = plans.find((x) => x.id === +b.dataset.planEdit);
+    const r = await modal({
+      title: `Price for ${p.name}`,
+      body: html`<div class="field"><label class="label" for="mp">Monthly price ($)</label><input class="input" id="mp" inputmode="decimal" value="${(p.price_cents / 100).toFixed(2)}">
+        <span class="hint">Current members pay the new price from their next monthly charge.</span></div><div class="error" id="mp-err" role="alert"></div>`,
+      actions: [{ label: 'Cancel', value: null }, { label: 'Save price', kind: 'primary', onClick: async (body) => {
+        try { return await api.put(`/plans/${p.id}`, { price_cents: toCents(body.querySelector('#mp').value) }); }
+        catch (e) { body.querySelector('#mp-err').textContent = e.message; return false; }
+      } }],
+    });
+    if (r) { toast('Price saved.'); ctx.reload(); }
+  }));
+  ctx.el.querySelectorAll('[data-plan-stop]').forEach((b) => b.addEventListener('click', async () => {
+    const p = plans.find((x) => x.id === +b.dataset.planStop);
+    if (!(await confirmDialog(`Stop selling ${p.name}?`, 'New families can no longer start it. Current members keep it until you change or cancel their membership.', 'Stop selling', 'warn'))) return;
+    try { await api.put(`/plans/${p.id}`, { active: false }); toast(`${p.name} is no longer for sale.`); ctx.reload(); } catch (e) { toastError(e); }
+  }));
 
   ctx.el.querySelectorAll('[data-arch-loc]').forEach((b) => b.addEventListener('click', async () => {
     const l = locations.find((x) => x.id === +b.dataset.archLoc);

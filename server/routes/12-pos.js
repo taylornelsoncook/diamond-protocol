@@ -234,6 +234,60 @@ function routes(api) {
     res.json({ ok: true, sale: saleRow(row), saved_card: result.savedCard, message: `${money(total)} paid${result.savedCard ? '. Card saved to the family' : ''}.` });
   }));
 
+  // ---- monthly memberships at the counter ----
+  // Plans with prices for the sale screen (all staff see prices here, as with products).
+  api.get('/pos/memberships', requireStaff(), (_req, res) => {
+    res.json(all('SELECT id, name, price_cents, trial_days, group_per_month, private_per_month FROM plans WHERE active=1 ORDER BY price_cents'));
+  });
+
+  // Start a monthly membership. It renews on the family's card, so the card used here is saved to the family.
+  api.post('/sales/membership', requireStaff(), h(async (req, res) => {
+    const b = req.body || {};
+    const method = b.method;
+    if (method === 'cash') throw bad('Monthly memberships renew on a card. Use Tap to Pay, the reader or the card on file.');
+    if (!['tap', 'reader', 'card'].includes(method)) throw bad('Choose how they\'re paying.');
+    const loc = get('SELECT * FROM locations WHERE id=? AND archived=0', b.location_id);
+    if (!loc) throw bad('Choose where you are.');
+    if (!(loc.address && loc.address.trim())) throw bad(`Card payments need an address for ${loc.name}. Add one in Point of sale setup.`);
+    const a = get('SELECT * FROM athletes WHERE id=? AND archived=0', b.athlete_id);
+    if (!a) throw bad('Choose who the membership is for.');
+    if (!a.family_id) throw bad(`${a.first_name} has no family account to bill. Add them as a client with a parent first.`);
+    const plan = get('SELECT * FROM plans WHERE id=? AND active=1', b.plan_id);
+    if (!plan) throw bad('That membership is no longer offered. Refresh and try again.');
+    if (billing.activeMembership(a.id)) throw bad(`${a.first_name} already has a membership. Change it on their client profile.`);
+
+    let tapped = null;
+    if (method === 'card') {
+      const f = get('SELECT card_last4 FROM families WHERE id=?', a.family_id);
+      if (!f?.card_last4) throw bad(`${a.first_name}'s family has no card on file. Use Tap to Pay or the reader.`);
+    } else {
+      if (method === 'reader' && !get('SELECT 1 FROM readers LIMIT 1')) throw bad('No front-desk reader is registered. Add one in Point of sale setup.');
+      // Tapped or inserted card (simulated in test mode; Stripe Terminal when live).
+      tapped = { brand: String(b.card?.brand || 'Visa').slice(0, 20), last4: String(b.card?.last4 || '4242').replace(/\D/g, '').slice(-4) || '4242', exp: b.card?.exp || '12/29' };
+      if (tapped.last4 === '0002') throw bad('Card declined. Ask for another card.');
+    }
+
+    // All or nothing: a declined first charge leaves no membership, no saved card and nothing to retry.
+    const result = tx(() => {
+      if (tapped) update('families', a.family_id, { card_brand: tapped.brand, card_last4: tapped.last4, card_exp: tapped.exp });
+      const r = billing.startMembership(a.id, plan.id);
+      if (!r.ok) throw bad(`${r.error || 'Card declined.'} Ask for another card.`);
+      return r;
+    });
+    const m = get('SELECT * FROM memberships WHERE id=?', result.id);
+    const card = get('SELECT card_brand, card_last4 FROM families WHERE id=?', a.family_id);
+    const cardText = `${card.card_brand} ••${card.card_last4}`;
+    log(req, 'Started membership', `${fullName(a)} · ${plan.name} · ${loc.name} · ${METHOD_LABEL[method]}`);
+    if (tapped) log(req, 'Saved card', `${a.first_name}'s family · ${cardText}`);
+    const when = new Date(m.next_charge + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    res.json({
+      ok: true, membership_id: m.id, status: m.status, next_charge: m.next_charge,
+      message: result.trial
+        ? `${a.first_name} is on ${plan.name}. Free trial until ${when}, then ${money(plan.price_cents)} a month on ${cardText}.`
+        : `${money(plan.price_cents)} paid. ${a.first_name}'s ${plan.name} renews on ${when} on ${cardText}.`,
+    });
+  }));
+
   // Refund all or part of a sale (owners).
   api.post('/sales/:id/refund', requireStaff('owner'), h(async (req, res) => {
     const s = get('SELECT * FROM sales WHERE id=?', req.params.id);

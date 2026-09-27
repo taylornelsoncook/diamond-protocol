@@ -308,3 +308,57 @@ test('Signed-out requests are refused', async () => {
   const anon = client();
   for (const p of ['/api/today', '/api/events', '/api/sales', '/api/locations']) assert.equal((await anon.get(p)).status, 401);
 });
+
+test('monthly memberships: created as a product, started at the counter on a saved card', async () => {
+  const o = await owner();
+  const d = await desk();
+  const c = await coach();
+  const loc = get("SELECT id FROM locations WHERE address IS NOT NULL AND address<>'' LIMIT 1").id;
+
+  // Owners add a monthly membership from Point of sale setup; coaches can't.
+  assert.equal((await c.post('/api/plans', { name: 'Coach plan', price_cents: 5000 })).status, 403);
+  let r = await o.post('/api/plans', { name: 'Speed club monthly', price_cents: 9900, group_per_month: 4, private_per_month: 0, trial_days: 7 });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const trialPlan = r.data.id;
+  r = await o.post('/api/plans', { name: 'No-trial monthly', price_cents: 12000, trial_days: 0 });
+  const payPlan = r.data.id;
+  const listed = (await d.get('/api/pos/memberships')).data;
+  assert.ok(listed.find((p) => p.id === trialPlan && p.price_cents === 9900));
+
+  // A fresh family with no card and no membership.
+  const isaFam = insert('families', { name: 'Card-less family' });
+  const isa = get('SELECT * FROM athletes WHERE id=?', insert('athletes', { code: 'NOCARD2026', family_id: isaFam, first_name: 'Nora', last_name: 'Card' }));
+  const sell = (who, body) => who.post('/api/sales/membership', { location_id: loc, ...body });
+  r = await sell(d, { athlete_id: isa.id, plan_id: trialPlan, method: 'cash' });
+  assert.equal(r.status, 400); assert.match(r.data.error, /renew on a card/);
+  r = await sell(d, { athlete_id: isa.id, plan_id: trialPlan, method: 'card' });
+  assert.match(r.data.error, /no card on file/);
+
+  // A declined tap leaves nothing behind.
+  r = await sell(d, { athlete_id: isa.id, plan_id: payPlan, method: 'tap', card: { last4: '0002' } });
+  assert.equal(r.status, 400);
+  assert.equal(get("SELECT COUNT(*) n FROM memberships WHERE athlete_id=?", isa.id).n, 0);
+  assert.equal(get('SELECT card_last4 FROM families WHERE id=?', isa.family_id).card_last4, null);
+
+  // Tap starts the trial and saves the card for the monthly charge.
+  r = await sell(d, { athlete_id: isa.id, plan_id: trialPlan, method: 'tap' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.status, 'trial');
+  assert.match(r.data.message, /Free trial until/);
+  assert.equal(get('SELECT card_last4 FROM families WHERE id=?', isa.family_id).card_last4, '4242');
+  r = await sell(d, { athlete_id: isa.id, plan_id: payPlan, method: 'card' });
+  assert.match(r.data.error, /already has a membership/);
+
+  // No trial: the card on file is charged the first month now.
+  const fid = insert('families', { name: 'Test family', card_brand: 'Visa', card_last4: '4242', card_exp: '01/30' });
+  const aid = insert('athletes', { code: 'TESFAM2026', family_id: fid, first_name: 'Tess', last_name: 'Family' });
+  r = await sell(o, { athlete_id: aid, plan_id: payPlan, method: 'card' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.status, 'active');
+  assert.equal(get("SELECT status FROM invoices WHERE athlete_id=? AND kind='membership' ORDER BY id DESC LIMIT 1", aid).status, 'paid');
+
+  // Team-only athletes have no family to bill.
+  const teamOnly = get('SELECT id FROM athletes WHERE family_id IS NULL LIMIT 1').id;
+  r = await sell(d, { athlete_id: teamOnly, plan_id: payPlan, method: 'tap' });
+  assert.match(r.data.error, /no family account/);
+});

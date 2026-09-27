@@ -655,8 +655,7 @@ CREATE TABLE IF NOT EXISTS perf_sessions (
   notes TEXT,
   shared_at TEXT,                               -- results become visible to parents once the coach shares the day
   parent_note TEXT,
-  created_at TEXT NOT NULL,
-  notified_at TEXT                              -- when families were last emailed about this day (version 34)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS perf_results (
   id TEXT PRIMARY KEY,
@@ -708,30 +707,9 @@ CREATE TABLE IF NOT EXISTS import_batches (
   duplicates INTEGER NOT NULL DEFAULT 0,
   pending TEXT NOT NULL DEFAULT '[]',           -- rows waiting for an athlete match
   errors TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  -- Undo an upload (version 34): what it wrote, so it can be taken back out.
-  kind TEXT,                                    -- upload (Upload results) or import (device file); NULL = can't be undone
-  source_label TEXT,                            -- where the file came from, as the coach chose it
-  result_source TEXT,                           -- perf_results.source of what it saved
-  session_id TEXT,
-  replaced INTEGER NOT NULL DEFAULT 0,
-  unchanged INTEGER NOT NULL DEFAULT 0,
-  prs INTEGER NOT NULL DEFAULT 0,
-  added_tests TEXT NOT NULL DEFAULT '[]',       -- tests the upload put on the testing day
-  created_by TEXT,
-  undone_at TEXT, undone_by TEXT, undo_summary TEXT
-);
--- One row per result an upload saved or sent to waiting (version 34). replaced = results it set aside (voided), restored on undo.
-CREATE TABLE IF NOT EXISTS import_batch_items (
-  batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
-  result_id TEXT,
-  value REAL,
-  replaced TEXT NOT NULL DEFAULT '[]',
-  queue_id TEXT
+  created_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS import_batch_items_batch ON import_batch_items(batch_id);
-CREATE INDEX IF NOT EXISTS perf_results_session ON perf_results(session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS clients_athlete_id ON clients(athlete_id);
 CREATE UNIQUE INDEX IF NOT EXISTS roster_athlete_id ON team_roster(athlete_id);
 CREATE UNIQUE INDEX IF NOT EXISTS locations_checkin_code ON locations(checkin_code);

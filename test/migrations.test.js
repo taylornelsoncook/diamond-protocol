@@ -10,6 +10,8 @@ import { openDb } from '../src/db.js';
 import { openSlots, listSessions } from '../src/services/schedule.js';
 import { listClients } from '../src/services/clients.js';
 import { openSpots, publicOffer } from '../src/services/spots.js';
+import { getSession } from '../src/services/performance.js';
+import { recentUploads, undoUpload } from '../src/services/uploads.js';
 
 test('a version 30 database upgrades to coaches, archive, time off and staff notes, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -36,7 +38,7 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.ok(cols('clients').includes('archived_at') && cols('clients').includes('archived_by'));
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 32);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(listClients(ctx)[0].name, 'Ava Lopez');
@@ -75,13 +77,43 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 32);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
       const row = openSpots(ctx).data.find((x) => x.id === 'cls_1');
       assert.deepEqual([row.spots_left, row.offers.sent, row.offers.trial_sent], [10, 1, round === 1 ? 0 : 1]);
       assert.deepEqual(publicOffer(ctx, 'tok_offer_1').trial, round === 1 ? null : { price_cents: 900, used: false });
       if (round === 1) db.run(`UPDATE spot_offers SET price_cents = 900 WHERE id = 'spot_1'`);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 32 (commit 09e32ca) to 34: testing days remember when families were emailed, and uploads can be undone.
+// Uploads saved before the upgrade can't be undone (nothing recorded what they wrote), so they aren't offered.
+test('a version 32 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v32.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 32');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}')`);
+    old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, created_at) VALUES ('imp_1', 'upload', 'old.xlsx', 4, 4, '${now}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.ok(cols('perf_sessions').includes('notified_at'), `round ${round}`);
+      for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
+      assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      const ctx = { db, now: () => new Date().toISOString() };
+      assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
+      assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
+      assert.throws(() => undoUpload(ctx, 'imp_1'), /not found/);
+      assert.equal(db.get(`SELECT added_tests FROM import_batches WHERE id = 'imp_1'`).added_tests, '[]');
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

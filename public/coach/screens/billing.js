@@ -89,7 +89,7 @@ const allowance = (p) => [p.group_per_month == null ? 'Unlimited group classes' 
 const signed = (c) => (c < 0 ? `−${money(-c)}` : money(c));
 const cardLabel = (r) => (r.card_last4 ? `${r.card_brand || 'Card'} ending ${r.card_last4}` : 'No card on file');
 const daysLate = (due) => Math.round((new Date(localISO() + 'T12:00:00') - new Date(due + 'T12:00:00')) / 864e5);
-const whoName = (i) => (i.first_name ? `${i.first_name} ${i.last_name}` : i.contract_id ? i.school || i.team_name || 'School' : i.family || 'Walk-in');
+const whoName = (i) => (i.first_name ? `${i.first_name} ${i.last_name}` : i.contract_id || i.school ? i.school || i.team_name || 'School' : i.family || 'Walk-in');
 const whatText = (i) => i.plan_name || (i.contract_id ? i.team_name : i.description) || '';
 
 function periodRange(id) {
@@ -540,7 +540,7 @@ async function render(ctx) {
         const n = (await api.get('/invoices?status=failed&limit=100')).filter((i) => i.card_last4).length;
         if (!(await confirmDialog('Retry declined charges?', `Charge the card on file again for ${plural(n, 'declined charge')} now. Families without a card are skipped.`, 'Retry charges'))) return;
         const r = await api.post('/billing/retry-declined');
-        toast(r.paid ? `${plural(r.paid, 'charge')} went through (${money(r.paid_cents)}).${r.declined ? ` ${r.declined} declined again.` : ''}` : `All ${plural(r.tried, 'charge')} declined again. Send card reminders.`, r.paid ? 'good' : 'warn');
+        toast(r.paid ? `${plural(r.paid, 'charge')} went through (${money(r.paid_cents)}).${r.declined ? ` ${r.declined} declined again.` : ''}` : `${r.tried === 1 ? 'The charge' : `All ${r.tried} charges`} declined again. Send card reminders.`, r.paid ? 'good' : 'warn');
         await drawMoney();
       } else if (act === 'remind-all') {
         if (!(await confirmDialog('Email card reminders?', 'Each family with a declined charge gets one email listing what is due, with a link to update their card. Families already reminded today are skipped.', 'Email families'))) return;

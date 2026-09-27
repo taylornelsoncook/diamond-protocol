@@ -61,7 +61,7 @@ function invoiceFilter(query) {
   else if (status === 'refunded') where.push('EXISTS (SELECT 1 FROM invoices r WHERE r.refund_of=i.id)');
   else if (status === 'paid') where.push("i.status='paid' AND i.amount_cents >= 0"); // refunds have their own view
   else if (status) { where.push('i.status=?'); p.push(String(status)); }
-  if (kind) { where.push('i.kind=?'); p.push(String(kind)); }
+  if (kind) { where.push('COALESCE(ro.kind, i.kind)=?'); p.push(String(kind)); } // a refund counts as the kind it refunds
   for (const [v, op] of [[from, '>='], [to, '<=']]) {
     if (!v) continue;
     if (!ISO_DATE.test(String(v))) throw bad('Choose a date for the date range.');
@@ -76,10 +76,11 @@ function invoiceFilter(query) {
   }
   return { where: where.join(' AND '), p };
 }
+// A refund row carries no contract of its own, so the school comes from the invoice it refunds.
 const INVOICE_FROM = `FROM invoices i LEFT JOIN athletes a ON a.id=i.athlete_id LEFT JOIN families f ON f.id=i.family_id
   LEFT JOIN memberships m ON m.id=i.membership_id LEFT JOIN plans pl ON pl.id=m.plan_id
-  LEFT JOIN team_contracts t ON t.id=i.contract_id LEFT JOIN schools s ON s.id=t.school_id
-  LEFT JOIN invoices ro ON ro.id=i.refund_of`;
+  LEFT JOIN invoices ro ON ro.id=i.refund_of
+  LEFT JOIN team_contracts t ON t.id=COALESCE(i.contract_id, ro.contract_id) LEFT JOIN schools s ON s.id=t.school_id`;
 const INVOICE_COLS = `i.id, i.number, i.kind, i.description, i.amount_cents, i.status, i.issued_at, i.due_date, i.paid_at, i.pay_method, i.check_number,
   i.attempts, i.next_retry, i.last_reminder, i.period, i.view_token, i.athlete_id, i.family_id, i.contract_id, i.membership_id, i.refund_of, i.created_at,
   a.first_name, a.last_name, f.name AS family, f.card_brand, f.card_last4, f.card_exp, pl.name AS plan_name, t.team_name, s.name AS school, ro.number AS refund_of_number,
@@ -88,9 +89,11 @@ function listRow(r) {
   return { ...r, retries_done: r.status === 'failed' && (r.attempts >= billing.MAX_ATTEMPTS || !r.next_retry), overdue: r.status === 'open' && !!r.due_date && r.due_date < today() };
 }
 
+// Text that a spreadsheet would run as a formula gets a leading apostrophe. Plain numbers (refunds are negative) stay numbers.
 function csvCell(v) {
   const s = v == null ? '' : String(v);
-  return /[",\n\r]/.test(s) || /^[=+\-@]/.test(s) ? `"${(/^[=+\-@]/.test(s) ? "'" : '') + s.replace(/"/g, '""')}"` : s;
+  const formula = /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s);
+  return formula || /[",\n\r]/.test(s) ? `"${(formula ? "'" : '') + s.replace(/"/g, '""')}"` : s;
 }
 const dollars = (c) => (Number(c || 0) / 100).toFixed(2);
 
@@ -247,6 +250,8 @@ function routes(api) {
     if (inv.status !== 'failed') throw bad('Only declined charges can be retried.');
     const fam = inv.family_id ? get('SELECT card_last4 FROM families WHERE id=?', inv.family_id) : null;
     if (!fam?.card_last4) throw bad('There is no card on file for this family. Send them a card reminder, or record a cash or check payment.');
+    const memStatus = () => (inv.membership_id ? get('SELECT status FROM memberships WHERE id=?', inv.membership_id)?.status : null);
+    const wasPastDue = memStatus() === 'past_due';
     const r = billing.retryFailed({ invoiceId: inv.id });
     const after = invoiceRow(inv.id);
     const who = inv.athlete_id ? get("SELECT first_name || ' ' || last_name AS n FROM athletes WHERE id=?", inv.athlete_id)?.n : inv.number;
@@ -254,7 +259,7 @@ function routes(api) {
     if (!r.paid) throw bad(after.attempts >= billing.MAX_ATTEMPTS
       ? 'The card was declined again. There are no more automatic retries, so ask the family to update their card.'
       : `The card was declined again. It retries on its own every ${billing.RETRY_DAYS} days, or ask the family to update their card.`);
-    res.json({ ok: true, invoice: after, message: `Charged ${money(inv.amount_cents)}.${inv.membership_id ? ' The membership is active again.' : ''}` });
+    res.json({ ok: true, invoice: after, message: `Charged ${money(inv.amount_cents)}.${wasPastDue && memStatus() === 'active' ? ' The membership is active again.' : ''}` });
   }));
 
   // Retry every declined charge that has a card on file, now.
@@ -294,8 +299,8 @@ function routes(api) {
     const inv = invoiceRow(Number(req.params.id));
     if (inv.status !== 'failed') throw bad('Only declined charges need a card reminder.');
     if (!inv.family_id) throw bad('This charge has no family to email.');
-    if (inv.last_reminder === today()) throw bad('A reminder already went out today. Give the family a day to update their card.');
     const list = all(`${FAILED_SELECT} AND i.family_id=? ORDER BY i.id`, inv.family_id);
+    if (list.some((i) => i.last_reminder === today())) throw bad('A reminder already went out today. Give the family a day to update their card.');
     const to = remindFamily(inv.family_id, list);
     if (!to) throw bad('This family has no email address. Add a parent email on the client profile.');
     const fam = get('SELECT name FROM families WHERE id=?', inv.family_id);
@@ -309,7 +314,7 @@ function routes(api) {
     if (!byFam.size) throw bad('There are no declined charges.');
     let sent = 0, skipped = 0, noEmail = 0;
     for (const [fid, list] of byFam) {
-      if (list.every((i) => i.last_reminder === today())) { skipped++; continue; }
+      if (list.some((i) => i.last_reminder === today())) { skipped++; continue; } // one email per family per day
       if (remindFamily(fid, list)) sent++; else noEmail++;
     }
     if (sent) log(req, 'Emailed payment reminders', `${sent} famil${sent === 1 ? 'y' : 'ies'}`);

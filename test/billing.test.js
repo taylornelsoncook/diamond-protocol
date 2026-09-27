@@ -233,6 +233,25 @@ test('card reminders: one email per family, not twice a day, and bulk skips fami
   assert.ok(!coachFeed.data.some((a) => /reminder/i.test(a.action)), 'reminders stay out of the coach feed');
 });
 
+test('card reminders: a second decline the same day does not email the family again', async () => {
+  const kevin = failedOf('Kevin', 'Nguyen');
+  assert.equal(kevin.last_reminder, today(), 'reminded in the test above');
+  const extra = insert('invoices', { number: 'DP-REM-0001', kind: 'charge', family_id: kevin.family_id, athlete_id: kevin.athlete_id, description: 'Drop-in group session',
+    amount_cents: 3000, status: 'failed', attempts: 1, next_retry: addDays(today(), 3), view_token: 'rem-test-token' });
+  try {
+    const before = outboxCount();
+    let r = await owner.post(`/invoices/${extra}/remind`);
+    assert.equal(r.status, 400);
+    assert.match(r.data.error, /already went out today/);
+    r = await owner.post('/billing/remind-declined');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.sent, 0);
+    assert.equal(outboxCount(), before, 'nobody is emailed twice in a day');
+  } finally {
+    run("UPDATE invoices SET status='void', next_retry=NULL WHERE id=?", extra);
+  }
+});
+
 test('retry all declined: good cards go through and memberships come back; no card is refused with a clear message', async () => {
   const oliviaInv = failedOf('Olivia', 'Park');
   const kevinInv = failedOf('Kevin', 'Nguyen');
@@ -255,6 +274,20 @@ test('retry all declined: good cards go through and memberships come back; no ca
   assert.equal(r.status, 400);
   assert.match(r.data.error, /card reminders/);
   run('UPDATE families SET card_last4=?, card_brand=? WHERE id=?', fam.card_last4, fam.card_brand, fam.id);
+});
+
+test('single retry says the membership is active again only when it was past due', async () => {
+  const m = get("SELECT m.*, a.family_id FROM memberships m JOIN athletes a ON a.id=m.athlete_id JOIN families f ON f.id=a.family_id WHERE m.status='active' AND f.card_last4='4242' LIMIT 1");
+  const mk = (n) => insert('invoices', { number: `DP-RTY-000${n}`, kind: 'membership', family_id: m.family_id, athlete_id: m.athlete_id, membership_id: m.id, description: 'Test month',
+    amount_cents: 1000, status: 'failed', attempts: 1, next_retry: addDays(today(), 3), view_token: `rty-test-${n}` });
+  let r = await owner.post(`/invoices/${mk(1)}/retry`);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.message, 'Charged $10.', 'an active membership is not "active again"');
+  run("UPDATE memberships SET status='past_due' WHERE id=?", m.id);
+  r = await owner.post(`/invoices/${mk(2)}/retry`);
+  assert.equal(r.status, 200);
+  assert.match(r.data.message, /The membership is active again/);
+  assert.equal(get('SELECT status FROM memberships WHERE id=?', m.id).status, 'active');
 });
 
 test('writing off a declined charge ends the retries and makes the membership active again', async () => {
@@ -350,4 +383,25 @@ test('activity seen by coaches still carries no dollar amounts after billing act
   const r = await coach.get('/activity?limit=500');
   const leaks = r.data.filter((a) => /\$\d/.test(`${a.action} ${a.detail || ''}`));
   assert.deepEqual(leaks, []);
+});
+
+test('school refunds keep the school name in the list, search and export; refund amounts export as numbers', async () => {
+  const inv = get("SELECT i.*, s.name AS school FROM invoices i JOIN team_contracts t ON t.id=i.contract_id JOIN schools s ON s.id=t.school_id WHERE i.status='paid' AND i.kind='school' ORDER BY i.id LIMIT 1");
+  let r = await owner.post(`/invoices/${inv.id}/refund`, { amount: '100', email: false });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const rf = get('SELECT * FROM invoices WHERE refund_of=? ORDER BY id DESC LIMIT 1', inv.id);
+  r = await owner.get(`/invoices?status=refund&q=${encodeURIComponent(inv.school)}`);
+  assert.equal(r.status, 200);
+  const row = r.data.find((i) => i.id === rf.id);
+  assert.ok(row, 'found by the school name');
+  assert.equal(row.school, inv.school);
+  const res = await fetch(base + '/api/invoices/export.csv?status=refund', { headers: { cookie: jars.owner } });
+  const lines = (await res.text()).replace(/^\uFEFF/, '').trim().split('\r\n');
+  const line = lines.find((l) => l.startsWith(rf.number + ','));
+  assert.ok(line.includes(`,${inv.school},refund,`), line);
+  assert.ok(line.includes(',-100.00,paid,'), 'negative amounts stay numbers a spreadsheet can add up');
+  assert.ok(!lines.slice(1).some((l) => l.includes("'-")), 'no refund amount is turned into text');
+  const schoolRefunds = (await owner.get('/invoices?status=refund&kind=school')).data;
+  assert.ok(schoolRefunds.some((i) => i.id === rf.id), 'the kind filter finds a refund by what it refunds');
+  assert.ok(!(await owner.get('/invoices?status=refund&kind=charge')).data.some((i) => i.id === rf.id));
 });

@@ -1069,3 +1069,5 @@ CREATE TABLE IF NOT EXISTS report_links (
   last_viewed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS report_links_client ON report_links(client_id, created_at);
+-- The test library's usage counts, record boards and "can it be deleted" checks look results up by test.
+CREATE INDEX IF NOT EXISTS perf_results_test ON perf_results(test_id, metric);

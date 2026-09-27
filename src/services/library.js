@@ -44,7 +44,7 @@ export function recordBoard(ctx, t, { metric, side, sex, age } = {}) {
   if (sex != null && sex !== '' && !['M', 'F'].includes(sex)) throw badRequest('sex must be M or F.');
   if (age != null && age !== '' && !AGE_GROUPS[age]) throw badRequest(`age must be one of: ${Object.keys(AGE_GROUPS).join(', ')}.`);
   if (m.better === 'none') return { metric: m.key, metric_name: m.name, unit: m.unit, decimals: m.decimals, better: m.better, board: [], note: `${m.name} is a measurement, not a score, so there's no record board.` };
-  const rows = ctx.db.all(`SELECT r.client_id, r.roster_id, r.value, r.side, r.timing, r.recorded_at, COALESCE(c.name, tr.name) AS name, COALESCE(c.athlete_id, tr.athlete_id) AS athlete_id,
+  const rows = ctx.db.all(`SELECT r.client_id, r.roster_id, tr.client_id AS roster_client_id, r.value, r.side, r.timing, r.recorded_at, COALESCE(c.name, tr.name) AS name, COALESCE(c.athlete_id, tr.athlete_id) AS athlete_id,
       COALESCE(c.sex, rc.sex) AS sex, COALESCE(c.birth_date, rc.birth_date) AS birth_date, COALESCE(r.client_id, tr.client_id, r.roster_id) AS person
     FROM perf_results r LEFT JOIN clients c ON c.id = r.client_id LEFT JOIN team_roster tr ON tr.id = r.roster_id LEFT JOIN clients rc ON rc.id = tr.client_id
     WHERE r.test_id = ? AND r.metric = ? AND r.voided = 0 ${side ? 'AND r.side = ?' : ''} AND c.archived_at IS NULL AND rc.archived_at IS NULL
@@ -58,8 +58,10 @@ export function recordBoard(ctx, t, { metric, side, sex, age } = {}) {
     const cur = best.get(r.person);
     if (!cur || better(r.value, cur.value)) best.set(r.person, r);
   }
-  const board = [...best.values()].sort((a, b) => (m.better === 'lower' ? a.value - b.value : b.value - a.value) || a.recorded_at.localeCompare(b.recorded_at)).slice(0, 10)
-    .map((r, i) => ({ rank: i + 1, client_id: r.client_id ?? null, roster_id: r.client_id ? null : r.roster_id, name: r.name, athlete_id: r.athlete_id, value: r.value, side: r.side, date: r.recorded_at.slice(0, 10), hand_timed: r.timing === 'hand' }));
+  // Equal results share a rank (1, 1, 3); the one set first is listed first.
+  const sorted = [...best.values()].sort((a, b) => (m.better === 'lower' ? a.value - b.value : b.value - a.value) || a.recorded_at.localeCompare(b.recorded_at));
+  const board = sorted.slice(0, 10)
+    .map((r, i) => ({ rank: sorted.findIndex((x) => x.value === r.value) + 1, client_id: r.client_id ?? r.roster_client_id ?? null, roster_id: r.client_id || r.roster_client_id ? null : r.roster_id, name: r.name, athlete_id: r.athlete_id, value: r.value, side: r.side, date: r.recorded_at.slice(0, 10), hand_timed: r.timing === 'hand' }));
   return { metric: m.key, metric_name: m.name, unit: m.unit, decimals: m.decimals, better: m.better, board };
 }
 
@@ -139,7 +141,7 @@ export function updatePreset(ctx, id, body) {
 }
 export function copyPreset(ctx, id) {
   const p = getPreset(ctx, id);
-  const base = `${p.name.slice(0, 32)} (copy`;
+  const base = `${p.name.slice(0, 30).trim()} (copy`;          // room for " (copy 99)" within the 40-character limit
   let name = `${base})`;
   for (let n = 2; ctx.db.get('SELECT 1 FROM test_presets WHERE name = ? COLLATE NOCASE', name); n++) name = `${base} ${n})`;
   return createPreset(ctx, { name, tests: JSON.parse(ctx.db.get('SELECT test_keys FROM test_presets WHERE id = ?', p.id).test_keys) });

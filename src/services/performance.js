@@ -144,6 +144,12 @@ export function updateTest(ctx, keyOrId, body) {
       for (const k of Object.keys(ms)) if (ms[k] === cur[k]) delete ms[k];
       if (t.builtin && ('name' in ms || 'unit' in ms || 'better' in ms)) throw badRequest('Built-in tests keep their numbers, units and scoring. Add your own test if you need a different one.');
       if (used && ('unit' in ms || 'better' in ms)) throw badRequest(`${t.name} already has results in ${cur.unit}, so its unit and scoring can't change. Add a new test instead.`);
+      // A range that saved results fall outside would make uploads reject real numbers like them.
+      const lo = 'min_value' in ms ? ms.min_value : cur.min_value, hi = 'max_value' in ms ? ms.max_value : cur.max_value;
+      if (('min_value' in ms || 'max_value' in ms) && lo != null && hi != null) {
+        const out = ctx.db.get('SELECT COUNT(*) AS n, MIN(value) AS lo, MAX(value) AS hi FROM perf_results WHERE test_id = ? AND metric = ? AND voided = 0 AND (value < ? OR value > ?)', t.id, cur.key, lo, hi);
+        if (out.n) throw badRequest(`${out.n} saved ${out.n === 1 ? 'result is' : 'results are'} outside ${lo}–${hi} ${cur.unit} for ${cur.name} (${out.lo === out.hi ? out.lo : `${out.lo} to ${out.hi}`}). Widen the range, or remove those results if they're mistakes.`);
+      }
       if (Object.keys(ms).length) { metricSets.push([cur.key, ms]); changes.push(...Object.keys(ms).map((k) => (k.endsWith('_value') ? 'range' : `metric ${k}`))); }
     }
   }
@@ -154,7 +160,10 @@ export function updateTest(ctx, keyOrId, body) {
   }
   const uniq = [...new Set(changes)];
   if (!uniq.length) return { ...t, changes: [] };
-  const edited = [...new Set([...JSON.parse(row.edited ?? '[]'), ...(t.builtin ? Object.keys(set).filter((k) => ['name', 'category', 'attempts', 'description', 'timed'].includes(k)) : [])])];
+  // On a built-in test, a field set back to the library's own value follows future library updates again.
+  const lib = t.builtin ? TESTS.find((x) => x.key === t.key) : null;
+  const libValue = lib ? { name: lib.name, category: lib.category, attempts: lib.attempts, description: lib.desc ?? null, timed: lib.timed ? 1 : 0 } : {};
+  const edited = [...new Set([...JSON.parse(row.edited ?? '[]'), ...(t.builtin ? Object.keys(set).filter((k) => k in libValue) : [])])].filter((k) => !(k in set) || set[k] !== libValue[k]);
   ctx.db.tx(() => {
     const cols = Object.keys(set);
     if (cols.length) ctx.db.run(`UPDATE perf_tests SET ${cols.map((c) => `${c} = ?`).join(', ')}, edited = ? WHERE id = ?`, ...cols.map((c) => set[c]), JSON.stringify(edited), t.id);

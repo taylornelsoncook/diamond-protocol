@@ -175,3 +175,33 @@ test('front desk sees presets but can\'t change them', async () => {
   assert.equal((await call('POST', `/v1/test-presets/${any.id}/copy`, null, desk)).status, 403);
   assert.equal((await call('POST', '/v1/test-presets', { name: 'Coach set', tests: ['height'] }, coach)).status, 201, 'coaches can');
 });
+
+test('review fixes: tied records share a rank, ranges must fit saved results, reverted edits follow the library, long preset names copy', async () => {
+  const t = (await call('POST', '/v1/tests', { name: 'Tie drill', unit: 's', better: 'lower' })).body;
+  const mk = async (name) => (await call('POST', '/v1/clients', { name, email: `${name.split(' ')[0].toLowerCase()}.tie@example.com` })).body;
+  const [a, b, c] = [await mk('Abe Tie'), await mk('Bea Tie'), await mk('Cal Tie')];
+  await call('POST', '/v1/results', { results: [{ client_id: a.id, test: t.key, value: 5, recorded_at: '2026-05-01' }, { client_id: b.id, test: t.key, value: 5, recorded_at: '2026-05-02' }, { client_id: c.id, test: t.key, value: 6, recorded_at: '2026-05-01' }] });
+  const board = (await call('GET', `/v1/tests/${t.key}/details`)).body.records.board;
+  assert.deepEqual(board.map((x) => [x.name, x.rank]), [['Abe Tie', 1], ['Bea Tie', 1], ['Cal Tie', 3]], 'equal results share a rank; the first set is listed first');
+
+  // A range that leaves out saved results is refused, so uploads don't start rejecting real numbers like them.
+  const r = await call('PATCH', `/v1/tests/${t.key}`, { metrics: [{ key: 'value', min_value: 5.5, max_value: 20 }] });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error.message, /2 saved results are outside 5\.5–20 s .*\(5\)\. Widen the range/);
+  assert.equal((await call('PATCH', `/v1/tests/${t.key}`, { metrics: [{ key: 'value', min_value: 4, max_value: 20 }] })).status, 200);
+  assert.equal((await call('PATCH', `/v1/tests/${t.key}`, { metrics: [{ key: 'value', min_value: 5.5 }] })).status, 400, 'changing one end is checked too');
+  assert.deepEqual((await call('PATCH', `/v1/tests/${t.key}`, { metrics: [{ key: 'value', min_value: '', max_value: '' }] })).body.metrics[0].range, null, 'clearing the range is always fine');
+
+  // Renaming a built-in test and then setting the library name back lets future library updates through again.
+  const lib = TESTS.find((x) => x.key === 'plank');
+  assert.deepEqual((await call('PATCH', '/v1/tests/plank', { name: 'Front plank' })).body.edited, ['name']);
+  assert.deepEqual((await call('PATCH', '/v1/tests/plank', { name: lib.name })).body.edited, []);
+  app.ctx.db.run(`UPDATE perf_tests SET name = 'Old plank name' WHERE key = 'plank'`);
+  syncLibrary(app.ctx);
+  assert.equal((await call('GET', '/v1/tests/plank')).body.name, lib.name);
+
+  const long = (await call('POST', '/v1/test-presets', { name: 'A very long preset name for tests', tests: ['height'] })).body;
+  const c1 = await call('POST', `/v1/test-presets/${long.id}/copy`), c2 = await call('POST', `/v1/test-presets/${long.id}/copy`);
+  assert.deepEqual([c1.status, c2.status], [201, 201]);
+  assert.ok(c2.body.name.length <= 40 && c2.body.name.endsWith('(copy 2)'));
+});

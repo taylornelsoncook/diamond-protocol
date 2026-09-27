@@ -2343,7 +2343,7 @@ function testDialog(t, categories, prefillName = '') {
   const name = input({ value: t?.name ?? prefillName, required: true, maxlength: '80' });
   const cat = select(categories.map((c) => [c.key, c.name]), { value: t?.category ?? 'sport' });
   const attempts = input({ type: 'number', min: '1', max: '10', step: '1', value: String(t?.attempts ?? 2), inputmode: 'numeric' });
-  const protocol = textarea(t ? t.protocol : '', { rows: '5', maxlength: '2000', 'aria-describedby': 'protocol-hint' });
+  const protocol = textarea(t ? t.protocol : '', { rows: '5', maxlength: '2000' });
   const description = textarea(t?.description ?? '', { rows: '2', maxlength: '1000' });
   const sides = h('input', { type: 'checkbox', checked: t ? t.sides === 'lr' : false, disabled: !!locked });
   const timed = h('input', { type: 'checkbox', checked: !!t?.timed });
@@ -2377,7 +2377,7 @@ function testDialog(t, categories, prefillName = '') {
     h('div', { class: 'row wrap', style: 'gap:8px 20px' }, h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, sides, 'Test left and right'), h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, timed, 'Can be hand-timed with the stopwatch (seconds only)')),
     field('How to run it', protocol, t?.builtin ? 'Leave it as it is, or write your own. Empty the box to go back to the built-in text.' : 'So every coach runs it the same way and retests compare.'),
     field('What it measures (optional)', description),
-    h('p', { class: 'dp-hint', id: 'protocol-hint', style: 'margin:0' }, 'The possible range catches numbers typed into the wrong column on uploads. Leave both empty to use the built-in range.'),
+    h('p', { class: 'dp-hint', style: 'margin:0' }, 'The possible range catches numbers typed into the wrong column on uploads. Leave both empty to use the built-in range.'),
     h('div', { class: 'row wrap' }, btn(isNew ? 'Add test' : 'Save', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   d.addEventListener('close', () => fill(d), { once: true });
   d.showModal();

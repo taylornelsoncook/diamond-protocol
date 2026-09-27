@@ -15,6 +15,7 @@ const period = { from: '', to: '', key: 'all' };
 let since = 'first';
 try { since = localStorage.getItem('dp-report-since') === 'last' ? 'last' : 'first'; } catch { /* private window: keep the default */ }
 let opened = false;
+window.addEventListener('hashchange', () => location.reload());     // another share link pasted into the same tab
 
 async function call(method, path, body) {
   const res = await fetch(path, { method, credentials: 'same-origin', headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(share ? { 'x-report-link': share } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -46,8 +47,7 @@ function periodPicker(r) {
     const v = sel.value;
     period.key = v; period.to = '';
     period.from = v === '12m' ? yearAgo : v.startsWith('day:') ? v.slice(4) : '';
-    window.addEventListener('hashchange', () => location.reload());     // another share link pasted into the same tab
-load();
+    load();
   } }, opts.map(([v, label]) => h('option', { value: v, selected: period.key === v }, label)));
   const sinceSel = h('select', { class: 'select', 'aria-label': 'Change since', onChange: () => { since = sinceSel.value; try { localStorage.setItem('dp-report-since', since); } catch { /* not saved */ } render(r); } },
     [['first', 'Change since the first test'], ['last', 'Change since the last test']].map(([v, label]) => h('option', { value: v, selected: since === v }, label)));

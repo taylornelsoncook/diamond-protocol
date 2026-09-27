@@ -84,18 +84,20 @@ function seed() {
     const month0 = T.slice(0, 7) + '-01';
     const daysIntoMonth = Math.round((new Date(T + 'T12:00:00') - new Date(month0 + 'T12:00:00')) / 864e5);
     const product = (name) => get('SELECT * FROM products WHERE name=?', name);
-    const sale = ({ ago, kind, who, items, method, staff }) => {
+    const sale = ({ ago, kind, who, items, method, staff, discount = 0, receipt = false }) => {
       const a = who ? A(who) : null;
       const lines = items.map(([pname, qty = 1]) => { const p = product(pname); return p ? { product_id: p.id, name: p.name, kind: p.kind, credits: p.credits, qty, price_cents: p.price_cents } : null; }).filter(Boolean);
       if (!lines.length || !loc[kind]) return;
+      if (discount) lines.push({ name: 'Discount 10% (Sibling)', kind: 'discount', qty: 1, price_cents: -discount });
       const total = lines.reduce((n, l) => n + l.price_cents * l.qty, 0);
       const r = billing.charge({ family_id: a?.family_id || null, athlete_id: a?.id || null, amount_cents: total, description: lines.map((l) => l.name).join(', '), method });
       if (!r.ok) return;
       if (a) for (const l of lines) billing.applyProduct(a.id, l, l.qty);
       const day = addDays(T, -Math.min(ago, daysIntoMonth));
       const created = ago === 0 ? null : `${day} 18:${String(10 + ago).padStart(2, '0')}:00`;
-      const row = { location_id: loc[kind], athlete_id: a?.id || null, family_id: a?.family_id || null, items: JSON.stringify(lines), total_cents: total, method, status: 'paid', charge_id: r.charge_id, staff_id: staff?.id || owner.id };
+      const row = { location_id: loc[kind], athlete_id: a?.id || null, family_id: a?.family_id || null, items: JSON.stringify(lines), total_cents: total, discount_cents: discount, method, status: 'paid', charge_id: r.charge_id, staff_id: staff?.id || owner.id };
       if (created) row.created_at = created;
+      if (receipt) row.receipt_sent_at = new Date().toISOString();
       insert('sales', row);
     };
     sale({ ago: 12, kind: 'facility', who: 'Isabela Silva', items: [['10-session group pack']], method: 'tap', staff: desk });
@@ -103,6 +105,7 @@ function seed() {
     sale({ ago: 6, kind: 'park', who: 'Olivia Park', items: [['Drop-in group session']], method: 'cash', staff: coach });
     sale({ ago: 5, kind: 'park', items: [['Speed parachute']], method: 'tap', staff: coach });
     sale({ ago: 3, kind: 'facility', who: 'Emma Jensen', items: [['DP training shirt'], ['Water bottle']], method: 'card', staff: desk });
+    sale({ ago: 2, kind: 'facility', who: 'Nate Jensen', items: [['10-session group pack']], method: 'card', staff: desk, discount: 2500, receipt: true });
     sale({ ago: 1, kind: 'facility', items: [['DP training shirt']], method: 'cash', staff: desk });
     sale({ ago: 0, kind: 'facility', who: 'Daniel Reyes', items: [['Private session']], method: 'card', staff: desk });
     sale({ ago: 0, kind: 'facility', items: [['Water bottle', 2]], method: 'cash', staff: desk });

@@ -1,9 +1,15 @@
 // Money rules shared by every screen: charging a family, memberships, renewals, retries, packs.
 'use strict';
-const { get, all, run, insert, update, tx } = require('../db');
+const { db, get, all, run, insert, update, tx } = require('../db');
 const { payments, nextInvoiceNumber, sendEmail, emit, today, addDays, addMonths, money, businessName, randomToken, bad } = require('../lib');
 
 const RETRY_DAYS = 3, MAX_ATTEMPTS = 4;
+
+// Sale schema added after launch: the discount on a counter sale and when its receipt was last emailed.
+// Upgrades existing databases in place on start (seeds and routes both load this module).
+const saleCols = all('PRAGMA table_info(sales)').map((c) => c.name);
+if (!saleCols.includes('discount_cents')) db.exec('ALTER TABLE sales ADD COLUMN discount_cents INTEGER DEFAULT 0');
+if (!saleCols.includes('receipt_sent_at')) db.exec('ALTER TABLE sales ADD COLUMN receipt_sent_at TEXT');
 
 function familyOf(athleteId) {
   const a = get('SELECT family_id FROM athletes WHERE id=?', athleteId);

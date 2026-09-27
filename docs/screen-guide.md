@@ -170,11 +170,17 @@ _Where: Point of sale_
 
 Take payment anywhere: at the facility, a park, or a client's home.
 
-- Pick where you are and who you're with (or Walk-in).
-- Tap products to add them, or enter a custom amount.
-- Choose how they're paying: Tap to Pay on your iPhone, the front-desk reader, their card on file, or cash.
+- Pick where you are and who you're with (or Walk-in). Search by name, code, family or parent email; arrow keys and Enter pick a client. The client's card, membership and session credits show under their name. "Sell to" on a client profile opens this screen with them chosen.
+- Tap products to add them (a count on each tile shows how many are in the sale), or enter a custom amount. With more than eight products, a search box filters the tiles.
+- Adjust quantities (44px buttons), clear the sale (with Undo), and add a discount: a percent (1-99) or an amount off, with an optional reason. The server checks the discount leaves something to pay and logs it.
+- Choose how they're paying: Tap to Pay on your iPhone, the front-desk reader at this location, their card on file, or cash. For cash, type what they handed you and the change due shows.
 - For a tapped card, tick Save card to keep it for their membership.
-- Recent sales show below. Owners can refund all or part of a sale.
+- Email a receipt: on by default when the family has an email, and you can type any address (walk-ins opt in). The receipt lists the items, discount and payment and links to the printable receipt page.
+- Monthly memberships start from their own tiles; a client who already has one sees it greyed out with the plan named.
+- After a sale, a confirmation shows with Email receipt and Undo sale. The person who took a sale can undo it for 10 minutes (a full refund that also takes back pack sessions); after that, the owner refunds.
+- The sale in progress survives leaving the screen in the same tab. On a phone, a bar at the bottom shows the running total and jumps to the sale.
+- Today (owners and front desk): net taken, cash to count the drawer against, cards and refunds, for this location or all locations. Coaches never see takings.
+- Recent sales: Today, 7 days or 30 days, search by client or item, filter by location. Tap a sale for its lines, payment, receipt status and a link to the client; re-send the receipt from there. Owners can refund all or part of a sale, with an optional reason for the activity log. Coaches see only the sales they took.
 
 ### Point of sale setup
 
@@ -184,9 +190,10 @@ _Where: Point of sale, then Setup_
 
 Where you sell and what you sell.
 
-- Add each location: the facility, your mobile work, and each park. Card payments need an address.
-- Add products: single sessions, packs (counted as group classes or private sessions), gear and anything else.
-- Register a front-desk card reader if you have one.
+- Add each location (Add location opens a short form): the facility, your mobile work, and each park. Card payments need an address. Edit or archive a location; archived locations can be restored.
+- Add products: single sessions, packs (counted as group classes or private sessions), gear and anything else. Choose the type each time. Edit a product's name, price and pack size; stop selling it and sell it again later from Stopped selling. Names must be unique among what's for sale.
+- Owners also add monthly memberships here, change their price, stop selling them and bring them back.
+- Register a front-desk card reader if you have one. A reader takes payments at its own location only.
 
 ### Clients
 

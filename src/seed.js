@@ -238,6 +238,9 @@ engage.createGoal(ctx, { clientId: cole.id }, { kind: 'checkins', target: 6, tit
 engage.sendMessage(ctx, { contractId: hillCountry }, { body: 'Great energy at practice. Hydrate before Thursday; it will be hot on the field.' }, coachUser);
 engage.sendMessage(ctx, { clientId: lopez.id }, { body: 'Your broad jump is up 5 inches since summer. Keep the landings quiet and we will chase 6 feet 8.' }, coachUser);
 engage.sendMessage(ctx, { clientId: cole.id }, { body: 'Saw your check-in: short on sleep and a tight hamstring. Easy warm-up today and tell me how it feels.' }, coachUser);
+// Parent courses: the starter drafts, two of them published.
+engage.addStarterParentCourses(ctx);
+for (const t of ['Growth spurts and training', 'Fueling a young athlete']) engage.updateCourse(ctx, ctx.db.get('SELECT id FROM courses WHERE title = ?', t).id, { published: true });
 // Skill badges, with one earned by Ava.
 const sprintStart = engage.createBadge(ctx, { name: 'Sprint start', category: 'Speed', description: 'Drives out of a two-point start with a low, powerful first three steps.' });
 engage.createBadge(ctx, { name: 'Hinge pattern', category: 'Strength', description: 'Hinges at the hips with a flat back, ready for deadlifts and cleans.' });

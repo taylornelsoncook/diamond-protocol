@@ -123,6 +123,9 @@ export const portalRoutes = [
   ['POST', '/portal/api/athletes/:id/messages', 'guardian', 'Write to your athlete\'s coach: body.', (ctx, r) => engage.replyMessage(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { from: 'parent', name: r.guardian.name, guardianId: r.guardian.id }), 201],
   ['POST', '/portal/api/athletes/:id/messages/read', 'guardian', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, athleteOf(ctx, r, r.params.id).id)],
   ['GET', '/portal/api/athletes/:id/lessons/:lesson', 'guardian', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson)],
+  ['GET', '/portal/api/parent-courses', 'guardian', 'Courses for parents that fit your athletes\' ages, with what you have read.', (ctx, r) => list(engage.parentCourses(ctx, r.guardian))],
+  ['GET', '/portal/api/parent-lessons/:id', 'guardian', 'Read a lesson for parents.', (ctx, r) => engage.parentLesson(ctx, r.guardian, r.params.id)],
+  ['POST', '/portal/api/parent-lessons/:id/complete', 'guardian', 'Mark a lesson for parents read (done=false to undo).', (ctx, r) => engage.completeParentLesson(ctx, r.guardian, r.params.id, r.body.done !== false)],
   ['POST', '/portal/api/athletes/:id/lessons/:lesson/quiz', 'guardian', 'Take the lesson quiz with your athlete: answers (choice numbers from 0). 80% or more finishes the lesson.', (ctx, r) => engage.takeQuiz(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body)],
   ['POST', '/portal/api/athletes/:id/lessons/:lesson/complete', 'guardian', 'Mark a lesson done for your athlete (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body.done !== false)],
   ['GET', '/portal/api/store', 'guardian', 'Packs and memberships a parent can buy.', (ctx) => ({

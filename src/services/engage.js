@@ -495,12 +495,14 @@ function assignmentRows(ctx, clientId) {
   const teams = teamsOf(ctx, clientId);
   return ctx.db.all(`SELECT * FROM lesson_assignments WHERE client_id = ? OR contract_id IN (${inList(teams)}) ORDER BY COALESCE(due_date, '9999-12-31'), created_at`, clientId, ...teams);
 }
+// Lessons in parent courses never show to athletes.
+const ATHLETE_LESSON = `(course_id IS NULL OR course_id NOT IN (SELECT id FROM courses WHERE audience = 'parents'))`;
 // What the athlete (or their parent) sees: assigned reading first, then courses and the library. Unpublished lessons never show.
 export function education(ctx, clientId) {
   clientRow(ctx, clientId);
   const done = doneSet(ctx, clientId), t = today(ctx);
-  const lessons = ctx.db.all('SELECT * FROM lessons WHERE published = 1 ORDER BY position, created_at');
-  const courses = ctx.db.all('SELECT * FROM courses WHERE published = 1 ORDER BY created_at').map((c) => {
+  const lessons = ctx.db.all(`SELECT * FROM lessons WHERE published = 1 AND ${ATHLETE_LESSON} ORDER BY position, created_at`);
+  const courses = ctx.db.all(`SELECT * FROM courses WHERE published = 1 AND audience = 'athletes' ORDER BY created_at`).map((c) => {
     const ls = lessons.filter((l) => l.course_id === c.id).map((l) => lessonItem(l, done));
     return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
   }).filter((c) => c.total > 0);
@@ -518,7 +520,7 @@ export function education(ctx, clientId) {
 }
 export function lessonFor(ctx, clientId, lessonId) {
   clientRow(ctx, clientId);
-  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ? AND published = 1', lessonId);
+  const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
   if (!l) throw notFound('Lesson');
   const course = l.course_id ? ctx.db.get('SELECT id, title FROM courses WHERE id = ? AND published = 1', l.course_id) : null;
   const siblings = course ? ctx.db.all('SELECT id, title FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', course.id) : [];
@@ -542,7 +544,7 @@ export function completeLesson(ctx, clientId, lessonId, done = true) {
 // Check the answers (the choice number for each question, from 0). Passing finishes the lesson. Tries are unlimited,
 // up to 20 a day, and the right answers are never sent: only which questions were wrong.
 export function takeQuiz(ctx, clientId, lessonId, body = {}) {
-  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ? AND published = 1', lessonId);
+  const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
   if (!l) throw notFound('Lesson');
   const quiz = quizOf(l);
   if (!quiz) throw conflict('This lesson has no quiz.');
@@ -627,10 +629,17 @@ export function deleteLesson(ctx, id) {
   ctx.db.run('DELETE FROM lessons WHERE id = ?', id);
   return { id, deleted: true };
 }
+function courseAudience(body, cur = {}) {
+  const audience = body.audience === undefined ? cur.audience ?? 'athletes' : v.oneOf(body.audience, 'audience', ['athletes', 'parents']);
+  const age = (k) => (body[k] === undefined ? cur[k] ?? null : blank(body[k]) ? null : v.int(body[k], k, { min: 3, max: 25 }));
+  const ageMin = age('age_min'), ageMax = age('age_max');
+  if (ageMin != null && ageMax != null && ageMin > ageMax) throw badRequest('The youngest age is higher than the oldest. Swap them.');
+  return { audience, age_min: audience === 'parents' ? ageMin : null, age_max: audience === 'parents' ? ageMax : null };
+}
 export function createCourse(ctx, body = {}) {
-  const id = newId('crs');
-  ctx.db.run('INSERT INTO courses (id, title, description, published, created_at) VALUES (?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
-    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, ctx.now());
+  const id = newId('crs'), a = courseAudience(body);
+  ctx.db.run('INSERT INTO courses (id, title, description, published, audience, age_min, age_max, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
+    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, a.audience, a.age_min, a.age_max, ctx.now());
   return getCourse(ctx, id);
 }
 export function getCourse(ctx, id) {
@@ -640,8 +649,9 @@ export function getCourse(ctx, id) {
 }
 export function updateCourse(ctx, id, body = {}) {
   const c = getCourse(ctx, id);
-  ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
-    body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), id);
+  const a = courseAudience(body, c);
+  ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ?, audience = ?, age_min = ?, age_max = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
+    body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), a.audience, a.age_min, a.age_max, id);
   return getCourse(ctx, id);
 }
 // Deleting a course keeps its lessons in the library.
@@ -669,6 +679,8 @@ export function assign(ctx, body = {}, actor) {
   if (blank(body.client_id) === blank(body.contract_id)) throw badRequest('Choose an athlete or a team.');
   const item = body.lesson_id ? getLesson(ctx, String(body.lesson_id)) : getCourse(ctx, String(body.course_id));
   if (!item.published) throw conflict(`Publish "${item.title}" before assigning it.`);
+  const forParents = body.course_id ? item.audience === 'parents' : !!item.course_id && ctx.db.get(`SELECT 1 FROM courses WHERE id = ? AND audience = 'parents'`, item.course_id);
+  if (forParents) throw conflict(`"${item.title}" is for parents. It shows in the parent portal on its own, so there's nothing to assign.`);
   const who = body.client_id ? [clientRow(ctx, String(body.client_id))] : (teamRow(ctx, String(body.contract_id)), rosterClients(ctx, String(body.contract_id)));
   const due = blank(body.due_date) ? null : body.due_date;
   if (due && !isDate(due)) throw badRequest('due_date must be a date like 2026-12-01.');
@@ -690,7 +702,8 @@ export function educationReport(ctx) {
   const lessons = ctx.db.all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id = l.id) AS completions FROM lessons l ORDER BY l.position, l.created_at')
     .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
   const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
-    certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n }));
+    certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
+    parents_reading: c.audience === 'parents' ? ctx.db.get('SELECT COUNT(DISTINCT p.guardian_id) AS n FROM guardian_lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE l.course_id = ?', c.id).n : undefined }));
   const finishedCourse = (courseId, clientId) => {
     const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
     return ids.length > 0 && ids.every((lid) => ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', lid, clientId));
@@ -706,6 +719,61 @@ export function educationReport(ctx) {
       finished: finished.length, total: who.length, not_finished: who.filter((c) => !finished.includes(c)).map((c) => ({ id: c.id, name: c.name })).slice(0, 50) };
   });
   return { courses, lessons: lessons.filter((l) => !l.course_id), assignments };
+}
+
+// ---------- Parent education ----------
+// Courses for parents (recruiting, nutrition, recovery, growth spurts) show in the parent portal under Home → For
+// parents. A course with an age range shows to parents with an athlete that age; without one, to every parent.
+// Each parent's reading is their own.
+export function parentCourses(ctx, guardian) {
+  const ages = ctx.db.all('SELECT birth_date FROM clients WHERE family_id = ?', guardian.family_id).map((c) => ageOn(c.birth_date, ctx.now())).filter((a) => a != null);
+  const fits = (c) => (c.age_min == null && c.age_max == null) || ages.some((a) => (c.age_min == null || a >= c.age_min) && (c.age_max == null || a <= c.age_max));
+  const done = new Set(ctx.db.all('SELECT lesson_id FROM guardian_lesson_progress WHERE guardian_id = ?', guardian.id).map((r) => r.lesson_id));
+  return ctx.db.all(`SELECT * FROM courses WHERE audience = 'parents' AND published = 1 ORDER BY created_at`).filter(fits).map((c) => {
+    const ls = ctx.db.all('SELECT * FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', c.id).map((l) => lessonItem(l, done));
+    return { id: c.id, title: c.title, description: c.description, age_min: c.age_min, age_max: c.age_max, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
+  }).filter((c) => c.total > 0);
+}
+export function parentLesson(ctx, guardian, lessonId) {
+  const course = parentCourses(ctx, guardian).find((c) => c.lessons.some((l) => l.id === lessonId));
+  if (!course) throw notFound('Lesson');
+  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', lessonId), i = course.lessons.findIndex((x) => x.id === lessonId);
+  return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: { id: course.id, title: course.title }, quiz: null,
+    done: course.lessons[i].done, next: course.lessons[i + 1] ? { id: course.lessons[i + 1].id, title: course.lessons[i + 1].title } : null, position: { n: i + 1, of: course.lessons.length } };
+}
+export function completeParentLesson(ctx, guardian, lessonId, done = true) {
+  parentLesson(ctx, guardian, lessonId);
+  if (done) ctx.db.run('INSERT OR IGNORE INTO guardian_lesson_progress (lesson_id, guardian_id, completed_at) VALUES (?, ?, ?)', lessonId, guardian.id, ctx.now());
+  else ctx.db.run('DELETE FROM guardian_lesson_progress WHERE lesson_id = ? AND guardian_id = ?', lessonId, guardian.id);
+  return parentLesson(ctx, guardian, lessonId);
+}
+
+// Starter parent courses, saved as drafts for the owner to read, edit and publish. General guidance only.
+const STARTER_PARENT_COURSES = [
+  { title: 'Growth spurts and training', description: 'What changes when your athlete grows fast, and how we adjust.', age_min: 10, age_max: 15, lessons: [
+    ['What a growth spurt does', 'Bones grow first; muscles and tendons catch up.', 'During a growth spurt, bones get longer before muscles and tendons catch up. For a while your athlete may feel tight, look clumsy, or lose some speed. That is normal and it passes.\n\nMost girls have their fastest growth around 10 to 14 and most boys around 12 to 16, but every child is different.', 4],
+    ['Knee and heel pain', 'Why it happens and when to see a doctor.', 'Pain just below the kneecap or at the back of the heel is common in growing athletes. It usually comes from growth plates being pulled on by tight muscles during a busy season.\n\nTell your coach about it so we can adjust training. See a doctor if pain lasts more than two weeks, wakes them at night, causes limping, or comes with swelling.', 4],
+    ['How we adjust training', 'Less jumping volume, more mobility, same effort.', 'When an athlete is growing fast we lower jumping and sprinting volume, add mobility work, and keep strength training light and technical. The goal is to keep them moving well so the gains show up when growth slows down.\n\nThe daily check-in in the app helps: soreness and sleep answers tell us when to back off.', 3]] },
+  { title: 'Fueling a young athlete', description: 'Everyday eating, game days and water, without the fads.', age_min: null, age_max: null, lessons: [
+    ['Everyday eating', 'Three meals, two snacks, and a plate that is half color.', 'Young athletes need more food than you might think. Aim for three meals and two snacks a day, each with a carbohydrate (bread, rice, pasta, fruit), a protein (eggs, dairy, meat, beans) and something colorful.\n\nSkipping breakfast is the most common reason for a flat afternoon practice.', 4],
+    ['Game day', 'What to eat 3 hours, 1 hour and 15 minutes out.', '3 hours before: a normal meal with carbohydrates and some protein.\n\n1 hour before: something small and easy, like a banana or crackers.\n\nAfter: a snack with carbohydrates and protein within an hour, like chocolate milk or a sandwich.', 3],
+    ['Water and sports drinks', 'Water first; sports drinks for long, hot sessions.', 'Send a full water bottle to every session. Pale yellow urine is a good sign they are drinking enough.\n\nSports drinks help during long or very hot sessions. For most practices under an hour, water is enough. Energy drinks are not sports drinks and are not recommended for kids.', 3]] },
+  { title: 'Recruiting basics for parents', description: 'A calm, general overview. Rules change, so always check the official sources.', age_min: 13, age_max: 18, lessons: [
+    ['When to start thinking about it', 'Grades count from 9th grade on.', 'College coaches look at grades as well as ability, and high school grades count from the first day of 9th grade. The most useful thing to do early is keep grades up and keep playing.\n\nContact rules between college coaches and athletes depend on the division, the sport and the athlete\'s grade, and they change often. Check the NCAA, NAIA and NJCAA websites for current rules.', 4],
+    ['What coaches look for', 'Film, measurable results, grades and character.', 'Coaches look at game film, measurable results (like the testing numbers in our progress reports), grades and test scores, and how an athlete treats teammates and coaches.\n\nOur printable progress report is a simple way to share testing results with a coach.', 3],
+    ['Your role as a parent', 'Support, organize, and let your athlete lead.', 'Coaches want to hear from the athlete, not the parent. Help your athlete keep a list of schools, deadlines and emails, and let them do the talking.\n\nBe wary of services that promise scholarships for a fee. Ask your high school counselor and coach what they recommend.', 3]] }
+];
+export function addStarterParentCourses(ctx) {
+  const made = [];
+  ctx.db.tx(() => {
+    for (const c of STARTER_PARENT_COURSES) {
+      if (ctx.db.get('SELECT id FROM courses WHERE title = ?', c.title)) continue;
+      const course = createCourse(ctx, { title: c.title, description: c.description, audience: 'parents', age_min: c.age_min, age_max: c.age_max, published: false });
+      for (const [title, summary, body, minutes] of c.lessons) createLesson(ctx, { title, summary, body, minutes, course_id: course.id });
+      made.push(course.title);
+    }
+  });
+  return { added: made, message: made.length ? `Added ${made.length} draft ${made.length === 1 ? 'course' : 'courses'} for parents. Read and edit them, then publish.` : 'The starter courses are already here.' };
 }
 
 // ---------- The three tabs, as the athlete or a parent sees them ----------

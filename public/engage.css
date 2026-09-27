@@ -98,8 +98,9 @@
 .eg-tab[aria-current="page"]{color:var(--green-bright)}
 .eg-tab svg{width:22px;height:22px}
 .eg-tab .eg-tab-dot,.p-subtab .eg-tab-dot{position:absolute;top:8px;left:calc(50% + 8px);width:8px;height:8px;border-radius:50%;background:var(--amber)}
-.p-subtabs{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.3fr) minmax(0,1.15fr) minmax(0,1fr);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);overflow:hidden}
-.p-subtab{position:relative;background:none;border:0;border-left:1px solid var(--line-subtle);color:var(--steel-muted);min-height:48px;font:500 13px/1.1 var(--font-sans);cursor:pointer;padding:0 4px}
+.p-subtabs{display:flex;overflow-x:auto;scrollbar-width:none;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.p-subtabs::-webkit-scrollbar{display:none}
+.p-subtab{position:relative;flex:1 0 auto;white-space:nowrap;background:none;border:0;border-left:1px solid var(--line-subtle);color:var(--steel-muted);min-height:48px;font:500 13px/1.1 var(--font-sans);cursor:pointer;padding:0 14px}
 .p-subtab:first-child{border-left:0}
 .p-subtab[aria-current="page"]{background:var(--green);color:var(--on-green)}
 .p-subtab .eg-tab-dot{top:6px;left:auto;right:6px}
@@ -124,7 +125,7 @@
 .edu-bar{width:120px}
 @media (max-width:760px){.cl-stats{grid-template-columns:repeat(3,minmax(0,1fr))}.edu-acts{width:100%}.edu-bar{width:100%}}
 @media (max-width:420px){.eg-ci-sum{grid-template-columns:repeat(3,minmax(0,1fr))}.eg-opt span{font-size:10px}.eg-summary b{font-size:24px}.eg-summary b.eg-word{font-size:18px}}
-@media (max-width:420px){.p-subtab{font-size:12px;padding:0 2px}}
+@media (max-width:420px){.p-subtab{font-size:12px;padding:0 10px}}
 /* Skill badges: athlete and parent Performance tab, and the coach's client profile. */
 .eg-badges{display:grid;gap:10px}
 .eg-badge{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--green-mid);border-radius:var(--radius-md);background:var(--green-deep)}

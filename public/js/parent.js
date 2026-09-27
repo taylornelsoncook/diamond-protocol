@@ -1,4 +1,4 @@
-import { h, fill, toast, money, busy, btn, field, input, select, panel } from './ui.js';
+import { h, fill, toast, money, busy, btn, field, input, select, panel, videoEmbed } from './ui.js';
 import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 
@@ -118,11 +118,14 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
+  const cur = subtabs.querySelector('[aria-current]');
+  if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
 }
 async function viewHome(main) {
   subtabs = h('nav', { class: 'p-subtabs', 'aria-label': 'Home sections' });
+  if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
   const a = athlete(), eng = engageFor(a);
   const where = h('div', { class: 'eg-view' });
@@ -132,6 +135,43 @@ async function viewHome(main) {
   if (!had) { fill(where, h('p', { class: 'muted' }, 'Loading…')); await eng.load(); }
   eng.render(where, state.homeTab);
   if (had) eng.load().then(() => eng.rerender()).catch(() => {});      // show what we have, then refresh
+}
+// ---------- For parents: short courses the coaches wrote for parents, by athlete age ----------
+let parentReader = null;
+const openCourse = new Set();
+async function viewParentEd(main) {
+  const where = h('div', { class: 'eg-view' });
+  fill(main, top('For parents'), subtabs, where);
+  drawSubtabs();
+  if (parentReader) return renderParentReader(where);
+  const { data } = await get('parent-courses');
+  if (data.length === 1) openCourse.add(data[0].id);
+  fill(where, data.length ? [h('p', { class: 'small muted', style: 'margin:0' }, 'Short reads from our coaches for parents, picked for your athletes\' ages.'), data.map((c) => {
+    const open = openCourse.has(c.id);
+    const list = h('div', { class: 'eg-list', hidden: !open }, c.description ? h('p', { class: 'small muted' }, c.description) : null, c.lessons.map((l) => h('button', { type: 'button', class: 'eg-lesson', onClick: () => openParentLesson(l.id) },
+      h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
+      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.done ? 'Read' : null].filter(Boolean).join(' · ') || 'Lesson')))));
+    return h('div', { class: 'dp-panel eg-course' },
+      h('button', { type: 'button', class: 'eg-course-h', 'aria-expanded': String(open), onClick: (ev) => { const now = !openCourse.has(c.id); now ? openCourse.add(c.id) : openCourse.delete(c.id); ev.currentTarget.setAttribute('aria-expanded', String(now)); list.hidden = !now; } },
+        h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.title), h('span', { class: 'small muted' }, `${c.done} of ${c.total} read${c.complete ? ' · Finished' : ''}`)), h('span', { class: 'eg-chev', 'aria-hidden': 'true' }, '›')),
+      list);
+  })] : h('div', { class: 'empty' }, 'Nothing here yet. When our coaches post reading for parents, it shows up here.'));
+}
+async function openParentLesson(id) {
+  try { parentReader = await get(`parent-lessons/${id}`); render(); }
+  catch (e) { toast(e.message, 'warn'); }
+}
+function renderParentReader(where) {
+  const l = parentReader;
+  fill(where, h('article', { class: 'eg-reader' },
+    h('div', null, btn('‹ Back to For parents', () => { parentReader = null; render(); }, 'ghost')),
+    h('p', { class: 'small muted' }, `${l.course.title} · Lesson ${l.position.n} of ${l.position.of}`),
+    h('h2', { class: 'eg-reader-t' }, l.title),
+    l.video_url ? videoEmbed(l.video_url, l.title) : null,
+    h('div', { class: 'eg-body' }, String(l.body ?? l.summary ?? '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => h('p', null, p))),
+    h('div', { class: 'row wrap' },
+      btn(l.done ? '✓ Read' : 'Mark as read', (e) => busy(e.currentTarget, async () => { parentReader = await post(`parent-lessons/${l.id}/complete`, { done: !l.done }); render(); }), l.done ? 'outline' : 'primary', { 'aria-pressed': String(!!l.done) }),
+      l.next ? btn('Next ›', () => openParentLesson(l.next.id), l.done ? 'primary' : 'secondary') : null)));
 }
 async function viewOverview(main) {
   const cards = state.me.athletes.map((a) => {

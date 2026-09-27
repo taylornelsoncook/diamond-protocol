@@ -870,7 +870,9 @@ CREATE TABLE IF NOT EXISTS courses (
   title TEXT NOT NULL,
   description TEXT,
   published INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents')),   -- parent courses show in the parent portal (version 25)
+  age_min INTEGER, age_max INTEGER                                                           -- for parents of athletes this age (version 25)
 );
 CREATE TABLE IF NOT EXISTS lessons (
   id TEXT PRIMARY KEY,
@@ -891,6 +893,13 @@ CREATE TABLE IF NOT EXISTS lesson_progress (
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   completed_at TEXT NOT NULL,
   PRIMARY KEY (lesson_id, client_id)
+);
+-- What each parent has read of the parent courses (version 25).
+CREATE TABLE IF NOT EXISTS guardian_lesson_progress (
+  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (lesson_id, guardian_id)
 );
 -- Quiz tries (version 24). The latest passing try finishes the lesson.
 CREATE TABLE IF NOT EXISTS quiz_attempts (

@@ -48,6 +48,7 @@ export function exportFamily(ctx, familyId) {
     exported_at: ctx.now(), business: getSetting(ctx, 'business_name'),
     family: { ...f, card: f.card_last4 ? `${f.card_brand} ending ${f.card_last4}` : null, card_brand: undefined, card_last4: undefined },
     parents: ctx.db.all('SELECT name, email, phone, relationship, sms_opt_in_at AS texts_turned_on_at, sms_opt_out_at AS texts_stopped_at, created_at FROM guardians WHERE family_id = ?', familyId),
+    parent_lessons_read: ctx.db.all('SELECT g.name AS parent, l.title AS lesson, p.completed_at FROM guardian_lesson_progress p JOIN guardians g ON g.id = p.guardian_id JOIN lessons l ON l.id = p.lesson_id WHERE g.family_id = ? ORDER BY p.completed_at', familyId),
     texts: ctx.db.all('SELECT direction, phone, body, status, created_at FROM texts WHERE family_id = ? ORDER BY created_at', familyId),
     pay_links: ctx.db.all(`SELECT description, amount_cents, status, sent_to, sent_at, paid_at, created_at FROM pay_links WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?) ORDER BY created_at`, familyId),
     announcement_emails: ctx.db.all('SELECT c.subject, r.email, r.sent_at, r.clicked_at, r.unsubscribed_at FROM campaign_recipients r JOIN campaigns c ON c.id = r.campaign_id WHERE r.family_id = ? ORDER BY r.sent_at', familyId),
@@ -115,6 +116,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     ctx.db.run('DELETE FROM review_requests WHERE family_id = ?', familyId);
     ctx.db.run('UPDATE campaign_recipients SET email = \'deleted\', name = NULL, family_id = NULL WHERE family_id = ?', familyId);
     ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
+    ctx.db.run('DELETE FROM guardian_lesson_progress WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);
     const note = `Deleted by ${actor?.name ?? 'an owner'} on ${ctx.now().slice(0, 10)}`;

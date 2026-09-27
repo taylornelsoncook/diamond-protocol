@@ -1546,7 +1546,8 @@ const PRESETS = [
 ];
 
 async function viewTesting(main) {
-  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), get('/v1/integrations'), get('/v1/queue')]);
+  const desk = state.user?.role === 'front_desk';          // front desk can't open devices or the results queue
+  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations'), desk ? { n: 0 } : get('/v1/queue')]);
   const connected = integrations.data.filter((i) => i.connected);
   fill(main,
     waiting.n ? h('div', { class: 'test-banner row', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waiting.n} ${waiting.n === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,

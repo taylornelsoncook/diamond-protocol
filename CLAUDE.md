@@ -15,7 +15,7 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 ## Commands
 - `npm run seed`: sample data (sign in `coach@diamondprotocol.local` / `change-me-now`; parent `maria.lopez@example.com`, code shown on screen in test mode). Delete `data/` first to reseed.
 - `npm start`: http://localhost:3000
-- `npm test`: the full suite (91 tests). Run it before calling anything done.
+- `npm test`: the full suite (107 tests). Run it before calling anything done.
 - Node 22.13+ only. **Zero npm dependencies** (node:sqlite, node:http, node:test, built-in fetch/zlib/crypto). Keep it that way unless the owner agrees.
 
 ## Code map
@@ -38,6 +38,10 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 - Plain-English UI copy, sentence case, active voice. Errors say what to fix.
 
 ## Status
-Done: everything above, with tests. Packaged, not yet deployed.
+Done: everything above, with tests, plus Accountability / Performance / Education (daily check-ins, streaks, weekly goals, coach messages, test targets, opt-in rankings, lessons, courses and assigned reading; `services/engage.js`, `public/js/engage-view.js`, `public/js/engage-coach.js`) and monthly memberships at the counter.
+
+**Deployed on Render** from `main` (see `render.yaml`): `diamond-protocol-staging` (demo data, test mode, auto-deploys; email limited by `EMAIL_ONLY_TO`) and `diamond-protocol` (production at https://app.diamondprotocol.org, deploys only on Manual Deploy). Email via Resend from `hello@diamondprotocol.org`; DNS on Cloudflare. The database is `/data/dp.db` (the first version of the app left an unused `/data/diamond.db`; never point `DB_FILE` at it). Older setting names `DP_APP_URL`, `DP_EMAIL_FROM`, `DP_EMAIL_REPLY_TO`, `DP_EMAIL_ONLY_TO` still work. `DP_DEMO=1` seeds an empty database and implies test mode.
+
+**How changes ship:** build and test here, push to `main` → staging updates → the owner checks staging → the owner presses Manual Deploy on production.
 Owner's side (see CHECKLIST.md): lawyer-written waiver/terms/privacy, Stripe live + Terminal + Tap to Pay entitlement (Apple), Resend email with domain DNS, domain, hosting (Render via `render.yaml`), GitHub repo, a Mac for the iPhone app, real prices/schedule, one real OVR export to confirm the import.
 Next builds: online programs for sale, pay links + text reminders, sales tax (after the owner's accountant weighs in), private video uploads, confirm OVR import against a real file.

@@ -14,7 +14,7 @@ You need **Node.js 22.13 or newer** (check with `node -v`; download from nodejs.
 cp .env.example .env      # then change ADMIN_PASSWORD
 npm run seed              # creates your login plus sample plans, programs and clients
 npm start                 # open http://localhost:3000
-npm test                  # runs the 26 end-to-end tests
+npm test                  # runs the full test suite (107 tests)
 ```
 
 The seed prints your login and a sample client app link. To start over, delete the `data` folder and seed again.
@@ -39,6 +39,8 @@ The seed prints your login and a sample client app link. To start over, delete t
 - **Revenue by location:** see what the facility, each park and your mobile work bring in this month.
 - **Programs:** exercise library with demo video links (YouTube, Vimeo or a direct video file), program builder by week and day, assign to clients.
 - **API & integrations:** create and revoke API keys, add webhooks and see every delivery, link to the full API spec.
+
+**Accountability, Performance and Education**: athletes (in their app) and parents (Home tabs) get a daily check-in (sleep, hydration, soreness, energy, mood) with red flags for coaches, streaks, weekly goals, coach messages, test targets with progress, opt-in rankings by best result (no other names shown), and lessons, courses and assigned reading. Coaches run it from the Education screen and each client profile.
 
 **Parent portal** (`/parent`): parents sign in with a 6-digit code emailed to them (no password). They see each athlete's upcoming sessions, membership and credits; book classes, clinics, privates and evaluations; join waitlists; cancel; hold a standing weekly spot (members); register for camps; buy packs and memberships with the family card; sign the waiver; and update athlete profiles and medical notes. It can be added to a phone's home screen like an app.
 

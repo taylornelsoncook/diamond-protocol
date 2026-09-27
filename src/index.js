@@ -11,7 +11,8 @@ env.EMAIL_REPLY_TO ||= env.DP_EMAIL_REPLY_TO || '';
 env.EMAIL_ONLY_TO ||= env.DP_EMAIL_ONLY_TO || '';
 
 const port = Number(process.env.PORT || 3000);
-const testMode = process.env.DP_TEST_MODE === 'true';
+// A demo copy (DP_DEMO=1, i.e. staging) runs in test mode unless DP_TEST_MODE says otherwise.
+const testMode = process.env.DP_TEST_MODE ? process.env.DP_TEST_MODE === 'true' : process.env.DP_DEMO === '1';
 const payments = process.env.STRIPE_SECRET_KEY
   ? createStripeProvider({ secretKey: process.env.STRIPE_SECRET_KEY, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET, currency: process.env.CURRENCY || 'usd' })
   : createTestProvider();

@@ -57,7 +57,7 @@ export async function sendEmail(ctx, { to, subject, text }) {
   const id = newId('msg');
   let status = 'logged', error = null;
   if (clean(ctx.mail?.resendKey)) {
-    if (!allowed(ctx, to)) status = 'held';
+    if (!allowed(ctx, to)) { status = 'logged'; error = `Held: this server only delivers to ${clean(ctx.mail.onlyTo)}.`; }
     else {
       try {
         const replyTo = clean(ctx.mail.replyTo);
@@ -73,7 +73,7 @@ export async function sendEmail(ctx, { to, subject, text }) {
     }
   }
   ctx.db.run('INSERT INTO outbox (id, to_email, subject, body, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, to, subject, text, status, error, ctx.now());
-  return { id, status, error };
+  return { id, status: error?.startsWith('Held:') ? 'held' : status, error };
 }
 export const listOutbox = (ctx, limit = 50) => ctx.db.all('SELECT * FROM outbox ORDER BY created_at DESC, rowid DESC LIMIT ?', limit);
 

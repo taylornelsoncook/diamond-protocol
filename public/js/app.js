@@ -2672,16 +2672,19 @@ async function viewTestingDay(main, id) {
     const display = h('div', { class: 'ts-clock', 'aria-live': 'off' }, '0.00');
     let t0 = null, raf = null;
     const cur = athletes[testingState.athleteIdx];
-    const tick = () => { display.textContent = ((performance.now() - t0) / 1000).toFixed(2); raf = requestAnimationFrame(tick); };
+    // Leaving the screen with the clock running stops it (nothing is saved).
+    const tick = () => { if (!display.isConnected) { t0 = null; stopwatchRunning = false; return; } display.textContent = ((performance.now() - t0) / 1000).toFixed(2); raf = requestAnimationFrame(tick); };
     const cancelBtn = btn('Cancel run', () => cancel(), 'ghost', { style: 'display:none' });
     const cancel = () => { if (t0 == null) return; cancelAnimationFrame(raf); t0 = null; stopwatchRunning = false; go.textContent = 'Start'; display.textContent = '0.00'; cancelBtn.style.display = 'none'; toast('Run cancelled. Nothing was saved.'); };
-    swEscape = (e) => { if (e.key === 'Escape' && stopwatchRunning) { e.preventDefault(); cancel(); } };
+    // Esc cancels a run only on this screen, and never while a dialog is open (Esc closes the dialog).
+    swEscape = (e) => { if (e.key === 'Escape' && stopwatchRunning && display.isConnected && !document.querySelector('dialog[open]')) { e.preventDefault(); cancel(); } };
     const saveTime = async (p) => {
       const a = athletes.find((x) => akey(x) === p.key);
       const problem = checkValue(p.secs);
       if (problem) throw new Error(problem);
       const r = await save(a, p.side, p.secs, p.attempt, 'hand', 'stopwatch');
-      swState = { pending: null, last: { id: r.results[0].id, idx: athletes.indexOf(a), label: `${a.name.split(' ')[0]} ${p.secs.toFixed(2)} s` } };
+      // A retry of a time that did save is a repeat (nothing new to undo).
+      swState = { pending: null, last: r.results[0] ? { id: r.results[0].id, idx: athletes.indexOf(a), label: `${a.name.split(' ')[0]} ${p.secs.toFixed(2)} s` } : swState.last };
       const done = sides.every((sd) => resultsOf(a, sd).length + (sd === p.side ? 1 : 0) >= test.attempts);
       if (done && athletes.indexOf(a) === testingState.athleteIdx) testingState.athleteIdx = Math.min(athletes.length - 1, testingState.athleteIdx + 1);
     };
@@ -2694,6 +2697,7 @@ async function viewTestingDay(main, id) {
       t0 = null; go.textContent = 'Start'; display.textContent = secs.toFixed(2);
       const side = sides.find((sd) => resultsOf(cur, sd).length < test.attempts) ?? sides[0];
       const p = { key: akey(cur), name: cur.name, side, attempt: (resultsOf(cur, side).at(-1)?.attempt ?? resultsOf(cur, side).length) + 1, secs };
+      if (p.attempt > 20) { display.textContent = '0.00'; return toast(`${cur.name.split(' ')[0]} has 20 attempts, the most a day holds. Delete one to time another.`, 'warn'); }
       try { await saveTime(p); redraw(); }
       catch (e) { swState = { ...swState, pending: { ...p, error: e.message } }; redraw(); }
     }, 'primary', { style: 'min-width:140px;min-height:64px;font-size:22px' });

@@ -364,6 +364,15 @@ export function undoUpload(ctx, id, user = null) {
   const b = ctx.db.get('SELECT * FROM import_batches WHERE id = ? AND kind IS NOT NULL', id);
   if (!b) throw notFound('Upload');
   if (b.undone_at) throw conflict('This upload was already undone.');
+  // Put a set-aside value back. A value saved by an upload that has since been undone stays out, and what that
+  // upload replaced comes back instead (so undoing two uploads in either order ends where both started).
+  const restore = (rid, depth = 0) => {
+    const from = depth < 50 && ctx.db.get(`SELECT i.replaced FROM import_batch_items i JOIN import_batches x ON x.id = i.batch_id
+      WHERE i.result_id = ? AND x.undone_at IS NOT NULL`, rid);
+    if (!from) return ctx.db.run('UPDATE perf_results SET voided = 0 WHERE id = ? AND voided = 1', rid).changes > 0;
+    if (!ctx.db.run('DELETE FROM perf_results WHERE id = ? AND voided = 1', rid).changes) return false;
+    return JSON.parse(from.replaced).filter((x) => restore(x, depth + 1)).length > 0;
+  };
   return ctx.db.tx(() => {
     let removed = 0, restored = 0, kept = 0, dropped = 0;
     for (const it of ctx.db.all('SELECT * FROM import_batch_items WHERE batch_id = ?', b.id)) {
@@ -377,7 +386,7 @@ export function undoUpload(ctx, id, user = null) {
       if (!r) continue;                                     // already gone (the testing day was deleted, say)
       if (r.voided || r.source !== b.result_source || Math.abs(r.value - it.value) > SAME) { kept++; continue; }
       ctx.db.run('DELETE FROM perf_results WHERE id = ?', r.id);
-      const back = JSON.parse(it.replaced).filter((rid) => ctx.db.run('UPDATE perf_results SET voided = 0 WHERE id = ? AND voided = 1', rid).changes).length;
+      const back = JSON.parse(it.replaced).filter((rid) => restore(rid)).length;
       if (back) restored++; else removed++;
     }
     // Tests the upload put on the testing day come off again if nothing is left for them there.

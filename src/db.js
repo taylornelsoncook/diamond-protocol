@@ -108,6 +108,10 @@ function migrate(raw, schema) {
   if (version < 15) rebuild(raw, schema, ['sales']);                                  // 'online' payment method for pay links
   if (version < 23) rebuild(raw, schema, ['workout_logs']);                           // screen logs without a program assignment
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
+  // Version 34: device names are matched in lower case, so results that waited under "Swift" join "swift".
+  if (version < 34 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {
+    raw.exec('UPDATE results_queue SET provider = lower(trim(provider)) WHERE provider != lower(trim(provider))');
+  }
 }
 // SQLite can't change constraints in place: create the new table, copy shared columns, swap.
 function rebuild(raw, schema, tables, prerequisites = []) {

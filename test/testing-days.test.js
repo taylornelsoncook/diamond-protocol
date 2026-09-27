@@ -218,6 +218,21 @@ test('uploads: a re-upload leaves saved values alone, replaces changed ones, and
   assert.ok((await coach('GET', '/v1/uploads')).body.data[0].undone_at);
 });
 
+test('undoing two uploads of the same spot in either order ends with the value from before both', async () => {
+  const header = ['Athlete ID', 'Name', '40-yard dash (s)'];
+  for (const order of [['first', 'second'], ['second', 'first']]) {
+    const d = (await coach('POST', '/v1/testing-sessions', { name: `Undo ${order[0]}`, date: '2026-09-22', tests: ['dash_40yd'], athletes: [{ client_id: cole.id }] })).body;
+    await coach('POST', '/v1/results', { session_id: d.id, results: [{ client_id: cole.id, test: 'dash_40yd', value: 5.8, attempt: 1, source: 'manual' }] });
+    const first = await commit(await upload([header, [cole.athlete_id, 'Cole Park', 5.6]], { session_id: d.id }));
+    const second = await commit(await upload([header, [cole.athlete_id, 'Cole Park', 5.5]], { session_id: d.id }));
+    assert.deepEqual([first.replaced, second.replaced], [1, 1]);
+    const ids = { first: first.batch_id, second: second.batch_id };
+    for (const which of order) assert.equal((await coach('POST', `/v1/uploads/${ids[which]}/undo`)).status, 200);
+    const left = (await coach('GET', `/v1/testing-sessions/${d.id}`)).body.athletes.find((a) => a.client_id === cole.id).results.map((r) => [r.value, r.source]);
+    assert.deepEqual(left, [[5.8, 'manual']], `undo ${order.join(' then ')}: an undone upload's value never comes back`);
+  }
+});
+
 test('uploads without a testing day: the same sheet twice saves once, a corrected value replaces the earlier upload', async () => {
   const header = ['Athlete ID', 'Name', 'Date', 'Vertical jump (in)'];
   const first = await commit(await upload([header, [dana.athlete_id, 'Dana Reed', '2026-06-01', 20]]));

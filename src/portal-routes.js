@@ -14,6 +14,7 @@ import * as engage from './services/engage.js';
 import * as sms from './services/sms.js';
 import * as leads from './services/leads.js';
 import * as shop from './services/shop.js';
+import * as spots from './services/spots.js';
 
 const list = (data) => ({ data });
 function athleteOf(ctx, r, id) {
@@ -44,6 +45,8 @@ export const portalRoutes = [
   ['GET', '/portal/api/public/info', 'public', 'Business name, whether sign-up is open, and whether terms and privacy are published.', (ctx) => signup.signupInfo(ctx)],
   ['POST', '/portal/api/public/inquiry', 'public', 'Ask about training: parent_name, email, phone, athlete_name, athlete_age, sport, message, texts_ok. We reply by email with next steps.', (ctx, r) => leads.submitInquiry(ctx, r.body)],
   ['GET', '/portal/api/public/certificates/:token', 'public', 'A course certificate for its shareable page: athlete name, course, lessons and date. Nothing else.', (ctx, r) => engage.publicCertificate(ctx, r.params.token)],
+  ['GET', '/portal/api/public/spot/:token', 'public', 'An open-spot offer: the session, how many spots are left, and the family\'s athletes who fit. No sign-in.', (ctx, r) => spots.publicOffer(ctx, r.params.token)],
+  ['POST', '/portal/api/public/spot/:token/book', 'public', 'Book from an open-spot offer: athlete_id, optional pay=card_on_file. First to book gets the spot.', (ctx, r) => spots.bookOffer(ctx, r.params.token, r.body)],
   ['GET', '/portal/api/public/shop', 'public', 'The online store page: programs and courses for sale with prices and what\'s inside. No names.', (ctx) => shop.publicShop(ctx)],
   ['GET', '/portal/api/public/schedule', 'public', 'The Book now page: classes, clinics and camp days in the next 2 weeks with open spots, and the next evaluation times. No names.', (ctx) => booknow.publicSchedule(ctx)],
   ['GET', '/portal/api/public/legal', 'public', 'The current terms of service and privacy policy.', (ctx) => legal.legalDocs(ctx)],

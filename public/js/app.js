@@ -97,6 +97,8 @@ const EVENT_TEXT = {
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
   'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
+  'purchase.completed': (d) => `${d.client_name} got ${d.title} from the online store`,
+  'spots.offered': (d) => `Open spots in ${d.session_name} offered to ${d.families} ${d.families === 1 ? 'family' : 'families'}`,
   'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
   'booking.waitlisted': (d) => `${d.client_name} joined the waitlist for ${d.session_name}`,
   'booking.canceled': (d) => `${d.client_name} canceled ${d.session_name}${d.late ? ' (late)' : ''}`,
@@ -122,7 +124,8 @@ const EVENT_TEXT = {
 const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Pay link' };
 
 async function viewToday(main) {
-  const [d, rev, ag, flags, risk] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), state.user.role !== 'front_desk' ? get('/v1/at-risk').catch(() => null) : null]);
+  const staff = state.user.role !== 'front_desk';
+  const [d, rev, ag, flags, risk, spots] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null, staff ? get('/v1/open-spots').catch(() => null) : null]);
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
@@ -179,6 +182,7 @@ async function viewToday(main) {
       metric('Payments failed', m.past_due_clients, `${money(m.at_risk_cents)} at risk this month`, m.past_due_clients ? 'warn' : null),
       metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
     agendaPanel,
+    spots?.data.length ? spotsPanel(spots) : null,
     flags,
     risk?.data.length ? panel('Athletes to check on', { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick message usually brings them back.' },
       risk.data.slice(0, 6).map((r) => h('div', { class: 'list-item' },
@@ -190,6 +194,21 @@ async function viewToday(main) {
         h('div', { class: 'small muted', style: 'width:92px;flex-shrink:0' }, ago(ev.created_at)),
         h('div', { class: 'grow' }, (EVENT_TEXT[ev.type] || (() => ev.type))(ev.data)))) : h('p', { class: 'muted' }, 'Activity shows up here as clients join, pay and train.'))),
     revPanel);
+}
+
+// Classes in the next 2 days with open spots and nobody waiting. One tap offers the spots to families who fit.
+function spotsPanel(spots) {
+  const auto = spots.mode === 'auto';
+  const mode = isOwner() ? select([['suggest', 'Send offers when I tap'], ['auto', 'Send offers automatically'], ['off', 'Don\'t show this']], { value: spots.mode, 'aria-label': 'Open spot offers', style: 'width:auto' }) : null;
+  if (mode) mode.addEventListener('change', () => busy(mode, async () => { await patch('/v1/settings', { open_spot_offers: mode.value }); toast(mode.value === 'auto' ? 'Offers go out on their own between 10 am and 7 pm.' : 'Saved.'); render(); }));
+  return panel('Classes with open spots', { subtitle: auto ? 'Offers go out on their own between 10 am and 7 pm, a day ahead. First family to tap the link gets the spot.' : 'Offer the spots to families who fit: regulars of the class first, then members and recent athletes. First to tap the link gets it.', action: mode },
+    spots.data.map((x) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('a', { href: `#/schedule/${x.id}`, class: 'strong', style: 'color:var(--steel)' }, x.name),
+        h('span', { class: 'small muted' }, `${new Intl.DateTimeFormat('en-US', { timeZone: tzName, weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(x.starts_at))} · ${x.location_name} · ${x.spots_left} of ${x.capacity} open`),
+        h('span', { class: 'small muted' }, [x.offers.sent ? `${x.offers.sent} offered, ${x.offers.opened} opened, ${x.offers.booked} booked` : null, x.families_who_fit ? `${x.families_who_fit} more ${x.families_who_fit === 1 ? 'family fits' : 'families fit'}` : 'No more families who fit'].filter(Boolean).join(' · '))),
+      x.families_who_fit ? btn(`Offer to ${Math.min(x.families_who_fit, x.spots_left * 4, 30)} ${Math.min(x.families_who_fit, x.spots_left * 4, 30) === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => {
+        const r = await post(`/v1/sessions/${x.id}/offer-spots`); toast(`Offered to ${r.sent} ${r.sent === 1 ? 'family' : 'families'}. First to tap gets it.`); render();
+      }), 'outline') : null)));
 }
 
 // ---------- Leads ----------

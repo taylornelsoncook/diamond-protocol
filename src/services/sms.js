@@ -13,7 +13,8 @@ export const TEXT_KINDS = {
   reminder: 'Reminder the day before a booked session',
   waitlist: 'When an athlete moves off the waitlist',
   canceled: 'When you cancel a session',
-  payment_failed: 'When a membership payment doesn\'t go through'
+  payment_failed: 'When a membership payment doesn\'t go through',
+  open_spot: 'When a class your athlete fits has an open spot'
 };
 const STOP_WORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'REVOKE', 'OPTOUT'];
 const START_WORDS = ['START', 'UNSTOP', 'YES'];

@@ -23,6 +23,7 @@ import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/
 import { weeklyDigest } from './services/insights.js';
 import { runFollowUps } from './services/leads.js';
 import { runReviewRequests, followReviewLink } from './services/reviews.js';
+import { runSlotFilling } from './services/spots.js';
 import { followCampaignLink } from './services/campaigns.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
@@ -98,6 +99,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
       if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/shop') rateLimit(`shop:${ip}`, 120, 15 * 60000);
+      if (route.path.startsWith('/portal/api/public/spot/')) rateLimit(`spot:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
       catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
@@ -157,6 +159,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     timers.push(setInterval(() => weeklyDigest(ctx).catch((e) => console.error('weekly digest', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => runFollowUps(ctx).catch((e) => console.error('lead follow-up', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => runReviewRequests(ctx).catch((e) => console.error('review requests', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runSlotFilling(ctx).catch((e) => console.error('open spots', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }
@@ -257,7 +260,7 @@ async function readJson(req, limit = 1_000_000) {
 }
 
 async function serveStatic(res, pathname) {
-  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : pathname.slice(1));
+  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });
   try {

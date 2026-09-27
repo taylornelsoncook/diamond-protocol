@@ -115,6 +115,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     ctx.db.run(`DELETE FROM pay_links WHERE status != 'paid' AND client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
     ctx.db.run(`UPDATE pay_links SET description = 'Deleted family', sent_to = NULL WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
     ctx.db.run('DELETE FROM review_requests WHERE family_id = ?', familyId);
+    ctx.db.run('DELETE FROM spot_offers WHERE family_id = ?', familyId);
     ctx.db.run('UPDATE campaign_recipients SET email = \'deleted\', name = NULL, family_id = NULL WHERE family_id = ?', familyId);
     ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
     ctx.db.run('DELETE FROM guardian_lesson_progress WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);

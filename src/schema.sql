@@ -914,6 +914,21 @@ CREATE TABLE IF NOT EXISTS purchases (
   refunded_at TEXT
 );
 CREATE INDEX IF NOT EXISTS purchases_client ON purchases(client_id, item_kind, item_id);
+-- Open-spot offers (version 27): a family is told a class it fits has room; the first to tap the link gets the spot.
+CREATE TABLE IF NOT EXISTS spot_offers (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  session_id TEXT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
+  family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+  client_ids TEXT NOT NULL,                       -- the family's athletes who fit, comma separated
+  sent_to TEXT,
+  sent_by TEXT,
+  sent_at TEXT NOT NULL,
+  opened_at TEXT,
+  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+  booked_at TEXT,
+  UNIQUE (session_id, family_id)
+);
 -- What each parent has read of the parent courses (version 25).
 CREATE TABLE IF NOT EXISTS guardian_lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,

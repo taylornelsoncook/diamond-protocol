@@ -28,6 +28,7 @@ import * as inventory from './services/inventory.js';
 import * as reviews from './services/reviews.js';
 import * as campaigns from './services/campaigns.js';
 import * as shop from './services/shop.js';
+import * as spots from './services/spots.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -110,6 +111,8 @@ export const routes = [
   ['POST', '/v1/workouts/:id/exercises', 'any', 'Training', 'Add exercise_id to a workout with a prescription like "3 × 10". Optional load_test and load_pct set the weight from the athlete\'s latest tested max.', (ctx, r) => programs.addWorkoutExercise(ctx, r.params.id, r.body), 201],
   ['PATCH', '/v1/workout-exercises/:id', 'any', 'Training', 'Change an exercise\'s prescription, or its weight: load_test (squat_1rm, bench_1rm, power_clean_1rm, or null) and load_pct (30 to 110).', (ctx, r) => programs.updateWorkoutExercise(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/workout-exercises/:id', 'any', 'Training', 'Remove an exercise from a workout.', (ctx, r) => programs.removeWorkoutExercise(ctx, r.params.id)],
+  ['GET', '/v1/open-spots', 'any', 'Schedule', 'Group classes and clinics in the next 2 days with open spots and nobody waiting, with how many families fit each and the offers sent so far.', (ctx) => spots.openSpots(ctx)],
+  ['POST', '/v1/sessions/:id/offer-spots', 'any', 'Schedule', 'Email (and text, if they turned texts on) families who fit this session that a spot is open. First to tap the link gets it. Up to 4 families per open spot.', (ctx, r) => spots.sendOffers(ctx, r.params.id, { actor: r.user?.name ?? 'API' })],
   ['GET', '/v1/shop', 'any', 'Training', 'Owners: every program and athlete course with its online price, whether it shows in the store, and what sold.', (ctx) => shop.shopAdmin(ctx)],
   ['PUT', '/v1/shop/programs/:id', 'any', 'Training', 'Owners: sell a program online: for_sale (true or false) and price_cents ($1 to $1,000).', (ctx, r) => shop.setForSale(ctx, 'program', r.params.id, r.body)],
   ['PUT', '/v1/shop/courses/:id', 'any', 'Training', 'Owners: sell an athlete course online: for_sale and price_cents. Athletes need to buy it (or be assigned it) to open its lessons.', (ctx, r) => shop.setForSale(ctx, 'course', r.params.id, r.body)],

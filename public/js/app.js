@@ -193,7 +193,7 @@ const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['signed_up', '
 const LEAD_SOURCE = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event', referral: 'Referral' };
 async function viewLeads(main) {
   const filter = new URLSearchParams(location.hash.split('?')[1] ?? '').get('status') ?? '';
-  const [res, settings] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings')]);
+  const [res, settings, reviews] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), get('/v1/review-requests')]);
   const chips = h('div', { class: 'row wrap', style: 'gap:8px' }, [['', 'All open'], ...LEAD_STAGES].map(([k, label]) => h('a', { class: `dp-btn dp-btn--${filter === k ? 'secondary' : 'ghost'}`, href: `#/leads${k ? `?status=${k}` : ''}` }, k ? `${label} (${res.counts[k] ?? 0})` : label)));
   const rows = (filter ? res.data : res.data.filter((l) => !['member', 'lost'].includes(l.status))).map((l) => {
     const stage = select(LEAD_STAGES, { value: l.status, 'aria-label': 'Stage' });
@@ -246,8 +246,26 @@ async function viewLeads(main) {
     h('p', { class: 'small muted', style: 'margin:0' }, 'Paste this where the schedule should appear (in Squarespace or Wix, use a Code or Embed block). For a single "Book now" button instead, add data-button="Book now" inside the tag.'),
     h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { class: 'small', style: 'word-break:break-all' }, embedCode), btn('Copy code', copy(embedCode, 'Code copied. Paste it into your website.'), 'secondary')),
     isOwner() ? h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, schedToggle, h('span', null, 'Show the Book now page'), btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_schedule: schedToggle.checked ? 'on' : 'off' }); toast('Saved.'); }), 'ghost')) : null);
+  // Google review requests: one friendly email after a 10th session or a personal best.
+  const reviewUrl = input({ type: 'url', placeholder: 'https://g.page/r/.../review', value: reviews.review_url, 'aria-label': 'Google review link' });
+  const reviewOn = h('input', { type: 'checkbox', checked: reviews.on });
+  const r90 = reviews.last_90_days;
+  const REVIEW_WHY = { milestone: (x) => `${x.detail}`, pr: (x) => `personal best${x.detail ? ` (${x.detail})` : ''}` };
+  const reviewPanel = panel('Google review requests', { subtitle: 'After an athlete\'s 10th session, or a personal best on a testing day the family can see, we email the parent once asking for a Google review. At most once every 6 months per family, never to a family behind on a payment, and only between 10 am and 7 pm.' },
+    !reviews.review_url ? h('p', { class: 'warn-text', style: 'margin:0' }, 'Off until you add your Google review link. Find it in your Google Business Profile under "Ask for reviews".') :
+      h('p', { style: 'margin:0' }, `Last 90 days: ${r90.sent} asked, ${r90.clicked} opened the review page${r90.stopped ? `, ${r90.stopped} asked us to stop` : ''}.`),
+    isOwner() ? h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      try { await patch('/v1/settings', { review_url: reviewUrl.value, review_requests: reviewOn.checked ? 'on' : 'off' }); toast('Saved.'); render(); } catch (err) { toast(err.message, 'warn'); }
+    }); } },
+      field('Google review link', reviewUrl),
+      h('div', { class: 'row wrap', style: 'gap:12px' }, h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, reviewOn, h('span', null, 'Send review requests')), btn('Save', null, 'secondary', { type: 'submit' }))) : null,
+    reviews.recent.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Recent'), ...reviews.recent.map((x) => h('div', { class: 'row small', style: 'gap:10px' },
+      h('span', { class: 'grow' }, `${x.family_name ?? 'Deleted family'} · ${x.athlete_name ?? ''}: ${REVIEW_WHY[x.reason](x)}`), h('span', { class: 'muted' }, ago(x.sent_at)),
+      x.opted_out_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Stop asking') : x.clicked_at ? h('span', { class: 'dp-badge dp-badge--good' }, 'Opened') : h('span', { class: 'dp-badge dp-badge--neutral' }, 'Sent')))) : null,
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'See the email'),
+      h('p', { class: 'strong small', style: 'margin:8px 0 4px' }, reviews.sample.subject), h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, reviews.sample.text)));
   fill(main, header('Leads', `${res.last_30_days.leads} ${res.last_30_days.leads === 1 ? 'family' : 'families'} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.`),
-    chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel);
+    chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel, reviewPanel);
 }
 
 // ---------- Clients ----------

@@ -24,6 +24,7 @@ import * as leads from './services/leads.js';
 import * as paylinks from './services/paylinks.js';
 import * as checkin from './services/checkin.js';
 import * as inventory from './services/inventory.js';
+import * as reviews from './services/reviews.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -125,6 +126,7 @@ export const routes = [
   ['GET', '/v1/products', 'any', 'Point of sale', 'What you sell in person: sessions, packs, gear.', (ctx, r) => list(commerce.listProducts(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['POST', '/v1/products', 'any', 'Point of sale', 'Add a product: name, kind (session, pack, gear, other), price_cents, sessions (for packs).', (ctx, r) => commerce.createProduct(ctx, r.body), 201],
   ['PATCH', '/v1/products/:id', 'any', 'Point of sale', 'Update a product. Set active=false to stop selling it.', (ctx, r) => commerce.updateProduct(ctx, r.params.id, r.body)],
+  ['GET', '/v1/review-requests', 'any', 'Leads', 'Google review requests: the review link, whether they\'re on, the last 90 days (sent, clicked, stopped), the 10 most recent and a sample email.', (ctx) => reviews.reviewSummary(ctx)],
   ['GET', '/v1/inventory', 'any', 'Point of sale', 'Gear that counts its stock: what\'s on hand per size, and what\'s running low.', (ctx) => inventory.inventory(ctx)],
   ['POST', '/v1/products/:id/variants', 'any', 'Point of sale', 'Add a size or color to a product: name (like M or Youth L), sku.', (ctx, r) => inventory.addVariant(ctx, r.params.id, r.body), 201],
   ['PATCH', '/v1/products/:id/variants/:vid', 'any', 'Point of sale', 'Rename a size or stop selling it (active=false).', (ctx, r) => inventory.updateVariant(ctx, r.params.id, r.params.vid, r.body)],

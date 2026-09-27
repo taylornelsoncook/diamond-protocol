@@ -253,6 +253,20 @@ CREATE TABLE IF NOT EXISTS stock_moves (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS stock_moves_product ON stock_moves(product_id, variant_id);
+-- Google review requests sent to families (version 18). One per family every 6 months at most.
+CREATE TABLE IF NOT EXISTS review_requests (
+  id TEXT PRIMARY KEY,
+  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('milestone','pr')),
+  detail TEXT,
+  token TEXT NOT NULL UNIQUE,
+  sent_to TEXT,
+  sent_at TEXT NOT NULL,
+  clicked_at TEXT,
+  opted_out_at TEXT
+);
+CREATE INDEX IF NOT EXISTS review_requests_family ON review_requests(family_id, sent_at);
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,

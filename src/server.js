@@ -22,6 +22,7 @@ import { handleStripeEvent } from './services/commerce.js';
 import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
 import { weeklyDigest } from './services/insights.js';
 import { runFollowUps } from './services/leads.js';
+import { runReviewRequests, followReviewLink } from './services/reviews.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -57,6 +58,15 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       const baseUrl = ctx.publicUrl || `${url.protocol.replace(':', '')}://${url.host}`;
       if (url.pathname === '/v1/openapi.json') return json(res, 200, openApiSpec(baseUrl));
       if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(ctx, req, res);
+      // The review link in the email: count the click and go on to Google (or stop asking, with ?stop=1).
+      const review = url.pathname.match(/^\/r\/([\w-]{8,40})$/);
+      if (review && req.method === 'GET') {
+        rateLimit(`review:${clientIp(req)}`, 30, 15 * 60000);
+        const out = followReviewLink(ctx, review[1], { stop: url.searchParams.has('stop') });
+        if (out.redirect) { res.writeHead(302, { location: out.redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store' });
+        return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Thank you</title><link rel="stylesheet" href="/styles.css"><body style="padding:48px 16px;text-align:center"><p style="font-size:18px">${out.page.replace(/[<>&]/g, '')}</p></body>`);
+      }
       if (url.pathname === '/sms/inbound' && req.method === 'POST') return smsInbound(ctx, req, res, `${baseUrl}/sms/inbound`);
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
       if (!route) {
@@ -135,6 +145,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     timers.push(setInterval(() => sendReminders(ctx).catch((e) => console.error('reminders', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => weeklyDigest(ctx).catch((e) => console.error('weekly digest', e)), 60 * 60 * 1000));
     timers.push(setInterval(() => runFollowUps(ctx).catch((e) => console.error('lead follow-up', e)), 60 * 60 * 1000));
+    timers.push(setInterval(() => runReviewRequests(ctx).catch((e) => console.error('review requests', e)), 60 * 60 * 1000));
     runBilling(ctx).catch((e) => console.error('billing', e));
     extendSchedule(ctx).catch((e) => console.error('schedule', e));
   }

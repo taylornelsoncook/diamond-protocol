@@ -27,7 +27,7 @@ const FRONT_DESK = [
   ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/],
   ['GET', /^\/v1\/kiosks$/], ['POST', /^\/v1\/kiosks$/],   // set up the check-in tablet at the desk
   ['GET', /^\/v1\/inventory$/], ['POST', /^\/v1\/products\/:id\/stock$/],   // receive deliveries and count the shelf
-  ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/]   // inquiries at the counter and on the phone
+  ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/]   // inquiries at the counter and on the phone
 ];
 const COACH_DENY = [['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 

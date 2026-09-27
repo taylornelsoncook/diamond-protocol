@@ -26,7 +26,9 @@ const DEFAULTS = {
   texts_off: '',                          // comma list of automatic texts turned off: reminder, waitlist, canceled, payment_failed
   weekly_digest: 'on',                    // Monday summary email to the owners
   lead_follow_up: 'on',                   // automatic follow-up emails (and texts, if they asked) to new leads
-  public_schedule: 'on'                   // the public Book now page (/book) and website widget
+  public_schedule: 'on',                  // the public Book now page (/book) and website widget
+  review_url: '',                         // Google review link; review requests stay off until it's set
+  review_requests: 'on'                   // ask happy families for a review after a 10th session or a personal best
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
 export function getSettings(ctx) { return Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, getSetting(ctx, k)])); }
@@ -52,6 +54,12 @@ export function updateSettings(ctx, body) {
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version
   }
   if (body.rankings !== undefined) next.rankings = body.rankings === true || body.rankings === 'on' ? 'on' : 'off';
+  if (body.review_url !== undefined) {
+    const url = v.str(body.review_url, 'review_url', { max: 500, optional: true }) ?? '';
+    if (url && !/^https:\/\/\S+$/.test(url)) throw badRequest('Paste the full review link from your Google Business Profile. It starts with https://');
+    next.review_url = url;
+  }
+  if (body.review_requests !== undefined) next.review_requests = body.review_requests === true || body.review_requests === 'on' ? 'on' : 'off';
   if (body.public_schedule !== undefined) next.public_schedule = body.public_schedule === true || body.public_schedule === 'on' ? 'on' : 'off';
   if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';

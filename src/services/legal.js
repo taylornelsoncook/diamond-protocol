@@ -50,6 +50,7 @@ export function exportFamily(ctx, familyId) {
     parents: ctx.db.all('SELECT name, email, phone, relationship, sms_opt_in_at AS texts_turned_on_at, sms_opt_out_at AS texts_stopped_at, created_at FROM guardians WHERE family_id = ?', familyId),
     texts: ctx.db.all('SELECT direction, phone, body, status, created_at FROM texts WHERE family_id = ? ORDER BY created_at', familyId),
     pay_links: ctx.db.all(`SELECT description, amount_cents, status, sent_to, sent_at, paid_at, created_at FROM pay_links WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?) ORDER BY created_at`, familyId),
+    review_requests: ctx.db.all('SELECT reason, detail, sent_to, sent_at, clicked_at, opted_out_at FROM review_requests WHERE family_id = ? ORDER BY sent_at', familyId),
     inquiries: ctx.db.all(`SELECT parent_name, email, phone, athlete_name, athlete_age, sport, message, source, status, created_at FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId),
     agreements: familyConsents(ctx, familyId),
     athletes: kids.map((k) => ({
@@ -107,6 +108,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     // Pay links: unpaid ones go; paid ones stay as payment records, without names or contact details.
     ctx.db.run(`DELETE FROM pay_links WHERE status != 'paid' AND client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
     ctx.db.run(`UPDATE pay_links SET description = 'Deleted family', sent_to = NULL WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
+    ctx.db.run('DELETE FROM review_requests WHERE family_id = ?', familyId);
     ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);

@@ -323,3 +323,45 @@ test('email the report to the family (owners and coaches)', async () => {
   assert.match(noRes.data.error, /no results/);
   assert.equal((await coach.post(`/api/report/${nate.code}/email`, { note: 'x'.repeat(2001) })).status, 400);
 });
+
+test('review fixes: blank attempts, spurious protocol edits, preset names, link views and age, age-group boards', async () => {
+  // A blank attempts box means one attempt, not none
+  const t = await coach.post('/api/tests', { name: 'Blank attempts', unit: 'reps', attempts: '' });
+  assert.equal(t.status, 200);
+  assert.equal(t.data.attempts, 1);
+  // Saving a custom test's form unchanged (empty protocol box) is not an edit
+  const logs = () => db.get('SELECT COUNT(*) n FROM activity').n;
+  const n0 = logs();
+  const same = await coach.patch(`/api/tests/${t.data.id}`, { name: 'Blank attempts', category: 'Custom', unit: 'reps', lower_better: '0', attempts: '1', min_value: '', max_value: '', timed: false, description: '' });
+  assert.equal(same.status, 200);
+  assert.equal(logs(), n0, 'no activity entry for an unchanged save');
+  assert.equal(db.get('SELECT description FROM tests WHERE id=?', t.data.id).description, null);
+
+  // Preset names that clash with built-in object keys are refused or not found, never silently lost
+  const ids = [testId('Pull-ups'), testId('Push-ups')];
+  assert.equal((await coach.post('/api/testing/presets', { name: '__proto__', test_ids: ids })).status, 400);
+  assert.equal((await coach.del('/api/testing/presets/constructor')).status, 404);
+  assert.equal((await coach.put('/api/testing/presets/toString', { name: 'Zed', test_ids: ids })).status, 404);
+  const ok = await coach.post('/api/testing/presets', { name: 'toString', test_ids: ids });
+  assert.equal(ok.status, 200);
+  assert.ok((await coach.get('/api/testing/presets')).data.some((p) => p.name === 'toString'));
+  assert.equal((await coach.del('/api/testing/presets/toString')).status, 200);
+
+  // A share link: changing the period doesn't count as another open, and the age shows without the birthday
+  const nate = athlete('Nate');
+  const l = (await coach.post(`/api/report/${nate.code}/links`, { days: 7 })).data;
+  const anon = client();
+  const first = await anon.get(`/api/report/${nate.code}?link=${l.token}`);
+  assert.equal(first.data.athlete.birthday, undefined);
+  assert.equal(first.data.athlete.age, require('../server/lib').ageOn(nate.birthday));
+  assert.equal((await anon.get(`/api/report/${nate.code}?link=${l.token}&from=2026-01-01`)).status, 200);
+  assert.equal(db.get('SELECT views FROM report_links WHERE id=?', l.id).views, 1);
+
+  // Age-group record boards use the athlete's age when the result was set
+  const lib = require('../server/services/testing-library');
+  const box = (await coach.post('/api/tests', { name: 'Age board test', unit: 'reps' })).data;
+  const kid = db.insert('athletes', { code: 'AGEBOARD01', first_name: 'Age', last_name: 'Board', sex: 'M', birthday: '2010-06-01' });
+  db.insert('results', { athlete_id: kid, test_id: box.id, value: 30, recorded_at: '2022-07-01 12:00:00' }); // 12 then, 16 now
+  assert.deepEqual(lib.detail(box.id, { age: 'u12' }).board.map((b) => b.athlete_id), [kid]);
+  assert.equal(lib.detail(box.id, { age: '15-16' }).board.length, 0);
+});

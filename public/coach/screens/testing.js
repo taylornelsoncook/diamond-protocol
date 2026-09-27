@@ -1439,7 +1439,8 @@ const LIB_STYLE = raw(`<style>
 .lib-board .no{font:600 18px/1 var(--font-display);color:var(--steel-muted);text-align:center}
 .lib-board li:nth-child(-n+3) .no{color:var(--green-bright)}
 .lib-board .val{font-variant-numeric:tabular-nums;font-weight:600;text-align:right;white-space:nowrap}
-.lib-board a{color:var(--steel)}
+.lib-board a{color:var(--steel);display:flex;align-items:center;min-height:44px;width:fit-content}
+.lib-board a+.small{display:block;margin-top:-10px}
 .lib-pchips{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
 .lib-pchip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px;background:var(--ground)}
 .lib-pchip.is-hidden{color:var(--steel-muted);border-style:dashed}
@@ -1501,7 +1502,7 @@ async function renderLibrary(ctx) {
   const oc = canRun(ctx);
   const st = {
     tab: ctx.query.tab === 'presets' ? 'presets' : 'tests', q: ctx.query.q || '', cat: ctx.query.cat || '',
-    show: LIB_FILTER[ctx.query.show] ? ctx.query.show : 'all', sort: ['used', 'name'].includes(ctx.query.sort) ? ctx.query.sort : '',
+    show: Object.hasOwn(LIB_FILTER, ctx.query.show || '') ? ctx.query.show : 'all', sort: ['used', 'name'].includes(ctx.query.sort) ? ctx.query.sort : '',
   };
   const cats = () => [...new Set(tests.map((t) => t.category))].sort(catSort);
   const setUrl = () => {
@@ -1654,7 +1655,7 @@ async function renderLibrary(ctx) {
     const t = tests.find((x) => x.id === id) || d;
     const filt = { sex: '', age: '' };
     const boardHtml = (b) => (b.board.length ? html`<ol class="lib-board">${b.board.map((r, i) => html`<li><span class="no" aria-label="Rank ${i + 1}">${i + 1}</span>
-        <span><a href="/app/clients/${r.athlete_id}">${r.first_name} ${r.last_name}</a><span class="small muted"> · ${fmtDate(r.date)}${r.hand_timed && b.unit === 's' ? ' · hand-timed' : ''}</span></span>
+        <span><a href="/app/clients/${r.athlete_id}">${r.first_name} ${r.last_name}</a><span class="small muted">${fmtDate(r.date)}${r.hand_timed && b.unit === 's' ? ' · hand-timed' : ''}</span></span>
         <span class="val">${fmtValue(r.value, b.unit)}</span></li>`)}</ol>`
       : html`<p class="small muted" style="margin:0">No results yet${filt.sex || filt.age ? ' for this group' : ''}.</p>`);
     const u = d.usage;

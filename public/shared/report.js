@@ -78,7 +78,7 @@ function render(p) {
   const tests = p.tests.filter((t) => !GROWTH_TESTS.includes(t.name)).sort((x, y) => (catIdx(x.category) - catIdx(y.category)) || x.name.localeCompare(y.name));
   const cats = [...new Set(tests.map((t) => t.category))];
   const anyHand = p.tests.some((t) => t.hand_timed && t.unit === 's');
-  const years = a.birthday ? age(a.birthday) : null;
+  const years = a.birthday ? age(a.birthday) : a.age ?? null; // a share link sends the age, not the date of birth
   const meta = [a.code, years != null ? `Age ${years}` : '', a.sport, a.position, a.school].filter(Boolean).join(' · ');
   const range = p.first_date ? (p.first_date === p.last_date ? fmtDate(p.first_date) : `${fmtDate(p.first_date)} to ${fmtDate(p.last_date)}`) : '';
   const g = p.growth;

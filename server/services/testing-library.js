@@ -129,7 +129,10 @@ function detail(id, { sex = '', age = '' } = {}) {
   const best = new Map();
   for (const r of rows) {
     if (sex && r.sex !== sex) continue;
-    if (band) { const y = r.birthday ? ageOn(r.birthday) : null; if (y == null || y < band[0] || y > band[1]) continue; }
+    if (band) { // the athlete's age when the result was set, like any age-group record board
+      const y = r.birthday ? ageOn(r.birthday, r.date) : null;
+      if (y == null || y < band[0] || y > band[1]) continue;
+    }
     const cur = best.get(r.athlete_id);
     if (!cur || (t.lower_better ? r.value < cur.value : r.value > cur.value)) best.set(r.athlete_id, r);
   }
@@ -195,6 +198,7 @@ function cleanFields(b, t = {}) {
 
 function create(b) {
   const f = cleanFields({ category: 'Custom', attempts: 1, lower_better: 0, ...b, name: b.name ?? '', unit: b.unit ?? '' });
+  if (f.attempts == null) f.attempts = 1; // a blank attempts box means one attempt
   const id = insert('tests', { name: f.name, category: f.category, unit: f.unit, lower_better: f.lower_better, attempts: f.attempts,
     min_value: f.min_value ?? null, max_value: f.max_value ?? null, timed: f.timed || 0, description: f.description || null, custom: 1 });
   return shape(get(`SELECT ${COLS} FROM tests WHERE id=?`, id));
@@ -213,6 +217,7 @@ function edit(id, b) {
     if ('lower_better' in f && f.lower_better !== t.lower_better) throw bad(`${t.name} already has results, so its scoring can't flip. Add a new test instead.`);
   }
   if ('description' in f && !t.custom && f.description === (PROTOCOLS[t.name] || '')) f.description = null; // back to the built-in text
+  if ('description' in f && t.custom && !f.description) f.description = null; // an empty box is no protocol, as when it was added
   const changes = Object.keys(f).filter((k) => f[k] !== t[k]);
   if ('hidden' in b) { const hv = bool(b.hidden) ? 1 : 0; if (hv !== t.hidden) { f.hidden = hv; changes.push('hidden'); } }
   if (!changes.length) return { test: shape(get(`SELECT ${COLS} FROM tests WHERE id=?`, t.id)), changes, before: t };
@@ -253,6 +258,7 @@ function presetInput(b, current = null) {
   const name = String(b.name ?? current ?? '').trim().replace(/\s+/g, ' ');
   if (!name) throw bad('Name the preset.');
   if (name.length > 40) throw bad('Keep the preset name under 40 characters.');
+  if (name === '__proto__') throw bad('Pick a different name for the preset.');
   const p = presetMap();
   if (Object.keys(p).some((k) => k.toLowerCase() === name.toLowerCase() && k !== current)) throw bad('A preset with that name already exists.');
   const raw = Array.isArray(b.test_ids) ? b.test_ids : [];
@@ -266,7 +272,7 @@ function presetInput(b, current = null) {
 }
 function savePreset(b, current = null) {
   const p = presetMap();
-  if (current != null && !(current in p)) throw notFound('That preset');
+  if (current != null && !Object.hasOwn(p, current)) throw notFound('That preset');
   const { name, names } = presetInput(b, current);
   // Keep the preset's place in the list when it's renamed.
   const next = {};
@@ -277,7 +283,7 @@ function savePreset(b, current = null) {
 }
 function deletePreset(name) {
   const p = presetMap();
-  if (!(name in p)) throw notFound('That preset');
+  if (!Object.hasOwn(p, name)) throw notFound('That preset');
   delete p[name];
   setSetting('presets', p);
 }
@@ -303,11 +309,11 @@ function revokeLink(athleteId, id) {
   return l;
 }
 // The athlete a working link opens, counting the view; null when it's wrong, expired or turned off.
-function openLink(athleteId, token) {
+function openLink(athleteId, token, { count = true } = {}) {
   if (!token || typeof token !== 'string' || token.length > 64) return null;
   const l = get(`SELECT * FROM report_links WHERE token=? AND athlete_id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now'))`, token, athleteId);
   if (!l) return null;
-  run("UPDATE report_links SET views=views+1, last_viewed_at=datetime('now') WHERE id=?", l.id);
+  if (count) run("UPDATE report_links SET views=views+1, last_viewed_at=datetime('now') WHERE id=?", l.id);
   return l;
 }
 const sqlTime = (ms) => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);

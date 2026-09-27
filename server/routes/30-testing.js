@@ -2,7 +2,7 @@
 // results waiting to be linked, the test library and athlete progress (staff and parent).
 'use strict';
 const { all, get, run, insert, update, tx, setting, setSetting } = require('../db');
-const { h, bad, notFound, HttpError, log, sendEmail, businessName, appUrl, today } = require('../lib');
+const { h, bad, notFound, HttpError, log, sendEmail, businessName, appUrl, today, ageOn } = require('../lib');
 const { requireStaff, requireParent, requireApiKey } = require('../auth');
 const core = require('../services/testing-core');
 const sheet = require('../services/testing-sheet');
@@ -540,8 +540,10 @@ function routes(api) {
     }
     if (req.parent && a && a.family_id === req.parent.family_id) return res.json({ view: 'parent', can_share: true, ...familyView() });
     if (req.query.link) {
-      if (a && !a.archived && lib.openLink(a.id, String(req.query.link))) {
+      // Changing the period on the page reloads it with ?from=; only the first open counts as a view.
+      if (a && !a.archived && lib.openLink(a.id, String(req.query.link), { count: !per.from && !per.to })) {
         const out = familyView();
+        out.athlete.age = ageOn(out.athlete.birthday);
         delete out.athlete.birthday; // the age shows; the date of birth stays private
         return res.json({ view: 'link', ...out });
       }

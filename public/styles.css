@@ -156,3 +156,15 @@ a.pulse-tile:hover,a.pulse-tile:focus-visible{background:var(--surface-raised)}
 .tm-bars{display:flex;gap:4px;align-items:flex-end;height:28px}
 .tm-bars span{flex:0 0 10px;background:var(--green-mid);border-radius:2px 2px 0 0;min-height:2px}
 .tm-bars span.low{background:var(--amber)}
+
+/* Test library */
+.lib-toolbar{display:grid;grid-template-columns:2fr 1.3fr 1fr 1fr;gap:12px;align-items:end;margin-bottom:var(--space-4)}
+.lib-toolbar .dp-field{margin:0}
+.lib-grid-metric{grid-template-columns:2fr 1fr 1.4fr}.lib-grid-2{grid-template-columns:1fr 1fr}.lib-grid-name{grid-template-columns:2fr 1.4fr 1fr}.lib-grid-add{grid-template-columns:1fr 1.4fr auto;align-items:end}
+.lib-metric{border:1px solid var(--line-subtle);border-radius:var(--radius-sm);padding:12px;display:flex;flex-direction:column;gap:8px}
+.lib-board{list-style:none;margin:0;padding:0}
+.lib-rank{font:700 20px/1 var(--font-display);color:var(--green-bright);min-width:32px;text-align:center}
+@media (max-width: 760px){
+  .lib-toolbar{grid-template-columns:1fr 1fr}.lib-toolbar>:first-child{grid-column:1/-1}
+  .lib-grid-metric,.lib-grid-2,.lib-grid-name,.lib-grid-add{grid-template-columns:1fr}
+}

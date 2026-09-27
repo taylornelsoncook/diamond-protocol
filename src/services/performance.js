@@ -1,7 +1,7 @@
 import { newId, v, notFound, badRequest, conflict, isDate, sha256, localDate } from '../util.js';
 import { getSetting } from './families.js';
 import { emit } from './events.js';
-import { TESTS, CATEGORIES } from './test-library.js';
+import { TESTS, CATEGORIES, PROTOCOLS, RANGES } from './test-library.js';
 import { convert, normalizeUnit, compatibleUnits } from './units.js';
 import { findByAthleteId } from './athlete-ids.js';
 
@@ -9,15 +9,17 @@ export { CATEGORIES };
 const MAX_BATCH = 1000;
 
 // ---------- Test library ----------
-// Adds any built-in tests that are missing and refreshes their definitions. Coach choices
-// (active/inactive) and custom tests are left alone.
+// Adds any built-in tests that are missing and refreshes their definitions. Coach choices (shown or hidden, and
+// anything a coach edited on a built-in test, listed in `edited`), coach-written protocols and ranges, and custom
+// tests are left alone.
+const keep = (field) => `CASE WHEN instr(edited, '"${field}"') > 0 THEN ${field} ELSE ? END`;
 export function syncLibrary(ctx) {
   const now = new Date().toISOString();
   ctx.db.tx(() => {
     TESTS.forEach((t, i) => {
       const row = ctx.db.get('SELECT id FROM perf_tests WHERE key = ?', t.key);
       const id = row?.id ?? newId('pt');
-      if (row) ctx.db.run('UPDATE perf_tests SET name = ?, category = ?, description = ?, sides = ?, attempts = ?, timed = ?, sports = ?, aliases = ?, sort = ? WHERE id = ? AND builtin = 1',
+      if (row) ctx.db.run(`UPDATE perf_tests SET name = ${keep('name')}, category = ${keep('category')}, description = ${keep('description')}, sides = ?, attempts = ${keep('attempts')}, timed = ${keep('timed')}, sports = ?, aliases = ?, sort = ? WHERE id = ? AND builtin = 1`,
         t.name, t.category, t.desc ?? null, t.sides, t.attempts, t.timed ? 1 : 0, JSON.stringify(t.sports), JSON.stringify(t.aliases), i, id);
       else ctx.db.run('INSERT INTO perf_tests (id, key, name, category, description, sides, attempts, timed, sports, aliases, builtin, active, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)',
         id, t.key, t.name, t.category, t.desc ?? null, t.sides, t.attempts, t.timed ? 1 : 0, JSON.stringify(t.sports), JSON.stringify(t.aliases), i, now);
@@ -30,10 +32,14 @@ export function syncLibrary(ctx) {
   });
 }
 
+// A metric's possible range: the coach's own when set, otherwise the built-in one (null when there is none).
+export const rangeOf = (testKey, m) => (m.min_value != null && m.max_value != null ? [m.min_value, m.max_value] : RANGES[`${testKey}.${m.key}`] ?? null);
 function shapeTest(t, metrics) {
   return { id: t.id, key: t.key, name: t.name, category: t.category, description: t.description, sides: t.sides, attempts: t.attempts, timed: !!t.timed,
     sports: JSON.parse(t.sports), aliases: JSON.parse(t.aliases), builtin: !!t.builtin, active: !!t.active,
-    metrics: metrics.map((m) => ({ key: m.key, name: m.name, unit: m.unit, better: m.better, decimals: m.decimals, aliases: JSON.parse(m.aliases), units: compatibleUnits(m.unit) })) };
+    protocol: t.protocol ?? (t.builtin ? PROTOCOLS[t.key] ?? '' : ''), protocol_custom: t.protocol != null, edited: JSON.parse(t.edited ?? '[]'),
+    metrics: metrics.map((m) => ({ key: m.key, name: m.name, unit: m.unit, better: m.better, decimals: m.decimals, aliases: JSON.parse(m.aliases), units: compatibleUnits(m.unit),
+      range: rangeOf(t.key, m), range_custom: m.min_value != null && m.max_value != null })) };
 }
 export function listTests(ctx, { includeInactive = false } = {}) {
   const metrics = ctx.db.all('SELECT * FROM perf_metrics ORDER BY sort');
@@ -45,33 +51,116 @@ export function getTest(ctx, keyOrId) {
   if (!t) throw notFound(`Test "${keyOrId}"`);
   return shapeTest(t, ctx.db.all('SELECT * FROM perf_metrics WHERE test_id = ? ORDER BY sort', t.id));
 }
+const nameTaken = (ctx, name, exceptId = null) => ctx.db.get('SELECT id FROM perf_tests WHERE name = ? COLLATE NOCASE AND id IS NOT ?', name, exceptId);
+// A written protocol: empty means none (or, on a built-in test, the built-in text).
+function protocolText(val) {
+  if (val == null) return null;
+  if (typeof val !== 'string') throw badRequest('protocol must be text.');
+  return val.trim() ? v.str(val, 'protocol', { max: 2000 }) : null;
+}
+// The possible range for a metric: both ends or neither (neither = the built-in range, or none).
+function rangeInput(m) {
+  const blank = (x) => x === undefined || x === null || x === '';
+  if (blank(m.min_value) && blank(m.max_value)) return [null, null];
+  if (blank(m.min_value) || blank(m.max_value)) throw badRequest('Give both the lowest and the highest possible value, or leave both empty.');
+  const min = Number(m.min_value), max = Number(m.max_value);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) throw badRequest('The possible range has to be numbers.');
+  if (min >= max) throw badRequest('The lowest possible value has to be below the highest.');
+  return [min, max];
+}
 // Your own tests: a sport-specific drill, a different distance, anything.
 export function createTest(ctx, body) {
   const name = v.str(body.name, 'name', { max: 80 });
   const key = (body.key ? v.str(body.key, 'key', { max: 40 }) : name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   if (!key) throw badRequest('Give the test a name.');
   if (ctx.db.get('SELECT id FROM perf_tests WHERE key = ?', key)) throw conflict(`A test with key "${key}" already exists.`);
-  const metrics = Array.isArray(body.metrics) && body.metrics.length ? body.metrics : [{ key: 'value', name: body.metric_name ?? 'Result', unit: body.unit, better: body.better }];
+  if (nameTaken(ctx, name)) throw conflict(`There's already a test called ${name}. Pick a different name.`);
+  const metrics = Array.isArray(body.metrics) && body.metrics.length ? body.metrics : [{ key: 'value', name: body.metric_name ?? 'Result', unit: body.unit, better: body.better, min_value: body.min_value, max_value: body.max_value }];
+  if (metrics.length > 12) throw badRequest('A test can have up to 12 numbers.');
   const cat = v.oneOf(body.category ?? 'sport', 'category', CATEGORIES.map((c) => c[0]));
+  const units = metrics.map((m) => normalizeUnit(v.str(m.unit, 'unit', { max: 20 })));
+  if (body.timed && units[0] !== 's') throw badRequest('Only tests measured in seconds can use the stopwatch.');
   const id = newId('pt');
   ctx.db.tx(() => {
-    ctx.db.run('INSERT INTO perf_tests (id, key, name, category, description, sides, attempts, timed, sports, aliases, builtin, active, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1000, ?)',
+    ctx.db.run('INSERT INTO perf_tests (id, key, name, category, description, sides, attempts, timed, sports, aliases, builtin, active, sort, created_at, protocol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 1000, ?, ?)',
       id, key, name, cat, v.str(body.description, 'description', { max: 1000, optional: true }), v.oneOf(body.sides ?? 'none', 'sides', ['none', 'lr']),
-      v.int(body.attempts ?? 2, 'attempts', { min: 1, max: 10 }), body.timed ? 1 : 0, JSON.stringify(body.sports ?? []), JSON.stringify(body.aliases ?? []), ctx.now());
+      v.int(body.attempts === '' || body.attempts == null ? 2 : body.attempts, 'attempts', { min: 1, max: 10 }), body.timed ? 1 : 0, JSON.stringify(body.sports ?? []), JSON.stringify(body.aliases ?? []), ctx.now(), protocolText(body.protocol));
+    const seen = new Set();
     metrics.forEach((m, j) => {
       const mk = String(m.key ?? m.name ?? 'value').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `m${j}`;
-      ctx.db.run('INSERT INTO perf_metrics (test_id, key, name, unit, better, decimals, aliases, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, mk, v.str(m.name ?? 'Result', 'metric name', { max: 60 }),
-        normalizeUnit(v.str(m.unit, 'unit', { max: 20 })), v.oneOf(m.better ?? 'higher', 'better', ['lower', 'higher', 'none']), v.int(m.decimals ?? 2, 'decimals', { min: 0, max: 4 }), JSON.stringify(m.aliases ?? []), j);
+      if (seen.has(mk)) throw badRequest(`Two numbers on this test are both called "${mk}". Give each a different name.`);
+      seen.add(mk);
+      const [min, max] = rangeInput(m);
+      ctx.db.run('INSERT INTO perf_metrics (test_id, key, name, unit, better, decimals, aliases, sort, min_value, max_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', id, mk, v.str(m.name ?? 'Result', 'metric name', { max: 60 }),
+        units[j], v.oneOf(m.better ?? 'higher', 'better', ['lower', 'higher', 'none']), v.int(m.decimals ?? 2, 'decimals', { min: 0, max: 4 }), JSON.stringify(m.aliases ?? []), j, min, max);
     });
   });
   return getTest(ctx, id);
 }
+// Does this test have results (saved, removed or waiting to be linked)? Its units and scoring are then fixed.
+export function testHasResults(ctx, t) {
+  return !!(ctx.db.get('SELECT 1 FROM perf_results WHERE test_id = ? LIMIT 1', t.id)
+    || ctx.db.get(`SELECT 1 FROM results_queue WHERE status = 'pending' AND json_extract(item, '$.test') = ? LIMIT 1`, t.key));
+}
+// Edit a test. Built-in tests: name, category, attempts, stopwatch, description, protocol and ranges (their numbers,
+// units and scoring stay, since device imports and history rely on them). Your own tests: everything, but units,
+// scoring and sides lock once the test has results. Returns the test with `changes`, the fields that really changed.
 export function updateTest(ctx, keyOrId, body) {
   const t = getTest(ctx, keyOrId);
-  ctx.db.run('UPDATE perf_tests SET name = ?, description = ?, attempts = ?, active = ? WHERE id = ?',
-    body.name !== undefined ? v.str(body.name, 'name', { max: 80 }) : t.name, body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : t.description,
-    body.attempts !== undefined ? v.int(body.attempts, 'attempts', { min: 1, max: 10 }) : t.attempts, body.active !== undefined ? (body.active ? 1 : 0) : (t.active ? 1 : 0), t.id);
-  return getTest(ctx, t.id);
+  const row = ctx.db.get('SELECT * FROM perf_tests WHERE id = ?', t.id);
+  const set = {}, changes = [];
+  const change = (field, value) => { if (value !== row[field]) { set[field] = value; changes.push(field); } };
+  if (body.name !== undefined) {
+    const name = v.str(body.name, 'name', { max: 80 });
+    if (nameTaken(ctx, name, t.id)) throw conflict(`There's already a test called ${name}. Pick a different name.`);
+    change('name', name);
+  }
+  if (body.category !== undefined) change('category', v.oneOf(body.category, 'category', CATEGORIES.map((c) => c[0])));
+  if (body.attempts !== undefined) change('attempts', v.int(body.attempts, 'attempts', { min: 1, max: 10 }));
+  if (body.description !== undefined) change('description', v.str(body.description, 'description', { max: 1000, optional: true }));
+  if (body.active !== undefined) change('active', body.active ? 1 : 0);
+  if (body.protocol !== undefined) {
+    let p = protocolText(body.protocol);
+    if (p != null && t.builtin && p === (PROTOCOLS[t.key] ?? '')) p = null;       // the built-in text again
+    change('protocol', p);
+  }
+  const used = testHasResults(ctx, t);
+  if (body.sides !== undefined) {
+    const sides = v.oneOf(body.sides, 'sides', ['none', 'lr']);
+    if (sides !== row.sides && (t.builtin || used)) throw badRequest(t.builtin ? 'Built-in tests keep their sides. Add your own test if you need a different one.' : `${t.name} already has results, so left and right can't change. Add a new test instead.`);
+    change('sides', sides);
+  }
+  const metricSets = [];
+  if (body.metrics !== undefined) {
+    if (!Array.isArray(body.metrics)) throw badRequest('metrics must be a list.');
+    for (const m of body.metrics) {
+      const cur = ctx.db.get('SELECT * FROM perf_metrics WHERE test_id = ? AND key = ?', t.id, String(m?.key ?? ''));
+      if (!cur) throw badRequest(`${t.name} has no number called "${m?.key}". Its numbers: ${t.metrics.map((x) => x.key).join(', ')}.`);
+      const ms = {};
+      if (m.name !== undefined) ms.name = v.str(m.name, 'metric name', { max: 60 });
+      if (m.unit !== undefined) ms.unit = normalizeUnit(v.str(m.unit, 'unit', { max: 20 }));
+      if (m.better !== undefined) ms.better = v.oneOf(m.better, 'better', ['lower', 'higher', 'none']);
+      if (m.min_value !== undefined || m.max_value !== undefined) [ms.min_value, ms.max_value] = rangeInput({ min_value: m.min_value !== undefined ? m.min_value : cur.min_value, max_value: m.max_value !== undefined ? m.max_value : cur.max_value });
+      for (const k of Object.keys(ms)) if (ms[k] === cur[k]) delete ms[k];
+      if (t.builtin && ('name' in ms || 'unit' in ms || 'better' in ms)) throw badRequest('Built-in tests keep their numbers, units and scoring. Add your own test if you need a different one.');
+      if (used && ('unit' in ms || 'better' in ms)) throw badRequest(`${t.name} already has results in ${cur.unit}, so its unit and scoring can't change. Add a new test instead.`);
+      if (Object.keys(ms).length) { metricSets.push([cur.key, ms]); changes.push(...Object.keys(ms).map((k) => (k.endsWith('_value') ? 'range' : `metric ${k}`))); }
+    }
+  }
+  if (body.timed !== undefined) {
+    const headUnit = metricSets.find(([k]) => k === t.metrics[0].key)?.[1].unit ?? t.metrics[0].unit;
+    if (body.timed && headUnit !== 's') throw badRequest('Only tests measured in seconds can use the stopwatch.');
+    change('timed', body.timed ? 1 : 0);
+  }
+  const uniq = [...new Set(changes)];
+  if (!uniq.length) return { ...t, changes: [] };
+  const edited = [...new Set([...JSON.parse(row.edited ?? '[]'), ...(t.builtin ? Object.keys(set).filter((k) => ['name', 'category', 'attempts', 'description', 'timed'].includes(k)) : [])])];
+  ctx.db.tx(() => {
+    const cols = Object.keys(set);
+    if (cols.length) ctx.db.run(`UPDATE perf_tests SET ${cols.map((c) => `${c} = ?`).join(', ')}, edited = ? WHERE id = ?`, ...cols.map((c) => set[c]), JSON.stringify(edited), t.id);
+    for (const [key, ms] of metricSets) ctx.db.run(`UPDATE perf_metrics SET ${Object.keys(ms).map((c) => `${c} = ?`).join(', ')} WHERE test_id = ? AND key = ?`, ...Object.values(ms), t.id, key);
+  });
+  return { ...getTest(ctx, t.id), changes: uniq };
 }
 
 // ---------- Athletes: clients and team roster players ----------
@@ -238,12 +327,14 @@ export function listResults(ctx, q = {}) {
 }
 
 // Everything an athlete has been tested on: headline metric per test with best, first, latest and history.
-export function athleteProfile(ctx, who, { parentView = false } = {}) {
+// from / to (YYYY-MM-DD, checked by the caller) limit it to a period.
+export function athleteProfile(ctx, who, { parentView = false, from = null, to = null } = {}) {
   const col = who.client_id ? 'client_id' : 'roster_id', id = who.client_id ?? who.roster_id;
   if (!resolveAthlete(ctx, who)) throw notFound('Athlete');
   const rows = ctx.db.all(`SELECT r.*, t.key AS test_key, t.name AS test_name, t.category, m.name AS metric_name, m.unit, m.better, m.decimals, m.sort AS msort
     FROM perf_results r JOIN perf_tests t ON t.id = r.test_id JOIN perf_metrics m ON m.test_id = r.test_id AND m.key = r.metric
-    WHERE r.${col} = ? AND r.voided = 0 ${parentView ? parentFilter(ctx) : ''} ORDER BY r.recorded_at`, id);
+    WHERE r.${col} = ? AND r.voided = 0 ${parentView ? parentFilter(ctx) : ''} ${from ? 'AND substr(r.recorded_at, 1, 10) >= ?' : ''} ${to ? 'AND substr(r.recorded_at, 1, 10) <= ?' : ''}
+    ORDER BY r.recorded_at`, id, ...(from ? [from] : []), ...(to ? [to] : []));
   const groups = new Map();
   for (const r of rows) {
     const k = `${r.test_key}|${r.metric}|${r.side ?? ''}`;

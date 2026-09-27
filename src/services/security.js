@@ -15,7 +15,7 @@ const OWNER_ONLY = [
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
@@ -31,6 +31,8 @@ const FRONT_DESK = [
   ['GET', /^\/v1\/inventory$/], ['POST', /^\/v1\/products\/:id\/stock$/],   // receive deliveries and count the shelf
   ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/]   // inquiries at the counter and on the phone
 ];
+// Front desk may look at clients, but sharing a progress report outside the business is for owners and coaches.
+const FRONT_DESK_DENY = [/^\/v1\/clients\/:id\/(report-links|report\/email)(\/|$)/];
 const COACH_DENY = [['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
@@ -39,7 +41,7 @@ export function can(role, method, path) {
   if (method === 'GET' && /^\/v1\/plans$/.test(path)) return true;     // everyone needs plan names on client pages
   if (OWNER_ONLY.some((re) => re.test(path))) return false;
   if (role === 'coach') return !COACH_DENY.some(([m, re]) => m === method && re.test(path));
-  if (role === 'front_desk') return FRONT_DESK.some(([m, re]) => m === method && re.test(path));
+  if (role === 'front_desk') return !FRONT_DESK_DENY.some((re) => re.test(path)) && FRONT_DESK.some(([m, re]) => m === method && re.test(path));
   return false;
 }
 // Coaches and front desk never see money. They take payments at the counter, so what the counter sells from (products,

@@ -2091,16 +2091,6 @@ function fmtResult(v, unit, decimals = 2, { delta = false } = {}) {
   const n = Number(v).toFixed(decimals ?? 2);
   return `${n}${UNIT_LABEL[unit] === '' ? '' : ` ${UNIT_LABEL[unit] ?? unit}`}`;
 }
-const PRESETS = [
-  ['Combine', ['height', 'weight', 'dash_40yd', 'pro_agility', 'three_cone', 'vertical_standing', 'broad_jump']],
-  ['Force plate', ['cmj', 'squat_jump', 'drop_jump', 'imtp']],
-  ['Baseball showcase', ['height', 'weight', 'dash_60yd', 'dash_30yd', 'pitch_velocity', 'exit_velocity', 'infield_velocity', 'outfield_velocity', 'pop_time']],
-  ['Basketball', ['height', 'wingspan', 'standing_reach', 'vertical_standing', 'vertical_max', 'lane_agility', 'nba_shuttle', 'three_quarter_court']],
-  ['Hockey', ['grip', 'broad_jump', 'cmj', 'pro_agility', 'bench_reps_load', 'pull_ups', 'y_balance', 'wingate']],
-  ['Soccer', ['sprint_10m', 'sprint_30m', 'cmj', 'five_oh_five', 'ift_30_15', 'yoyo_ir1']],
-  ['Youth', ['height', 'seated_height', 'weight', 'sprint_5m', 'sprint_10m', 'vertical_standing', 'broad_jump', 'five_oh_five', 'plank', 'beep_test']]
-];
-
 async function viewTesting(main) {
   const desk = state.user?.role === 'front_desk';          // front desk can't open devices or the results queue
   const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations'), desk ? { n: 0 } : get('/v1/queue')]);
@@ -2116,15 +2106,27 @@ async function viewTesting(main) {
 }
 
 async function viewNewTesting(main) {
-  const [lib, clientsList, contracts] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts')]);
+  const [lib, clientsList, contracts, presetList] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts'), get('/v1/test-presets')]);
   const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: bizDate() });
   const team = select([['', 'Individual athletes'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
   const picked = new Set();
   const testBoxes = new Map();
+  const order = [];          // running order: a preset's order first, then tests ticked by hand in the order they were ticked
   const byCat = lib.categories.map((cat) => [cat, lib.data.filter((t) => t.category === cat.key)]).filter(([, ts]) => ts.length);
   const testPicker = h('div', { class: 'stack' }, byCat.map(([cat, ts]) => h('details', null, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:36px' }, cat.name),
-    h('div', { class: 'row wrap', style: 'gap:4px 16px;margin:8px 0' }, ts.map((t) => { const cb = h('input', { type: 'checkbox', value: t.key }); testBoxes.set(t.key, cb); return h('label', { class: 'row small', style: 'gap:6px;min-height:32px' }, cb, t.name); })))));
-  const presets = h('div', { class: 'row wrap' }, PRESETS.map(([label, keys]) => btn(label, () => { keys.forEach((k) => { const cb = testBoxes.get(k); if (cb) { cb.checked = true; cb.closest('details').open = true; } }); }, 'secondary')));
+    h('div', { class: 'row wrap', style: 'gap:4px 16px;margin:8px 0' }, ts.map((t) => {
+      const cb = h('input', { type: 'checkbox', value: t.key, onChange: () => { const i = order.indexOf(t.key); if (cb.checked && i < 0) order.push(t.key); if (!cb.checked && i >= 0) order.splice(i, 1); } });
+      testBoxes.set(t.key, cb);
+      return h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, cb, t.name);
+    })))));
+  const usePreset = (p) => {
+    for (const t of p.tests) { const cb = testBoxes.get(t.key); if (cb) { cb.checked = true; cb.closest('details').open = true; if (!order.includes(t.key)) order.push(t.key); } }
+    if (!name.value.trim() || name.value === 'Testing day') name.value = p.name;
+  };
+  const usable = presetList.data.filter((p) => p.tests.length);
+  const presets = usable.length ? h('div', { class: 'row wrap' }, usable.map((p) => btn(p.name, () => usePreset(p), 'secondary', { title: p.tests.map((t) => t.name).join(', ') })))
+    : h('p', { class: 'small muted' }, 'No presets yet. ', h('a', { href: '#/testing/library?tab=presets' }, 'Make one in the Test library'), ' to start faster next time.');
+  const start = usable.find((p) => p.id === hashQuery().get('preset'));
   const athleteList = h('div', { class: 'row wrap', style: 'gap:4px 16px' }, clientsList.data.filter((c) => c.status !== 'canceled').map((c) => {
     const cb = h('input', { type: 'checkbox', onChange: (e) => (e.target.checked ? picked.add(c.id) : picked.delete(c.id)) });
     return h('label', { class: 'row small', style: 'gap:6px;min-height:32px' }, cb, c.name);
@@ -2133,14 +2135,16 @@ async function viewNewTesting(main) {
   team.addEventListener('change', () => { athleteBox.style.display = team.value ? 'none' : ''; });
   fill(main, header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or pulled from devices.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Cancel')),
     h('form', { class: 'dp-panel stack', style: 'max-width:900px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const tests = [...testBoxes.entries()].filter(([, cb]) => cb.checked).map(([k]) => k);
+      const rank = (k) => (order.includes(k) ? order.indexOf(k) : order.length);
+      const tests = [...testBoxes.entries()].filter(([, cb]) => cb.checked).map(([k]) => k).sort((x, y) => rank(x) - rank(y));
       if (!tests.length) throw new Error('Choose at least one test.');
       const d = await post('/v1/testing-sessions', { name: name.value, date: date.value, tests, contract_id: team.value || undefined, athletes: team.value ? undefined : [...picked].map((client_id) => ({ client_id })) });
       location.hash = `#/testing/${d.id}`;
     }); } },
       h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 2fr' }, field('Name', name), field('Date', date), field('Team', team)),
-      athleteBox, h('div', { class: 'dp-label' }, 'Tests'), h('div', { class: 'small muted' }, 'Start from a preset, then adjust.'), presets, testPicker,
+      athleteBox, h('div', { class: 'dp-label' }, 'Tests'), h('div', { class: 'small muted' }, 'Start from a preset, then adjust. Tests run in the preset\'s order, then in the order you tick them.'), presets, testPicker,
       h('div', null, btn('Start testing day', null, 'primary', { type: 'submit' }))));
+  if (start) usePreset(start);        // "Plan a day" from a preset in the Test library
 }
 
 // Entry screen: one test at a time, every athlete's attempts, and a stopwatch for hand timing.
@@ -2256,18 +2260,229 @@ function notesPanel(id, notes) {
         !x.note.approved ? btn('Approve', (e) => busy(e.currentTarget, async () => { await patch(`/v1/progress-notes/${x.note.id}`, { approved: true }); redraw(); }), 'secondary') : null) : null)));
 }
 
+// ---------- Test library: search and filter every test, one test's details and record board, and presets ----------
+const canEditLibrary = () => state.user.role !== 'front_desk';
+const metricText = (m) => `${m.name} (${UNIT_LABEL[m.unit] || m.unit || 'score'}${m.better === 'none' ? ', a measurement' : m.better === 'lower' ? ', lower is better' : ', higher is better'})`;
+const usageText = (u) => (u.results ? `${u.results} ${u.results === 1 ? 'result' : 'results'} · ${u.athletes} ${u.athletes === 1 ? 'athlete' : 'athletes'} · last used ${ymd(u.last_used)}` : 'Not used yet');
+const libTabs = (tab) => h('div', { class: 'row', role: 'tablist', 'aria-label': 'Test library', style: 'gap:8px' },
+  [['tests', 'Tests', '#/testing/library'], ['presets', 'Presets', '#/testing/library?tab=presets']].map(([k, label, href]) =>
+    h('a', { class: `dp-btn dp-btn--${tab === k ? 'secondary' : 'ghost'}`, href, role: 'tab', 'aria-selected': tab === k ? 'true' : 'false', 'aria-current': tab === k ? 'page' : null, style: 'min-height:44px' }, label)));
+
 async function viewLibrary(main) {
-  const lib = await get('/v1/tests?include_inactive=true');
-  const n = input(), u = input({ placeholder: 's, in, lb, mph…' }), better = select([['lower', 'Lower is better'], ['higher', 'Higher is better']]), cat = select(lib.categories.map((c) => [c.key, c.name]));
-  fill(main, header('Test library', `${lib.data.filter((t) => t.active).length} tests ready. Hide the ones you don't use, or add your own.`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    ...lib.categories.map((c) => { const ts = lib.data.filter((t) => t.category === c.key); return ts.length ? panel(c.name, {}, ts.map((t) => h('div', { class: 'list-item', style: t.active ? '' : 'opacity:.55' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.name, t.builtin ? null : h('span', { class: 'small muted' }, ' (yours)')),
-        h('span', { class: 'small muted' }, t.metrics.map((m) => `${m.name} (${UNIT_LABEL[m.unit] || m.unit || 'score'}${m.better === 'none' ? '' : m.better === 'lower' ? ', lower better' : ', higher better'})`).join(' · ')),
-        t.description ? h('span', { class: 'small muted' }, t.description) : null),
-      btn(t.active ? 'Hide' : 'Show', (e) => busy(e.currentTarget, async () => { await patch(`/v1/tests/${t.key}`, { active: !t.active }); render(); }), 'ghost')))) : null; }),
-    panel('Add your own test', {}, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const t = await post('/v1/tests', { name: n.value, unit: u.value, better: better.value, category: cat.value }); toast(`${t.name} added.`); render(); }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr 1fr' }, field('Name', n), field('Unit', u), field('Scoring', better), field('Category', cat)),
-      h('div', null, btn('Add test', null, 'primary', { type: 'submit' })))));
+  const q = hashQuery();
+  if (q.get('test')) return viewTestDetails(main, q.get('test'));
+  if (q.get('tab') === 'presets') return viewPresets(main);
+  const lib = await get('/v1/tests?usage=true');
+  const cats = new Map(lib.categories.map((c) => [c.key, c.name]));
+  const edit = canEditLibrary();
+  const search = input({ type: 'search', placeholder: 'Name, unit or protocol', value: q.get('q') ?? '', 'aria-label': 'Find a test' });
+  const cat = select([['', 'All categories'], ...lib.categories.map((c) => [c.key, c.name])], { value: cats.has(q.get('cat')) ? q.get('cat') : '', 'aria-label': 'Category' });
+  const SHOW = [['all', 'All tests'], ['active', 'In menus'], ['hidden', 'Hidden'], ['custom', 'Your own']];
+  const show = select(SHOW, { value: SHOW.some(([k]) => k === q.get('show')) ? q.get('show') : 'all', 'aria-label': 'Show' });
+  const SORT = [['category', 'By category'], ['used', 'Most used'], ['name', 'A to Z']];
+  const sort = select(SORT, { value: SORT.some(([k]) => k === q.get('sort')) ? q.get('sort') : 'category', 'aria-label': 'Sort' });
+  const box = h('div', { class: 'stack' });
+  const words = (t) => [t.name, t.key, t.description, t.protocol, cats.get(t.category), ...t.metrics.flatMap((m) => [m.name, m.unit, UNIT_LABEL[m.unit]])].filter(Boolean).join(' ').toLowerCase();
+  // Hide or show in place: the row updates, keyboard focus stays on its button.
+  const toggle = async (t, b, row) => {
+    await patch(`/v1/tests/${encodeURIComponent(t.key)}`, { active: !t.active });
+    t.active = !t.active;
+    b.textContent = t.active ? 'Hide' : 'Show';
+    b.setAttribute('aria-label', `${t.active ? 'Hide' : 'Show'} ${t.name}`);
+    row.style.opacity = t.active ? '' : '.6';
+    row.querySelector('.lib-hidden').hidden = t.active;
+    toast(t.active ? `${t.name} is back in your menus.` : `${t.name} is hidden from your menus. Its results stay.`);
+    if (show.value === 'active' || show.value === 'hidden') renderList();
+  };
+  const row = (t) => {
+    const hideBtn = edit ? btn(t.active ? 'Hide' : 'Show', null, 'ghost', { 'aria-label': `${t.active ? 'Hide' : 'Show'} ${t.name}`, style: 'min-height:44px' }) : null;
+    const el = h('div', { class: 'list-item', style: `align-items:flex-start;${t.active ? '' : 'opacity:.6'}` },
+      h('div', { class: 'grow stack-tight', style: 'min-width:0' },
+        h('div', { class: 'row wrap', style: 'gap:8px' }, h('a', { class: 'strong', href: `#/testing/library?test=${encodeURIComponent(t.key)}`, style: 'min-height:44px;display:inline-flex;align-items:center' }, t.name),
+          t.builtin ? null : h('span', { class: 'dp-badge dp-badge--neutral' }, 'Yours'), h('span', { class: 'dp-badge dp-badge--muted lib-hidden', hidden: t.active }, 'Hidden')),
+        h('span', { class: 'small muted' }, `${cats.get(t.category) ?? t.category} · ${t.metrics.map(metricText).join(' · ')}`),
+        h('span', { class: 'small muted' }, usageText(t.usage), t.presets.length ? ` · In ${t.presets.map((p) => p.name).join(', ')}` : '')),
+      hideBtn);
+    if (hideBtn) hideBtn.addEventListener('click', () => busy(hideBtn, () => toggle(t, hideBtn, el)).then(() => { if (hideBtn.isConnected) hideBtn.focus(); }));
+    return el;
+  };
+  function renderList() {
+    const s = search.value.trim().toLowerCase();
+    const next = new URLSearchParams({ ...(s ? { q: search.value.trim() } : {}), ...(cat.value ? { cat: cat.value } : {}), ...(show.value !== 'all' ? { show: show.value } : {}), ...(sort.value !== 'category' ? { sort: sort.value } : {}) }).toString();
+    history.replaceState(null, '', `#/testing/library${next ? `?${next}` : ''}`);
+    const list = lib.data.filter((t) => (!s || s.split(/\s+/).every((w) => words(t).includes(w))) && (!cat.value || t.category === cat.value)
+      && (show.value === 'all' || (show.value === 'active' && t.active) || (show.value === 'hidden' && !t.active) || (show.value === 'custom' && !t.builtin)));
+    const byName = (a, b) => a.name.localeCompare(b.name);
+    if (!list.length) {
+      return fill(box, h('div', { class: 'empty stack', style: 'align-items:center' }, h('span', null, s ? `No tests match "${search.value.trim()}".` : 'No tests here.'),
+        h('div', { class: 'row wrap', style: 'justify-content:center' },
+          s || cat.value || show.value !== 'all' ? btn('Clear the search', () => { search.value = ''; cat.value = ''; show.value = 'all'; renderList(); search.focus(); }, 'secondary') : null,
+          edit && s ? btn(`Add "${search.value.trim()}" as a new test`, () => testDialog(null, lib.categories, search.value.trim()), 'ghost') : null)));
+    }
+    if (sort.value === 'category') {
+      return fill(box, lib.categories.map((c) => { const ts = list.filter((t) => t.category === c.key); return ts.length ? panel(c.name, { subtitle: `${ts.length} ${ts.length === 1 ? 'test' : 'tests'}` }, ts.map(row)) : null; }));
+    }
+    const sorted = [...list].sort(sort.value === 'used' ? (a, b) => b.usage.results - a.usage.results || byName(a, b) : byName);
+    fill(box, panel(null, {}, sorted.map(row)));
+  }
+  search.addEventListener('input', renderList);
+  for (const el of [cat, show, sort]) el.addEventListener('change', renderList);
+  const ready = lib.data.filter((t) => t.active).length;
+  fill(main, header('Test library', `${ready} tests in your menus, ${lib.data.length - ready} hidden. Every built-in test says how to run it.`,
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing'), edit ? btn('Add test', () => testDialog(null, lib.categories), 'primary') : null)),
+    libTabs('tests'),
+    h('div', { class: 'lib-toolbar' }, field('Find a test', search), field('Category', cat), field('Show', show), field('Sort', sort)),
+    box);
+  renderList();
+}
+
+// Add or edit a test in a dialog. Built-in tests keep their numbers, units and scoring; your own can change them until they have results.
+function testDialog(t, categories, prefillName = '') {
+  const d = document.getElementById('dialog');
+  const isNew = !t, locked = t && (t.builtin || t.has_results);
+  const name = input({ value: t?.name ?? prefillName, required: true, maxlength: '80' });
+  const cat = select(categories.map((c) => [c.key, c.name]), { value: t?.category ?? 'sport' });
+  const attempts = input({ type: 'number', min: '1', max: '10', step: '1', value: String(t?.attempts ?? 2), inputmode: 'numeric' });
+  const protocol = textarea(t ? t.protocol : '', { rows: '5', maxlength: '2000', 'aria-describedby': 'protocol-hint' });
+  const description = textarea(t?.description ?? '', { rows: '2', maxlength: '1000' });
+  const sides = h('input', { type: 'checkbox', checked: t ? t.sides === 'lr' : false, disabled: !!locked });
+  const timed = h('input', { type: 'checkbox', checked: !!t?.timed });
+  const metrics = (t?.metrics ?? [{ key: 'value', name: 'Result', unit: '', better: 'higher', range: null, range_custom: false }]).map((m) => ({
+    m, name: input({ value: m.name, disabled: !!locked, maxlength: '60' }), unit: input({ value: m.unit, disabled: !!locked, placeholder: 's, in, lb, mph…', maxlength: '20' }),
+    better: select([['lower', 'Lower is better'], ['higher', 'Higher is better'], ['none', 'A measurement']], { value: m.better, disabled: !!locked }),
+    min: input({ type: 'number', step: 'any', value: m.range ? String(m.range[0]) : '', 'aria-label': `${m.name}: lowest possible` }),
+    max: input({ type: 'number', step: 'any', value: m.range ? String(m.range[1]) : '', 'aria-label': `${m.name}: highest possible` })
+  }));
+  for (const x of metrics) { x.min0 = x.min.value; x.max0 = x.max.value; }
+  const metricRows = metrics.map((x) => h('div', { class: 'lib-metric' },
+    h('div', { class: 'form-grid lib-grid-metric' }, field(metrics.length > 1 ? `Number ${metrics.indexOf(x) + 1}` : 'What you record', x.name), field('Unit', x.unit), field('Scoring', x.better)),
+    h('div', { class: 'form-grid lib-grid-2' }, field('Lowest possible', x.min), field('Highest possible', x.max))));
+  const save = (e) => { e.preventDefault(); busy(e.submitter, async () => {
+    // The range is sent only when it was changed, so saving doesn't turn the built-in range into your own.
+    const ms = metrics.map((x) => ({ key: x.m.key, ...(locked ? {} : { name: x.name.value, unit: x.unit.value, better: x.better.value }),
+      ...(x.min.value !== x.min0 || x.max.value !== x.max0 ? { min_value: x.min.value, max_value: x.max.value } : {}) }));
+    if (isNew) {
+      const out = await post('/v1/tests', { name: name.value, category: cat.value, attempts: attempts.value, protocol: protocol.value, description: description.value, sides: sides.checked ? 'lr' : 'none', timed: timed.checked, metrics: ms.map(({ key, ...m }) => ({ ...m, key: 'value' })) });
+      d.close(); toast(`${out.name} added.`); location.hash = `#/testing/library?test=${encodeURIComponent(out.key)}`; return;
+    }
+    const out = await patch(`/v1/tests/${encodeURIComponent(t.key)}`, { name: name.value, category: cat.value, attempts: attempts.value, protocol: protocol.value, description: description.value, ...(locked ? {} : { sides: sides.checked ? 'lr' : 'none' }), timed: timed.checked, metrics: ms });
+    d.close(); toast(out.changes.length ? 'Saved.' : 'Nothing changed.'); render();
+  }); };
+  fill(d, h('form', { class: 'stack', onSubmit: save, style: 'max-width:640px' },
+    h('h2', { class: 'dp-panel-title' }, isNew ? 'Add your own test' : `Edit ${t.name}`),
+    t?.builtin ? h('p', { class: 'small muted', style: 'margin:0' }, 'Built-in tests keep their numbers, units and scoring, because device imports and past results rely on them. Add your own test if you need a different one.')
+      : t?.has_results ? h('p', { class: 'small muted', style: 'margin:0' }, 'This test has results, so its numbers, units, scoring and sides are fixed. Add a new test for a different unit.') : null,
+    h('div', { class: 'form-grid lib-grid-name' }, field('Name', name), field('Category', cat), field('Attempts', attempts)),
+    metricRows,
+    h('div', { class: 'row wrap', style: 'gap:8px 20px' }, h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, sides, 'Test left and right'), h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, timed, 'Can be hand-timed with the stopwatch (seconds only)')),
+    field('How to run it', protocol, t?.builtin ? 'Leave it as it is, or write your own. Empty the box to go back to the built-in text.' : 'So every coach runs it the same way and retests compare.'),
+    field('What it measures (optional)', description),
+    h('p', { class: 'dp-hint', id: 'protocol-hint', style: 'margin:0' }, 'The possible range catches numbers typed into the wrong column on uploads. Leave both empty to use the built-in range.'),
+    h('div', { class: 'row wrap' }, btn(isNew ? 'Add test' : 'Save', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  name.focus();
+}
+
+async function viewTestDetails(main, key) {
+  const q = hashQuery();
+  const params = new URLSearchParams(Object.fromEntries(['metric', 'side', 'sex', 'age'].map((k) => [k, q.get(k) ?? '']).filter(([, val]) => val))).toString();
+  const [t, lib] = await Promise.all([get(`/v1/tests/${encodeURIComponent(key)}/details${params ? `?${params}` : ''}`), get('/v1/tests')]);
+  const edit = canEditLibrary();
+  const rec = t.records;
+  const go = (changes) => { const next = new URLSearchParams({ test: key, ...Object.fromEntries(['metric', 'side', 'sex', 'age'].map((k) => [k, q.get(k) ?? ''])), ...changes }); for (const [k, val] of [...next]) if (!val) next.delete(k); location.hash = `#/testing/library?${next}`; };
+  const scored = t.metrics.filter((m) => m.better !== 'none');
+  const filters = h('div', { class: 'lib-toolbar' },
+    scored.length > 1 ? field('Number', select(scored.map((m) => [m.key, m.name]), { value: rec.metric, onChange: (e) => go({ metric: e.target.value }) })) : null,
+    t.sides === 'lr' ? field('Side', select([['', 'Either side'], ['L', 'Left'], ['R', 'Right']], { value: q.get('side') ?? '', onChange: (e) => go({ side: e.target.value }) })) : null,
+    field('Sex', select([['', 'Everyone'], ['F', 'Girls and women'], ['M', 'Boys and men']], { value: q.get('sex') ?? '', onChange: (e) => go({ sex: e.target.value }) })),
+    field('Age when set', select([['', 'All ages'], ...t.age_groups.map((a) => [a.key, a.label])], { value: q.get('age') ?? '', onChange: (e) => go({ age: e.target.value }) })));
+  const board = rec.board.length ? h('ol', { class: 'lib-board' }, rec.board.map((r) => h('li', { class: 'list-item' },
+    h('span', { class: 'lib-rank', 'aria-hidden': 'true' }, String(r.rank)),
+    h('div', { class: 'grow stack-tight' },
+      r.client_id ? h('a', { class: 'strong', href: `#/clients/${r.client_id}`, style: 'min-height:44px;display:inline-flex;align-items:center' }, r.name) : h('span', { class: 'strong', style: 'min-height:44px;display:inline-flex;align-items:center' }, r.name),
+      h('span', { class: 'small muted' }, [r.athlete_id, r.side ? (r.side === 'L' ? 'Left' : 'Right') : null].filter(Boolean).join(' · ')),
+      h('span', { class: 'small muted' }, ymd(r.date))),
+    h('span', { class: 'strong', style: 'text-align:right' }, fmtResult(r.value, rec.unit, rec.decimals), r.hand_timed ? h('div', { class: 'small muted' }, 'hand-timed') : null))))
+    : h('div', { class: 'empty' }, rec.note ?? (params ? 'No results match these filters.' : 'No results yet. The best result for each athlete shows here.'));
+  const remove = () => { if (confirm(`Delete ${t.name}? This can't be undone.`)) busy(null, async () => { await api('DELETE', `/v1/tests/${encodeURIComponent(t.key)}`); toast(`${t.name} deleted.`); location.hash = '#/testing/library'; }); };
+  fill(main, header(t.name, `${lib.categories.find((c) => c.key === t.category)?.name ?? t.category} · ${t.builtin ? 'Built-in test' : 'Your own test'}${t.active ? '' : ' · Hidden from your menus'}`,
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'All tests'),
+      edit ? btn('Edit test', () => testDialog(t, lib.categories), 'primary') : null)),
+    panel('How to run it', { subtitle: t.protocol_custom ? 'Written by your team.' : t.builtin ? 'The standard protocol. Edit the test to write your own.' : null },
+      t.protocol ? h('p', { style: 'margin:0;white-space:pre-wrap' }, t.protocol) : h('p', { class: 'muted', style: 'margin:0' }, edit ? 'No protocol yet. Edit the test to write how to run it.' : 'No protocol yet.'),
+      t.description ? h('p', { class: 'small muted' }, t.description) : null),
+    panel('Details', {},
+      h('div', { class: 'stack-tight small' },
+        t.metrics.map((m) => h('div', null, h('span', { class: 'strong' }, metricText(m)), m.range ? h('span', { class: 'muted' }, ` · possible ${m.range[0]} to ${m.range[1]}${m.range_custom ? ' (your range)' : ''}`) : null)),
+        h('div', null, `${t.attempts} ${t.attempts === 1 ? 'attempt' : 'attempts'}${t.sides === 'lr' ? ' per side' : ''}${t.timed ? ' · can be hand-timed' : ''}`),
+        h('div', null, usageText(t.usage), t.usage.days ? ` · ${t.usage.days} testing ${t.usage.days === 1 ? 'day' : 'days'}` : ''),
+        h('div', null, t.presets.length ? ['In presets: ', t.presets.map((p, i) => [i ? ', ' : '', h('a', { href: '#/testing/library?tab=presets' }, p.name)])] : 'Not in any preset.'))),
+    panel('Record board', { subtitle: rec.better === 'none' ? null : `Each athlete's best ${rec.metric_name.toLowerCase()}, top 10. ${rec.better === 'lower' ? 'Lower' : 'Higher'} is better.` }, filters, board),
+    edit ? panel(null, {}, h('div', { class: 'row wrap' },
+      btn(t.active ? 'Hide from menus' : 'Show in menus', (e) => busy(e.currentTarget, async () => { await patch(`/v1/tests/${encodeURIComponent(t.key)}`, { active: !t.active }); toast(t.active ? `${t.name} is hidden. Its results stay.` : `${t.name} is back in your menus.`); render(); }), 'secondary'),
+      t.deletable ? btn('Delete test', remove, 'ghost') : h('span', { class: 'small muted' }, t.not_deletable_because))) : null);
+}
+
+// Presets: named sets of tests in running order, to start a testing day in one tap.
+async function viewPresets(main) {
+  const [list, lib] = await Promise.all([get('/v1/test-presets'), get('/v1/tests')]);
+  const edit = canEditLibrary(), plan = state.user.role !== 'front_desk';
+  const redraw = () => render();
+  fill(main, header('Test library', 'Presets are the tests you run together, in order. Start a testing day from one in a tap.',
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing'), edit ? btn('New preset', () => presetDialog(null, lib, redraw), 'primary') : null)),
+    libTabs('presets'),
+    panel(null, {}, list.data.length ? list.data.map((p) => h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, p.name),
+        h('span', { class: 'small muted' }, p.tests.length ? `${p.tests.length} ${p.tests.length === 1 ? 'test' : 'tests'}: ${p.tests.map((t) => t.name).join(', ')}` : 'No tests. Edit it to add some.'),
+        p.hidden ? h('span', { class: 'small', style: 'color:var(--amber)' }, `${p.hidden} of these ${p.hidden === 1 ? 'is' : 'are'} hidden from your menus.`) : null),
+      h('div', { class: 'row wrap' },
+        plan && p.tests.length ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/new?preset=${encodeURIComponent(p.id)}`, style: 'min-height:44px' }, 'Plan a day') : null,
+        edit ? btn('Edit', () => presetDialog(p, lib, redraw), 'ghost', { 'aria-label': `Edit ${p.name}`, style: 'min-height:44px' }) : null,
+        edit ? btn('Copy', (e) => busy(e.currentTarget, async () => { const c = await post(`/v1/test-presets/${p.id}/copy`); toast(`Copied as ${c.name}.`); redraw(); }), 'ghost', { 'aria-label': `Copy ${p.name}`, style: 'min-height:44px' }) : null,
+        edit ? btn('Delete', (e) => { if (confirm(`Delete the ${p.name} preset? Testing days made from it keep their tests.`)) busy(e.currentTarget, async () => { await del(`/v1/test-presets/${p.id}`); toast(`${p.name} deleted.`); redraw(); }); }, 'ghost', { 'aria-label': `Delete ${p.name}`, style: 'min-height:44px' }) : null)))
+      : h('div', { class: 'empty' }, edit ? 'No presets yet. Add one for the tests you run together, like a combine or a preseason battery.' : 'No presets yet.')));
+}
+
+function presetDialog(p, lib, done) {
+  const d = document.getElementById('dialog');
+  const name = input({ value: p?.name ?? '', required: true, maxlength: '40' });
+  const chosen = (p?.tests ?? []).map((t) => t.key);
+  const byKey = new Map(lib.data.map((t) => [t.key, t]));
+  for (const t of p?.tests ?? []) if (!byKey.has(t.key)) byKey.set(t.key, t);          // a hidden test already in the preset
+  const listBox = h('ol', { class: 'stack-tight', style: 'padding:0;margin:0;list-style:none' });
+  const find = input({ type: 'search', placeholder: 'Find a test to add', 'aria-label': 'Find a test to add' });
+  const pick = select([], { 'aria-label': 'Test to add' });
+  const fillPick = () => {
+    const s = find.value.trim().toLowerCase();
+    const opts = lib.data.filter((t) => !chosen.includes(t.key) && (!s || t.name.toLowerCase().includes(s)));
+    fill(pick, opts.length ? opts.map((t) => h('option', { value: t.key }, t.name)) : h('option', { value: '' }, s ? 'No tests match' : 'Every test is in the preset'));
+  };
+  const draw = () => {
+    fill(listBox, chosen.length ? chosen.map((k, i) => h('li', { class: 'list-item', style: 'padding:6px 0' },
+      h('span', { class: 'small muted', style: 'min-width:24px' }, `${i + 1}.`), h('span', { class: 'grow' }, byKey.get(k)?.name ?? k),
+      btn('↑', () => { [chosen[i - 1], chosen[i]] = [chosen[i], chosen[i - 1]]; draw(); listBox.querySelectorAll('li')[i - 1]?.querySelector('button')?.focus(); }, 'ghost', { 'aria-label': `Move ${byKey.get(k)?.name} up`, disabled: i === 0, style: 'min-width:44px;min-height:44px' }),
+      btn('↓', () => { [chosen[i + 1], chosen[i]] = [chosen[i], chosen[i + 1]]; draw(); listBox.querySelectorAll('li')[i + 1]?.querySelectorAll('button')[1]?.focus(); }, 'ghost', { 'aria-label': `Move ${byKey.get(k)?.name} down`, disabled: i === chosen.length - 1, style: 'min-width:44px;min-height:44px' }),
+      btn('Remove', () => { chosen.splice(i, 1); draw(); fillPick(); find.focus(); }, 'ghost', { 'aria-label': `Remove ${byKey.get(k)?.name}`, style: 'min-height:44px' })))
+      : h('li', { class: 'small muted' }, 'No tests yet. Add them below in the order you run them.'));
+  };
+  const add = () => { if (!pick.value) return; chosen.push(pick.value); draw(); fillPick(); find.focus(); };
+  find.addEventListener('input', fillPick);
+  find.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  draw(); fillPick();
+  const save = (e) => { e.preventDefault(); busy(e.submitter, async () => {
+    const out = p ? await patch(`/v1/test-presets/${p.id}`, { name: name.value, tests: chosen }) : await post('/v1/test-presets', { name: name.value, tests: chosen });
+    d.close(); toast(`${out.name} saved with ${out.tests.length} ${out.tests.length === 1 ? 'test' : 'tests'}.`); done();
+  }); };
+  fill(d, h('form', { class: 'stack', onSubmit: save, style: 'max-width:560px' },
+    h('h2', { class: 'dp-panel-title' }, p ? `Edit ${p.name}` : 'New preset'),
+    field('Name', name, 'Like Combine, Preseason or U12 battery.'),
+    h('div', { class: 'dp-label' }, 'Tests, in running order'), listBox,
+    h('div', { class: 'form-grid lib-grid-add' }, field('Find', find), field('Test', pick), btn('Add', add, 'secondary', { style: 'min-height:44px' })),
+    h('div', { class: 'row wrap' }, btn('Save preset', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  name.focus();
 }
 
 async function viewConnections(main) {
@@ -2559,16 +2774,22 @@ const toBase64 = (buf) => { let s = ''; const b = new Uint8Array(buf); for (let 
 let uploadState = null;
 async function viewUpload(main) {
   const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const [days, lib, contracts, clientsList] = await Promise.all([get('/v1/testing-sessions'), get('/v1/tests'), get('/v1/team-contracts'), get('/v1/clients')]);
+  const [days, lib, contracts, clientsList, presetList] = await Promise.all([get('/v1/testing-sessions'), get('/v1/tests'), get('/v1/team-contracts'), get('/v1/clients'), get('/v1/test-presets')]);
+  const presets = presetList.data.filter((p) => p.tests.length);
 
   // Step 1: template
   const daySel = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
   const teamSel = select([['', 'Choose athletes later'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name}`])]);
-  const presetSel = select(PRESETS.map(([label], i) => [String(i), label]));
-  const tplOpts = h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(2,minmax(0,1fr))' }, field('Team', teamSel), field('Tests', presetSel));
+  const presetSel = select(presets.length ? presets.map((p) => [p.id, p.name]) : [['', 'No presets yet']], { disabled: !presets.length });
+  const tplOpts = h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(2,minmax(0,1fr))' }, field('Team', teamSel), field('Tests', presetSel, presets.length ? 'From your presets in the Test library.' : 'Add a preset in the Test library, or pick a testing day.'));
   const sync = () => { tplOpts.style.display = daySel.value ? 'none' : ''; };
   daySel.addEventListener('change', sync); sync();
-  const tplQuery = () => (daySel.value ? `session_id=${daySel.value}` : `tests=${PRESETS[Number(presetSel.value)][1].join(',')}${teamSel.value ? `&contract_id=${teamSel.value}` : `&client_ids=${clientsList.data.filter((c) => c.status !== 'canceled').map((c) => c.id).join(',')}`}`);
+  const tplQuery = () => {
+    if (daySel.value) return `session_id=${daySel.value}`;
+    const preset = presets.find((p) => p.id === presetSel.value);
+    if (!preset) throw new Error('There are no presets yet. Add one in the Test library, or pick a testing day.');
+    return `tests=${preset.tests.map((t) => t.key).join(',')}${teamSel.value ? `&contract_id=${teamSel.value}` : `&client_ids=${clientsList.data.filter((c) => c.status !== 'canceled').map((c) => c.id).join(',')}`}`;
+  };
   const step1 = panel('1. Get the sheet', { subtitle: 'Every athlete\'s ID is filled in, with a column for each test and attempt. Fill it in on paper, a laptop, or a phone.' },
     field('Testing day', daySel), tplOpts,
     h('div', { class: 'row wrap' }, btn('Download Excel', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}`)), 'primary'), btn('Download CSV (Google Sheets)', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}&format=csv`)), 'ghost')));

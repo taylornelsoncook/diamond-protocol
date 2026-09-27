@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 32;
+const SCHEMA_VERSION = 33;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -59,7 +59,9 @@ const ADDED_TABLES = {
   28: ['progress_notes'],                                                 // progress notes for parents
   29: ['money_checks'],                                                   // daily money checks
   30: ['guardian_message_reads'],                                         // parents' own read state for coach messages
-  31: ['time_off', 'client_notes']                                        // coach time off, staff notes on clients
+  31: ['time_off', 'client_notes'],                                       // coach time off, staff notes on clients
+  // ---- version 33 (batch B10): test presets and report share links. Renumber this block as one if it merges after another 33.
+  33: ['test_presets', 'report_links']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -80,7 +82,10 @@ const ADDED_COLUMNS = {
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
-  spot_offers: ['price_cents INTEGER']                                                        // version 32: trial offers at a special price
+  spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
+  // ---- version 33 (batch B10): coach-written protocols, edits to built-in tests that survive the library refresh, possible ranges
+  perf_tests: ['protocol TEXT', "edited TEXT NOT NULL DEFAULT '[]'"],
+  perf_metrics: ['min_value REAL', 'max_value REAL']
 };
 
 function migrate(raw, schema) {

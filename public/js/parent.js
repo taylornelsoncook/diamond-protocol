@@ -310,7 +310,7 @@ async function viewProgress(main) {
           g.growth_per_year ? h('div', { class: 'p-stat' }, h('b', null, `${g.growth_per_year.toFixed(1)}″`), h('span', null, 'Growth per year')) : null,
           g.estimate ? h('div', { class: 'p-stat' }, h('b', { style: 'font-size:18px' }, PHASE[g.estimate.phase]), h('span', null, `Estimated peak around age ${g.estimate.peak_age}`)) : null),
         g.estimate ? h('p', { class: 'small muted' }, `${g.estimate.text} This is an estimate and can be off by about a year.`) : g.missing.length ? h('p', { class: 'small muted' }, `Add ${g.missing.filter((m) => ['birthday', 'sex'].includes(m)).join(' and ') || 'more measurements'} on the Family tab to see a growth-spurt estimate.`) : null) : null,
-      h('a', { class: 'dp-btn dp-btn--secondary', href: `/report.html?athlete=${a.id}` }, 'Printable report')
+      h('a', { class: 'dp-btn dp-btn--secondary', href: `/report.html?athlete=${a.id}` }, 'Report: print or share a link')
     ]);
 }
 

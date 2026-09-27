@@ -14,6 +14,7 @@ import * as queue from './services/queue.js';
 import * as security from './services/security.js';
 import * as backups from './services/backups.js';
 import * as reports from './services/reports.js';
+import * as library from './services/library.js';
 import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
 import * as engage from './services/engage.js';
@@ -40,6 +41,8 @@ const list = (data) => ({ data });
 // Team sessions follow their contract (teams.js can't import schedule.js, which imports it).
 const teamSchedule = (ctx) => ({ updateSeries: (id, b) => schedule.updateSeries(ctx, id, b), cancelSession: (id, o) => schedule.cancelSession(ctx, id, o), generateSessions: (id) => schedule.generateSessions(ctx, id) });
 // Who is writing a staff note: the signed-in staff member, or an API key (treated like the owner).
+// Who made a report share link: the signed-in staff member or an API key.
+const staffBy = (r) => (r.user ? { kind: 'staff', id: r.user.id, name: r.user.name } : { kind: 'staff', id: r.apiKey?.id ?? null, name: r.apiKey?.label ?? 'API' });
 const noteActor = (r) => (r.user ? { id: r.user.id, name: r.user.name, role: r.user.role } : { id: null, name: r.apiKey?.label ?? 'API', role: 'owner' });
 const subOf = (ctx, clientId) => {
   const s = billing.currentSubscription(ctx, clientId);
@@ -334,10 +337,18 @@ export const routes = [
   ['POST', '/invoice-api/:token/simulate', 'public', 'Teams', 'Test mode only: mark the invoice paid online.', (ctx, r) => teams.simulateInvoicePaid(ctx, r.params.token)],
 
   // Performance testing
-  ['GET', '/v1/tests', 'any', 'Performance', 'The test library: every test with its metrics, units and whether lower or higher is better. ?include_inactive=true shows hidden tests.', (ctx, r) => ({ data: perf.listTests(ctx, { includeInactive: r.query.include_inactive === 'true' }), categories: perf.CATEGORIES.map(([key, name]) => ({ key, name })) })],
-  ['POST', '/v1/tests', 'any', 'Performance', 'Add your own test: name, category, unit and better (lower or higher), or metrics [{key, name, unit, better}]; sides (none or lr); attempts.', (ctx, r) => perf.createTest(ctx, r.body), 201],
+  ['GET', '/v1/tests', 'any', 'Performance', 'The test library: every test with its metrics, units, whether lower or higher is better, protocol ("how to run it") and possible range. ?include_inactive=true shows hidden tests; ?usage=true adds hidden tests, how much each is used (results, athletes, testing days, last used) and the presets it is in.', (ctx, r) => ({ data: r.query.usage === 'true' ? library.libraryList(ctx) : perf.listTests(ctx, { includeInactive: r.query.include_inactive === 'true' }), categories: perf.CATEGORIES.map(([key, name]) => ({ key, name })) })],
+  ['POST', '/v1/tests', 'any', 'Performance', 'Add your own test: name, category, unit and better (lower or higher), or metrics [{key, name, unit, better, min_value, max_value}]; sides (none or lr); attempts; timed (seconds only); description; protocol.', (ctx, r) => perf.createTest(ctx, r.body), 201],
   ['GET', '/v1/tests/:key', 'any', 'Performance', 'One test by key (e.g. dash_40yd, cmj, imtp).', (ctx, r) => perf.getTest(ctx, r.params.key)],
-  ['PATCH', '/v1/tests/:key', 'any', 'Performance', 'Rename, change attempts, or hide a test (active=false).', (ctx, r) => perf.updateTest(ctx, r.params.key, r.body)],
+  ['GET', '/v1/tests/:key/details', 'any', 'Performance', 'One test in full: protocol, usage, presets it is in, whether it can be deleted, and the record board (each athlete\'s best, top 10). Filter the board with ?metric=, ?side=L|R, ?sex=M|F and ?age=u12|13-14|15-16|17-18|adult (age when the result was set).', (ctx, r) => library.testDetails(ctx, r.params.key, r.query)],
+  ['PATCH', '/v1/tests/:key', 'any', 'Performance', 'Edit a test: name, category, attempts, timed, description, protocol (empty = the built-in text), active (false hides it), metrics [{key, min_value, max_value}] for the possible range. Your own tests can also change metric name, unit, better and sides until they have results. Returns the test with changes (the fields that really changed).', (ctx, r) => perf.updateTest(ctx, r.params.key, r.body)],
+  ['DELETE', '/v1/tests/:key', 'any', 'Performance', 'Delete one of your own tests that was never used (no results, testing days, targets or program weights). Presets lose it. Built-in tests can only be hidden.', (ctx, r) => library.deleteTest(ctx, r.params.key)],
+  ['GET', '/v1/test-presets', 'any', 'Performance', 'Presets: named sets of tests to start a testing day from, in order.', (ctx) => list(library.listPresets(ctx))],
+  ['POST', '/v1/test-presets', 'any', 'Performance', 'Add a preset: name, tests [keys in running order] (1 to 40).', (ctx, r) => library.createPreset(ctx, r.body), 201],
+  ['GET', '/v1/test-presets/:id', 'any', 'Performance', 'One preset.', (ctx, r) => library.getPreset(ctx, r.params.id)],
+  ['PATCH', '/v1/test-presets/:id', 'any', 'Performance', 'Rename a preset or change its tests (the whole list, in running order).', (ctx, r) => library.updatePreset(ctx, r.params.id, r.body)],
+  ['POST', '/v1/test-presets/:id/copy', 'any', 'Performance', 'Copy a preset as "<name> (copy)".', (ctx, r) => library.copyPreset(ctx, r.params.id), 201],
+  ['DELETE', '/v1/test-presets/:id', 'any', 'Performance', 'Delete a preset. Testing days made from it keep their tests.', (ctx, r) => library.deletePreset(ctx, r.params.id)],
   ['POST', '/v1/results', 'any', 'Performance', 'Record results from any device or app. Body: {results: [{athlete: {client_id | roster_id | email | external_id + name}, test, metric, value, unit, side, attempt, recorded_at, timing, device, external_id}], provider, session_id}. Values in other units are converted. Sending the same external_id again is ignored, so retries are safe. Up to 1,000 per request.', (ctx, r) => {
     const items = Array.isArray(r.body.results) ? r.body.results : [r.body];
     const provider = r.body.provider ? v.str(r.body.provider, 'provider', { max: 40 }).toLowerCase() : null;
@@ -357,7 +368,11 @@ export const routes = [
   ['POST', '/v1/testing-sessions/:id/notes/approve', 'any', 'Performance', 'Approve every draft on this testing day. Parents see approved notes once the day is shared.', (ctx, r) => notes.approveAll(ctx, r.params.id, r.user)],
   ['PATCH', '/v1/progress-notes/:id', 'any', 'Performance', 'Edit a progress note (body) or approve it (approved: true; false takes it back).', (ctx, r) => notes.updateNote(ctx, r.params.id, r.body, r.user)],
   ['DELETE', '/v1/testing-sessions/:id/share', 'any', 'Performance', 'Hide a testing day from families again.', (ctx, r) => reports.unshareSession(ctx, r.params.id)],
-  ['GET', '/v1/clients/:id/report', 'any', 'Performance', 'Progress report: best, first and latest for every test, top improvements, growth and growth-spurt estimate. ?parent_view=true shows exactly what the family sees.', (ctx, r) => reports.athleteReport(ctx, r.params.id, { parentView: r.query.parent_view === 'true' })],
+  ['GET', '/v1/clients/:id/report', 'any', 'Performance', 'Progress report: best, first, previous and latest for every test, change since the first and the last test, top improvements, growth and growth-spurt estimate. ?parent_view=true shows exactly what the family sees; the coach view marks results the family can\'t see yet (unshared_days). ?from= and ?to= (YYYY-MM-DD) limit it to a period.', (ctx, r) => ({ ...reports.athleteReport(ctx, clients.getClient(ctx, r.params.id).id, { parentView: r.query.parent_view === 'true', ...reports.reportPeriod(r.query) }), can_share: r.user ? r.user.role !== 'front_desk' : true })],
+  ['GET', '/v1/clients/:id/report-links', 'any', 'Performance', 'Working share links to this athlete\'s progress report (the family view): who made each, when it expires and how often it was opened. The link addresses are only shown when made.', (ctx, r) => list(reports.listReportLinks(ctx, clients.getClient(ctx, r.params.id).id))],
+  ['POST', '/v1/clients/:id/report-links', 'any', 'Performance', 'Make a share link to the family view of the progress report that works without signing in: days (7, 30, 90 or 365), optional label. The response has the url once. Up to 10 working links per athlete.', (ctx, r) => reports.createReportLink(ctx, clients.getClient(ctx, r.params.id).id, r.body, staffBy(r), r.baseUrl), 201],
+  ['DELETE', '/v1/clients/:id/report-links/:link', 'any', 'Performance', 'Turn off a share link. It stops working at once.', (ctx, r) => reports.revokeReportLink(ctx, clients.getClient(ctx, r.params.id).id, r.params.link)],
+  ['POST', '/v1/clients/:id/report/email', 'any', 'Performance', 'Email the family a summary of the progress report (what they can see) with the report link: optional note, include_link=true adds a 90-day share link so they don\'t need to sign in.', (ctx, r) => reports.emailReport(ctx, clients.getClient(ctx, r.params.id).id, r.body, staffBy(r), r.baseUrl)],
   ['GET', '/v1/athlete-links', 'any', 'Performance', 'Device IDs and names you\'ve linked to athletes (?provider=, ?client_id=, ?roster_id=).', (ctx, r) => list(perf.listLinks(ctx, r.query))],
   ['GET', '/v1/queue', 'any', 'Performance', 'Results waiting to be linked to a profile, grouped by who sent them. Results only land automatically by Athlete ID or a link you confirmed.', (ctx) => ({ data: queue.listQueue(ctx), ...queue.queueCount(ctx) })],
   ['POST', '/v1/queue/link', 'any', 'Performance', 'Link waiting results to an athlete: athlete_id (or client_id / roster_id), and either provider + identity (everything from that sender) or ids [specific results]. remember=true sends that sender\'s future results straight to the athlete. All or nothing.', (ctx, r) => queue.linkQueue(ctx, r.body)],

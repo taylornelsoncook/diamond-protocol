@@ -416,10 +416,18 @@ _Where: Billing_
 
 [Owner] 
 
-Membership plans and every invoice.
+Money in, money owed, and who is on which plan.
 
-- Plans show price, free trial, subscribers and monthly revenue. Create or change a plan here; price changes apply from each member's next charge.
-- Invoices list every charge. Retry a declined one; declines also retry automatically every 3 days.
+- Four numbers at the top: monthly recurring revenue (memberships plus team contracts), collected this month net of refunds, failed payments with the amount at risk, and open invoices with how much is overdue. Tap one to jump to the matching list. A bar under them jumps to each section.
+- Needs attention lists every declined charge (card on file, how many tries, the next automatic retry or that retries have run out, when the family was last reminded) and every overdue school invoice. Retry a charge (it asks first, showing the amount and card), email the family a card reminder with a link to the parent portal, or record a payment. Retry all declined charges at once, or email every family with a declined card; families already reminded today are skipped, and each family gets one email listing everything due.
+- Invoices list every charge, newest first, with views for All, Failed, Unpaid, Overdue, Paid, Refunds and Void (each with its count), a kind filter, a date range (this month, last month, last 90 days, this year) and search by name, invoice number, school or item. The line under the title gives the count and total for the current filter. Export CSV downloads exactly what the filter shows, for the bookkeeper.
+- Tap an invoice for its details and what can be done now: retry, record a payment taken by check, cash or bank transfer, email a card reminder, refund, email the invoice, view or print it, or void it. Voiding a declined charge writes it off: no more retries, and a membership held past due only by that charge becomes active again. Paid invoices can't be voided; refund them instead.
+- Refund all or part of a paid invoice, with an optional reason and a refund receipt emailed to the family. Billing shows how much has already been refunded and won't refund more than was paid. Refunds of counter sales stay in step with Point of sale, and a full refund takes back unused session credits.
+- Memberships list everyone on a plan with price, status, next charge or trial end, and card on file. Views: All members, Renewing this week, Free trial, Past due, Paused and Cancelled lately, plus search and a plan filter. The line under the title says how many renewals are due in the next 7 days and how much they bring in. Manage a membership to change plan (from the next charge), pause, resume or cancel it.
+- Plans show price, free trial, members and monthly revenue. Tap a plan's member count to see its members. Add a plan or edit one; price changes apply from each member's next charge and nobody is charged when you save. Retire a plan to stop new sign-ups; current members keep it. Two live plans can't share a name, trials are up to 90 days and session allowances up to 100 a month.
+- Declines retry automatically every 3 days, up to 4 tries. In test mode, the billing clock runs billing as of a later date and shows what happened.
+
+> Note: Owner only. Coaches and front desk can't open Billing, and refunds, reminders and write-offs stay out of their activity feed.
 
 ### Programs
 

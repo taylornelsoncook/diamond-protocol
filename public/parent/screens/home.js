@@ -31,11 +31,12 @@ function renewText(m) {
   return m.status === 'trial' ? `Trial ends ${d}` : m.status === 'active' ? `Renews ${d}` : '';
 }
 
-// "MM/YY" -> 'expired' | 'soon' (this month or next) | null
+// "MM/YY" (also "M/YY" or "MM/YYYY", as a card reader may store it) -> 'expired' | 'soon' (this month or next) | null
 export function cardState(exp, now = new Date()) {
-  const m = /^(\d{2})\/(\d{2})$/.exec(exp || '');
-  if (!m) return null;
-  const end = (2000 + +m[2]) * 12 + (+m[1] - 1);
+  const m = /^\s*(\d{1,2})\s*\/\s*(\d{2}|\d{4})\s*$/.exec(exp || '');
+  if (!m || +m[1] < 1 || +m[1] > 12) return null;
+  const year = +m[2] < 100 ? 2000 + +m[2] : +m[2];
+  const end = year * 12 + (+m[1] - 1);
   const cur = now.getFullYear() * 12 + now.getMonth();
   return end < cur ? 'expired' : end - cur <= 1 ? 'soon' : null;
 }
@@ -79,7 +80,7 @@ function attendanceLine(a) {
   const at = a.attendance;
   if (!at) return '';
   if (!at.last_at) return html`<p class="a-meta">No sessions attended yet.</p>`;
-  return html`<p class="a-meta">${plural(at.last_30, 'session')} in the last 30 days · last in ${weekday(at.last_at)}, ${dayShort(at.last_at)}</p>`;
+  return html`<p class="a-meta">${plural(at.last_30, 'session')} in the last 30 days · last on ${weekday(at.last_at)}, ${dayShort(at.last_at)}</p>`;
 }
 
 function sessionRow(b, hidden) {
@@ -212,7 +213,7 @@ async function overview(ctx, el) {
     f.card_last4 && !pastDue.length && card === 'expired' ? html`<div class="banner"><span>The ${f.card_label} expired (${f.card_exp}). Add a new card so payments keep working.</span><a class="btn btn-warn btn-sm" href="/parent/card">Update card</a></div>` : '',
     f.card_last4 && !pastDue.length && card === 'soon' ? html`<div class="banner"><span>The ${f.card_label} expires at the end of ${f.card_exp}. Update it before then so nothing is missed.</span><a class="btn btn-warn btn-sm" href="/parent/card">Update card</a></div>` : '',
   ];
-  const showInstall = !ctx.install.standalone() && !hiddenInstall() && (ctx.install.canPrompt() || ctx.install.ios());
+  const installOk = () => !ctx.install.standalone() && !hiddenInstall() && (ctx.install.canPrompt() || ctx.install.ios());
 
   mount(el, html`${banners}
     ${me.athletes.length ? '' : html`<div class="empty">No athletes on this account yet. <a href="/parent/family#add-athlete">Add an athlete</a>.</div>`}
@@ -239,12 +240,7 @@ async function overview(ctx, el) {
       <div class="grow"><h2 class="panel-title" id="cal-h">Sessions in your calendar</h2>
         <p class="muted" style="margin:0">Every booking shows up in your phone's calendar and stays up to date when plans change.</p></div>
       <button type="button" class="btn" id="cal-open">${svg(CAL_ADD)} Add to calendar</button></section>` : ''}
-    ${showInstall ? html`<section class="panel p-mini" id="install" aria-labelledby="inst-h">
-      <div class="grow"><h2 class="panel-title" id="inst-h">Put this on your home screen</h2>
-        <p class="muted" style="margin:0">${ctx.install.canPrompt() ? 'It opens like an app, and you stay signed in.'
-          : html`On iPhone: tap Share <span class="p-share" role="img" aria-label="(the square with an arrow)">${svg(SHARE, 16)}</span> in Safari, then Add to Home Screen.`}</p></div>
-      <div class="btn-row">${ctx.install.canPrompt() ? html`<button type="button" class="btn" id="inst-go">Add to home screen</button>` : ''}
-        <button type="button" class="btn btn-ghost btn-sm" id="inst-hide">Not now</button></div></section>` : ''}`);
+    <div id="install-slot"></div>`);
 
   el.querySelectorAll('[data-more-for]').forEach((btn) => {
     btn.onclick = () => {
@@ -306,13 +302,24 @@ async function overview(ctx, el) {
   el.querySelectorAll('[data-open]').forEach((btn) => { btn.onclick = () => details(bookings.find((x) => x.id === +btn.dataset.open)); });
   el.querySelector('#cal-open')?.addEventListener('click', () => calendarDialog());
 
-  const inst = el.querySelector('#install');
-  if (inst) {
-    el.querySelector('#inst-hide').onclick = () => { hideInstall(); inst.remove(); };
-    el.querySelector('#inst-go')?.addEventListener('click', async () => { if (await ctx.install.prompt()) inst.remove(); });
-  } else if (!ctx.install.standalone() && !hiddenInstall()) {
-    // Chrome can offer its install prompt a moment after the page loads.
-    document.addEventListener('dp-install', () => { if (ctx.isCurrent() && el.isConnected && !el.querySelector('#install')) ctx.reload(); }, { once: true });
+  // Put this on your home screen. Chrome can offer its install prompt a moment after the page loads,
+  // so the card is added in place then, without redrawing the screen.
+  const slot = el.querySelector('#install-slot');
+  function paintInstall() {
+    if (!slot.isConnected || !installOk()) { mount(slot, ''); return; }
+    const canPrompt = ctx.install.canPrompt();
+    mount(slot, html`<section class="panel p-mini" id="install" aria-labelledby="inst-h">
+      <div class="grow"><h2 class="panel-title" id="inst-h">Put this on your home screen</h2>
+        <p class="muted" style="margin:0">${canPrompt ? 'It opens like an app, and you stay signed in.'
+          : html`On iPhone: tap Share <span class="p-share" role="img" aria-label="(the square with an arrow)">${svg(SHARE, 16)}</span> in Safari, then Add to Home Screen.`}</p></div>
+      <div class="btn-row">${canPrompt ? html`<button type="button" class="btn" id="inst-go">Add to home screen</button>` : ''}
+        <button type="button" class="btn btn-ghost btn-sm" id="inst-hide">Not now</button></div></section>`);
+    slot.querySelector('#inst-hide').onclick = () => { hideInstall(); mount(slot, ''); };
+    slot.querySelector('#inst-go')?.addEventListener('click', async () => { if (await ctx.install.prompt()) mount(slot, ''); else paintInstall(); });
+  }
+  paintInstall();
+  if (!ctx.install.standalone() && !hiddenInstall() && !ctx.install.canPrompt()) {
+    document.addEventListener('dp-install', () => { if (ctx.isCurrent() && slot.isConnected) paintInstall(); }, { once: true });
   }
 }
 
@@ -323,10 +330,13 @@ function hideInstall() { try { localStorage.setItem(INSTALL_KEY, '1'); } catch {
 async function calendarDialog() {
   let links;
   try { links = await api.get('/parent/calendar'); } catch (e) { toastError(e); return; }
+  const apple = /iphone|ipad|ipod|macintosh/i.test(navigator.userAgent); // Android and Windows: Google first
   const body = () => html`<p style="margin:0">Subscribe once and every booking for your family appears in your calendar. Cancelled sessions drop off on their own; calendars check for changes every hour or so.</p>
     <div class="stack cal-links">
-      <a class="btn btn-primary" href="${links.webcal}">Add to Apple Calendar</a>
-      <a class="btn" href="${links.google}" target="_blank" rel="noopener">Add to Google Calendar</a>
+      ${apple ? html`<a class="btn btn-primary" href="${links.webcal}">Add to Apple Calendar</a>
+        <a class="btn" href="${links.google}" target="_blank" rel="noopener">Add to Google Calendar</a>`
+      : html`<a class="btn btn-primary" href="${links.google}" target="_blank" rel="noopener">Add to Google Calendar</a>
+        <a class="btn" href="${links.webcal}">Add to Apple Calendar</a>`}
       <button type="button" class="btn" data-copy>Copy link for Outlook or others</button>
     </div>
     <p class="hint" style="margin:0">The link is private to your family. Shared it by mistake? Reset it and the old link stops working.</p>

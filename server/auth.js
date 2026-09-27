@@ -136,9 +136,12 @@ router.post('/parent/code', h(async (req, res) => {
   codeLimit(req, email); // same limit for every address, so it can't tell which emails are on file
   const p = get('SELECT * FROM parents WHERE email=?', email);
   const out = { ok: true };
-  if (p) {
+  run('UPDATE parent_codes SET used=1 WHERE email=?', email);
+  if (!p) {
+    // Not on file: keep a code nobody knows, so checking a code answers exactly as it would for a real account.
+    insert('parent_codes', { email, code_hash: sha256(randomToken(24)), expires_at: new Date(Date.now() + 10 * 6e4).toISOString() });
+  } else {
     const code = String(crypto.randomInt(0, 1e6)).padStart(6, '0');
-    run('UPDATE parent_codes SET used=1 WHERE email=?', email);
     insert('parent_codes', { email, code_hash: sha256(code), expires_at: new Date(Date.now() + 10 * 6e4).toISOString() });
     sendEmail(email, `Your ${businessName()} sign-in code: ${code}`, `Your sign-in code is ${code}. It works once, for 10 minutes.\n\nIf you didn't ask for it, you can ignore this email.`);
     // Test mode (or a restricted staging server): the email won't arrive, so show the code on screen.
@@ -161,7 +164,7 @@ router.post('/parent/verify', h(async (req, res) => {
   }
   if (sha256(code) !== row.code_hash) {
     run('UPDATE parent_codes SET attempts=attempts+1 WHERE id=?', row.id);
-    if (row.attempts + 1 >= 5) log(null, 'Sign-in failed', `${email}: too many wrong codes`, 'signin');
+    if (row.attempts + 1 >= 5) log(req, 'Sign-in failed', `${email}: too many wrong codes`, 'signin');
     throw bad("That code doesn't match. Check the latest email.");
   }
   run('UPDATE parent_codes SET used=1 WHERE id=?', row.id);

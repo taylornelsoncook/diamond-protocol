@@ -107,8 +107,16 @@ details.panel:not([open]){gap:0}
 
 /* ---- Home overview (sign-in and Home upgrade) ---- */
 .p-body .btn-sm{min-height:44px}
-.stats{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr)}
+.stats{grid-template-columns:minmax(0,1.1fr) minmax(0,1.1fr) minmax(0,.8fr)}
 #home-body .s-row{grid-template-columns:84px minmax(0,1fr) auto}
+@media (max-width:420px){ .stat-v.word{font-size:16px;line-height:22px} }
+@media (max-width:380px){ .stats{grid-template-columns:repeat(3,minmax(0,1fr))} .stat{padding:12px 8px} .stat-v.word{font-size:15px} }
+#home-body .s-name{overflow-wrap:anywhere}
+@media (max-width:340px){
+  .stats{grid-template-columns:1fr 1fr}
+  #home-body .s-row{grid-template-columns:72px minmax(0,1fr) auto}
+  #home-body .s-when{font-size:13px}
+}
 .stat-l{overflow-wrap:normal;hyphens:manual}
 .s-main{min-width:0;display:flex;flex-direction:column;gap:6px}
 .s-open{all:unset;display:flex;flex-direction:column;cursor:pointer;min-height:44px;justify-content:center;border-radius:var(--radius-sm)}

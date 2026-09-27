@@ -618,3 +618,22 @@ test('calendar times follow daylight saving', () => {
   assert.equal(new Date(localToUtc('2026-11-01T09:00', 'America/Denver')).toISOString(), '2026-11-01T16:00:00.000Z');
   assert.equal(new Date(localToUtc('2026-03-08T09:00', 'America/Denver')).toISOString(), '2026-03-08T15:00:00.000Z');
 });
+
+test('checking a code answers the same for an email that is not on file', async () => {
+  const fid = insert('families', { name: 'Probe family' });
+  insert('parents', { family_id: fid, name: 'Real Parent', email: 'real.probe@example.com' });
+  const answers = {};
+  for (const email of ['real.probe@example.com', 'nobody.probe@example.com']) {
+    assert.equal((await call('POST', '/auth/parent/code', { email })).status, 200);
+    const seen = [];
+    for (let i = 0; i < 6; i++) { const r = await call('POST', '/auth/parent/verify', { email, code: '000000' }); seen.push(`${r.status} ${r.data.error}`); }
+    answers[email] = seen;
+  }
+  assert.deepEqual(answers['nobody.probe@example.com'], answers['real.probe@example.com']);
+  assert.match(answers['nobody.probe@example.com'][0], /doesn't match/);
+  assert.match(answers['nobody.probe@example.com'][5], /Too many tries/);
+  // No email goes to an address that isn't on file, and the failure is logged with where it came from.
+  assert.ok(!get("SELECT 1 FROM outbox WHERE to_email='nobody.probe@example.com'"));
+  const row = get("SELECT * FROM activity WHERE action='Sign-in failed' AND detail LIKE 'nobody.probe@example.com%' ORDER BY id DESC LIMIT 1");
+  assert.ok(row && row.ip, 'failed sign-in is logged with the network address');
+});

@@ -488,7 +488,7 @@ A 6-digit code arrives by email and works once, for 10 minutes.
 
 - Enter the code (phones fill it in from the email; pasting the whole email line keeps just the code). It signs in as soon as the sixth digit is in.
 - Send a new code unlocks after 30 seconds; the old code stops working. No email? explains where to look and who to ask.
-- Five wrong tries end a code, and 15 wrong tries in an hour across codes lock sign-in for that email for the hour.
+- Five wrong tries end a code, and 15 wrong tries in an hour across codes lock sign-in for that email for the hour. Wrong codes get the same answers whether or not the email is on file.
 - Parents stay signed in on that phone for 30 days. Every parent sign-in is in the activity log.
 
 > Note: In test mode the code shows on screen, as here. Once email is connected it only goes to the parent's inbox.

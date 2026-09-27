@@ -1,7 +1,7 @@
 // Point of sale: locations, products, front-desk readers, sales and refunds.
 'use strict';
 const { get, all, run, insert, update, tx, setting } = require('../db');
-const { h, bad, notFound, log, money, payments, sendEmail, appUrl, businessName } = require('../lib');
+const { h, bad, notFound, log, money, payments, sendEmail, appUrl, businessName, addDays } = require('../lib');
 const { requireStaff } = require('../auth');
 const billing = require('../services/billing');
 const booking = require('../services/booking');
@@ -15,10 +15,19 @@ const TEST_READER_CODE = 'simulated-wpe';
 const UNDO_MINUTES = 10; // the person who rang up a sale can undo it this long afterwards
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SALE_SELECT = `SELECT s.*, l.name AS location, a.first_name, a.last_name, st.name AS staff,
-    CAST(ROUND((julianday('now') - julianday(s.created_at)) * 1440) AS INTEGER) AS age_min
+    (julianday('now') - julianday(s.created_at)) * 1440 AS age_min
   FROM sales s LEFT JOIN locations l ON l.id=s.location_id LEFT JOIN athletes a ON a.id=s.athlete_id LEFT JOIN staff st ON st.id=s.staff_id`;
 
 const cents = (v) => (v === '' || v == null ? null : Math.round(Number(v)));
+// Signed money for receipt lines: a discount reads "-$25", not "$-25".
+const signedMoney = (c) => (c < 0 ? `-${money(-c)}` : money(c));
+// An optional location filter: blank means all locations; anything else must be a real location id.
+function locationFilter(v) {
+  if (v === undefined || v === '') return null;
+  const loc = /^\d+$/.test(String(v)) ? get('SELECT id, name FROM locations WHERE id=?', Number(v)) : null;
+  if (!loc) throw notFound('That location');
+  return loc;
+}
 const locRow = (l) => ({ ...l, cards_ready: !!(l.address && l.address.trim()) });
 
 function composeAddress(b) {
@@ -112,7 +121,7 @@ function receiptText(s) {
   const body = [
     `Thank you. Here is your receipt from ${businessName()}.`, '',
     `${when}${loc ? ` · ${loc.name}` : ''}`, '',
-    ...lines.map((l) => `${l.qty > 1 ? `${l.qty} × ` : ''}${l.name}  ${money(l.price_cents * (l.qty || 1))}`), '',
+    ...lines.map((l) => `${l.qty > 1 ? `${l.qty} × ` : ''}${l.name}  ${signedMoney(l.price_cents * (l.qty || 1))}`), '',
     `Total paid: ${money(s.total_cents)} by ${METHOD_LABEL[s.method]}${s.method === 'card' && card?.card_last4 ? ` (${card.card_brand} ••${card.card_last4})` : ''}`,
     s.refunded_cents ? `Refunded: ${money(s.refunded_cents)}` : '',
     inv?.view_token ? `\nView or print it online:\n${appUrl()}/invoice/${inv.view_token}` : '',
@@ -240,10 +249,13 @@ function routes(api) {
 
   // ---- sales ----
   // Recent sales, newest first. Filters: days (1-366), location_id, method, q (client name or item), athlete_id.
+  // Days are calendar days in the business time zone: days=1 is today since local midnight, days=7 is today and the six before.
   // Coaches see only the sales they rang up themselves.
   api.get('/sales', requireStaff(), h(async (req, res) => {
     const days = Math.min(Math.max(Math.floor(Number(req.query.days)) || 7, 1), 366);
-    const where = ["s.created_at >= datetime('now', ?)"], params = [`-${days} days`];
+    const from = addDays(booking.todayLocal(), -(days - 1));
+    // A day of slack in SQL (time zones), then the exact local-date cut below.
+    const where = ["s.created_at >= datetime('now', ?)"], params = [`-${days + 1} days`];
     if (req.query.athlete_id) { where.push('s.athlete_id=?'); params.push(Number(req.query.athlete_id) || 0); }
     if (req.query.location_id) { where.push('s.location_id=?'); params.push(Number(req.query.location_id) || 0); }
     if (req.query.method) {
@@ -253,16 +265,20 @@ function routes(api) {
     const q = String(req.query.q || '').trim();
     if (q) { where.push("((a.first_name || ' ' || a.last_name) LIKE ? OR s.items LIKE ?)"); params.push(`%${q}%`, `%${q}%`); }
     if (coachOnly(req)) { where.push('s.staff_id=?'); params.push(req.staff.id); }
-    const rows = all(`${SALE_SELECT} WHERE ${where.join(' AND ')} ORDER BY s.id DESC LIMIT 200`, ...params);
+    const rows = all(`${SALE_SELECT} WHERE ${where.join(' AND ')} ORDER BY s.created_at DESC, s.id DESC LIMIT 200`, ...params)
+      .filter((r) => (localDateOf(r.created_at) || '') >= from);
     res.json(rows.map((r) => saleRow(r, req.staff)));
   }));
 
   // The day's takings for closing out: count, discounts, refunds and net by payment method (owners and front desk).
   api.get('/sales/summary', requireStaff('owner', 'frontdesk'), h(async (req, res) => {
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? req.query.date : booking.todayLocal();
-    const locId = req.query.location_id ? Number(req.query.location_id) || 0 : null;
-    const loc = locId ? get('SELECT id, name FROM locations WHERE id=?', locId) : null;
-    if (locId && !loc) throw notFound('That location');
+    let date = booking.todayLocal();
+    if (req.query.date) {
+      date = String(req.query.date);
+      const t = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(date + 'T12:00:00Z') : null;
+      if (!t || Number.isNaN(t.getTime()) || t.toISOString().slice(0, 10) !== date) throw bad('Choose a real date, like 2026-09-27.');
+    }
+    const loc = locationFilter(req.query.location_id);
     const next = new Date(date + 'T12:00:00Z'); next.setUTCDate(next.getUTCDate() + 2);
     const prev = new Date(date + 'T12:00:00Z'); prev.setUTCDate(prev.getUTCDate() - 1);
     const rows = all(`SELECT * FROM sales WHERE status!='failed' AND created_at >= ? AND created_at < ? ${loc ? 'AND location_id=?' : ''}`,

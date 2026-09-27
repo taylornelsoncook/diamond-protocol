@@ -79,7 +79,7 @@ async function renderPos(ctx) {
   const state = {
     location: locations.find((l) => String(l.id) === remembered)?.id || locations[0]?.id, who: null,
     cart: Array.isArray(saved?.cart) ? saved.cart : [], method: 'tap', seq: saved?.seq || 0,
-    discount: saved?.discount || null, receipt: null, receiptEmail: '', tendered: '', last: null,
+    discount: saved?.discount || null, receipt: null, receiptEmail: '', tendered: '', saveCard: false, last: null,
     period: 1, q: '', histLoc: '',
   };
   let barHidden = false;
@@ -187,13 +187,14 @@ async function renderPos(ctx) {
       if (e.key === 'Escape') { close(); q.focus(); }
     });
     res.addEventListener('click', (e) => { const b = e.target.closest('[data-a]'); if (b) pickClient(b.dataset.a); });
-    box.addEventListener('focusout', () => setTimeout(() => { if (!box.contains(document.activeElement)) close(); }, 150));
+    // On the search field and its results (not the box, which outlives each render) so listeners don't pile up.
+    for (const el of [q, res]) el.addEventListener('focusout', () => setTimeout(() => { if (!box.contains(document.activeElement)) close(); }, 150));
   }
 
   async function pickClient(id, { quiet = false } = {}) {
     try {
       state.who = await api.get(`/pos/client/${id}`);
-      state.receiptEmail = ''; state.receipt = null;
+      state.receiptEmail = ''; state.receipt = null; state.saveCard = false;
     } catch (err) { if (!quiet) toastError(err); state.who = null; }
     if (!ctx.isCurrent()) return;
     persist(); renderWho(); renderPlans(); renderSale();
@@ -276,7 +277,7 @@ async function renderPos(ctx) {
       ${state.method === 'cash' && state.cart.length ? html`<div class="field"><label class="label" for="tendered">Cash received ($)</label>
         <input class="input" id="tendered" inputmode="decimal" value="${state.tendered}" placeholder="${(Math.max(0, tot) / 100).toFixed(2)}">
         <span class="hint ${change < 0 ? 'warn-text' : ''}" id="change" aria-live="polite">${Number.isFinite(change) ? (change >= 0 ? `Change due: ${money(change, { always2: true })}` : `${money(-change, { always2: true })} short`) : 'Optional. Shows the change to hand back.'}</span></div>` : ''}
-      ${canSave ? html`<label class="check"><input type="checkbox" id="save-card"><span>Save card to the ${who.family || 'family'} account for their membership</span></label>` : ''}
+      ${canSave ? html`<label class="check"><input type="checkbox" id="save-card" ${state.saveCard ? raw('checked') : ''}><span>Save card to the ${who.family || 'family'} account for their membership</span></label>` : ''}
       ${state.cart.length ? html`<div class="stack-sm"><label class="check"><input type="checkbox" id="rc-on" ${receiptOn ? raw('checked') : ''}><span>Email a receipt</span></label>
         ${receiptOn ? html`<input class="input" id="rc-email" type="email" value="${email}" placeholder="${who ? 'No email on file. Type one' : 'Email address'}" aria-label="Receipt email" autocomplete="off">` : ''}</div>` : ''}
       <button class="btn btn-primary btn-lg btn-block" id="charge" ${state.cart.length && l && !offBad && tot > 0 ? '' : raw('disabled')}>${state.method === 'cash' ? `Record ${money(Math.max(0, tot))} cash` : `Charge ${money(Math.max(0, tot))}`}</button>`);
@@ -303,7 +304,7 @@ async function renderPos(ctx) {
         <div class="pos-metric"><div class="small muted">Net taken</div><div class="v">${money(d.net_cents)}</div></div>
         <div class="pos-metric"><div class="small muted">Cash</div><div class="v">${money(cash.net_cents)}</div><div class="small muted">${plural(cash.count, 'sale')}</div></div>
         <div class="pos-metric"><div class="small muted">Cards</div><div class="v">${money(cards)}</div><div class="small muted">${plural(cardCount, 'sale')}</div></div>
-        <div class="pos-metric"><div class="small muted">Refunds</div><div class="v ${d.refunded_cents ? 'warn-text' : ''}">${money(d.refunded_cents)}</div>${d.discount_cents ? html`<div class="small muted">${money(d.discount_cents)} in discounts</div>` : ''}</div>
+        <div class="pos-metric"><div class="small muted">Refunds</div><div class="v">${money(d.refunded_cents)}</div>${d.discount_cents ? html`<div class="small muted">${money(d.discount_cents)} in discounts</div>` : ''}</div>
       </div>`);
     box.querySelectorAll('[data-scope]').forEach((b) => b.addEventListener('click', () => { pref.set('dp-pos-today-scope', b.dataset.scope); renderToday(); }));
   }
@@ -430,6 +431,7 @@ async function renderPos(ctx) {
   });
   sale.addEventListener('change', (e) => {
     if (e.target.name === 'pm') { state.method = e.target.value; renderSale(); }
+    if (e.target.id === 'save-card') state.saveCard = e.target.checked;
     if (e.target.id === 'rc-on') { state.receipt = e.target.checked; if (state.who?.email) pref.set('dp-pos-receipt', state.receipt ? '1' : '0'); renderSale(); if (state.receipt) sale.querySelector('#rc-email')?.focus(); }
   });
   function refreshTotals() {
@@ -440,12 +442,12 @@ async function renderPos(ctx) {
   }
 
   // A toast with an Undo button for a few seconds.
-  function undoToast(msg, fn) {
+  function undoToast(msg, fn, label = 'Undo') {
     let box = document.querySelector('.toasts');
     if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('role', 'status'); box.setAttribute('aria-live', 'polite'); document.body.append(box); }
     const t = document.createElement('div');
     t.className = 'toast';
-    mount(t, html`${msg} <button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px;color:inherit;text-decoration:underline">Undo</button>`);
+    mount(t, html`${msg} <button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px;color:inherit;text-decoration:underline">${label}</button>`);
     t.querySelector('button').addEventListener('click', () => { t.remove(); fn(); });
     box.append(t);
     setTimeout(() => t.remove(), 6000);
@@ -482,7 +484,7 @@ async function renderPos(ctx) {
       toast(r.message);
       const change = state.method === 'cash' && state.tendered ? toCents(state.tendered) - tot : 0;
       if (change > 0) toast(`Hand back ${money(change, { always2: true })} change.`);
-      state.cart = []; state.discount = null; state.tendered = ''; state.receipt = null;
+      state.cart = []; state.discount = null; state.tendered = ''; state.receipt = null; state.saveCard = false;
       state.last = { ...r.sale, receipt_to: r.receipt_to };
       if (state.who) await pickClient(state.who.id, { quiet: true }); else { persist(); renderSale(); }
       renderRecent(); renderToday();
@@ -514,7 +516,15 @@ async function renderPos(ctx) {
 
   renderLocHint(); renderPlans(); renderWho(); renderSale(); renderRecent(); renderToday();
   // Sell to a client from their profile (?athlete=ID), or pick the sale back up after leaving the screen.
-  if (ctx.query?.athlete) await pickClient(ctx.query.athlete);
+  if (ctx.query?.athlete) {
+    await pickClient(ctx.query.athlete);
+    // A sale left in progress for someone else stays, but say so before it's charged to this client.
+    if (state.cart.length && saved?.who !== state.who?.id && ctx.isCurrent()) {
+      undoToast(`The sale in progress is still here, now for ${state.who ? state.who.first_name : 'a walk-in'}.`, () => {
+        state.cart = []; state.discount = null; state.tendered = ''; persist(); renderSale();
+      }, 'Clear sale');
+    }
+  }
   else if (saved?.who) await pickClient(saved.who, { quiet: true });
 }
 

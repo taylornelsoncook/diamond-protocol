@@ -179,8 +179,8 @@ Take payment anywhere: at the facility, a park, or a client's home.
 - Monthly memberships start from their own tiles; a client who already has one sees it greyed out with the plan named.
 - After a sale, a confirmation shows with Email receipt and Undo sale. The person who took a sale can undo it for 10 minutes (a full refund that also takes back pack sessions); after that, the owner refunds.
 - The sale in progress survives leaving the screen in the same tab. On a phone, a bar at the bottom shows the running total and jumps to the sale.
-- Today (owners and front desk): net taken, cash to count the drawer against, cards and refunds, for this location or all locations. Coaches never see takings.
-- Recent sales: Today, 7 days or 30 days, search by client or item, filter by location. Tap a sale for its lines, payment, receipt status and a link to the client; re-send the receipt from there. Owners can refund all or part of a sale, with an optional reason for the activity log. Coaches see only the sales they took.
+- Today (owners and front desk): net taken, cash to count the drawer against, cards and refunds, for this location or all locations. Days run midnight to midnight in the business time zone, and a refund counts against the day of the sale it refunds. Coaches never see takings.
+- Recent sales: Today (since midnight, matching the Today panel), 7 days or 30 days, search by client or item, filter by location. Tap a sale for its lines, payment, receipt status and a link to the client; re-send the receipt from there. Owners can refund all or part of a sale, with an optional reason for the activity log. Coaches see only the sales they took.
 
 ### Point of sale setup
 

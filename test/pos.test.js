@@ -261,3 +261,63 @@ test('setup: duplicate names are refused and archived locations and products com
   assert.equal(again.data.product.name, `${gear.name} (classic)`);
   assert.equal((await c.put(`/api/products/${twin.data.id}`, { name: `${gear.name} (classic)` })).status, 400, 'renaming into a clash is refused');
 });
+
+// ---- review fixes ----
+const { localDateOf } = require('../server/services/floor-util');
+const booking = require('../server/services/booking');
+
+// The UTC 'YYYY-MM-DD HH:MM:SS' for a local wall-clock time in the business time zone.
+function utcForLocal(date, hhmm) {
+  const tz = require('../server/db').setting('timezone', 'America/Denver');
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const guess = Date.parse(`${date}T${hhmm}:00Z`);
+  for (let off = -14 * 60; off <= 14 * 60; off += 15) {
+    const t = new Date(guess - off * 60000);
+    const p = Object.fromEntries(fmt.formatToParts(t).map((x) => [x.type, x.value]));
+    if (`${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}` === `${date} ${hhmm}`) return t.toISOString().slice(0, 19).replace('T', ' ');
+  }
+  throw new Error('no match');
+}
+
+test('review fixes: Today in recent sales means since local midnight, like the takings', async () => {
+  const d = await desk();
+  const today = booking.todayLocal();
+  const yesterday = new Date(Date.parse(today + 'T12:00:00Z') - 864e5).toISOString().slice(0, 10);
+  // 23:59 last night is always inside the last 24 hours, but it isn't today.
+  const late = await d.post('/api/sales', { location_id: facility(), method: 'cash', items: [{ product_id: product('gear').id }] });
+  run('UPDATE sales SET created_at=? WHERE id=?', utcForLocal(yesterday, '23:59'), late.data.sale.id);
+  assert.equal(localDateOf(get('SELECT created_at FROM sales WHERE id=?', late.data.sale.id).created_at), yesterday);
+  const todays = (await d.get('/api/sales?days=1')).data;
+  assert.ok(!todays.some((s) => s.id === late.data.sale.id), 'last night is not in Today');
+  assert.ok(todays.every((s) => localDateOf(s.created_at) === today));
+  const summary = (await d.get('/api/sales/summary')).data;
+  assert.equal(todays.filter((s) => s.status !== 'failed').length, summary.count, 'the list and the takings count the same sales');
+  assert.ok((await d.get('/api/sales?days=2')).data.some((s) => s.id === late.data.sale.id), '2 days includes yesterday');
+});
+
+test('review fixes: takings refuse a bad date or location instead of failing or widening', async () => {
+  const o = await owner();
+  assert.equal((await o.get('/api/sales/summary?date=2026-13-45')).status, 400);
+  assert.equal((await o.get('/api/sales/summary?date=2026-02-30')).status, 400);
+  assert.equal((await o.get('/api/sales/summary?date=2026-02-28')).status, 200);
+  assert.equal((await o.get('/api/sales/summary?location_id=abc')).status, 404, 'not silently all locations');
+});
+
+test('review fixes: Undo shows only while the server would still allow it', async () => {
+  const d = await desk();
+  const s = await d.post('/api/sales', { location_id: facility(), method: 'cash', items: [{ product_id: product('gear').id }] });
+  run("UPDATE sales SET created_at=datetime('now','-625 seconds') WHERE id=?", s.data.sale.id); // 10.4 minutes
+  assert.equal((await d.get(`/api/sales/${s.data.sale.id}`)).data.can_undo, false);
+  assert.equal((await d.post(`/api/sales/${s.data.sale.id}/undo`)).status, 400);
+});
+
+test('review fixes: a receipt shows the discount as money off', async () => {
+  const d = await desk();
+  const gear = product('gear');
+  const r = await d.post('/api/sales', { location_id: facility(), method: 'cash', items: [{ product_id: gear.id }], discount: { type: 'amount', value: 250, reason: 'Team' },
+    email_receipt: true, receipt_email: 'counter@example.com' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const mail = get("SELECT body FROM outbox WHERE to_email='counter@example.com' ORDER BY id DESC LIMIT 1").body;
+  assert.match(mail, /Discount \(Team\) {2}-\$2\.50/);
+  assert.doesNotMatch(mail, /\$-/);
+});

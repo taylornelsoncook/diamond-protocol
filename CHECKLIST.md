@@ -101,6 +101,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 ## 10. Public launch
 
 - [ ] Put the sign-up link (`https://your-domain/join`, copy it from Hours & settings) on your website, Instagram bio and a QR code at the facility. Any free QR code generator works.
+- [ ] Print the check-in QR poster for the facility door and set up a check-in tablet if you have one (Schedule → Hours & settings → Self check-in).
 - [ ] Put the "Ask about training" link (`https://your-domain/start`) next to it for families who aren't ready to sign up. Send yourself a test inquiry and check the thank-you email and the Leads tab.
 - [ ] Email your current families their portal link with a short "how to book" note.
 - [ ] Announce your class schedule and camps.

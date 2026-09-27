@@ -24,6 +24,9 @@ const KIND = { group: 'Group class', clinic: 'Clinic', camp: 'Camp', private: 'P
 async function boot() {
   try { state.me = await get('me'); state.athleteId ??= state.me.athletes[0]?.id; } catch { state.me = null; }
   // Just signed up: go straight to the waiver and card.
+  // Signed in from the check-in QR code on the door: go back to it.
+  const back = new URLSearchParams(location.search).get('checkin');
+  if (state.me && back && /^[\w-]+$/.test(back)) { location.replace(`/here/${back}`); return; }
   if (state.me && new URLSearchParams(location.search).has('welcome')) { state.tab = 'family'; history.replaceState(null, '', '/parent'); setTimeout(() => toast('Welcome! Sign the waiver and add a card, then you can book.'), 300); }
   render();
 }

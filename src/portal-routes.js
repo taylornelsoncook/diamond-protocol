@@ -7,6 +7,7 @@ import * as clients from './services/clients.js';
 import { v, notFound, conflict, badRequest, newId, ageOn, zonedToUtc, localDate, addDaysToDate } from './util.js';
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
+import * as checkin from './services/checkin.js';
 import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
 import * as sms from './services/sms.js';
@@ -48,6 +49,8 @@ export const portalRoutes = [
   ['POST', '/portal/api/deletion-request', 'guardian', 'Ask for your family\'s account and data to be deleted. Optional note.', (ctx, r) => legal.requestDeletion(ctx, r.guardian, r.body), 201],
   ['POST', '/portal/api/verify', 'public', 'Exchange the code for a session.', (ctx, r) => families.verifyCode(ctx, r.body)],
   ['PATCH', '/portal/api/texts', 'guardian', 'Turn text messages on or off: texts (true or false), phone (your mobile number, needed to turn them on).', (ctx, r) => sms.setTextPrefs(ctx, r.guardian, r.body)],
+  ['GET', '/portal/api/check-in', 'guardian', 'From the door QR code (?code=): your athletes booked at that location with check-in open now.', (ctx, r) => checkin.familyCheckIns(ctx, r.guardian.family_id, r.query.code)],
+  ['POST', '/portal/api/check-in', 'guardian', 'Check in at the door: code, and booking_id (or none to check in everyone booked there now).', (ctx, r) => checkin.familyCheckIn(ctx, r.guardian.family_id, r.body)],
   ['POST', '/portal/api/logout', 'guardian', 'Sign out.', (ctx, r) => { families.portalLogout(ctx, r.familyToken); return { ok: true }; }],
 
   ['GET', '/portal/api/me', 'guardian', 'Family, athletes, card, waiver.', (ctx, r) => {

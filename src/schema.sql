@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS locations (
   address_line1 TEXT, city TEXT, state TEXT, postal_code TEXT, country TEXT NOT NULL DEFAULT 'US',
   stripe_location_id TEXT,
   active INTEGER NOT NULL DEFAULT 1,
+  checkin_code TEXT,                     -- the code in the door poster's QR link (/here/<code>); version 16
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS readers (
@@ -444,6 +445,18 @@ CREATE TABLE IF NOT EXISTS pay_links (
 CREATE INDEX IF NOT EXISTS pay_links_invoice ON pay_links(invoice_id);
 CREATE INDEX IF NOT EXISTS pay_links_client ON pay_links(client_id, status);
 
+-- Check-in tablets: a browser at the front desk opened with a secret link (/kiosk#<key>) where athletes tap their name.
+CREATE TABLE IF NOT EXISTS kiosks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  location_id TEXT NOT NULL REFERENCES locations(id),
+  key_hash TEXT NOT NULL UNIQUE,
+  last_seen_at TEXT,
+  revoked_at TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+
 -- ---- Team contracts: schools and clubs pay a monthly fee; athletes are on a roster ----
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
@@ -604,6 +617,7 @@ CREATE TABLE IF NOT EXISTS import_batches (
 
 CREATE UNIQUE INDEX IF NOT EXISTS clients_athlete_id ON clients(athlete_id);
 CREATE UNIQUE INDEX IF NOT EXISTS roster_athlete_id ON team_roster(athlete_id);
+CREATE UNIQUE INDEX IF NOT EXISTS locations_checkin_code ON locations(checkin_code);
 
 -- A checked upload waiting for the coach to confirm. Saved results always come from here, never from the browser.
 CREATE TABLE IF NOT EXISTS upload_previews (

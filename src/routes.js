@@ -22,6 +22,7 @@ import * as sms from './services/sms.js';
 import * as insights from './services/insights.js';
 import * as leads from './services/leads.js';
 import * as paylinks from './services/paylinks.js';
+import * as checkin from './services/checkin.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -108,6 +109,14 @@ export const routes = [
   // Point of sale: in-person payments at the facility, in parks and at clients' homes
   ['GET', '/v1/locations', 'any', 'Point of sale', 'Places you train. card_ready shows whether card payments are set up there.', (ctx, r) => list(commerce.listLocations(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['POST', '/v1/locations', 'any', 'Point of sale', 'Add a location: name, kind (facility, mobile, park, client_home, other) and street address for card payments.', (ctx, r) => commerce.createLocation(ctx, r.body), 201],
+  ['GET', '/v1/locations/:id/check-in-code', 'any', 'Schedule', 'The door poster for self check-in at this location: code, url (what the QR code opens) and poster_url (printable).', (ctx, r) => checkin.checkinCode(ctx, r.params.id)],
+  ['POST', '/v1/locations/:id/check-in-code/reset', 'any', 'Schedule', 'Make a new door code; old posters stop working.', (ctx, r) => checkin.checkinCode(ctx, r.params.id, { reset: true })],
+  ['GET', '/v1/kiosks', 'any', 'Schedule', 'Check-in tablets in use.', (ctx) => list(checkin.listKiosks(ctx))],
+  ['POST', '/v1/kiosks', 'any', 'Schedule', 'Set up a check-in tablet: location_id, optional name. Returns the link to open on the tablet (shown once).', (ctx, r) => checkin.createKiosk(ctx, r.body, r.user?.name), 201],
+  ['DELETE', '/v1/kiosks/:id', 'any', 'Schedule', 'Stop a tablet from checking athletes in.', (ctx, r) => checkin.revokeKiosk(ctx, r.params.id)],
+  ['GET', '/kiosk-api/board', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): sessions open for check-in at its location and who is booked.', (ctx, r) => checkin.kioskBoard(ctx, r.kioskKey)],
+  ['POST', '/kiosk-api/check-in', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): check in booking_id.', (ctx, r) => checkin.kioskCheckIn(ctx, r.kioskKey, r.body)],
+  ['GET', '/here-api/:code', 'public', 'Schedule', 'The door poster\'s page: business and location name.', (ctx, r) => checkin.publicPlace(ctx, r.params.code)],
   ['PATCH', '/v1/locations/:id', 'any', 'Point of sale', 'Update a location. Set active=false to archive it.', (ctx, r) => commerce.updateLocation(ctx, r.params.id, r.body)],
   ['GET', '/v1/readers', 'any', 'Point of sale', 'Front-desk card readers.', (ctx) => list(commerce.listReaders(ctx))],
   ['POST', '/v1/readers', 'any', 'Point of sale', 'Register a smart reader with the code on its screen: registration_code, label, location_id.', (ctx, r) => commerce.registerReader(ctx, r.body), 201],

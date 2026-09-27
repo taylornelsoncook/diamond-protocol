@@ -1036,8 +1036,34 @@ async function viewSession(main, id) {
     }, 'ghost')) : null);
 }
 
+// Self check-in: a QR poster for the door and check-in tablets for the front desk.
+function checkinPanel(locations, kiosks) {
+  const places = locations.filter((l) => l.active && ['facility', 'park', 'other'].includes(l.kind) && l.name !== 'Online');   // places with a door
+  const shown = h('div');
+  const canManage = state.user?.role !== 'front_desk';
+  const poster = (l) => async (e) => busy(e.currentTarget, async () => { const c = await get(`/v1/locations/${l.id}/check-in-code`); window.open(c.poster_url || `/poster.html?code=${c.code}`, '_blank'); });
+  const tablet = (l) => async (e) => busy(e.currentTarget, async () => {
+    const k = await post('/v1/kiosks', { location_id: l.id });
+    if (!k.link.startsWith('http')) k.link = location.origin + k.link;
+    fill(shown, h('div', { class: 'dp-panel stack', style: 'background:var(--surface-2, transparent)' },
+      h('div', { class: 'strong' }, `Tablet link for ${l.name}`),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Open this link once in the tablet\'s browser, then add it to the home screen. Anyone with the link can check athletes in here, so don\'t share it. It\'s only shown now.'),
+      h('code', { style: 'word-break:break-all' }, k.link),
+      h('div', null, btn('Copy tablet link', async () => { await navigator.clipboard?.writeText(k.link).catch(() => {}); toast('Tablet link copied.'); }, 'secondary'))));
+  });
+  return panel('Self check-in', { subtitle: 'Athletes check themselves in for sessions they\'re booked on, from 30 minutes before the start. The roster updates as they do.' },
+    places.length ? places.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow strong' }, l.name),
+      btn('Door poster', poster(l), 'outline'), btn('Set up a tablet', tablet(l), 'ghost'),
+      canManage ? btn('New door code', (e) => { if (confirm(`Make a new code for ${l.name}? Printed posters there stop working.`)) busy(e.currentTarget, async () => { await post(`/v1/locations/${l.id}/check-in-code/reset`); toast('New code made. Print the poster again.'); }); }, 'ghost') : null))
+      : h('p', { class: 'muted', style: 'margin:0' }, 'Add a location in Point of sale first.'),
+    shown,
+    kiosks.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Tablets in use'), kiosks.map((k) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, k.name), h('span', { class: 'small muted' }, k.last_seen_at ? `Last used ${ago(k.last_seen_at)}` : 'Not opened yet')),
+      canManage ? btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/kiosks/${k.id}`); toast('That tablet can\'t check anyone in now.'); render(); }), 'ghost') : null))) : null);
+}
+
 async function viewScheduleSetup(main) {
-  const [av, locs, settings] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings')]);
+  const [av, locs, settings, kiosks] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks')]);
   const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }) };
   const hours = panel('Your hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Anything else on your schedule blocks the time.' },
     ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
@@ -1110,7 +1136,7 @@ async function viewScheduleSetup(main) {
       btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
       btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
     digestOut);
-  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, setPanel, rankingsPanel(settings),
+  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings),
     isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
 }
 

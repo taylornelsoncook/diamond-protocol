@@ -176,6 +176,7 @@ function parseWhen(x, fallback) {
 export function recordResults(ctx, items, { source = 'api', provider = null, sessionId = null, defaultWhen, queue = true, internal = false } = {}) {
   if (!Array.isArray(items) || !items.length) throw badRequest('Send at least one result.');
   if (items.length > MAX_BATCH && !internal) throw badRequest(`Send up to ${MAX_BATCH} results at a time.`);   // internal: an upload saved in one go
+  if (provider) provider = String(provider).trim().toLowerCase();   // device links are saved in lower case, so "Swift" and "swift" are one sender
   if (sessionId) getSession(ctx, sessionId);
   const out = { created: [], duplicates: 0, unmatched: [], errors: [], prs: [], newQueued: [] };
   const tests = new Map();

@@ -2489,7 +2489,7 @@ async function viewTestingDay(main, id) {
   else if (f?.startsWith('tab|')) main.querySelector(`[data-tab="${f.slice(4)}"]`)?.focus();
   else if (f) main.querySelector(`input[data-cell="${f}"]`)?.focus();
 }
-document.addEventListener('keydown', (e) => swEscape?.(e));
+document.addEventListener('keydown', (e) => { if (location.hash.startsWith('#/testing/')) swEscape?.(e); });
 
 // A short note per athlete for parents: drafted from the results, read and approved by a coach.
 function notesPanel(id, notes) {

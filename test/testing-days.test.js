@@ -267,7 +267,7 @@ test('link a device ahead: waiting results are linked, the device name is kept, 
   assert.equal(link.external_name, 'Runner 0', 'the name the device uses, not the bare ID');
   assert.ok(link.linked > 300, 'everything waiting from that device is linked');
   assert.equal(link.moved_from, null);
-  const later = (await owner('POST', '/v1/results', { provider: 'swift', results: [{ athlete: { external_id: 'dev-0' }, test: 'dash_40yd', value: 5.3, external_id: 'run-new' }] })).body;
+  const later = (await owner('POST', '/v1/results', { provider: 'Swift', results: [{ athlete: { external_id: 'dev-0' }, test: 'dash_40yd', value: 5.3, external_id: 'run-new' }] })).body;
   assert.equal(later.created, 1, 'new results from the device go straight to the athlete');
   const moved = (await coach('POST', '/v1/athlete-links', { provider: 'swift', external_id: 'dev-0', athlete_id: cole.athlete_id })).body;
   assert.deepEqual(moved.moved_from, { name: 'Ava Lopez', athlete_id: ava.athlete_id });

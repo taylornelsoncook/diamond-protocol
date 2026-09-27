@@ -1498,7 +1498,7 @@ async function viewTeam(main, id) {
   const rosterPanel = panel(`Roster · ${c.roster.length}`, { subtitle: c.sessions_held ? `Attendance across ${c.sessions_held} ${c.sessions_held === 1 ? 'session' : 'sessions'} so far` : 'Check athletes in from each team session.' },
     c.roster.length ? c.roster.map((r) => h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, [r.athlete_id, r.position, r.grad_year ? `Class of ${r.grad_year}` : null].filter(Boolean).join(' · '))),
-      c.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${c.sessions_held} · ${Math.round((r.sessions_attended / c.sessions_held) * 100)}%`) : null,
+      r.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${r.sessions_held} · ${Math.round((r.sessions_attended / r.sessions_held) * 100)}%`) : null,
       btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/team-contracts/${id}/roster/${r.id}`); render(); }), 'ghost'))) : h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below.'),
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/team-contracts/${id}/roster`, { names: names.value }); toast(`Roster now has ${r.data.length} athletes.`); render(); }); } },
       names, h('div', null, btn('Add to roster', null, 'secondary', { type: 'submit' }))));

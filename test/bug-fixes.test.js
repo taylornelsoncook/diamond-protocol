@@ -146,3 +146,24 @@ test('front desk isn\'t offered a link to the results queue it can\'t open', asy
   assert.equal((await waiting(coach)).can_link, true);
   assert.equal((await waiting(owner)).can_link, true);
 });
+
+test('team attendance counts only sessions since the athlete joined the roster', async () => {
+  const contract = (await owner('POST', '/v1/team-contracts', { organization: { name: 'Westlake HS' }, name: 'Varsity', monthly_cents: 100000 })).body;
+  const series = (await owner('POST', `/v1/team-contracts/${contract.id}/sessions`, { location_id: park.id, weekdays: [1], start_time: '16:00', duration_min: 60, start_date: addDaysToDate(localDate(new Date().toISOString(), TZ), 1) })).body;
+  await owner('POST', `/v1/team-contracts/${contract.id}/roster`, { names: 'Early Bird\nLate Comer' });
+  const roster = (await owner('GET', `/v1/team-contracts/${contract.id}`)).body.roster;
+  const early = roster.find((r) => r.name === 'Early Bird'), late = roster.find((r) => r.name === 'Late Comer');
+  const today = localDate(new Date().toISOString(), TZ);
+  const past = [-20, -13, -6].map((n) => { const id = newId('cls'), at = zonedToUtc(addDaysToDate(today, n), '16:00', TZ);
+    app.ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, status, created_at) VALUES (?, ?, 'Varsity', 'team', ?, ?, ?, 20, 'scheduled', ?)`, id, series.id, park.id, at, new Date(Date.parse(at) + 3600000).toISOString(), at);
+    return id; });
+  app.ctx.db.run('UPDATE team_roster SET created_at = ? WHERE id = ?', zonedToUtc(addDaysToDate(today, -30), '09:00', TZ), early.id);
+  app.ctx.db.run('UPDATE team_roster SET created_at = ? WHERE id = ?', zonedToUtc(addDaysToDate(today, -8), '09:00', TZ), late.id);
+  for (const s of past) await owner('POST', `/v1/sessions/${s}/team-attendance`, { roster_id: early.id, present: true });
+  await owner('POST', `/v1/sessions/${past[2]}/team-attendance`, { roster_id: late.id, present: true });
+  const c = (await owner('GET', `/v1/team-contracts/${contract.id}`)).body;
+  assert.equal(c.sessions_held, 3);
+  const row = (id) => c.roster.find((r) => r.id === id);
+  assert.deepEqual([row(early.id).sessions_attended, row(early.id).sessions_held], [3, 3]);
+  assert.deepEqual([row(late.id).sessions_attended, row(late.id).sessions_held], [1, 1], 'sessions before they joined don\'t count against them');
+});

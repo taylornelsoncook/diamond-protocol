@@ -16,7 +16,7 @@ Unzip the project, create a **private** repository on GitHub, and upload the fol
    - `PUBLIC_URL`: `https://app.yourdomain.com`
    - `ADMIN_EMAIL`, `ADMIN_PASSWORD`: your sign-in for the first start (10+ characters)
    - `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`, `EMAIL_FROM`
-3. Deploy. The log should say `Created the owner account …`.
+3. Deploy. The log should say `Created the owner account …`. (`render.yaml` sets `TRUST_PROXY=2`: Render's Cloudflare edge and its load balancer. If you created the service by hand, set it yourself.)
 4. **Custom domain:** in the service settings add `app.yourdomain.com`, then add the DNS record Render shows at your domain registrar. HTTPS is set up automatically.
 
 ## 2b. Fly.io (alternative)
@@ -62,7 +62,7 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | --- | --- |
 | `PUBLIC_URL` | Your https address. Required. |
 | `DP_TEST_MODE` | `false` in production. |
-| `TRUST_PROXY` | `true` (set in the Dockerfile) so HTTPS and visitors' addresses behind the host's proxy are recognized. `true` means one proxy (Render). If another proxy sits in front (for example Cloudflare with the orange cloud on), set the number of proxies instead, like `2`. To confirm it, sign in as the owner and open Staff & security → Connection check: the address the app decided on should be your own internet address. |
+| `TRUST_PROXY` | How many proxies sit in front of the app, so HTTPS and visitors' addresses are recognized. The Dockerfile sets `true` (one proxy). **On Render set `TRUST_PROXY=2`**: Render puts its own Cloudflare edge in front of its load balancer, so two addresses arrive. Add one more (`3`) if you also turn on your own Cloudflare proxy (orange cloud) for the domain. To confirm it, sign in as the owner and open Staff & security → Connection check: the address the app decided on should be your own internet address, and the check lists what each value would pick. |
 | `DB_FILE`, `BACKUP_DIR` | `/data/diamond.db`, `/data/backups` (set in the Dockerfile). |
 | `BACKUP_KEEP` | How many daily backups to keep (default 30). |
 | `BUSINESS_TZ` | Your time zone, e.g. `America/Chicago`. |

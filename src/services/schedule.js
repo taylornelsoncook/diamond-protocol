@@ -20,6 +20,35 @@ const when = (ctx, iso) => new Intl.DateTimeFormat('en-US', { timeZone: tz(ctx),
 export function listCoaches(ctx) {
   return ctx.db.all(`SELECT id, name, role FROM users WHERE active = 1 AND role IN ('owner','coach') ORDER BY name COLLATE NOCASE`);
 }
+// The owner's Coaches panel on Today: for each active coach (and owner who leads sessions), today's sessions and the next
+// one, the next 7 days (sessions, how full the classes are, privates booked), attendance at what they led in the last 7
+// days, and their upcoming days off. Sessions with no coach are counted too, so nothing goes unnoticed. No money.
+const CLASS_KINDS = ['group', 'clinic', 'camp'];
+export function coachSummary(ctx) {
+  const zone = tz(ctx), now = ctx.now(), today = localDate(now, zone);
+  const dayEnd = zonedToUtc(addDaysToDate(today, 1), '00:00', zone), weekEnd = zonedToUtc(addDaysToDate(today, 7), '00:00', zone);
+  const week = listSessions(ctx, { from: zonedToUtc(today, '00:00', zone), to: weekEnd });
+  const att = new Map(ctx.db.all(`SELECT s.coach_id, SUM(b.status = 'attended') AS came, SUM(b.status = 'no_show') AS missed FROM bookings b JOIN class_sessions s ON s.id = b.session_id
+    WHERE s.status = 'scheduled' AND s.starts_at >= ? AND s.starts_at < ? GROUP BY s.coach_id`, new Date(Date.parse(now) - 7 * 86400000).toISOString(), now).map((r) => [r.coach_id, r]));
+  const off = listTimeOff(ctx, { from: today, to: addDaysToDate(today, 30) });
+  const facilityOff = off.filter((t) => !t.user_id).map(({ id, start_date, end_date, note }) => ({ id, start_date, end_date, note }));
+  const summarize = (list, a) => {
+    const classes = list.filter((x) => CLASS_KINDS.includes(x.kind));
+    const cap = classes.reduce((t, x) => t + x.capacity, 0), booked = classes.reduce((t, x) => t + x.booked_count, 0);
+    const todays = list.filter((x) => x.starts_at < dayEnd), next = list.find((x) => x.ends_at > now);
+    return {
+      today: { sessions: todays.length, booked: todays.reduce((t, x) => t + x.booked_count, 0) },
+      next_session: next ? { id: next.id, name: next.name, kind: next.kind, starts_at: next.starts_at, location_name: next.location_name, booked: next.booked_count, capacity: next.capacity } : null,
+      week: { sessions: list.length, classes: classes.length, class_spots: cap, class_booked: booked, fill_pct: cap ? Math.round((booked / cap) * 100) : null,
+        privates_booked: list.filter((x) => x.kind === 'private' && x.booked_count > 0).length, evaluations_booked: list.filter((x) => x.kind === 'evaluation' && x.booked_count > 0).length },
+      attendance_7_days: { came: a?.came ?? 0, missed: a?.missed ?? 0 }
+    };
+  };
+  const coaches = listCoaches(ctx).map((c) => ({ id: c.id, name: c.name, role: c.role, ...summarize(week.filter((x) => x.coach_id === c.id), att.get(c.id)),
+    time_off: off.filter((t) => t.user_id === c.id).map(({ id, start_date, end_date, note }) => ({ id, start_date, end_date, note })) }));
+  const unassigned = week.filter((x) => !x.coach_id);
+  return { date: today, timezone: zone, coaches, no_coach: { sessions: unassigned.length, next: unassigned[0] ? { id: unassigned[0].id, name: unassigned[0].name, starts_at: unassigned[0].starts_at } : null }, facility_time_off: facilityOff };
+}
 // A coach_id from a request: null or '' clears it, anything else must be an active owner or coach.
 function coachInput(ctx, x) {
   if (x === null || x === '') return null;
@@ -230,10 +259,18 @@ function ageCheck(client, session) {
 }
 
 // Decide how a booking is paid for: membership, a credit, a card charge, or (coach only) pay later.
-async function cover(ctx, session, client, { pay, allowUnpaid, actor }) {
+// offerPriceCents: a trial offer's special price (spots.js). A membership that covers the class still covers it; otherwise
+// the family pays that price with the card on file instead of using a pack or the drop-in, and 0 books it free.
+async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPriceCents }) {
   const type = creditTypeFor(session.kind);
   if (session.kind === 'team') return { coverage: 'none' };                       // billed through the team contract
   if (type === 'group' && isMember(ctx, client.id)) return { coverage: 'membership' };
+  if (offerPriceCents != null) {
+    if (offerPriceCents === 0) return { coverage: 'none' };
+    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))} (trial offer)`, amount_cents: offerPriceCents } }, actor);
+    if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
+    return { coverage: 'paid', sale_id: sale.id };
+  }
   if (type && commerce.creditBalance(ctx, client.id, type) > 0 && pay !== 'card_on_file') {
     ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'booking', ?, ?)`, newId('cr'), client.id, type, `${session.name} ${localDate(session.starts_at, tz(ctx))}`, ctx.now());
     return { coverage: 'credit', credit_type: type };
@@ -270,7 +307,7 @@ async function releaseBooking(ctx, b, status) {
 
 // Bookings for one session go one at a time, so a double tap can't charge twice and two families can't both take the last spot.
 export function book(ctx, args) { return withLock(`book:${args.sessionId}`, () => bookNow(ctx, args)); }
-async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, overrideAge = false }) {
+async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, overrideAge = false, offerPriceCents }) {
   const s = getSession(ctx, sessionId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');
@@ -285,8 +322,10 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
   if (existing && ['booked', 'attended', 'waitlisted'].includes(existing.status)) throw conflict(`${first(c.name)} is already ${existing.status === 'waitlisted' ? 'on the waitlist' : 'booked'} for this session.`);
 
   const full = s.booked_count >= s.capacity;
+  // A trial offer is for a spot, not the waitlist: the waitlist later books at the usual price.
+  if (full && offerPriceCents != null) throw conflict('Sorry, that spot was just taken. We\'ll let you know next time one opens.');
   let result = { coverage: 'none' }, status = 'waitlisted';
-  if (!full) { result = await cover(ctx, s, c, { pay, allowUnpaid: isCoach, actor }); status = 'booked'; }
+  if (!full) { result = await cover(ctx, s, c, { pay, allowUnpaid: isCoach, actor, offerPriceCents }); status = 'booked'; }
   // Archived while the card was being charged: give the credit or payment back rather than book an archived client.
   if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) {
     await undoCover(ctx, clientId, result);
@@ -297,7 +336,7 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
     if (existing) ctx.db.run('UPDATE bookings SET status = ?, coverage = ?, credit_type = ?, sale_id = ?, booked_by = ?, created_at = ?, updated_at = ? WHERE id = ?', status, result.coverage, result.credit_type ?? null, result.sale_id ?? null, actor ?? null, ctx.now(), ctx.now(), id);
     else ctx.db.run(`INSERT INTO bookings (id, session_id, client_id, status, coverage, credit_type, sale_id, booked_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, sessionId, clientId, status, result.coverage, result.credit_type ?? null, result.sale_id ?? null, actor ?? null, ctx.now(), ctx.now());
-    emit(ctx, status === 'waitlisted' ? 'booking.waitlisted' : 'booking.created', { booking_id: id, session_id: sessionId, session_name: s.name, starts_at: s.starts_at, client_id: clientId, client_name: c.name, coverage: result.coverage });
+    emit(ctx, status === 'waitlisted' ? 'booking.waitlisted' : 'booking.created', { booking_id: id, session_id: sessionId, session_name: s.name, starts_at: s.starts_at, client_id: clientId, client_name: c.name, coverage: result.coverage, ...(offerPriceCents != null && status === 'booked' ? { trial_offer: true, price_cents: offerPriceCents } : {}) });
   });
   notifyFamily(ctx, c.family_id, status === 'waitlisted' ? `Waitlisted: ${s.name}, ${when(ctx, s.starts_at)}` : `Booked: ${s.name}, ${when(ctx, s.starts_at)}`,
     status === 'waitlisted' ? `${first(c.name)} is on the waitlist for ${s.name} at ${s.location_name}, ${when(ctx, s.starts_at)}. We'll email you if a spot opens.`

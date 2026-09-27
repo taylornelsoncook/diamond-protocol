@@ -28,6 +28,7 @@ const headCoach = createUser(ctx, { email, name: 'Head Coach', password });
 // Sample staff (same sample password): a coach who leads classes and privates, and front desk.
 const riley = createUser(ctx, { email: 'riley@diamondprotocol.local', name: 'Riley Brooks', password, role: 'coach' });
 const desk = createUser(ctx, { email: 'desk@diamondprotocol.local', name: 'Jess Moreno', password, role: 'front_desk' });
+const jordan = createUser(ctx, { email: 'jordan@diamondprotocol.local', name: 'Jordan Ellis', password, role: 'coach' });   // a third coach, for the owner's Coaches panel
 
 const plans = {
   coach: billing.createPlan(ctx, { name: '1:1 Online Coaching', price_cents: 14900, trial_days: 7 }),
@@ -153,6 +154,19 @@ if (next) { await schedule.book(ctx, { sessionId: next.id, clientId: cole.id, is
 // The head coach subs for Riley on the second Speed & Agility session.
 const second = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now() + 14 * 86400000).toISOString(), kind: 'group' }).filter((x) => x.series_id === speed.id)[1];
 if (second) schedule.updateSession(ctx, second.id, { coach_id: headCoach.id });
+// Jordan's younger group (so three coaches have classes this week), a private Riley has booked, and last week's
+// sessions with check-ins, so Today's Coaches panel has attendance to show.
+await schedule.createSeries(ctx, { coach_id: jordan.id, name: 'Youth Foundations', kind: 'group', location_id: facility.id, weekdays: [2, 5], start_time: '16:30', duration_min: 60, capacity: 10, age_min: 7, age_max: 11, drop_in_cents: 2000, start_date: today, description: 'Running form, jumping and landing, and games for younger athletes.' });
+const colePrivate = await schedule.createSession(ctx, { name: 'Private: Cole Park', kind: 'private', location_id: facility.id, date: addDaysToDate(today, 2), start_time: '10:00', duration_min: 60, coach_id: riley.id, drop_in_cents: 8000 });
+await schedule.book(ctx, { sessionId: colePrivate.id, clientId: cole.id, isCoach: true });
+const benLopez = ctx.db.get(`SELECT id FROM clients WHERE name = 'Ben Lopez'`).id;
+for (const [name, coachId, daysAgo, who] of [['Speed & Agility', riley.id, 5, [[lopez.id, 'attended'], [cole.id, 'attended'], [nguyen.id, 'no_show']]], ['High School Strength', headCoach.id, 4, [[nguyen.id, 'attended'], [cole.id, 'attended']]],
+  ['Saturday Park Sprints', riley.id, 3, [[lopez.id, 'attended'], [cole.id, 'attended'], [benLopez, 'attended']]], ['Youth Foundations', jordan.id, 2, [[benLopez, 'attended'], [lopez.id, 'no_show']]]]) {
+  const at = new Date(Date.now() - daysAgo * 86400000), id = `cls_seed_past_${daysAgo}`;
+  ctx.db.run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, coach_id, status, created_at) VALUES (?, ?, 'group', ?, ?, ?, 12, 2500, ?, 'scheduled', ?)`,
+    id, name, name === 'Saturday Park Sprints' ? park.id : facility.id, at.toISOString(), new Date(at.getTime() + 3600000).toISOString(), coachId, ctx.now());
+  for (const [clientId, status] of who) ctx.db.run(`INSERT INTO bookings (id, session_id, client_id, status, coverage, booked_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'membership', 'seed', ?, ?)`, `bkg_seed_${daysAgo}_${clientId}`, id, clientId, status, ctx.now(), ctx.now());
+}
 
 // Team contracts (sample): a high school billed monthly, and a club without a billing email yet.
 updateSettings(ctx, { business_address: '1200 Sample Rd, Suite 4\nAustin, TX 78701', payment_instructions: 'Pay online with the button on this invoice (card or bank transfer), or mail a check payable to Diamond Protocol LLC to the address above.' });
@@ -289,7 +303,7 @@ const owen = await clients.createClient(ctx, { name: 'Owen Fischer', birth_date:
 await clients.archiveClient(ctx, owen.id, {}, { name: 'Head Coach' });
 
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
-console.log(`Sample staff (same password): riley@diamondprotocol.local (coach), desk@diamondprotocol.local (front desk)`);
+console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);
 console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com; in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
 console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);

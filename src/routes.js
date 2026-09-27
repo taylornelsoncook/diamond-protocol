@@ -32,7 +32,7 @@ import * as spots from './services/spots.js';
 import * as notes from './services/notes.js';
 import * as moneychecks from './services/moneychecks.js';
 import { portalRoutes } from './portal-routes.js';
-import { HttpError, v, badRequest } from './util.js';
+import { HttpError, v, badRequest, notFound } from './util.js';
 
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
 // Each entry: [method, path, auth, tag, summary, handler(ctx, req)] where req = { params, query, body, user, apiKey }
@@ -56,7 +56,8 @@ export const routes = [
   ['GET', '/v1/at-risk', 'any', 'Dashboard', 'Athletes who may be drifting away: a score (40 to 100) and the reasons, from attendance, bookings, check-ins and (owners only) payments.', (ctx, r) => list(insights.atRisk(ctx, { role: r.user?.role ?? 'owner' }))],
   ['GET', '/v1/digest', 'any', 'Dashboard', 'This week\'s owner summary: money in, members, athletes to check on, open spots and suggested actions. Includes the email text.', (ctx) => { const d = insights.buildDigest(ctx); return { ...d, text: insights.digestText(ctx, d) }; }],
   ['POST', '/v1/digest/send', 'session', 'Dashboard', 'Email this week\'s summary to the owners now.', (ctx) => insights.sendDigest(ctx)],
-  ['GET', '/v1/events', 'any', 'Dashboard', 'Recent events, newest first. Filter with ?type=.', (ctx, r) => list(events.listEvents(ctx, { type: r.query.type, limit: v.int(r.query.limit ?? 50, 'limit', { min: 1, max: 200 }) }))],
+  ['GET', '/v1/events', 'any', 'Dashboard', 'Recent events, newest first. Filter with ?type=.', (ctx, r) => list(events.listEvents(ctx, { type: r.query.type, limit: v.int(r.query.limit ?? 50, 'limit', { min: 1, max: 200 }) })
+    .filter((e) => !r.user || r.user.role === 'owner' || !security.OWNER_EVENTS.test(e.type)))],
 
   // Clients
   ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name or email) and ?status=.', (ctx, r) => list(clients.listClients(ctx, r.query))],
@@ -159,9 +160,14 @@ export const routes = [
   ['PATCH', '/v1/products/:id/variants/:vid', 'any', 'Point of sale', 'Rename a size or stop selling it (active=false).', (ctx, r) => inventory.updateVariant(ctx, r.params.id, r.params.vid, r.body)],
   ['POST', '/v1/products/:id/stock', 'any', 'Point of sale', 'Change stock: reason received (quantity arrived), count (quantity on the shelf) or adjust (+/-), with variant_id for a size and an optional note.', (ctx, r) => inventory.recordStock(ctx, r.params.id, r.body, r.user?.name ?? 'API'), 201],
   ['GET', '/v1/products/:id/stock', 'any', 'Point of sale', 'Stock history for a product, newest first.', (ctx, r) => list(inventory.stockHistory(ctx, r.params.id))],
-  ['GET', '/v1/sales', 'any', 'Point of sale', 'In-person sales, newest first. Filter with ?location_id=, ?client_id=, ?status=, ?since=.', (ctx, r) => list(commerce.listSales(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined, locationId: r.query.location_id, clientId: r.query.client_id, status: r.query.status }))],
+  // Coaches see only the sales they rang up themselves, never the business's takings.
+  ['GET', '/v1/sales', 'any', 'Point of sale', 'In-person sales, newest first. Filter with ?location_id=, ?client_id=, ?status=, ?since=. Coaches see only their own sales.', (ctx, r) => list(commerce.listSales(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined, locationId: r.query.location_id, clientId: r.query.client_id, status: r.query.status, createdBy: r.user?.role === 'coach' ? r.user.id : undefined }))],
   ['POST', '/v1/sales', 'any', 'Point of sale', 'Start a sale: location_id, method (tap_to_pay, reader, card_on_file, cash), items [{product_id, quantity}] and/or custom {description, amount_cents}, optional client_id, save_card, reader_id. For tap_to_pay the response includes tap_to_pay.client_secret and tap_to_pay.location_ref for the iPhone app.', (ctx, r) => commerce.createSale(ctx, r.body, r.user?.id ?? r.apiKey?.id), 201],
-  ['GET', '/v1/sales/:id', 'any', 'Point of sale', 'A sale with its items.', (ctx, r) => commerce.getSale(ctx, r.params.id, { withSecret: true })],
+  ['GET', '/v1/sales/:id', 'any', 'Point of sale', 'A sale with its items.', (ctx, r) => {
+    const sale = commerce.getSale(ctx, r.params.id, { withSecret: true });
+    if (r.user?.role === 'coach' && sale.created_by !== r.user.id) throw notFound('Sale');
+    return sale;
+  }],
   ['POST', '/v1/sales/:id/sync', 'any', 'Point of sale', 'Check with the payment service and record the result. The iPhone app calls this after a tap.', (ctx, r) => commerce.syncSale(ctx, r.params.id)],
   ['POST', '/v1/sales/:id/cancel', 'any', 'Point of sale', 'Cancel a payment that is still waiting for a card.', (ctx, r) => commerce.cancelSale(ctx, r.params.id)],
   ['POST', '/v1/sales/:id/refund', 'any', 'Point of sale', 'Refund a sale. Optional amount_cents for a partial refund. A full refund removes unused sessions from the pack.', (ctx, r) => commerce.refundSale(ctx, r.params.id, r.body)],

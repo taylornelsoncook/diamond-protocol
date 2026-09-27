@@ -4,6 +4,7 @@ import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
+import { OWNER_EVENTS } from './security.js';
 
 const SESSION_DAYS = 14;
 
@@ -125,7 +126,7 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
     return { today_sales: null, metrics: { paying_clients: active.n, trialing_clients: trialing, workouts_last_7_days: workouts }, teams: null,
       attention: [...waiting, ...quiet, ...(role === 'front_desk' ? pendingSales.map(({ amount_cents, ...x }) => x) : pendingSales)],
-      activity: listEvents(ctx, { limit: 12 }).filter((e) => !/^(invoice|subscription|team_invoice|sale\.refunded)/.test(e.type)) };
+      activity: listEvents(ctx, { limit: 12 }).filter((e) => !OWNER_EVENTS.test(e.type)) };
   }
   return {
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },

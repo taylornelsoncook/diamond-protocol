@@ -40,6 +40,17 @@ export function can(role, method, path) {
   if (role === 'front_desk') return FRONT_DESK.some(([m, re]) => m === method && re.test(path));
   return false;
 }
+// Coaches never see money. They take payments at the counter, so what the counter sells from (products, stock, plans)
+// and the sales they rang up themselves keep their prices; every other _cents field is removed from what they read.
+const COACH_SEES_PRICES = /^\/v1\/(products|inventory|plans|sales)(\/|$)/;
+const withoutCents = (x) => (Array.isArray(x) ? x.map(withoutCents)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).filter(([k]) => !k.endsWith('_cents')).map(([k, val]) => [k, withoutCents(val)])) : x);
+export function hideMoney(role, method, path, out) {
+  if (role !== 'coach' || method !== 'GET' || COACH_SEES_PRICES.test(path)) return out;
+  return withoutCents(out);
+}
+// Activity that is only about money (memberships, refunds, school contracts) stays with the owner.
+export const OWNER_EVENTS = /^(invoice|subscription|team_invoice|team_contract|sale\.refunded)/;
 export const roleName = (r) => ({ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[r] ?? r);
 
 // ---------- Staff ----------

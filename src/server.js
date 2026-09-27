@@ -13,7 +13,7 @@ import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
 import { assignMissingIds } from './services/athlete-ids.js';
-import { can, audit, rateLimit, roleName } from './services/security.js';
+import { can, audit, rateLimit, roleName, hideMoney } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
 import { syncAll as syncDevices, migratePending } from './services/perf-import.js';
 import { runBilling } from './services/billing.js';
@@ -135,7 +135,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         if (out.__file.stream) return out.__file.stream.pipe(res);
         return res.end(out.__file.body);
       }
-      return json(res, route.status, out);
+      return json(res, route.status, r.user ? hideMoney(r.user.role, req.method, route.path, out) : out);
     } catch (e) {
       if (e instanceof HttpError) return json(res, e.status, { error: { code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) } });
       console.error(e);

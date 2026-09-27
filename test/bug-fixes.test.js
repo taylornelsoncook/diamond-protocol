@@ -96,3 +96,29 @@ test('today\'s takings start at midnight in the business\'s time zone, not the s
   assert.equal(after.n - before.n, 1);
   app.ctx.db.run(`DELETE FROM sales WHERE created_at LIKE '2026-10-06%'`);
 });
+
+test('canceling a private frees its time, and only overlapping sessions at the same place block private hours', async () => {
+  const day = addDaysToDate(localDate(new Date().toISOString(), TZ), 3);
+  const av = (await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekday: weekdayOf(day), start_time: '06:00', end_time: '09:00', slot_minutes: 60 })).body;
+  const slots = async () => (await owner('GET', '/v1/slots?days=5')).body.data.filter((s) => s.availability_id === av.id && localDate(s.starts_at, TZ) === day).map((s) => s.starts_at);
+  const six = zonedToUtc(day, '06:00', TZ), seven = zonedToUtc(day, '07:00', TZ), eight = zonedToUtc(day, '08:00', TZ);
+  assert.deepEqual(await slots(), [six, seven, eight]);
+
+  // A team session somewhere else at the same time doesn't take the facility's private hours.
+  await owner('POST', '/v1/sessions', { name: 'Away session', kind: 'team', location_id: park.id, date: day, start_time: '06:00', duration_min: 60 });
+  assert.deepEqual(await slots(), [six, seven, eight]);
+  // A class at the facility blocks only the hour it overlaps.
+  await owner('POST', '/v1/sessions', { name: 'Early group', kind: 'group', location_id: facility.id, date: day, start_time: '07:15', duration_min: 30 });
+  assert.deepEqual(await slots(), [six, eight]);
+
+  // Book a private at 6, then cancel it: the hour opens again, and the empty session is off the schedule.
+  const b = (await owner('POST', '/v1/slots/book', { kind: 'private', starts_at: six, availability_id: av.id, client_id: cole.id })).body;
+  assert.deepEqual(await slots(), [eight]);
+  await owner('POST', `/v1/bookings/${b.id}/cancel`, { waive: true });
+  assert.deepEqual(await slots(), [six, eight]);
+  assert.equal(app.ctx.db.get('SELECT status FROM class_sessions WHERE id = ?', b.session_id).status, 'canceled');
+  // A private left empty some other way doesn't block the hour either.
+  const again = (await owner('POST', '/v1/slots/book', { kind: 'private', starts_at: six, availability_id: av.id, client_id: cole.id })).body;
+  app.ctx.db.run(`UPDATE bookings SET status = 'canceled' WHERE id = ?`, again.id);
+  assert.deepEqual(await slots(), [six, eight]);
+});

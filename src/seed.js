@@ -9,10 +9,12 @@ import * as perf from './services/performance.js';
 import * as reports from './services/reports.js';
 import { updateSettings } from './services/families.js';
 import { localDate, addDaysToDate } from './util.js';
+const weekStart = (d) => addDaysToDate(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
 import * as billing from './services/billing.js';
 import * as clients from './services/clients.js';
 import * as programs from './services/programs.js';
 import { createUser } from './services/access.js';
+import * as engage from './services/engage.js';
 import { addDays } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -177,7 +179,84 @@ perf.recordResults(ctx, [
   { athlete: { external_id: 'MAT-0412', name: 'Athlete 12' }, test: 'vertical_standing', value: 18, recorded_at: at(fall), device: 'Jump mat', external_id: 'mat-demo-2' }
 ], { source: 'api:just_jump', provider: 'just_jump' });
 
+// Accountability, performance targets and education (sample). Ava is on the Hill Country FC roster and Cole on Westlake's,
+// so team goals, messages and reading reach them in the app and the parent portal.
+const coachUser = ctx.db.get(`SELECT id, name FROM users ORDER BY created_at LIMIT 1`);
+const realNow = ctx.now;
+const at9 = (d) => `${d}T15:00:00.000Z`;
+const hillCountry = ctx.db.get(`SELECT id FROM team_contracts WHERE name = '14U Girls'`).id;
+teams.addRoster(ctx, hillCountry, { name: 'Ava Lopez', position: 'Winger', grad_year: 2031, client_id: lopez.id });
+teams.addRoster(ctx, hillCountry, { names: 'Sofia Ramirez, Midfield, 2031\nEmma Clarke, Defender, 2031\nHannah Brooks, Forward, 2030\nZoe Patel, Goalkeeper, 2031' });
+teams.addRoster(ctx, westlake.id, { name: 'Cole Park', position: 'WR', grad_year: 2029, client_id: cole.id });
+const roster = (contractId) => ctx.db.all('SELECT id, name FROM team_roster WHERE contract_id = ? AND client_id IS NULL AND active = 1 ORDER BY name', contractId);
+const preseason = addDaysToDate(today, -9);
+const hcDay = perf.createSession(ctx, { name: 'Hill Country preseason testing', date: preseason, contract_id: hillCountry, tests: ['dash_40yd', 'vertical_standing', 'broad_jump'] });
+const hcVals = [[6.05, 16, 74], [5.88, 17.5, 79], [6.21, 15, 70], [5.97, 16.5, 76]];
+perf.recordResults(ctx, roster(hillCountry).flatMap((r, i) => [['dash_40yd', hcVals[i][0], { timing: 'hand' }], ['vertical_standing', hcVals[i][1]], ['broad_jump', hcVals[i][2]]]
+  .map(([test, value, extra = {}]) => ({ roster_id: r.id, test, value, recorded_at: at9(preseason), ...extra }))), { source: 'manual', sessionId: hcDay.id });
+const wlDay = perf.createSession(ctx, { name: 'Westlake summer testing', date: summer, contract_id: westlake.id, tests: ['dash_40yd', 'vertical_standing', 'broad_jump'] });
+const wlVals = [[4.92, 29, 108], [5.01, 27.5, 104], [5.18, 25, 98], [5.35, 23.5, 96], [4.88, 30, 110], [5.62, 21, 92]];
+perf.recordResults(ctx, roster(westlake.id).slice(0, 6).flatMap((r, i) => [['dash_40yd', wlVals[i][0], { timing: 'electronic' }], ['vertical_standing', wlVals[i][1]], ['broad_jump', wlVals[i][2]]]
+  .map(([test, value, extra = {}]) => ({ roster_id: r.id, test, value, recorded_at: at9(summer), ...extra }))), { source: 'manual', sessionId: wlDay.id });
+reports.shareSession(ctx, hcDay.id, { notify: false });
+reports.shareSession(ctx, wlDay.id, { notify: false });
+engage.setRankings(ctx, { rankings: 'on' });
+
+// Training over the last three weeks for Ava: workouts and walk-in check-ins, so streaks and the calendar fill in.
+programs.assign(ctx, strength.id, lopez.id);
+const avaRow = () => ctx.db.get('SELECT * FROM clients WHERE id = ?', lopez.id);
+for (const back of [19, 17, 12, 10, 5, 3]) {
+  ctx.now = () => `${addDaysToDate(today, -back)}T23:00:00.000Z`;
+  const home = programs.clientHome(ctx, avaRow());
+  if (home.workout) programs.completeWorkout(ctx, avaRow(), home.workout.id, { exercise_ids: home.workout.exercises.map((e) => e.id) });
+}
+for (const back of [15, 8, 1]) { ctx.now = () => `${addDaysToDate(today, -back)}T23:30:00.000Z`; commerce.checkIn(ctx, lopez.id, { location_id: facility.id }); }
+
+// Daily check-ins: Ava every day but today (so the form is ready), Mia a few days, Cole flagged today.
+const checkins = [
+  [lopez, [[8.5, 4, 2, 4, 4], [8, 4, 3, 4, 5], [9, 5, 2, 5, 4], [7.5, 3, 3, 4, 4], [8, 4, 2, 4, 5], [8.5, 4, 2, 5, 5], [7, 3, 4, 3, 4], [8, 4, 2, 4, 4]], 1],
+  [nguyen, [[7, 3, 3, 3, 4], [8, 4, 2, 4, 4], [8.5, 4, 2, 4, 5]], 1],
+  [cole, [[7, 3, 3, 3, 4], [6.5, 3, 4, 3, 3], [5.5, 2, 4, 2, 3]], 0]
+];
+for (const [c, days, endsBack] of checkins) {
+  days.forEach(([sleep_hours, hydration, soreness, energy, mood], i) => {
+    ctx.now = () => `${addDaysToDate(today, -(days.length - 1 - i) - endsBack)}T13:00:00.000Z`;
+    engage.saveCheckin(ctx, c.id, { sleep_hours, hydration, soreness, energy, mood, note: c === cole && i === days.length - 1 ? 'Hamstring is tight from Tuesday.' : undefined });
+  });
+}
+ctx.now = realNow;
+
+// Goals, messages and test targets.
+engage.createGoal(ctx, { clientId: lopez.id }, { kind: 'workouts', target: 3, title: '3 workouts this week' }, coachUser);
+engage.createGoal(ctx, { clientId: lopez.id }, { kind: 'checkins', target: 5, title: 'Check in 5 days' }, coachUser);
+const mobility = engage.createGoal(ctx, { clientId: lopez.id }, { kind: 'custom', target: 4, title: '10 minutes of mobility' }, coachUser);
+ctx.db.run('INSERT INTO goal_checks (goal_id, client_id, date) VALUES (?, ?, ?)', mobility.id, lopez.id, weekStart(today) < today ? weekStart(today) : today);
+engage.createGoal(ctx, { contractId: hillCountry }, { kind: 'sessions', target: 2, title: 'Make 2 team sessions this week' }, coachUser);
+engage.createGoal(ctx, { clientId: cole.id }, { kind: 'checkins', target: 6, title: 'Check in 6 days' }, coachUser);
+engage.sendMessage(ctx, { contractId: hillCountry }, { body: 'Great energy at practice. Hydrate before Thursday; it will be hot on the field.' }, coachUser);
+engage.sendMessage(ctx, { clientId: lopez.id }, { body: 'Your broad jump is up 5 inches since summer. Keep the landings quiet and we will chase 6 feet 8.' }, coachUser);
+engage.sendMessage(ctx, { clientId: cole.id }, { body: 'Saw your check-in: short on sleep and a tight hamstring. Easy warm-up today and tell me how it feels.' }, coachUser);
+engage.setTarget(ctx, lopez.id, { test: 'broad_jump', target: '6\'8"', due_date: addDaysToDate(today, 60) }, coachUser);
+engage.setTarget(ctx, lopez.id, { test: 'dash_40yd', target: '5.75', due_date: addDaysToDate(today, 60) }, coachUser);
+engage.setTarget(ctx, cole.id, { test: 'vertical_standing', target: '28', due_date: addDaysToDate(today, 90) }, coachUser);
+
+// Education: a four-lesson course and two stand-alone lessons.
+const recovery = engage.createCourse(ctx, { title: 'Recovery basics', description: 'Four short lessons on recovering well, so every session counts.' });
+const lessons = [
+  ['Why sleep is your best supplement', 'Growth, speed and focus all depend on it.', 'Most of your progress happens while you sleep. Athletes your age need 8 to 10 hours a night.\n\nTonight: phone out of the bedroom, lights out at the same time, and a cool, dark room.', 4],
+  ['Hydration you can actually follow', 'A simple plan for training days.', 'Drink a full bottle with breakfast, another before training, and sip during.\n\nCheck your color: pale yellow means you are on track.', 3],
+  ['Soreness or pain?', 'When to push and when to tell a coach.', 'Soreness is dull, in the muscle, and eases as you warm up. Pain is sharp, in a joint, or gets worse as you move.\n\nIf it is pain, stop and tell your coach.', 3],
+  ['The 10-minute cool-down', 'What to do right after a hard session.', 'Walk for 3 minutes, then hips, calves and upper back for 2 minutes each.\n\nThen eat something with protein within an hour.', 5]
+].map(([title, summary, body, minutes]) => engage.createLesson(ctx, { title, summary, body, minutes, course_id: recovery.id }));
+const fuel = engage.createLesson(ctx, { title: 'Fuel before a game', summary: 'What to eat 3 hours, 1 hour and 15 minutes out.', body: '3 hours out: a real meal with carbs and protein.\n\n1 hour out: something small and easy, like a banana.\n\n15 minutes out: water only.', minutes: 4 });
+const mindset = engage.createLesson(ctx, { title: 'Mindset: next play', summary: 'How great athletes reset after a mistake.', body: 'Name it, let it go, and focus on your next job.\n\nTake one breath and pick one cue word you say to yourself.', minutes: 3 });
+engage.assign(ctx, { course_id: recovery.id, client_id: lopez.id, due_date: addDaysToDate(today, 7), note: 'Start with sleep. Takes 15 minutes in total.' }, coachUser);
+ctx.db.run('INSERT INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', lessons[0].id, lopez.id, ctx.now());
+engage.assign(ctx, { lesson_id: fuel.id, contract_id: hillCountry, due_date: addDaysToDate(today, 3) }, coachUser);
+engage.assign(ctx, { lesson_id: mindset.id, contract_id: westlake.id, due_date: addDaysToDate(today, 5) }, coachUser);
+
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com; in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
+console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);
 ctx.db.close();

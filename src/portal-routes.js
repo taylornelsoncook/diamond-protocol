@@ -8,6 +8,7 @@ import { v, notFound, conflict, badRequest, newId, ageOn, zonedToUtc, localDate,
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as signup from './services/signup.js';
+import * as engage from './services/engage.js';
 
 const list = (data) => ({ data });
 function athleteOf(ctx, r, id) {
@@ -35,7 +36,7 @@ function athleteSummary(ctx, id) {
     sport: c.sport, position: c.position, school: c.school, grad_year: c.grad_year, medical_notes: c.medical_notes,
     emergency_name: c.emergency_name, emergency_phone: c.emergency_phone,
     membership: c.subscription && c.subscription.status !== 'canceled' ? { status: c.subscription.status, plan_name: c.subscription.plan_name, price_cents: c.subscription.price_cents, renews: c.subscription.current_period_end } : null,
-    credits: c.credits, program: c.program, app_link: c.app_link,
+    credits: c.credits, program: c.program, app_link: c.app_link, engagement: engage.badges(ctx, id),
     upcoming: schedule.clientBookings(ctx, id, { upcoming: true, limit: 20 }),
     enrollments: ctx.db.all(`SELECT e.series_id, e.kind, s.name FROM enrollments e JOIN class_series s ON s.id = e.series_id WHERE e.client_id = ? AND e.status = 'active'`, id)
   };
@@ -113,6 +114,13 @@ export const portalRoutes = [
     return schedule.bookSlot(ctx, { kind: r.body.kind === 'evaluation' ? 'evaluation' : 'private', startsAt: v.str(r.body.starts_at, 'starts_at'), availabilityId: v.str(r.body.availability_id, 'availability_id'), clientId: c.id, pay: r.body.pay, actor: r.guardian.id });
   }],
   ['GET', '/portal/api/athletes/:id/report', 'guardian', 'Progress report for one of your athletes (shared testing days only).', (ctx, r) => reports.athleteReport(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true })],
+  // Accountability, performance and education for one of your athletes. Parents can check in and finish lessons for them.
+  ['GET', '/portal/api/athletes/:id/engage', 'guardian', 'Accountability, performance (shared testing days only) and education for one of your athletes.', (ctx, r) => engage.athleteView(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true })],
+  ['POST', '/portal/api/athletes/:id/daily-check-in', 'guardian', 'Today\'s check-in for your athlete: sleep_hours, hydration, soreness, energy, mood, note.', (ctx, r) => engage.saveCheckin(ctx, athleteOf(ctx, r, r.params.id).id, r.body)],
+  ['POST', '/portal/api/athletes/:id/goals/:goal/check', 'guardian', 'Tick a custom goal for today (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, athleteOf(ctx, r, r.params.id).id, r.params.goal, r.body.done !== false)],
+  ['POST', '/portal/api/athletes/:id/messages/read', 'guardian', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, athleteOf(ctx, r, r.params.id).id)],
+  ['GET', '/portal/api/athletes/:id/lessons/:lesson', 'guardian', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson)],
+  ['POST', '/portal/api/athletes/:id/lessons/:lesson/complete', 'guardian', 'Mark a lesson done for your athlete (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body.done !== false)],
   ['GET', '/portal/api/store', 'guardian', 'Packs and memberships a parent can buy.', (ctx) => ({
     products: commerce.listProducts(ctx).filter((p) => ['session', 'pack'].includes(p.kind)),
     plans: billing.listPlans(ctx).map(({ subscribers, ...p }) => p)

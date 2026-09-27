@@ -21,6 +21,7 @@ const DEFAULTS = {
   privacy_version: '1',
   privacy_updated: '',
   public_signup: 'on',
+  rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
   emails_off: ''                          // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
@@ -46,6 +47,7 @@ export function updateSettings(ctx, body) {
     const text = v.str(body[`${kind}_text`], `${kind}_text`, { max: 100000 });
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version
   }
+  if (body.rankings !== undefined) next.rankings = body.rankings === true || body.rankings === 'on' ? 'on' : 'off';
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';
   if (body.emails_off !== undefined) {
     const list = (Array.isArray(body.emails_off) ? body.emails_off : String(body.emails_off).split(',')).map((x) => String(x).trim()).filter(Boolean);

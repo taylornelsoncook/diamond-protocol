@@ -615,3 +615,109 @@ CREATE TABLE IF NOT EXISTS signup_requests (
   used_at TEXT,
   created_at TEXT NOT NULL
 );
+
+-- ---- Accountability, performance targets and education (version 12) ----
+-- One daily check-in per athlete per day (in the business time zone). Parents can fill it in too.
+CREATE TABLE IF NOT EXISTS daily_checkins (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,                           -- YYYY-MM-DD
+  sleep_hours REAL CHECK (sleep_hours BETWEEN 0 AND 16),
+  hydration INTEGER CHECK (hydration BETWEEN 1 AND 5),
+  soreness INTEGER CHECK (soreness BETWEEN 1 AND 5),
+  energy INTEGER CHECK (energy BETWEEN 1 AND 5),
+  mood INTEGER CHECK (mood BETWEEN 1 AND 5),
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (client_id, date)
+);
+CREATE INDEX IF NOT EXISTS daily_checkins_date ON daily_checkins(date);
+-- Weekly goals (Monday to Sunday) for one athlete or everyone on a team roster.
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  contract_id TEXT REFERENCES team_contracts(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('workouts','sessions','checkins','custom')),
+  target INTEGER NOT NULL CHECK (target BETWEEN 1 AND 14),
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  ended_at TEXT,
+  CHECK ((client_id IS NULL) <> (contract_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS goal_checks (
+  goal_id TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  PRIMARY KEY (goal_id, client_id, date)
+);
+-- Notes from coaches to one athlete or a whole team. Read state is kept per athlete.
+CREATE TABLE IF NOT EXISTS coach_messages (
+  id TEXT PRIMARY KEY,
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  contract_id TEXT REFERENCES team_contracts(id) ON DELETE CASCADE,
+  staff_id TEXT,
+  staff_name TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  CHECK ((client_id IS NULL) <> (contract_id IS NULL))
+);
+CREATE TABLE IF NOT EXISTS message_reads (
+  message_id TEXT NOT NULL REFERENCES coach_messages(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  read_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, client_id)
+);
+-- A coach's target for one test (the test's headline number), in that metric's unit.
+CREATE TABLE IF NOT EXISTS test_targets (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  test_id TEXT NOT NULL REFERENCES perf_tests(id) ON DELETE CASCADE,
+  target REAL NOT NULL,
+  due_date TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (client_id, test_id)
+);
+CREATE TABLE IF NOT EXISTS courses (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  published INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lessons (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  summary TEXT,
+  body TEXT,                                    -- plain text; blank lines start new paragraphs
+  video_url TEXT,
+  minutes INTEGER,
+  course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  published INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lesson_progress (
+  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (lesson_id, client_id)
+);
+-- A lesson or a course assigned to an athlete or a team roster, with an optional due date.
+CREATE TABLE IF NOT EXISTS lesson_assignments (
+  id TEXT PRIMARY KEY,
+  lesson_id TEXT REFERENCES lessons(id) ON DELETE CASCADE,
+  course_id TEXT REFERENCES courses(id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  contract_id TEXT REFERENCES team_contracts(id) ON DELETE CASCADE,
+  due_date TEXT,
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  CHECK ((lesson_id IS NULL) <> (course_id IS NULL)),
+  CHECK ((client_id IS NULL) <> (contract_id IS NULL))
+);

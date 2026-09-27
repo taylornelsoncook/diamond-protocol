@@ -16,6 +16,7 @@ import * as backups from './services/backups.js';
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
+import * as engage from './services/engage.js';
 import { listOutbox, sendEmail, mailMode } from './services/mail.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
@@ -259,9 +260,41 @@ export const routes = [
   ['GET', '/v1/webhooks/:id/deliveries', 'session', 'Integrations', 'Recent delivery attempts for an endpoint.', (ctx, r) => list(events.listDeliveries(ctx, r.params.id))],
   ['GET', '/v1/event-types', 'any', 'Integrations', 'Every event type a webhook can subscribe to.', () => list(events.EVENT_TYPES)],
 
+  // Accountability, performance targets and education. Owners and coaches manage; front desk views.
+  ['GET', '/v1/clients/:id/engagement', 'any', 'Engagement', 'Accountability for one athlete: streaks, this week, 30-day check-in averages and flags, goals, messages, test targets, rankings and assigned reading.', (ctx, r) => engage.staffOverview(ctx, clients.getClient(ctx, r.params.id).id)],
+  ['POST', '/v1/clients/:id/goals', 'any', 'Engagement', 'Set a weekly goal: kind (workouts, sessions, checkins, custom), target (1-14 a week), optional title.', (ctx, r) => engage.createGoal(ctx, { clientId: clients.getClient(ctx, r.params.id).id }, r.body, r.user ?? r.apiKey), 201],
+  ['POST', '/v1/clients/:id/messages', 'any', 'Engagement', 'Send the athlete a message: body. The athlete and their parents are emailed a copy.', (ctx, r) => engage.sendMessage(ctx, { clientId: clients.getClient(ctx, r.params.id).id }, r.body, r.user ?? r.apiKey), 201],
+  ['POST', '/v1/clients/:id/targets', 'any', 'Engagement', 'Set a test target: test (key), target (like 84, 6\'5" or 1:05), optional due_date. Replaces an existing target for that test.', (ctx, r) => engage.setTarget(ctx, clients.getClient(ctx, r.params.id).id, r.body, r.user ?? r.apiKey), 201],
+  ['DELETE', '/v1/targets/:id', 'any', 'Engagement', 'Remove a test target. Results stay.', (ctx, r) => engage.removeTarget(ctx, r.params.id)],
+  ['PATCH', '/v1/goals/:id', 'any', 'Engagement', 'Change a goal\'s title or target, or end it with active=false.', (ctx, r) => engage.updateGoal(ctx, r.params.id, r.body)],
+  ['GET', '/v1/teams', 'any', 'Engagement', 'Active teams for goals, messages and assigned reading (names and roster counts only).', (ctx) => list(engage.listTeams(ctx))],
+  ['GET', '/v1/teams/:id/engagement', 'any', 'Engagement', 'A team\'s goals, messages and assigned reading, and which roster athletes have the app.', (ctx, r) => engage.teamEngagement(ctx, r.params.id)],
+  ['POST', '/v1/teams/:id/goals', 'any', 'Engagement', 'Set a weekly goal for everyone on the roster: kind, target, optional title.', (ctx, r) => engage.createGoal(ctx, { contractId: r.params.id }, r.body, r.user ?? r.apiKey), 201],
+  ['POST', '/v1/teams/:id/messages', 'any', 'Engagement', 'Message the whole roster: body. Athletes and parents are emailed.', (ctx, r) => engage.sendMessage(ctx, { contractId: r.params.id }, r.body, r.user ?? r.apiKey), 201],
+  ['GET', '/v1/daily-check-ins/flags', 'any', 'Engagement', 'Athletes whose latest daily check-in (today or yesterday) needs a look: short sleep, high soreness, low energy, mood or hydration.', (ctx) => list(engage.recentFlags(ctx))],
+  ['GET', '/v1/engagement/settings', 'any', 'Engagement', 'Whether rankings are on.', (ctx) => ({ rankings: engage.rankingsOn(ctx) ? 'on' : 'off' })],
+  ['PATCH', '/v1/engagement/settings', 'any', 'Engagement', 'Turn rankings on or off: rankings ("on" or "off"). Athletes and parents see where a best result ranks, never anyone else\'s name.', (ctx, r) => engage.setRankings(ctx, r.body)],
+  ['GET', '/v1/education', 'any', 'Education', 'Every course and lesson with completions, and each assignment with who has finished.', (ctx) => engage.educationReport(ctx)],
+  ['GET', '/v1/lessons/:id', 'any', 'Education', 'One lesson with its full text.', (ctx, r) => engage.getLesson(ctx, r.params.id)],
+  ['POST', '/v1/lessons', 'any', 'Education', 'Post a lesson: title, summary, body (plain text; blank lines start paragraphs), video_url (https), minutes, course_id, published.', (ctx, r) => engage.createLesson(ctx, r.body), 201],
+  ['PATCH', '/v1/lessons/:id', 'any', 'Education', 'Edit a lesson. published=false hides it from athletes.', (ctx, r) => engage.updateLesson(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/lessons/:id', 'any', 'Education', 'Delete a lesson and its completions.', (ctx, r) => engage.deleteLesson(ctx, r.params.id)],
+  ['POST', '/v1/courses', 'any', 'Education', 'Create a course: title, description, published.', (ctx, r) => engage.createCourse(ctx, r.body), 201],
+  ['PATCH', '/v1/courses/:id', 'any', 'Education', 'Edit a course. published=false hides it from athletes.', (ctx, r) => engage.updateCourse(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/courses/:id', 'any', 'Education', 'Delete a course. Its lessons stay in the library.', (ctx, r) => engage.deleteCourse(ctx, r.params.id)],
+  ['PUT', '/v1/courses/:id/order', 'any', 'Education', 'Reorder a course\'s lessons: lesson_ids in the new order.', (ctx, r) => engage.reorderCourse(ctx, r.params.id, r.body)],
+  ['POST', '/v1/lesson-assignments', 'any', 'Education', 'Assign reading: lesson_id or course_id, to client_id or a team (contract_id), optional due_date and note. The athletes and their parents are emailed.', (ctx, r) => engage.assign(ctx, r.body, r.user ?? r.apiKey), 201],
+  ['DELETE', '/v1/lesson-assignments/:id', 'any', 'Education', 'Remove an assignment. Completed lessons stay completed.', (ctx, r) => engage.unassign(ctx, r.params.id)],
+
   // Client app (authenticated by the client's private link token)
   ['GET', '/app/api/home', 'client', 'Client app', 'The client\'s next workout and progress.', (ctx, r) => programs.clientHome(ctx, r.client)],
   ['POST', '/app/api/workouts/:id/complete', 'client', 'Client app', 'Log a finished workout with exercise_ids done and optional notes.', (ctx, r) => programs.completeWorkout(ctx, r.client, r.params.id, r.body), 201],
+  ['GET', '/app/api/engage', 'client', 'Client app', 'Accountability, performance and education for the athlete.', (ctx, r) => engage.athleteView(ctx, r.client.id, { parentView: true })],
+  ['POST', '/app/api/daily-check-in', 'client', 'Client app', 'Today\'s check-in: sleep_hours (0-16), hydration, soreness, energy, mood (1-5), note. Saving again today updates it.', (ctx, r) => engage.saveCheckin(ctx, r.client.id, r.body)],
+  ['POST', '/app/api/goals/:id/check', 'client', 'Client app', 'Tick a custom goal for today (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, r.client.id, r.params.id, r.body.done !== false)],
+  ['POST', '/app/api/messages/read', 'client', 'Client app', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, r.client.id)],
+  ['GET', '/app/api/lessons/:id', 'client', 'Client app', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, r.client.id, r.params.id)],
+  ['POST', '/app/api/lessons/:id/complete', 'client', 'Client app', 'Mark a lesson done (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, r.client.id, r.params.id, r.body.done !== false)],
   ...portalRoutes.map(([method, path, auth, summary, handler, status]) => [method, path, auth, 'Parent portal', summary, handler, status])
 ].map(([method, path, auth, tag, summary, handler, status = 200]) => ({
   method, path, auth, tag, summary, handler, status,

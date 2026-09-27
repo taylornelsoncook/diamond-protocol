@@ -1,0 +1,572 @@
+// Athlete engagement: accountability (daily check-ins, streaks, weekly goals, coach messages),
+// performance (test targets and opt-in rankings, on top of the testing results) and education
+// (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
+// team goals, messages and reading reach the roster athletes who are also clients.
+import { newId, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate } from '../util.js';
+import { getSetting } from './families.js';
+import { sendEmail, notifyFamily } from './mail.js';
+import { athleteProfile, getTest, parentFilter } from './performance.js';
+
+const SCALES = ['hydration', 'soreness', 'energy', 'mood'];           // 1 to 5
+export const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
+
+// ---------- Dates (business time zone) ----------
+const zone = (ctx) => getSetting(ctx, 'timezone');
+export const today = (ctx) => localDate(ctx.now(), zone(ctx));
+// Weeks run Monday to Sunday.
+export const weekStart = (date) => addDaysToDate(date, -((weekdayOf(date) + 6) % 7));
+const fmtDay = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+function clientRow(ctx, id) {
+  const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', id);
+  if (!c) throw notFound('Athlete');
+  return c;
+}
+const firstName = (c) => String(c.name ?? '').split(' ')[0];
+// Active team rosters an athlete is on (a roster row linked to their client record).
+const teamsOf = (ctx, clientId) => ctx.db.all('SELECT DISTINCT contract_id FROM team_roster WHERE client_id = ? AND active = 1', clientId).map((r) => r.contract_id);
+const inList = (ids) => (ids.length ? ids.map(() => '?').join(', ') : 'NULL');
+// Athletes a team goal, message or assignment reaches: clients on the active roster.
+const rosterClients = (ctx, contractId) => ctx.db.all(`SELECT DISTINCT c.* FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 ORDER BY c.name`, contractId);
+function teamRow(ctx, id) {
+  const t = ctx.db.get('SELECT t.id, t.name, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', id);
+  if (!t) throw notFound('Team');
+  return t;
+}
+const teamLabel = (t) => `${t.org_name} ${t.name}`;
+
+// Training: finished workouts plus sessions attended (booked classes, walk-in check-ins, team sessions),
+// each with the local date it happened on.
+function training(ctx, clientId, from, to) {
+  const tz = zone(ctx), lo = zonedToUtc(from, '00:00', tz), hi = zonedToUtc(addDaysToDate(to, 1), '00:00', tz);
+  const rows = [
+    ...ctx.db.all('SELECT completed_at AS at FROM workout_logs WHERE client_id = ? AND completed_at >= ? AND completed_at < ?', clientId, lo, hi).map((r) => ({ kind: 'workouts', at: r.at })),
+    ...ctx.db.all(`SELECT s.starts_at AS at FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
+    ...ctx.db.all('SELECT created_at AS at FROM check_ins WHERE client_id = ? AND created_at >= ? AND created_at < ?', clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
+    ...ctx.db.all(`SELECT s.starts_at AS at FROM team_attendance a JOIN team_roster r ON r.id = a.roster_id JOIN class_sessions s ON s.id = a.session_id WHERE r.client_id = ? AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at }))
+  ];
+  return rows.map((r) => ({ kind: r.kind, date: localDate(r.at, tz) }));
+}
+const trainingDays = (ctx, clientId, from, to) => new Set(training(ctx, clientId, from, to).map((r) => r.date));
+function counts(ctx, clientId, from, to) {
+  const t = training(ctx, clientId, from, to);
+  return {
+    workouts: t.filter((r) => r.kind === 'workouts').length,
+    sessions: t.filter((r) => r.kind === 'sessions').length,
+    checkins: ctx.db.get('SELECT COUNT(*) AS n FROM daily_checkins WHERE client_id = ? AND date BETWEEN ? AND ?', clientId, from, to).n
+  };
+}
+
+// ---------- Daily check-ins ----------
+// A check-in needs a look when sleep is short, soreness high, or energy, mood or hydration low.
+export function flagsOf(c) {
+  if (!c) return [];
+  const f = [];
+  if (c.sleep_hours != null && c.sleep_hours < 6) f.push(`Slept ${c.sleep_hours} hours`);
+  if (c.soreness != null && c.soreness >= 4) f.push(`Soreness ${c.soreness} of 5`);
+  if (c.energy != null && c.energy <= 2) f.push(`Energy ${c.energy} of 5`);
+  if (c.mood != null && c.mood <= 2) f.push(`Mood ${c.mood} of 5`);
+  if (c.hydration != null && c.hydration <= 2) f.push(`Hydration ${c.hydration} of 5`);
+  return f;
+}
+const shapeCheckin = (c) => (c ? { id: c.id, date: c.date, sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, note: c.note, updated_at: c.updated_at, flags: flagsOf(c) } : null);
+const blank = (x) => x === undefined || x === null || x === '';
+
+// Today's check-in. Saving again the same day updates it.
+export function saveCheckin(ctx, clientId, body = {}) {
+  clientRow(ctx, clientId);
+  const row = { note: v.str(body.note, 'note', { max: 500, optional: true }) };
+  if (blank(body.sleep_hours)) row.sleep_hours = null;
+  else {
+    const s = Number(body.sleep_hours);
+    if (!Number.isFinite(s) || s < 0 || s > 16) throw badRequest('Enter hours of sleep between 0 and 16.');
+    row.sleep_hours = Math.round(s * 2) / 2;
+  }
+  for (const k of SCALES) {
+    if (blank(body[k])) { row[k] = null; continue; }
+    const n = Number(body[k]);
+    if (!Number.isInteger(n) || n < 1 || n > 5) throw badRequest(`Rate ${k} from 1 to 5.`);
+    row[k] = n;
+  }
+  if ([row.sleep_hours, ...SCALES.map((k) => row[k])].every((x) => x == null)) throw badRequest('Fill in at least one answer.');
+  const date = today(ctx);
+  ctx.db.run(`INSERT INTO daily_checkins (id, client_id, date, sleep_hours, hydration, soreness, energy, mood, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(client_id, date) DO UPDATE SET sleep_hours = excluded.sleep_hours, hydration = excluded.hydration, soreness = excluded.soreness, energy = excluded.energy, mood = excluded.mood, note = excluded.note, updated_at = excluded.updated_at`,
+  newId('chk'), clientId, date, row.sleep_hours, row.hydration, row.soreness, row.energy, row.mood, row.note, ctx.now(), ctx.now());
+  return shapeCheckin(ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, date));
+}
+// Days in a row with a check-in. Not having checked in yet today doesn't break it.
+function checkinStreak(ctx, clientId) {
+  const t = today(ctx);
+  const dates = new Set(ctx.db.all('SELECT date FROM daily_checkins WHERE client_id = ? AND date >= ?', clientId, addDaysToDate(t, -400)).map((r) => r.date));
+  let d = dates.has(t) ? t : addDaysToDate(t, -1), n = 0;
+  while (dates.has(d)) { n++; d = addDaysToDate(d, -1); }
+  return n;
+}
+// Active weeks in a row: weeks with 2 or more training days, ending this week (or last week if this one isn't there yet).
+function activeWeekStreak(ctx, clientId) {
+  const thisWeek = weekStart(today(ctx));
+  const days = trainingDays(ctx, clientId, addDaysToDate(thisWeek, -7 * 52), addDaysToDate(thisWeek, 6));
+  const inWeek = (ws) => [0, 1, 2, 3, 4, 5, 6].filter((i) => days.has(addDaysToDate(ws, i))).length;
+  let ws = inWeek(thisWeek) >= 2 ? thisWeek : addDaysToDate(thisWeek, -7), n = 0;
+  while (n < 52 && inWeek(ws) >= 2) { n++; ws = addDaysToDate(ws, -7); }
+  return n;
+}
+
+// ---------- Weekly goals ----------
+function goalRows(ctx, clientId, { activeOnly = true } = {}) {
+  const teams = teamsOf(ctx, clientId);
+  return ctx.db.all(`SELECT * FROM goals WHERE ${activeOnly ? 'active = 1 AND' : ''} (client_id = ? OR contract_id IN (${inList(teams)})) ORDER BY created_at, id`, clientId, ...teams);
+}
+export function goalsFor(ctx, clientId) {
+  const t = today(ctx), ws = weekStart(t), we = addDaysToDate(ws, 6);
+  const c = counts(ctx, clientId, ws, we);
+  return goalRows(ctx, clientId).map((g) => {
+    const checks = g.kind === 'custom' ? ctx.db.all('SELECT date FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date BETWEEN ? AND ?', g.id, clientId, ws, we).map((r) => r.date) : [];
+    const progress = g.kind === 'custom' ? checks.length : c[g.kind];
+    return { id: g.id, title: g.title, kind: g.kind, kind_label: GOAL_KINDS[g.kind], target: g.target, progress, done: progress >= g.target,
+      team: !!g.contract_id, checked_today: checks.includes(t), week_start: ws, week_end: we };
+  });
+}
+// The athlete (or a parent) ticks a custom goal once per day.
+export function checkGoal(ctx, clientId, goalId, done = true) {
+  const g = goalRows(ctx, clientId).find((x) => x.id === goalId);
+  if (!g) throw notFound('Goal');
+  if (g.kind !== 'custom') throw badRequest('This goal counts itself from training and check-ins.');
+  if (done) ctx.db.run('INSERT OR IGNORE INTO goal_checks (goal_id, client_id, date) VALUES (?, ?, ?)', g.id, clientId, today(ctx));
+  else ctx.db.run('DELETE FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date = ?', g.id, clientId, today(ctx));
+  return goalsFor(ctx, clientId).find((x) => x.id === g.id);
+}
+const goalTarget = (x) => {
+  const t = Number(x);
+  if (!Number.isInteger(t) || t < 1 || t > 14) throw badRequest('Set a weekly target from 1 to 14.');
+  return t;
+};
+export function createGoal(ctx, { clientId = null, contractId = null }, body = {}, actor) {
+  if (clientId) clientRow(ctx, clientId); else teamRow(ctx, contractId);
+  if (!GOAL_KINDS[body.kind]) throw badRequest('Choose what the goal counts: workouts, sessions, checkins or custom.');
+  const target = goalTarget(body.target);
+  const title = v.str(body.title, 'title', { max: 120, optional: true }) ?? `${target} ${GOAL_KINDS[body.kind].toLowerCase()} a week`;
+  const id = newId('goal');
+  ctx.db.run('INSERT INTO goals (id, client_id, contract_id, title, kind, target, active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)', id, clientId, contractId, title, body.kind, target, actor?.id ?? null, ctx.now());
+  return ctx.db.get('SELECT * FROM goals WHERE id = ?', id);
+}
+// Change the target or title, or end a goal (active=false). Past weeks aren't affected.
+export function updateGoal(ctx, id, body = {}) {
+  const g = ctx.db.get('SELECT * FROM goals WHERE id = ?', id);
+  if (!g) throw notFound('Goal');
+  const active = body.active === undefined ? !!g.active : !!body.active;
+  ctx.db.run('UPDATE goals SET title = ?, target = ?, active = ?, ended_at = ? WHERE id = ?',
+    body.title !== undefined ? v.str(body.title, 'title', { max: 120 }) : g.title, body.target !== undefined ? goalTarget(body.target) : g.target,
+    active ? 1 : 0, active ? null : g.ended_at ?? ctx.now(), id);
+  return ctx.db.get('SELECT * FROM goals WHERE id = ?', id);
+}
+
+// ---------- Coach messages ----------
+export function messagesFor(ctx, clientId, limit = 30) {
+  const teams = teamsOf(ctx, clientId);
+  return ctx.db.all(`SELECT m.id, m.body, m.created_at, m.contract_id, m.staff_name AS coach, r.read_at FROM coach_messages m
+      LEFT JOIN message_reads r ON r.message_id = m.id AND r.client_id = ?
+    WHERE m.client_id = ? OR m.contract_id IN (${inList(teams)}) ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`, clientId, clientId, ...teams, limit)
+    .map((m) => ({ id: m.id, body: m.body, created_at: m.created_at, coach: m.coach, team: !!m.contract_id, read: !!m.read_at }));
+}
+export function markRead(ctx, clientId) {
+  const unread = messagesFor(ctx, clientId, 500).filter((m) => !m.read);
+  for (const m of unread) ctx.db.run('INSERT OR IGNORE INTO message_reads (message_id, client_id, read_at) VALUES (?, ?, ?)', m.id, clientId, ctx.now());
+  return { read: unread.length };
+}
+// Emails the athlete (when they have their own address) and every parent, with a link to see it.
+function notifyAthlete(ctx, c, subject, text) {
+  const base = ctx.publicUrl ?? '';
+  const biz = getSetting(ctx, 'business_name');
+  if (c.family_id) notifyFamily(ctx, c.family_id, subject, `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}`);
+  if (c.email) sendEmail(ctx, { to: c.email, subject, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}\n\n${biz}` }).catch(() => {});
+}
+const staffName = (actor) => actor?.name ?? actor?.label ?? 'Your coach';
+export function sendMessage(ctx, { clientId = null, contractId = null }, body = {}, actor) {
+  const text = v.str(body.body, 'Message', { max: 2000 });
+  const who = clientId ? [clientRow(ctx, clientId)] : (teamRow(ctx, contractId), rosterClients(ctx, contractId));
+  const id = newId('cmsg');
+  ctx.db.run('INSERT INTO coach_messages (id, client_id, contract_id, staff_id, staff_name, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, clientId, contractId, actor?.id ?? null, staffName(actor), text, ctx.now());
+  const from = staffName(actor).split(' ')[0];
+  for (const c of who) notifyAthlete(ctx, c, `A note from ${from} at ${getSetting(ctx, 'business_name')}`, `${from} wrote to ${firstName(c)}:\n\n${text}`);
+  return { id, body: text, created_at: ctx.now(), coach: staffName(actor), team: !!contractId, recipients: who.length };
+}
+
+// ---------- Performance: targets and rankings ----------
+// Values as typed: 84, 6'5" or 6 ft 5 for inches, 1:05 for seconds.
+export function parseValue(raw, unit) {
+  const t = String(raw ?? '').trim().replace(/[′’‘]/g, "'").replace(/[″“”]/g, '"').replace(/\s+/g, ' ');
+  if (!t) return null;
+  if (unit === 'in') {
+    const fi = t.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet)\s*(?:(\d+(?:\.\d+)?)\s*(?:"|in|inches)?)?$/i);
+    if (fi) return Number(fi[1]) * 12 + Number(fi[2] ?? 0);
+  }
+  if (unit === 's') {
+    const ms = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+    if (ms) return Number(ms[1]) * 60 + Number(ms[2]);
+  }
+  const n = Number(t.replace(new RegExp(`\\s*(${String(unit ?? '').replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}|")$`), '').replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+const UNIT_TEXT = { ratio: '', level: '', points: 'pts' };
+export function fmtValue(val, unit, decimals = 2) {
+  if (val == null || !Number.isFinite(val)) return null;
+  if (unit === 'in' && Math.abs(val) >= 48) { const ft = Math.floor(val / 12), inch = val - ft * 12; return `${ft}′ ${inch.toFixed(inch % 1 ? 1 : 0)}″`; }
+  const u = UNIT_TEXT[unit] ?? unit;
+  return `${+Number(val).toFixed(decimals)}${u ? ` ${u}` : ''}`;
+}
+
+// One line per test: the headline number, best across sides, first and latest results.
+function testSummary(profile) {
+  const byTest = new Map();
+  for (const p of profile.filter((x) => x.headline && x.better !== 'none')) {
+    const cur = byTest.get(p.test);
+    if (!cur) { byTest.set(p.test, { ...p }); continue; }
+    const lower = p.better === 'lower';
+    if (p.best != null && (cur.best == null || (lower ? p.best < cur.best : p.best > cur.best))) { cur.best = p.best; cur.best_date = p.best_date; }
+    if (p.first.date < cur.first.date) cur.first = p.first;
+    if (p.latest.date > cur.latest.date) cur.latest = p.latest;
+    cur.tests_count = Math.max(cur.tests_count, p.tests_count);
+    cur.side = null;
+  }
+  return [...byTest.values()];
+}
+function targetsFor(ctx, clientId, tests) {
+  return ctx.db.all(`SELECT tt.*, t.key, t.name FROM test_targets tt JOIN perf_tests t ON t.id = tt.test_id WHERE tt.client_id = ? ORDER BY t.name`, clientId).map((x) => {
+    const m = ctx.db.get('SELECT unit, better, decimals FROM perf_metrics WHERE test_id = ? ORDER BY sort LIMIT 1', x.test_id);
+    const r = tests.find((t) => t.test === x.key);
+    const lower = m.better === 'lower', best = r?.best ?? null, first = r?.first?.value ?? null;
+    let pct = 0;
+    if (best != null) {
+      if (lower ? best <= x.target : best >= x.target) pct = 100;
+      else if (first != null && first !== x.target) pct = Math.max(0, Math.min(99, Math.round(((lower ? first - best : best - first) / Math.abs(x.target - first)) * 100)));
+    }
+    return { id: x.id, test: x.key, test_name: x.name, unit: m.unit, better: m.better, target: x.target, due_date: x.due_date, best, first, pct, reached: pct === 100,
+      best_text: fmtValue(best, m.unit, m.decimals), target_text: fmtValue(x.target, m.unit, m.decimals) };
+  });
+}
+export function setTarget(ctx, clientId, body = {}, actor) {
+  clientRow(ctx, clientId);
+  if (blank(body.test)) throw badRequest('Choose a test.');
+  const test = getTest(ctx, String(body.test));
+  const metric = test.metrics[0];
+  const val = parseValue(body.target, metric.unit);
+  if (val == null || val <= 0) throw badRequest(`Enter the target in ${metric.unit === 'in' ? 'inches, or feet and inches like 6\'5"' : metric.unit}.`);
+  const due = blank(body.due_date) ? null : body.due_date;
+  if (due && !isDate(due)) throw badRequest('due_date must be a date like 2026-12-01.');
+  ctx.db.run(`INSERT INTO test_targets (id, client_id, test_id, target, due_date, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(client_id, test_id) DO UPDATE SET target = excluded.target, due_date = excluded.due_date`, newId('tgt'), clientId, test.id, val, due, actor?.id ?? null, ctx.now());
+  const tests = testSummary(athleteProfile(ctx, { client_id: clientId }));
+  return targetsFor(ctx, clientId, tests).find((t) => t.test === test.key);
+}
+export function removeTarget(ctx, id) {
+  if (!ctx.db.run('DELETE FROM test_targets WHERE id = ?', id).changes) throw notFound('Target');
+  return { id, deleted: true };
+}
+
+export const rankingsOn = (ctx) => getSetting(ctx, 'rankings') === 'on';
+const AGE_BANDS = [[0, 9, '9 and under'], [10, 11, '10–11'], [12, 13, '12–13'], [14, 15, '14–15'], [16, 18, '16–18'], [19, 200, 'adults']];
+// Where the athlete's best result sits among: the same sex and age band, each team they're on, and
+// everyone at the gym. Counts and percentages only; no other athlete is ever named. Groups with
+// fewer than 4 athletes tested aren't ranked. Ties count half.
+function rankings(ctx, c, tests, parentView) {
+  if (!rankingsOn(ctx)) return null;
+  const link = new Map(ctx.db.all('SELECT id, client_id FROM team_roster WHERE client_id IS NOT NULL').map((r) => [r.id, r.client_id]));
+  const keyOf = (r) => (r.client_id ? `c:${r.client_id}` : link.has(r.roster_id) ? `c:${link.get(r.roster_id)}` : `r:${r.roster_id}`);
+  const groups = [];
+  const age = ageOn(c.birth_date, ctx.now());
+  if (age != null && c.sex) {
+    const [lo, hi, label] = AGE_BANDS.find(([a, b]) => age >= a && age <= b);
+    const ids = ctx.db.all('SELECT id, birth_date FROM clients WHERE sex = ? AND birth_date IS NOT NULL', c.sex).filter((x) => { const a = ageOn(x.birth_date, ctx.now()); return a >= lo && a <= hi; }).map((x) => `c:${x.id}`);
+    groups.push({ label: label === 'adults' ? (c.sex === 'F' ? 'Women' : 'Men') : `${c.sex === 'F' ? 'Girls' : 'Boys'} ${label}`, keys: new Set(ids) });
+  }
+  for (const contractId of teamsOf(ctx, c.id)) {
+    const t = teamRow(ctx, contractId);
+    groups.push({ label: teamLabel(t), keys: new Set(ctx.db.all('SELECT id, client_id FROM team_roster WHERE contract_id = ? AND active = 1', contractId).map((r) => (r.client_id ? `c:${r.client_id}` : `r:${r.id}`))) });
+  }
+  groups.push({ label: `Everyone at ${getSetting(ctx, 'business_name')}`, keys: null });
+  const me = `c:${c.id}`, out = [];
+  for (const t of tests.filter((x) => x.category !== 'body')) {
+    const lower = t.better === 'lower';
+    const rows = ctx.db.all(`SELECT r.client_id, r.roster_id, ${lower ? 'MIN' : 'MAX'}(r.value) AS best FROM perf_results r JOIN perf_tests pt ON pt.id = r.test_id
+      WHERE pt.key = ? AND r.metric = ? AND r.voided = 0 ${parentView ? parentFilter(ctx) : ''} GROUP BY r.client_id, r.roster_id`, t.test, t.metric);
+    const bests = new Map();
+    for (const r of rows) { const k = keyOf(r), cur = bests.get(k); if (cur == null || (lower ? r.best < cur : r.best > cur)) bests.set(k, r.best); }
+    if (!bests.has(me)) continue;
+    const mine = bests.get(me);
+    const ranks = groups.map((g) => {
+      const vals = [...bests.entries()].filter(([k]) => !g.keys || g.keys.has(k)).map(([, x]) => x);
+      if (vals.length < 4) return null;
+      const better = vals.filter((x) => (lower ? x < mine : x > mine)).length, worse = vals.filter((x) => (lower ? x > mine : x < mine)).length;
+      const ties = vals.length - better - worse - 1;
+      return { group: g.label, rank: better + 1, of: vals.length, percentile: Math.round(((worse + ties / 2) / (vals.length - 1)) * 100) };
+    }).filter(Boolean);
+    if (ranks.length) out.push({ test: t.test, test_name: t.test_name, unit: t.unit, best: mine, best_text: fmtValue(mine, t.unit, t.decimals), ranks });
+  }
+  return out;
+}
+
+export function performance(ctx, clientId, { parentView = false } = {}) {
+  const c = clientRow(ctx, clientId);
+  const profile = athleteProfile(ctx, { client_id: c.id }, { parentView });
+  const tests = testSummary(profile);
+  const lastDate = tests.reduce((m, t) => (t.latest.date > m ? t.latest.date : m), '');
+  return {
+    tests: tests.map((t) => ({ test: t.test, test_name: t.test_name, category: t.category, metric: t.metric, unit: t.unit, decimals: t.decimals, better: t.better,
+      best: t.best, best_text: fmtValue(t.best, t.unit, t.decimals), first: t.first, latest: t.latest, change: t.tests_count > 1 ? t.latest.value - t.first.value : null,
+      improved: t.tests_count > 1 ? (t.better === 'lower' ? t.latest.value < t.first.value : t.latest.value > t.first.value) : null, tests_count: t.tests_count, history: t.history })),
+    prs: tests.filter((t) => t.tests_count > 1 && t.best_date === lastDate && t.best_date !== t.first.date).map((t) => ({ test: t.test, test_name: t.test_name, value: t.best, text: fmtValue(t.best, t.unit, t.decimals), date: t.best_date })),
+    last_tested: lastDate || null,
+    targets: targetsFor(ctx, c.id, tests),
+    rankings: rankings(ctx, c, tests, parentView),
+    rankings_enabled: rankingsOn(ctx)
+  };
+}
+
+// ---------- Education ----------
+const doneSet = (ctx, clientId) => new Set(ctx.db.all('SELECT lesson_id FROM lesson_progress WHERE client_id = ?', clientId).map((r) => r.lesson_id));
+const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, course_id: l.course_id, done: done.has(l.id) });
+function assignmentRows(ctx, clientId) {
+  const teams = teamsOf(ctx, clientId);
+  return ctx.db.all(`SELECT * FROM lesson_assignments WHERE client_id = ? OR contract_id IN (${inList(teams)}) ORDER BY COALESCE(due_date, '9999-12-31'), created_at`, clientId, ...teams);
+}
+// What the athlete (or their parent) sees: assigned reading first, then courses and the library. Unpublished lessons never show.
+export function education(ctx, clientId) {
+  clientRow(ctx, clientId);
+  const done = doneSet(ctx, clientId), t = today(ctx);
+  const lessons = ctx.db.all('SELECT * FROM lessons WHERE published = 1 ORDER BY position, created_at');
+  const courses = ctx.db.all('SELECT * FROM courses WHERE published = 1 ORDER BY created_at').map((c) => {
+    const ls = lessons.filter((l) => l.course_id === c.id).map((l) => lessonItem(l, done));
+    return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
+  }).filter((c) => c.total > 0);
+  const assigned = assignmentRows(ctx, clientId).map((x) => {
+    if (x.lesson_id) {
+      const l = lessons.find((y) => y.id === x.lesson_id);
+      if (!l) return null;
+      return { id: x.id, type: 'lesson', lesson_id: l.id, title: l.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: done.has(l.id), overdue: !done.has(l.id) && !!x.due_date && x.due_date < t };
+    }
+    const c = courses.find((y) => y.id === x.course_id);
+    if (!c) return null;
+    return { id: x.id, type: 'course', course_id: c.id, title: c.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: c.complete, progress: `${c.done} of ${c.total}`, overdue: !c.complete && !!x.due_date && x.due_date < t };
+  }).filter(Boolean);
+  return { assigned, courses, lessons: lessons.filter((l) => !l.course_id || !courses.some((c) => c.id === l.course_id)).map((l) => lessonItem(l, done)), completed: done.size };
+}
+export function lessonFor(ctx, clientId, lessonId) {
+  clientRow(ctx, clientId);
+  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ? AND published = 1', lessonId);
+  if (!l) throw notFound('Lesson');
+  const course = l.course_id ? ctx.db.get('SELECT id, title FROM courses WHERE id = ? AND published = 1', l.course_id) : null;
+  const siblings = course ? ctx.db.all('SELECT id, title FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', course.id) : [];
+  const i = siblings.findIndex((s) => s.id === l.id);
+  return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: course ?? null,
+    done: !!ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId),
+    next: i >= 0 ? siblings[i + 1] ?? null : null, position: i >= 0 ? { n: i + 1, of: siblings.length } : null };
+}
+export function completeLesson(ctx, clientId, lessonId, done = true) {
+  const l = lessonFor(ctx, clientId, lessonId);
+  if (done) ctx.db.run('INSERT OR IGNORE INTO lesson_progress (lesson_id, client_id, completed_at) VALUES (?, ?, ?)', l.id, clientId, ctx.now());
+  else ctx.db.run('DELETE FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId);
+  return lessonFor(ctx, clientId, lessonId);
+}
+
+// Coach side: lessons and courses.
+function lessonFields(ctx, body, cur = {}) {
+  const has = (k) => body[k] !== undefined;
+  const out = {
+    title: has('title') ? v.str(body.title, 'title', { max: 160 }) : cur.title,
+    summary: has('summary') ? v.str(body.summary, 'summary', { max: 300, optional: true }) : cur.summary ?? null,
+    body: has('body') ? (blank(body.body) ? null : v.str(body.body, 'body', { max: 50000 })) : cur.body ?? null,
+    video_url: has('video_url') ? v.url(body.video_url, 'video_url', { optional: true }) : cur.video_url ?? null,
+    minutes: has('minutes') ? v.int(body.minutes, 'minutes', { min: 1, max: 240, optional: true }) : cur.minutes ?? null,
+    course_id: has('course_id') ? (blank(body.course_id) ? null : String(body.course_id)) : cur.course_id ?? null,
+    published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1
+  };
+  if (!out.title) throw badRequest('Give the lesson a title.');
+  if (out.course_id && !ctx.db.get('SELECT id FROM courses WHERE id = ?', out.course_id)) throw notFound('Course');
+  return out;
+}
+export function getLesson(ctx, id) {
+  const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', id);
+  if (!l) throw notFound('Lesson');
+  return { ...l, published: !!l.published };
+}
+export function createLesson(ctx, body = {}) {
+  const f = lessonFields(ctx, body);
+  const position = f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : 0;
+  const id = newId('les');
+  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, ctx.now(), ctx.now());
+  return getLesson(ctx, id);
+}
+export function updateLesson(ctx, id, body = {}) {
+  const cur = getLesson(ctx, id);
+  const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0 });
+  const position = f.course_id !== cur.course_id && f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : cur.position;
+  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, updated_at = ? WHERE id = ?',
+    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, ctx.now(), id);
+  return getLesson(ctx, id);
+}
+export function deleteLesson(ctx, id) {
+  getLesson(ctx, id);
+  ctx.db.run('DELETE FROM lessons WHERE id = ?', id);
+  return { id, deleted: true };
+}
+export function createCourse(ctx, body = {}) {
+  const id = newId('crs');
+  ctx.db.run('INSERT INTO courses (id, title, description, published, created_at) VALUES (?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
+    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, ctx.now());
+  return getCourse(ctx, id);
+}
+export function getCourse(ctx, id) {
+  const c = ctx.db.get('SELECT * FROM courses WHERE id = ?', id);
+  if (!c) throw notFound('Course');
+  return { ...c, published: !!c.published, lessons: ctx.db.all('SELECT id, title, position, published FROM lessons WHERE course_id = ? ORDER BY position, created_at', id).map((l) => ({ ...l, published: !!l.published })) };
+}
+export function updateCourse(ctx, id, body = {}) {
+  const c = getCourse(ctx, id);
+  ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
+    body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), id);
+  return getCourse(ctx, id);
+}
+// Deleting a course keeps its lessons in the library.
+export function deleteCourse(ctx, id) {
+  getCourse(ctx, id);
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE lessons SET course_id = NULL WHERE course_id = ?', id);
+    ctx.db.run('DELETE FROM courses WHERE id = ?', id);
+  });
+  return { id, deleted: true };
+}
+// Reorder a course's lessons in one step: lesson_ids in the new order.
+export function reorderCourse(ctx, id, body = {}) {
+  const c = getCourse(ctx, id);
+  const ids = Array.isArray(body.lesson_ids) ? body.lesson_ids.map(String) : [];
+  const mine = new Set(c.lessons.map((l) => l.id));
+  if (ids.length !== mine.size || !ids.every((x) => mine.has(x))) throw badRequest('Send every lesson in this course once, in the new order.');
+  ctx.db.tx(() => ids.forEach((lid, i) => ctx.db.run('UPDATE lessons SET position = ? WHERE id = ?', i, lid)));
+  return getCourse(ctx, id);
+}
+
+// Assign a lesson or a course to an athlete or a team. The athlete and their parents are emailed.
+export function assign(ctx, body = {}, actor) {
+  if (blank(body.lesson_id) === blank(body.course_id)) throw badRequest('Choose a lesson or a course.');
+  if (blank(body.client_id) === blank(body.contract_id)) throw badRequest('Choose an athlete or a team.');
+  const item = body.lesson_id ? getLesson(ctx, String(body.lesson_id)) : getCourse(ctx, String(body.course_id));
+  if (!item.published) throw conflict(`Publish "${item.title}" before assigning it.`);
+  const who = body.client_id ? [clientRow(ctx, String(body.client_id))] : (teamRow(ctx, String(body.contract_id)), rosterClients(ctx, String(body.contract_id)));
+  const due = blank(body.due_date) ? null : body.due_date;
+  if (due && !isDate(due)) throw badRequest('due_date must be a date like 2026-12-01.');
+  const note = v.str(body.note, 'note', { max: 500, optional: true });
+  const id = newId('lasg');
+  ctx.db.run('INSERT INTO lesson_assignments (id, lesson_id, course_id, client_id, contract_id, due_date, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    id, body.lesson_id ? item.id : null, body.course_id ? item.id : null, body.client_id ? who[0].id : null, body.contract_id ? String(body.contract_id) : null, due, note, actor?.id ?? null, ctx.now());
+  const kind = body.lesson_id ? 'lesson' : 'course';
+  for (const c of who) notifyAthlete(ctx, c, `New ${kind} for ${firstName(c)}: ${item.title}`, `${staffName(actor).split(' ')[0]} assigned "${item.title}" to ${firstName(c)}${due ? ` (due ${fmtDay(due)})` : ''}.${note ? `\n\n${note}` : ''}`);
+  return { id, title: item.title, type: kind, due_date: due, note, recipients: who.length };
+}
+export function unassign(ctx, id) {
+  if (!ctx.db.run('DELETE FROM lesson_assignments WHERE id = ?', id).changes) throw notFound('Assignment');
+  return { id, deleted: true };
+}
+
+// The Education screen: every course and lesson with completions, and each assignment with who has finished.
+export function educationReport(ctx) {
+  const lessons = ctx.db.all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id = l.id) AS completions FROM lessons l ORDER BY l.position, l.created_at')
+    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
+  const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id) }));
+  const finishedCourse = (courseId, clientId) => {
+    const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
+    return ids.length > 0 && ids.every((lid) => ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', lid, clientId));
+  };
+  const assignments = ctx.db.all(`SELECT x.*, l.title AS lesson_title, c.title AS course_title, cl.name AS client_name, t.name AS team_name, o.name AS org_name FROM lesson_assignments x
+      LEFT JOIN lessons l ON l.id = x.lesson_id LEFT JOIN courses c ON c.id = x.course_id LEFT JOIN clients cl ON cl.id = x.client_id
+      LEFT JOIN team_contracts t ON t.id = x.contract_id LEFT JOIN organizations o ON o.id = t.org_id
+    ORDER BY x.created_at DESC LIMIT 200`).map((x) => {
+    const who = x.client_id ? ctx.db.all('SELECT id, name FROM clients WHERE id = ?', x.client_id) : rosterClients(ctx, x.contract_id);
+    const finished = who.filter((c) => (x.lesson_id ? !!ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', x.lesson_id, c.id) : finishedCourse(x.course_id, c.id)));
+    return { id: x.id, type: x.lesson_id ? 'lesson' : 'course', lesson_id: x.lesson_id, course_id: x.course_id, title: x.lesson_title ?? x.course_title,
+      client_id: x.client_id, contract_id: x.contract_id, assigned_to: x.client_id ? x.client_name : `${x.org_name} ${x.team_name}`, due_date: x.due_date, note: x.note, created_at: x.created_at,
+      finished: finished.length, total: who.length, not_finished: who.filter((c) => !finished.includes(c)).map((c) => ({ id: c.id, name: c.name })).slice(0, 50) };
+  });
+  return { courses, lessons: lessons.filter((l) => !l.course_id), assignments };
+}
+
+// ---------- The three tabs, as the athlete or a parent sees them ----------
+export function accountability(ctx, clientId) {
+  clientRow(ctx, clientId);
+  const t = today(ctx), ws = weekStart(t), from = addDaysToDate(t, -27);
+  const days = trainingDays(ctx, clientId, from, t);
+  const checked = new Set(ctx.db.all('SELECT date FROM daily_checkins WHERE client_id = ? AND date BETWEEN ? AND ?', clientId, from, t).map((r) => r.date));
+  const messages = messagesFor(ctx, clientId);
+  return {
+    today: t, week_start: ws,
+    streaks: { active_weeks: activeWeekStreak(ctx, clientId), checkin_days: checkinStreak(ctx, clientId) },
+    this_week: counts(ctx, clientId, ws, addDaysToDate(ws, 6)), this_month: counts(ctx, clientId, `${t.slice(0, 8)}01`, t),
+    calendar: Array.from({ length: 28 }, (_, i) => { const d = addDaysToDate(from, i); return { date: d, trained: days.has(d), checked_in: checked.has(d) }; }),
+    checkin_today: shapeCheckin(ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, t)),
+    recent_checkins: ctx.db.all('SELECT * FROM daily_checkins WHERE client_id = ? ORDER BY date DESC LIMIT 7', clientId).map(shapeCheckin),
+    goals: goalsFor(ctx, clientId), messages, unread: messages.filter((m) => !m.read).length
+  };
+}
+export function athleteView(ctx, clientId, { parentView = false } = {}) {
+  const c = clientRow(ctx, clientId);
+  return { athlete: { id: c.id, athlete_id: c.athlete_id, name: c.name, first_name: firstName(c) },
+    accountability: accountability(ctx, c.id), performance: performance(ctx, c.id, { parentView }), education: education(ctx, c.id) };
+}
+// A light summary for the parent portal's athlete list (dots on the tabs).
+export function badges(ctx, clientId) {
+  return { unread: messagesFor(ctx, clientId, 200).filter((m) => !m.read).length, open_assignments: education(ctx, clientId).assigned.filter((x) => !x.done).length,
+    checked_in_today: !!ctx.db.get('SELECT 1 FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, today(ctx)) };
+}
+
+// Coach view for the client profile: 30-day check-in trends and flags, plus everything the coach set.
+export function staffOverview(ctx, clientId) {
+  const acc = accountability(ctx, clientId);
+  const checkins = ctx.db.all('SELECT * FROM daily_checkins WHERE client_id = ? AND date >= ? ORDER BY date', clientId, addDaysToDate(acc.today, -29)).map(shapeCheckin);
+  const avg = (k) => { const vals = checkins.map((c) => c[k]).filter((x) => x != null); return vals.length ? Math.round((vals.reduce((s, x) => s + x, 0) / vals.length) * 10) / 10 : null; };
+  const perf = performance(ctx, clientId);
+  const edu = education(ctx, clientId);
+  return {
+    ...acc, checkins, averages: Object.fromEntries(['sleep_hours', ...SCALES].map((k) => [k, avg(k)])),
+    flagged: checkins.filter((c) => c.flags.length).reverse().slice(0, 5),
+    goals: goalsFor(ctx, clientId).map((g) => ({ ...g, client_goal: !g.team })),
+    targets: perf.targets, rankings: perf.rankings, rankings_enabled: perf.rankings_enabled,
+    tests: perf.tests.map((t) => ({ test: t.test, test_name: t.test_name, unit: t.unit, best: t.best, best_text: t.best_text })),
+    education: { assigned: edu.assigned, completed: edu.completed }
+  };
+}
+
+// Athletes whose latest check-in (today or yesterday) needs a look, for Today.
+export function recentFlags(ctx) {
+  const since = addDaysToDate(today(ctx), -1);
+  const seen = new Set();
+  return ctx.db.all('SELECT d.*, c.name, c.athlete_id FROM daily_checkins d JOIN clients c ON c.id = d.client_id WHERE d.date >= ? ORDER BY d.date DESC', since)
+    .filter((d) => { if (seen.has(d.client_id)) return false; seen.add(d.client_id); return true; })
+    .map((d) => ({ client_id: d.client_id, name: d.name, athlete_id: d.athlete_id, date: d.date, note: d.note, flags: flagsOf(d) }))
+    .filter((d) => d.flags.length);
+}
+
+// Team side: goals and messages for a roster.
+export function teamEngagement(ctx, contractId) {
+  const t = teamRow(ctx, contractId);
+  return {
+    team: { id: t.id, name: teamLabel(t) },
+    athletes: rosterClients(ctx, contractId).map((c) => ({ id: c.id, name: c.name })),
+    unlinked: ctx.db.get('SELECT COUNT(*) AS n FROM team_roster WHERE contract_id = ? AND active = 1 AND client_id IS NULL', contractId).n,
+    goals: ctx.db.all('SELECT id, title, kind, target, created_at FROM goals WHERE contract_id = ? AND active = 1 ORDER BY created_at', contractId).map((g) => ({ ...g, kind_label: GOAL_KINDS[g.kind] })),
+    messages: ctx.db.all('SELECT id, body, staff_name AS coach, created_at FROM coach_messages WHERE contract_id = ? ORDER BY created_at DESC LIMIT 20', contractId),
+    assignments: educationReport(ctx).assignments.filter((x) => x.contract_id === contractId)
+  };
+}
+// Team names for pickers (no money).
+export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org_name, (SELECT COUNT(*) FROM team_roster r WHERE r.contract_id = t.id AND r.active = 1) AS roster_count,
+    (SELECT COUNT(*) FROM team_roster r WHERE r.contract_id = t.id AND r.active = 1 AND r.client_id IS NOT NULL) AS app_athletes
+  FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.status = 'active' ORDER BY o.name, t.name`).map((t) => ({ ...t, label: `${t.org_name} ${t.name}` }));
+
+export function setRankings(ctx, body = {}) {
+  const on = body.rankings === 'on' || body.rankings === true || body.rankings_enabled === true;
+  if (body.rankings === undefined && body.rankings_enabled === undefined) throw badRequest('Send rankings: "on" or "off".');
+  ctx.db.run(`INSERT INTO settings (key, value) VALUES ('rankings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, on ? 'on' : 'off');
+  return { rankings: on ? 'on' : 'off' };
+}

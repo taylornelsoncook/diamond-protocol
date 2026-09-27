@@ -7,7 +7,7 @@ import { getSetting } from './families.js';
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
   coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds, API keys or staff.',
-  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results.'
+  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
 };
 const OWNER_ONLY = [
   /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|api-keys|webhooks|webhook-deliveries|outbox|staff|audit|backups)(\/|$)/,
@@ -16,6 +16,8 @@ const OWNER_ONLY = [
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
   ['GET', /^\/v1\/(dashboard|events|clients|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types)(\/|$)/],
+  // Accountability and education: front desk can look, not change anything.
+  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/], ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
   ['POST', /^\/v1\/clients\/:id\/subscription$/],   // start a membership at the counter (not change, pause or cancel)
   ['POST', /^\/v1\/families(\/:id\/(guardians|athletes))?$/],

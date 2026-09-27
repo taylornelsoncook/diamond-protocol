@@ -56,7 +56,10 @@ export function exportFamily(ctx, familyId) {
       invoices: per(`SELECT amount_cents, status, period_start, period_end, created_at FROM invoices WHERE client_id = ? ORDER BY created_at`, k.id),
       purchases: per(`SELECT (SELECT GROUP_CONCAT(i.name, ', ') FROM sale_items i WHERE i.sale_id = s.id) AS items, s.amount_cents, s.method, s.status, s.created_at FROM sales s WHERE s.client_id = ? ORDER BY s.created_at`, k.id),
       test_results: per(`SELECT t.name AS test, r.metric, r.side, r.attempt, r.value, m.unit, r.timing, r.recorded_at FROM perf_results r JOIN perf_tests t ON t.id = r.test_id JOIN perf_metrics m ON m.test_id = r.test_id AND m.key = r.metric WHERE r.client_id = ? AND r.voided = 0 ORDER BY r.recorded_at`, k.id),
-      workouts: per(`SELECT w.title AS workout, l.completed_at, l.notes FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id)
+      workouts: per(`SELECT w.title AS workout, l.completed_at, l.notes FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
+      daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
+      lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
+      coach_messages: per(`SELECT staff_name AS coach, body, created_at FROM coach_messages WHERE client_id = ? ORDER BY created_at`, k.id)
     }))
   };
 }
@@ -91,6 +94,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`DELETE FROM perf_results WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM athlete_links WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,

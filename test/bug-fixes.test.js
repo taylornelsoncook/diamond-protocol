@@ -167,3 +167,23 @@ test('team attendance counts only sessions since the athlete joined the roster',
   assert.deepEqual([row(early.id).sessions_attended, row(early.id).sessions_held], [3, 3]);
   assert.deepEqual([row(late.id).sessions_attended, row(late.id).sessions_held], [1, 1], 'sessions before they joined don\'t count against them');
 });
+
+test('behind one hosting proxy the client address is the one the proxy saw, and enquiries have an overall cap', async () => {
+  resetRateLimits();
+  process.env.TRUST_PROXY = 'true';
+  try {
+    const ask = (xff, n) => req('POST', '/portal/api/public/inquiry', { parent_name: `Pat ${n}`, email: `pat${n}@example.com`, athlete_name: 'Sam' }, { 'x-forwarded-for': xff });
+    // The first entry is whatever the sender wrote; the proxy appends the real address last.
+    for (let i = 0; i < 10; i++) assert.equal((await ask(`10.0.0.${i}, 203.0.113.7`, i)).status, 200, `enquiry ${i}`);
+    assert.equal((await ask('10.0.1.1, 203.0.113.7', 10)).status, 429, 'a made-up first address doesn\'t dodge the limit');
+    // Many real addresses: the overall cap still stops a flood.
+    let last;
+    for (let i = 0; i < 60; i++) last = await ask(`198.51.100.${i}`, 100 + i);
+    assert.equal(last.status, 429);
+    // More than one proxy in front can be configured.
+    resetRateLimits();
+    process.env.TRUST_PROXY = '2';
+    for (let i = 0; i < 10; i++) await ask(`1.1.1.${i}, 203.0.113.9, 10.9.9.9`, 200 + i);
+    assert.equal((await ask('1.1.2.1, 203.0.113.9, 10.9.9.9', 300)).status, 429);
+  } finally { delete process.env.TRUST_PROXY; resetRateLimits(); }
+});

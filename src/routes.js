@@ -32,7 +32,7 @@ import * as spots from './services/spots.js';
 import * as notes from './services/notes.js';
 import * as moneychecks from './services/moneychecks.js';
 import { portalRoutes } from './portal-routes.js';
-import { HttpError, v, badRequest, notFound } from './util.js';
+import { HttpError, v, badRequest, notFound, zonedToUtc, localDate } from './util.js';
 
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
 // Each entry: [method, path, auth, tag, summary, handler(ctx, req)] where req = { params, query, body, user, apiKey }
@@ -174,7 +174,7 @@ export const routes = [
   ['POST', '/v1/sales/:id/simulate', 'any', 'Point of sale', 'Test mode only: act as the client tapping their card. outcome is approved or declined.', (ctx, r) => commerce.simulateTap(ctx, r.params.id, r.body.outcome)],
   ['POST', '/v1/terminal/connection-token', 'any', 'Point of sale', 'Connection token for the Stripe Terminal SDK in the iPhone app. Optional location_id.', (ctx, r) => commerce.connectionToken(ctx, r.body.location_id)],
   ['GET', '/v1/reports/revenue', 'any', 'Point of sale', 'Revenue by location plus membership payments since ?since= (default: start of this month).', (ctx, r) => {
-    const d = new Date(); const start = new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+    const zone = families.getSetting(ctx, 'timezone'), start = zonedToUtc(`${localDate(ctx.now(), zone).slice(0, 8)}01`, '00:00', zone);
     return commerce.revenueByLocation(ctx, r.query.since ? v.date(r.query.since, 'since') : start);
   }],
   ['GET', '/v1/clients/:id/card', 'any', 'Clients', 'Whether the client has a saved card, and its brand and last 4 digits.', (ctx, r) => commerce.cardSummary(ctx, r.params.id)],

@@ -83,3 +83,16 @@ test('coaches never see money: sales, schedule and session prices, availability,
   assert.equal((await owner('GET', `/v1/sessions/${one.id}`)).body.drop_in_cents, 3000);
   assert.ok((await owner('GET', '/v1/events')).body.data.some((e) => e.data.amount_cents));
 });
+
+test('today\'s takings start at midnight in the business\'s time zone, not the server\'s', () => {
+  const ctx = { ...app.ctx, now: () => '2026-10-06T16:00:00.000Z' };      // 11am in Chicago, 1am the next day in Tokyo
+  const loc = facility.id;
+  const add = (at, cents) => app.ctx.db.run(`INSERT INTO sales (id, location_id, method, status, amount_cents, created_at, completed_at) VALUES (?, ?, 'cash', 'succeeded', ?, ?, ?)`, newId('sale'), loc, cents, at, at);
+  const before = dashboard(ctx).today_sales;
+  add('2026-10-06T10:00:00.000Z', 700);        // 5am Chicago on the 6th: today
+  add('2026-10-06T04:00:00.000Z', 1100);       // 11pm Chicago on the 5th: yesterday
+  const after = dashboard(ctx).today_sales;
+  assert.equal(after.cents - before.cents, 700);
+  assert.equal(after.n - before.n, 1);
+  app.ctx.db.run(`DELETE FROM sales WHERE created_at LIKE '2026-10-06%'`);
+});

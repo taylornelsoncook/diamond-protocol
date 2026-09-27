@@ -113,6 +113,8 @@ export function zonedToUtc(dateStr, timeStr, tz) {
   return new Date(utc).toISOString();
 }
 export const localDate = (iso, tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+// Midnight at the start of the business day that contains iso, as a UTC ISO string.
+export const startOfLocalDay = (iso, tz) => zonedToUtc(localDate(iso, tz), '00:00', tz);
 export const weekdayOf = (dateStr) => new Date(`${dateStr}T12:00:00Z`).getUTCDay();
 export const addDaysToDate = (dateStr, n) => new Date(Date.parse(`${dateStr}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 export function ageOn(birthDate, iso) {

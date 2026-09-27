@@ -200,11 +200,11 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor }) {
   if (session.kind === 'team') return { coverage: 'none' };                       // billed through the team contract
   if (type === 'group' && isMember(ctx, client.id)) return { coverage: 'membership' };
   if (type && commerce.creditBalance(ctx, client.id, type) > 0 && pay !== 'card_on_file') {
-    ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'booking', ?, ?)`, newId('cr'), client.id, type, `${session.name} ${session.starts_at.slice(0, 10)}`, ctx.now());
+    ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'booking', ?, ?)`, newId('cr'), client.id, type, `${session.name} ${localDate(session.starts_at, tz(ctx))}`, ctx.now());
     return { coverage: 'credit', credit_type: type };
   }
   if (pay === 'card_on_file' && session.drop_in_cents) {
-    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${session.starts_at.slice(0, 10)}`, amount_cents: session.drop_in_cents } }, actor);
+    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))}`, amount_cents: session.drop_in_cents } }, actor);
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
     return { coverage: 'paid', sale_id: sale.id };
   }

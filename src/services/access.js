@@ -1,4 +1,5 @@
-import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpError, addDays } from '../util.js';
+import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpError, addDays, startOfLocalDay } from '../util.js';
+import { getSetting } from './families.js';
 import { listEvents } from './events.js';
 import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
@@ -130,11 +131,10 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   }
   return {
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
-    today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfDay(ctx.now())),
+    today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfLocalDay(ctx.now(), getSetting(ctx, 'timezone'))),
     metrics: { mrr_cents: active.mrr, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },
     attention: [...ctx.db.all(`SELECT id AS request_id, family_id, family_name, requested_by, created_at FROM data_requests WHERE status = 'open' AND kind = 'delete'`).map((x) => ({ kind: 'deletion_request', ...x })), ...failed, ...overdueTeams, ...waiting, ...trials, ...quiet, ...pendingSales],
     activity: listEvents(ctx, { limit: 12 })
   };
 }
 
-function startOfDay(iso) { const d = new Date(iso); d.setHours(0, 0, 0, 0); return d.toISOString(); }

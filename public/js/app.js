@@ -578,7 +578,7 @@ function payLinksPanel(clientId, first, owed, products, render) {
 // Daily money checks: what the morning check found, newest day first.
 function moneyChecksPanel(checks, render) {
   const tone = { ok: ['All clear', 'good'], problems: ['To look at', 'warn'], error: ['Couldn\'t reach Stripe', 'warn'] };
-  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: new Date(Date.now() - 86400000).toISOString().slice(0, 10), style: 'width:170px' });
+  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: bizDate(-1), style: 'width:170px' });
   const run = (day) => (e) => busy(e.currentTarget, async () => {
     const c = await post('/v1/money-checks/run', { date: day });
     toast(c.status === 'ok' ? `Nothing unusual on ${ymd(c.date)}.` : c.status === 'error' ? c.error : `${c.problems} ${c.problems === 1 ? 'thing' : 'things'} to look at on ${ymd(c.date)}.`, c.status === 'ok' ? 'good' : 'warn'); render();
@@ -625,7 +625,7 @@ async function viewBilling(main) {
       btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
   filter.addEventListener('change', draw); draw();
 
-  const asOf = input({ type: 'date', value: new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10) });
+  const asOf = input({ type: 'date', value: bizDate(8) });
   const testPanel = state.testMode ? panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
     h('div', { class: 'row wrap' }, h('div', { style: 'width:200px' }, field('Run as of', asOf)),
       h('div', { style: 'align-self:flex-end' }, btn('Run billing', (e) => busy(e.currentTarget, async () => {
@@ -1139,6 +1139,8 @@ async function viewSetup(main) {
 const KIND_LABEL = { group: 'Group', camp: 'Camp', clinic: 'Clinic', team: 'Team', evaluation: 'Evaluation', private: 'Private' };
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 let tzName;
+// Today's date in the business's time zone (the browser's own zone until the settings have loaded), not UTC.
+const bizDate = (days = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: tzName, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + days * 86400000));
 const tzFmt = (iso, opts) => new Intl.DateTimeFormat('en-US', { timeZone: tzName, ...opts }).format(new Date(iso));
 const dayOf = (iso) => tzFmt(iso, { weekday: 'long', month: 'short', day: 'numeric' });
 const timeOf = (iso) => tzFmt(iso, { hour: 'numeric', minute: '2-digit' });
@@ -1163,7 +1165,7 @@ async function viewSchedule(main) {
   const f = { name: input(), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
     time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }), ageMin: input({ type: 'number', placeholder: 'Any' }), ageMax: input({ type: 'number', placeholder: 'Any' }),
     dropIn: input({ type: 'number', step: '0.01', placeholder: 'Not sold singly' }), reg: input({ type: 'number', step: '0.01', placeholder: 'Camps and clinics' }),
-    start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }) };
+    start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
@@ -1438,7 +1440,7 @@ async function viewNewTeam(main) {
   const orgs = await get('/v1/organizations');
   const orgSel = select([['', 'A new school or club…'], ...orgs.data.map((o) => [o.id, o.name])], { value: '' });
   const o = { name: input(), kind: select([['school', 'School'], ['club', 'Club'], ['other', 'Other']]), contact: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), address: textarea() };
-  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }), end: input({ type: 'date' }),
+  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
     terms: select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']]), po: input() };
   const orgBox = h('div', { class: 'stack' },
     h('div', { class: 'form-grid' }, field('School or club name', o.name), field('Type', o.kind)),
@@ -1501,7 +1503,7 @@ async function viewTeam(main, id) {
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/team-contracts/${id}/roster`, { names: names.value }); toast(`Roster now has ${r.data.length} athletes.`); render(); }); } },
       names, h('div', null, btn('Add to roster', null, 'secondary', { type: 'submit' }))));
 
-  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }) };
+  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: bizDate() }) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const schedPanel = panel('Team sessions', { subtitle: c.series.filter((x) => x.active).map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${x.start_time}`).join(' · ') || 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
     ended || !locs.data.length ? null : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
@@ -1558,7 +1560,7 @@ async function viewTesting(main) {
 
 async function viewNewTesting(main) {
   const [lib, clientsList, contracts] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts')]);
-  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: new Date().toISOString().slice(0, 10) });
+  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: bizDate() });
   const team = select([['', 'Individual athletes'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
   const picked = new Set();
   const testBoxes = new Map();
@@ -2008,7 +2010,7 @@ async function viewUpload(main) {
   const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px' });
   const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])]);
   const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const upDate = input({ type: 'date', value: new Date().toISOString().slice(0, 10), max: new Date().toISOString().slice(0, 10) });
+  const upDate = input({ type: 'date', value: bizDate(), max: bizDate() });
   async function doPreview() {
     const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDate.value || undefined };
     if (file.files[0]) {

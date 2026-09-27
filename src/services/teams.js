@@ -115,6 +115,7 @@ function duplicateActive(ctx, orgName, name, exceptId = '') {
 // past (for a start date before today): 'all' invoices every month that has started (default), 'current' only the
 // month running now, 'none' none of them (they were billed another way); later months follow on their billing day.
 export async function createContract(ctx, body, baseUrl) {
+  if (!body.org_id) orgInput(body.organization ?? {});   // the school's fields first: they're at the top of the form
   const name = teamName(body.name);
   const monthly = feeCents(body.monthly_cents);
   const start = body.start_date || today(ctx);

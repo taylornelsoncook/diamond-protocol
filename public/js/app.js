@@ -1661,133 +1661,420 @@ async function viewScheduleSetup(main) {
 const INV_BADGE = { open: ['Open', 'neutral'], overdue: ['Overdue', 'warn'], paid: ['Paid', 'good'], void: ['Void', 'muted'] };
 const invBadge = (st) => h('span', { class: `dp-badge dp-badge--${INV_BADGE[st]?.[1] ?? 'muted'}` }, INV_BADGE[st]?.[0] ?? st);
 const ymd = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—');
-
-function invoiceRow(i, { showTeam = false } = {}) {
-  const pay = btn('Record payment', (e) => {
-    const how = prompt(`Record payment of ${money(i.amount_cents)} for ${i.number}. How was it paid? check, ach, card, cash or other`, 'check');
-    if (!how) return;
-    const method = how.trim().toLowerCase();
-    const ref = method === 'check' ? prompt('Check number (optional):', '') : '';
-    busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/payments`, { method, reference: ref || undefined }); toast(`${i.number} marked paid.`); render(); });
-  }, 'outline');
-  const unpaid = ['open', 'overdue'].includes(i.status);
-  return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-    h('div', { class: 'grow stack-tight', style: 'min-width:240px' },
-      h('span', { class: 'strong' }, `${i.number}${showTeam ? ` · ${i.org_name} ${i.team_name}` : ''}`),
-      h('span', { class: 'small muted' }, i.status === 'paid' ? `Paid ${ymd(i.paid_on)} by ${i.paid_method}${i.paid_reference ? ` ${i.paid_reference}` : ''}`
-        : `${i.period_start ? `${ymd(i.period_start)} – ${ymd(i.period_end)}` : i.lines[0]?.description ?? ''} · due ${ymd(i.due_on)}${unpaid ? (i.sent_at ? ` · emailed ${ago(i.sent_at)}` : ' · not emailed') : ''}`)),
-    h('span', { class: 'strong' }, money(i.amount_cents)), invBadge(i.status),
-    h('div', { class: 'row', style: 'gap:4px' }, h('a', { class: 'dp-btn dp-btn--ghost', href: i.link, target: '_blank', rel: 'noopener' }, 'View'),
-    unpaid ? pay : null,
-    unpaid ? btn('Email', (e) => busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/send`); toast(`${i.number} emailed.`); render(); }), 'ghost') : null,
-    unpaid ? btn('Void', (e) => { if (confirm(`Void ${i.number}? It won't be collected.`)) busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/void`); toast('Voided.'); render(); }); }, 'ghost') : null));
-}
+const nplural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const pctText = (r) => `${Math.round(r * 100)}%`;
+const TERMS = [['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['60', 'Net 60'], ['0', 'Due on receipt']];
+const termsName = (d) => (d === 0 ? 'Due on receipt' : `Net ${d}`);
+const termsOptions = (d) => (TERMS.some(([k]) => k === String(d)) ? TERMS : [...TERMS, [String(d), `Net ${d}`]]);
+const ORG_KIND = [['school', 'School'], ['club', 'Club'], ['other', 'Other']];
+const PAY_METHOD = [['check', 'Check'], ['ach', 'Bank transfer'], ['card', 'Card'], ['cash', 'Cash'], ['other', 'Other']];
+const METHOD_WORD = { check: 'check', ach: 'bank transfer', card: 'card', cash: 'cash', online: 'online payment', other: 'payment' };
+const ordinal = (n) => `${n}${[11, 12, 13].includes(n % 100) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th')}`;
+// "15:30" -> "3:30 PM"
+const hm12 = (t) => { const [hh, mm] = String(t ?? '').split(':').map(Number); return Number.isFinite(hh) ? `${((hh + 11) % 12) + 1}:${String(mm || 0).padStart(2, '0')} ${hh < 12 ? 'AM' : 'PM'}` : t; };
+// Same month arithmetic as the server: the billing day is the start day, clamped to the end of shorter months.
+const periodOf = (start, k) => { const [y, m, d] = start.split('-').map(Number); const f = new Date(Date.UTC(y, m - 1 + k, 1)); f.setUTCDate(Math.min(d, new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth() + 1, 0)).getUTCDate())); return f.toISOString().slice(0, 10); };
+const dollarsToCents = (s) => { const t = String(s ?? '').replace(/[$,\s]/g, ''); return t === '' ? NaN : Math.round(Number(t) * 100); };
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', style: 'min-height:72px', ...attrs }); t.value = value ?? ''; return t; };
 
+// A dialog with a title, a body and buttons. Each action's onClick returns false to keep the dialog open.
+function teamDialog(title, body, actions) {
+  const d = document.getElementById('dialog');
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  fill(d, h('div', { class: 'stack' }, h('h2', { class: 'week-title', style: 'color:var(--steel)' }, title), body, err,
+    h('div', { class: 'row wrap' }, actions.map((a) => btn(a.label, async (e) => {
+      if (!a.onClick) return d.close();
+      err.textContent = '';
+      const b = e.currentTarget; b.disabled = true;
+      try { if ((await a.onClick(d)) !== false) d.close(); } catch (x) { err.textContent = x.message; } finally { b.disabled = false; }
+    }, a.variant ?? 'secondary')))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  return d;
+}
+// A toast with an Undo button for a few seconds.
+function undoToast(msg, onUndo) {
+  const t = h('div', { class: 'dp-toast', role: 'status' }, msg, ' ', h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', style: 'min-height:32px;padding:0 8px;color:inherit;text-decoration:underline', onClick: () => { t.remove(); onUndo(); } }, 'Undo'));
+  document.getElementById('toasts').append(t);
+  setTimeout(() => t.remove(), 8000);
+}
+// Point at the field a server error names (error.details.field), and show the message.
+function fieldErr(fields, err, box) {
+  for (const el of Object.values(fields)) el?.removeAttribute?.('aria-invalid');
+  const el = fields[err.details?.field];
+  if (el) { el.setAttribute('aria-invalid', 'true'); el.focus(); }
+  if (box) box.textContent = err.message; else toast(err.message, 'warn');
+}
+// Cells a spreadsheet would run as a formula get a leading apostrophe.
+const csvCell = (x) => { let s = String(x ?? ''); if (/^[=@\t\r+-]/.test(s) && !/^-?\d+(\.\d+)?%?$/.test(s)) s = `'${s}`; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+function downloadCsv(name, rows) {
+  const a = h('a', { href: URL.createObjectURL(new Blob([rows.map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv' })), download: name });
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// How they paid / Check number / Received, shared by one invoice and several.
+function payFields() {
+  const method = select(PAY_METHOD, { value: 'check' }), ref = input({ autocomplete: 'off', maxlength: '120', inputmode: 'numeric' }), on = input({ type: 'date', value: bizDate(), max: bizDate() });
+  const refField = field('Check number (optional)', ref);
+  method.addEventListener('change', () => { refField.querySelector('label').textContent = method.value === 'check' ? 'Check number (optional)' : 'Reference (optional)'; ref.inputMode = method.value === 'check' ? 'numeric' : 'text'; });
+  return { el: h('div', { class: 'form-grid cols-3' }, field('How they paid', method), refField, field('Received', on)), values: () => ({ method: method.value, reference: ref.value.trim() || undefined, paid_on: on.value || undefined }), fields: { method, reference: ref, paid_on: on } };
+}
+function recordPaymentDialog(i) {
+  const pf = payFields();
+  teamDialog('Record payment', h('div', { class: 'stack' }, h('p', { class: 'muted', style: 'margin:0' }, `${i.number} · ${money(i.amount_cents)}${i.org_name ? ` · ${i.org_name}` : ''}`), pf.el),
+    [{ label: 'Record payment', variant: 'primary', onClick: async () => { await post(`/v1/team-invoices/${i.id}/payments`, pf.values()); toast(`${i.number} marked paid.`); render(); } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+function payManyDialog(c) {
+  const open = c.invoices.filter((i) => ['open', 'overdue'].includes(i.status)).slice().reverse();
+  const total = h('span', { class: 'strong' });
+  const boxes = open.map((i) => h('input', { type: 'checkbox', value: i.id, checked: true, 'data-amt': String(i.amount_cents) }));
+  const sum = () => boxes.filter((b) => b.checked).reduce((t, b) => t + Number(b.dataset.amt), 0);
+  const redraw = () => { total.textContent = money(sum()); };
+  const pf = payFields();
+  const list = h('div', { class: 'stack-tight', role: 'group', 'aria-label': 'Invoices this payment covers', style: 'max-height:40vh;overflow:auto' }, open.map((i, n) => h('label', { class: 'list-item', style: 'cursor:pointer;min-height:44px' }, boxes[n],
+    h('span', { class: 'grow stack-tight' }, h('span', null, i.number), h('span', { class: 'small muted' }, `${i.period_start ? `${ymd(i.period_start)} – ${ymd(i.period_end)}` : i.lines[0]?.description ?? ''}${i.days_past_due ? ` · ${nplural(i.days_past_due, 'day')} past due` : ` · due ${ymd(i.due_on)}`}`)),
+    h('span', { class: 'strong' }, money(i.amount_cents)))));
+  list.addEventListener('change', redraw); redraw();
+  teamDialog('Record one payment', h('div', { class: 'stack' }, h('p', { class: 'muted', style: 'margin:0' }, 'Tick the invoices this payment covers, like one check for several months.'), list, h('p', { style: 'margin:0' }, 'Total ', total), pf.el),
+    [{ label: 'Record payment', variant: 'primary', onClick: async () => {
+      const ids = boxes.filter((b) => b.checked).map((b) => b.value);
+      if (!ids.length) throw new Error('Tick at least one invoice.');
+      const r = await post(`/v1/team-contracts/${c.id}/payments`, { invoice_ids: ids, total_cents: sum(), ...pf.values() });
+      toast(`${nplural(r.count, 'invoice')} marked paid, ${money(r.total_cents)} in all.`); render();
+    } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+
+function invoiceRow(i, { showTeam = false } = {}) {
+  const unpaid = ['open', 'overdue'].includes(i.status);
+  const title = showTeam ? h('a', { class: 'strong', href: `#/teams/${i.contract_id}`, style: 'color:inherit' }, `${i.org_name} · ${i.team_name}`) : h('span', { class: 'strong' }, i.number);
+  const sub = i.status === 'paid' ? `Paid ${ymd(i.paid_on)} by ${METHOD_WORD[i.paid_method] ?? i.paid_method}${i.paid_reference ? ` ${i.paid_reference}` : ''}`
+    : i.status === 'void' ? `Voided · ${i.lines[0]?.description ?? ''}`
+      : [i.period_start ? `${ymd(i.period_start)} – ${ymd(i.period_end)}` : i.lines[0]?.description ?? '', i.days_past_due ? `${nplural(i.days_past_due, 'day')} past due` : `due ${ymd(i.due_on)}`, i.sent_at ? `emailed ${ago(i.sent_at).toLowerCase()}` : 'not emailed'].filter(Boolean).join(' · ');
+  return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, title, h('span', { class: `small ${i.days_past_due ? 'warn-text' : 'muted'}` }, `${showTeam ? `${i.number} · ` : ''}${sub}`)),
+    h('span', { class: 'strong' }, money(i.amount_cents)), invBadge(i.status),
+    h('div', { class: 'row wrap', style: 'gap:4px' }, h('a', { class: 'dp-btn dp-btn--ghost', href: i.link, target: '_blank', rel: 'noopener', 'aria-label': `View ${i.number} as the school sees it` }, 'View'),
+      unpaid ? btn('Record payment', () => recordPaymentDialog(i), 'outline') : null,
+      unpaid ? btn('Email', (e) => busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/send`); toast(`${i.number} emailed.`); render(); }), 'ghost', { 'aria-label': `Email ${i.number} again` }) : null,
+      unpaid ? btn('Void', (e) => { if (confirm(`Void ${i.number}? The school can no longer pay it and it stops counting as unpaid. To bill a corrected amount, use Bill something extra.`)) busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/void`); toast(`${i.number} voided.`); render(); }); }, 'ghost', { 'aria-label': `Void ${i.number}` }) : null));
+}
+
+const teamsUi = { view: null, q: '' };
 async function viewTeams(main) {
-  const [contracts, unpaid] = await Promise.all([get('/v1/team-contracts'), get('/v1/team-invoices?status=unpaid')]);
-  const active = contracts.data.filter((c) => c.status === 'active');
-  const monthly = active.reduce((t, c) => t + c.monthly_cents, 0);
-  const open = unpaid.data.reduce((t, i) => t + i.amount_cents, 0), overdue = unpaid.data.filter((i) => i.status === 'overdue');
+  const [contracts, unpaid, sum] = await Promise.all([get('/v1/team-contracts'), get('/v1/team-invoices?status=unpaid'), get('/v1/team-billing/summary')]);
+  const all = contracts.data;
+  const count = (v) => all.filter((c) => v === 'all' || c.status === v).length;
+  if (!teamsUi.view) teamsUi.view = count('active') || !all.length ? 'active' : 'all';
+  const overdue = unpaid.data.filter((i) => i.status === 'overdue');
+  const box = h('div', { 'aria-live': 'polite' });
+  const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show' });
+  const drawList = () => {
+    const q = teamsUi.q.trim().toLowerCase();
+    const shown = all.filter((c) => (teamsUi.view === 'all' || c.status === teamsUi.view) && (!q || `${c.org_name} ${c.name} ${c.po_number ?? ''}`.toLowerCase().includes(q)));
+    fill(views, [['active', 'Active'], ['ended', 'Ended'], ['all', 'All']].map(([v, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(teamsUi.view === v), onClick: () => { teamsUi.view = v; drawList(); } }, label, h('span', { class: 'muted' }, String(count(v))))));
+    fill(box, !all.length ? h('div', { class: 'empty' }, 'No team contracts yet. Schools and clubs pay a flat monthly fee, and invoices go out on their own.')
+      : !shown.length ? h('p', { class: 'muted' }, q ? `No ${teamsUi.view === 'all' ? '' : `${teamsUi.view} `}contracts match "${teamsUi.q.trim()}".` : `No ${teamsUi.view} contracts.`)
+        : shown.map((c) => h('a', { class: 'list-item', href: `#/teams/${c.id}`, style: 'text-decoration:none;color:inherit;flex-wrap:wrap' },
+          h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, `${c.org_name} · ${c.name}`),
+            h('span', { class: 'small muted' }, [`${money(c.monthly_cents)}/month`, termsName(c.terms_days), nplural(c.roster_count, 'athlete'), c.attendance_rate != null ? `${pctText(c.attendance_rate)} attendance` : null,
+              c.status === 'ended' ? `ended ${ymd(c.end_date)}` : c.next_invoice_on ? `next invoice ${ymd(c.next_invoice_on)}` : 'no more invoices'].filter(Boolean).join(' · '),
+            c.contact_email ? null : h('span', { class: 'warn-text' }, ' · add a billing email'))),
+          c.overdue_cents ? h('span', { class: 'dp-badge dp-badge--warn' }, `${money(c.overdue_cents)} overdue`) : c.balance_cents ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${money(c.balance_cents)} open`) : null,
+          c.status === 'ended' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Ended') : null)));
+  };
+  const search = all.length > 4 ? input({ type: 'search', placeholder: 'School, team or PO number', 'aria-label': 'Search contracts', value: teamsUi.q, autocomplete: 'off' }) : null;
+  search?.addEventListener('input', () => { teamsUi.q = search.value; drawList(); });
+  drawList();
+  const remind = overdue.length ? btn(`Email overdue reminders (${overdue.length})`, (e) => {
+    if (!confirm(`Email a reminder for each overdue invoice now? ${nplural(overdue.length, 'invoice is', 'invoices are')} overdue. The weekly reminder then waits another week.`)) return;
+    busy(e.currentTarget, async () => { const r = await post('/v1/team-billing/remind-overdue'); toast(`${nplural(r.sent, 'reminder')} emailed.${r.skipped ? ` ${r.skipped} had no billing email: ${r.schools_without_email.join(', ')}.` : ''}`, r.skipped ? 'warn' : 'good'); render(); });
+  }, 'secondary') : null;
   fill(main,
     header('Teams', 'School and club contracts, billed a flat monthly fee.', h('a', { class: 'dp-btn dp-btn--primary', href: '#/teams/new' }, 'New team contract')),
     h('div', { class: 'metrics' },
-      metric('Monthly contract revenue', money(monthly), `${active.length} active ${active.length === 1 ? 'team' : 'teams'}`),
-      metric('Waiting on payment', money(open), `${unpaid.data.length} open ${unpaid.data.length === 1 ? 'invoice' : 'invoices'}`),
+      metric('Monthly contract revenue', money(sum.monthly_cents), nplural(sum.active_contracts, 'active team')),
+      metric('Waiting on payment', money(sum.open_cents), nplural(sum.open_count, 'open invoice')),
       metric('Overdue', money(overdue.reduce((t, i) => t + i.amount_cents, 0)), `${overdue.length} past due`, overdue.length ? 'warn' : null),
-      metric('Athletes on rosters', active.reduce((t, c) => t + c.roster_count, 0), 'Across active teams')),
-    panel('Contracts', {}, contracts.data.length ? contracts.data.map((c) => h('a', { class: 'list-item', href: `#/teams/${c.id}`, style: 'text-decoration:none;color:inherit' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${c.org_name} · ${c.name}`),
-        h('span', { class: 'small muted' }, c.status === 'ended' ? `Ended ${ymd(c.end_date)}` : `${money(c.monthly_cents)}/month · Net ${c.terms_days} · ${c.roster_count} athletes${c.next_invoice_on ? ` · next invoice ${ymd(c.next_invoice_on)}` : ''}${c.contact_email ? '' : ' · add a billing email'}`)),
-      c.overdue_cents ? h('span', { class: 'dp-badge dp-badge--warn' }, `${money(c.overdue_cents)} overdue`) : c.balance_cents ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${money(c.balance_cents)} open`) : null,
-      c.status === 'ended' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Ended') : null)) : h('div', { class: 'empty' }, 'No team contracts yet.')),
-    unpaid.data.length ? panel('Unpaid invoices', { subtitle: 'Invoices email the school\'s billing contact with a link to view, print or pay online. Overdue ones get a reminder each week.' }, unpaid.data.map((i) => invoiceRow(i, { showTeam: true }))) : null);
+      metric('Collected', money(sum.collected_30_cents), 'Last 30 days')),
+    panel('Contracts', { subtitle: `${nplural(sum.athletes, 'athlete')} on active rosters.`, action: all.length > 1 ? views : null }, search, box),
+    panel('Unpaid invoices', { subtitle: 'Invoices email the school\'s billing contact with a link to view, print or pay online. Overdue ones get a reminder each week.', action: remind },
+      unpaid.data.length ? unpaid.data.map((i) => invoiceRow(i, { showTeam: true })) : h('p', { class: 'muted' }, 'Nothing unpaid. Every school invoice is settled.')));
 }
 
 async function viewNewTeam(main) {
-  const orgs = await get('/v1/organizations');
+  const [orgs, settings] = await Promise.all([get('/v1/organizations'), get('/v1/settings')]);
+  tzName = settings.timezone;
   const orgSel = select([['', 'A new school or club…'], ...orgs.data.map((o) => [o.id, o.name])], { value: '' });
-  const o = { name: input(), kind: select([['school', 'School'], ['club', 'Club'], ['other', 'Other']]), contact: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), address: textarea() };
-  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
-    terms: select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']]), po: input() };
+  const o = { name: input({ maxlength: '120', autocomplete: 'off' }), kind: select(ORG_KIND), contact: input({ autocomplete: 'off' }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }), address: textarea() };
+  const t = { name: input({ placeholder: 'Varsity Football', maxlength: '120' }), fee: input({ inputmode: 'decimal', placeholder: '1,200' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
+    terms: select(TERMS, { value: '30' }), po: input({ maxlength: '60' }), past: select([]), notes: textarea('', { maxlength: '2000', placeholder: 'Only staff see this, like Invoices need the AD\'s signature' }) };
+  const pastField = field('Months that have already started', t.past);
+  const summary = h('div', { class: 'tm-summary', 'aria-live': 'polite' });
   const orgBox = h('div', { class: 'stack' },
     h('div', { class: 'form-grid' }, field('School or club name', o.name), field('Type', o.kind)),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Billing contact', o.contact, 'Athletic director or treasurer'), field('Billing email', o.email, 'Invoices go here.'), field('Phone', o.phone)),
+    h('div', { class: 'form-grid cols-3' }, field('Billing contact', o.contact, 'Athletic director or treasurer'), field('Billing email', o.email, 'Invoices go here.'), field('Phone', o.phone)),
     field('Billing address', o.address));
   orgSel.addEventListener('change', () => { orgBox.style.display = orgSel.value ? 'none' : ''; });
+  // What happens when you save: how many invoices go out now, and when the rest follow.
+  const drawSummary = () => {
+    const start = t.start.value, end = t.end.value, fee = dollarsToCents(t.fee.value), T = bizDate();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) { summary.textContent = 'Choose a start date.'; pastField.hidden = true; return; }
+    if (end && end < start) { summary.textContent = 'The end date is before the start date.'; pastField.hidden = true; return; }
+    const started = [];
+    for (let k = 0; k < 240; k++) { const p = periodOf(start, k); if (p > T || (end && p > end)) break; started.push(p); }
+    pastField.hidden = !started.length || start >= T;
+    if (!pastField.hidden) {
+      const keep = t.past.value || 'all';
+      fill(t.past, [['all', started.length > 1 ? `Invoice all ${started.length} now` : 'Invoice it now'], ...(started.length > 1 ? [['current', `Invoice only the current month (from ${ymd(started[started.length - 1])})`]] : []), ['none', 'Don\'t invoice them, they were billed another way']]
+        .map(([v, label]) => h('option', { value: v, selected: v === keep }, label)));
+    }
+    const mode = pastField.hidden ? 'all' : t.past.value;
+    const now = mode === 'all' ? started.length : mode === 'current' ? Math.min(1, started.length) : 0;
+    let next = null;
+    for (let k = 0; k < 240; k++) { const p = periodOf(start, k); if (end && p > end) break; if (p > T) { next = p; break; } }
+    const feeTxt = fee > 0 ? money(fee) : 'the monthly fee', day = ordinal(Number(start.slice(8, 10)));
+    const parts = [];
+    if (now) parts.push(now === 1 ? `One invoice for ${feeTxt} goes out as soon as you save.` : `${now} invoices of ${feeTxt}${fee > 0 ? ` (${money(fee * now)} in all)` : ''} go out as soon as you save.`);
+    else if (start > T) parts.push(`The first invoice for ${feeTxt} goes out ${ymd(start)}.`);
+    if (next && start <= T) parts.push(`Then one on the ${day} of each month, next ${ymd(next)}${end ? `, until ${ymd(end)}` : ''}.`);
+    else if (start > T) parts.push(`Then one on the ${day} of each month${end ? ` until ${ymd(end)}` : ''}.`);
+    summary.textContent = parts.join(' ') || 'No invoices go out for this contract.';
+  };
+  for (const el of [t.start, t.end, t.fee, t.past]) { el.addEventListener('input', drawSummary); el.addEventListener('change', drawSummary); }
+  drawSummary();
   const err = h('div', { class: 'dp-error', role: 'alert' });
+  const fields = { org_name: o.name, contact_email: o.email, contact_phone: o.phone, name: t.name, monthly_cents: t.fee, start_date: t.start, end_date: t.end, terms_days: t.terms, past: t.past };
   fill(main,
     header('New team contract', 'A flat monthly fee, invoiced to the school or club at the start of each month of the contract.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'Cancel')),
-    h('form', { class: 'dp-panel stack', style: 'max-width:820px', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+    h('form', { class: 'dp-panel stack', style: 'max-width:820px', novalidate: true, onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
       try {
+        const fee = dollarsToCents(t.fee.value);
+        if (!(fee > 0)) throw Object.assign(new Error('Enter the monthly fee, like 1200.'), { details: { field: 'monthly_cents' } });
         const c = await post('/v1/team-contracts', { org_id: orgSel.value || undefined, organization: orgSel.value ? undefined : { name: o.name.value, kind: o.kind.value, contact_name: o.contact.value || undefined, contact_email: o.email.value || undefined, contact_phone: o.phone.value || undefined, billing_address: o.address.value || undefined },
-          name: t.name.value, monthly_cents: Math.round(Number(t.fee.value) * 100), start_date: t.start.value, end_date: t.end.value || undefined, terms_days: Number(t.terms.value), po_number: t.po.value || undefined });
-        toast(c.invoices.length ? `Contract created. ${c.invoices.length === 1 ? 'The first invoice' : `${c.invoices.length} invoices`} ${c.org.contact_email ? `emailed to ${c.org.contact_email}` : 'created (add a billing email to send)'}.` : `Contract created. First invoice goes out ${ymd(c.next_invoice_on)}.`);
+          name: t.name.value, monthly_cents: fee, start_date: t.start.value, end_date: t.end.value || undefined, terms_days: Number(t.terms.value), po_number: t.po.value || undefined, notes: t.notes.value || undefined, past: pastField.hidden ? undefined : t.past.value });
+        const sent = c.invoices.filter((i) => i.sent_at).length;
+        toast(c.invoices.length ? `Contract created. ${nplural(c.invoices.length, 'invoice')} ${sent ? `emailed to ${c.org.contact_email}` : 'created (add a billing email to send them)'}.` : `Contract created. The first invoice goes out ${ymd(c.next_invoice_on)}.`);
         location.hash = `#/teams/${c.id}`;
-      } catch (x) { err.textContent = x.message; }
+      } catch (x) { fieldErr(fields, x, err); }
     }); } },
       field('School or club', orgSel), orgBox,
       h('div', { class: 'form-grid' }, field('Team', t.name), field('Monthly fee ($)', t.fee)),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Start', t.start, 'Billing day each month'), field('End (optional)', t.end), field('Payment terms', t.terms), field('PO number', t.po)),
-      h('p', { class: 'small muted' }, 'If the start date is today or earlier, the first month is invoiced as soon as you save. Months already past are invoiced too.'),
+      h('div', { class: 'form-grid cols-4' }, field('Start', t.start, 'Billing day each month'), field('End (optional)', t.end), field('Payment terms', t.terms), field('PO number', t.po)),
+      pastField, summary, field('Notes (staff only)', t.notes),
       err, h('div', null, btn('Create contract', null, 'primary', { type: 'submit' }))));
   o.name.focus();
 }
 
+// Unsaved edits to the contract form survive a redraw after recording a payment, adding a session and so on.
+const teamUi = { id: null, draft: null, allInvoices: false, q: '', sort: 'name', pasteOpen: false };
 async function viewTeam(main, id) {
-  const [c, locs, settings, engPanel] = await Promise.all([get(`/v1/team-contracts/${id}`), get('/v1/locations'), get('/v1/settings'), teamPanel(id)]);
+  if (teamUi.id !== id) Object.assign(teamUi, { id, draft: null, allInvoices: false, q: '', sort: 'name', pasteOpen: false });
+  let c;
+  try { c = await get(`/v1/team-contracts/${id}`); } catch (e) {
+    if (!/not found/i.test(e.message)) throw e;
+    return fill(main, header('Contract not found', 'It may have been removed.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')), h('div', { class: 'empty' }, 'That team contract wasn\'t found. Open it from the Teams list.'));
+  }
+  const [locs, settings, coachList, engPanel] = await Promise.all([get('/v1/locations'), get('/v1/settings'), get('/v1/coaches'), teamPanel(id)]);
   tzName = settings.timezone;
   const ended = c.status === 'ended';
-  const fee = input({ type: 'number', step: '0.01', value: (c.monthly_cents / 100).toFixed(2) }), end = input({ type: 'date', value: c.end_date ?? '' }), po = input({ value: c.po_number ?? '' });
-  const terms = select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']], { value: String(c.terms_days) });
-  const ce = { name: input({ value: c.org.contact_name ?? '' }), email: input({ type: 'email', value: c.org.contact_email ?? '' }), phone: input({ value: c.org.contact_phone ?? '' }), addr: textarea(c.org.billing_address) };
-  const contractPanel = panel('Contract', { subtitle: ended ? `Ended ${ymd(c.end_date)}` : `${money(c.monthly_cents)}/month since ${ymd(c.start_date)}${c.next_invoice_on ? ` · next invoice ${ymd(c.next_invoice_on)}` : ''}` },
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Monthly fee ($)', fee, 'Applies from the next invoice.'), field('End date', end), field('Terms', terms), field('PO number', po)),
+  const openInv = c.invoices.filter((i) => ['open', 'overdue'].includes(i.status));
+
+  // Invoices
+  const shown = teamUi.allInvoices ? c.invoices : c.invoices.slice(0, 6);
+  const extraDesc = input({ placeholder: 'Testing day, Oct 3', maxlength: '200' }), extraAmt = input({ inputmode: 'decimal', placeholder: '0.00' });
+  const invoicesPanel = h('div', { id: 'tm-inv' }, panel('Invoices', { subtitle: [c.balance_cents ? `${money(c.balance_cents)} unpaid` : 'Nothing unpaid', c.paid_cents ? `${money(c.paid_cents)} paid to date` : null, c.next_invoice_on ? `next invoice ${ymd(c.next_invoice_on)}` : null].filter(Boolean).join(' · '),
+    action: openInv.length ? h('div', { class: 'row wrap', style: 'gap:8px' }, openInv.length > 1 ? btn('Record one payment', () => payManyDialog(c), 'secondary') : null,
+      btn('Email statement', (e) => {
+        if (!c.org.contact_email) return toast(`Add a billing email for ${c.org.name} first.`, 'warn');
+        if (confirm(`Email ${c.org.contact_email} one statement listing ${nplural(openInv.length, 'open invoice')} (${money(c.balance_cents)}), each with its link to view or pay?`)) busy(e.currentTarget, async () => { const r = await post(`/v1/team-contracts/${id}/statement`); toast(`Statement emailed to ${r.to}.`); });
+      }, 'secondary')) : null },
+    c.invoices.length ? shown.map((i) => invoiceRow(i)) : h('p', { class: 'muted' }, `No invoices yet. The first goes out ${ymd(c.next_invoice_on ?? c.start_date)}.`),
+    c.invoices.length > 6 ? btn(teamUi.allInvoices ? 'Show the latest 6' : `Show all ${c.invoices.length} invoices`, () => { teamUi.allInvoices = !teamUi.allInvoices; render(); }, 'ghost') : null,
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Bill something extra'),
+      h('form', { class: 'row wrap', style: 'margin-top:8px', novalidate: true, onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        const amount = dollarsToCents(extraAmt.value);
+        if (!extraDesc.value.trim()) throw new Error('Say what the invoice is for.');
+        if (!(amount > 0)) throw new Error('Enter an amount above zero.');
+        const i = await post(`/v1/team-contracts/${id}/invoices`, { description: extraDesc.value, amount_cents: amount });
+        toast(`${i.number} ${i.sent_at ? `emailed to ${c.org.contact_email}` : 'created. Add a billing email to send it'}.`); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('What for', extraDesc)), h('div', { style: 'width:140px' }, field('Amount ($)', extraAmt)), h('div', { style: 'align-self:flex-end' }, btn('Create invoice', null, 'secondary', { type: 'submit' }))),
+      h('p', { class: 'small muted' }, `It goes on its own invoice with the contract's terms (${termsName(c.terms_days).toLowerCase()})${c.org.contact_email ? `, emailed to ${c.org.contact_email}` : ''}.`))));
+
+  // Contract terms
+  const f = { name: input({ value: c.name, maxlength: '120' }), kind: select(ORG_KIND, { value: c.org.kind }), fee: input({ inputmode: 'decimal', value: (c.monthly_cents / 100).toFixed(2) }), end: input({ type: 'date', value: c.end_date ?? '', min: c.start_date }),
+    terms: select(termsOptions(c.terms_days), { value: String(c.terms_days) }), po: input({ value: c.po_number ?? '', maxlength: '60' }),
+    contact: input({ value: c.org.contact_name ?? '', autocomplete: 'off' }), email: input({ type: 'email', value: c.org.contact_email ?? '', autocomplete: 'off' }), phone: input({ type: 'tel', value: c.org.contact_phone ?? '', autocomplete: 'off' }),
+    addr: textarea(c.org.billing_address), notes: textarea(c.notes, { maxlength: '2000', placeholder: 'Only staff see this, like Invoices need the AD\'s signature' }) };
+  const dirty = h('span', { class: 'small warn-text', 'aria-live': 'polite' });
+  const snapshot = () => Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
+  if (teamUi.draft) { for (const [k, val] of Object.entries(teamUi.draft)) if (f[k]) f[k].value = val; dirty.textContent = 'Unsaved changes'; }
+  const cErr = h('div', { class: 'dp-error', role: 'alert' });
+  const cFields = { name: f.name, monthly_cents: f.fee, end_date: f.end, terms_days: f.terms, contact_email: f.email, contact_phone: f.phone, notes: f.notes };
+  const form = h('form', { class: 'stack', novalidate: true, onInput: () => { teamUi.draft = snapshot(); dirty.textContent = 'Unsaved changes'; }, onChange: () => { teamUi.draft = snapshot(); dirty.textContent = 'Unsaved changes'; }, onSubmit: (e) => { e.preventDefault(); cErr.textContent = ''; busy(e.submitter, async () => {
+    try {
+      const fee = dollarsToCents(f.fee.value);
+      if (!(fee > 0)) throw Object.assign(new Error('Enter the monthly fee.'), { details: { field: 'monthly_cents' } });
+      await patch(`/v1/organizations/${c.org.id}`, { kind: f.kind.value, contact_name: f.contact.value || null, contact_email: f.email.value || null, contact_phone: f.phone.value || null, billing_address: f.addr.value || null });
+      const r = await patch(`/v1/team-contracts/${id}`, { name: f.name.value, monthly_cents: fee, end_date: f.end.value || null, terms_days: Number(f.terms.value), po_number: f.po.value || null, notes: f.notes.value || null });
+      teamUi.draft = null;
+      const bits = [r.restarted ? `Contract restarted. The next invoice goes out ${ymd(r.next_invoice_on)}.` : 'Contract saved.',
+        r.sessions_removed ? `${nplural(r.sessions_removed, 'team session')} after the end date came off the schedule.` : null, r.sessions_added ? `${nplural(r.sessions_added, 'team session')} added up to the new end date.` : null];
+      toast(bits.filter(Boolean).join(' ')); render();
+    } catch (x) { fieldErr(cFields, x, cErr); }
+  }); } },
+    h('div', { class: 'form-grid' }, field('Team', f.name), field('Type', f.kind)),
+    h('div', { class: 'form-grid' }, field('Monthly fee ($)', f.fee), field('End date', f.end), field('Terms', f.terms), field('PO number', f.po)),
+    h('p', { class: 'small muted', style: 'margin:0' }, `A new fee applies from the next invoice. Team sessions follow the end date.${ended ? ' To restart, clear the end date or move it to today or later and save. Billing picks up on the next billing day; months it was ended aren\'t billed.' : ''}`),
     h('div', { class: 'dp-label' }, `Billing contact at ${c.org.name}`),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Name', ce.name), field('Email', ce.email), field('Phone', ce.phone)), field('Billing address', ce.addr),
-    h('div', { class: 'row wrap' }, btn('Save', (e) => busy(e.currentTarget, async () => {
-      await patch(`/v1/organizations/${c.org.id}`, { contact_name: ce.name.value || null, contact_email: ce.email.value || null, contact_phone: ce.phone.value || null, billing_address: ce.addr.value || null });
-      await patch(`/v1/team-contracts/${id}`, { monthly_cents: Math.round(Number(fee.value) * 100), end_date: end.value || null, terms_days: Number(terms.value), po_number: po.value || null });
-      toast('Saved.'); render();
-    })), h('span', { class: 'grow' }),
-      ended ? btn('Reactivate', (e) => busy(e.currentTarget, async () => { await patch(`/v1/team-contracts/${id}`, { status: 'active', end_date: null }); render(); }), 'ghost')
-        : btn('End contract', (e) => { if (confirm(`End ${c.org.name} ${c.name}? Invoicing stops and future team sessions are canceled. Unpaid invoices stay open.`)) busy(e.currentTarget, async () => { await patch(`/v1/team-contracts/${id}`, { status: 'ended' }); toast('Contract ended.'); render(); }); }, 'ghost')));
+    h('div', { class: 'form-grid' }, field('Name', f.contact), field('Email', f.email, 'Invoices, statements and reminders go here.'),
+      h('div', { class: 'stack-tight' }, field('Phone', f.phone), c.org.contact_phone ? h('a', { class: 'small', href: `tel:${c.org.contact_phone.replace(/[^\d+]/g, '')}` }, `Call ${c.org.contact_phone}`) : null)),
+    field('Billing address', f.addr), field('Notes (staff only)', f.notes), cErr,
+    h('div', { class: 'row wrap' }, btn('Save contract', null, 'primary', { type: 'submit' }), dirty, h('span', { class: 'grow' }),
+      ended ? null : btn('End contract', (e) => {
+        if (confirm(`End ${c.org.name} ${c.name}? No more invoices go out and future team sessions come off the schedule. Unpaid invoices stay open and the roster is kept.`)) busy(e.currentTarget, async () => {
+          const r = await patch(`/v1/team-contracts/${id}`, { status: 'ended' }); teamUi.draft = null;
+          toast(`Contract ended.${r.sessions_removed ? ` ${nplural(r.sessions_removed, 'future team session')} came off the schedule.` : ''}`); render();
+        });
+      }, 'ghost')));
+  const contractPanel = h('div', { id: 'tm-contract' }, panel('Contract', { subtitle: ended ? `Ended ${ymd(c.end_date)}` : `${money(c.monthly_cents)}/month since ${ymd(c.start_date)}, billed on the ${ordinal(Number(c.start_date.slice(8, 10)))}${c.next_invoice_on ? ` · next invoice ${ymd(c.next_invoice_on)}` : ''}` }, form));
 
-  const extraDesc = input({ placeholder: 'Saturday combine prep' }), extraAmt = input({ type: 'number', step: '0.01', placeholder: '0.00' });
-  const invoicesPanel = panel('Invoices', { subtitle: c.balance_cents ? `${money(c.balance_cents)} unpaid` : 'All paid up.' },
-    c.invoices.length ? c.invoices.map((i) => invoiceRow(i)) : h('p', { class: 'muted' }, `No invoices yet. The first goes out ${ymd(c.next_invoice_on)}.`),
-    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'Bill something extra'),
-      h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-        const i = await post(`/v1/team-contracts/${id}/invoices`, { description: extraDesc.value, amount_cents: Math.round(Number(extraAmt.value) * 100) });
-        toast(`${i.number} ${i.sent_at ? 'emailed' : 'created'}.`); render();
-      }); } }, h('div', { class: 'grow' }, field('What for', extraDesc)), field('Amount ($)', extraAmt), h('div', { style: 'align-self:flex-end' }, btn('Create invoice', null, 'secondary', { type: 'submit' })))));
-
-  const names = h('textarea', { class: 'dp-input', placeholder: 'One athlete per line: Name, position, grad year\nJalen Brooks, QB, 2027\nMarcus Hill, WR, 2028' });
-  const rosterPanel = panel(`Roster · ${c.roster.length}`, { subtitle: c.sessions_held ? `Attendance across ${c.sessions_held} ${c.sessions_held === 1 ? 'session' : 'sessions'} so far` : 'Check athletes in from each team session.' },
-    c.roster.length ? c.roster.map((r) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, [r.athlete_id, r.position, r.grad_year ? `Class of ${r.grad_year}` : null].filter(Boolean).join(' · '))),
-      r.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${r.sessions_held} · ${Math.round((r.sessions_attended / r.sessions_held) * 100)}%`) : null,
-      btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/team-contracts/${id}/roster/${r.id}`); render(); }), 'ghost'))) : h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below.'),
-    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/team-contracts/${id}/roster`, { names: names.value }); toast(`Roster now has ${r.data.length} athletes.`); render(); }); } },
-      names, h('div', null, btn('Add to roster', null, 'secondary', { type: 'submit' }))));
-
-  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: bizDate() }) };
-  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
-  const schedPanel = panel('Team sessions', { subtitle: c.series.filter((x) => x.active).map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${x.start_time}`).join(' · ') || 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
-    ended || !locs.data.length ? null : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+  // Team sessions
+  const activeSeries = c.series.filter((x) => x.active);
+  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10', max: '600', inputmode: 'numeric' }),
+    start: input({ type: 'date', value: bizDate() > c.start_date ? bizDate() : c.start_date, max: c.end_date ?? undefined }), coach: coachPicker(coachList.data, null) };
+  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i) }), d));
+  const schedPanel = h('div', { id: 'tm-sessions' }, panel('Team sessions', { subtitle: activeSeries.length ? activeSeries.map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${hm12(x.start_time)}`).join('; ') : 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
+    activeSeries.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${hm12(x.start_time)} · ${x.duration_min} min`),
+      h('span', { class: 'small muted' }, [x.location_name, x.coach_name ?? 'no coach set', x.next_starts_at ? `next ${tzFmt(x.next_starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}` : 'no more sessions scheduled', x.end_date ? `until ${ymd(x.end_date)}` : null].filter(Boolean).join(' · '))),
+      btn('Remove', (e) => { if (confirm('Take these team sessions off the schedule? Future sessions are canceled. Past attendance is kept.')) busy(e.currentTarget, async () => { const r = await del(`/v1/team-contracts/${id}/sessions/${x.id}`); toast(`${nplural(r.sessions_removed, 'future session')} came off the schedule.`); render(); }); }, 'ghost', { 'aria-label': `Remove ${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${hm12(x.start_time)}` }))),
+    ended ? h('p', { class: 'muted small' }, 'This contract has ended. Restart it to schedule team sessions.') : !locs.data.length ? h('p', { class: 'muted small' }, 'Add a location first (Point of sale, Locations).') : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
-      const x = await post(`/v1/team-contracts/${id}/sessions`, { location_id: sd.loc.value, weekdays, start_time: sd.time.value, duration_min: Number(sd.dur.value), start_date: sd.start.value });
-      toast(`${x.upcoming_sessions} team sessions added to your schedule.`); render();
+      if (!weekdays.length) throw new Error('Choose at least one day.');
+      const x = await post(`/v1/team-contracts/${id}/sessions`, { location_id: sd.loc.value, weekdays, start_time: sd.time.value, duration_min: Number(sd.dur.value), start_date: sd.start.value, coach_id: sd.coach.value || null });
+      toast(`${nplural(x.upcoming_sessions, 'team session')} added to your schedule${c.end_date ? `, until ${ymd(c.end_date)}` : ' for the next 8 weeks (more are added as time goes on)'}.`); render();
     }); } },
-      h('div', { class: 'row wrap', style: 'gap:12px' }, days),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Where', sd.loc), field('Starts', sd.time), field('Minutes', sd.dur), field('First day', sd.start)),
-      h('div', null, btn('Add team sessions', null, 'secondary', { type: 'submit' }))));
+      h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:4px 14px' }, days)),
+      h('div', { class: 'form-grid cols-3' }, field('Where', sd.loc), field('Starts', sd.time), field('Minutes', sd.dur)),
+      h('div', { class: 'form-grid' }, field('First day', sd.start), field('Coach', sd.coach)),
+      h('div', null, btn('Add team sessions', null, 'secondary', { type: 'submit' })))));
 
+  // Roster
+  const last = c.recent_sessions[0];
+  const listBox = h('div', { 'aria-live': 'polite' });
+  const drawRoster = () => {
+    const q = teamUi.q.trim().toLowerCase();
+    let rows = c.roster.filter((a) => !q || `${a.name} ${a.athlete_id ?? ''} ${a.position ?? ''}`.toLowerCase().includes(q));
+    if (teamUi.sort === 'attendance') rows = [...rows].sort((x, y) => (x.attendance_rate ?? 2) - (y.attendance_rate ?? 2));
+    if (teamUi.sort === 'grad') rows = [...rows].sort((x, y) => (x.grad_year ?? 9999) - (y.grad_year ?? 9999) || x.name.localeCompare(y.name));
+    fill(listBox, !c.roster.length ? h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below, or add a client you already have.')
+      : !rows.length ? h('p', { class: 'muted' }, `Nobody on the roster matches "${teamUi.q.trim()}".`)
+        : rows.map((a) => {
+          const low = a.attendance_rate != null && a.attendance_rate < 0.6;
+          return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+            h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, a.client_id ? h('a', { class: 'strong', href: `#/clients/${a.client_id}`, style: 'color:inherit' }, a.name) : h('span', { class: 'strong' }, a.name),
+              h('span', { class: 'small muted' }, [a.athlete_id, a.position, a.grad_year ? `Class of ${a.grad_year}` : null].filter(Boolean).join(' · '), ' · ',
+                h('span', { class: low ? 'warn-text' : '' }, a.sessions_held ? `attendance ${pctText(a.attendance_rate)} (${a.sessions_attended} of ${a.sessions_held})` : 'no sessions yet'),
+                a.last_seen ? ` · last here ${tzFmt(a.last_seen, { month: 'short', day: 'numeric' })}` : '')),
+            btn('Remove', (e) => { if (confirm(`Take ${a.name} off this roster? Their profile and results are kept.`)) busy(e.currentTarget, async () => {
+              await del(`/v1/team-contracts/${id}/roster/${a.id}`); render();
+              undoToast(`${a.name} removed from the roster.`, () => busy(null, async () => { await post(`/v1/team-contracts/${id}/roster/${a.id}/restore`); toast(`${a.name} is back on the roster.`); render(); }));
+            }); }, 'ghost', { 'aria-label': `Remove ${a.name} from the roster` }));
+        }));
+  };
+  drawRoster();
+  const find = c.roster.length > 5 ? input({ type: 'search', placeholder: 'Find a player', 'aria-label': 'Find on the roster', value: teamUi.q, autocomplete: 'off' }) : null;
+  find?.addEventListener('input', () => { teamUi.q = find.value; drawRoster(); });
+  const sort = c.roster.length > 5 ? select([['name', 'Name, A to Z'], ['attendance', 'Lowest attendance first'], ['grad', 'Grad year']], { value: teamUi.sort, 'aria-label': 'Sort roster' }) : null;
+  sort?.addEventListener('change', () => { teamUi.sort = sort.value; drawRoster(); });
+  const bars = c.recent_sessions.length > 1 && c.roster.length ? h('div', { class: 'tm-bars', role: 'img', 'aria-label': `Check-ins at the last ${c.recent_sessions.length} team sessions, oldest first: ${c.recent_sessions.slice().reverse().map((s) => `${s.here} of ${Math.max(s.here, s.roster)}`).join(', ')}` },
+    c.recent_sessions.slice().reverse().map((s) => { const r = s.here / Math.max(1, s.here, s.roster); return h('span', { class: r < 0.6 ? 'low' : '', style: `height:${Math.max(2, Math.round(28 * r))}px`, title: `${tzFmt(s.starts_at, { month: 'short', day: 'numeric' })}: ${s.here} of ${Math.max(s.here, s.roster)} here` }); })) : null;
+  const names = textarea('', { rows: '4', placeholder: 'One athlete per line: Name, position, grad year\nJalen Brooks, QB, 2027\nMarcus Hill, WR, 2028', 'aria-label': 'Team list' });
+  const paste = h('details', { open: !c.roster.length || teamUi.pasteOpen, onToggle: (e) => { teamUi.pasteOpen = e.currentTarget.open; } },
+    h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Paste a team list'),
+    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, () => pasteRoster(c, names)); } },
+      names, h('div', null, btn('Check the list', null, 'secondary', { type: 'submit' })),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing is saved until the whole list checks out. Each new player gets an Athlete ID. Names already on the roster are skipped, and names that match a client you already have can be linked instead. Rows copied from a spreadsheet work too.')));
+  const rosterPanel = h('div', { id: 'tm-roster' }, panel(`Roster · ${c.roster.length}`, { subtitle: [c.team_rate != null ? `Team attendance ${pctText(c.team_rate)}` : 'Check athletes in from each team session. Attendance counts from the day each athlete joins.', last ? `last session ${tzFmt(last.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}: ${last.here} of ${Math.max(last.here, last.roster)} here` : null].filter(Boolean).join(' · '), action: bars },
+    h('div', { class: 'row wrap', style: 'gap:8px' }, find ? h('div', { class: 'grow', style: 'min-width:160px' }, find) : null, sort ? h('div', { style: 'min-width:180px' }, sort) : null,
+      btn('Add existing client', () => addExistingDialog(c), 'secondary'),
+      c.roster.length ? btn('Export CSV', () => {
+        downloadCsv(`${`${c.org.name} ${c.name}`.replace(/[^\w]+/g, '-').toLowerCase()}-roster-${bizDate()}.csv`, [['Name', 'Athlete ID', 'Position', 'Grad year', 'Attendance', 'Sessions attended', 'Team sessions', 'Last here'],
+          ...c.roster.map((a) => [a.name, a.athlete_id ?? '', a.position ?? '', a.grad_year ?? '', a.attendance_rate == null ? '' : pctText(a.attendance_rate), a.sessions_attended, a.sessions_held, a.last_seen ? tzFmt(a.last_seen, { year: 'numeric', month: '2-digit', day: '2-digit' }) : ''])]);
+        toast(`Exported ${nplural(c.roster.length, 'athlete')}.`);
+      }, 'ghost') : null),
+    listBox, paste));
+
+  const jumps = [['tm-inv', 'Invoices'], ['tm-roster', 'Roster'], ['tm-sessions', 'Team sessions'], ['tm-contract', 'Contract'], ['tm-eng', 'Goals & messages']];
   fill(main,
-    header(`${c.org.name}`, `${c.name} · ${money(c.monthly_cents)}/month${ended ? ' · ended' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')),
-    c.org.contact_email ? null : h('div', { class: 'test-banner', role: 'note' }, `Add a billing email for ${c.org.name} so invoices and reminders can be emailed.`),
+    header(c.org.name, `${c.name} · ${money(c.monthly_cents)}/month${c.org.kind === 'club' ? ' · club' : ''}${ended ? ` · ended ${ymd(c.end_date)}` : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')),
+    h('nav', { class: 'tm-jump', 'aria-label': 'Sections' }, jumps.map(([t, label]) => h('button', { type: 'button', onClick: () => document.getElementById(t)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
+    c.org.contact_email ? null : h('div', { class: 'test-banner', role: 'note' }, `Add a billing email for ${c.org.name} so invoices, statements and reminders can be emailed.`),
+    ended ? h('div', { class: 'test-banner', role: 'note' }, `This contract ended ${ymd(c.end_date)}. No invoices go out. To restart it, clear the end date or move it later and save.`) : null,
     invoicesPanel,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, contractPanel, schedPanel), h('div', { class: 'stack', style: 'gap:24px' }, engPanel, rosterPanel)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px;min-width:0' }, rosterPanel, h('div', { id: 'tm-eng' }, engPanel)), h('div', { class: 'stack', style: 'gap:24px;min-width:0' }, schedPanel, contractPanel)));
+}
+
+// Paste: check the whole list first. Problem lines are listed and nothing is saved; names that match a client you
+// already have need a choice (link them, or add a new athlete) before anything is added.
+async function pasteRoster(c, names) {
+  const text = names.value;
+  if (!text.trim()) { names.focus(); throw new Error('Paste at least one name, one per line.'); }
+  const plan = await post(`/v1/team-contracts/${c.id}/roster/check`, { names: text });
+  const save = async (links = {}) => {
+    const r = await post(`/v1/team-contracts/${c.id}/roster`, { names: text, links });
+    const bits = [r.added ? `${nplural(r.added, 'new athlete')} added` : null, r.linked ? `${r.linked} existing ${r.linked === 1 ? 'client' : 'clients'} linked` : null, r.skipped ? `${r.skipped} already on the roster` : null].filter(Boolean);
+    teamUi.pasteOpen = false;
+    toast(bits.length ? `${bits.join(', ')}.` : 'Nothing new to add.'); render();
+  };
+  const errors = plan.rows.filter((r) => r.status === 'error'), matches = plan.rows.filter((r) => r.status === 'match');
+  if (errors.length) {
+    teamDialog(`Fix ${nplural(errors.length, 'line')} first`, h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, 'Nothing was added. Each line needs a first and last name; the position and grad year are optional.'),
+      h('ul', { style: 'margin:0;padding-left:18px' }, errors.map((r) => h('li', null, r.error)))), [{ label: 'Edit the list', variant: 'primary', onClick: () => { setTimeout(() => names.focus(), 0); } }]);
+    return;
+  }
+  if (!matches.length) return save();
+  const picks = matches.map((m) => select([['', 'Choose…'], ...m.matches.map((x) => [x.id, `Link to ${x.name} (${[x.athlete_id, x.birth_date ? `born ${ymd(x.birth_date)}` : null, x.teams ? `on ${x.teams}` : null].filter(Boolean).join(', ')})`]), ['new', 'Add as a new athlete']], { value: '', 'aria-label': `What to do with ${m.name}` }));
+  teamDialog('Link clients you already have?', h('div', { class: 'stack' },
+    h('p', { style: 'margin:0' }, `${matches.length === 1 ? 'One name matches' : `${matches.length} names match`} a client you already have. Link to put that client on this team (their app gets team goals and messages), or add a new athlete if it's someone else with the same name.`),
+    matches.map((m, n) => h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, `Line ${m.line}: ${m.name}`, m.position ? h('span', { class: 'muted small' }, ` · ${m.position}`) : null, m.grad_year ? h('span', { class: 'muted small' }, ` · ${m.grad_year}`) : null), picks[n])),
+    h('p', { class: 'small muted', style: 'margin:0' }, `${nplural(plan.counts.new, 'other new name')}${plan.counts.skip ? `, ${plan.counts.skip} already on the roster` : ''}.`)),
+  [{ label: 'Add to roster', variant: 'primary', onClick: async () => {
+    const undecided = matches.filter((m, n) => !picks[n].value);
+    if (undecided.length) throw new Error(`Choose what to do with ${undecided.map((m) => m.name).join(', ')}.`);
+    await save(Object.fromEntries(matches.map((m, n) => [m.line, picks[n].value]).filter(([, val]) => val && val !== 'new')));
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+
+// Search every client and put one on this roster. Someone on another team is asked about first.
+function addExistingDialog(c) {
+  const q = input({ type: 'search', autocomplete: 'off', placeholder: 'Like Ava Lopez or AVALOP2026' });
+  const out = h('div', { 'aria-live': 'polite' }, h('p', { class: 'small muted', style: 'margin:0' }, 'Type at least two letters.'));
+  let timer;
+  const add = async (b, x, extra = {}) => {
+    b.disabled = true;
+    try {
+      const r = await post(`/v1/team-contracts/${c.id}/roster/existing`, { client_id: x.id, ...extra });
+      document.getElementById('dialog').close();
+      toast(`${x.name} added to the roster${r.moved_from.length ? ` and taken off ${r.moved_from.join(', ')}` : ''}.`); render();
+    } catch (e) {
+      b.disabled = false;
+      if (e.code !== 'confirm_required') return toast(e.message, 'warn');
+      fill(out, h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, e.message), h('div', { class: 'row wrap' },
+        btn('Move them here', (ev) => add(ev.currentTarget, x, { move: true }), 'secondary'), btn('Keep them on both', (ev) => add(ev.currentTarget, x, { keep: true }), 'secondary'), btn('Back', () => search(), 'ghost'))));
+    }
+  };
+  const search = async () => {
+    const val = q.value.trim();
+    if (val.length < 2) return fill(out, h('p', { class: 'small muted', style: 'margin:0' }, 'Type at least two letters.'));
+    let rows;
+    try { rows = (await get(`/v1/team-contracts/${c.id}/client-search?q=${encodeURIComponent(val)}`)).data; } catch (e) { return fill(out, h('p', { class: 'dp-error' }, e.message)); }
+    fill(out, rows.length ? rows.map((x) => h('div', { class: 'list-item', style: 'min-height:52px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, [x.athlete_id, x.teams ? `on ${x.teams}` : null].filter(Boolean).join(' · '))),
+      x.on_roster ? h('span', { class: 'small muted' }, 'On this roster') : btn(x.teams ? 'Add or move' : 'Add', (e) => add(e.currentTarget, x), 'secondary', { 'aria-label': `Add ${x.name}` })))
+      : h('p', { class: 'small muted', style: 'margin:0' }, 'No clients match. Paste their name into the team list instead to add them as a new athlete.'));
+  };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 200); });
+  teamDialog('Add an existing client', h('div', { class: 'stack' }, field('Name or Athlete ID', q), out), [{ label: 'Done', variant: 'ghost' }]);
+  q.focus();
 }
 
 // ---------- Athlete ID ----------

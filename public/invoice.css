@@ -22,3 +22,10 @@ body{background:var(--ground)}
   body{background:#fff;color:#111}.inv{padding:0}.inv-sheet{border:0;padding:0}.inv-actions,.test-banner{display:none}
   .inv-head img{filter:invert(1) grayscale(1)}
 }
+.inv-team{font-family:var(--font-sans)!important;max-width:240px}
+.inv-how{display:flex;flex-direction:column;gap:6px}
+.inv-how p{margin:0;color:var(--steel-muted);white-space:pre-line;line-height:22px}
+.inv-how .inv-how-k{color:var(--steel);font-weight:600}
+.inv-how .warn-text{color:var(--amber)}
+.inv-note{margin:0;font-size:13px;color:var(--steel-muted)}
+@media print{.inv-how p,.inv-note{color:#444}.inv-how .inv-how-k{color:#111}}

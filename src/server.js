@@ -15,6 +15,7 @@ import { syncLibrary } from './services/performance.js';
 import { assignMissingIds } from './services/athlete-ids.js';
 import { can, audit, rateLimit, roleName, hideMoney } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
+import { sendNewest as sendBackupOffsite } from './services/offsite.js';
 import { syncHawkin, migratePending } from './services/perf-import.js';
 import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
@@ -153,6 +154,13 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('hawkin-sync', 15 * 60e3, () => syncHawkin(ctx));
   if (dbFile !== ':memory:') {
     runner.define('daily-backup', HOUR, () => { const b = dailyBackup(ctx); if (!b) return { skipped: true }; console.log(`Backup saved: ${b.name}`); return { name: b.name, bytes: b.bytes }; }, { atStart: true });
+    // Sends the newest backup off-site (when storage is set up) and reads it back; a failed send is a failed run.
+    runner.define('offsite-backup', HOUR, async () => {
+      const r = await sendBackupOffsite(ctx);
+      if (!r) return { skipped: true };
+      if (!r.ok) throw new Error(`Off-site backup failed: ${r.error}`);
+      return r;
+    }, { atStart: true });
   }
   runner.define('billing', HOUR, () => runBilling(ctx), { atStart: true });
   runner.define('extend-schedule', 6 * HOUR, () => extendSchedule(ctx), { atStart: true });

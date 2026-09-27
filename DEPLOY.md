@@ -50,9 +50,27 @@ fly certs add app.yourdomain.com
 - The app refuses to start with unsafe settings (no https address, sample password, test mode with a live Stripe key) and prints what to fix in the log.
 
 ## Backups
-- A full copy of the database is saved every day to `/data/backups` and the last 30 are kept.
-- **Keep copies off the server too:** download one from Staff & security → Backups every week or two, and turn on your host's disk snapshots if offered.
-- **To restore:** stop the app, replace `/data/diamond.db` with the backup file (renamed to `diamond.db`), start the app.
+- A full copy of the database is saved every day to `/data/dp-backups` and the last 30 are kept.
+- **Keep copies off the server too.** A copy on the same disk is lost with the disk, so set up off-site backups (below). Staff & security → Backups shows **Off-site: OK** once it works.
+
+### Off-site backups
+Each daily backup is checked by SQLite, encrypted with your passphrase, uploaded, then downloaded again and compared, so a copy only counts once it's known to restore. Failed uploads retry every hour. It works with any S3-compatible storage; these steps use Cloudflare R2 (your DNS is already on Cloudflare).
+
+1. In the Cloudflare dashboard open **R2 Object Storage** (the free tier covers 10 GB; R2 asks for a card to turn it on).
+2. **Create bucket**, e.g. `diamond-protocol-backups`. Location: automatic.
+3. In the bucket, **Settings → Object lifecycle rules → Add rule**: delete objects 90 days after upload, so old copies don't pile up.
+4. Back in R2, **Manage API tokens → Create API token**: permission **Object Read & Write**, limited to that bucket. Copy the **Access Key ID**, **Secret Access Key** and the **S3 endpoint** (`https://<account id>.r2.cloudflarestorage.com`).
+5. Make a passphrase: `openssl rand -base64 32`, or a long password from your password manager. **Save it in your password manager.** Backups can't be restored without it and nobody can recover it for you.
+6. In Render, open **diamond-protocol → Environment** and set `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_KEY_ID`, `BACKUP_S3_SECRET` and `BACKUP_PASSPHRASE`. Do the same on staging if you want it backed up too; `render.yaml` already keeps the two apart in the bucket (`production/` and `staging/`).
+7. After Render redeploys, press **Staff & security → Back up now**. It should say the backup was sent off-site.
+
+Backblaze B2 and AWS S3 work the same way: use their S3 endpoint (e.g. `https://s3.us-west-004.backblazeb2.com`) and set `BACKUP_S3_REGION` to the bucket's region (e.g. `us-west-004`).
+
+### Restoring
+- **From an off-site copy:** on any computer with Node 22.13+ and this repository, download the `.enc` file from the bucket and run
+  `BACKUP_PASSPHRASE='...' node src/restore-backup.js ~/Downloads/diamond-20260927-030000.db.enc restored.db`
+  (with the `BACKUP_S3_*` settings also set, pass just the backup name, e.g. `diamond-20260927-030000.db`, and it fetches it). The script checks the database before it writes `restored.db`.
+- **Putting it back in service:** stop the app, replace `/data/dp.db` with the restored file (renamed to `dp.db`), start the app. A file downloaded from Staff & security → Backups is already a plain database and goes in the same way.
 
 ## Updating
 Push changes to the repository. GitHub runs the full test suite and checks the Docker image builds (the **Tests** check, `.github/workflows/tests.yml`). Staging deploys only after that check passes; production still waits for Manual Deploy. If staging was set up by hand rather than from the Blueprint, set it yourself: staging service → Settings → Auto-Deploy → **After CI Checks Pass**. The database upgrades itself on start, and a backup is made on start before anything else runs each day.
@@ -63,8 +81,10 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | `PUBLIC_URL` | Your https address. Required. |
 | `DP_TEST_MODE` | `false` in production. |
 | `TRUST_PROXY` | How many proxies sit in front of the app, so HTTPS and visitors' addresses are recognized. The Dockerfile sets `true` (one proxy). **On Render set `TRUST_PROXY=2`**: Render puts its own Cloudflare edge in front of its load balancer, so two addresses arrive. Add one more (`3`) if you also turn on your own Cloudflare proxy (orange cloud) for the domain. To confirm it, sign in as the owner and open Staff & security → Connection check: the address the app decided on should be your own internet address, and the check lists what each value would pick. |
-| `DB_FILE`, `BACKUP_DIR` | `/data/diamond.db`, `/data/backups` (set in the Dockerfile). |
+| `DB_FILE`, `BACKUP_DIR` | `/data/dp.db`, `/data/dp-backups` (set in the Dockerfile). |
 | `BACKUP_KEEP` | How many daily backups to keep (default 30). |
+| `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_KEY_ID`, `BACKUP_S3_SECRET` | Off-site backups to S3-compatible storage (see Backups). Optional: `BACKUP_S3_REGION` (default `auto`), `BACKUP_S3_PREFIX` (default `diamond-protocol/`). |
+| `BACKUP_PASSPHRASE` | Encrypts off-site backups. Required for them; keep it in your password manager. |
 | `BUSINESS_TZ` | Your time zone, e.g. `America/Chicago`. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | First start only. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CURRENCY` | Payments. |

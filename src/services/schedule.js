@@ -322,6 +322,8 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
   if (existing && ['booked', 'attended', 'waitlisted'].includes(existing.status)) throw conflict(`${first(c.name)} is already ${existing.status === 'waitlisted' ? 'on the waitlist' : 'booked'} for this session.`);
 
   const full = s.booked_count >= s.capacity;
+  // A trial offer is for a spot, not the waitlist: the waitlist later books at the usual price.
+  if (full && offerPriceCents != null) throw conflict('Sorry, that spot was just taken. We\'ll let you know next time one opens.');
   let result = { coverage: 'none' }, status = 'waitlisted';
   if (!full) { result = await cover(ctx, s, c, { pay, allowUnpaid: isCoach, actor, offerPriceCents }); status = 'booked'; }
   // Archived while the card was being charged: give the credit or payment back rather than book an archived client.

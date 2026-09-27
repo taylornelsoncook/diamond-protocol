@@ -108,6 +108,8 @@ function offerBlock(s, asOf) {
   return null;
 }
 const maxTrialPrice = (s) => (s.drop_in_cents != null ? s.drop_in_cents : TRIAL_MAX_CENTS);
+// What a trial link charges now: its price, but never more than the drop-in if that was lowered after the offer went out.
+const trialPrice = (o, s) => (o.price_cents == null ? null : s.drop_in_cents != null ? Math.min(o.price_cents, s.drop_in_cents) : o.price_cents);
 
 // Today: every upcoming class with a spot left in the next 7 days (or ?days=), soonest first, for every coach (coachId
 // narrows it to one). With how many families fit, what a tap would send, and why offers can't go out when they can't.
@@ -137,7 +139,8 @@ async function deliver(ctx, s, f, { actor, priceCents = null, subject, body, tex
   let tok;
   if (f.offer) {
     tok = f.offer.token;
-    ctx.db.run('UPDATE spot_offers SET price_cents = ?, client_ids = ?, sent_to = ?, sent_by = ?, sent_at = ? WHERE id = ?', priceCents, f.athletes.map((a) => a.id).join(','), guardian?.email ?? null, actor ?? 'Automatic', ctx.now(), f.offer.id);
+    // Only while still unbooked: a family booking from their standard link while earlier emails go out keeps what they paid.
+    if (!ctx.db.run('UPDATE spot_offers SET price_cents = ?, client_ids = ?, sent_to = ?, sent_by = ?, sent_at = ? WHERE id = ? AND booked_at IS NULL', priceCents, f.athletes.map((a) => a.id).join(','), guardian?.email ?? null, actor ?? 'Automatic', ctx.now(), f.offer.id).changes) return false;
   } else {
     tok = token(16);
     ctx.db.run('INSERT INTO spot_offers (id, token, session_id, family_id, client_ids, sent_to, sent_by, sent_at, price_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -146,6 +149,7 @@ async function deliver(ctx, s, f, { actor, priceCents = null, subject, body, tex
   const link = `${ctx.publicUrl ?? ''}/spot/${tok}`, names = f.athletes.map((a) => first(a.name)).join(' or ');
   if (guardian) await sendEmail(ctx, { to: guardian.email, subject, text: body({ parent: first(guardian.name), names, link }) });
   textFamily(ctx, f.family_id, 'open_spot', text({ names, link }));
+  return true;
 }
 
 // Send offers for one session: up to 4 families per open spot (30 at most), best fits first.
@@ -166,7 +170,7 @@ export async function sendOffers(ctx, sessionId, { actor, asOf = ctx.now() } = {
 
 // ---------- Trial offers: "try this session for $X" (owner only; routes and security.js keep it that way) ----------
 const DEFAULT_TRIAL = (ctx, s) => `We'd love to have {athlete} try ${s.name} at ${s.location_name} on ${when(ctx, s.starts_at)}. This session is {price} for you.`;
-const fill = (tpl, { names, price }) => tpl.replaceAll('{athlete}', names).replaceAll('{price}', price);
+const fill = (tpl, { names, price }) => tpl.replaceAll('{athlete}', () => names).replaceAll('{price}', () => price);   // functions: a $ in a name is kept as typed
 
 // What the dialog needs: the price range, who it would reach, and the message to start from.
 export function trialOfferPreview(ctx, sessionId, asOf = ctx.now()) {
@@ -198,11 +202,12 @@ export async function sendTrialOffer(ctx, sessionId, body = {}, { actor, asOf = 
   const who = trialAudience(ctx, s, asOf).slice(0, cap);
   if (!who.length) throw conflict('No families to send this to: everyone who fits is booked, already has a trial offer, or had 2 offers today.');
   const biz = getSetting(ctx, 'business_name'), price$ = priceText(price);
-  for (const f of who) await deliver(ctx, s, f, { actor, priceCents: price, subject: `Try ${s.name} ${price === 0 ? 'free' : `for ${price$}`}: ${when(ctx, s.starts_at)}`,
+  let sent = 0;
+  for (const f of who) if (await deliver(ctx, s, f, { actor, priceCents: price, subject: `Try ${s.name} ${price === 0 ? 'free' : `for ${price$}`}: ${when(ctx, s.starts_at)}`,
     body: ({ parent, names, link }) => `Hi ${parent},\n\n${fill(tpl, { names, price: price$ })}\n\n${s.spots_left === 1 ? 'There\'s one spot' : `There are ${s.spots_left} spots`}, and the first to book gets ${s.spots_left === 1 ? 'it' : 'them'}. The offer ends when the session starts. Book in one tap, no sign-in needed:\n${link}\n\nCan't make it? No need to reply.\n\n${biz}`,
-    text: ({ names, link }) => `${biz}: ${names} can try ${s.name}, ${when(ctx, s.starts_at)}, ${price === 0 ? 'free' : `for ${price$}`}. First to book gets it: ${link}` });
-  emit(ctx, 'spots.offered', { session_id: s.id, session_name: s.name, starts_at: s.starts_at, families: who.length, spots_left: s.spots_left, trial: true, price_cents: price, sent_by: actor ?? null });
-  return { session_id: s.id, sent: who.length, price_cents: price, families_left: Math.max(0, trialAudience(ctx, s, asOf).length), offers: offerStats(ctx, s.id) };
+    text: ({ names, link }) => `${biz}: ${names} can try ${s.name}, ${when(ctx, s.starts_at)}, ${price === 0 ? 'free' : `for ${price$}`}. First to book gets it: ${link}` })) sent++;
+  emit(ctx, 'spots.offered', { session_id: s.id, session_name: s.name, starts_at: s.starts_at, families: sent, spots_left: s.spots_left, trial: true, price_cents: price, sent_by: actor ?? null });
+  return { session_id: s.id, sent, price_cents: price, families_left: Math.max(0, trialAudience(ctx, s, asOf).length), offers: offerStats(ctx, s.id) };
 }
 
 // Hourly, with open_spot_offers on 'auto': group classes and clinics starting in the next 30 hours that haven't had
@@ -239,12 +244,13 @@ export function publicOffer(ctx, tok) {
   const status = s.status !== 'scheduled' ? 'canceled' : s.starts_at <= ctx.now() ? 'started' : athletes.some((a) => a.status === 'booked') ? 'booked' : s.spots_left <= 0 ? 'full' : 'open';
   return { business_name: getSetting(ctx, 'business_name'), status,
     session: { name: s.name, kind: s.kind, starts_at: s.starts_at, ends_at: s.ends_at, location_name: s.location_name, spots_left: s.spots_left, drop_in_cents: s.drop_in_cents ?? null },
-    trial: o.price_cents != null ? { price_cents: o.price_cents, used: !!o.booked_at } : null,
+    trial: o.price_cents != null ? { price_cents: trialPrice(o, s), used: !!o.booked_at } : null,
     athletes, timezone: getSetting(ctx, 'timezone'), waiver_signed: fam?.waiver_version != null && Number(fam.waiver_version) === Number(getSetting(ctx, 'waiver_version')), card_last4: fam?.card_payment_method ? fam.card_last4 : null };
 }
 // Book from the offer. A standard offer uses the family's usual cover (membership, a pack, or pay with the family card).
 // A trial offer charges its own price to the family card (or books free at $0), once; a membership that covers the class
 // still covers it. The special price comes only from this offer's row, so no other booking is affected.
+const trialInFlight = new Set();
 export async function bookOffer(ctx, tok, body = {}) {
   const o = byToken(ctx, tok);
   const view = publicOffer(ctx, tok);
@@ -254,12 +260,17 @@ export async function bookOffer(ctx, tok, body = {}) {
   const clientId = v.str(body.athlete_id, 'athlete_id');
   if (!o.client_ids.split(',').includes(clientId)) throw notFound('Athlete');
   if (!view.waiver_signed) throw new HttpError(409, 'waiver_required', 'Sign the waiver in the parent portal first (Family tab), then come back to this link.');
-  const trial = o.price_cents != null;
-  if (trial && o.booked_at) throw conflict('This trial offer has already been used. Book another session from the parent portal.');
+  const trial = o.price_cents != null, price = view.trial?.price_cents;
+  if (trial && (o.booked_at || trialInFlight.has(o.id))) throw conflict('This trial offer has already been used. Book another session from the parent portal.');
   const member = view.session.kind === 'group' && !!ctx.db.get(`SELECT 1 FROM subscriptions WHERE client_id = ? AND status IN ('active','trialing','past_due')`, clientId);
-  if (trial && o.price_cents > 0 && !member && !view.card_last4) throw new HttpError(402, 'payment_required', `Add a card in the parent portal (Family tab), then come back to this link to book for ${money(o.price_cents)}.`);
-  const b = await book(ctx, { sessionId: o.session_id, clientId, pay: body.pay === 'card_on_file' ? 'card_on_file' : undefined, actor: trial ? 'Trial offer' : 'Open spot offer', offerPriceCents: trial ? o.price_cents : undefined });
-  if (b.status === 'booked') ctx.db.run('UPDATE spot_offers SET booking_id = ?, booked_at = ? WHERE id = ?', b.id, ctx.now(), o.id);
+  if (trial && price > 0 && !member && !view.card_last4) throw new HttpError(402, 'payment_required', `Add a card in the parent portal (Family tab), then come back to this link to book for ${money(price)}.`);
+  // One booking per trial link, even when two athletes on it are booked at the same moment (the card charge takes time).
+  if (trial) trialInFlight.add(o.id);
+  let b;
+  try {
+    b = await book(ctx, { sessionId: o.session_id, clientId, pay: body.pay === 'card_on_file' ? 'card_on_file' : undefined, actor: trial ? 'Trial offer' : 'Open spot offer', offerPriceCents: trial ? price : undefined });
+    if (b.status === 'booked') ctx.db.run('UPDATE spot_offers SET booking_id = ?, booked_at = ? WHERE id = ?', b.id, ctx.now(), o.id);
+  } finally { trialInFlight.delete(o.id); }
   const charged = b.coverage === 'paid' ? ctx.db.get('SELECT amount_cents FROM sales WHERE id = ?', b.sale_id)?.amount_cents : null;
   return { ...publicOffer(ctx, tok), booked: b.status === 'booked', waitlisted: b.status === 'waitlisted', coverage: b.coverage,
     message: b.status === 'booked' ? `${first(b.client_name)} is booked for ${b.session_name}.${charged != null ? ` ${money(charged)} was charged to the card ending ${view.card_last4}.` : trial && b.coverage === 'none' ? ' It\'s free, nothing to pay.' : b.coverage === 'membership' && trial ? ' Covered by the membership.' : ''}` : `The last spot was just taken, so ${first(b.client_name)} is on the waitlist.` };

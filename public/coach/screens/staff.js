@@ -118,7 +118,9 @@ function status(s) {
 // A hand-over picker for a coach's future sessions: another active coach or owner, nobody, or leave as is.
 function handPicker(s, staff, { keepLabel } = {}) {
   if (!hasWork(s.work)) return '';
-  const others = staff.filter((x) => x.active && x.id !== s.id && ['owner', 'coach'].includes(x.role));
+  // Coaches first, so the default choice is another coach rather than the owner.
+  const others = staff.filter((x) => x.active && x.id !== s.id && ['owner', 'coach'].includes(x.role))
+    .sort((a, b) => (a.role === 'coach' ? 0 : 1) - (b.role === 'coach' ? 0 : 1));
   return html`<div class="dps-hand"><p>${s.name} leads ${workText(s.work)}.</p>
     <div class="field"><label class="label" for="hand">Hand them to</label>
     <select class="input" id="hand" name="hand_to">

@@ -339,3 +339,72 @@ test('only owners reach staff tools; coaches and front desk are refused and logg
   }
   assert.ok(db.get("SELECT 1 FROM activity WHERE kind='refused' AND detail LIKE 'GET /api/staff/summary%'"));
 });
+
+test('Review fixes: an open reset link stops working after an owner reset, an email change or a password change', async () => {
+  const o = await owner();
+  const { id, pw, c } = await newStaff(o, 'Link Lister', 'link@demo.test');
+  const anon = client();
+  const linkFor = async (email) => { await anon.post('/api/staff-reset', { email }); return lastMail(email).body.match(/\?reset=([\w-]+)/)[1]; };
+  // owner resets the password (say it was compromised): the emailed link can't override it
+  let token = await linkFor('link@demo.test');
+  assert.equal((await anon.get(`/api/staff-reset/${token}`)).status, 200);
+  assert.equal((await o.post(`/api/staff/${id}/reset-password`)).status, 200);
+  assert.equal((await anon.get(`/api/staff-reset/${token}`)).status, 400);
+  assert.equal((await anon.post(`/api/staff-reset/${token}`, { password: 'sneaky-new-password' })).status, 400);
+  // an email change cancels a link sent to the old address
+  const temp = tempFrom('link@demo.test');
+  const c2 = await signedIn('link@demo.test', temp);
+  assert.equal((await c2.post('/api/auth/staff/password', { password: pw + '-2' })).status, 200);
+  token = await linkFor('link@demo.test');
+  assert.equal((await o.put(`/api/staff/${id}`, { email: 'link.new@demo.test' })).status, 200);
+  assert.equal((await anon.get(`/api/staff-reset/${token}`)).status, 400);
+  // changing your own password cancels a link asked for earlier
+  token = await linkFor('link.new@demo.test');
+  assert.equal((await c2.post('/api/auth/staff/password', { current_password: pw + '-2', password: pw + '-3' })).status, 200);
+  assert.equal((await anon.get(`/api/staff-reset/${token}`)).status, 400);
+  // turning the account off (and back on) doesn't revive one either (after the hourly limit of three links resets)
+  db.run("UPDATE staff_resets SET created_at=datetime('now','-2 hours') WHERE staff_id=?", id);
+  token = await linkFor('link.new@demo.test');
+  await o.post(`/api/staff/${id}/turn-off`);
+  await o.post(`/api/staff/${id}/turn-on`);
+  assert.equal((await anon.get(`/api/staff-reset/${token}`)).status, 400);
+  void c;
+});
+
+test('Review fixes: summary counts only invited people who never signed in as "not signed in yet"', async () => {
+  const o = await owner();
+  const { id } = await newStaff(o, 'Reset Rae', 'rae@demo.test');
+  const before = (await o.get('/api/staff/summary')).data.waiting;
+  await o.post(`/api/staff/${id}/reset-password`); // must choose a new password, but has signed in before
+  assert.equal((await o.get('/api/staff/summary')).data.waiting, before);
+  await o.post('/api/staff', { name: 'New Nell', email: 'nell@demo.test', role: 'frontdesk' });
+  assert.equal((await o.get('/api/staff/summary')).data.waiting, before + 1);
+});
+
+test('Review fixes: the staff member filter skips a parent with the same name; CSV defuses tab-led cells', async () => {
+  const o = await owner();
+  const coachRow = db.get("SELECT * FROM staff WHERE email='coach@demo.test'");
+  db.insert('activity', { actor: `${coachRow.name} (parent)`, action: 'Booked a session', kind: 'change' });
+  const r = (await o.get(`/api/staff/activity?staff_id=${coachRow.id}&per=200`)).data;
+  assert.ok(r.items.length);
+  assert.ok(!r.items.some((a) => a.actor === `${coachRow.name} (parent)`));
+  db.insert('activity', { actor: 'System', action: 'Tab test', detail: '\t=cmd|x', kind: 'change' });
+  const csv = await o.get('/api/staff/activity.csv?q=Tab%20test');
+  assert.ok(csv.data.includes(`"'\t=cmd|x"`), csv.data);
+});
+
+test("Review fixes: a turned-off coach's private hours aren't offered to parents", async () => {
+  const o = await owner();
+  const { id } = await newStaff(o, 'Hours Hal', 'hal@demo.test');
+  const booking = require('../server/services/booking');
+  const av = db.insert('availability', { kind: 'evaluation', weekday: 0, start_time: '05:00', end_time: '06:00', slot_min: 60, coach_id: id });
+  const from = booking.nowLocal().slice(0, 10);
+  const mine = () => booking.openSlots('evaluation', from, 14).filter((s) => s.availability_id === av).length;
+  assert.ok(mine() > 0, 'offered while the coach is active');
+  await o.post(`/api/staff/${id}/turn-off`); // left with Hal (no hand_to)
+  assert.equal(mine(), 0, 'not offered once turned off');
+  const list = (await o.get('/api/staff')).data.find((s) => s.id === id);
+  assert.equal(list.work.hours, 1, 'still flagged to hand over');
+  await o.post(`/api/staff/${id}/turn-on`);
+  assert.ok(mine() > 0);
+});

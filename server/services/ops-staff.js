@@ -22,6 +22,15 @@ const cleanIp = (ip) => (ip ? String(ip).replace(/^::ffff:/, '') : null);
 // SQLite datetime('now') is UTC without a zone; hand the browser real ISO strings.
 const iso = (t) => (!t ? null : t.includes('T') ? t : t.replace(' ', 'T') + 'Z');
 
+// When someone last signed in. Accounts from before sign-ins were recorded on the staff row fall back to their
+// sessions and the activity log.
+function lastSignIn(s) {
+  if (s.last_signin_at) return s.last_signin_at;
+  const lastSession = get("SELECT MAX(created_at) AS t FROM auth_sessions WHERE kind='staff' AND user_id=?", s.id).t;
+  const lastLog = get("SELECT MAX(created_at) AS t FROM activity WHERE kind='signin' AND action='Signed in' AND actor=?", `${s.name} (${s.role})`).t;
+  return iso([lastSession, lastLog].filter(Boolean).sort().pop() || null);
+}
+
 // "Chrome on Mac", "Safari on iPhone"; good enough to recognize your own devices.
 function deviceLabel(ua) {
   const s = String(ua || '');
@@ -97,6 +106,9 @@ function findReset(token) {
   if (!r || r.used_at || r.expires_at < new Date().toISOString() || !r.active) return null;
   return r;
 }
+// Emailed links still open for someone stop working (used, owner reset, email changed, turned off, password changed).
+const cancelResets = (staffId, at = new Date().toISOString()) =>
+  Number(run('UPDATE staff_resets SET used_at=? WHERE staff_id=? AND used_at IS NULL', at, staffId).changes);
 function passwordChangedEmail(s, how) {
   sendEmail(s.email, `Your ${businessName()} password was changed`,
     `Hi ${s.name.split(' ')[0]},\n\nThe password for ${s.email} was changed ${how}. Other devices were signed out.\n\nIf this wasn't you, ask an owner to reset your password straight away.`);
@@ -112,7 +124,8 @@ function summary(backups) {
     active: staff.filter((s) => s.active).length,
     off: staff.filter((s) => !s.active).length,
     locked: staff.filter((s) => s.active && s.locked_until && s.locked_until > nowIso).length,
-    waiting: staff.filter((s) => s.active && s.must_change).length,
+    // Invited and never signed in (not someone an owner just reset, who has to choose a new password).
+    waiting: staff.filter((s) => s.active && s.must_change && !lastSignIn(s)).length,
     failed_24h: get("SELECT COUNT(*) AS n FROM activity WHERE kind='signin' AND action LIKE 'Sign-in failed%' AND created_at>datetime('now','-1 day')").n,
     refused_7d: get("SELECT COUNT(*) AS n FROM activity WHERE kind='refused' AND created_at>datetime('now','-7 days')").n,
     last_backup_at: last ? last.created_at : null,
@@ -133,8 +146,9 @@ function activityWhere(q) {
   if (WHO[q.who]) conds.push(WHO[q.who]);
   if (q.staff_id) {
     const s = get('SELECT name, email FROM staff WHERE id=?', Number(q.staff_id));
-    // Their own actions (any role they've had), plus failed sign-ins typed with their email.
-    if (s) { conds.push("(actor LIKE ? ESCAPE '\\' OR (kind='signin' AND detail=?))"); args.push(`${s.name.replace(/[\\%_]/g, '\\$&')} (%)`, s.email); }
+    // Their own actions (any staff role they've had, not a parent or athlete who shares the name), plus failed
+    // sign-ins typed with their email.
+    if (s) { conds.push("(actor IN (?,?,?) OR (kind='signin' AND detail=?))"); args.push(`${s.name} (owner)`, `${s.name} (coach)`, `${s.name} (frontdesk)`, s.email); }
     else conds.push('0');
   }
   const since = q.since ? toSqlTime(q.since) : null, until = q.until ? toSqlTime(q.until) : null;
@@ -147,5 +161,5 @@ function activityWhere(q) {
 
 module.exports = {
   ROLE_LABEL, deviceLabel, noteSignIn, seen, sessions, endSessions, workload, handOff, workText,
-  requestReset, findReset, passwordChangedEmail, summary, activityWhere, iso, cleanIp, RESET_MIN,
+  requestReset, findReset, cancelResets, passwordChangedEmail, lastSignIn, summary, activityWhere, iso, cleanIp, RESET_MIN,
 };

@@ -241,12 +241,23 @@ function renderSetup() {
   const f = document.getElementById('f');
   bindPasswordFields(f);
   f.name.focus();
+  const ORDER = ['name', 'email', 'password', 'again'];
+  const problemOf = (d) => (!d.name.trim() ? ['name', 'Enter your name.'] : !/^\S+@\S+\.\S+$/.test(d.email.trim()) ? ['email', 'Enter a valid email address.']
+    : d.password.length < 10 ? ['password', 'Use a password of at least 10 characters.'] : d.password !== d.again ? ['again', "Those passwords don't match."] : null);
+  const mark = (p) => { ORDER.forEach((k) => f[k].removeAttribute('aria-invalid')); if (p) f[p[0]].setAttribute('aria-invalid', 'true'); setErr(p ? p[1] : ''); };
+  // Check each field as you leave it (once something is typed there), not while you're still on the way down the form.
+  f.addEventListener('focusout', (e) => {
+    const k = e.target.name;
+    if (!ORDER.includes(k) || e.relatedTarget?.dataset?.pwFor) return; // tapping Show isn't leaving the field
+    const d = formData(f), p = problemOf(d);
+    mark(p && d[k] && ORDER.indexOf(p[0]) <= ORDER.indexOf(k) ? p : null);
+  });
   f.onsubmit = async (e) => {
     e.preventDefault();
     const d = formData(f);
-    const problem = !d.name.trim() ? ['name', 'Enter your name.'] : !/^\S+@\S+\.\S+$/.test(d.email.trim()) ? ['email', 'Enter a valid email address.']
-      : d.password.length < 10 ? ['password', 'Use a password of at least 10 characters.'] : d.password !== d.again ? ['again', "Those passwords don't match."] : null;
-    if (problem) { setErr(problem[1]); f[problem[0]].focus(); return; }
+    const problem = problemOf(d);
+    mark(problem);
+    if (problem) { f[problem[0]].focus(); return; }
     const done = busy(f, 'Creating…');
     try {
       const { again, ...body } = d;

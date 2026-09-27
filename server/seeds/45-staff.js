@@ -23,7 +23,11 @@ function seed() {
   if (!coach || !desk || !owner) return;
   tx(() => {
     insert('staff', { name: 'Sam Ortiz', email: 'sam.ortiz@demo.test', role: 'frontdesk', pw_hash: hashPassword(tempPassword()), must_change: 1, active: 1, created_at: sqlTime(ago(50)) });
-    insert('staff', { name: 'Drew Kim', email: 'drew.kim@demo.test', role: 'coach', pw_hash: hashPassword(tempPassword()), must_change: 0, active: 0, created_at: sqlTime(ago(24 * 200)), last_signin_at: ago(24 * 40).toISOString(), last_signin_ip: '172.58.12.40' });
+    const drew = insert('staff', { name: 'Drew Kim', email: 'drew.kim@demo.test', role: 'coach', pw_hash: hashPassword(tempPassword()), must_change: 0, active: 0, created_at: sqlTime(ago(24 * 200)), last_signin_at: ago(24 * 40).toISOString(), last_signin_ip: '172.58.12.40' });
+    // Turned off before hand-overs existed: still holds a block of Saturday private hours (not offered to parents),
+    // so the list flags the account with "Hand over their sessions".
+    const loc = get("SELECT id FROM locations WHERE archived=0 ORDER BY id LIMIT 1");
+    insert('availability', { kind: 'private', weekday: 6, start_time: '09:00', end_time: '11:00', slot_min: 60, location_id: loc?.id ?? null, coach_id: drew });
 
     // Other people's devices (the owner's own session appears when they sign in).
     const device = (s, ua, ip, signedInH, seenH) => insert('auth_sessions', {

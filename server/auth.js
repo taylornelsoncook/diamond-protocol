@@ -143,6 +143,7 @@ router.post('/staff/password', requireStaff(), h(async (req, res) => {
   update('staff', req.staff.id, { pw_hash: hashPassword(pw), must_change: 0 });
   const ops = require('./services/ops-staff');
   const others = ops.endSessions(req.staff.id, req.staffSession || null);
+  ops.cancelResets(req.staff.id); // a reset link asked for earlier can't undo the new password
   if (!req.staff.must_change) ops.passwordChangedEmail(req.staff, 'on the Account page');
   log(req, req.staff.must_change ? 'Chose a password' : 'Changed password', others ? `other devices signed out (${others})` : null);
   res.json({ ok: true });

@@ -24,13 +24,7 @@ function staffOr404(id) {
 const otherActiveOwners = (id) => get("SELECT COUNT(*) AS n FROM staff WHERE role='owner' AND active=1 AND id<>?", id).n;
 const activityRow = (a) => ({ ...a, created_at: ops.iso(a.created_at), ip: ops.cleanIp(a.ip) });
 
-function lastSignIn(s) {
-  if (s.last_signin_at) return s.last_signin_at;
-  // Accounts from before sign-ins were recorded on the staff row: fall back to sessions and the activity log.
-  const lastSession = get("SELECT MAX(created_at) AS t FROM auth_sessions WHERE kind='staff' AND user_id=?", s.id).t;
-  const lastLog = get("SELECT MAX(created_at) AS t FROM activity WHERE kind='signin' AND action='Signed in' AND actor=?", `${s.name} (${s.role})`).t;
-  return ops.iso([lastSession, lastLog].filter(Boolean).sort().pop() || null);
-}
+const lastSignIn = ops.lastSignIn;
 
 function view(s) {
   const locked = !!(s.locked_until && s.locked_until > new Date().toISOString());
@@ -113,6 +107,7 @@ function routes(api) {
     const target = next.role === 'frontdesk' ? handTarget(b, s) : undefined;
     tx(() => {
       update('staff', s.id, next);
+      if (next.email) ops.cancelResets(s.id); // a link sent to the old address stops working
       if (edits.length) log(req, 'Edited staff member', `${s.name}: ${edits.join(', ')}`);
       if (next.role) log(req, 'Changed role', `${next.name || s.name}: ${ROLE_LABEL[s.role]} → ${ROLE_LABEL[next.role]}`);
       applyHandOff(req, { ...s, ...next }, target);
@@ -127,6 +122,7 @@ function routes(api) {
     const pw = tempPassword();
     update('staff', s.id, { pw_hash: hashPassword(pw), must_change: 1, failed_count: 0, locked_until: null });
     ops.endSessions(s.id);
+    ops.cancelResets(s.id); // an owner reset overrides any emailed link still open
     welcomeStaffEmail(s, pw);
     log(req, invite ? 'Resent invite' : 'Reset password', `${s.name}: one-time password emailed to ${s.email}${invite ? '' : ', signed out everywhere'}`);
     res.json(view(staffOr404(s.id)));
@@ -159,6 +155,7 @@ function routes(api) {
     tx(() => {
       update('staff', s.id, { active: 0 });
       ops.endSessions(s.id);
+      ops.cancelResets(s.id);
       log(req, 'Turned off account', `${s.name}: signed out everywhere`);
       applyHandOff(req, s, target);
     });
@@ -196,7 +193,7 @@ function routes(api) {
     const { where, args } = ops.activityWhere(req.query);
     const rows = all(`SELECT * FROM activity ${where} ORDER BY created_at DESC, id DESC LIMIT 20000`, ...args);
     // Quote every cell; prefix formula-looking text so spreadsheets don't run it.
-    const cell = (v) => { let t = v == null ? '' : String(v); if (/^[=+\-@]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
+    const cell = (v) => { let t = v == null ? '' : String(v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
     const lines = [['When (UTC)', 'Who', 'What', 'Detail', 'From', 'Type'].map(cell).join(',')]
       .concat(rows.map((a) => [a.created_at, a.actor || 'System', a.action, a.detail, ops.cleanIp(a.ip), a.kind].map(cell).join(',')));
     log(req, 'Exported activity log', `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}`);
@@ -281,7 +278,7 @@ function routes(api) {
     const now = new Date().toISOString();
     tx(() => {
       update('staff', s.id, { pw_hash: hashPassword(pw), must_change: 0, failed_count: 0, locked_until: null });
-      run('UPDATE staff_resets SET used_at=? WHERE staff_id=? AND used_at IS NULL', now, s.id); // every open link for them
+      ops.cancelResets(s.id, now); // every open link for them
       ops.endSessions(s.id);
     });
     ops.passwordChangedEmail(s, 'with an emailed reset link');

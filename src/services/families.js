@@ -25,7 +25,8 @@ const DEFAULTS = {
   emails_off: '',                         // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
   texts_off: '',                          // comma list of automatic texts turned off: reminder, waitlist, canceled, payment_failed
   weekly_digest: 'on',                    // Monday summary email to the owners
-  lead_follow_up: 'on'                    // automatic follow-up emails (and texts, if they asked) to new leads
+  lead_follow_up: 'on',                   // automatic follow-up emails (and texts, if they asked) to new leads
+  public_schedule: 'on'                   // the public Book now page (/book) and website widget
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
 export function getSettings(ctx) { return Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, getSetting(ctx, k)])); }
@@ -51,6 +52,7 @@ export function updateSettings(ctx, body) {
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version
   }
   if (body.rankings !== undefined) next.rankings = body.rankings === true || body.rankings === 'on' ? 'on' : 'off';
+  if (body.public_schedule !== undefined) next.public_schedule = body.public_schedule === true || body.public_schedule === 'on' ? 'on' : 'off';
   if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';

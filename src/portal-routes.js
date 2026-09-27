@@ -8,6 +8,7 @@ import { v, notFound, conflict, badRequest, newId, ageOn, zonedToUtc, localDate,
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as checkin from './services/checkin.js';
+import * as booknow from './services/booknow.js';
 import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
 import * as sms from './services/sms.js';
@@ -41,6 +42,7 @@ export const portalRoutes = [
   ['POST', '/portal/api/login', 'public', 'Email a 6-digit sign-in code.', (ctx, r) => families.requestCode(ctx, r.body)],
   ['GET', '/portal/api/public/info', 'public', 'Business name, whether sign-up is open, and whether terms and privacy are published.', (ctx) => signup.signupInfo(ctx)],
   ['POST', '/portal/api/public/inquiry', 'public', 'Ask about training: parent_name, email, phone, athlete_name, athlete_age, sport, message, texts_ok. We reply by email with next steps.', (ctx, r) => leads.submitInquiry(ctx, r.body)],
+  ['GET', '/portal/api/public/schedule', 'public', 'The Book now page: classes, clinics and camp days in the next 2 weeks with open spots, and the next evaluation times. No names.', (ctx) => booknow.publicSchedule(ctx)],
   ['GET', '/portal/api/public/legal', 'public', 'The current terms of service and privacy policy.', (ctx) => legal.legalDocs(ctx)],
   ['POST', '/portal/api/signup', 'public', 'New family: parent {name, email, phone}, athletes [{name, birth_date, sex, sport, school, medical_notes, emergency_name, emergency_phone}], accept_terms=true. Emails a code.', (ctx, r) => signup.startSignup(ctx, r.body, r.ip)],
   ['POST', '/portal/api/signup/verify', 'public', 'Finish sign-up with signup_id and the emailed code. Creates the family and signs the parent in.', (ctx, r) => signup.finishSignup(ctx, r.body, r.ip)],

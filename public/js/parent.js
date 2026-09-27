@@ -27,6 +27,9 @@ async function boot() {
   // Signed in from the check-in QR code on the door: go back to it.
   const back = new URLSearchParams(location.search).get('checkin');
   if (state.me && back && /^[\w-]+$/.test(back)) { location.replace(`/here/${back}`); return; }
+  // From the public Book now page: open the Book tab on classes or evaluations.
+  const book = new URLSearchParams(location.search).get('book');
+  if (state.me && ['classes', 'private', 'evaluation'].includes(book)) { state.tab = 'book'; state.bookMode = book; history.replaceState(null, '', '/parent'); }
   if (state.me && new URLSearchParams(location.search).has('welcome')) { state.tab = 'family'; history.replaceState(null, '', '/parent'); setTimeout(() => toast('Welcome! Sign the waiver and add a card, then you can book.'), 300); }
   render();
 }
@@ -168,7 +171,8 @@ async function cancelBooking(button, u) {
 async function viewBook(main) {
   const a = athlete();
   if (!a) return fill(main, top('Book'), h('div', { class: 'empty' }, 'Add an athlete on the Family tab first.'));
-  const mode = { value: 'classes' };
+  const mode = { value: state.bookMode ?? 'classes' };
+  state.bookMode = null;
   const body = h('div', { class: 'stack' });
   const modes = h('div', { class: 'p-chips' }, [['classes', 'Classes'], ['private', 'Private'], ['evaluation', 'Evaluation']].map(([k, label]) =>
     h('button', { type: 'button', class: 'p-chip', 'aria-pressed': String(mode.value === k), onClick: (e) => { mode.value = k; [...modes.children].forEach((c) => c.setAttribute('aria-pressed', String(c === e.currentTarget))); load(); } }, label)));

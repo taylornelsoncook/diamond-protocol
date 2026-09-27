@@ -27,8 +27,15 @@ const plural = (n, one) => `${n} ${n === 1 ? one : one + 's'}`;
 const fmtLb = (w) => `${Number.isInteger(w) ? w : w.toFixed(1)} lb`;
 // "3" → 3 sets; anything odd → 1 set; never more than 10 rows to start with.
 const targetSets = (sets) => { const n = parseInt(sets, 10); return Number.isInteger(n) && n > 0 ? Math.min(n, 10) : 1; };
-// "8" or "8 each side" → 8 reps to count. "20 sec" or "20 yd" → null: the set is done, not counted.
-const targetReps = (reps) => { const m = /^\s*(\d{1,3})\s*(each side|each|per side|\/side|reps?)?\s*$/i.exec(String(reps ?? '')); return m ? Number(m[1]) : null; };
+// "8", "8 each side" or "8-10" → 8 reps to count (the low end of a range). "20 sec", "20 yd" or "0:30" → null:
+// the set is done, not counted.
+const TIME_OR_DISTANCE = /\d\s*(s|secs?|seconds?|min|mins|minutes?|yds?|yards?|m|meters?|metres?|ft|feet|km|mi|miles?)\b|:\d|\b(amrap|max)\b/i;
+const targetReps = (reps) => {
+  const t = String(reps ?? '').trim();
+  if (!t || TIME_OR_DISTANCE.test(t)) return null;
+  const m = /^(\d{1,3})(?:\s*(?:-|–|—|to|\/)\s*\d{1,3})?\s*([a-z .\/]*)$/i.exec(t);
+  return m ? Number(m[1]) : null;
+};
 // Minutes from the first thing logged to Finish, when that looks like a real session.
 function minutesBetween(from, to) {
   if (!from || !to) return null;
@@ -72,7 +79,8 @@ function suggestDay(daysInWeek, from = todayLocal()) {
 
 // Full state for the workout app.
 function state(athlete) {
-  const out = { athlete: { first_name: athlete.first_name, last_name: athlete.last_name, code: athlete.code }, program: null, history: history(athlete.id) };
+  const out = { athlete: { first_name: athlete.first_name, last_name: athlete.last_name, code: athlete.code }, program: null,
+    history: history(athlete.id), reopen_id: reopenableId(athlete) };
   if (!athlete.program_id) return out;
   const program = get('SELECT id,name,weeks,level,description FROM programs WHERE id=?', athlete.program_id);
   if (!program) return out;
@@ -247,20 +255,33 @@ function finish(athlete, { day_id, note, rpe }, ip) {
 }
 
 // Undo Finish workout: the most recent finished workout can be reopened for a couple of hours,
-// as long as the next one hasn't been started.
-function reopen(athlete, { log_id }, ip) {
-  const l = get(`SELECT l.*, d.program_id, d.week, d.day, d.title FROM workout_logs l JOIN program_days d ON d.id=l.day_id
-    WHERE l.id=? AND l.athlete_id=? AND l.finished_at IS NOT NULL`, Number(log_id) || 0, athlete.id);
-  if (!l) throw notFound('That workout');
+// as long as the next one hasn't been started. Returns why not, or null when it can be.
+function reopenBlock(athlete, l) {
   const latest = get('SELECT id FROM workout_logs WHERE athlete_id=? AND finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT 1', athlete.id);
-  if (latest.id !== l.id) throw bad('Only your most recent workout can be reopened.');
-  if (l.program_id !== athlete.program_id) throw bad("Your program has changed since, so this workout can't be reopened. Tell your coach instead.");
+  if (!latest || latest.id !== l.id) return 'Only your most recent workout can be reopened.';
+  if (l.program_id !== athlete.program_id) return "Your program has changed since, so this workout can't be reopened. Tell your coach instead.";
   if (!get("SELECT 1 AS ok WHERE ? >= datetime('now', ?)", l.finished_at, `-${REOPEN_HOURS} hours`)) {
-    throw bad(`Workouts can be reopened for ${REOPEN_HOURS} hours after you finish. Put anything you missed in a note next time.`);
+    return `Workouts can be reopened for ${REOPEN_HOURS} hours after you finish. Put anything you missed in a note next time.`;
   }
   const started = get(`SELECT l.id FROM workout_logs l WHERE l.athlete_id=? AND l.finished_at IS NULL AND l.day_id<>?
     AND (COALESCE(l.done,'[]') <> '[]' OR EXISTS (SELECT 1 FROM workout_sets s WHERE s.log_id=l.id))`, athlete.id, l.day_id);
-  if (started) throw bad("You've already started your next workout, so this one can't be reopened.");
+  if (started) return "You've already started your next workout, so this one can't be reopened.";
+  return null;
+}
+const finishedLog = (athleteId, logId) => get(`SELECT l.*, d.program_id, d.week, d.day, d.title FROM workout_logs l JOIN program_days d ON d.id=l.day_id
+  WHERE l.id=? AND l.athlete_id=? AND l.finished_at IS NOT NULL`, Number(logId) || 0, athleteId);
+// The finished workout that can still be reopened right now, if any (so the app can offer it after a reload too).
+function reopenableId(athlete) {
+  const latest = get('SELECT id FROM workout_logs WHERE athlete_id=? AND finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT 1', athlete.id);
+  const l = latest && finishedLog(athlete.id, latest.id);
+  return l && !reopenBlock(athlete, l) ? l.id : null;
+}
+
+function reopen(athlete, { log_id }, ip) {
+  const l = finishedLog(athlete.id, log_id);
+  if (!l) throw notFound('That workout');
+  const why = reopenBlock(athlete, l);
+  if (why) throw bad(why);
   const name = `${athlete.first_name} ${athlete.last_name}`;
   tx(() => {
     run('UPDATE workout_logs SET finished_at=NULL, rpe=NULL WHERE id=?', l.id);

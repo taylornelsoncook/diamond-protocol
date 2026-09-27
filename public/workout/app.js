@@ -12,11 +12,21 @@ let userClosed = false;   // the athlete closed every card on purpose: don't aut
 let finished = null;      // result of the last Finish workout, for the done screen
 let rpe = null;           // how hard it was, picked before Finish
 let noteDirty = false;    // a typed note that hasn't reached the server yet
+let finishing = false;    // Finish workout is on its way: the note goes with it, not separately
 const drafts = new Map(); // "item:set" → { weight, reps } typed but not logged yet
 const extraSets = new Map(); // item id → sets added beyond the plan
 const hist = new Map();   // finished workout id → detail (or 'loading') when opened
 
-const announce = (msg) => { if (!live) return; live.textContent = ''; setTimeout(() => { live.textContent = msg; }, 30); };
+// Short spoken updates. Several in one tap ("Set 2 logged." then "Rest 1:30.") are read together, not the last one only.
+let spoken = [];
+let speakTimer = null;
+const announce = (msg) => {
+  if (!live) return;
+  spoken.push(msg);
+  live.textContent = '';
+  clearTimeout(speakTimer);
+  speakTimer = setTimeout(() => { live.textContent = spoken.join(' '); spoken = []; }, 30);
+};
 const ls = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window: fine without it */ } },
@@ -62,7 +72,7 @@ function paint(content) {
 const QKEY = `dp-wo-queue:${token}`;
 let queue = ls.get(QKEY, []);
 if (!Array.isArray(queue)) queue = [];
-let flushing = false;
+let flushing = null;      // the send in progress, so Finish workout can wait for it
 let offline = false;
 let retryTimer = null;
 function enqueue(path, body, key) {
@@ -78,36 +88,38 @@ function setOffline(v) {
   if (b) b.hidden = !v;
   if (v) announce('No connection. Your logs are saved on this phone.');
 }
-async function flush() {
-  if (flushing) return;
-  flushing = true;
+function flush() {
+  if (!flushing) flushing = sendQueue().finally(() => { flushing = null; });
+  return flushing;
+}
+async function sendQueue() {
   clearTimeout(retryTimer);
-  try {
-    while (queue.length) {
-      const job = queue[0];
-      let r;
-      try { r = await api.post(job.path, job.body, { noRedirect: true }); }
-      catch (err) {
-        if (!err.status) { setOffline(true); retryTimer = setTimeout(flush, 8000); return; }
-        // The server said no (the program changed, the link was reset): drop it, and anything else for that day.
-        queue = err.status === 409 ? queue.filter((j) => j.body.day_id !== job.body.day_id) : queue.slice(1);
-        ls.set(QKEY, queue);
-        setOffline(false);
-        await handle(err);
-        continue;
-      }
-      queue.shift(); ls.set(QKEY, queue);
+  while (queue.length) {
+    const job = queue[0];
+    let r;
+    try { r = await api.post(job.path, job.body, { noRedirect: true }); }
+    catch (err) {
+      if (!err.status) { setOffline(true); retryTimer = setTimeout(flush, 8000); return; }
+      // The server is having a moment: keep it and try again shortly.
+      if (err.status >= 500 || err.status === 429) { retryTimer = setTimeout(flush, 8000); return; }
+      // The server said no (the program changed, the link was reset): drop it, and anything else for that day.
+      queue = err.status === 409 ? queue.filter((j) => j.body.day_id !== job.body.day_id) : queue.slice(1);
+      ls.set(QKEY, queue);
       setOffline(false);
-      if (job.key === 'note' && !queue.some((j) => j.key === 'note')) noteDirty = false;
-      // Only trust the server's copy once nothing newer is waiting to be sent.
-      if (!queue.length && r && s?.current && job.body.day_id === s.current.day_id && Array.isArray(r.done)) {
-        const c = s.current;
-        const changed = JSON.stringify([r.done, r.sets]) !== JSON.stringify([c.log.done, c.log.sets]);
-        c.log.done = r.done; c.log.sets = r.sets || [];
-        if (changed && !finished) render();
-      }
+      await handle(err);
+      continue;
     }
-  } finally { flushing = false; }
+    queue.shift(); ls.set(QKEY, queue);
+    setOffline(false);
+    if (job.key === 'note' && !queue.some((j) => j.key === 'note')) noteDirty = false;
+    // Only trust the server's copy once nothing newer is waiting to be sent.
+    if (!queue.length && r && s?.current && job.body.day_id === s.current.day_id && Array.isArray(r.done)) {
+      const c = s.current;
+      const changed = JSON.stringify([r.done, r.sets]) !== JSON.stringify([c.log.done, c.log.sets]);
+      c.log.done = r.done; c.log.sets = r.sets || [];
+      if (changed && !finished) render();
+    }
+  }
 }
 window.addEventListener('online', () => flush());
 
@@ -190,7 +202,8 @@ function histDetail(d) {
     <ul class="wo-hist-items">${d.items.map((i) => html`<li>
       <span class="wo-hist-i">${i.done ? icon('check', 14) : html`<span class="wo-skip" aria-hidden="true">–</span>`}<span>${i.name}${i.done ? '' : html` <span class="muted">(skipped)</span>`}</span></span>
       <span class="muted">${i.logged.length ? fmtSets(i.logged) : setsReps(i)}</span></li>`)}</ul>
-    ${d.note ? html`<p class="wo-hist-note">“${d.note}”</p>` : ''}`;
+    ${d.note ? html`<p class="wo-hist-note">“${d.note}”</p>` : ''}
+    ${s.reopen_id === d.id && !finished ? html`<p class="muted small wo-reopen">Finished by mistake or missed something? <button type="button" class="wo-link wo-inline" data-reopen="${d.id}" data-focus="reopen-${d.id}">Reopen this workout</button></p>` : ''}`;
 }
 
 function progress() {
@@ -327,7 +340,7 @@ function renderDone() {
       <p class="muted">${n ? html`Next up: <span class="strong" style="color:var(--steel)">${n.title}</span> on ${n.weekday}.` : 'That was the last workout in this program. Your coach will set up what comes next.'}</p>
       ${n ? html`<div><button class="btn" id="next" data-focus="next">See next workout</button></div>` : ''}
     </div>
-    <p class="muted small wo-reopen">Finished by mistake or missed something? <button type="button" class="wo-link wo-inline" id="reopen">Reopen this workout</button></p>
+    ${s.reopen_id === f.log_id ? html`<p class="muted small wo-reopen">Finished by mistake or missed something? <button type="button" class="wo-link wo-inline" data-reopen="${f.log_id}" data-focus="reopen">Reopen this workout</button></p>` : ''}
     ${history()}${foot}`);
 }
 
@@ -403,8 +416,11 @@ function logSet(row, { rest = true } = {}) {
   if (rest && !c.items.every((x) => c.log.done.includes(x.id))) startRest();
   if (nowDone && !wasDone) { openNext(i.id); return; }
   render();
-  // Straight on to the next open set.
-  if (rest) root.querySelector(`.wo-set[data-item="${i.id}"]:not(.logged):not(.wo-set-head) [data-f]`)?.focus({ preventScroll: true });
+  // Straight on to the next open set: its tick on a phone (so the keyboard doesn't cover the rest timer), its first box otherwise.
+  if (rest) {
+    const next = root.querySelector(`.wo-set[data-item="${i.id}"]:not(.logged):not(.wo-set-head)`);
+    (matchMedia('(pointer: coarse)').matches ? next?.querySelector('[data-setlog]') : next?.querySelector('[data-f]'))?.focus({ preventScroll: true });
+  }
 }
 
 function clearSet(row) {
@@ -459,12 +475,14 @@ root.addEventListener('click', async (e) => {
     await finishWorkout(t);
   } else if (t.id === 'next') {
     finished = null; openId = null; userClosed = false; render(); window.scrollTo(0, 0);
-  } else if (t.id === 'reopen') {
+  } else if (t.dataset.reopen) {
     t.disabled = true;
+    const id = Number(t.dataset.reopen);
     try {
-      const r = await api.post(`${base}/reopen`, { log_id: finished.finished.log_id }, { noRedirect: true });
-      rpe = finished.finished.rpe || null; // keep the rating they gave, so Finish again is one tap
-      s = r.state; finished = null; openId = null; userClosed = false;
+      const r = await api.post(`${base}/reopen`, { log_id: id }, { noRedirect: true });
+      // Keep the rating they gave, so Finish again is one tap.
+      rpe = (finished?.finished.log_id === id ? finished.finished.rpe : s.history?.find((h) => h.id === id)?.rpe) || null;
+      s = r.state; finished = null; openId = null; userClosed = false; hist.clear();
       render(); window.scrollTo(0, 0);
       toast("Workout reopened. Finish it again when you're ready.");
     } catch (err) { t.disabled = false; toastError(err); }
@@ -485,21 +503,25 @@ async function finishWorkout(btn) {
   }
   btn.disabled = true;
   btn.textContent = 'Saving…';
+  finishing = true;
   await flush();
   if (queue.length) {
+    finishing = false;
     btn.disabled = false; btn.textContent = 'Finish workout';
-    toast("You're offline. Everything you logged is saved on this phone. Tap Finish workout again when you have signal.", 'warn');
+    toast(offline ? "You're offline. Everything you logged is saved on this phone. Tap Finish workout again when you have signal."
+      : "Some logs haven't been sent yet. They're saved on this phone. Try Finish workout again in a moment.", 'warn');
     return;
   }
   try {
     finished = await api.post(`${base}/finish`, { day_id: c.day_id, note: note?.value ?? '', rpe }, { noRedirect: true });
     s = finished.state;
-    rpe = null; noteDirty = false; drafts.clear(); extraSets.clear(); hist.clear();
+    rpe = null; noteDirty = false; finishing = false; drafts.clear(); extraSets.clear(); hist.clear();
     stopRest(false);
     render();
     window.scrollTo(0, 0);
     root.querySelector('#next')?.focus({ preventScroll: true });
   } catch (err) {
+    finishing = false;
     btn.disabled = false; btn.textContent = 'Finish workout';
     if (!err.status) toast("Couldn't reach the server. Everything you logged is saved. Try Finish workout again in a moment.", 'warn');
     else await handle(err);
@@ -509,7 +531,7 @@ async function finishWorkout(btn) {
 // Typing: keep drafts across re-paints, save the note as they type, and let Enter move along the set row.
 const saveNote = debounce(() => {
   const c = cur(); const el = root.querySelector('#note');
-  if (!c || !el) return;
+  if (!c || !el || finishing) return;
   c.log.note = el.value;
   enqueue(`${base}/log`, { day_id: c.day_id, note: el.value }, 'note');
 }, 700);

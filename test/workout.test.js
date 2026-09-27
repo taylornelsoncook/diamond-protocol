@@ -72,6 +72,17 @@ test('targets: sets and reps are read from what the coach typed', () => {
   assert.equal(workout.targetReps('10 each side'), 10);
   assert.equal(workout.targetReps('20 sec'), null);
   assert.equal(workout.targetReps('20 yd'), null);
+  // Rep ranges and per-side shorthand are still counted (the low end of a range); time and distance are not.
+  assert.equal(workout.targetReps('8-10'), 8);
+  assert.equal(workout.targetReps('6–8'), 6);
+  assert.equal(workout.targetReps('8 to 10'), 8);
+  assert.equal(workout.targetReps('8/side'), 8);
+  assert.equal(workout.targetReps('12 per leg'), 12);
+  assert.equal(workout.targetReps('20 sec each side'), null);
+  assert.equal(workout.targetReps('0:30'), null);
+  assert.equal(workout.targetReps('40m'), null);
+  assert.equal(workout.targetReps('AMRAP'), null);
+  assert.equal(workout.targetReps(''), null);
 });
 
 test('log sets: validation, done after the last set, clearing, editing', async () => {
@@ -192,6 +203,9 @@ test('reopen: undo Finish on the latest workout, within the window, before the n
   await w.post(`${T}/log`, { day_id: dayA, item_id: s.current.items[0].id, done: true });
   let fin = (await w.post(`${T}/finish`, { day_id: dayA, rpe: 8 })).data;
   const firstLog = fin.finished.log_id;
+  // The app offers it after a reload too: the state names the workout that can be reopened.
+  assert.equal(fin.state.reopen_id, firstLog);
+  assert.equal((await w.get(T)).data.reopen_id, firstLog);
   // Reopen straight away: Day A is current again, with what was logged.
   let r = await w.post(`${T}/reopen`, { log_id: firstLog });
   assert.equal(r.status, 200);
@@ -205,6 +219,7 @@ test('reopen: undo Finish on the latest workout, within the window, before the n
   await w.post(`${T}/log`, { day_id: s.current.day_id, item_id: s.current.items[0].id, done: true });
   r = await w.post(`${T}/reopen`, { log_id: firstLog });
   assert.equal(r.status, 400); assert.match(r.data.error, /already started your next workout/);
+  assert.equal((await w.get(T)).data.reopen_id, null, 'not offered once the next workout is started');
   // Finish Day B; Day A is no longer the latest.
   fin = (await w.post(`${T}/finish`, { day_id: s.current.day_id })).data;
   r = await w.post(`${T}/reopen`, { log_id: firstLog });
@@ -214,6 +229,7 @@ test('reopen: undo Finish on the latest workout, within the window, before the n
   db.run("UPDATE workout_logs SET finished_at=datetime('now','-3 hours') WHERE id=?", fin.finished.log_id);
   r = await w.post(`${T}/reopen`, { log_id: fin.finished.log_id });
   assert.equal(r.status, 400); assert.match(r.data.error, /2 hours/);
+  assert.equal((await w.get(T)).data.reopen_id, null, 'not offered after the window');
   // Someone else's workout, or nonsense: not found.
   const other = db.get("SELECT workout_token FROM athletes WHERE first_name='Chidi'").workout_token;
   assert.equal((await w.post(`/api/w/${other}/reopen`, { log_id: firstLog })).status, 404);

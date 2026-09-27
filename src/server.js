@@ -15,10 +15,11 @@ import { syncLibrary } from './services/performance.js';
 import { assignMissingIds } from './services/athlete-ids.js';
 import { can, audit, rateLimit, roleName } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
-import { syncAll as syncDevices, migratePending } from './services/perf-import.js';
+import { syncHawkin, migratePending } from './services/perf-import.js';
 import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
 import { handleStripeEvent } from './services/commerce.js';
+import { createJobRunner } from './services/jobs.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -110,23 +111,19 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     }
   });
 
-  let timers = [];
-  if (jobs) {
-    timers.push(setInterval(() => deliverPending(ctx).catch((e) => console.error('webhooks', e)), 15000));
-    timers.push(setInterval(() => runBilling(ctx).catch((e) => console.error('billing', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => runTeamBilling(ctx, { baseUrl: ctx.publicUrl }).catch((e) => console.error('team billing', e)), 60 * 60 * 1000));
-    runTeamBilling(ctx, { baseUrl: ctx.publicUrl }).catch((e) => console.error('team billing', e));
-    timers.push(setInterval(() => syncDevices(ctx), 15 * 60 * 1000));
-    if (dbFile !== ':memory:') {
-      const backup = () => { try { const b = dailyBackup(ctx); if (b) console.log(`Backup saved: ${b.name}`); } catch (e) { console.error('backup', e.message); } };
-      timers.push(setInterval(backup, 60 * 60 * 1000));
-      backup();
-    }
-    timers.push(setInterval(() => extendSchedule(ctx).catch((e) => console.error('schedule', e)), 6 * 60 * 60 * 1000));
-    runBilling(ctx).catch((e) => console.error('billing', e));
-    extendSchedule(ctx).catch((e) => console.error('schedule', e));
+  // Background jobs: see services/jobs.js for run history, owner alerts and the one-copy-at-a-time lease.
+  const runner = ctx.jobs = createJobRunner(ctx);
+  const HOUR = 3600e3;
+  runner.define('webhooks', 15e3, () => deliverPending(ctx), { quiet: true });
+  runner.define('team-billing', HOUR, () => runTeamBilling(ctx, { baseUrl: ctx.publicUrl }), { atStart: true });
+  runner.define('hawkin-sync', 15 * 60e3, () => syncHawkin(ctx));
+  if (dbFile !== ':memory:') {
+    runner.define('daily-backup', HOUR, () => { const b = dailyBackup(ctx); if (!b) return { skipped: true }; console.log(`Backup saved: ${b.name}`); return { name: b.name, bytes: b.bytes }; }, { atStart: true });
   }
-  server.on('close', () => { timers.forEach(clearInterval); ctx.db.close(); });
+  runner.define('billing', HOUR, () => runBilling(ctx), { atStart: true });
+  runner.define('extend-schedule', 6 * HOUR, () => extendSchedule(ctx), { atStart: true });
+  if (jobs) runner.start();
+  server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };
 }
 

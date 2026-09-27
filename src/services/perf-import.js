@@ -333,4 +333,3 @@ export async function syncHawkin(ctx) {
     throw e;
   }
 }
-export async function syncAll(ctx) { try { await syncHawkin(ctx); } catch (e) { console.error('hawkin sync', e.message); } }

@@ -15,11 +15,11 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 ## Commands
 - `npm run seed`: sample data (sign in `coach@diamondprotocol.local` / `change-me-now`; parent `maria.lopez@example.com`, code shown on screen in test mode). Delete `data/` first to reseed.
 - `npm start`: http://localhost:3000
-- `npm test`: the full suite (107 tests). Run it before calling anything done.
+- `npm test`: the full suite (115 tests). Run it before calling anything done.
 - Node 22.13+ only. **Zero npm dependencies** (node:sqlite, node:http, node:test, built-in fetch/zlib/crypto). Keep it that way unless the owner agrees.
 
 ## Code map
-- `src/server.js` HTTP, auth, roles check, audit log, rate limits, static pages, jobs. `src/index.js` startup and production safety checks.
+- `src/server.js` HTTP, auth, roles check, audit log, rate limits, static pages, the list of background jobs. `src/services/jobs.js` runs them: run history (`job_runs`), owner email on failure and recovery, and a lease (`job_state`) so server copies sharing a database never run the same job at once. `src/index.js` startup and production safety checks.
 - `src/routes.js` coach and public API (+ OpenAPI). `src/portal-routes.js` parent API.
 - `src/schema.sql` all tables. `src/db.js` versioned migrations (`SCHEMA_VERSION`, `ADDED_COLUMNS`, table rebuilds). New columns go in **both** the CREATE TABLE and `ADDED_COLUMNS`, and bump the version.
 - `src/services/`: billing, clients, families (settings, waiver, parent sign-in), commerce (point of sale, cards, credits), schedule, teams, performance + test-library + units + perf-import + uploads + queue + reports, athlete-ids, security (roles, staff, audit, rate limits), backups, legal (terms/privacy, data export/deletion), signup, client-import, notify (automatic emails), mail (Resend + outbox), xlsx (Excel read/write), events (webhooks).

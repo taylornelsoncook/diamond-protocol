@@ -248,6 +248,8 @@ export const routes = [
   ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept).', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx) })],
   ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now.', (ctx) => backups.createBackup(ctx), 201],
   ['GET', '/v1/backups/:name', 'session', 'Admin', 'Download a backup file.', (ctx, r) => ({ __file: backups.backupFile(ctx, r.params.name) })],
+  ['GET', '/v1/jobs', 'session', 'Admin', 'Background jobs: health, last runs and errors (runs are kept 30 days).', (ctx) => ({ data: ctx.jobs.status() })],
+  ['POST', '/v1/jobs/:name/run', 'session', 'Admin', 'Run a background job now.', (ctx, r) => ctx.jobs.runNow(r.params.name)],
 
   // Integrations (coach login only)
   ['GET', '/v1/api-keys', 'session', 'Integrations', 'List API keys.', (ctx) => list(access.listApiKeys(ctx))],
@@ -325,7 +327,7 @@ export function openApiSpec(baseUrl) {
 }
 
 // Plain-English labels for the activity log, from each endpoint's own description.
-const SPECIAL = { 'sign-in': 'Signed in', 'POST /portal/api/login': 'Parent asked for a sign-in code', 'POST /portal/api/verify': 'Parent signed in', 'POST /auth/logout': 'Signed out', 'POST /portal/api/logout': 'Parent signed out' };
+const SPECIAL = { 'sign-in': 'Signed in', 'POST /portal/api/login': 'Parent asked for a sign-in code', 'POST /portal/api/verify': 'Parent signed in', 'POST /auth/logout': 'Signed out', 'POST /portal/api/logout': 'Parent signed out', 'job failed': 'Background job failed (owners emailed)', 'job recovered': 'Background job running again' };
 function describeAction(action) {
   if (SPECIAL[action]) return SPECIAL[action];
   const [method, path] = action.split(' ');

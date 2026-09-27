@@ -10,7 +10,7 @@ const STYLE = html`<style>
 .crm-tools .input{flex:1 1 160px;width:auto;min-width:0}
 .crm-tools input[type=search]{flex:2 1 240px}
 .crm-tools .seg button{min-height:44px}
-.crm-tools .field{flex:0 1 180px}.crm-tools .field .input{width:100%}
+.crm-tools .field{flex:0 1 180px}.crm-tools .field .input{width:100%;flex:none}
 #rp-f{align-items:flex-end}
 .crm-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(236px,1fr);gap:var(--space-3);overflow-x:auto;padding-bottom:var(--space-2);scroll-snap-type:x proximity}
 .crm-col{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);display:flex;flex-direction:column;min-width:0;scroll-snap-align:start}
@@ -50,7 +50,7 @@ const STYLE = html`<style>
 .crm-slots label{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 12px;border:1px solid var(--control-border);border-radius:var(--radius-sm);cursor:pointer}
 .crm-slots label:has(input:checked){border-color:var(--green-mid);background:var(--green-deep)}
 .crm-ath{display:grid;grid-template-columns:minmax(0,2fr) 90px 110px 44px;gap:8px;align-items:end}
-@media (max-width:520px){.crm-ath{grid-template-columns:minmax(0,1fr) 70px 90px 44px}}
+@media (max-width:520px){.crm-ath{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px}.crm-ath>.field:first-child{grid-column:1/-1}}
 .crm-dup a{color:var(--amber);font-weight:600}
 .crm-count{font-size:12px;color:var(--steel-muted);text-align:right}
 .crm-count.warn{color:var(--amber)}
@@ -58,6 +58,7 @@ const STYLE = html`<style>
 .crm-bar{display:grid;grid-template-columns:minmax(110px,160px) minmax(0,1fr) auto;gap:12px;align-items:center;font-size:14px}
 .crm-bar .bar{height:10px}
 .crm-bar .v{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--steel-muted)}
+@media (max-width:520px){.crm-bar{grid-template-columns:minmax(0,1fr) auto;row-gap:4px}.crm-bar .bar{grid-column:1/-1;order:3}}
 .crm-snip{margin:0;background:var(--black);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;font:400 13px/20px var(--font-mono);color:var(--steel);white-space:pre-wrap;overflow-wrap:anywhere}
 .crm-prev{max-height:320px;overflow-y:auto}
 .crm details>summary{list-style:none;gap:8px}.crm details>summary::-webkit-details-marker{display:none}

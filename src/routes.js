@@ -25,6 +25,7 @@ import * as paylinks from './services/paylinks.js';
 import * as checkin from './services/checkin.js';
 import * as inventory from './services/inventory.js';
 import * as reviews from './services/reviews.js';
+import * as campaigns from './services/campaigns.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -126,6 +127,15 @@ export const routes = [
   ['GET', '/v1/products', 'any', 'Point of sale', 'What you sell in person: sessions, packs, gear.', (ctx, r) => list(commerce.listProducts(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['POST', '/v1/products', 'any', 'Point of sale', 'Add a product: name, kind (session, pack, gear, other), price_cents, sessions (for packs).', (ctx, r) => commerce.createProduct(ctx, r.body), 201],
   ['PATCH', '/v1/products/:id', 'any', 'Point of sale', 'Update a product. Set active=false to stop selling it.', (ctx, r) => commerce.updateProduct(ctx, r.params.id, r.body)],
+  ['GET', '/v1/campaigns', 'any', 'Leads', 'Announcement emails: drafts and sent, with how many got each and clicked a link.', (ctx) => list(campaigns.listCampaigns(ctx))],
+  ['POST', '/v1/campaigns/preview', 'any', 'Leads', 'How many people an audience reaches: {audience: {group (everyone, members, lapsed, no_membership, leads), age_min, age_max, sport}}.', (ctx, r) => campaigns.previewAudience(ctx, r.body.audience)],
+  ['POST', '/v1/campaigns', 'any', 'Leads', 'Draft an announcement email: subject, body ({first_name} is the parent\'s first name), audience.', (ctx, r) => campaigns.createCampaign(ctx, r.body, r.user?.name ?? 'API'), 201],
+  ['GET', '/v1/campaigns/:id', 'any', 'Leads', 'One announcement email and its numbers.', (ctx, r) => campaigns.getCampaign(ctx, r.params.id)],
+  ['PATCH', '/v1/campaigns/:id', 'any', 'Leads', 'Change a draft.', (ctx, r) => campaigns.updateCampaign(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/campaigns/:id', 'any', 'Leads', 'Delete a draft.', (ctx, r) => campaigns.deleteCampaign(ctx, r.params.id)],
+  ['POST', '/v1/campaigns/:id/copy', 'any', 'Leads', 'Start a new draft from an email.', (ctx, r) => campaigns.copyCampaign(ctx, r.params.id, r.user?.name ?? 'API'), 201],
+  ['POST', '/v1/campaigns/:id/test', 'session', 'Leads', 'Send the draft to yourself.', (ctx, r) => campaigns.sendTest(ctx, r.params.id, r.user)],
+  ['POST', '/v1/campaigns/:id/send', 'any', 'Leads', 'Send now: confirm_count must equal the number of people it goes to.', (ctx, r) => campaigns.sendCampaign(ctx, r.params.id, r.body)],
   ['GET', '/v1/review-requests', 'any', 'Leads', 'Google review requests: the review link, whether they\'re on, the last 90 days (sent, clicked, stopped), the 10 most recent and a sample email.', (ctx) => reviews.reviewSummary(ctx)],
   ['GET', '/v1/inventory', 'any', 'Point of sale', 'Gear that counts its stock: what\'s on hand per size, and what\'s running low.', (ctx) => inventory.inventory(ctx)],
   ['POST', '/v1/products/:id/variants', 'any', 'Point of sale', 'Add a size or color to a product: name (like M or Youth L), sku.', (ctx, r) => inventory.addVariant(ctx, r.params.id, r.body), 201],

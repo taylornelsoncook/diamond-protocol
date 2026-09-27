@@ -23,6 +23,7 @@ import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/
 import { weeklyDigest } from './services/insights.js';
 import { runFollowUps } from './services/leads.js';
 import { runReviewRequests, followReviewLink } from './services/reviews.js';
+import { followCampaignLink } from './services/campaigns.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -59,13 +60,21 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (url.pathname === '/v1/openapi.json') return json(res, 200, openApiSpec(baseUrl));
       if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(ctx, req, res);
       // The review link in the email: count the click and go on to Google (or stop asking, with ?stop=1).
-      const review = url.pathname.match(/^\/r\/([\w-]{8,40})$/);
-      if (review && req.method === 'GET') {
-        rateLimit(`review:${clientIp(req)}`, 30, 15 * 60000);
-        const out = followReviewLink(ctx, review[1], { stop: url.searchParams.has('stop') });
+      // Links in announcement emails work the same way: /c/<token>/<n> counts the click, /c/<token>?stop=1 stops them.
+      const review = url.pathname.match(/^\/r\/([\w-]{8,40})$/), camp = url.pathname.match(/^\/c\/([\w-]{8,40})(?:\/(\d{1,3}))?$/);
+      if ((review || camp) && (req.method === 'GET' || req.method === 'POST')) {
+        rateLimit(`link:${clientIp(req)}`, 60, 15 * 60000);
+        const stop = url.searchParams.has('stop') || (camp && camp[2] === undefined);
+        const page = (text, form = '') => {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store' });
+          return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your emails</title><link rel="stylesheet" href="/styles.css"><body style="padding:48px 16px;text-align:center"><p style="font-size:18px">${text.replace(/[<>&]/g, '')}</p>${form}</body>`);
+        };
+        // Stopping takes a button press, so email scanners that open every link can't unsubscribe anyone.
+        if (stop && req.method === 'GET') return page('Stop these emails?', `<form method="post" action="${url.pathname}?stop=1"><button class="dp-btn dp-btn--primary" type="submit">Yes, stop them</button></form>`);
+        if (req.method === 'POST' && !stop) throw new HttpError(405, 'method_not_allowed', 'That method is not allowed here.');
+        const out = review ? followReviewLink(ctx, review[1], { stop }) : followCampaignLink(ctx, camp[1], camp[2], { stop });
         if (out.redirect) { res.writeHead(302, { location: out.redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store' });
-        return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Thank you</title><link rel="stylesheet" href="/styles.css"><body style="padding:48px 16px;text-align:center"><p style="font-size:18px">${out.page.replace(/[<>&]/g, '')}</p></body>`);
+        return page(out.page);
       }
       if (url.pathname === '/sms/inbound' && req.method === 'POST') return smsInbound(ctx, req, res, `${baseUrl}/sms/inbound`);
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));

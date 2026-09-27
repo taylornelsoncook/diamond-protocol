@@ -64,7 +64,7 @@ export async function runReviewRequests(ctx, { asOf = ctx.now() } = {}) {
   for (const m of moments(ctx, asOf)) {
     const c = ctx.db.get('SELECT id, name, family_id FROM clients WHERE id = ?', m.client_id);
     if (!c?.family_id || done.has(c.family_id) || !eligibleFamily(ctx, c.family_id, asOf)) continue;
-    const g = ctx.db.get('SELECT name, email FROM guardians WHERE family_id = ? AND email IS NOT NULL ORDER BY is_primary DESC LIMIT 1', c.family_id);
+    const g = ctx.db.get('SELECT name, email FROM guardians WHERE family_id = ? AND email NOT IN (SELECT email FROM email_optouts) ORDER BY is_primary DESC LIMIT 1', c.family_id);
     if (!g) continue;
     done.add(c.family_id);
     const tok = token(12), link = `${ctx.publicUrl ?? ''}/r/${tok}`;

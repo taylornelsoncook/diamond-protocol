@@ -50,7 +50,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -264,8 +264,55 @@ async function viewLeads(main) {
       x.opted_out_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Stop asking') : x.clicked_at ? h('span', { class: 'dp-badge dp-badge--good' }, 'Opened') : h('span', { class: 'dp-badge dp-badge--neutral' }, 'Sent')))) : null,
     h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'See the email'),
       h('p', { class: 'strong small', style: 'margin:8px 0 4px' }, reviews.sample.subject), h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, reviews.sample.text)));
-  fill(main, header('Leads', `${res.last_30_days.leads} ${res.last_30_days.leads === 1 ? 'family' : 'families'} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.`),
+  fill(main, header('Leads', `${res.last_30_days.leads} ${res.last_30_days.leads === 1 ? 'family' : 'families'} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.`, isOwner() ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/leads/campaigns' }, 'Email a group') : null),
     chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel, reviewPanel);
+}
+
+// ---------- Announcement emails ----------
+const GROUPS = [['everyone', 'All families'], ['members', 'Members'], ['lapsed', 'Lapsed members (canceled in the last year)'], ['no_membership', 'Families without a membership'], ['leads', 'Families who asked about training']];
+async function viewCampaigns(main) {
+  const [{ data }, settings] = await Promise.all([get('/v1/campaigns'), get('/v1/settings')]);
+  let editing = null, reach = null;
+  const f = { subject: input({ maxlength: '120', placeholder: 'Summer camp registration is open' }), body: h('textarea', { class: 'dp-input', rows: '10', placeholder: 'Hi {first_name},\n\nSummer camp runs June 9 to 13...' }),
+    group: select(GROUPS, { 'aria-label': 'Who it goes to' }), age_min: input({ type: 'number', min: '3', max: '99', inputmode: 'numeric', placeholder: 'Any', style: 'width:90px' }), age_max: input({ type: 'number', min: '3', max: '99', inputmode: 'numeric', placeholder: 'Any', style: 'width:90px' }), sport: input({ placeholder: 'Any sport' }) };
+  const audience = () => ({ group: f.group.value, age_min: f.age_min.value || null, age_max: f.age_max.value || null, sport: f.sport.value || undefined });
+  const body = () => ({ subject: f.subject.value, body: f.body.value, audience: audience() });
+  const reachBox = h('p', { class: 'small', style: 'margin:0' }), err = h('div', { class: 'dp-error', role: 'alert' });
+  const sendBtn = btn('Send', (e) => send(e.currentTarget), 'primary');
+  let t;
+  const refreshReach = () => { clearTimeout(t); t = setTimeout(async () => {
+    try { reach = await post('/v1/campaigns/preview', { audience: audience() }); reachBox.className = 'small'; fill(reachBox, h('span', { class: 'strong' }, `Goes to ${reach.count} ${reach.count === 1 ? 'person' : 'people'}`), reach.sample.length ? `: ${reach.sample.join(', ')}${reach.count > reach.sample.length ? ' and more' : ''}.` : '.'); sendBtn.textContent = `Send to ${reach.count}`; sendBtn.disabled = !reach.count; }
+    catch (e) { reach = null; reachBox.className = 'small warn-text'; reachBox.textContent = e.message; sendBtn.disabled = true; }
+  }, 250); };
+  for (const el of [f.group, f.age_min, f.age_max, f.sport]) { el.addEventListener('input', refreshReach); el.addEventListener('change', refreshReach); }
+  const save = async () => { editing = editing ? await patch(`/v1/campaigns/${editing.id}`, body()) : await post('/v1/campaigns', body()); return editing; };
+  async function send(button) {
+    err.textContent = '';
+    if (!reach?.count) return;
+    if (!confirm(`Send "${f.subject.value}" to ${reach.count} ${reach.count === 1 ? 'person' : 'people'} now? This can't be undone.`)) return;
+    await busy(button, async () => {
+      try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/send`, { confirm_count: reach.count }); toast(`Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}.`); editing = null; render(); }
+      catch (e) { err.textContent = e.message; }
+    });
+  }
+  const load = (c) => { editing = c.status === 'draft' ? c : null; f.subject.value = c.subject; f.body.value = c.body; f.group.value = c.audience.group; f.age_min.value = c.audience.age_min ?? ''; f.age_max.value = c.audience.age_max ?? ''; f.sport.value = c.audience.sport ?? ''; refreshReach(); main.scrollIntoView({ behavior: 'smooth' }); };
+  const compose = panel('New email', { subtitle: 'For news every family should hear: camp registration, a closure, a new class. Receipts and booking emails go out on their own. Write {first_name} for the parent\'s first name. Links are counted when clicked, and every email ends with your address and a "stop these emails" link.' },
+    settings.business_address ? null : h('p', { class: 'warn-text', style: 'margin:0' }, 'Add your mailing address in Schedule → Hours & settings first. US law (CAN-SPAM) requires it at the bottom of announcement emails.'),
+    field('Subject', f.subject), field('Message', f.body),
+    h('div', { class: 'form-grid' }, field('Who it goes to', f.group), field('Sport (optional)', f.sport)),
+    h('div', { class: 'row wrap', style: 'gap:12px' }, field('Athlete age from', f.age_min), field('to', f.age_max)),
+    reachBox, err,
+    h('div', { class: 'row wrap', style: 'gap:8px' }, sendBtn,
+      btn('Send me a test', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/test`); toast(`Test sent to ${r.sent_to}.`); } catch (x) { err.textContent = x.message; } }), 'secondary'),
+      btn('Save draft', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { await save(); toast('Draft saved.'); render(); } catch (x) { err.textContent = x.message; } }), 'ghost')));
+  const rows = data.map((c) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, c.subject), h('span', { class: 'small muted' }, `${c.audience_text} · ${c.status === 'draft' ? `draft, ${ago(c.created_at)}` : `sent ${date(c.sent_at)}`}`)),
+    c.status === 'draft' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Draft') : h('span', { class: 'small' }, `${c.sent} sent · ${c.clicked} clicked${c.stopped ? ` · ${c.stopped} stopped` : ''}`),
+    c.status === 'draft' ? btn('Edit', () => load(c), 'ghost') : btn('Copy', (e) => busy(e.currentTarget, async () => load(await post(`/v1/campaigns/${c.id}/copy`))), 'ghost'),
+    c.status === 'draft' ? btn('Delete', (e) => { if (confirm('Delete this draft?')) busy(e.currentTarget, async () => { await api('DELETE', `/v1/campaigns/${c.id}`); render(); }); }, 'ghost') : null));
+  fill(main, header('Email a group', 'Announcements to families, narrowed by membership, age and sport.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/leads' }, 'Back to leads')),
+    compose, panel('Sent and drafts', {}, rows.length ? rows : h('p', { class: 'muted' }, 'Nothing sent yet.')));
+  refreshReach();
 }
 
 // ---------- Clients ----------

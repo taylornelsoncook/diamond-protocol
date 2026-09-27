@@ -267,6 +267,38 @@ CREATE TABLE IF NOT EXISTS review_requests (
   opted_out_at TEXT
 );
 CREATE INDEX IF NOT EXISTS review_requests_family ON review_requests(family_id, sent_at);
+-- Announcement emails to a group (version 19). Opens aren't tracked; clicks on links are.
+CREATE TABLE IF NOT EXISTS campaigns (
+  id TEXT PRIMARY KEY,
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  audience TEXT NOT NULL,                        -- {group, age_min, age_max, sport}
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sending','sent')),
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
+CREATE TABLE IF NOT EXISTS campaign_recipients (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  name TEXT,
+  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+  lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL,
+  token TEXT NOT NULL UNIQUE,
+  links TEXT,                                    -- the original links, in order, for the counted redirects
+  sent_at TEXT NOT NULL,
+  clicked_at TEXT,
+  unsubscribed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS campaign_recipients_campaign ON campaign_recipients(campaign_id);
+-- Addresses that asked for no more announcement or review emails (receipts and booking emails still go).
+CREATE TABLE IF NOT EXISTS email_optouts (
+  email TEXT PRIMARY KEY COLLATE NOCASE,
+  source TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,

@@ -70,7 +70,8 @@ test('families get one friendly ask after a 10th session, at a decent hour', asy
   const go = await fetch(`${base}/r/${tok}`, { redirect: 'manual' });
   assert.equal(go.status, 302);
   assert.equal(go.headers.get('location'), 'https://g.page/r/example/review');
-  const stop = await fetch(`${base}/r/${tok}?stop=1`);
+  assert.match(await (await fetch(`${base}/r/${tok}?stop=1`)).text(), /Yes, stop them/, 'opening the link only asks');
+  const stop = await fetch(`${base}/r/${tok}?stop=1`, { method: 'POST' });
   assert.match(await stop.text(), /won't ask your family for a review again/);
   const summary = (await owner('GET', '/v1/review-requests')).body;
   assert.deepEqual([summary.last_90_days.sent, summary.last_90_days.clicked, summary.last_90_days.stopped], [2, 1, 1]);

@@ -138,7 +138,8 @@ src/
     test-provider.js    built-in test payments (no Stripe key)
     stripe-provider.js  Stripe: customers, Tap to Pay, readers, saved cards, refunds, webhooks
   routes.js             every endpoint, its access rule and its docs
-  server.js             HTTP, auth, security headers, background jobs
+  server.js             HTTP, auth, security headers, background job list
+  services/jobs.js      job runner: run history, owner alerts, one-copy lease
 public/                 dashboard and client app (plain JavaScript, no build step)
 test/                   end-to-end tests (API, point of sale, Stripe against a stand-in Stripe server)
 ios/                    DP Coach iPhone app (SwiftUI + Stripe Terminal)

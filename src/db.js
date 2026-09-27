@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 32;
+const SCHEMA_VERSION = 33;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -59,7 +59,8 @@ const ADDED_TABLES = {
   28: ['progress_notes'],                                                 // progress notes for parents
   29: ['money_checks'],                                                   // daily money checks
   30: ['guardian_message_reads'],                                         // parents' own read state for coach messages
-  31: ['time_off', 'client_notes']                                        // coach time off, staff notes on clients
+  31: ['time_off', 'client_notes'],                                       // coach time off, staff notes on clients
+  33: ['job_runs', 'job_state']                                           // background job history and leases
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31

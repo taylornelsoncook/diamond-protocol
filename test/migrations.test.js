@@ -36,7 +36,8 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.ok(cols('clients').includes('archived_at') && cols('clients').includes('archived_by'));
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 32);
+      assert.ok(cols('job_runs').includes('error') && cols('job_state').includes('lease_until'));   // background jobs, version 33
+      assert.equal(db.get('PRAGMA user_version').user_version, 33);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(listClients(ctx)[0].name, 'Ava Lopez');
@@ -75,7 +76,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 32);
+      assert.equal(db.get('PRAGMA user_version').user_version, 33);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
       const row = openSpots(ctx).data.find((x) => x.id === 'cls_1');

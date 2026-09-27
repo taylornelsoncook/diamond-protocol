@@ -2129,7 +2129,7 @@ function renderPasswordChange(forced) {
 
 async function viewStaff(main) {
   if (!isOwner()) return fill(main, header('Staff & security', 'Only owners can manage staff.'));
-  const [staff, audit, bk] = await Promise.all([get('/v1/staff'), get('/v1/audit?limit=100'), get('/v1/backups')]);
+  const [staff, audit, bk, jobs] = await Promise.all([get('/v1/staff'), get('/v1/audit?limit=100'), get('/v1/backups'), get('/v1/jobs')]);
   const ROLE = { owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' };
   const n = input(), e = input({ type: 'email' }), role = select(Object.keys(staff.roles).map((k) => [k, ROLE[k]]), { value: 'coach' });
   const roleHelp = h('p', { class: 'small muted' }, staff.roles.coach);
@@ -2163,6 +2163,19 @@ async function viewStaff(main) {
       btn('Download', (ev) => busy(ev.currentTarget, () => download(`/v1/backups/${b.name}`)), 'ghost'))) : h('p', { class: 'muted small' }, 'No backups yet.'),
     h('div', null, btn('Back up now', (ev) => busy(ev.currentTarget, async () => { await post('/v1/backups'); toast('Backup saved.'); render(); }), 'secondary')),
     h('p', { class: 'small muted' }, 'Backup files contain client, family and medical information. Store them like you would paper records.'));
+  const every = (sec) => (sec < 60 ? `every ${sec} seconds` : sec < 3600 ? `every ${sec / 60} min` : sec === 3600 ? 'hourly' : `every ${sec / 3600} hours`);
+  const jobBadge = (j) => (j.running ? ['muted', 'Running'] : j.health === 'failing' ? ['warn', j.fail_streak > 1 ? `Failed ${j.fail_streak}×` : 'Failed'] : j.health === 'waiting' ? ['muted', 'Not run yet'] : j.recent[0]?.status === 'skipped' && j.recent[0].started_at === j.last_run_at ? ['muted', 'Nothing to do'] : ['good', 'OK']);
+  const jobsPanel = panel('Background jobs', { subtitle: 'The work the server does on its own: billing, school invoices, the schedule, reminders, follow-ups, money checks, webhooks, device syncs and backups. Owners get an email when a job fails and when it recovers.' },
+    jobs.data.map((j) => { const [tone, label] = jobBadge(j); return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, j.name),
+        h('span', { class: 'small muted' }, `${every(j.every_seconds)}${j.last_run_at ? ` · last ran ${ago(j.last_run_at)}` : ''}${j.health === 'failing' ? (j.last_ok_at ? ` · last worked ${ago(j.last_ok_at)}` : ' · has not worked yet') : ''}`),
+        j.last_error ? h('span', { class: 'small', style: 'font-family:var(--font-mono);word-break:break-word' }, j.last_error) : null),
+      h('span', { class: `dp-badge dp-badge--${tone}` }, label),
+      btn('Run now', (ev) => busy(ev.currentTarget, async () => {
+        const r = await post(`/v1/jobs/${encodeURIComponent(j.name)}/run`);
+        toast(r.status === 'failed' ? `${j.name} failed. The error is shown below.` : r.status === 'skipped' ? `${j.name} had nothing to do.` : `${j.name} ran.`, r.status === 'failed' ? 'warn' : 'good');
+        render();
+      }), 'ghost', j.running ? { disabled: true } : {})); }));
   const requests = await get('/v1/data-requests');
   const openReqs = requests.data.filter((r) => r.status === 'open');
   const reqPanel = panel('Data requests', { subtitle: openReqs.length ? 'Parents asking for their family\'s data to be deleted. Check with your accountant what payment records you must keep; the app keeps them without names.' : 'Parents can download their own data from the portal. Deletion requests appear here.' },
@@ -2189,7 +2202,7 @@ async function viewStaff(main) {
         h('p', { class: 'strong', style: 'margin:8px 0 0' }, c.guidance),
         ...(c.previews ?? []).map((p) => h('div', { class: 'small', style: `padding:2px 0${p.trust_proxy === c.proxies_trusted ? ';font-weight:600' : ''}` }, `With TRUST_PROXY=${p.trust_proxy} the app would pick: `, h('code', null, p.address), h('span', { class: 'muted' }, ` (${KIND[p.kind] ?? p.kind})${p.trust_proxy === c.proxies_trusted ? ' · now' : ''}`))));
     }), 'secondary')));
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, auditPanel);
+  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, jobsPanel, auditPanel);
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.

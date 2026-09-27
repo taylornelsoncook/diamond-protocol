@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/server.js';
 import { createUser, dashboard } from '../src/services/access.js';
 import { resetRateLimits } from '../src/services/security.js';
-import { newId, addDaysToDate, localDate, zonedToUtc, weekdayOf } from '../src/util.js';
+import { newId, addDaysToDate, localDate, zonedToUtc, weekdayOf, startOfLocalDay } from '../src/util.js';
+import { bookSlot } from '../src/services/schedule.js';
 
 let app, base, owner, coach, desk, maria, facility, park, ava, cole, coachId;
 const TZ = 'America/Chicago';
@@ -194,4 +195,52 @@ test('behind one hosting proxy the client address is the one the proxy saw, and 
     for (let i = 0; i < 10; i++) await ask(`1.1.1.${i}, 203.0.113.9, 10.9.9.9`, 200 + i);
     assert.equal((await ask('1.1.2.1, 203.0.113.9, 10.9.9.9', 300)).status, 429);
   } finally { delete process.env.TRUST_PROXY; resetRateLimits(); }
+});
+
+test('saving as a coach or front desk doesn\'t hand back amounts either, but collecting for a booking still shows what was taken', async () => {
+  const plan = (await owner('POST', '/v1/plans', { name: 'Saver', price_cents: 5900 })).body;
+  await owner('POST', `/v1/clients/${cole.id}/card/test`);
+  await owner('POST', `/v1/clients/${cole.id}/subscription`, { plan_id: plan.id });
+  for (const who of [coach, desk]) {
+    const r = await who('PATCH', `/v1/clients/${cole.id}`, { notes: 'Left knee is fine now' });
+    assert.equal(r.status, 200);
+    assert.deepEqual([...moneyKeys(r.body)], []);
+  }
+  assert.equal((await owner('PATCH', `/v1/clients/${cole.id}`, { notes: 'x' })).body.subscription.price_cents, 5900);
+  // The roster "collect" button and the iPhone app read the amount on the sale.
+  const day = addDaysToDate(localDate(new Date().toISOString(), TZ), 2);
+  const s = (await owner('POST', '/v1/sessions', { name: 'Drop-in speed', kind: 'clinic', location_id: facility.id, date: day, start_time: '10:00', drop_in_cents: 2000 })).body;
+  const b = (await coach('POST', `/v1/sessions/${s.id}/bookings`, { client_id: ava.id })).body;
+  assert.equal(b.coverage, 'unpaid');
+  const paid = (await coach('POST', `/v1/bookings/${b.id}/pay`, { method: 'cash' })).body;
+  assert.equal(paid.sale.amount_cents, 2000);
+});
+
+test('two families booking the same open private hour at once: only one gets it', async () => {
+  const day = addDaysToDate(localDate(new Date().toISOString(), TZ), 5);
+  const av = (await owner('POST', '/v1/availability', { kind: 'private', location_id: park.id, weekday: weekdayOf(day), start_time: '19:00', end_time: '20:00', slot_minutes: 60 })).body;
+  const at = zonedToUtc(day, '19:00', TZ);
+  // The second request arrives while the first is still charging the card (before its booking is saved).
+  const results = await Promise.allSettled([ava, cole].map((c) => bookSlot(app.ctx, { kind: 'private', startsAt: at, availabilityId: av.id, clientId: c.id, isCoach: true })));
+  assert.deepEqual(results.map((r) => r.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM class_sessions WHERE starts_at = ? AND location_id = ? AND status = 'scheduled'`, at, park.id).n, 1);
+});
+
+test('the business day starts at the right moment across daylight saving, even where midnight is skipped', () => {
+  assert.equal(startOfLocalDay('2026-03-08T12:00:00Z', 'America/Denver'), '2026-03-08T07:00:00.000Z');
+  assert.equal(startOfLocalDay('2026-11-02T06:30:00Z', 'America/Denver'), '2026-11-01T06:00:00.000Z');   // 11:30pm on Nov 1 in Denver
+  assert.equal(startOfLocalDay('2026-10-06T16:00:00Z', 'Asia/Tokyo'), '2026-10-06T15:00:00.000Z');
+  assert.equal(startOfLocalDay('2026-09-06T12:00:00Z', 'America/Santiago'), '2026-09-06T04:00:00.000Z');  // clocks go from 00:00 to 01:00
+});
+
+test('removing a parent who has read coach messages clears their read state', async () => {
+  const fam = (await owner('GET', `/v1/families/${ava.family.id}`)).body;
+  await owner('POST', `/v1/families/${fam.id}/guardians`, { name: 'Luis Lopez', email: 'luis@example.com' });
+  const { body } = await req('POST', '/portal/api/login', { email: 'luis@example.com' });
+  const luis = as((await req('POST', '/portal/api/verify', { email: 'luis@example.com', code: body.dev_code })).cookie);
+  await luis('POST', `/portal/api/athletes/${ava.id}/messages/read`);
+  const g = app.ctx.db.get('SELECT id FROM guardians WHERE email = ?', 'luis@example.com');
+  assert.ok(app.ctx.db.get('SELECT COUNT(*) AS n FROM guardian_message_reads WHERE guardian_id = ?', g.id).n > 0);
+  assert.equal((await owner('DELETE', `/v1/families/${fam.id}/guardians/${g.id}`)).status, 200);
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM guardian_message_reads WHERE guardian_id = ?', g.id).n, 0);
 });

@@ -412,14 +412,17 @@ export function removeAvailability(ctx, id) {
   return { id, deleted: true };
 }
 // Open slots are your availability minus what is already on the schedule at the same place and time. A one-off private or
-// evaluation nobody is booked into doesn't take the time. (Which coach runs what comes later; until then the place decides.)
+// evaluation whose bookings were all canceled doesn't take the time. One with no bookings yet does: that is a slot being
+// booked right now (the booking is saved after the card is charged) or one a coach put on the schedule.
+// (Which coach runs what comes later; until then the place decides.)
 export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
   const blocks = ctx.db.all('SELECT a.*, l.name AS location_name FROM availability a JOIN locations l ON l.id = a.location_id WHERE a.kind = ?', kind);
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
   const busy = ctx.db.all(`SELECT s.location_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
-    AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended','waitlisted')))`, ctx.now(), end);
+    AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)
+      OR EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended','waitlisted')))`, ctx.now(), end);
   const minStart = new Date(Date.now() + 2 * 3600000).toISOString();            // at least 2 hours' notice
   const out = [];
   for (let d = today, i = 0; i <= days; d = addDaysToDate(d, 1), i++) {

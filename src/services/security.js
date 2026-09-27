@@ -41,16 +41,18 @@ export function can(role, method, path) {
   return false;
 }
 // Coaches and front desk never see money. They take payments at the counter, so what the counter sells from (products,
-// stock, plans) and sales keep their prices (coaches only get their own sales); front desk also collects for a session,
-// a camp or a private. Every other _cents field is removed from what they read.
+// stock, plans), sales and collecting for a booking keep their amounts (coaches only get their own sales; the iPhone app
+// needs the amount on a sale); front desk also collects for a session, a camp or a private. Every other _cents field is
+// removed from what they get back, whether they read or save (saving a client returns the client, membership price too).
+const COUNTER = /^\/v1\/(products|inventory|plans|sales|terminal)(\/|$)|^\/v1\/bookings\/:id\/pay$/;
 const SEES_PRICES = {
-  coach: /^\/v1\/(products|inventory|plans|sales)(\/|$)/,
-  front_desk: /^\/v1\/(products|inventory|plans|sales|slots)(\/|$)|^\/v1\/(sessions|class-series)\/:id$/
+  coach: COUNTER,
+  front_desk: new RegExp(`${COUNTER.source}|^\\/v1\\/slots(\\/|$)|^\\/v1\\/(sessions|class-series)\\/:id$`)
 };
 const withoutCents = (x) => (Array.isArray(x) ? x.map(withoutCents)
   : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).filter(([k]) => !k.endsWith('_cents')).map(([k, val]) => [k, withoutCents(val)])) : x);
 export function hideMoney(role, method, path, out) {
-  if (!SEES_PRICES[role] || method !== 'GET' || SEES_PRICES[role].test(path)) return out;
+  if (!SEES_PRICES[role] || SEES_PRICES[role].test(path)) return out;
   return withoutCents(out);
 }
 // Activity that is only about money (memberships, refunds, school contracts) stays with the owner.

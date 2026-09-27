@@ -48,6 +48,8 @@ public/
 - **Every change** that matters calls `log(req, 'Verb phrase', 'detail')` so it shows in Recent activity and the activity log.
 - **Email** goes through `sendEmail(to, subject, body)`: logged in the outbox; relayed when `DP_EMAIL_WEBHOOK` is set.
 - **Texts** go through `messaging.sendSms(to, body, { leadId, familyId, parentId, sentBy })`. Check consent first (`crm.textBlock`): an OK to text on file and no STOP. A number that replied STOP is refused by `sendSms` itself.
+- **Email consent** follows the address: `crm.emailOptedOut(email)` is true when any lead or parent with it unsubscribed; check it (or `crm.sendLeadEmail`/`sendFamilyEmail`, which do) before any CRM email.
+- **Client IPs.** `trust proxy` is 1 hop (Render); set `DP_TRUST_PROXY` for another setup. Never trust a raw X-Forwarded-For.
 - **CRM roles.** Owners and front desk only (`requireStaff('owner','frontdesk')`); reports, group messages, import/export, settings and prices are owner-only; the front desk sees only their own tasks.
 - **Payments** go through `services/billing.charge()` (test mode: cards ending 0002 decline). Live Stripe replaces `lib.payments`.
 - **Voice** (docs/brand.md): direct, calm, specific. Sentence case. Buttons say what happens. No exclamation marks, no emoji.

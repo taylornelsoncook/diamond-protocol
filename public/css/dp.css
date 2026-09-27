@@ -91,7 +91,7 @@ legend{padding:0 6px;font-weight:600}
 .seg button[aria-pressed="true"]{background:var(--green);color:var(--on-green)}
 
 /* ---------- tables & lists ---------- */
-.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.table-wrap{position:relative;overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
 table.table{width:100%;border-collapse:collapse;font-size:15px}
 .table th{text-align:left;font:500 13px/18px var(--font-sans);color:var(--steel-muted);padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
 .table td{padding:12px 14px;border-bottom:1px solid var(--line-subtle);vertical-align:middle}

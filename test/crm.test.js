@@ -521,3 +521,104 @@ test('delete a lead (owners): refused while an evaluation is held', async () => 
   assert.equal((await owner.del(`/crm/leads/${l.id}`)).status, 200);
   assert.equal((await owner.get(`/crm/leads/${l.id}`)).status, 404);
 });
+
+// ---- review fixes ----
+
+test('an unsubscribe follows the email address: a second lead with it, and the parent a lead became', async () => {
+  const a = (await desk.post('/crm/leads', newLead({ email: 'same.person@example.com', interest: 'camp', source: 'social' }))).data.lead;
+  const b = (await desk.post('/crm/leads', { ...newLead({ email: 'same.person@example.com', interest: 'camp', source: 'social' }), allow_duplicate: true })).data.lead;
+  const seg = { audience: 'leads', interest: 'camp', source: 'social' };
+  let p = (await owner.post('/crm/group/preview', { segment: seg, channel: 'email' })).data;
+  assert.equal(p.recipients.filter((r) => r.email === 'same.person@example.com').length, 1, 'one email per address, even with two leads');
+  assert.ok(p.excluded.some((r) => r.email === 'same.person@example.com' && /same email/.test(r.reason)));
+  // Unsubscribing from lead A's link covers lead B too
+  const token = crm.unsubToken('l', a.id);
+  assert.equal((await anon().post(`/public/unsubscribe/${token}`)).status, 200);
+  p = (await owner.post('/crm/group/preview', { segment: seg, channel: 'email' })).data;
+  assert.ok(!p.recipients.some((r) => r.email === 'same.person@example.com'), 'no group email to that address');
+  const one = await desk.post(`/crm/leads/${b.id}/email`, { subject: 'Hi', body: 'Checking in' });
+  assert.equal(one.status, 400); assert.match(one.data.error, /unsubscribed/);
+  assert.equal((await desk.get(`/crm/leads/${b.id}`)).data.lead.email_opt_out, true, 'the lead page knows');
+  // A parent who unsubscribed isn't emailed through the lead they came from, either
+  const l = (await desk.post('/crm/leads', newLead({ parent_name: 'Una Subscribe', email: 'una.sub@example.com', interest: 'camp', source: 'social' }))).data.lead;
+  const c = await desk.post(`/crm/leads/${l.id}/convert`, {});
+  assert.equal(c.status, 201, JSON.stringify(c.data));
+  const parent = get("SELECT id FROM parents WHERE email='una.sub@example.com'");
+  assert.equal((await anon().post(`/public/unsubscribe/${crm.unsubToken('p', parent.id)}`)).status, 200);
+  p = (await owner.post('/crm/group/preview', { segment: seg, channel: 'email' })).data;
+  assert.ok(p.excluded.some((r) => r.id === l.id && r.reason === 'unsubscribed'), 'the member lead is left out');
+  assert.equal((await desk.post(`/crm/leads/${l.id}/email`, { subject: 'Hi', body: 'x' })).status, 400);
+  // An owner subscribing them again (they asked) turns it back on for the address
+  assert.equal((await owner.post(`/crm/leads/${a.id}/consent`, { email_opt_out: false })).status, 200);
+  assert.equal(get('SELECT email_opt_out FROM crm_leads WHERE id=?', b.id).email_opt_out, 0);
+  assert.equal((await desk.post(`/crm/leads/${b.id}/email`, { subject: 'Hi', body: 'Checking in' })).status, 200);
+});
+
+test('website form: an OK to text only counts for the number already on the lead', async () => {
+  crm._resetEnquiryLimit();
+  const l = (await desk.post('/crm/leads', newLead({ email: 'victim.lead@example.com', phone: '801-555-7101' }))).data.lead;
+  assert.equal(l.sms_opt_in, false);
+  const form = { parent_name: 'Someone Else', email: 'victim.lead@example.com', phone: '801-555-7102', sms_opt_in: true, message: 'hi' };
+  assert.equal((await anon().post('/public/enquiry', form, { 'x-forwarded-for': '198.51.100.20' })).status, 201);
+  assert.equal(get('SELECT sms_opt_in FROM crm_leads WHERE id=?', l.id).sms_opt_in, 0, 'another number can’t switch on texts for this lead');
+  assert.equal((await anon().post('/public/enquiry', { ...form, phone: '801-555-7101' }, { 'x-forwarded-for': '198.51.100.21' })).status, 201);
+  assert.equal(get('SELECT sms_opt_in FROM crm_leads WHERE id=?', l.id).sms_opt_in, 1, 'the lead’s own number can');
+});
+
+test('website form rate limit: a made-up X-Forwarded-For doesn’t reset it, and there is a cap across addresses', async () => {
+  crm._resetEnquiryLimit();
+  const form = (i) => ({ parent_name: 'Flood Test', email: `flood${i}@example.com`, message: 'x' });
+  let last;
+  for (let i = 0; i < 6; i++) last = await anon().post('/public/enquiry', form(i), { 'x-forwarded-for': `10.9.${i}.1, 203.0.113.50` });
+  assert.equal(last.status, 429, 'the address the proxy saw counts, not the one the sender typed');
+  crm._resetEnquiryLimit();
+  let limited = 0;
+  for (let i = 0; i < crm.ENQUIRY_GLOBAL_LIMIT + 2; i++) if ((await anon().post('/public/enquiry', form(100 + i), { 'x-forwarded-for': `203.0.${Math.floor(i / 200)}.${i % 200}` })).status === 429) limited++;
+  assert.equal(limited, 2, 'rotating addresses hits the overall cap');
+  crm._resetEnquiryLimit();
+});
+
+test('converting a lead: an OK to text stays with its number', async () => {
+  const same = (await desk.post('/crm/leads', newLead({ parent_name: 'Tia Same', email: 'tia.same@example.com', phone: '801-555-7201' }))).data.lead;
+  await desk.post(`/crm/leads/${same.id}/consent`, { sms_opt_in: true, source: 'Asked on the phone' });
+  assert.equal((await desk.post(`/crm/leads/${same.id}/convert`, {})).status, 201);
+  assert.equal(get("SELECT sms_opt_in FROM parents WHERE email='tia.same@example.com'").sms_opt_in, 1);
+  const moved = (await desk.post('/crm/leads', newLead({ parent_name: 'Tom Moved', email: 'tom.moved@example.com', phone: '801-555-7202' }))).data.lead;
+  await desk.post(`/crm/leads/${moved.id}/consent`, { sms_opt_in: true, source: 'Asked on the phone' });
+  assert.equal((await desk.post(`/crm/leads/${moved.id}/convert`, { parent_phone: '801-555-7299' })).status, 201);
+  const p = get("SELECT sms_opt_in, phone_e164 FROM parents WHERE email='tom.moved@example.com'");
+  assert.deepEqual([p.phone_e164, p.sms_opt_in], ['+18015557299', 0], 'a different number needs its own OK');
+});
+
+test('automatic moves: a family back through a newer lead moves that lead, not the old lost one too', () => {
+  const fam = insert('families', { name: 'Twice family' });
+  const ath = insert('athletes', { code: 'TWIFAM2026', family_id: fam, first_name: 'Tw', last_name: 'Ice' });
+  const old = insert('crm_leads', { parent_name: 'Old Lead', email: 'twice.old@example.com', stage: 'lost', lost_reason: 'price', family_id: fam, family_linked_on: addDays(T(), -60) });
+  const fresh = insert('crm_leads', { parent_name: 'New Lead', email: 'twice.new@example.com', stage: 'contacted', family_id: fam, family_linked_on: addDays(T(), -1), reengaged: 1 });
+  insert('memberships', { athlete_id: ath, plan_id: get('SELECT id FROM plans WHERE trial_days>0 ORDER BY id').id, status: 'trial', started_at: T() });
+  crm.syncStages([old, fresh]);
+  assert.equal(get('SELECT stage FROM crm_leads WHERE id=?', fresh).stage, 'trial');
+  assert.equal(get('SELECT stage FROM crm_leads WHERE id=?', old).stage, 'lost');
+  crm.syncStages([old, fresh]);
+  assert.equal(get('SELECT COUNT(*) n FROM crm_stage_changes WHERE lead_id=? AND auto=1', fresh).n, 1, 'idempotent');
+});
+
+test('dates: UTC timestamps count in the business time zone', () => {
+  const { setting, setSetting } = require('../server/db');
+  const tz = setting('timezone');
+  setSetting('timezone', 'America/Denver');
+  assert.equal(crm.utcToDate('2026-09-27 03:00:00'), '2026-09-26', 'a Denver evening is still the day before');
+  assert.equal(crm.utcToDate('2026-09-27 18:00:00'), '2026-09-27');
+  assert.equal(crm.utcToDate('2026-09-27'), '2026-09-27');
+  setSetting('timezone', tz);
+});
+
+test('DP_DB alone keeps the data folder next to the database (npm test leaves no ./data behind)', () => {
+  const { execFileSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dp-datadir-'));
+  const env = { ...process.env, DP_DB: path.join(dir, 'x.db') };
+  delete env.DP_DATA_DIR;
+  const out = execFileSync(process.execPath, ['-e', "process.stdout.write(require('./server/db').DATA_DIR)"], { cwd: path.join(__dirname, '..'), env }).toString();
+  assert.equal(out, dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

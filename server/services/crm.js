@@ -67,7 +67,15 @@ const cleanText = (v, max = 2000) => { const s = String(v ?? '').trim(); return 
 const nowUtc = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')) && addDays(d, 0) === d;
 const daysBetween = (a, b) => Math.round((Date.parse(String(b).slice(0, 10) + 'T12:00:00Z') - Date.parse(String(a).slice(0, 10) + 'T12:00:00Z')) / 864e5);
-const utcToDate = (t) => String(t || '').slice(0, 10);
+// A UTC timestamp ("2026-09-27 03:10:00") as a date in the business time zone, the same day lib.today() uses.
+function utcToDate(t) {
+  const s = String(t || '');
+  if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s.replace(' ', 'T').slice(0, 19) + 'Z');
+  if (Number.isNaN(d.getTime())) return s.slice(0, 10);
+  const fmt = (tz) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  try { return fmt(setting('timezone', 'America/Denver')); } catch { return fmt('America/Denver'); }
+}
 const fullName = (a) => `${a.first_name} ${a.last_name}`;
 const staffOf = (req) => req?.staff || null;
 
@@ -137,6 +145,11 @@ function unsubscribe(token) {
   if (!t) throw bad('That unsubscribe link isn’t valid. Reply to the email and we will take you off the list.');
   const row = t.kind === 'lead' ? get('SELECT id, email, email_opt_out FROM crm_leads WHERE id=?', t.id) : get('SELECT id, email, email_opt_out FROM parents WHERE id=?', t.id);
   if (!row) throw notFound('That contact');
+  if (!row.email_opt_out && row.email) {
+    // The other records with this address (the parent a lead became, a second lead) are the same person.
+    run("UPDATE crm_leads SET email_opt_out=1, email_opt_out_at=datetime('now') WHERE email=? AND email_opt_out=0 AND id<>?", row.email, t.kind === 'lead' ? row.id : 0);
+    run("UPDATE parents SET email_opt_out=1, email_opt_out_at=datetime('now') WHERE email=? AND email_opt_out=0 AND id<>?", row.email, t.kind === 'parent' ? row.id : 0);
+  }
   if (!row.email_opt_out) {
     if (t.kind === 'lead') { update('crm_leads', row.id, { email_opt_out: 1, email_opt_out_at: nowUtc() }); activity({ leadId: row.id, kind: 'consent', body: 'Unsubscribed from emails (link in an email)' }); }
     else {
@@ -217,7 +230,7 @@ function leadView(l, staff) {
     last_activity_at: lastAct, stale: open && daysBetween(utcToDate(lastAct), T) >= STALE_DAYS, days_since_activity: Math.max(0, daysBetween(utcToDate(lastAct), T)),
     first_contact: l.first_contact || utcToDate(l.created_at), created_at: l.created_at, created_by: l.created_by,
     family_id: l.family_id, converted_at: l.converted_at, reengaged: !!l.reengaged,
-    email_opt_out: !!l.email_opt_out, email_opt_out_at: l.email_opt_out_at,
+    email_opt_out: !!l.email_opt_out || emailOptedOut(l.email), email_opt_out_at: l.email_opt_out_at,
     sms_opt_in: !!l.sms_opt_in, sms_opt_in_at: l.sms_opt_in_at, sms_opt_in_source: l.sms_opt_in_source, sms_opt_out: !!l.sms_opt_out, sms_opt_out_at: l.sms_opt_out_at,
     open_tasks: tasks.n, next_task_due: tasks.next, overdue_task: !!tasks.next && tasks.next < T,
   };
@@ -295,7 +308,7 @@ function createLead(b, { staff = null, source = null, by = null, allowDuplicate 
     const dups = duplicates(data);
     if (dups.length) throw new HttpError(409, `${data.parent_name} may already be on file (${dups.map((d) => `${d.name}, ${d.detail.toLowerCase()}`).join('; ')}). Open the existing record, or add the lead anyway.`, { duplicates: dups });
   }
-  const consent = smsConsent || (b.sms_opt_in === true ? { source: clean(b.sms_opt_in_source, 120) || (staff ? `Told ${staff.name}` : 'Enquiry form') } : null);
+  const consent = smsConsent || (b.sms_opt_in === true ? { source: clean(b.sms_opt_in_source, 120) || (staff ? `Told ${staff.name}` : by ? `Sent with the lead (${by})` : 'Enquiry form') } : null);
   if (consent && !data.phone) throw bad('Add a mobile number to record that it’s OK to text them.');
   const id = tx(() => {
     const leadId = insert('crm_leads', {
@@ -355,6 +368,8 @@ function syncLead(l) {
   const [stage, why] = t;
   if (l.stage === 'member') return false;
   if (l.stage === 'lost' ? !['trial', 'member'].includes(stage) : RANK[stage] <= RANK[l.stage]) return false;
+  // A family that came back through a newer lead (re-engage) moves that lead, not the old lost one as well.
+  if (l.stage === 'lost' && l.family_id && get('SELECT 1 FROM crm_leads WHERE family_id=? AND id>?', l.family_id, l.id)) return false;
   return moveStage(l, stage, { auto: true, why });
 }
 function syncStages(ids = null) {
@@ -507,7 +522,13 @@ function familyTimeline(familyId, staff, { compact = false } = {}) {
 }
 
 // ---- email and text from the CRM ----
-function canEmail(r) { return !!r.email && !r.email_opt_out; }
+// An unsubscribe follows the email address: a lead and the parent it became (or a second lead with the same
+// address) are one person, so an opt-out on any of them stops CRM emails to all of them.
+function emailOptedOut(email) {
+  if (!email) return false;
+  return !!(get('SELECT 1 FROM crm_leads WHERE email=? AND email_opt_out=1', email) || get('SELECT 1 FROM parents WHERE email=? AND email_opt_out=1', email));
+}
+function canEmail(r) { return !!r.email && !r.email_opt_out && !emailOptedOut(r.email); }
 // Texting needs a mobile number, a recorded OK to text, and no STOP since.
 function textBlock(r) {
   const phone = r.phone_e164 !== undefined ? r.phone_e164 : r.phone;
@@ -518,7 +539,7 @@ function textBlock(r) {
 }
 function sendLeadEmail(l, { subject, body }, staff, kind = 'one') {
   if (!l.email) throw bad('This lead has no email address. Add one first.');
-  if (l.email_opt_out) throw bad(`${l.parent_name} unsubscribed from emails. They won't get CRM emails.`);
+  if (l.email_opt_out || emailOptedOut(l.email)) throw bad(`${l.parent_name} unsubscribed from emails. They won't get CRM emails.`);
   const s = clean(subject, 150), t = cleanText(body);
   if (!s) throw bad('Add a subject.');
   if (!t) throw bad('Write the message first.');
@@ -534,10 +555,11 @@ function primaryParent(familyId) {
 function sendFamilyEmail(familyId, { subject, body }, staff, kind = 'one', parent = null) {
   const p = parent || primaryParent(familyId);
   if (!p) throw bad('This family has no parent on file.');
-  if (p.email_opt_out) throw bad(`${p.name} unsubscribed from emails. They won't get CRM emails.`);
+  if (p.email_opt_out || emailOptedOut(p.email)) throw bad(`${p.name} unsubscribed from emails. They won't get CRM emails.`);
   const s = clean(subject, 150), t = cleanText(body);
   if (!s) throw bad('Add a subject.');
   if (!t) throw bad('Write the message first.');
+  if (t.length > 10000) throw bad('Keep the message under 10,000 characters.');
   const outboxId = sendEmail(p.email, s, t + footer('parent', p.id));
   activity({ familyId, kind: 'email', body: t, meta: { subject: s, outbox_id: outboxId, to: p.email, group: kind === 'group' }, staff });
   return outboxId;
@@ -583,6 +605,11 @@ function setConsent(kind, row, b, staff) {
   }
   if (!Object.keys(patch).length) throw bad('Nothing to change.');
   update(table, row.id, patch);
+  if ('email_opt_out' in patch && row.email) {
+    const v = patch.email_opt_out, at = patch.email_opt_out_at;
+    run('UPDATE crm_leads SET email_opt_out=?, email_opt_out_at=? WHERE email=? AND id<>?', v, at, row.email, kind === 'lead' ? row.id : 0);
+    run('UPDATE parents SET email_opt_out=?, email_opt_out_at=? WHERE email=? AND id<>?', v, at, row.email, kind === 'parent' ? row.id : 0);
+  }
   activity({ leadId: kind === 'lead' ? row.id : null, familyId: kind === 'lead' ? row.family_id : row.family_id, kind: 'consent', body: `${kind === 'parent' ? `${row.name}: ` : ''}${notes.join('. ')}`, staff });
 }
 
@@ -643,9 +670,15 @@ function trialsEnded() {
 function segment(spec = {}, channel = 'email') {
   if (!['email', 'text'].includes(channel)) throw bad('Choose email or text.');
   const recipients = [], excluded = [];
+  const seen = new Set();
   const check = (r) => {
-    const why = channel === 'email' ? (!r.email ? 'no email' : r.email_opt_out ? 'unsubscribed' : null) : textBlock(r);
-    return why;
+    const why = channel === 'email' ? (!r.email ? 'no email' : r.email_opt_out || emailOptedOut(r.email) ? 'unsubscribed' : null) : textBlock(r);
+    if (why) return why;
+    // One message per address or number, even when two records share it.
+    const key = channel === 'email' ? String(r.email).toLowerCase() : r.phone_e164 !== undefined ? r.phone_e164 : r.phone;
+    if (seen.has(key)) return channel === 'email' ? 'same email as someone above' : 'same number as someone above';
+    seen.add(key);
+    return null;
   };
   if (spec.audience === 'trials_ended') {
     for (const f of trialsEnded()) {
@@ -763,7 +796,10 @@ function convertLead(l, b, staff) {
     inTx: ({ athlete, familyId, parentId, siblings: more }) => {
       update('crm_leads', l.id, { family_id: familyId, family_linked_on: T, converted_at: nowUtc() });
       // The parent keeps the lead's contact preferences.
-      update('parents', parentId, { email_opt_out: l.email_opt_out, email_opt_out_at: l.email_opt_out_at, sms_opt_in: l.sms_opt_in, sms_opt_in_at: l.sms_opt_in_at, sms_opt_in_source: l.sms_opt_in_source, sms_opt_out: l.sms_opt_out, sms_opt_out_at: l.sms_opt_out_at });
+      // An OK to text belongs to the number it was given for, so it carries over only when the number stayed the same.
+      const sameNumber = !!l.phone && get('SELECT phone_e164 FROM parents WHERE id=?', parentId)?.phone_e164 === l.phone;
+      update('parents', parentId, { email_opt_out: l.email_opt_out, email_opt_out_at: l.email_opt_out_at, sms_opt_out: l.sms_opt_out, sms_opt_out_at: l.sms_opt_out_at,
+        ...(sameNumber ? { sms_opt_in: l.sms_opt_in, sms_opt_in_at: l.sms_opt_in_at, sms_opt_in_source: l.sms_opt_in_source } : {}) });
       // Notes carry over to the client profile, with who wrote them and when.
       const notes = [];
       if (l.notes) notes.push({ body: l.notes, staff_name: l.created_by, created_at: l.created_at });
@@ -816,11 +852,17 @@ function reengage(familyId, staff, { note = null } = {}) {
 // ---- website enquiry form ----
 const enquiryHits = new Map(); // ip -> [timestamps]
 const ENQUIRY_LIMIT = 5, ENQUIRY_WINDOW = 10 * 6e4;
+// Every address together, too: rotating addresses (or a spoofed X-Forwarded-For) can't flood the owner's inbox.
+const ENQUIRY_GLOBAL_LIMIT = 60;
+let enquiryAll = [];
 function enquiryLimit(ip) {
   const now = Date.now();
+  enquiryAll = enquiryAll.filter((t) => now - t < ENQUIRY_WINDOW);
+  if (enquiryAll.length >= ENQUIRY_GLOBAL_LIMIT) throw new HttpError(429, 'We’re getting a lot of enquiries right now. Please try again in a few minutes, or call us.', { retry_after: Math.ceil((enquiryAll[0] + ENQUIRY_WINDOW - now) / 1000) });
   const recent = (enquiryHits.get(ip) || []).filter((t) => now - t < ENQUIRY_WINDOW);
   if (recent.length >= ENQUIRY_LIMIT) throw new HttpError(429, 'Thanks, we already have your enquiry. If you need us sooner, please call.', { retry_after: Math.ceil((recent[0] + ENQUIRY_WINDOW - now) / 1000) });
   recent.push(now);
+  enquiryAll.push(now);
   enquiryHits.set(ip, recent);
   if (enquiryHits.size > 5000) for (const [k, v] of enquiryHits) if (!v.some((t) => now - t < ENQUIRY_WINDOW)) enquiryHits.delete(k);
 }
@@ -849,7 +891,8 @@ function websiteEnquiry(b, ip) {
   if (existing) {
     lead = existing;
     activity({ leadId: lead.id, familyId: lead.family_id, kind: 'enquiry', body: `Sent the website form again${message ? `: ${message}` : ''}` });
-    if (wantsTexts && data.phone && !existing.sms_opt_out) update('crm_leads', lead.id, { sms_opt_in: 1, sms_opt_in_at: nowUtc(), sms_opt_in_source: 'Ticked "OK to text me" on the website form' });
+    // An OK to text counts only for the number already on the lead (anyone can type someone else's email here).
+    if (wantsTexts && data.phone && data.phone === existing.phone && !existing.sms_opt_out) update('crm_leads', lead.id, { sms_opt_in: 1, sms_opt_in_at: nowUtc(), sms_opt_in_source: 'Ticked "OK to text me" on the website form' });
   } else {
     lead = createLead(input, { source: 'website', by: 'the website form', allowDuplicate: true, smsConsent: wantsTexts && data.phone ? { source: 'Ticked "OK to text me" on the website form' } : null });
     if (message) activity({ leadId: lead.id, kind: 'enquiry', body: message });
@@ -970,8 +1013,9 @@ module.exports = {
   templates, saveTemplates, fill, varsFor, unsubToken, readUnsubToken, unsubscribe, unsubInfo, unsubUrl,
   crmStaff, staffId, activity, leadRow, leadView, duplicates, cleanLead, createLead, moveStage, syncStages, syncLead, touch, listLeads, stageCounts, webhookLead,
   taskView, cleanTask, dueTasksFor, leadTimeline, familyTimeline, primaryParent,
-  sendLeadEmail, sendFamilyEmail, sendLeadText, sendFamilyText, textBlock, setConsent, inboundSms,
+  emailOptedOut, utcToDate, sendLeadEmail, sendFamilyEmail, sendLeadText, sendFamilyText, textBlock, setConsent, inboundSms,
   trialsEnded, segment, describeSegment, sendGroup, evalSlots, bookEvaluation, convertLead, reengage,
   websiteEnquiry, notifyEmails, planImport, importLeads, exportCsv, report, clean, cleanText, nowUtc, isDate,
-  _resetEnquiryLimit: () => enquiryHits.clear(),
+  _resetEnquiryLimit: () => { enquiryHits.clear(); enquiryAll = []; },
+  ENQUIRY_GLOBAL_LIMIT,
 };

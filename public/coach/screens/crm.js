@@ -28,8 +28,9 @@ const STYLE = html`<style>
 .crm-warn{color:var(--amber)}
 .crm-older{font-size:13px;color:var(--steel-muted);padding:0 4px}
 .crm-list td{padding:10px 14px}.crm-list .nm{font-weight:600;color:var(--steel);text-decoration:none}
-.crm-list .sub{font-size:13px;color:var(--steel-muted)}
+.crm-list .sub{font-size:13px;color:var(--steel-muted);overflow-wrap:anywhere}
 @media (max-width:760px){.crm-list .c-src,.crm-list .c-own,.crm-list .c-act{display:none}.crm-list td,.crm-list th{padding:10px 10px}}
+@media (max-width:480px){.crm-list .c-age{display:none}}
 .crm-tasks .list-row{align-items:flex-start}
 .crm-tasks .t-title{font-weight:500}
 .crm-tasks .done .t-title{text-decoration:line-through;color:var(--steel-muted)}
@@ -405,11 +406,11 @@ async function renderPipeline(ctx) {
       return;
     }
     const rows = data.leads;
-    mount(box, rows.length ? html`<div class="table-wrap"><table class="table crm-list"><thead><tr><th>Lead</th><th>Stage</th><th class="c-src">Source</th><th class="c-own">Owner</th><th>In stage</th><th class="c-act">Last contact</th><th><span class="sr-only">Move</span></th></tr></thead>
+    mount(box, rows.length ? html`<div class="table-wrap"><table class="table crm-list"><thead><tr><th>Lead</th><th>Stage</th><th class="c-src">Source</th><th class="c-own">Owner</th><th class="c-age">In stage</th><th class="c-act">Last contact</th><th><span class="sr-only">Move</span></th></tr></thead>
       <tbody>${rows.map((l) => html`<tr><td><a class="nm" href="/app/crm/leads/${l.id}">${l.parent_name}</a><div class="sub">${[athletesLine(l), l.email || l.phone_display].filter(Boolean).join(' · ')}</div></td>
         <td>${stageBadge(l.stage, l.stage_label)}${l.stage === 'lost' && l.lost_reason_label ? html`<div class="sub">${l.lost_reason_label}</div>` : ''}</td>
         <td class="c-src">${l.source_label}${l.source_detail ? html`<div class="sub">${l.source_detail}</div>` : ''}</td><td class="c-own">${l.owner_name || html`<span class="muted">Nobody</span>`}</td>
-        <td>${days(l.days_in_stage)}</td><td class="c-act ${l.stale ? 'crm-warn' : ''}">${l.stale ? html`${icon('warn', 14)} ` : ''}${relTime(l.last_activity_at)}</td>
+        <td class="c-age">${days(l.days_in_stage)}</td><td class="c-act ${l.stale ? 'crm-warn' : ''}">${l.stale ? html`${icon('warn', 14)} ` : ''}${relTime(l.last_activity_at)}</td>
         <td><button class="btn btn-sm btn-ghost" type="button" data-move="${l.id}" aria-label="Move ${l.parent_name}">Move</button></td></tr>`)}</tbody></table></div>
       <p class="hint">${plural(rows.length, 'lead')}.</p>`
       : html`<div class="empty">No leads match. ${f.q || f.stage || f.source || f.owner || f.interest || f.stale ? 'Clear a filter to see more.' : html`<button class="btn btn-sm" type="button" data-act="add-lead">Add your first lead</button>`}</div>`);
@@ -480,7 +481,7 @@ async function renderLead(ctx) {
       <div class="page-header"><div>
         <div class="row" style="gap:12px;align-items:center;flex-wrap:wrap"><h1 class="page-title">${l.parent_name}</h1>${stageBadge(l.stage, l.stage_label)}${l.reengaged ? html`<span class="badge badge-neutral">Re-engaged</span>` : ''}</div>
         <p class="page-sub">${sub}</p>
-        <p class="page-sub">${l.stage === 'lost' ? `Lost: ${l.lost_reason_label}${l.lost_note ? ` (${l.lost_note})` : ''}. ` : ''}In ${l.stage_label} for ${days(l.days_in_stage)}. Last contact ${relTime(l.last_activity_at)}.</p></div>
+        <p class="page-sub">${l.stage === 'lost' ? `Lost: ${l.lost_reason_label}${l.lost_note ? ` (${l.lost_note})` : ''}. ` : ''}${l.days_in_stage === 0 ? `${l.stage_label} since today` : `In ${l.stage_label} for ${days(l.days_in_stage)}`}. Last contact ${relTime(l.last_activity_at)}.</p></div>
         <div class="btn-row"><a class="btn" href="/app/crm">All leads</a>
           ${l.family_id ? (client ? html`<a class="btn btn-primary" href="/app/clients/${client.id}">Open client</a>` : '') : html`<button class="btn btn-primary" type="button" data-act="convert">Convert to client</button>`}</div></div>
       ${l.stale ? html`<div class="banner" role="note">${icon('warn')}<span>No contact in ${days(l.days_since_activity)}. Log a call, or send an email or text, to keep it moving.</span></div>` : ''}

@@ -322,7 +322,7 @@ _Where: CRM, then Group messages_
 Email or text a group, and see exactly who gets it before you send.
 
 - Who it's for: leads by stage (lost for a reason, like schedule), interest and source, or families whose trial ended without joining.
-- Send as Email or Text, then Show who gets it: the count, the list, and who's left out and why (no email, unsubscribed, no mobile number, no OK to text, replied STOP).
+- Send as Email or Text, then Show who gets it: the count, the list, and who's left out and why (no email, unsubscribed, no mobile number, no OK to text, replied STOP, or the same email or number as someone already on the list, so nobody gets it twice).
 - The message: start from a template; {first_name}, {athlete}, {business} and {staff} fill in for each person. Texts show the character and text count.
 - Send asks once more with the first person's opening line. If the group changed since the preview, nothing is sent and you're asked to check again. Every message lands on each person's timeline.
 
@@ -783,13 +783,13 @@ What a parent fills in to ask about training.
 
 - Name, email, mobile phone (optional), the athlete's name, age and grad year, sport and position, what they're interested in and a message.
 - An optional "OK to text me" box with the wording carriers expect (frequency, rates, STOP and HELP, not required to train). Ticking it records their consent on the lead.
-- Send enquiry creates a New lead with source Website form (or adds to their open lead if they write in again) and emails the owners. A hidden field and a limit of 5 enquiries per 10 minutes from one address keep bots out.
+- Send enquiry creates a New lead with source Website form (or adds to their open lead if they write in again) and emails the owners. A hidden field, a limit of 5 enquiries per 10 minutes from one address and 60 in all keep bots out. Writing in again with the same email only turns on texts for the number already on that lead.
 
 ### Unsubscribe
 
 _Where: the link at the end of every CRM email_
 
-Shows the (partly hidden) address and one button, Unsubscribe. Group emails leave that person out from then on, and one-to-one CRM emails are refused. Account emails like receipts still arrive.
+Shows the (partly hidden) address and one button, Unsubscribe. Group emails leave that address out from then on (every lead and parent with it), and one-to-one CRM emails are refused. Account emails like receipts still arrive.
 
 ### Athlete workout app
 

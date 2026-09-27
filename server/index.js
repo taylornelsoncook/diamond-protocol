@@ -9,7 +9,10 @@ const auth = require('./auth');
 const { HttpError } = require('./lib');
 
 const app = express();
-app.set('trust proxy', true);
+// Trust only the proxy in front of us (Render adds one hop): with `true`, anyone could pick their own IP with an
+// X-Forwarded-For header and slip past per-address limits. DP_TRUST_PROXY sets the hop count (or an Express value).
+const hops = process.env.DP_TRUST_PROXY;
+app.set('trust proxy', hops == null || hops === '' ? 1 : /^\d+$/.test(hops) ? Number(hops) : hops === 'true' ? true : hops === 'false' ? false : hops);
 app.disable('x-powered-by');
 app.use(express.json({ limit: '5mb' }));
 app.use(express.text({ type: ['text/csv', 'text/plain'], limit: '5mb' }));

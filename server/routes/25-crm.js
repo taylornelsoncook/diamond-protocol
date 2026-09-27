@@ -36,7 +36,7 @@ function familyInfo(familyId) {
     ...f,
     athletes: all('SELECT id, code, first_name, last_name FROM athletes WHERE family_id=? AND archived=0 ORDER BY id', familyId),
     parents: all('SELECT id, name, email, phone, phone_e164, email_opt_out, sms_opt_in, sms_opt_in_at, sms_opt_in_source, sms_opt_out, sms_opt_out_at FROM parents WHERE family_id=? ORDER BY is_self DESC, id', familyId)
-      .map((p) => ({ ...p, email_opt_out: !!p.email_opt_out, sms_opt_in: !!p.sms_opt_in, sms_opt_out: !!p.sms_opt_out, can_text: !crm.textBlock(p), text_block: crm.textBlock(p) })),
+      .map((p) => ({ ...p, email_opt_out: !!p.email_opt_out || crm.emailOptedOut(p.email), sms_opt_in: !!p.sms_opt_in, sms_opt_out: !!p.sms_opt_out, can_text: !crm.textBlock(p), text_block: crm.textBlock(p) })),
   };
 }
 function evaluationsFor(l, role) {
@@ -267,7 +267,7 @@ function routes(api) {
     if (b.parent_id && !p) throw notFound('That parent');
     const r = crm.sendFamilyText(f.id, b.body, req.staff, 'one', p);
     log(req, 'Texted a family', f.name);
-    res.json({ ok: true, status: r.status, message: r.status === 'logged' ? 'Text saved to the outbox. Test mode: it isn’t sent until a texting service is connected.' : 'Text sent.' });
+    res.json({ ok: true, status: r.status, message: r.status === 'logged' ? 'Text saved to the outbox. Test mode: it isn’t sent until a texting service is connected.' : r.status === 'held' ? 'Text held: this server only texts listed numbers.' : 'Text sent.' });
   }));
   api.post('/crm/parents/:id/consent', CRM, h(async (req, res) => {
     const p = get('SELECT * FROM parents WHERE id=?', Number(req.params.id));

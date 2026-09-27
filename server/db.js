@@ -5,7 +5,8 @@ const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
 const fs = require('fs');
 
-const DATA_DIR = process.env.DP_DATA_DIR || path.join(__dirname, '..', 'data');
+// DP_DB alone (tests) keeps everything next to that file, so nothing is written to ./data.
+const DATA_DIR = process.env.DP_DATA_DIR || (process.env.DP_DB ? path.dirname(path.resolve(process.env.DP_DB)) : path.join(__dirname, '..', 'data'));
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const DB_PATH = process.env.DP_DB || path.join(DATA_DIR, 'diamond.db');
 

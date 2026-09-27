@@ -21,7 +21,8 @@ const DEFAULTS = {
   privacy_version: '1',
   privacy_updated: '',
   public_signup: 'on',
-  rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
+  rankings: 'off',
+  readiness_adjust: 'on',                 // lighter weights in the athlete app after a rough daily check-in                        // athletes and parents see where a best result ranks (no names); coaches turn it on
   emails_off: '',                         // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
   texts_off: '',                          // comma list of automatic texts turned off: reminder, waitlist, canceled, payment_failed
   weekly_digest: 'on',                    // Monday summary email to the owners
@@ -53,6 +54,7 @@ export function updateSettings(ctx, body) {
     const text = v.str(body[`${kind}_text`], `${kind}_text`, { max: 100000 });
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version
   }
+  if (body.readiness_adjust !== undefined) next.readiness_adjust = body.readiness_adjust === true || body.readiness_adjust === 'on' ? 'on' : 'off';
   if (body.rankings !== undefined) next.rankings = body.rankings === true || body.rankings === 'on' ? 'on' : 'off';
   if (body.review_url !== undefined) {
     const url = v.str(body.review_url, 'review_url', { max: 500, optional: true }) ?? '';

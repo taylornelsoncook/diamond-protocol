@@ -212,7 +212,7 @@ test('targets accept feet and inches, and rankings follow the setting without na
   let perf = (await athlete(ava)('GET', 'engage')).body.performance;
   assert.equal(perf.rankings, null, 'rankings are off until a coach turns them on');
   assert.ok(perf.targets.find((x) => x.test === 'broad_jump' && x.reached));
-  assert.deepEqual((await coach('PATCH', '/v1/engagement/settings', { rankings: 'on' })).body, { rankings: 'on' });
+  assert.equal((await coach('PATCH', '/v1/engagement/settings', { rankings: 'on' })).body.rankings, 'on');
   perf = (await athlete(ava)('GET', 'engage')).body.performance;
   const broad = perf.rankings.find((x) => x.test === 'broad_jump');
   const girls = broad.ranks.find((x) => x.group === 'Girls 12–13');

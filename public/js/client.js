@@ -32,7 +32,13 @@ function show(tab) {
   state.tab = tab;
   drawTabs();
   window.scrollTo(0, 0);
-  if (tab === 'workout') return state.home ? render(state.home) : load();
+  if (tab === 'workout') {
+    if (!state.home) return load();
+    render(state.home);
+    // A check-in saved on another tab can change today's weights, so fetch again quietly.
+    api('GET', '/app/api/home').then((home) => { if (state.tab === 'workout') render(home); }).catch(() => {});
+    return;
+  }
   const where = h('div', { class: 'eg-view' });
   fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, ENGAGE_TABS.find(([k]) => k === tab)[1])), where);
   engage.render(where, tab);
@@ -54,6 +60,16 @@ function message(text, extra) {
   fill(root, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('div', { class: 'dp-panel' }, h('p', null, text), extra || null));
 }
 
+// How ready the athlete is today, from their daily check-in. Nothing shows when coaches turned it off.
+function readinessCard(r) {
+  if (!r) return null;
+  if (!r.level) return h('div', { class: 'c-ready' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.headline), h('span', { class: 'small muted' }, r.advice)), btn('Check in', () => show('accountability'), 'secondary'));
+  return h('div', { class: `c-ready c-ready--${r.level}`, role: 'status' },
+    h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, r.headline),
+      r.reasons.length ? h('span', { class: 'small' }, `From your check-in: ${r.reasons.join(', ').toLowerCase()}.`) : null,
+      h('span', { class: 'small muted' }, r.advice)));
+}
+
 function render(home) {
   state.home = home;
   const top = [h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' })];
@@ -69,7 +85,7 @@ function render(home) {
 
   const rows = w.exercises.map((x) => h('div', { class: `dp-ex${x.id === state.playing ? ' dp-ex--current' : ''}` },
     h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => { state.playing = x.id; render(home); window.scrollTo({ top: 0, behavior: 'smooth' }); } }, playIcon()),
-    h('div', { class: 'dp-ex-body' }, h('div', { class: 'dp-ex-name' }, x.name), h('div', { class: 'dp-ex-sets' }, x.prescription), x.load ? h('div', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : 'color:var(--green-bright)' }, x.load.text) : null),
+    h('div', { class: 'dp-ex-body' }, h('div', { class: 'dp-ex-name' }, x.name), h('div', { class: 'dp-ex-sets' }, x.prescription), x.load ? h('div', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : `color:var(${x.load.planned_pct ? '--amber' : '--green-bright'})` }, x.load.text) : null),
     h('button', { type: 'button', class: 'dp-ex-log', 'aria-pressed': String(state.done.has(x.id)), 'aria-label': `${state.done.has(x.id) ? 'Logged' : 'Log'} ${x.name}`, onClick: (e) => {
       // Update in place so a playing video and typed notes are left alone.
       const on = !state.done.has(x.id);
@@ -101,6 +117,7 @@ function render(home) {
       h('h1', { class: 'c-title' }, w.title)),
     h('div', { class: 'stack-tight' }, h('div', { class: 'c-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': 'Program progress' }, h('div', { style: `width:${pct}%` })),
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
+    readinessCard(home.readiness),
     current ? h('div', { class: 'stack' }, videoEmbed(current.video_url, current.name, 'Demo video coming soon. Follow the cues below.'), current.instructions ? h('p', { class: 'c-cue' }, h('span', { class: 'strong', style: 'color:var(--steel)' }, current.name + '. '), current.instructions) : null) : null,
     count,
     h('div', { class: 'stack', style: 'gap:8px' }, rows),

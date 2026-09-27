@@ -1,5 +1,5 @@
 import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel, videoEmbed, playIcon } from './ui.js';
-import { initEngage, clientPanels, flagsPanel, rankingsPanel, teamPanel, viewEducation } from './engage-coach.js';
+import { initEngage, clientPanels, flagsPanel, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -1298,7 +1298,7 @@ async function viewScheduleSetup(main) {
       btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
       btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
     digestOut);
-  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings),
+  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
     isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
 }
 

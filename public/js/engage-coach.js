@@ -115,7 +115,7 @@ export async function flagsPanel() {
   return panel('Check-ins that need a look', { subtitle: 'Latest daily check-in from today or yesterday: short sleep, high soreness, or low energy, mood or water.' },
     data.map((f) => h('div', { class: 'list-item', style: 'align-items:flex-start' },
       h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${f.client_id}`, class: 'strong', style: 'color:var(--steel)' }, f.name),
-        h('span', { class: 'small warn-text' }, f.flags.join(' · ')), f.note ? h('span', { class: 'small muted' }, `"${f.note}"`) : null),
+        h('span', { class: 'small warn-text' }, f.flags.join(' · ')), f.readiness && f.date === todayIso() ? h('span', { class: 'small muted' }, f.readiness === 'red' ? 'Their app suggests an easy day: lower weights and one set less.' : 'Their app suggests slightly lower weights.') : null, f.note ? h('span', { class: 'small muted' }, `"${f.note}"`) : null),
       h('span', { class: 'small muted' }, f.date === todayIso() ? 'Today' : 'Yesterday'),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${f.client_id}` }, 'Open'))));
 }
@@ -126,6 +126,12 @@ export function rankingsPanel(settings) {
   return panel('Rankings', { subtitle: 'Athletes and parents see where a best result ranks: against the same sex and age group, their team, and everyone here. Only counts and percentages, never anyone else\'s name. Groups need 4 or more athletes tested.' },
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, on, h('span', null, 'Show rankings in the athlete app and parent portal')),
     canManage() ? h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', { rankings: on.checked ? 'on' : 'off' }); toast(on.checked ? 'Rankings are on.' : 'Rankings are off.'); }), 'primary')) : null);
+}
+export function readinessPanel(settings) {
+  const on = h('input', { type: 'checkbox', checked: settings.readiness_adjust !== 'off', disabled: !canManage() });
+  return panel('Lighter days after a rough check-in', { subtitle: 'When an athlete\'s daily check-in shows short sleep, high soreness, or low energy, mood or water, their app says so above the workout. One problem takes weights set from a tested max down 10 points (75% becomes 65%). Two or more, under 5 hours of sleep, or soreness 5 of 5 makes it an easy day: down 20 points and one set less.' },
+    h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, on, h('span', null, 'Adjust workouts from daily check-ins')),
+    canManage() ? h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', { readiness_adjust: on.checked ? 'on' : 'off' }); toast(on.checked ? 'Workouts adjust to check-ins.' : 'Workouts no longer adjust to check-ins.'); }), 'primary')) : null);
 }
 
 // ---------- Team page ----------

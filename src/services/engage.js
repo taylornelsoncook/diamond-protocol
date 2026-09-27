@@ -69,7 +69,24 @@ export function flagsOf(c) {
   if (c.hydration != null && c.hydration <= 2) f.push(`Hydration ${c.hydration} of 5`);
   return f;
 }
-const shapeCheckin = (c) => (c ? { id: c.id, date: c.date, sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, note: c.note, updated_at: c.updated_at, flags: flagsOf(c) } : null);
+// Readiness from a check-in: train as written, go a little lighter, or take it easy. Weights set from a tested
+// max drop by 10 or 20 percentage points; the athlete and coach see why.
+export function readinessOf(c) {
+  if (!c) return null;
+  const reasons = flagsOf(c);
+  const red = reasons.length >= 2 || (c.sleep_hours != null && c.sleep_hours < 5) || c.soreness === 5;
+  if (red) return { level: 'red', drop: 20, reasons, headline: 'Take it easy today', advice: 'Weights from your max come down 20 points (75% becomes 55%). Do one set less of each exercise, and stop and tell your coach if anything hurts.' };
+  if (reasons.length) return { level: 'yellow', drop: 10, reasons, headline: 'Go a little lighter today', advice: 'Weights from your max come down 10 points (75% becomes 65%). Keep your form sharp.' };
+  return { level: 'green', drop: 0, reasons, headline: 'Ready to go', advice: 'Train as written.' };
+}
+export const readinessOn = (ctx) => getSetting(ctx, 'readiness_adjust') !== 'off';
+// Today's readiness for one athlete, or a nudge to check in first. Null when coaches turned it off.
+export function readinessToday(ctx, clientId) {
+  if (!readinessOn(ctx)) return null;
+  const c = ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, today(ctx));
+  return c ? readinessOf(c) : { level: null, drop: 0, reasons: [], headline: 'Check in first', advice: 'Answer today\'s check-in to see if your workout should be lighter.' };
+}
+const shapeCheckin = (c) => (c ? { id: c.id, date: c.date, sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, note: c.note, updated_at: c.updated_at, flags: flagsOf(c), readiness: readinessOf(c)?.level ?? null } : null);
 const blank = (x) => x === undefined || x === null || x === '';
 
 // Today's check-in. Saving again the same day updates it.
@@ -568,11 +585,12 @@ export function staffOverview(ctx, clientId) {
 
 // Athletes whose latest check-in (today or yesterday) needs a look, for Today.
 export function recentFlags(ctx) {
+  const on = readinessOn(ctx);
   const since = addDaysToDate(today(ctx), -1);
   const seen = new Set();
   return ctx.db.all('SELECT d.*, c.name, c.athlete_id FROM daily_checkins d JOIN clients c ON c.id = d.client_id WHERE d.date >= ? ORDER BY d.date DESC', since)
     .filter((d) => { if (seen.has(d.client_id)) return false; seen.add(d.client_id); return true; })
-    .map((d) => ({ client_id: d.client_id, name: d.name, athlete_id: d.athlete_id, date: d.date, note: d.note, flags: flagsOf(d) }))
+    .map((d) => ({ client_id: d.client_id, name: d.name, athlete_id: d.athlete_id, date: d.date, note: d.note, flags: flagsOf(d), readiness: on ? readinessOf(d).level : null }))
     .filter((d) => d.flags.length);
 }
 
@@ -594,8 +612,11 @@ export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org
   FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.status = 'active' ORDER BY o.name, t.name`).map((t) => ({ ...t, label: `${t.org_name} ${t.name}` }));
 
 export function setRankings(ctx, body = {}) {
-  const on = body.rankings === 'on' || body.rankings === true || body.rankings_enabled === true;
-  if (body.rankings === undefined && body.rankings_enabled === undefined) throw badRequest('Send rankings: "on" or "off".');
-  ctx.db.run(`INSERT INTO settings (key, value) VALUES ('rankings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, on ? 'on' : 'off');
-  return { rankings: on ? 'on' : 'off' };
+  const put = (key, on) => ctx.db.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, on ? 'on' : 'off');
+  const flag = (x) => x === 'on' || x === true;
+  if (body.rankings === undefined && body.rankings_enabled === undefined && body.readiness_adjust === undefined) throw badRequest('Send rankings or readiness_adjust: "on" or "off".');
+  if (body.rankings !== undefined || body.rankings_enabled !== undefined) put('rankings', flag(body.rankings) || body.rankings_enabled === true);
+  if (body.readiness_adjust !== undefined) put('readiness_adjust', flag(body.readiness_adjust));
+  return engagementSettings(ctx);
 }
+export const engagementSettings = (ctx) => ({ rankings: rankingsOn(ctx) ? 'on' : 'off', readiness_adjust: readinessOn(ctx) ? 'on' : 'off' });

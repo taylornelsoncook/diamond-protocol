@@ -1,6 +1,7 @@
 import { newId, v, notFound, badRequest, conflict } from '../util.js';
 import { emit } from './events.js';
 import { parentFilter } from './performance.js';
+import { readinessToday } from './engage.js';
 
 // ---- Exercise library ----
 export function listExercises(ctx) {
@@ -127,13 +128,17 @@ export function latestMax(ctx, clientId, testKey, { visibleOnly = false } = {}) 
   return ctx.db.get(`SELECT r.value, r.recorded_at FROM perf_results r JOIN perf_tests t ON t.id = r.test_id
     WHERE r.client_id = ? AND t.key = ? AND r.metric = 'load' AND r.voided = 0 ${visibleOnly ? parentFilter(ctx) : ''} ORDER BY r.recorded_at DESC, r.rowid DESC LIMIT 1`, clientId, testKey) ?? null;
 }
-export function loadFor(ctx, clientId, x, opts) {
+// drop: percentage points to take off today after a rough daily check-in (readiness).
+export function loadFor(ctx, clientId, x, { drop = 0, ...opts } = {}) {
   if (!x.load_test) return null;
   const max = latestMax(ctx, clientId, x.load_test, opts);
   const lift = LOAD_TESTS[x.load_test];
-  if (!max) return { pct: x.load_pct, lift, missing: true, text: `${x.load_pct}% of your ${lift} max. Test your max to get a weight.` };
-  const lb = Math.max(5, Math.round((max.value * x.load_pct) / 100 / 5) * 5);
-  return { pct: x.load_pct, lift, lb, max_lb: max.value, tested_at: max.recorded_at, text: `${lb} lb (${x.load_pct}% of your ${max.value} lb ${lift} max)` };
+  const pct = drop ? Math.max(30, x.load_pct - drop) : x.load_pct;
+  const lighter = pct < x.load_pct ? { planned_pct: x.load_pct } : {};
+  if (!max) return { pct, lift, ...lighter, missing: true, text: `${pct}% of your ${lift} max${lighter.planned_pct ? ' (lighter today)' : ''}. Test your max to get a weight.` };
+  const lb = Math.max(5, Math.round((max.value * pct) / 100 / 5) * 5);
+  return { pct, lift, lb, max_lb: max.value, tested_at: max.recorded_at, ...lighter,
+    text: lighter.planned_pct ? `${lb} lb (lighter today: ${pct}% instead of ${x.load_pct}% of your ${max.value} lb ${lift} max)` : `${lb} lb (${pct}% of your ${max.value} lb ${lift} max)` };
 }
 
 export function removeWorkoutExercise(ctx, id) {
@@ -183,11 +188,13 @@ export function clientHome(ctx, client) {
   const program = getProgram(ctx, a.program_id);
   const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', a.id).map((r) => r.workout_id));
   const next = program.workouts.find((w) => !done.has(w.id)) ?? null;
+  const readiness = next ? readinessToday(ctx, client.id) : null;
   return {
     ...base, locked: false,
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: done.size, total: program.workouts.length },
-    workout: next && { ...next, exercises: next.exercises.map((x) => ({ ...x, load: loadFor(ctx, client.id, x, { visibleOnly: true }) })) },
+    readiness,
+    workout: next && { ...next, exercises: next.exercises.map((x) => ({ ...x, load: loadFor(ctx, client.id, x, { visibleOnly: true, drop: readiness?.drop ?? 0 }) })) },
     message: next ? null : 'Program complete. Your coach will set your next block.'
   };
 }

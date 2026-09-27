@@ -4,6 +4,7 @@
 const { get, all, run, insert, update, tx, setting } = require('../db');
 const { bad, sendEmail, emit, addDays, ageOn, money } = require('../lib');
 const billing = require('./billing');
+const floorUtil = require('./floor-util'); // time off, and the schedule columns it adds on start
 
 const GENERATE_WEEKS = 8;
 
@@ -31,7 +32,10 @@ function generateEvents() {
     for (let d = from; d <= to; d = addDays(d, 1)) {
       if (!days.includes(new Date(d + 'T12:00:00').getDay())) continue;
       const starts_at = `${d}T${c.start_time}`;
-      if (get('SELECT 1 FROM events WHERE class_id=? AND starts_at=?', c.id, starts_at)) continue;
+      // One session per class per day: a session moved to another time, or to another day (slot_date), still
+      // stands for this day, and a class whose time changed after today's session doesn't get a second one.
+      // (The same start time is also taken: class_id + starts_at is unique.)
+      if (get('SELECT 1 FROM events WHERE class_id=? AND (starts_at=? OR COALESCE(slot_date, substr(starts_at,1,10))=?)', c.id, starts_at, d)) continue;
       const eid = insert('events', { class_id: c.id, type: c.type, name: c.name, starts_at, duration_min: c.duration_min, capacity: c.capacity, price_cents: c.price_cents, location_id: c.location_id, team_id: c.team_id, coach_id: c.coach_id });
       made++;
       // Standing weekly spots and camp registrations carry into new sessions.
@@ -187,13 +191,14 @@ function openSlots(kind, fromDate, days = 21) {
     const d = addDays(fromDate, i);
     const wd = new Date(d + 'T12:00:00').getDay();
     for (const h of hours.filter((x) => x.weekday === wd)) {
+      if (floorUtil.isTimeOff(h.coach_id, d)) continue; // coach away or facility closed
       const toMin = (t) => +t.slice(0, 2) * 60 + +t.slice(3, 5);
       for (let m = toMin(h.start_time); m + h.slot_min <= toMin(h.end_time); m += h.slot_min) {
         const t = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
         const starts_at = `${d}T${t}`;
         if (starts_at <= now) continue;
         const endM = m + h.slot_min;
-        const clash = all(`SELECT starts_at, duration_min FROM events WHERE cancelled=0 AND substr(starts_at,1,10)=? AND (coach_id IS NULL OR coach_id=? OR type IN ('private','evaluation'))`, d, h.coach_id)
+        const clash = all(`SELECT starts_at, duration_min FROM events WHERE cancelled=0 AND substr(starts_at,1,10)=? AND (? IS NULL OR coach_id IS NULL OR coach_id=?)`, d, h.coach_id, h.coach_id)
           .some((e) => { const s = toMin(e.starts_at.slice(11, 16)); return s < endM && s + e.duration_min > m; });
         if (!clash) out.push({ starts_at, duration_min: h.slot_min, location_id: h.location_id, price_cents: h.price_cents, coach_id: h.coach_id, availability_id: h.id });
       }

@@ -50,9 +50,14 @@ function routes(api) {
 
   api.get('/activity', requireStaff(), (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 30, 500);
+    const owner = req.staff.role === 'owner';
     // Coaches and front desk never see money in the feed.
-    const where = req.staff.role === 'owner' ? '' : "WHERE action NOT LIKE '%payment%' AND action NOT LIKE '%refund%' AND action NOT LIKE '%invoice%'";
-    res.json(all(`SELECT * FROM activity ${where} ORDER BY id DESC LIMIT ?`, limit));
+    const where = owner ? [] : ["action NOT LIKE '%payment%'", "action NOT LIKE '%refund%'", "action NOT LIKE '%invoice%'", "action NOT LIKE 'Ran billing%'", "action NOT LIKE 'Added product%'", "action NOT LIKE 'Voided%'", "action NOT LIKE 'Changed price%'"];
+    // kind=change leaves out sign-ins and refusals (the Today feed); kind=signin|refused asks for just those.
+    if (['change', 'signin', 'refused'].includes(req.query.kind)) where.push(`kind='${req.query.kind}'`);
+    // Newest first by when it happened (seeded and imported rows can arrive out of id order).
+    const rows = all(`SELECT * FROM activity ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC, id DESC LIMIT ?`, limit);
+    res.json(owner ? rows : rows.map((r) => ({ ...r, action: scrubMoney(r.action), detail: scrubMoney(r.detail) })));
   });
 
   api.get('/lookups', requireStaff(), (req, res) => {
@@ -76,4 +81,15 @@ function routes(api) {
   });
 }
 
-module.exports = { routes };
+// Remove dollar amounts from a feed line: "Bought pack: Ava (10-pack, $250)" → "Bought pack: Ava (10-pack)".
+function scrubMoney(s) {
+  if (!s) return s;
+  const AMT = '-?\\$\\d+(?:,\\d{3})*(?:\\.\\d+)?';
+  return String(s)
+    .replace(new RegExp(`\\(${AMT}(?:, )?`, 'g'), '(').replace(/\(\)/g, '')
+    .replace(new RegExp(`(?: · |, )${AMT}`, 'g'), '')
+    .replace(new RegExp(`${AMT}(?: · |, )?`, 'g'), '')
+    .replace(/ {2,}/g, ' ').replace(/ \)/g, ')').trim();
+}
+
+module.exports = { routes, scrubMoney };

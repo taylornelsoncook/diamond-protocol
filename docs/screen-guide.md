@@ -94,12 +94,15 @@ _Where: Today_
 
 [Owner] [Coach] [Front desk] 
 
-Your home screen: today's sessions, anything that needs a decision, and what just happened.
+Your home screen: today's sessions, who to check in, anything that needs a decision, and what just happened. It refreshes itself every minute while it's open, so the front desk can leave it up all day.
 
-- Glance at the numbers across the top. Owners see recurring revenue, failed payments and workouts logged; coaches and front desk see clients and sessions, never money.
-- Open any of today's sessions to check athletes in.
-- Work through Needs your attention: retry a declined payment, open an overdue school invoice, link waiting test results, or reach out to a client who has gone quiet.
-- Recent activity shows every booking, payment, check-in and new PR as it happens. Owners also see revenue by location.
+- Glance at the numbers across the top; each one opens its screen. Owners see recurring revenue, active clients, failed payments and workouts logged, and the header shows today's in-person sales. Coaches and front desk see clients, sessions (what's on now and next), check-ins against the number expected and workouts logged, never money.
+- Today's sessions shows each session's time, place, coach, bookings and a check-in bar, marked On now, Next or Done, with unpaid and waitlist counts. Open one to work its roster. Below the list: how tomorrow looks.
+- Check in: everyone booked today: still to arrive first, then no-shows from sessions that are over, then those already here. Type a name or Athlete ID and press Enter to check in the only match, or tap Check in; Undo is in the confirmation and on the row. Rows flag allergies and injuries, a missing waiver, an unpaid booking, a red-flag daily check-in and a birthday. Team athletes check in from the session roster.
+- Work through Needs your attention: check-ins with red flags (short sleep, soreness, low energy, mood or hydration, and whether they train today), declined payments (owners: Retry charge asks you to confirm the amount and card; a family with no card goes to Add a card), overdue school invoices, unpaid bookings to collect at the door, test results waiting to be linked, trials ending and clients who have gone quiet.
+- Follow up without losing track: Send a note (owners and coaches) writes to the athlete's app and emails the family, then takes the item off Today; Call dials the family; Reached out, Followed up and Mark reviewed hide an item for everyone for a while (a week for quiet clients, until a trial ends) and log who did it. Undo from the confirmation, or open the followed-up items at the bottom of the list and Bring back. A reviewed check-in stays off Today.
+- Birthdays this week sit under the list.
+- Recent activity shows every booking, payment, check-in, workout and new PR as it happens, newest first. Filter it (Check-ins, Bookings, Training, Testing, and Money for owners) and Show more. Coaches and front desk never see amounts. Owners also see revenue by location for the month, with a total.
 
 ### Schedule
 
@@ -107,14 +110,18 @@ _Where: Schedule_
 
 [Owner] [Coach] [Front desk] 
 
-Every class, camp, clinic, team session, private and evaluation for the next two weeks, with who's booked and who hasn't paid.
+Every class, camp, clinic, team session, private and evaluation, two weeks at a time, with who's booked and who hasn't paid.
 
-- Tap a session to open its roster.
-- To add a weekly class: Add class or camp, then fill in the name, type, days, start time, length, spots, ages and price. For camps and clinics, set a registration price and a last day.
+- Tap a session to open its roster. Sessions on now say On now; finished ones are dimmed with a check-in bar. Full sessions, unpaid bookings and waitlists are flagged, and a staff note shows under the session.
+- Move a week at a time with Previous week and Next week (Today brings you back). Find a session by name, place or coach, and filter by type (group classes, camps and clinics, team sessions, privates and evaluations), coach (or My sessions) and place. The filters stay in the address, so a reload or a shared link shows the same view. The line under the filters totals the sessions, bookings, unpaid and waitlisted in view.
+- Days a coach is off, or the facility is closed, are marked on the day, in past weeks too. The Schedule button on a roster brings you back to the week and filters you were on.
+- To add a weekly class: Add class or camp, then fill in the name, type, days, start time, length, spots, ages, price and coach ("No coach set" leaves it open). For camps and clinics, set a first and last day, a registration price and a last day to register (on or before the camp's last day).
 - Save it. Sessions are created automatically, eight weeks ahead for weekly classes.
+- Add one session for a makeup or a one-time clinic: name, date, time, length, spots, place, coach, price and a note for staff. Parents can book it like any class.
+- Edit a class to change its name, days, time, length, spots, ages, place, coach or price. Every upcoming session follows what you changed; a session you changed on its own (a sub coach, a new time, more spots) keeps that change. If the time or place changes, booked families get one email listing their sessions; sessions on days you take away are cancelled (credits back, families emailed); new days are added. Spots can't go below what an upcoming session already has booked. Coaches edit without seeing prices, and prices stay as they were.
 - Archive a class to cancel its future sessions. Credits go back and families are emailed.
 
-> Note: Front desk can view the schedule and manage bookings, but only owners and coaches create classes.
+> Note: Front desk can view the schedule and manage bookings, but only owners and coaches add, edit or archive classes and sessions. Only owners see prices in the schedule list and the classes list.
 
 ### Session roster
 
@@ -122,15 +129,18 @@ _Where: Schedule, then a session_
 
 [Owner] [Coach] [Front desk] 
 
-Run a session: check athletes in, see medical flags and parent phone numbers, and collect from anyone unpaid.
+Run a session: check athletes in, see medical flags, missing waivers and parent phone numbers, and collect from anyone unpaid.
 
-- Tap Check in as each athlete arrives. Tap again to undo.
-- Each athlete shows how they're covered: Member, Credit, Paid, Registered or Unpaid.
-- For Unpaid, tap Collect and choose card on file, cash or Tap to Pay. The booking is marked paid when the payment goes through.
-- Add a walk-in with Add an athlete. A full session puts them on the waitlist, which moves up automatically when someone cancels.
-- Cancel this session (for weather, say): credits go back, drop-ins are refunded and families get an email with your reason.
+- Tap Check in as each athlete arrives. Tap again to undo. The page stays where you are, so you can work down a long roster on a phone.
+- Each athlete shows how they're covered: Member, Credit, Paid, Registered or Unpaid. Rows flag allergies, injuries, medical notes, No waiver and a birthday today. After a session ends, anyone not checked in shows No-show.
+- For Unpaid, tap Collect and choose card on file, cash or Tap to Pay. The booking is marked paid when the payment goes through; a declined card says so and the booking stays unpaid.
+- Add a walk-in: type a name, Athlete ID or email and tap the match, or press Enter when there's only one. A full session puts them on the waitlist, which moves up automatically when someone cancels. Move up books someone from the waitlist now, even over the spots (it asks first), and emails the family.
+- Email families sends a message to everyone booked (and the waitlist if you tick it), signed with your name: "Starting 10 minutes late", "Bring your cleats". Team sessions go to the whole team.
+- Print roster gives a clean sign-in sheet with a box by each name.
+- Edit session (owners and coaches) changes just this session: date and time, length, spots, place, coach (a sub) and a note for staff. Booked families are emailed if the day, time or place changes (you can turn that off). More spots move the waitlist up. A class session moved to another day still counts as that week's session, so it isn't added again.
+- Cancel this session (for weather, say): credits go back, drop-ins are refunded and families get an email with your reason. For a team session the school contact is emailed too.
 
-> Note: Team sessions show the team's roster instead, with one-tap "Everyone's here".
+> Note: Team sessions show the team's roster instead, with one-tap "Everyone's here", and guests can be added below.
 
 ### Hours & settings
 
@@ -138,9 +148,13 @@ _Where: Schedule, then Hours & settings_
 
 [Owner] [Coach] 
 
-When parents can book privates and evaluations, and the policies the whole platform follows.
+When parents can book privates and evaluations, time off, and the policies the whole platform follows.
 
-- Add your hours for private training and evaluations: day, time range, slot length, location, and a price for evaluations. Parents see open times in the portal; anything already on your schedule blocks them.
+- Add your hours for private training and evaluations: pick every day they repeat (Monday to Friday in one go), the time range, slot length, location, coach, and a price for evaluations. Parents see open times in the portal; anything already on that coach's schedule blocks them. If one of the days overlaps existing hours, nothing is added and it tells you which.
+- The line at the top shows how many private and evaluation times parents can book in the next seven days, and the next one.
+- Hours are grouped into Privates and Evaluations. Removing hours asks first; anything already booked stays booked.
+- Add time off for a coach (or Facility closed for a holiday): first day, last day and a note. Parents aren't offered private or evaluation times on those days, and the schedule marks them. It tells you if privates or evaluations are already booked on those days so you can move them. Classes don't change: cancel those sessions from the schedule.
+- Turn rankings on or off for athletes and parents.
 - Set your time zone and the late-cancel window (cancels inside it still use the session).
 - Choose when parents see test results: after you share a testing day, or as soon as results are saved.
 - Add the business address and "how to pay" line that print on school invoices.
@@ -156,11 +170,17 @@ _Where: Point of sale_
 
 Take payment anywhere: at the facility, a park, or a client's home.
 
-- Pick where you are and who you're with (or Walk-in).
-- Tap products to add them, or enter a custom amount.
-- Choose how they're paying: Tap to Pay on your iPhone, the front-desk reader, their card on file, or cash.
+- Pick where you are and who you're with (or Walk-in). Search by name, code, family or parent email; arrow keys and Enter pick a client. The client's card, membership and session credits show under their name. "Sell to" on a client profile opens this screen with them chosen.
+- Tap products to add them (a count on each tile shows how many are in the sale), or enter a custom amount. With more than eight products, a search box filters the tiles.
+- Adjust quantities (44px buttons), clear the sale (with Undo), and add a discount: a percent (1-99) or an amount off, with an optional reason. The server checks the discount leaves something to pay and logs it.
+- Choose how they're paying: Tap to Pay on your iPhone, the front-desk reader at this location, their card on file, or cash. For cash, type what they handed you and the change due shows.
 - For a tapped card, tick Save card to keep it for their membership.
-- Recent sales show below. Owners can refund all or part of a sale.
+- Email a receipt: on by default when the family has an email, and you can type any address (walk-ins opt in). The receipt lists the items, discount and payment and links to the printable receipt page.
+- Monthly memberships start from their own tiles; a client who already has one sees it greyed out with the plan named.
+- After a sale, a confirmation shows with Email receipt and Undo sale. The person who took a sale can undo it for 10 minutes (a full refund that also takes back pack sessions); after that, the owner refunds.
+- The sale in progress survives leaving the screen in the same tab. On a phone, a bar at the bottom shows the running total and jumps to the sale.
+- Today (owners and front desk): net taken, cash to count the drawer against, cards and refunds, for this location or all locations. Days run midnight to midnight in the business time zone, and a refund counts against the day of the sale it refunds. Coaches never see takings.
+- Recent sales: Today (since midnight, matching the Today panel), 7 days or 30 days, search by client or item, filter by location. Tap a sale for its lines, payment, receipt status and a link to the client; re-send the receipt from there. Owners can refund all or part of a sale, with an optional reason for the activity log. Coaches see only the sales they took.
 
 ### Point of sale setup
 
@@ -170,9 +190,10 @@ _Where: Point of sale, then Setup_
 
 Where you sell and what you sell.
 
-- Add each location: the facility, your mobile work, and each park. Card payments need an address.
-- Add products: single sessions, packs (counted as group classes or private sessions), gear and anything else.
-- Register a front-desk card reader if you have one.
+- Add each location (Add location opens a short form): the facility, your mobile work, and each park. Card payments need an address. Edit or archive a location; archived locations can be restored.
+- Add products: single sessions, packs (counted as group classes or private sessions), gear and anything else. Choose the type each time. Edit a product's name, price and pack size; stop selling it and sell it again later from Stopped selling. Names must be unique among what's for sale.
+- Owners also add monthly memberships here, change their price, stop selling them and bring them back.
+- Register a front-desk card reader if you have one. A reader takes payments at its own location only.
 
 ### Clients
 
@@ -180,11 +201,16 @@ _Where: Clients_
 
 [Owner] [Coach] [Front desk] 
 
-Everyone you train, with their plan, status, program and last workout.
+Everyone you train, with their plan, status, program and when you last saw them.
 
-- Search by name, Athlete ID, email or family name.
-- Filter by status (active, trial, past due, paused).
-- Open anyone to see their full profile, or Add client.
+- Search by name, Athlete ID, email, phone (any format, like 8015550142) or family name. Press Enter when only one client matches to open them; Escape clears the search.
+- Views with counts: All, Active, Trial, Past due, Paused, No plan, Team only, No waiver and Archived. Views with nobody in them are hidden.
+- Sort by name, by longest since last seen (who has gone quiet), or newest clients first. The search, view and sort stay in the address.
+- Each row flags what needs attention: Medical (allergies, injuries or medical notes), No waiver, No card (members only) and pinned notes. Grad year shows next to the Athlete ID.
+- Last seen is the latest check-in or workout, and says which.
+- Archived clients live in the Archived view (the other views keep counting current clients); a search that only matches archived clients offers to search there.
+- Owners can Export CSV of the current view (contacts, plan, program, waiver, last visit and workout; no money).
+- Open anyone to see their full profile, or Add client. Long lists show 100 at a time with Show more.
 
 ### New client
 
@@ -196,8 +222,11 @@ One form creates the athlete, the parent's portal login, the membership and the 
 
 - Leave "Athlete with a parent who pays" ticked for kids. Enter the athlete, then the parent's name, email and phone.
 - For an adult paying for themselves, untick it and enter their own email.
-- Optionally start a plan and assign a starting program.
+- More details (optional): position, grad year, athlete phone, allergies, injuries and emergency contact. Parents can fill these in later in the portal.
+- Optionally start a plan. Owners and coaches can assign a starting program; the front desk leaves that to a coach (the server refuses it).
 - Create account. The athlete gets their Athlete ID (like AVALOP2026) and the parent can sign in to the portal right away.
+- If someone with the same name (and birthday, when both are known) is already on file, including archived clients, the form lists them with links. Open them, or Create a new account anyway.
+- If the parent's email already has a login, the form links straight to that family's athlete with Add sibling open.
 
 > Note: Adding a brother or sister? Open the sibling and use "Add sibling" so the family shares one login and one card.
 
@@ -209,12 +238,19 @@ _Where: Clients, then a client_
 
 Everything about one athlete in one place, tied together by their Athlete ID.
 
-- The medical banner at the top shows allergies, injuries and the emergency contact.
-- Family: parents, waiver status, add a sibling or parent, and copy the portal link.
-- Membership: start, pause, resume, change or cancel.
-- Card & sessions: the card on file, group and private sessions left, walk-in check-in, and Sell.
-- Upcoming sessions, test results with PRs and a printable progress report, and their training program with the workout app link.
-- Profile: birthday, sport, position, school, sex (for growth estimates), medical notes, emergency contact and coach-only notes.
+- The header shows age, grad year, sport and position, with Call, Text and Email for the primary parent (or the athlete). Tap the Athlete ID to copy it.
+- The medical banner at the top shows allergies, injuries and the emergency contact (tap the number to call). Pinned notes show under it for everyone.
+- A section bar (Family, Sessions, Attendance, Upcoming, Notes, Messages, Testing, Goals, Training, Payments, Profile) stays at the top while you scroll and jumps to each panel.
+- Family: parents with tap-to-call and email links, waiver status, add a sibling or parent, and copy the portal link. Edit a parent to fix their name, email or phone, email them the portal sign-in link again, or remove a second parent (a family always keeps one sign-in). When the waiver isn't signed, Record a paper waiver saves who signed it at the desk.
+- Membership (owner): start, pause, resume, change or cancel. Coaches and the front desk see the plan and status, never the price.
+- Card & sessions: the card on file, group and private sessions left, walk-in check-in, and Sell. Coaches never see a drop-in price.
+- Attendance: visits, no-shows and late cancels in the last 30 days, visits in 90 days, last check-in, and the recent sessions with Attended, No-show or Late cancel. A booking only counts as a no-show once the session is over.
+- Upcoming sessions: Book a session (group sessions in the next two weeks, searchable; full ones join the waitlist) and Cancel a booking (credits come back, drop-ins are refunded, the waitlist moves up).
+- Notes: dated staff notes with who wrote them. Pin a note to the top of the profile; coaches and owners can mark a note Coaches only, which the front desk never sees. The author can edit a note; the author or an owner can delete it.
+- Accountability, weekly goals, coach messages, test targets and education (see the athlete app).
+- Test results with PRs and a printable progress report, and their training program with the workout app link.
+- Profile: birthday, sex (for growth estimates), sport, position, school, grad year, athlete phone and email, medical notes, emergency contact and coach-only notes. Unsaved changes are flagged and survive other actions on the page.
+- Archive (owner, coach) takes a client off the list, search and rosters and cancels their upcoming bookings with credits back; an archived profile has a Restore client button at the top.
 
 ### Teams
 

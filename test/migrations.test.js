@@ -1,4 +1,4 @@
-// A database from the previous version (schema 30, commit 7349d1e) opens with this version: new columns and tables are
+// Databases from earlier versions (schema 30, 31, 32 and 33) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,8 +10,9 @@ import { openDb } from '../src/db.js';
 import { openSlots, listSessions } from '../src/services/schedule.js';
 import { listClients } from '../src/services/clients.js';
 import { openSpots, publicOffer } from '../src/services/spots.js';
-import { syncLibrary, getTest, updateTest } from '../src/services/performance.js';
+import { syncLibrary, getTest, updateTest, getSession } from '../src/services/performance.js';
 import { seedPresets } from '../src/services/library.js';
+import { recentUploads, undoUpload } from '../src/services/uploads.js';
 
 test('a version 30 database upgrades to coaches, archive, time off and staff notes, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -38,7 +39,7 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.ok(cols('clients').includes('archived_at') && cols('clients').includes('archived_by'));
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 33);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(listClients(ctx)[0].name, 'Ava Lopez');
@@ -77,7 +78,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 33);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
       const row = openSpots(ctx).data.find((x) => x.id === 'cls_1');
@@ -89,7 +90,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 32 (commit 7079ba9) to 33: coach-written protocols, edits to built-in tests that survive the library refresh,
+// Version 32 (commit 7079ba9) to 34 (B10's version 33 part): coach-written protocols, edits to built-in tests that survive the library refresh,
 // possible ranges, presets (the standard ones added once) and report share links.
 test('a version 32 database upgrades to the test library changes, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -110,7 +111,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
       assert.ok(cols('perf_metrics').includes('min_value') && cols('perf_metrics').includes('max_value'));
       assert.ok(cols('test_presets').includes('test_keys'));
       assert.ok(cols('report_links').includes('token_hash'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 33);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
       const ctx = { db, now: () => new Date().toISOString() };
       syncLibrary(ctx);
       seedPresets(ctx);
@@ -126,6 +127,72 @@ test('a version 32 database upgrades to the test library changes, and opening it
         assert.equal(presets.length, 6, 'a deleted preset stays deleted');
         assert.equal(t.attempts, 3, 'an edit to a built-in test survives the refresh');
       }
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 32 (commit 09e32ca) to 34 (B9's version 34 part): testing days remember when families were emailed, and uploads can be undone.
+// Uploads saved before the upgrade can't be undone (nothing recorded what they wrote), so they aren't offered.
+test('a version 32 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v32.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 32');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}')`);
+    old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, created_at) VALUES ('imp_1', 'upload', 'old.xlsx', 4, 4, '${now}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.ok(cols('perf_sessions').includes('notified_at'), `round ${round}`);
+      for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
+      assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      const ctx = { db, now: () => new Date().toISOString() };
+      assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
+      assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
+      assert.throws(() => undoUpload(ctx, 'imp_1'), /not found/);
+      assert.equal(db.get(`SELECT added_tests FROM import_batches WHERE id = 'imp_1'`).added_tests, '[]');
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 33 (the test library, B10) to 34: the same testing-day and undo changes on a database that already has version 33.
+test('a version 33 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v33.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 33');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}')`);
+    old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, created_at) VALUES ('imp_1', 'upload', 'old.xlsx', 4, 4, '${now}')`);
+    old.exec(`INSERT INTO test_presets (id, name, test_keys, created_at) VALUES ('tpr_1', 'Spring combine', '["broad_jump"]', '${now}')`);
+    old.exec(`INSERT INTO perf_tests (id, key, name, category, attempts, builtin, active, protocol, created_at) VALUES ('pt_1', 'wall_sit', 'Wall sit', 'custom', 1, 0, 1, 'Back flat on the wall', '${now}')`);
+    old.exec(`INSERT INTO perf_metrics (test_id, key, name, unit, better, min_value, max_value) VALUES ('pt_1', 'time', 'Time', 's', 'higher', 5, 600)`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.ok(cols('perf_sessions').includes('notified_at'), `round ${round}`);
+      for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
+      assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
+      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      const ctx = { db, now: () => new Date().toISOString() };
+      assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
+      assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
+      assert.throws(() => undoUpload(ctx, 'imp_1'), /not found/);
+      assert.equal(db.get(`SELECT added_tests FROM import_batches WHERE id = 'imp_1'`).added_tests, '[]');
+      // What version 33 added is still there.
+      assert.equal(db.get(`SELECT test_keys FROM test_presets WHERE id = 'tpr_1'`).test_keys, '["broad_jump"]');
+      assert.deepEqual(db.get(`SELECT min_value, max_value FROM perf_metrics WHERE test_id = 'pt_1'`), { min_value: 5, max_value: 600 });
+      assert.equal(db.get(`SELECT protocol FROM perf_tests WHERE id = 'pt_1'`).protocol, 'Back flat on the wall');
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

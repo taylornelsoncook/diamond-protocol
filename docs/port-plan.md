@@ -2,8 +2,8 @@
 
 **Status (updated 2026-09-27):**
 - Done and merged: **B0** bug fixes (PR #5), **B1** coaches on sessions/hours, time off, client archive, staff notes, connection check (PR #6), Today business summary (PR #6), every open class on Today + owner trial offers + Coaches panel (PR #7).
-- In progress: **B7** Teams and **B10** Test library, presets, report share links.
-- Still to do, in order: B9 Testing day/uploads/devices → B4 Clients → B5 Point of sale → B6 Billing (reuse thread `vrx31w`'s refund handling if it has merged) → B2 Schedule/roster/hours and B3 Today extras → B12/B13 parent portal → B8 Programs builder + athlete Workout tab → B14 API & integrations + Staff & security → B11 Education + engage tabs → B15 CRM on top of `leads.js`/`sms.js`/`campaigns.js`.
+- Also done and merged: **B7** Teams, **B10** Test library, presets, report share links (schema 33), **B4** Clients, **B9** Testing days, uploads (with undo) and devices (schema 34).
+- Next: the one-profile-per-athlete change for team athletes, then B5 Point of sale → B6 Billing (reuse thread `vrx31w`'s refund handling if it has merged) → B2 Schedule/roster/hours and B3 Today extras → B12/B13 parent portal → B8 Programs builder + athlete Workout tab → B14 API & integrations + Staff & security → B11 Education + engage tabs → B15 CRM on top of `leads.js`/`sms.js`/`campaigns.js`.
 - The old version's code is readable with `git show d6b36a2:<path>` (commits `2342d22..d6b36a2`; each old tab has an "<Tab>: ..." commit whose body lists its improvements). Re-implement against the current code; never copy old files.
 - Owner decisions still open: whether coach-only staff notes stay out of the parent's self-service data export; whether coaches should work leads in the CRM (old version: no CRM access for coaches).
 

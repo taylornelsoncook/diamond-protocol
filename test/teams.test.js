@@ -322,3 +322,82 @@ test('team sessions: coach and time are checked; the contract page shows coaches
   assert.ok(list.data.contracts.find((x) => x.id === c.id).attendance_rate > 0);
   assert.equal(typeof list.data.metrics.collected_30_cents, 'number');
 });
+
+// ---- review fixes ----
+const summitAny = () => get("SELECT * FROM team_contracts WHERE team_name LIKE 'Summit Elite%'");
+
+test('a client added from elsewhere starts their team attendance the day they join, not the day they were created', async () => {
+  const c = riverside();
+  const past = get("SELECT COUNT(*) n FROM events WHERE team_id=? AND type='team' AND cancelled=0 AND starts_at < ?", c.id, require('../server/services/booking').nowLocal()).n;
+  assert.ok(past >= 1, 'the team has had sessions');
+  // A client who has been around for a year, then gets put on the team today.
+  const id = insert('athletes', { code: 'OLDCLI2026', first_name: 'Olden', last_name: 'Client', workout_token: 'tok-olden', created_at: `${addDays(today(), -365)} 10:00:00` });
+  assert.equal((await owner.post(`/teams/${c.id}/roster/add`, { athlete_id: id })).status, 200);
+  const d = await owner.get(`/teams/${c.id}`);
+  const row = d.data.roster.find((a) => a.id === id);
+  assert.equal(row.sessions, 0, 'no team sessions have happened since they joined');
+  assert.equal(row.attendance_rate, null);
+  // The same goes for a matched name linked from a pasted list.
+  const id2 = insert('athletes', { code: 'OLDLNK2026', first_name: 'Linda', last_name: 'Oldlink', workout_token: 'tok-oldlink', created_at: `${addDays(today(), -365)} 10:00:00` });
+  const r = await owner.post(`/teams/${c.id}/roster`, { text: 'Linda Oldlink', links: { 0: id2 } });
+  assert.equal(r.data.linked, 1);
+  const d2 = await owner.get(`/teams/${c.id}`);
+  assert.equal(d2.data.roster.find((a) => a.id === id2).sessions, 0);
+  // Old sessions do not count them as missing.
+  const oldest = d2.data.recent_sessions[d2.data.recent_sessions.length - 1];
+  assert.equal(oldest.roster, d.data.recent_sessions[d.data.recent_sessions.length - 1].roster);
+  // Undo after a removal keeps their team history.
+  const keep = get("SELECT team_since FROM athletes WHERE id=?", id).team_since;
+  run('UPDATE athletes SET team_since=? WHERE id=?', addDays(today(), -30), id);
+  await owner.post(`/teams/${c.id}/roster/${id}/remove`);
+  await owner.post(`/teams/${c.id}/roster/add`, { athlete_id: id, restore: true });
+  assert.equal(get('SELECT team_since FROM athletes WHERE id=?', id).team_since, addDays(today(), -30));
+  assert.ok(keep);
+  // Moved to another team: that team counts from today.
+  await owner.post(`/teams/${summitAny().id}/roster/add`, { athlete_id: id, restore: true });
+  assert.equal(get('SELECT team_since FROM athletes WHERE id=?', id).team_since, today());
+  await owner.post(`/teams/${summitAny().id}/roster/${id}/remove`);
+  await owner.post(`/teams/${c.id}/roster/${id2}/remove`);
+});
+
+test('roster paste understands a jersey-number column, a trailing #number and a header row', async () => {
+  const c = riverside();
+  const text = 'Name\tPosition\tGrad year\n12\tJalen Brookfield\tQB\t2027\nMarcus Hillard, 7, WR, 2028\nDeon Parkes #22, RB';
+  const p = await owner.post(`/teams/${c.id}/roster`, { text, preview: true });
+  assert.equal(p.status, 200);
+  const rows = p.data.rows.filter((r) => r.status !== 'header');
+  assert.equal(p.data.counts.error, 0, JSON.stringify(p.data.rows));
+  assert.deepEqual(rows.map((r) => [r.first, r.last, r.position, r.grad_year]), [
+    ['Jalen', 'Brookfield', 'QB', 2027], ['Marcus', 'Hillard', 'WR', 2028], ['Deon', 'Parkes', 'RB', null]]);
+  // A plain list with no header still treats every line as a player.
+  const q = await owner.post(`/teams/${c.id}/roster`, { text: 'Namey Person\nOther Person', preview: true });
+  assert.deepEqual(q.data.rows.map((r) => r.status), ['new', 'new']);
+});
+
+test('extending a contract does not bring back sessions from a schedule that was removed', async () => {
+  const r = await owner.post('/teams', { school_id: 'new', school_name: 'Removed Sched High', team_name: 'Golf', monthly_fee: '100', start_date: today() });
+  const id = r.data.id;
+  const s = await owner.post(`/teams/${id}/sessions`, { weekdays: ['0', '1', '2', '3', '4', '5', '6'], start_time: '07:00', start_date: today() });
+  assert.equal(s.status, 201);
+  const live = () => get('SELECT COUNT(*) n FROM events WHERE class_id=? AND cancelled=0', s.data.id).n;
+  await owner.put(`/teams/${id}`, { end_date: addDays(today(), 3) });
+  await owner.post(`/teams/${id}/sessions/${s.data.id}/remove`);
+  const after = live();
+  await owner.put(`/teams/${id}`, { end_date: '' });
+  assert.equal(live(), after, 'a removed schedule stays off');
+  // Ending then restarting does not bring back the ended schedule's sessions either.
+  const s2 = await owner.post(`/teams/${id}/sessions`, { weekdays: ['0', '1', '2', '3', '4', '5', '6'], start_time: '08:00', start_date: today() });
+  await owner.put(`/teams/${id}`, { end_date: addDays(today(), 3) });
+  await owner.post(`/teams/${id}/end`);
+  await owner.put(`/teams/${id}`, { end_date: '' });
+  assert.equal(get('SELECT COUNT(*) n FROM events WHERE class_id=? AND cancelled=0 AND starts_at > ?', s2.data.id, `${today()}T23:59`).n, 0);
+});
+
+test('record payment refuses a calendar date that does not exist', async () => {
+  const c = summitAny();
+  const schools = require('../server/services/money-schools');
+  const id = schools.createSchoolInvoice(c, { description: 'Feb 30 check', amount_cents: 1000, email: false });
+  const y = Number(today().slice(0, 4)) - 1;
+  assert.equal((await owner.post(`/invoices/${id}/record-payment`, { method: 'cash', paid_on: `${y}-02-30` })).status, 400);
+  assert.equal(get('SELECT status FROM invoices WHERE id=?', id).status, 'open');
+});

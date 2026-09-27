@@ -34,7 +34,7 @@ const STYLE = html`<style>
 .tm .tm-tools .input{width:auto;flex:1 1 180px}
 .tm .tm-tools select.input{flex:0 1 190px}
 .tm .tm-views{display:flex;gap:6px;flex-wrap:wrap}
-.tm .tm-view{min-height:40px;padding:0 12px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel-muted);font:600 14px/1 var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.tm .tm-view{min-height:44px;padding:0 12px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel-muted);font:600 14px/1 var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
 .tm .tm-view:hover{color:var(--steel);background:var(--surface-raised)}
 .tm .tm-view[aria-pressed="true"]{background:var(--surface-raised);border-color:var(--green-mid);color:var(--steel)}
 .tm .tm-view .n{font-weight:500;color:var(--steel-muted)}
@@ -272,7 +272,7 @@ async function renderList(ctx) {
 // ---------------------------------------------------------------- contract
 async function renderTeam(ctx) {
   const id = ctx.params.id;
-  const ui = { allInvoices: false, q: '', sort: 'name', pasteOpen: false };
+  const ui = { allInvoices: false, q: '', sort: 'name', pasteOpen: false, ctDraft: null };
   async function draw() {
     let d, eng, edu;
     try {
@@ -336,7 +336,7 @@ async function renderTeam(ctx) {
               <div class="field"><label class="label" for="ct-be">Email</label><input class="input" id="ct-be" name="billing_email" type="email" value="${c.billing_email || ''}" autocomplete="off"><span class="hint">Invoices, statements and reminders go here.</span></div>
               <div class="field"><label class="label" for="ct-a">Billing address</label><textarea class="input" id="ct-a" name="address" rows="2" style="min-height:72px">${c.school_address || ''}</textarea></div>
               <div class="field"><label class="label" for="ct-no">Notes</label><textarea class="input" id="ct-no" name="notes" rows="2" maxlength="2000" style="min-height:72px" placeholder="Only staff see this, like Invoices need the AD's signature">${c.notes || ''}</textarea></div>
-              <div class="spread"><div class="btn-row"><button class="btn btn-primary" type="submit">Save</button><span class="unsaved" id="ct-dirty" aria-live="polite"></span></div>
+              <div class="spread"><div class="btn-row"><button class="btn btn-primary" type="submit">Save contract</button><span class="unsaved" id="ct-dirty" aria-live="polite"></span></div>
                 ${ended ? '' : html`<button class="btn btn-ghost" type="button" data-act="end">End contract</button>`}</div>
             </form></section>
           <section class="panel" id="tm-sessions">
@@ -382,6 +382,12 @@ async function renderTeam(ctx) {
           ${accountabilityPanel(ctx, eng, manage)}
         </div>
       </div></div>`);
+    // Edits to the contract form that weren't saved survive a redraw (recording a payment, adding a session...).
+    const ct = ctx.el.querySelector('#ct');
+    if (ui.ctDraft && ct) {
+      for (const [k, v] of Object.entries(ui.ctDraft)) if (ct.elements[k] && typeof v === 'string') ct.elements[k].value = v;
+      const x = ctx.el.querySelector('#ct-dirty'); if (x) x.textContent = 'Unsaved changes';
+    }
     drawRoster(d);
     bind(d);
   }
@@ -417,7 +423,7 @@ async function renderTeam(ctx) {
   async function payMany(d) {
     const open = d.invoices.filter((i) => i.status === 'open').slice().reverse();
     const r = await modal({
-      title: 'Pay several invoices',
+      title: 'Record one payment',
       body: html`<div class="tm-modal stack-sm"><p class="muted" style="margin:0">Tick the invoices this payment covers.</p>
         <div class="tm-pick" role="group" aria-label="Invoices">${open.map((i) => html`<label class="check"><input type="checkbox" value="${i.id}" data-amt="${i.amount_cents}" checked>
           <span>${i.number}<br><span class="small muted">${i.period ? `${fmtDate(i.period)} – ${fmtDate(i.period_end)}` : i.description}</span></span><span class="strong">${money(i.amount_cents)}</span></label>`)}</div>
@@ -515,7 +521,7 @@ async function renderTeam(ctx) {
     const c = d.contract;
     const root = ctx.el.querySelector('.tm');
     const ct = root.querySelector('#ct');
-    ct?.addEventListener('input', () => { const x = root.querySelector('#ct-dirty'); if (x) x.textContent = 'Unsaved changes'; });
+    ct?.addEventListener('input', () => { ui.ctDraft = formData(ct); const x = root.querySelector('#ct-dirty'); if (x) x.textContent = 'Unsaved changes'; });
     root.querySelector('#ro-q')?.addEventListener('input', debounce((e) => { ui.q = e.target.value; drawRoster(d); }, 120));
     root.querySelector('#ro-s')?.addEventListener('change', (e) => { ui.sort = e.target.value; drawRoster(d); });
     root.querySelector('#ro-paste')?.addEventListener('toggle', (e) => { ui.pasteOpen = e.target.open; });
@@ -550,7 +556,7 @@ async function renderTeam(ctx) {
             const aid = b.dataset.id, name = b.dataset.name;
             await api.post(`/teams/${c.id}/roster/${aid}/remove`);
             undoToast(`${name} removed from the roster.`, async () => {
-              try { await api.post(`/teams/${c.id}/roster/add`, { athlete_id: Number(aid) }); toast(`${name} is back on the roster.`); await draw(); } catch (err) { toastError(err); }
+              try { await api.post(`/teams/${c.id}/roster/add`, { athlete_id: Number(aid), restore: true }); toast(`${name} is back on the roster.`); await draw(); } catch (err) { toastError(err); }
             });
             break;
           }
@@ -580,6 +586,7 @@ async function renderTeam(ctx) {
         const data = formData(f);
         if (f.id === 'ct') {
           const r = await api.put(`/teams/${c.id}`, data);
+          ui.ctDraft = null;
           toast(r.restarted ? `Contract restarted. The next invoice goes out ${fmtDate(r.bill_from)}.` : 'Contract saved.');
         } else if (f.id === 'ss') {
           const r = await api.post(`/teams/${c.id}/sessions`, data);

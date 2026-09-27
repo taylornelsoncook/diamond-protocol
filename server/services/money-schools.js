@@ -15,6 +15,9 @@ const contractCols = all('PRAGMA table_info(team_contracts)').map((c) => c.name)
 if (!contractCols.includes('billing_phone')) db.exec('ALTER TABLE team_contracts ADD COLUMN billing_phone TEXT');
 if (!contractCols.includes('notes')) db.exec('ALTER TABLE team_contracts ADD COLUMN notes TEXT');
 if (!contractCols.includes('bill_from')) db.exec('ALTER TABLE team_contracts ADD COLUMN bill_from TEXT');
+// The day an athlete joined their current team (business date). Team attendance counts from here, so a client who
+// has been around for a year and joins today isn't marked absent for every earlier session.
+if (!all('PRAGMA table_info(athletes)').some((c) => c.name === 'team_since')) db.exec('ALTER TABLE athletes ADD COLUMN team_since TEXT');
 
 const fmtLong = (d) => (d ? new Date(d.slice(0, 10) + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '');
 
@@ -115,6 +118,14 @@ function sendOverdueReminders(asOf = today()) {
   return sent;
 }
 
+// A real calendar day in YYYY-MM-DD (Date.parse quietly turns Feb 30 into Mar 2).
+function realDate(d) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d));
+  if (!m) return false;
+  const t = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return t.getUTCFullYear() === +m[1] && t.getUTCMonth() === +m[2] - 1 && t.getUTCDate() === +m[3];
+}
+
 function markPaid(invoiceId, { method, check_number = null, paid_on = null, charge_id = null }) {
   const inv = get('SELECT * FROM invoices WHERE id=?', invoiceId);
   if (!inv) throw bad("That invoice wasn't found.");
@@ -122,7 +133,7 @@ function markPaid(invoiceId, { method, check_number = null, paid_on = null, char
   if (inv.status === 'void') throw bad('That invoice was voided.');
   if (!['check', 'cash', 'ach', 'card', 'other'].includes(method)) throw bad('Choose how it was paid.');
   if (method === 'check' && !String(check_number || '').trim()) throw bad('Enter the check number.');
-  if (paid_on && (!/^\d{4}-\d{2}-\d{2}$/.test(String(paid_on)) || Number.isNaN(Date.parse(paid_on + 'T12:00:00')))) throw bad('Choose the date the payment arrived.');
+  if (paid_on && !realDate(paid_on)) throw bad('Choose the date the payment arrived.');
   if (paid_on && paid_on > addDays(today(), 1)) throw bad('The payment date can\'t be in the future.');
   update('invoices', inv.id, {
     status: 'paid', pay_method: method, check_number: method === 'check' ? String(check_number).trim() : null,

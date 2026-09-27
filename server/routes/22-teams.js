@@ -47,7 +47,7 @@ function rosterWithAttendance(teamId) {
   return all(`SELECT a.id, a.code, a.first_name, a.last_name, a.position, a.grad_year, a.sport, a.family_id, a.created_at,
       (a.email IS NOT NULL AND a.email<>'') OR EXISTS (SELECT 1 FROM parents p WHERE p.family_id=a.family_id) AS reachable,
       (SELECT MAX(e.starts_at) FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=a.id AND e.team_id=? AND b.checked_in_at IS NOT NULL) AS last_seen,
-      (SELECT COUNT(*) FROM events e WHERE e.team_id=? AND e.type='team' AND e.cancelled=0 AND e.starts_at < ? AND e.starts_at >= MIN(substr(a.created_at,1,10),
+      (SELECT COUNT(*) FROM events e WHERE e.team_id=? AND e.type='team' AND e.cancelled=0 AND e.starts_at < ? AND e.starts_at >= MIN(COALESCE(a.team_since, substr(a.created_at,1,10)),
         COALESCE((SELECT MIN(substr(e2.starts_at,1,10)) FROM bookings b2 JOIN events e2 ON e2.id=b2.event_id WHERE b2.athlete_id=a.id AND e2.team_id=e.team_id), '9999'))) AS sessions,
       (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=a.id AND e.team_id=? AND e.type='team' AND b.checked_in_at IS NOT NULL) AS attended
     FROM athletes a WHERE a.team_id=? AND a.archived=0 ORDER BY a.last_name COLLATE NOCASE, a.first_name COLLATE NOCASE`, teamId, teamId, now, teamId, teamId)
@@ -63,19 +63,25 @@ function recentSessions(teamId, n = 8) {
   // roster: who was on the team that day (on the roster now and added by then, or booked into it), so athletes added
   // later don't make old sessions look empty.
   return all(`SELECT e.id, e.starts_at, (SELECT COUNT(*) FROM bookings b WHERE b.event_id=e.id AND b.checked_in_at IS NOT NULL) AS here,
-      (SELECT COUNT(*) FROM athletes a WHERE a.archived=0 AND (a.team_id=e.team_id AND substr(a.created_at,1,10) <= substr(e.starts_at,1,10)
+      (SELECT COUNT(*) FROM athletes a WHERE a.archived=0 AND (a.team_id=e.team_id AND COALESCE(a.team_since, substr(a.created_at,1,10)) <= substr(e.starts_at,1,10)
         OR EXISTS (SELECT 1 FROM bookings b WHERE b.event_id=e.id AND b.athlete_id=a.id))) AS roster
     FROM events e WHERE e.team_id=? AND e.type='team' AND e.cancelled=0 AND e.starts_at < ? ORDER BY e.starts_at DESC LIMIT ?`, teamId, booking.nowLocal(), n);
 }
 
-// Roster paste: one athlete per line, "Name, position, grad year" (tabs from a spreadsheet work too). Leading list
-// numbers or jersey numbers ("1.", "#12") are dropped. Each line says what will happen to it.
+// Roster paste: one athlete per line, "Name, position, grad year" (tabs from a spreadsheet work too). List numbers
+// and jersey numbers ("1.", "#12", "Deon Parkes #22", or a number column of its own) are dropped, and a header row
+// from a spreadsheet ("Name, Position, Grad year") is skipped. Each line says what will happen to it.
+const HEADER_CELL = /^(#|no\.?|num(ber)?|jersey|name|player|athlete|full name|player name|athlete name)$/i;
+const JERSEY = /^#?\s*\d{1,3}$/;
 function parseRoster(text) {
-  return text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line, n) => {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length && lines[0].split(/\t|,/).map((x) => x.trim()).filter(Boolean).some((x) => HEADER_CELL.test(x)) && !/\d{4}/.test(lines[0])) lines.shift();
+  return lines.map((line, n) => {
     const parts = line.split(/\t|,/).map((x) => x.trim());
-    const names = parts[0].replace(/^(#\s*\d{1,3}|\d{1,3}[.)])\s+/, '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    if (parts.length > 1 && JERSEY.test(parts[0])) parts.shift();
+    const names = parts[0].replace(/^(#\s*\d{1,3}|\d{1,3}[.)])\s+/, '').replace(/\s+#\s*\d{1,3}$/, '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
     if (names.length < 2) return { n, line, error: `Line ${n + 1} needs a first and last name: "${line}"` };
-    const extra = parts.slice(1).filter(Boolean);
+    const extra = parts.slice(1).filter((x) => x && !JERSEY.test(x));
     let grad_year = null, position = null, error = null;
     for (const x of extra) {
       const y = x.match(/^(?:class of\s+)?'?(\d{4})$/i);
@@ -270,8 +276,9 @@ function routes(api) {
         run('UPDATE classes SET end_date=? WHERE team_id=? AND archived=0', newEnd, c.id);
         if (newEnd) run("UPDATE events SET cancelled=1, cancel_reason='After the team contract ends' WHERE team_id=? AND type='team' AND cancelled=0 AND starts_at>? AND starts_at>?", c.id, `${newEnd}T23:59`, booking.nowLocal());
         // A longer contract brings back sessions an earlier, shorter end date took off.
-        run("UPDATE events SET cancelled=0, cancel_reason=NULL WHERE team_id=? AND type='team' AND cancelled=1 AND cancel_reason='After the team contract ends' AND starts_at>? AND (? IS NULL OR starts_at<=?)",
-          c.id, booking.nowLocal(), newEnd, `${newEnd}T23:59`);
+        run(`UPDATE events SET cancelled=0, cancel_reason=NULL WHERE team_id=? AND type='team' AND cancelled=1 AND cancel_reason='After the team contract ends' AND starts_at>? AND (? IS NULL OR starts_at<=?)
+          AND class_id IN (SELECT id FROM classes WHERE team_id=? AND archived=0)`,
+          c.id, booking.nowLocal(), newEnd, `${newEnd}T23:59`, c.id);
       }
     });
     if (newEnd !== undefined) booking.generateEvents();
@@ -340,11 +347,11 @@ function routes(api) {
         const m = (p.matches || []).find((x) => x.id === linkId);
         if (!m) throw bad(`Line ${p.n + 1}: choose one of the matching clients or add a new athlete.`);
         const cur = get('SELECT * FROM athletes WHERE id=?', m.id);
-        update('athletes', m.id, { team_id: c.id, position: cur.position || p.position, grad_year: cur.grad_year || p.grad_year, school: cur.school || c.school_name });
+        update('athletes', m.id, { team_id: c.id, team_since: today(), position: cur.position || p.position, grad_year: cur.grad_year || p.grad_year, school: cur.school || c.school_name });
         return { id: m.id, code: m.code, linked: true };
       }
       const code = makeAthleteCode(p.first, p.last);
-      const id = insert('athletes', { code, first_name: p.first, last_name: p.last, position: p.position, grad_year: p.grad_year, team_id: c.id, school: c.school_name, workout_token: randomToken(12) });
+      const id = insert('athletes', { code, first_name: p.first, last_name: p.last, position: p.position, grad_year: p.grad_year, team_id: c.id, team_since: today(), school: c.school_name, workout_token: randomToken(12) });
       return { id, code };
     }));
     const n = result.filter((a) => !a.existing && !a.linked).length, linked = result.filter((a) => a.linked).length;
@@ -371,7 +378,9 @@ function routes(api) {
     if (!a) throw notFound('That athlete');
     if (a.team_id === c.id) throw bad(`${a.first_name} ${a.last_name} is already on this roster.`);
     const from = a.team_id ? get('SELECT team_name FROM team_contracts WHERE id=?', a.team_id)?.team_name : null;
-    update('athletes', a.id, { team_id: c.id, school: a.school || c.school_name });
+    // Undo after a removal (restore) keeps the day they first joined, so their attendance history comes back too.
+    const keepSince = req.body?.restore && !a.team_id && a.team_since;
+    update('athletes', a.id, { team_id: c.id, team_since: keepSince ? a.team_since : today(), school: a.school || c.school_name });
     log(req, 'Added to team roster', `${a.first_name} ${a.last_name} to ${c.school_name} ${c.team_name}${from ? ` (moved from ${from})` : ''}`);
     res.json({ ok: true, moved_from: from });
   }));

@@ -75,6 +75,14 @@ test('coaches never see money: sales, schedule and session prices, availability,
   }
   assert.deepEqual(leaks, {});
   assert.ok((await coach('GET', `/v1/sessions/${one.id}`)).body.roster, 'the rest of the response is untouched');
+  // Front desk collects at the counter, so it keeps sales, the session it is collecting for and open slots; not memberships or class lists.
+  const deskLeaks = {};
+  for (const p of ['/v1/schedule', '/v1/class-series', '/v1/availability', '/v1/events', '/v1/dashboard', '/v1/clients', `/v1/clients/${ava.id}`, `/v1/clients/${ava.id}/invoices`, `/v1/families/${ava.family.id}`, '/v1/programs']) {
+    const keys = [...moneyKeys((await desk('GET', p)).body)];
+    if (keys.length) deskLeaks[p] = keys;
+  }
+  assert.deepEqual(deskLeaks, {});
+  assert.equal((await desk('GET', `/v1/sessions/${one.id}`)).body.drop_in_cents, 3000);
   assert.ok((await coach('GET', '/v1/events')).body.data.every((e) => !/^(invoice|subscription|team_invoice|sale\.refunded)/.test(e.type)), 'membership and refund events stay with the owner');
   assert.ok((await desk('GET', '/v1/events')).body.data.every((e) => !/^(invoice|subscription|team_invoice|sale\.refunded)/.test(e.type)));
   // What the counter needs to sell is still there.

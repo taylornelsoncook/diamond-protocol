@@ -950,7 +950,6 @@ CREATE TABLE IF NOT EXISTS spot_offers (
   opened_at TEXT,
   booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
   booked_at TEXT,
-  price_cents INTEGER,                            -- a trial offer's special price (0 = free); NULL for a standard offer at the usual cover (version 32)
   UNIQUE (session_id, family_id)
 );
 -- Progress notes for parents (version 28): one per athlete per testing day, drafted by the app, approved by a coach.

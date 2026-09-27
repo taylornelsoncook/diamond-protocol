@@ -206,7 +206,7 @@ async function renderNew(ctx) {
   const selected = new Set(); // insertion order = order on the day
   const pastDays = o.days || [];
   const today = localISO();
-  let preset = presetNames[0];
+  let preset = presetNames.includes(ctx.query.preset) ? ctx.query.preset : presetNames[0]; // ?preset= from the Test library
   (o.presets[preset] || []).forEach((n) => idByName[n] && selected.add(idByName[n]));
   mount(ctx.el, html`${STYLE}
     ${header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or pulled from devices.', html`<a class="btn" href="/app/testing">Cancel</a>`)}
@@ -1410,42 +1410,383 @@ async function renderDevices(ctx) {
 }
 
 // ============ Test library ============
+const LIB_STYLE = raw(`<style>
+.lib-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.lib-tools .input{min-height:44px}
+.lib-tools .lib-q{flex:1;min-width:200px;max-width:380px}
+.lib-tools select.input{width:auto;max-width:240px}
+.lib-tools .seg button{min-height:44px}
+.lib-n{font-weight:400;opacity:.8;margin-left:4px}
+.lib-count{margin:0}
+.lib-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line-subtle)}
+.lib-row:first-child{border-top:0}
+.lib-open{flex:1;min-width:0;text-align:left;background:none;border:0;padding:6px 0;color:inherit;cursor:pointer;font:inherit;min-height:44px;display:flex;flex-direction:column;gap:2px}
+.lib-open .strong{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lib-open:hover .lib-name,.lib-open:focus-visible .lib-name{color:var(--green-soft)}
+.lib-desc{font-size:13px;color:var(--steel-muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lib-use{font-size:12px;color:var(--steel-muted)}
+.lib-row.is-hidden .lib-name{color:var(--steel-muted)}
+.lib-row>.btn,.lib-actions .btn{min-height:44px}
+.lib-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.lib-fact{border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px 12px;background:var(--ground)}
+.lib-fact .k{font-size:12px;color:var(--steel-muted);display:block}
+.lib-fact .v{font-weight:600}
+.lib-h{font:600 13px/1 var(--font-sans);letter-spacing:.1em;text-transform:uppercase;color:var(--silver);margin:0 0 8px}
+.lib-proto{margin:0;white-space:pre-wrap;border-left:3px solid var(--green-mid);padding:10px 14px;background:var(--ground);border-radius:0 var(--radius-sm) var(--radius-sm) 0}
+.lib-board{list-style:none;margin:0;padding:0}
+.lib-board li{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line-subtle)}
+.lib-board li:first-child{border-top:0}
+.lib-board .no{font:600 18px/1 var(--font-display);color:var(--steel-muted);text-align:center}
+.lib-board li:nth-child(-n+3) .no{color:var(--green-bright)}
+.lib-board .val{font-variant-numeric:tabular-nums;font-weight:600;text-align:right;white-space:nowrap}
+.lib-board a{color:var(--steel)}
+.lib-pchips{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.lib-pchip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px;background:var(--ground)}
+.lib-pchip.is-hidden{color:var(--steel-muted);border-style:dashed}
+.lib-pedit{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;max-height:320px;overflow:auto}
+.lib-pedit li{display:flex;align-items:center;gap:4px;padding:2px 0;border-top:1px solid var(--line-subtle)}
+.lib-pedit li:first-child{border-top:0}
+.lib-pedit .grow{flex:1;min-width:0}
+.lib-pedit button{min-width:44px;min-height:44px;padding:0;justify-content:center}
+.lib-found{max-height:232px;overflow:auto;border:1px solid var(--line);border-radius:var(--radius-sm)}
+.lib-found:empty{display:none}
+.lib-found button{display:flex;width:100%;justify-content:space-between;gap:12px;padding:10px 12px;background:none;border:0;border-top:1px solid var(--line-subtle);color:var(--steel);cursor:pointer;text-align:left;min-height:44px;font:inherit}
+.lib-found button:first-child{border-top:0}
+.lib-found button:hover,.lib-found button:focus-visible{background:var(--green-deep)}
+.lib-actions{display:flex;gap:8px;flex-wrap:wrap}
+@media (max-width:700px){
+  .lib-tools .lib-q{max-width:none;flex-basis:100%}
+  .lib-tools select.input{flex:1;max-width:none;min-width:0}
+  .lib-tools .seg{width:100%;flex-wrap:nowrap}.lib-tools .seg button{flex:1;padding:0 4px;font-size:13px;white-space:nowrap}
+}
+</style>`);
+const LIB_SHOW = [['all', 'All'], ['active', 'In menus'], ['hidden', 'Hidden'], ['custom', 'Custom']];
+const LIB_FILTER = { all: () => true, active: (t) => !t.hidden, hidden: (t) => !!t.hidden, custom: (t) => !!t.custom };
+const LIB_AGES = [['', 'All ages'], ['u12', '12 and under'], ['13-14', '13 to 14'], ['15-16', '15 to 16'], ['17-18', '17 to 18'], ['adult', '19 and over']];
+const LIB_UNITS = ['s', 'in', 'cm', 'ft', 'm', 'lb', 'kg', 'reps', 'mph', 'km/h', 'W', 'W/kg', 'N', '%', 'deg', 'level', 'ratio'];
+const testMeta = (t) => `${t.unit}, ${scoring(t)} · ${plural(t.attempts || 1, 'attempt')}${rangeText(t) ? ` · possible range ${rangeText(t)}` : ''}${t.timed ? ' · stopwatch' : ''}`;
+const usageText = (t) => (t.results ? `${plural(t.results, 'result')} from ${plural(t.athletes, 'athlete')} · last ${fmtDate(t.last_used)}` : 'No results yet');
+
+// Add or edit form. Built-in tests keep their name, unit and scoring; a custom test's unit and scoring lock once it has results.
+function testForm(t, cats) {
+  const builtIn = t.id && !t.custom;
+  const hasResults = t.id && t.results > 0;
+  const lockName = builtIn, lockKind = builtIn || (t.custom && hasResults);
+  const dis = (on) => (on ? raw('disabled') : '');
+  return html`<form class="stack" id="nt" novalidate>
+    <div class="field"><label class="label" for="nt-n">Name</label><input class="input" id="nt-n" name="name" value="${t.name || ''}" maxlength="60" required ${dis(lockName)} ${lockName ? '' : raw('autofocus')}></div>
+    <div class="form-grid">
+      <div class="field"><label class="label" for="nt-c">Category</label><input class="input" id="nt-c" name="category" list="nt-cats" value="${t.category || 'Custom'}" maxlength="30">
+        <datalist id="nt-cats">${cats.map((c) => html`<option value="${c}"></option>`)}</datalist></div>
+      <div class="field"><label class="label" for="nt-u">Unit</label><input class="input" id="nt-u" name="unit" list="nt-units" value="${t.unit || ''}" placeholder="s, in, lb, reps…" maxlength="12" required ${dis(lockKind)}>
+        <datalist id="nt-units">${LIB_UNITS.map((u) => html`<option value="${u}"></option>`)}</datalist></div>
+      <div class="field"><label class="label" for="nt-s">Scoring</label><select class="input" id="nt-s" name="lower_better" ${dis(lockKind)}>
+        <option value="0" ${!t.lower_better ? raw('selected') : ''}>Higher is better</option><option value="1" ${t.lower_better ? raw('selected') : ''}>Lower is better</option></select></div>
+      <div class="field"><label class="label" for="nt-a">Attempts</label><input class="input" id="nt-a" name="attempts" type="number" min="1" max="10" value="${t.attempts || 2}"></div>
+      <div class="field"><label class="label" for="nt-min">Lowest possible</label><input class="input" id="nt-min" name="min_value" inputmode="decimal" value="${t.min_value ?? ''}"></div>
+      <div class="field"><label class="label" for="nt-max">Highest possible</label><input class="input" id="nt-max" name="max_value" inputmode="decimal" value="${t.max_value ?? ''}"></div>
+    </div>
+    <label class="check tst-handchk"><input type="checkbox" name="timed" ${t.timed ? raw('checked') : ''}> Timed with the stopwatch (tests in seconds)</label>
+    <div class="field"><label class="label" for="nt-d">How to run it <span class="muted">(optional)</span></label>
+      <textarea class="input" id="nt-d" name="description" rows="3" maxlength="1000" placeholder="Setup, start position, what counts as a good attempt">${t.description || ''}</textarea>
+      <span class="hint">Everyone who runs this test sees it in the library.</span></div>
+    ${builtIn ? html`<p class="hint" style="margin:0">Built-in tests keep their name, unit and scoring so device imports and past results stay matched.</p>`
+    : lockKind ? html`<p class="hint" style="margin:0">Unit and scoring are fixed once a test has results.</p>` : ''}
+    <span class="hint">The possible range catches typos, like a broad jump typed in the 40 column.</span></form>`;
+}
+
 async function renderLibrary(ctx) {
-  const tests = await api.get('/tests?all=1');
+  let [tests, presets] = await Promise.all([api.get('/tests?all=1'), api.get('/testing/presets')]);
   if (!ctx.isCurrent()) return;
   const oc = canRun(ctx);
-  const cats = [...new Set(tests.map((t) => t.category))].sort(catSort);
-  const visible = tests.filter((t) => !t.hidden).length;
-  mount(ctx.el, html`${STYLE}
-    ${header('Test library', oc ? `${visible} tests ready. Hide the ones you don't use, or add your own.` : `${visible} tests. Owners and coaches can hide tests or add their own.`, html`${back()}${oc ? html`<button class="btn btn-primary" id="add">${icon('plus')}Add a test</button>` : ''}`)}
-    <div class="stack tst-lib">${cats.map((c) => html`<section class="panel"><h2 class="panel-title">${c}</h2><div class="list">
-      ${tests.filter((t) => t.category === c).map((t) => html`<div class="list-row ${t.hidden ? 'hidden-test' : ''}"><div class="grow">
-        <div class="strong">${t.name} ${t.custom ? html`<span class="badge badge-neutral" style="margin-left:6px">Custom</span>` : ''}${t.hidden ? html`<span class="badge badge-muted" style="margin-left:6px">Hidden</span>` : ''}</div>
-        <div class="small muted">${t.unit}, ${scoring(t)} · ${plural(t.attempts || 1, 'attempt')}${rangeText(t) ? ` · possible range ${rangeText(t)}` : ''}${t.timed ? ' · stopwatch' : ''}</div></div>
-        ${oc ? html`<button class="btn btn-ghost btn-sm" data-toggle="${t.id}" data-hidden="${t.hidden ? 1 : 0}">${t.hidden ? 'Show' : 'Hide'}</button>` : ''}</div>`)}
-    </div></section>`)}</div>`);
-  ctx.el.querySelectorAll('[data-toggle]').forEach((b) => b.addEventListener('click', async () => {
-    try { await api.patch(`/tests/${b.dataset.toggle}`, { hidden: b.dataset.hidden !== '1' }); ctx.reload(); } catch (err) { toastError(err); }
-  }));
-  ctx.el.querySelector('#add')?.addEventListener('click', async () => {
+  const st = {
+    tab: ctx.query.tab === 'presets' ? 'presets' : 'tests', q: ctx.query.q || '', cat: ctx.query.cat || '',
+    show: LIB_FILTER[ctx.query.show] ? ctx.query.show : 'all', sort: ['used', 'name'].includes(ctx.query.sort) ? ctx.query.sort : '',
+  };
+  const cats = () => [...new Set(tests.map((t) => t.category))].sort(catSort);
+  const setUrl = () => {
+    const p = new URLSearchParams();
+    if (st.tab !== 'tests') p.set('tab', st.tab);
+    if (st.tab === 'tests') { if (st.q) p.set('q', st.q); if (st.cat) p.set('cat', st.cat); if (st.show !== 'all') p.set('show', st.show); if (st.sort) p.set('sort', st.sort); }
+    const s = p.toString();
+    history.replaceState(history.state, '', `/app/testing/library${s ? '?' + s : ''}`);
+  };
+  const subText = () => {
+    if (st.tab === 'presets') return `${plural(presets.length, 'preset')}. Each one fills in a new testing day's tests in one tap.`;
+    const visible = tests.filter((t) => !t.hidden).length;
+    return oc ? `${visible} tests ready${visible < tests.length ? `, ${tests.length - visible} hidden` : ''}. Hide the ones you don't use, or add your own.`
+      : `${visible} tests. Owners and coaches can change the library.`;
+  };
+  const refresh = async () => {
+    [tests, presets] = await Promise.all([api.get('/tests?all=1'), api.get('/testing/presets')]);
+    if (ctx.isCurrent()) paint();
+  };
+
+  function paint() {
+    const action = !oc ? '' : st.tab === 'presets' ? html`<button class="btn btn-primary" id="new-preset">${icon('plus')}New preset</button>`
+      : html`<button class="btn btn-primary" id="add">${icon('plus')}Add a test</button>`;
+    mount(ctx.el, html`${STYLE}${LIB_STYLE}${header('Test library', subText(), html`${back()}${action}`)}
+      <div class="tabs" role="tablist" aria-label="Test library">
+        ${[['tests', 'Tests', tests.length], ['presets', 'Presets', presets.length]].map(([k, l, n]) => html`<button role="tab" id="tab-${k}" data-tab="${k}" aria-controls="lib-panel" aria-selected="${st.tab === k}" tabindex="${st.tab === k ? 0 : -1}">${l}<span class="lib-n">${n}</span></button>`)}
+      </div>
+      <div id="lib-panel" role="tabpanel" aria-labelledby="tab-${st.tab}" class="stack" style="margin-top:4px"></div>`);
+    const tabs = [...ctx.el.querySelectorAll('[data-tab]')];
+    const pick = (k) => { if (st.tab === k) return; st.tab = k; setUrl(); paint(); ctx.el.querySelector(`#tab-${k}`)?.focus(); };
+    tabs.forEach((b) => {
+      b.addEventListener('click', () => pick(b.dataset.tab));
+      b.addEventListener('keydown', (e) => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); pick(st.tab === 'tests' ? 'presets' : 'tests'); } });
+    });
+    ctx.el.querySelector('#add')?.addEventListener('click', () => addTest());
+    ctx.el.querySelector('#new-preset')?.addEventListener('click', () => editPreset(null));
+    if (st.tab === 'tests') paintTests(); else paintPresets();
+  }
+
+  // ---- tests ----
+  function paintTests() {
+    const panel = ctx.el.querySelector('#lib-panel');
+    const counts = Object.fromEntries(LIB_SHOW.map(([k]) => [k, tests.filter(LIB_FILTER[k]).length]));
+    mount(panel, html`<div class="lib-tools" role="search">
+        <label class="sr-only" for="lq">Find a test</label><input class="input lib-q" id="lq" type="search" placeholder="Find a test" value="${st.q}" autocomplete="off">
+        <label class="sr-only" for="lcat">Category</label><select class="input" id="lcat"><option value="">All categories</option>
+          ${cats().map((c) => html`<option value="${c}" ${c === st.cat ? raw('selected') : ''}>${c} (${tests.filter((t) => t.category === c).length})</option>`)}</select>
+        <label class="sr-only" for="lsort">Sort</label><select class="input" id="lsort">
+          ${[['', 'By category'], ['used', 'Most used'], ['name', 'A to Z']].map(([k, l]) => html`<option value="${k}" ${k === st.sort ? raw('selected') : ''}>${l}</option>`)}</select>
+        <div class="seg" role="group" aria-label="Show">${LIB_SHOW.map(([k, l]) => html`<button type="button" data-show="${k}" aria-pressed="${st.show === k}">${l}<span class="lib-n">${counts[k]}</span></button>`)}</div>
+      </div>
+      <p class="small muted lib-count" id="lcount" aria-live="polite"></p>
+      <div id="llist" class="stack"></div>`);
+    const q = panel.querySelector('#lq');
+    q.addEventListener('input', debounce(() => { st.q = q.value; setUrl(); paintList(); }, 120));
+    q.addEventListener('keydown', (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); q.value = ''; st.q = ''; setUrl(); paintList(); } });
+    panel.querySelector('#lcat').addEventListener('change', (e) => { st.cat = e.target.value; setUrl(); paintList(); });
+    panel.querySelector('#lsort').addEventListener('change', (e) => { st.sort = e.target.value; setUrl(); paintList(); });
+    panel.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
+      st.show = b.dataset.show; setUrl();
+      panel.querySelectorAll('[data-show]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      paintList();
+    }));
+    panel.querySelector('#llist').addEventListener('click', (e) => {
+      const tg = e.target.closest('[data-toggle]');
+      if (tg) return toggleHidden(tests.find((t) => t.id === Number(tg.dataset.toggle)));
+      const op = e.target.closest('[data-open]');
+      if (op) return openTest(Number(op.dataset.open));
+      if (e.target.closest('#lclear')) { st.q = ''; st.cat = ''; st.show = 'all'; setUrl(); paintTests(); ctx.el.querySelector('#lq')?.focus(); return; }
+      if (e.target.closest('#laddq')) addTest(st.q.trim());
+    });
+    paintList();
+  }
+
+  function paintList() {
+    const list = ctx.el.querySelector('#llist');
+    if (!list) return;
+    const words = st.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = (t) => { const hay = `${t.name} ${t.category} ${t.unit} ${t.description || ''}`.toLowerCase(); return words.every((w) => hay.includes(w)); };
+    const shown = tests.filter((t) => (!st.cat || t.category === st.cat) && LIB_FILTER[st.show](t) && hit(t));
+    ctx.el.querySelector('#lcount').textContent = shown.length === tests.length ? `${plural(tests.length, 'test')}. Select a test to see how it's run and its record board.` : `Showing ${shown.length} of ${plural(tests.length, 'test')}.`;
+    if (!shown.length) {
+      mount(list, html`<div class="empty stack" style="align-items:center">
+        <span>No test matches${st.q.trim() ? html` “${st.q.trim()}”` : ''}${st.cat ? ` in ${st.cat}` : ''}${st.show !== 'all' ? ` (${LIB_SHOW.find(([k]) => k === st.show)[1].toLowerCase()})` : ''}.</span>
+        <div class="btn-row" style="justify-content:center"><button type="button" class="btn" id="lclear">Clear the filters</button>
+          ${oc && st.q.trim() ? html`<button type="button" class="btn btn-outline" id="laddq">Add “${st.q.trim()}” as a test</button>` : ''}</div></div>`);
+      return;
+    }
+    const row = (t) => html`<div class="lib-row ${t.hidden ? 'is-hidden' : ''}">
+      <button type="button" class="lib-open" data-open="${t.id}">
+        <span class="strong"><span class="lib-name">${t.name}</span>${t.custom ? html`<span class="badge badge-neutral">Custom</span>` : ''}${t.hidden ? html`<span class="badge badge-muted">Hidden</span>` : ''}</span>
+        <span class="small muted">${testMeta(t)}</span>
+        ${t.description ? html`<span class="lib-desc">${t.description}</span>` : ''}
+        <span class="lib-use">${usageText(t)}${t.presets?.length ? ` · in ${t.presets.join(', ')}` : ''}</span>
+      </button>
+      ${oc ? html`<button type="button" class="btn btn-ghost btn-sm" data-toggle="${t.id}" aria-label="${t.hidden ? 'Show' : 'Hide'} ${t.name}">${t.hidden ? 'Show' : 'Hide'}</button>` : ''}</div>`;
+    if (st.sort) {
+      const sorted = [...shown].sort(st.sort === 'used' ? (a, b) => (b.results - a.results) || a.name.localeCompare(b.name) : (a, b) => a.name.localeCompare(b.name));
+      mount(list, html`<section class="panel"><h2 class="panel-title">${st.sort === 'used' ? 'Most used' : 'A to Z'}</h2><div>${sorted.map(row)}</div></section>`);
+      return;
+    }
+    const groups = [...new Set(shown.map((t) => t.category))].sort(catSort);
+    mount(list, groups.map((c) => {
+      const inCat = shown.filter((t) => t.category === c);
+      return html`<section class="panel"><h2 class="panel-title">${c} <span class="lib-n small muted">${inCat.length}</span></h2><div>${inCat.map(row)}</div></section>`;
+    }));
+  }
+
+  async function toggleHidden(t, { focus = true } = {}) {
+    if (!t) return;
+    try {
+      const r = await api.patch(`/tests/${t.id}`, { hidden: !t.hidden });
+      t.hidden = r.hidden;
+      toast(t.hidden ? `${t.name} hidden. It stays out of your menus until you show it again.` : `${t.name} is back in your menus.`);
+      const sub = ctx.el.querySelector('.page-sub'); if (sub) sub.textContent = subText();
+      if (st.tab === 'tests') {
+        const counts = Object.fromEntries(LIB_SHOW.map(([k]) => [k, tests.filter(LIB_FILTER[k]).length]));
+        ctx.el.querySelectorAll('[data-show]').forEach((b) => { const n = b.querySelector('.lib-n'); if (n) n.textContent = counts[b.dataset.show]; });
+        paintList();
+        if (focus) (ctx.el.querySelector(`[data-toggle="${t.id}"]`) || ctx.el.querySelector('#lq'))?.focus();
+      }
+    } catch (err) { toastError(err); }
+  }
+
+  async function addTest(prefill = '') {
     const r = await modal({
       title: 'Add a test',
-      body: html`<form class="stack" id="nt" novalidate>
-        <div class="field"><label class="label" for="nt-n">Name</label><input class="input" id="nt-n" name="name" required autofocus></div>
-        <div class="form-grid">
-          <div class="field"><label class="label" for="nt-c">Category</label><select class="input" id="nt-c" name="category">${options([...cats.filter((c) => c !== 'Custom'), 'Custom'].map((c) => ({ id: c, name: c })), 'Custom')}</select></div>
-          <div class="field"><label class="label" for="nt-u">Unit</label><input class="input" id="nt-u" name="unit" placeholder="s, in, lb, reps…" required></div>
-          <div class="field"><label class="label" for="nt-s">Scoring</label><select class="input" id="nt-s" name="lower_better"><option value="0">Higher is better</option><option value="1">Lower is better</option></select></div>
-          <div class="field"><label class="label" for="nt-a">Attempts</label><input class="input" id="nt-a" name="attempts" type="number" min="1" max="10" value="2"></div>
-          <div class="field"><label class="label" for="nt-min">Lowest possible</label><input class="input" id="nt-min" name="min_value" inputmode="decimal"></div>
-          <div class="field"><label class="label" for="nt-max">Highest possible</label><input class="input" id="nt-max" name="max_value" inputmode="decimal"></div>
-        </div>
-        <label class="check"><input type="checkbox" name="timed"> Timed with the stopwatch (seconds)</label>
-        <span class="hint">The possible range catches typos, like a broad jump typed in the 40 column.</span></form>`,
+      body: testForm({ name: prefill, category: st.cat || 'Custom', attempts: 2 }, cats()),
       actions: [{ label: 'Cancel', value: null }, { label: 'Add test', kind: 'primary', onClick: async (body) => api.post('/tests', formData(body.querySelector('#nt'))) }],
     });
-    if (r) { toast(`${r.name} added.`); ctx.reload(); }
-  });
+    if (!r) return;
+    toast(`${r.name} added. It's in your menus now.`);
+    await refresh();
+  }
+
+  async function editTest(t) {
+    const r = await modal({
+      title: `Edit ${t.name}`,
+      body: testForm(t, cats()),
+      actions: [{ label: 'Cancel', value: null }, { label: 'Save changes', kind: 'primary', onClick: async (body) => api.patch(`/tests/${t.id}`, formData(body.querySelector('#nt'))) }],
+    });
+    if (!r) return;
+    toast(`${r.name} saved.`);
+    await refresh();
+  }
+
+  async function openTest(id) {
+    let d;
+    try { d = await api.get(`/tests/${id}`); } catch (err) { return toastError(err); }
+    const t = tests.find((x) => x.id === id) || d;
+    const filt = { sex: '', age: '' };
+    const boardHtml = (b) => (b.board.length ? html`<ol class="lib-board">${b.board.map((r, i) => html`<li><span class="no" aria-label="Rank ${i + 1}">${i + 1}</span>
+        <span><a href="/app/clients/${r.athlete_id}">${r.first_name} ${r.last_name}</a><span class="small muted"> · ${fmtDate(r.date)}${r.hand_timed && b.unit === 's' ? ' · hand-timed' : ''}</span></span>
+        <span class="val">${fmtValue(r.value, b.unit)}</span></li>`)}</ol>`
+      : html`<p class="small muted" style="margin:0">No results yet${filt.sex || filt.age ? ' for this group' : ''}.</p>`);
+    const u = d.usage;
+    const actions = [{ label: 'Close', value: null }];
+    if (oc) {
+      if (d.deletable) actions.push({ label: 'Delete test', value: 'delete' });
+      actions.push({ label: d.hidden ? 'Show in menus' : 'Hide from menus', value: 'toggle' });
+      actions.push({ label: 'Edit test', value: 'edit', kind: 'primary' });
+    }
+    const v = await modal({
+      title: d.name, wide: true, actions,
+      body: html`<div class="tst-badges" style="flex-wrap:wrap;outline:none" tabindex="-1" autofocus><span class="badge badge-neutral">${d.category}</span>${d.custom ? html`<span class="badge badge-neutral">Custom</span>` : ''}${d.hidden ? html`<span class="badge badge-muted">Hidden</span>` : ''}</div>
+        <section><h3 class="lib-h">How to run it</h3>${d.description ? html`<p class="lib-proto">${d.description}</p>`
+          : html`<p class="small muted" style="margin:0">No protocol written yet.${oc ? ' Edit the test to add one, so every coach runs it the same way.' : ''}</p>`}</section>
+        <div class="lib-facts">
+          <div class="lib-fact"><span class="k">Unit</span><span class="v">${d.unit}</span></div>
+          <div class="lib-fact"><span class="k">Scoring</span><span class="v">${d.lower_better ? 'Lower is better' : 'Higher is better'}</span></div>
+          <div class="lib-fact"><span class="k">Attempts</span><span class="v">${d.attempts || 1}</span></div>
+          <div class="lib-fact"><span class="k">Possible range</span><span class="v">${rangeText(d) || 'Any value'}</span></div>
+          <div class="lib-fact"><span class="k">Entry</span><span class="v">${d.timed ? 'Stopwatch or typed' : 'Typed or imported'}</span></div>
+        </div>
+        <p class="small muted" style="margin:0">${u.results ? `${plural(u.results, 'result')} from ${plural(u.athletes, 'athlete')}${u.days ? ` on ${plural(u.days, 'testing day')}` : ''} · last used ${fmtDate(u.last_used)}.` : 'No results yet.'}
+          ${d.presets.length ? ` In the ${d.presets.join(', ')} preset${d.presets.length === 1 ? '' : 's'}.` : ' Not in any preset.'}</p>
+        <section class="stack" style="gap:10px"><h3 class="lib-h" style="margin:0">Record board</h3>
+          <div class="lib-tools"><div class="seg" role="group" aria-label="Filter the record board">${[['', 'Everyone'], ['M', 'Male'], ['F', 'Female']].map(([k, l]) => html`<button type="button" data-sex="${k}" aria-pressed="${k === ''}">${l}</button>`)}</div>
+            <label class="sr-only" for="bage">Age</label><select class="input" id="bage">${LIB_AGES.map(([k, l]) => html`<option value="${k}">${l}</option>`)}</select></div>
+          <div id="board" aria-live="polite">${boardHtml(d)}</div>
+          <span class="hint">Each athlete's best, ${d.lower_better ? 'lowest' : 'highest'} first. Archived athletes are left out.</span></section>`,
+      onMount: (body, close) => {
+        body.addEventListener('click', (e) => { if (e.target.closest('a[href]')) close(null); });
+        const load = async () => {
+          const qs = new URLSearchParams(Object.entries(filt).filter(([, x]) => x)).toString();
+          try { const b = await api.get(`/tests/${id}${qs ? '?' + qs : ''}`); mount(body.querySelector('#board'), boardHtml(b)); } catch (err) { toastError(err); }
+        };
+        body.querySelectorAll('[data-sex]').forEach((b) => b.addEventListener('click', () => {
+          filt.sex = b.dataset.sex; body.querySelectorAll('[data-sex]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); load();
+        }));
+        body.querySelector('#bage').addEventListener('change', (e) => { filt.age = e.target.value; load(); });
+      },
+    });
+    if (v === 'edit') return editTest({ ...t, ...d, results: u.results });
+    if (v === 'toggle') return toggleHidden(t, { focus: false });
+    if (v === 'delete') {
+      if (!(await confirmDialog(`Delete ${d.name}?`, 'It comes out of the library and any presets. It has no results, so nothing else changes.', 'Delete test'))) return;
+      try { await api.del(`/tests/${d.id}`); toast(`${d.name} deleted.`); await refresh(); } catch (err) { toastError(err); }
+    }
+  }
+
+  // ---- presets ----
+  function paintPresets() {
+    const panel = ctx.el.querySelector('#lib-panel');
+    if (!presets.length) {
+      mount(panel, html`<div class="empty">No presets yet.${oc ? ' New preset groups the tests you run together, like a combine or a team battery.' : ''}</div>`);
+      return;
+    }
+    mount(panel, html`${presets.map((p, i) => {
+      const hidden = p.tests.filter((t) => t.hidden).length;
+      return html`<section class="panel"><div class="spread"><div><h2 class="panel-title">${p.name}</h2>
+          <p class="small muted" style="margin:4px 0 0">${plural(p.tests.length, 'test')}, in the order they run${hidden ? html` · <span style="color:var(--amber)">${hidden} hidden, skipped when you plan a day</span>` : ''}</p></div>
+        ${oc ? html`<div class="lib-actions"><a class="btn btn-sm" href="/app/testing/new?preset=${encodeURIComponent(p.name)}">Plan a day with it</a>
+          <button type="button" class="btn btn-ghost btn-sm" data-pedit="${i}" aria-label="Edit ${p.name}">Edit</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-pcopy="${i}" aria-label="Copy ${p.name}">Copy</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-pdel="${i}" aria-label="Delete ${p.name}">Delete</button></div>` : ''}</div>
+        <ol class="lib-pchips">${p.tests.map((t, j) => html`<li class="lib-pchip ${t.hidden ? 'is-hidden' : ''}"><span class="muted">${j + 1}.</span> ${t.name}${t.hidden ? ' (hidden)' : ''}</li>`)}</ol></section>`;
+    })}`);
+    panel.querySelectorAll('[data-pedit]').forEach((b) => b.addEventListener('click', () => editPreset(presets[+b.dataset.pedit])));
+    panel.querySelectorAll('[data-pcopy]').forEach((b) => b.addEventListener('click', () => editPreset(presets[+b.dataset.pcopy], { copy: true })));
+    panel.querySelectorAll('[data-pdel]').forEach((b) => b.addEventListener('click', async () => {
+      const p = presets[+b.dataset.pdel];
+      if (!(await confirmDialog(`Delete the ${p.name} preset?`, 'Testing days already planned with it keep their tests.', 'Delete preset'))) return;
+      try { await api.del(`/testing/presets/${encodeURIComponent(p.name)}`); toast(`${p.name} preset deleted.`); await refresh(); } catch (err) { toastError(err); }
+    }));
+  }
+
+  async function editPreset(p, { copy = false } = {}) {
+    const editing = p && !copy;
+    const sel = p ? p.tests.map((t) => t.id) : [];
+    const byId = new Map(tests.map((t) => [t.id, t]));
+    const r = await modal({
+      title: editing ? `Edit ${p.name}` : copy ? `Copy ${p.name}` : 'New preset', wide: true,
+      body: html`<div class="field"><label class="label" for="pe-n">Name</label><input class="input" id="pe-n" value="${p ? (copy ? `${p.name} copy` : p.name) : ''}" maxlength="40" placeholder="Like Spring baseball or U14 soccer" autofocus></div>
+        <div class="field"><span class="label" id="pe-l">Tests, in the order they run <span class="muted" id="pe-c"></span></span><ol class="lib-pedit" id="pe-list" aria-labelledby="pe-l"></ol></div>
+        <div class="field"><label class="label" for="pe-q">Add a test</label><input class="input" id="pe-q" type="search" placeholder="Find a test, like broad jump or exit velocity" autocomplete="off">
+          <span class="hint">Enter adds the first match. Hidden tests aren't offered.</span><div class="lib-found" id="pe-found" role="list"></div></div>`,
+      actions: [{ label: 'Cancel', value: null }, {
+        label: editing ? 'Save preset' : 'Add preset', kind: 'primary',
+        onClick: async (body) => {
+          const payload = { name: body.querySelector('#pe-n').value, test_ids: sel };
+          return editing ? api.put(`/testing/presets/${encodeURIComponent(p.name)}`, payload) : api.post('/testing/presets', payload);
+        },
+      }],
+      onMount: (body) => {
+        const list = body.querySelector('#pe-list'), q = body.querySelector('#pe-q'), found = body.querySelector('#pe-found');
+        const matches = () => {
+          const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+          if (!words.length) return [];
+          return tests.filter((t) => !t.hidden && !sel.includes(t.id) && words.every((w) => `${t.name} ${t.category}`.toLowerCase().includes(w))).slice(0, 8);
+        };
+        const paintSel = (focusSel) => {
+          body.querySelector('#pe-c').textContent = `(${sel.length})`;
+          mount(list, sel.length ? sel.map((id, i) => { const t = byId.get(id); return html`<li><span class="grow"><span class="muted">${i + 1}.</span> ${t?.name || 'Test'}${t?.hidden ? html` <span class="badge badge-muted">Hidden</span>` : ''}</span>
+            <button type="button" class="btn btn-ghost" data-up="${i}" aria-label="Move ${t?.name} earlier" ${i === 0 ? raw('disabled') : ''}>↑</button>
+            <button type="button" class="btn btn-ghost" data-down="${i}" aria-label="Move ${t?.name} later" ${i === sel.length - 1 ? raw('disabled') : ''}>↓</button>
+            <button type="button" class="btn btn-ghost tst-rm" data-rm="${i}" aria-label="Remove ${t?.name}">${icon('close', 16)}</button></li>`; })
+            : html`<li class="small muted" style="padding:10px 0">No tests yet. Find tests below to add them.</li>`);
+          if (focusSel) list.querySelector(focusSel)?.focus();
+        };
+        const paintFound = () => {
+          const m = matches();
+          mount(found, q.value.trim() && !m.length ? html`<p class="small muted" style="margin:0;padding:10px 12px">No test matches. Hidden tests and tests already added aren't listed.</p>`
+            : m.map((t) => html`<button type="button" role="listitem" data-add="${t.id}"><span>${t.name}</span><span class="small muted">${t.category} · ${t.unit}</span></button>`));
+        };
+        list.addEventListener('click', (e) => {
+          const b = e.target.closest('button'); if (!b) return;
+          const focusMoved = (j, dir) => { const pref = list.querySelector(`[data-${dir}="${j}"]:not([disabled])`); (pref || list.querySelector(`[data-${dir === 'up' ? 'down' : 'up'}="${j}"]`))?.focus(); };
+          if (b.dataset.up) { const i = +b.dataset.up; [sel[i - 1], sel[i]] = [sel[i], sel[i - 1]]; paintSel(); focusMoved(i - 1, 'up'); }
+          else if (b.dataset.down) { const i = +b.dataset.down; [sel[i + 1], sel[i]] = [sel[i], sel[i + 1]]; paintSel(); focusMoved(i + 1, 'down'); }
+          else if (b.dataset.rm) { const i = +b.dataset.rm; sel.splice(i, 1); paintSel(`[data-rm="${Math.min(i, sel.length - 1)}"]`); paintFound(); if (!sel.length) q.focus(); }
+        });
+        const add = (id) => { if (!sel.includes(id)) sel.push(id); paintSel(); q.value = ''; paintFound(); q.focus(); };
+        found.addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) add(Number(b.dataset.add)); });
+        q.addEventListener('input', paintFound);
+        q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const m = matches(); if (m[0]) add(m[0].id); } });
+        paintSel();
+      },
+    });
+    if (!r) return;
+    toast(editing ? `${r.name} saved.` : `${r.name} preset added with ${plural(r.tests, 'test')}.`);
+    await refresh();
+  }
+
+  paint();
 }
 
 export const routes = [

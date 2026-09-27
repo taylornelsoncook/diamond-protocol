@@ -373,12 +373,17 @@ _Where: Testing, then Test library_
 
 [Owner] [Coach] [Front desk] 
 
-All 78 tests, grouped by category, with their units and whether lower or higher is better.
+All 78 tests and your presets. Each test shows its unit, whether lower or higher is better, attempts, possible range, how it's run, and how much it's used.
 
-- Hide tests you don't use so they stay out of your menus.
-- Add your own test with its unit and scoring.
+- Tests tab: find a test by name, unit or protocol, pick a category, sort by category, most used or A to Z, and show All, In menus, Hidden or Custom. When nothing matches, Clear the filters, or Add the search as a new test.
+- Select a test to see how to run it (a written protocol for every built-in test), its unit, scoring, attempts, possible range, how many results, athletes and testing days use it, which presets include it, and its record board: each athlete's best, top 10, for Everyone, Male or Female and by age group. Names open the client profile.
+- Hide tests you don't use so they stay out of your menus; Show brings them back. Hidden tests stay on the list with a Hidden badge.
+- Add a test with its category, unit, scoring, attempts, possible range, stopwatch timing and how to run it.
+- Edit a test: built-in tests keep their name, unit and scoring (device imports and past results rely on them) but their attempts, range, category and protocol can change. A custom test's unit and scoring lock once it has results. Renaming a custom test updates the presets that use it.
+- Delete a custom test that has never been used (no results, waiting results, testing days or targets), after a confirmation. It leaves any presets too. Anything else can be hidden.
+- Presets tab: every preset with its tests in the order they run (hidden tests are marked; they're skipped when you plan a day). New preset, Edit (rename, find and add tests, move them earlier or later, remove), Copy, Delete after a confirmation, and Plan a day with it, which opens New testing day with that preset picked.
 
-> Note: Front desk can view the library; owners and coaches change it.
+> Note: Front desk can view the library, protocols, record boards and presets; owners and coaches change them. Every change is in the activity log.
 
 ### Billing
 
@@ -533,15 +538,19 @@ Pages people outside your staff open from a link.
 
 ### Printable progress report
 
-_Where: from the client profile or the parent Progress tab_
+_Where: from the client profile, the parent Progress tab, or a share link_
 
-A branded report you can hand to a parent or save as a PDF.
+A branded report you can hand to a parent, send to a college coach or save as a PDF.
 
-- Opens from the athlete's profile (coach view) or the Progress tab (parent view).
-- Shows the coach's note, biggest improvements, new PRs, every test with first, latest, best and change, and growth.
+- Opens from the athlete's profile (coach view) or the Progress tab (family view). Anyone with a share link sees the family view without signing in.
+- Shows the coach's note, biggest improvements, new PRs, every test grouped by category with first, latest, best, change and a trend line (screen readers hear each date and value), and growth.
+- Period: All results, Last 12 months, or Since any earlier testing day, so a report can cover one season. Change since first test or since the last test (the choice is remembered and printed in the footer).
+- Coach view: tests with results not yet shared are marked Not shared yet. Family view previews exactly what the family (and a share link) sees.
+- Share a link (owners, coaches and the athlete's family): name who it's for and pick 7, 30, 90 days or a year, then Copy. Working links show when they expire, how often they've been opened and who made them; Turn off stops a link at once. Links show only shared results and never the date of birth, and stop working when the athlete is archived.
+- Email to family (owners and coaches): sends each parent a summary of improvements and PRs, an optional note and the report link. Tick Include a link to let them open it without signing in (a 90-day share link).
 - Print or save as PDF. The print version uses white paper and dark ink.
 
-> Note: The coach view includes results not yet shared with the family, and says so at the top.
+> Note: The coach view includes results not yet shared with the family, and says so at the top. Front desk sees the coach view but can't share or email it. Sharing, turning off and emailing are in the activity log.
 
 ### School invoice
 

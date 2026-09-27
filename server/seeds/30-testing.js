@@ -1,12 +1,13 @@
 // Demo data for Testing & results: three testing days over about three months (two shared with coach notes,
 // one still open), realistic improving results for the family athletes (incl. height, seated height and weight
-// for the growth estimate), five results from two unknown senders waiting to be linked, one linked timing chip
-// and one past timing-gate upload under Recent uploads.
+// for the growth estimate), five results from two unknown senders waiting to be linked, one linked timing chip,
+// one past timing-gate upload under Recent uploads, a custom test with a protocol and a shared report link for Ava.
 'use strict';
 const { all, get, insert, tx } = require('../db');
 const { addDays, today } = require('../lib');
 const core = require('../services/testing-core');
 require('../services/testing-upload'); // creates the upload_batches tables
+require('../services/testing-library'); // creates report_links and the tests.description column
 
 const DAY_TESTS = ['40-yard dash', '20-yard sprint', 'Pro agility (5-10-5)', 'Standing broad jump', 'Vertical jump', 'Seated chest pass', 'Height', 'Seated height', 'Weight'];
 
@@ -125,6 +126,18 @@ function seed() {
         insert('upload_batch_items', { batch_id: batch, result_id: rid, athlete_id: a.id, test_id: ten.id, value, created: 1 });
       });
       act('Uploaded results', `${sprinters.length} results (freelap-10yd-sprints.csv)`, `${upDate} 18:20:00`);
+    }
+
+    // Test library: one custom test with a written protocol, and a report link Ava's family can see was opened.
+    if (!get("SELECT 1 FROM tests WHERE name='Med ball scoop toss (6 lb)'")) {
+      insert('tests', { name: 'Med ball scoop toss (6 lb)', category: 'Baseball', unit: 'ft', lower_better: 0, attempts: 3, min_value: 5, max_value: 90, custom: 1,
+        description: 'Side-on like a hitter, 6 lb ball. Load the back hip and scoop toss through the target. Best of three each side.' });
+    }
+    const ava = byName('Ava');
+    if (ava) {
+      insert('report_links', { athlete_id: ava.id, token: `demo-${ava.code.toLowerCase()}-recruiting`, label: 'BYU recruiting', created_by: 'Chris Maddox',
+        created_at: `${addDays(T, -6)} 17:05:00`, expires_at: `${addDays(T, 24)} 17:05:00`, views: 2, last_viewed_at: `${addDays(T, -2)} 20:14:00` });
+      act('Shared progress report link', 'Ava Lopez, for BYU recruiting', `${addDays(T, -6)} 17:05:00`);
     }
   });
 }

@@ -8,10 +8,12 @@ const core = require('../services/testing-core');
 const sheet = require('../services/testing-sheet');
 const upload = require('../services/testing-upload');
 const hawkin = require('../services/testing-hawkin');
+const lib = require('../services/testing-library');
 
 const STAFF = requireStaff();
 const OC = requireStaff('owner', 'coach');
 const OWNER = requireStaff('owner');
+const OC_ROLES = ['owner', 'coach'];
 const ids = (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]).map(Number).filter((n) => Number.isInteger(n) && n > 0);
 const fmtDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const TEST_COLS = 'id, name, category, unit, lower_better, attempts, min_value, max_value, timed, hidden, custom';
@@ -129,33 +131,50 @@ function routes(api) {
   });
 
   // ---- test library ----
+  // ?all=1 lists hidden tests too, with protocol, usage (results, athletes, last used) and the presets each is in.
   api.get('/tests', STAFF, (req, res) => {
-    res.json(all(`SELECT ${TEST_COLS} FROM tests ${req.query.all ? '' : 'WHERE hidden=0'} ORDER BY id`));
+    if (req.query.all) return res.json(lib.list());
+    res.json(all(`SELECT ${TEST_COLS} FROM tests WHERE hidden=0 ORDER BY id`));
+  });
+  api.get('/tests/:id', STAFF, (req, res) => {
+    const sex = ['M', 'F'].includes(req.query.sex) ? req.query.sex : '';
+    const age = lib.AGE_BANDS[req.query.age] ? req.query.age : '';
+    res.json(lib.detail(req.params.id, { sex, age }));
   });
   api.post('/tests', OC, h(async (req, res) => {
-    const b = req.body || {};
-    const name = String(b.name || '').trim();
-    if (!name) throw bad('Name the test.');
-    if (get('SELECT 1 FROM tests WHERE name=? COLLATE NOCASE', name)) throw bad('A test with that name already exists.');
-    const unit = String(b.unit || '').trim();
-    if (!unit || unit.length > 12) throw bad('Give the unit, like s, in, lb or reps.');
-    const min = b.min_value === '' || b.min_value == null ? null : Number(b.min_value);
-    const max = b.max_value === '' || b.max_value == null ? null : Number(b.max_value);
-    if ((min != null && !Number.isFinite(min)) || (max != null && !Number.isFinite(max)) || (min != null && max != null && min >= max)) throw bad('The lowest possible value has to be below the highest.');
-    const attempts = Math.min(10, Math.max(1, Number(b.attempts) || 1));
-    const id = insert('tests', { name, category: String(b.category || 'Custom').trim() || 'Custom', unit, lower_better: b.lower_better === true || b.lower_better === '1' || b.lower_better === 1 ? 1 : 0,
-      attempts, min_value: min, max_value: max, timed: unit === 's' && (b.timed === true || b.timed === '1' || b.timed === 1) ? 1 : 0, custom: 1 });
-    log(req, 'Added test', name);
-    res.json(get(`SELECT ${TEST_COLS} FROM tests WHERE id=?`, id));
+    const t = lib.create(req.body || {});
+    log(req, 'Added test', t.name);
+    res.json(t);
   }));
   api.patch('/tests/:id', OC, h(async (req, res) => {
-    const t = get('SELECT * FROM tests WHERE id=?', Number(req.params.id));
-    if (!t) throw notFound('That test');
-    if ('hidden' in req.body) {
-      update('tests', t.id, { hidden: req.body.hidden ? 1 : 0 });
-      log(req, req.body.hidden ? 'Hid test' : 'Showed test', t.name);
-    }
-    res.json(get(`SELECT ${TEST_COLS} FROM tests WHERE id=?`, t.id));
+    const { test, changes, before } = lib.edit(req.params.id, req.body || {});
+    if (changes.includes('hidden')) log(req, test.hidden ? 'Hid test' : 'Showed test', test.name);
+    const edits = changes.filter((k) => k !== 'hidden');
+    if (edits.length) log(req, 'Edited test', `${before.name}${test.name !== before.name ? ` (now ${test.name})` : ''}: ${edits.map((k) => ({ lower_better: 'scoring', min_value: 'range', max_value: 'range', timed: 'stopwatch', description: 'protocol' }[k] || k)).filter((k, i, a) => a.indexOf(k) === i).join(', ')}`);
+    res.json(test);
+  }));
+  api.delete('/tests/:id', OC, h(async (req, res) => {
+    const t = lib.remove(req.params.id);
+    log(req, 'Deleted test', t.name);
+    res.json({ ok: true });
+  }));
+
+  // ---- presets ----
+  api.get('/testing/presets', STAFF, (_req, res) => res.json(lib.presets()));
+  api.post('/testing/presets', OC, h(async (req, res) => {
+    const p = lib.savePreset(req.body || {});
+    log(req, 'Added preset', `${p.name} (${p.tests} tests)`);
+    res.json(p);
+  }));
+  api.put('/testing/presets/:name', OC, h(async (req, res) => {
+    const p = lib.savePreset(req.body || {}, req.params.name);
+    log(req, 'Edited preset', `${req.params.name}${p.name !== req.params.name ? ` (now ${p.name})` : ''}, ${p.tests} tests`);
+    res.json(p);
+  }));
+  api.delete('/testing/presets/:name', OC, h(async (req, res) => {
+    lib.deletePreset(req.params.name);
+    log(req, 'Deleted preset', req.params.name);
+    res.json({ ok: true });
   }));
 
   // ---- testing days ----
@@ -346,6 +365,7 @@ function routes(api) {
     } else {
       const presets = setting('presets', {});
       const preset = presets[req.query.preset] ? req.query.preset : Object.keys(presets)[0];
+      if (!preset) throw bad('There are no presets. Add one in the Test library, or pick a testing day.');
       tests = presets[preset].map((n) => get(`SELECT ${TEST_COLS} FROM tests WHERE name=?`, n)).filter(Boolean);
       const teamId = Number(req.query.team_id) || null;
       athletes = teamId ? all('SELECT id, code, first_name, last_name FROM athletes WHERE team_id=? AND archived=0 ORDER BY last_name, first_name', teamId) : [];
@@ -502,19 +522,95 @@ function routes(api) {
     if (!a || a.family_id !== req.parent.family_id) throw notFound('That athlete');
     res.json(core.progress(a.id, { view: 'parent', visibility: setting('results_visibility', 'shared') }));
   });
-  // Printable report: staff get the coach view; the athlete's own family get the parent view.
+  // Printable report. Staff get the coach view (?view=family previews what the family sees); the athlete's own
+  // family get the family view; anyone with a working share link (?link=) gets the family view without signing in.
+  // ?from= and ?to= (YYYY-MM-DD) limit it to a period.
+  const reportDays = (athleteId, onlyShared) => all(`SELECT DISTINCT d.id, d.name, d.date, d.status FROM testing_days d JOIN results r ON r.day_id=d.id
+    WHERE r.athlete_id=? ${onlyShared ? "AND d.status='shared'" : ''} ORDER BY d.date DESC`, athleteId);
+  const familyVisibility = () => setting('results_visibility', 'shared');
   api.get('/report/:code', (req, res) => {
-    const a = get('SELECT id, family_id FROM athletes WHERE code=? COLLATE NOCASE', String(req.params.code));
+    const a = get('SELECT id, family_id, archived FROM athletes WHERE code=? COLLATE NOCASE', String(req.params.code));
+    const per = lib.period(req.query);
+    const familyView = () => ({ business: businessName(), ...core.progress(a.id, { view: 'parent', visibility: familyVisibility(), ...per }),
+      all_days: reportDays(a.id, familyVisibility() !== 'immediate'), period: per });
     if (req.staff && !req.staff.must_change) {
       if (!a) throw notFound('That athlete');
-      return res.json({ view: 'coach', business: businessName(), ...core.progress(a.id, { view: 'staff' }) });
+      if (req.query.view === 'family') return res.json({ view: 'family', preview: true, can_share: OC_ROLES.includes(req.staff.role), ...familyView() });
+      return res.json({ view: 'coach', can_share: OC_ROLES.includes(req.staff.role), business: businessName(), ...core.progress(a.id, { view: 'staff', ...per }), all_days: reportDays(a.id, false), period: per });
     }
-    if (req.parent) {
-      if (!a || a.family_id !== req.parent.family_id) throw notFound('That athlete');
-      return res.json({ view: 'parent', business: businessName(), ...core.progress(a.id, { view: 'parent', visibility: setting('results_visibility', 'shared') }) });
+    if (req.parent && a && a.family_id === req.parent.family_id) return res.json({ view: 'parent', can_share: true, ...familyView() });
+    if (req.query.link) {
+      if (a && !a.archived && lib.openLink(a.id, String(req.query.link))) {
+        const out = familyView();
+        delete out.athlete.birthday; // the age shows; the date of birth stays private
+        return res.json({ view: 'link', ...out });
+      }
+      throw new HttpError(410, 'This link has expired or been turned off. Ask the family or coach for a new one.');
     }
+    if (req.parent) throw notFound('That athlete');
     throw new HttpError(401, 'Sign in to see this report.');
   });
+
+  // Share links: owners, coaches and the athlete's own family can make, list and turn off links.
+  function shareAthlete(req) {
+    const a = get('SELECT id, code, first_name, last_name, family_id, archived FROM athletes WHERE code=? COLLATE NOCASE', String(req.params.code));
+    if (req.staff && !req.staff.must_change) {
+      if (!OC_ROLES.includes(req.staff.role)) throw new HttpError(403, 'Only owners and coaches can share reports.');
+      if (!a) throw notFound('That athlete');
+      return a;
+    }
+    if (req.parent) { if (!a || a.family_id !== req.parent.family_id) throw notFound('That athlete'); return a; }
+    throw new HttpError(401, 'Sign in to share this report.');
+  }
+  const linkOut = (a, l) => ({ ...l, url: `${appUrl()}/report/${encodeURIComponent(a.code)}?link=${l.token}` });
+  const byWho = (req) => (req.staff ? req.staff.name : req.parent ? `${req.parent.name} (parent)` : '');
+  api.get('/report/:code/links', (req, res) => {
+    const a = shareAthlete(req);
+    res.json(lib.activeLinks(a.id).map((l) => linkOut(a, l)));
+  });
+  api.post('/report/:code/links', h(async (req, res) => {
+    const a = shareAthlete(req);
+    if (a.archived) throw bad(`${a.first_name} ${a.last_name} is archived. Restore the profile to share the report.`);
+    const l = lib.createLink(a.id, req.body || {}, byWho(req));
+    log(req, 'Shared progress report link', `${a.first_name} ${a.last_name}${l.label ? `, for ${l.label}` : ''}, until ${l.expires_at.slice(0, 10)}`);
+    res.json(linkOut(a, l));
+  }));
+  api.delete('/report/:code/links/:id', h(async (req, res) => {
+    const a = shareAthlete(req);
+    const l = lib.revokeLink(a.id, req.params.id);
+    log(req, 'Turned off progress report link', `${a.first_name} ${a.last_name}${l.label ? `, ${l.label}` : ''}`);
+    res.json({ ok: true });
+  }));
+
+  // Email the report to the family (owners and coaches). Parents sign in to open it, unless a share link is included.
+  api.post('/report/:code/email', OC, h(async (req, res) => {
+    const a = get('SELECT id, code, first_name, last_name, family_id, archived FROM athletes WHERE code=? COLLATE NOCASE', String(req.params.code));
+    if (!a) throw notFound('That athlete');
+    const parents = a.family_id ? all('SELECT name, email FROM parents WHERE family_id=? AND email IS NOT NULL AND email != \'\'', a.family_id) : [];
+    if (!parents.length) throw bad(`${a.first_name} has no parent email on file. Add one on the client profile first.`);
+    const note = String(req.body?.note ?? '').trim();
+    if (note.length > 2000) throw bad('Keep the note under 2,000 characters.');
+    const p = core.progress(a.id, { view: 'parent', visibility: familyVisibility() });
+    if (!p.tests.length) throw bad(`${a.first_name} has no results the family can see yet. Share a testing day first.`);
+    let url = `${appUrl()}/report/${encodeURIComponent(a.code)}`;
+    let link = null;
+    if (req.body?.include_link) {
+      if (a.archived) throw bad(`${a.first_name} ${a.last_name} is archived. Restore the profile to share the report.`);
+      link = lib.createLink(a.id, { days: 90, label: 'Emailed to family' }, byWho(req));
+      url += `?link=${link.token}`;
+    }
+    const lines = [];
+    if (p.improvements.length) lines.push('Biggest improvements:', ...p.improvements.map((i) => `  ${i.test}: ${core.fmtValue(i.first, i.unit)} to ${core.fmtValue(i.latest, i.unit)} (+${i.pct}%)`), '');
+    if (p.prs.length) lines.push(`New personal records: ${p.prs.map((x) => `${x.test} (${core.fmtValue(x.value, x.unit)})`).join(', ')}.`, '');
+    for (const par of parents) {
+      const body = `Hi ${par.name.split(' ')[0]},\n\nHere is ${a.first_name}'s progress report from ${businessName()}.\n\n`
+        + (note ? `From your coach:\n${note}\n\n` : '') + lines.join('\n')
+        + `\nOpen, print or save the full report:\n${url}\n` + (link ? '' : 'Sign in with this email address if asked.\n') + `\n${businessName()}`;
+      sendEmail(par.email, `${a.first_name}'s progress report`, body);
+    }
+    log(req, 'Emailed progress report', `${a.first_name} ${a.last_name} to ${parents.length === 1 ? parents[0].email : `${parents.length} parents`}${link ? ', with a 90-day link' : ''}`);
+    res.json({ ok: true, emails: parents.length, to: parents.map((x) => x.email), unshared: core.progress(a.id, { view: 'staff' }).unshared });
+  }));
 }
 
 module.exports = {

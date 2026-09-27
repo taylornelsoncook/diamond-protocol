@@ -1,7 +1,19 @@
 // Floor operations helpers: session lists with counts, local dates for UTC timestamps, athlete lookups.
 'use strict';
-const { get, all, setting } = require('../db');
+const { db, get, all, setting } = require('../db');
 const { ageOn } = require('../lib');
+
+// Schedule schema added after launch: time off (a coach away, or the whole facility closed) and a staff-only
+// note on a session. Both upgrade existing databases in place on start.
+db.exec(`CREATE TABLE IF NOT EXISTS time_off (
+  id INTEGER PRIMARY KEY, coach_id INTEGER REFERENCES staff(id), -- NULL = the whole facility is closed
+  start_date TEXT NOT NULL, end_date TEXT NOT NULL, note TEXT, created_at TEXT DEFAULT (datetime('now')));`);
+if (!all('PRAGMA table_info(events)').some((c) => c.name === 'staff_note')) db.exec('ALTER TABLE events ADD COLUMN staff_note TEXT');
+
+// Is this coach (or everyone) off on this local date? Off days offer no private or evaluation times.
+function isTimeOff(coachId, date) {
+  return !!get('SELECT 1 FROM time_off WHERE ? BETWEEN start_date AND end_date AND (coach_id IS NULL OR coach_id IS ?)', date, coachId ?? null);
+}
 
 // "2026-09-26 18:03:11" (UTC, SQLite) or ISO → local "YYYY-MM-DD" in the business time zone.
 function localDateOf(ts) {
@@ -32,16 +44,18 @@ function eventById(id) {
 
 // Everything a roster row needs about an athlete: age, family, first parent phone, medical flags, card on file.
 function athleteCard(a, on) {
-  const fam = a.family_id ? get('SELECT id,name,card_brand,card_last4 FROM families WHERE id=?', a.family_id) : null;
+  const fam = a.family_id ? get('SELECT id,name,card_brand,card_last4,waiver_version FROM families WHERE id=?', a.family_id) : null;
   const parent = a.family_id ? get('SELECT name, phone, email FROM parents WHERE family_id=? ORDER BY is_self DESC, id LIMIT 1', a.family_id) : null;
   return {
     id: a.id, code: a.code, first_name: a.first_name, last_name: a.last_name, age: ageOn(a.birthday, on), team_id: a.team_id,
     family: fam?.name || null, family_id: fam?.id || null, card: fam?.card_last4 ? { brand: fam.card_brand, last4: fam.card_last4 } : null,
     parent_name: parent?.name || null, parent_phone: parent?.phone || a.emergency_phone || null,
     allergies: a.allergies || null, injuries: a.injuries || null, medical_notes: a.medical_notes || null,
+    waiver_missing: !!fam && Number(fam.waiver_version || 0) < Number(setting('waiver_version', 1)),
+    birthday_today: !!(a.birthday && on && String(a.birthday).slice(5, 10) === String(on).slice(5, 10)),
   };
 }
 
 const fullName = (a) => (a ? `${a.first_name} ${a.last_name}` : '');
 
-module.exports = { localDateOf, eventsBetween, eventById, athleteCard, fullName };
+module.exports = { localDateOf, eventsBetween, eventById, athleteCard, fullName, isTimeOff };

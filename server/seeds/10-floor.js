@@ -5,6 +5,7 @@ const { get, all, run, insert, update, tx } = require('../db');
 const { addDays, ageOn } = require('../lib');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
+require('../services/floor-util'); // time off table and session notes
 
 function seed() {
   const coach = get("SELECT id FROM staff WHERE role='coach' ORDER BY id LIMIT 1");
@@ -117,6 +118,12 @@ function seed() {
       const a = A(n);
       if (a && !a.birthday) { const md = addDays(T, ahead).slice(5); update('athletes', a.id, { birthday: `${md === '02-29' ? 2008 : 2009}-${md}` }); }
     }
+
+    // Schedule extras: a staff note on today's session, a one-off makeup session and a coach's day off.
+    update('events', first.id, { staff_note: 'Sled work today. Set up the turf lane before the session starts.' });
+    insert('events', { type: 'class', name: 'Makeup: Park Sprint Club', starts_at: `${addDays(T, 5)}T10:00`, duration_min: 45, capacity: 10, price_cents: 2500,
+      location_id: loc.park || loc.facility, coach_id: coach?.id, staff_note: 'Makeup for the rained-out Friday session.' });
+    if (coach) insert('time_off', { coach_id: coach.id, start_date: addDays(T, 9), end_date: addDays(T, 9), note: 'Coaching clinic in Salt Lake City' });
   });
 }
 

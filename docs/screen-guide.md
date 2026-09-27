@@ -110,14 +110,18 @@ _Where: Schedule_
 
 [Owner] [Coach] [Front desk] 
 
-Every class, camp, clinic, team session, private and evaluation for the next two weeks, with who's booked and who hasn't paid.
+Every class, camp, clinic, team session, private and evaluation, two weeks at a time, with who's booked and who hasn't paid.
 
-- Tap a session to open its roster.
-- To add a weekly class: Add class or camp, then fill in the name, type, days, start time, length, spots, ages and price. For camps and clinics, set a registration price and a last day.
+- Tap a session to open its roster. Sessions on now say On now; finished ones are dimmed with a check-in bar. Full sessions, unpaid bookings and waitlists are flagged, and a staff note shows under the session.
+- Move a week at a time with Previous week and Next week (Today brings you back). Find a session by name, place or coach, and filter by type (group classes, camps and clinics, team sessions, privates and evaluations), coach (or My sessions) and place. The filters stay in the address, so a reload or a shared link shows the same view. The line under the filters totals the sessions, bookings, unpaid and waitlisted in view.
+- Days a coach is off, or the facility is closed, are marked on the day.
+- To add a weekly class: Add class or camp, then fill in the name, type, days, start time, length, spots, ages, price and coach ("No coach set" leaves it open). For camps and clinics, set a first and last day, a registration price and a last day to register (inside the camp).
 - Save it. Sessions are created automatically, eight weeks ahead for weekly classes.
+- Add one session for a makeup or a one-time clinic: name, date, time, length, spots, place, coach, price and a note for staff. Parents can book it like any class.
+- Edit a class to change its name, days, time, length, spots, ages, place, coach or price. Every upcoming session follows. If the time or place changes, booked families are emailed; sessions on days you take away are cancelled (credits back, families emailed); new days are added. Spots can't go below what an upcoming session already has booked. Coaches edit without seeing prices, and prices stay as they were.
 - Archive a class to cancel its future sessions. Credits go back and families are emailed.
 
-> Note: Front desk can view the schedule and manage bookings, but only owners and coaches create classes.
+> Note: Front desk can view the schedule and manage bookings, but only owners and coaches add, edit or archive classes and sessions. Only owners see prices in the schedule list and the classes list.
 
 ### Session roster
 
@@ -125,15 +129,18 @@ _Where: Schedule, then a session_
 
 [Owner] [Coach] [Front desk] 
 
-Run a session: check athletes in, see medical flags and parent phone numbers, and collect from anyone unpaid.
+Run a session: check athletes in, see medical flags, missing waivers and parent phone numbers, and collect from anyone unpaid.
 
-- Tap Check in as each athlete arrives. Tap again to undo.
-- Each athlete shows how they're covered: Member, Credit, Paid, Registered or Unpaid.
-- For Unpaid, tap Collect and choose card on file, cash or Tap to Pay. The booking is marked paid when the payment goes through.
-- Add a walk-in with Add an athlete. A full session puts them on the waitlist, which moves up automatically when someone cancels.
-- Cancel this session (for weather, say): credits go back, drop-ins are refunded and families get an email with your reason.
+- Tap Check in as each athlete arrives. Tap again to undo. The page stays where you are, so you can work down a long roster on a phone.
+- Each athlete shows how they're covered: Member, Credit, Paid, Registered or Unpaid. Rows flag allergies, injuries, medical notes, No waiver and a birthday today. After a session ends, anyone not checked in shows No-show.
+- For Unpaid, tap Collect and choose card on file, cash or Tap to Pay. The booking is marked paid when the payment goes through; a declined card says so and the booking stays unpaid.
+- Add a walk-in: type a name, Athlete ID or email and tap the match, or press Enter when there's only one. A full session puts them on the waitlist, which moves up automatically when someone cancels. Move up books someone from the waitlist now, even over the spots (it asks first), and emails the family.
+- Email families sends a message to everyone booked (and the waitlist if you tick it), signed with your name: "Starting 10 minutes late", "Bring your cleats". Team sessions go to the whole team.
+- Print roster gives a clean sign-in sheet with a box by each name.
+- Edit session (owners and coaches) changes just this session: date and time, length, spots, place, coach (a sub) and a note for staff. Booked families are emailed if the day, time or place changes (you can turn that off). More spots move the waitlist up.
+- Cancel this session (for weather, say): credits go back, drop-ins are refunded and families get an email with your reason. For a team session the school contact is emailed too.
 
-> Note: Team sessions show the team's roster instead, with one-tap "Everyone's here".
+> Note: Team sessions show the team's roster instead, with one-tap "Everyone's here", and guests can be added below.
 
 ### Hours & settings
 
@@ -141,9 +148,13 @@ _Where: Schedule, then Hours & settings_
 
 [Owner] [Coach] 
 
-When parents can book privates and evaluations, and the policies the whole platform follows.
+When parents can book privates and evaluations, time off, and the policies the whole platform follows.
 
-- Add your hours for private training and evaluations: day, time range, slot length, location, and a price for evaluations. Parents see open times in the portal; anything already on your schedule blocks them.
+- Add your hours for private training and evaluations: pick every day they repeat (Monday to Friday in one go), the time range, slot length, location, coach, and a price for evaluations. Parents see open times in the portal; anything already on that coach's schedule blocks them. If one of the days overlaps existing hours, nothing is added and it tells you which.
+- The line at the top shows how many private and evaluation times parents can book in the next seven days, and the next one.
+- Hours are grouped into Privates and Evaluations. Removing hours asks first; anything already booked stays booked.
+- Add time off for a coach (or Facility closed for a holiday): first day, last day and a note. Parents aren't offered private or evaluation times on those days, and the schedule marks them. It tells you if privates or evaluations are already booked on those days so you can move them. Classes don't change: cancel those sessions from the schedule.
+- Turn rankings on or off for athletes and parents.
 - Set your time zone and the late-cancel window (cancels inside it still use the session).
 - Choose when parents see test results: after you share a testing day, or as soon as results are saved.
 - Add the business address and "how to pay" line that print on school invoices.

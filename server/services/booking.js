@@ -193,7 +193,9 @@ function openSlots(kind, fromDate, days = 21) {
         const starts_at = `${d}T${t}`;
         if (starts_at <= now) continue;
         const endM = m + h.slot_min;
-        const clash = all(`SELECT starts_at, duration_min FROM events WHERE cancelled=0 AND substr(starts_at,1,10)=? AND (coach_id IS NULL OR coach_id=? OR type IN ('private','evaluation'))`, d, h.coach_id)
+        // Anything on this coach's schedule (or nobody's) blocks the time; another coach's private does not.
+        const clash = all(`SELECT starts_at, duration_min FROM events WHERE cancelled=0 AND substr(starts_at,1,10)=?
+            AND (coach_id IS NULL OR coach_id=? OR (? IS NULL AND type IN ('private','evaluation')))`, d, h.coach_id, h.coach_id)
           .some((e) => { const s = toMin(e.starts_at.slice(11, 16)); return s < endM && s + e.duration_min > m; });
         if (!clash) out.push({ starts_at, duration_min: h.slot_min, location_id: h.location_id, price_cents: h.price_cents, coach_id: h.coach_id, availability_id: h.id });
       }

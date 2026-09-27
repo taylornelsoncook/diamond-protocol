@@ -175,3 +175,4 @@ details.panel:not([open]){gap:0}
 .bk-body .bk-booked .s-row{grid-template-columns:92px minmax(0,1fr) auto}
 .bk-body .s-when{overflow-wrap:anywhere}
 @media (max-width:380px){ .bk-body .bk-booked .s-row{grid-template-columns:80px minmax(0,1fr) auto} }
+.bk-body .bk-booked .s-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;line-clamp:3;overflow:hidden}

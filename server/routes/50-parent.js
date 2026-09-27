@@ -10,7 +10,7 @@ const booking = require('../services/booking');
 const billing = require('../services/billing');
 const { luhnValid, cardBrand, parseExpiry } = require('../services/parent-card');
 const cal = require('../services/parent-calendar');
-const { endAt, bookedBetween, clashIn, whenText } = require('../services/parent-book');
+const { endAt, bookedBetween, clashIn, clashText, whenText } = require('../services/parent-book');
 
 const ATHLETE_FIELDS = ['first_name', 'last_name', 'birthday', 'sex', 'sport', 'position', 'school', 'allergies', 'injuries', 'medical_notes', 'emergency_name', 'emergency_phone'];
 const BOOKABLE_TYPES = ['class', 'camp', 'clinic'];
@@ -157,7 +157,7 @@ function routes(api) {
     }
     // One place at a time: a waitlist spot counts too, since it books itself when a spot opens.
     const clash = clashIn(bookedBetween(a.id, e.starts_at, endAt(e.starts_at, e.duration_min)), e.starts_at, e.duration_min, e.id);
-    if (clash) throw bad(`${a.first_name} is already booked for ${clash.name} at that time (${whenText(clash.starts_at)}). Cancel that first, or pick another session.`, { clash_event_id: clash.id });
+    if (clash) throw bad(`${a.first_name} is already ${clashText(clash)} at that time (${whenText(clash.starts_at)}). Cancel that first, or pick another session.`, { clash_event_id: clash.id });
     const pay = req.body.pay === 'card' ? 'card' : null;
     const full = e.capacity && e.booked >= e.capacity;
     if (!full) {
@@ -177,12 +177,17 @@ function routes(api) {
       WHERE b.id=? AND a.family_id=?`, Number(req.params.id) || 0, req.parent.family_id);
     if (!b) throw notFound('That booking');
     if (b.status === 'booked' && (b.checked_in_at || b.starts_at <= booking.nowLocal())) throw bad('That session has already started, so it can’t be cancelled here. Talk to the front desk.');
-    const r = booking.cancelBooking(b.id, { byParent: true });
     // A private or evaluation is its own session: with nobody left on it, the time opens up again for booking.
     let freed = false;
-    if (['private', 'evaluation'].includes(b.type) && !get("SELECT 1 FROM bookings WHERE event_id=? AND status IN ('booked','waitlist')", b.event_id)) {
-      run("UPDATE events SET cancelled=1, cancel_reason='Cancelled by the family' WHERE id=? AND cancelled=0", b.event_id);
-      freed = true;
+    const r = tx(() => {
+      const out = booking.cancelBooking(b.id, { byParent: true });
+      if (['private', 'evaluation'].includes(b.type) && !get("SELECT 1 FROM bookings WHERE event_id=? AND status IN ('booked','waitlist')", b.event_id)) {
+        run("UPDATE events SET cancelled=1, cancel_reason='Cancelled by the family' WHERE id=? AND cancelled=0", b.event_id);
+        freed = true;
+      }
+      return out;
+    });
+    if (freed) {
       tellCoach(b.coach_id, `Cancelled: ${b.first_name} ${b.last_name}, ${whenText(b.starts_at)}`,
         `${b.first_name} ${b.last_name}'s ${b.type} on ${whenText(b.starts_at)} was cancelled by the family.${r.late ? ' It was inside the late-cancel window, so the session still counts as used.' : ''} The time is open again for booking.`);
     }
@@ -224,7 +229,7 @@ function routes(api) {
         my_booking_id: r.my_booking_id, my_status: r.my_status, my_coverage: r.my_coverage, my_paid_cents: r.my_paid_cents || 0,
         waitlist_pos: r.my_status === 'waitlist' ? r.my_waitlist_pos : null,
         late: booking.hoursUntil(r.starts_at) < lateH,
-        clash: clash ? { name: clash.name, starts_at: clash.starts_at } : null,
+        clash: clash ? { name: clash.name, starts_at: clash.starts_at, status: clash.status } : null,
         needs_registration: needsReg, reg_price_cents: r.reg_price_cents,
         reg_days: r.reg_price_cents ? daysOf(r.class_id) : null,
         reg_closed: !!(needsReg && r.reg_deadline && r.reg_deadline < T),
@@ -285,7 +290,7 @@ function routes(api) {
     if (kind === 'evaluation') needCard(family(req));
     const slotLen = booking.openSlots(kind, starts_at.slice(0, 10), 1).find((s) => s.starts_at === starts_at && (!coachId || s.coach_id === coachId))?.duration_min || 60;
     const clash = clashIn(bookedBetween(a.id, starts_at, addDays(starts_at.slice(0, 10), 1) + 'T00:00'), starts_at, slotLen);
-    if (clash) throw bad(`${a.first_name} is already booked for ${clash.name} at that time. Pick another time.`, { clash_event_id: clash.id });
+    if (clash) throw bad(`${a.first_name} is already ${clashText(clash)} at that time. Pick another time.`, { clash_event_id: clash.id });
     const b = booking.bookSlot(kind, starts_at, a.id, { source: 'parent', coachId });
     if (note) update('bookings', b.id, { note });
     const ev = get('SELECT coach_id FROM events WHERE id=?', b.event_id);

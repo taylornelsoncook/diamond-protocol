@@ -25,6 +25,7 @@ function dayWord(s) {
 const timeRange = (s, min) => `${clock(s)} to ${endClock(s, min)}`;
 const when = (s) => `${dayLong(s)} at ${clock(s)}`;
 const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
+const clashWhat = (c) => `${c.status === 'waitlist' ? 'on the waitlist' : 'booked'} for ${c.name}`;
 const cardBack = (path) => `/parent/card?back=${encodeURIComponent(path)}`;
 function mapLink(location, address) {
   const q = encodeURIComponent([location, address].filter(Boolean).join(', '));
@@ -170,7 +171,7 @@ export async function render(ctx) {
     const tags = [
       e.my_status === 'booked' ? badge('active', e.my_coverage === 'registered' ? 'Registered' : 'Booked') : '',
       e.my_status === 'waitlist' ? html`<span class="badge badge-neutral">Waitlist${e.waitlist_pos ? ` · ${ordinal(e.waitlist_pos)} in line` : ''}</span>` : '',
-      e.clash ? html`<span class="s-late">${ath.first_name} is booked for ${e.clash.name} then</span>` : '',
+      e.clash ? html`<span class="s-late">${ath.first_name} is ${clashWhat(e.clash)} then</span>` : '',
       e.reg_closed ? html`<span class="s-late">Registration closed</span>` : '',
     ].filter(Boolean);
     return html`<div class="s-row">
@@ -215,7 +216,7 @@ export async function render(ctx) {
           <dt>Payment</dt><dd>${payLine(ath, e, data.card_label)}</dd>
         </dl>
         ${e.full && !e.my_status && !e.clash ? html`<p class="hint" style="margin:0">Join the waitlist and ${ath.first_name} moves up automatically when a spot opens. We email you when that happens.</p>` : ''}
-        ${e.clash ? html`<div class="banner" style="display:block">${ath.first_name} is already booked for ${e.clash.name} at ${clock(e.clash.starts_at)}. Cancel that first to book this one.</div>` : ''}
+        ${e.clash ? html`<div class="banner" style="display:block">${ath.first_name} is already ${clashWhat(e.clash)} at ${clock(e.clash.starts_at)}. ${e.clash.status === 'waitlist' ? 'Leave that waitlist' : 'Cancel that'} first to book this one.</div>` : ''}
         ${e.reg_closed ? html`<div class="banner" style="display:block">Registration for ${e.name} has closed. Ask at the front desk.</div>` : ''}
         ${e.my_coverage === 'registered' ? html`<p class="hint" style="margin:0">Can't make a camp day? Tell the front desk.</p>` : ''}
         ${e.late && e.my_status === 'booked' && e.my_coverage !== 'registered' ? html`<p class="hint" style="margin:0">It starts within ${lateH} hours, so cancelling now still counts as used.</p>`
@@ -223,7 +224,8 @@ export async function render(ctx) {
         ${e.my_status === 'booked' || map ? html`<div class="btn-row">
           ${e.my_status === 'booked' ? html`<a class="btn btn-sm" href="/api/parent/bookings/${e.my_booking_id}/ics" download="session.ics">${svg(CAL_ADD)} Add to calendar</a>` : ''}
           ${map ? html`<a class="btn btn-sm btn-ghost" href="${map}" target="_blank" rel="noopener">Directions</a>` : ''}</div>` : ''}`,
-      actions: [cancelAct, { label: 'Close', value: null }, primary].filter(Boolean),
+      // Close comes first so the focus a dialog opens with never lands on Cancel.
+      actions: [{ label: 'Close', value: null }, cancelAct, primary].filter(Boolean),
     });
     if (act === 'book') bookClass(e, data);
     else if (act === 'register') registerCamp(e, data);
@@ -394,7 +396,7 @@ export async function render(ctx) {
     };
     // Handled here (modal closes): the time was taken, or the card needs fixing.
     const handled = async (err) => {
-      if (/just taken|already booked/i.test(err.message)) { toastError(err); refresh(); return true; }
+      if (/just taken|already (booked|on the waitlist)/i.test(err.message)) { toastError(err); refresh(); return true; }
       return paymentError(err);
     };
 
@@ -441,10 +443,10 @@ export async function render(ctx) {
     const ok = await modal({
       title: isPrivate ? 'Book a private' : 'Book an evaluation',
       body: html`${summary}
-        <p class="muted" style="margin:0">${isPrivate ? `Uses 1 of ${ath.first_name}'s ${ath.private_credits} private ${ath.private_credits === 1 ? 'session' : 'sessions'}.` : `${money(s.price_cents)} is charged to the ${data.card_label}.`} Cancel more than ${data.late_cancel_hours} hours before and ${isPrivate ? 'it goes back on the account' : 'it is refunded'}.</p>
+        <p class="muted" style="margin:0">${isPrivate ? `Uses 1 of ${ath.first_name}'s ${ath.private_credits} private ${ath.private_credits === 1 ? 'session' : 'sessions'}. Cancel more than ${data.late_cancel_hours} hours before and it goes back on the account.` : s.price_cents ? `${money(s.price_cents)} is charged to the ${data.card_label}. Cancel more than ${data.late_cancel_hours} hours before and it is refunded.` : 'There is no charge.'}</p>
         ${noteField(s)}`,
       actions: [{ label: 'Cancel', value: false }, {
-        label: isPrivate ? 'Book private' : `Book and pay ${money(s.price_cents)}`, value: true, kind: 'primary',
+        label: isPrivate ? 'Book private' : s.price_cents ? `Book and pay ${money(s.price_cents)}` : 'Book evaluation', value: true, kind: 'primary',
         onClick: async (el) => { try { await bookIt(el); return true; } catch (err) { if (await handled(err)) return null; throw err; } },
       }],
     });
@@ -468,7 +470,7 @@ export async function render(ctx) {
         ${b.late ? html`<p class="hint" style="margin:0">It starts within ${data.late_cancel_hours} hours, so cancelling now still counts as used.</p>` : ''}
         <div class="btn-row"><a class="btn btn-sm" href="/api/parent/bookings/${b.id}/ics" download="session.ics">${svg(CAL_ADD)} Add to calendar</a>
           ${map ? html`<a class="btn btn-sm btn-ghost" href="${map}" target="_blank" rel="noopener">Directions</a>` : ''}</div>`,
-      actions: [{ label: 'Cancel booking', value: 'cancel', kind: 'ghost' }, { label: 'Close', value: null }],
+      actions: [{ label: 'Close', value: null }, { label: 'Cancel booking', value: 'cancel', kind: 'ghost' }],
     });
     if (act === 'cancel') cancelSlot(b, data);
   }

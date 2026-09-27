@@ -802,3 +802,75 @@ test('book tab endpoints stay family-scoped and parent-only', async () => {
   const avaBooking = get("SELECT b.id FROM bookings b WHERE b.athlete_id=? AND b.status='booked' LIMIT 1", ava.id);
   assert.equal((await call('DELETE', `/parent/bookings/${avaBooking.id}`, null, kurt)).status, 404);
 });
+
+// ---- review fixes ----
+test('a waitlist spot blocks booking another session at the same time, since it can turn into a booking', async () => {
+  const paulo = await signIn(PAULO);
+  const isa = athlete('Isabela', 'Silva');
+  run('UPDATE athletes SET group_credits=5 WHERE id=?', isa.id);
+  const w = makeEvent({ hours: 140, capacity: 1, name: 'Waitlisted W' });
+  const x = makeEvent({ hours: 140.5, name: 'Other X' });
+  const held = booking.book(w, athlete('Ava', 'Lopez').id, { source: 'staff' }); // fills W
+  const r1 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: w }, paulo);
+  assert.equal(r1.status, 200, JSON.stringify(r1.data));
+  assert.equal(r1.data.status, 'waitlist');
+  const list = (await call('GET', `/parent/classes?athlete_id=${isa.id}`, null, paulo)).data.events;
+  const xr = list.find((e) => e.id === x);
+  assert.equal(xr.clash?.name, 'Waitlisted W', 'the overlapping class says why it cannot be booked');
+  assert.equal(xr.clash.status, 'waitlist');
+  const r2 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: x }, paulo);
+  assert.equal(r2.status, 400, 'refused: the waitlist spot could be promoted into a double booking');
+  assert.equal(r2.data.clash_event_id, w);
+  assert.match(r2.data.error, /waitlist/);
+  // Leaving the waitlist frees the time.
+  await call('DELETE', `/parent/bookings/${r1.data.id}`, null, paulo);
+  const r3 = await call('POST', '/parent/bookings', { athlete_id: isa.id, event_id: x }, paulo);
+  assert.equal(r3.status, 200, JSON.stringify(r3.data));
+  await call('DELETE', `/parent/bookings/${r3.data.id}`, null, paulo);
+  booking.cancelBooking(held.id);
+  run('UPDATE athletes SET group_credits=3 WHERE id=?', isa.id);
+});
+
+test("one coach's private does not take another coach's hours at the same time", async () => {
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  run('UPDATE athletes SET private_credits=2 WHERE id=?', ava.id);
+  const coach = get("SELECT * FROM staff WHERE role='coach'");
+  const owner = get("SELECT * FROM staff WHERE role='owner'");
+  const mine = get("SELECT * FROM availability WHERE kind='private' AND coach_id=? ORDER BY weekday LIMIT 1", coach.id);
+  const extra = insert('availability', { kind: 'private', weekday: mine.weekday, start_time: mine.start_time, end_time: mine.end_time, slot_min: mine.slot_min, location_id: mine.location_id, coach_id: owner.id });
+  const from = require('../server/lib').addDays(booking.todayLocal(), 1);
+  const slot = booking.openSlots('private', from, 14).find((s) => s.coach_id === coach.id
+    && booking.openSlots('private', from, 14).some((o) => o.coach_id === owner.id && o.starts_at === s.starts_at));
+  assert.ok(slot, 'both coaches have that time open');
+  const r = await call('POST', '/parent/slots', { kind: 'private', starts_at: slot.starts_at, athlete_id: ava.id, coach_id: coach.id }, maria);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const open = booking.openSlots('private', slot.starts_at.slice(0, 10), 1).filter((s) => s.starts_at === slot.starts_at);
+  assert.deepEqual(open.map((s) => s.coach_id), [owner.id], 'the other coach is still free then');
+  await call('DELETE', `/parent/bookings/${r.data.id}`, null, maria);
+  run('DELETE FROM availability WHERE id=?', extra);
+});
+
+test('a late-cancelled private still opens the time, keeps the session used and tells the coach so', async () => {
+  const maria = await signIn(MARIA);
+  const ava = athlete('Ava', 'Lopez');
+  run('UPDATE athletes SET private_credits=1 WHERE id=?', ava.id);
+  const d = (await call('GET', `/parent/slots?kind=private&athlete_id=${ava.id}`, null, maria)).data;
+  const s = d.slots[d.slots.length - 1];
+  const r = await call('POST', '/parent/slots', { kind: 'private', starts_at: s.starts_at, athlete_id: ava.id, coach_id: s.coach_id }, maria);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const lateBefore = setting('late_cancel_hours', 12);
+  run("INSERT INTO settings (key, value) VALUES ('late_cancel_hours', '10000') ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+  const coach = get('SELECT * FROM staff WHERE id=?', s.coach_id);
+  const before = outboxTop();
+  const c = await call('DELETE', `/parent/bookings/${r.data.id}`, null, maria);
+  run("UPDATE settings SET value=? WHERE key='late_cancel_hours'", String(lateBefore));
+  assert.equal(c.status, 200);
+  assert.equal(c.data.late, true);
+  assert.equal(c.data.freed, true);
+  assert.equal(get('SELECT status FROM bookings WHERE id=?', r.data.id).status, 'late_cancel');
+  assert.equal(athlete('Ava', 'Lopez').private_credits, 0, 'inside the window the session stays used');
+  const mail = outboxSince(before).find((m) => m.to_email === coach.email);
+  assert.ok(mail && /still counts as used/.test(mail.body), 'the coach hears it was late');
+  assert.ok(booking.openSlots('private', s.starts_at.slice(0, 10), 1).some((x) => x.starts_at === s.starts_at && x.coach_id === s.coach_id), 'the time is open again');
+});

@@ -44,7 +44,7 @@ export function recipients(ctx, audience) {
   const athletes = ctx.db.all(`SELECT c.id, c.name, c.email, c.birth_date, c.sport, c.family_id,
       (SELECT status FROM subscriptions s WHERE s.client_id = c.id ORDER BY s.created_at DESC LIMIT 1) AS sub_status,
       (SELECT canceled_at FROM subscriptions s WHERE s.client_id = c.id ORDER BY s.created_at DESC LIMIT 1) AS canceled_at
-    FROM clients c WHERE c.family_id IS NULL OR c.family_id NOT IN (SELECT family_id FROM data_requests WHERE status = 'open' AND family_id IS NOT NULL) ORDER BY c.name`);
+    FROM clients c WHERE c.archived_at IS NULL AND (c.family_id IS NULL OR c.family_id NOT IN (SELECT family_id FROM data_requests WHERE status = 'open' AND family_id IS NOT NULL)) ORDER BY c.name`);
   for (const c of athletes) {
     const member = ['active', 'trialing', 'past_due', 'paused'].includes(c.sub_status);
     if (a.group === 'members' && !member) continue;

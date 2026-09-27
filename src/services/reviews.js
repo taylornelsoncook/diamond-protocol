@@ -62,8 +62,8 @@ export async function runReviewRequests(ctx, { asOf = ctx.now() } = {}) {
   let sent = 0;
   const done = new Set();
   for (const m of moments(ctx, asOf)) {
-    const c = ctx.db.get('SELECT id, name, family_id FROM clients WHERE id = ?', m.client_id);
-    if (!c?.family_id || done.has(c.family_id) || !eligibleFamily(ctx, c.family_id, asOf)) continue;
+    const c = ctx.db.get('SELECT id, name, family_id, archived_at FROM clients WHERE id = ?', m.client_id);
+    if (!c?.family_id || c.archived_at || done.has(c.family_id) || !eligibleFamily(ctx, c.family_id, asOf)) continue;
     const g = ctx.db.get('SELECT name, email FROM guardians WHERE family_id = ? AND email NOT IN (SELECT email FROM email_optouts) ORDER BY is_primary DESC LIMIT 1', c.family_id);
     if (!g) continue;
     done.add(c.family_id);

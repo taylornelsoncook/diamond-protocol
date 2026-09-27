@@ -86,20 +86,22 @@ function renderLogin() {
 const EVENT_TEXT = {
   'client.created': (d) => `${d.client_name} joined`,
   'client.updated': (d) => `${d.client_name}'s details were updated`,
+  'client.archived': (d) => `${d.client_name} was archived${d.by ? ` by ${d.by}` : ''}${d.bookings_canceled ? ` (${d.bookings_canceled} ${d.bookings_canceled === 1 ? 'booking' : 'bookings'} canceled)` : ''}`,
+  'client.restored': (d) => `${d.client_name} was brought back from the archive`,
   'subscription.created': (d) => `${d.client_name} started ${d.plan_name}${d.status === 'trialing' ? ' (free trial)' : ''}`,
   'subscription.updated': (d) => d.previous_plan_name ? `${d.client_name} moved to ${d.plan_name}` : `${d.client_name}'s membership is now ${d.status.replace('_', ' ')}`,
   'invoice.paid': (d) => `Payment of ${money(d.amount_cents)} received from ${d.client_name}`,
   'invoice.payment_failed': (d) => `Payment of ${money(d.amount_cents)} failed for ${d.client_name}${d.final ? '. Membership canceled.' : ''}`,
   'program.assigned': (d) => `${d.client_name} started ${d.program_name}`,
   'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises)`,
-  'sale.completed': (d) => `${d.client_name} paid ${money(d.amount_cents)} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
-  'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment of ${money(d.amount_cents)} from ${d.client_name} didn't go through`,
+  'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
+  'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment${d.amount_cents == null ? '' : ` of ${money(d.amount_cents)}`} from ${d.client_name} didn't go through`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
   'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
   'purchase.completed': (d) => `${d.client_name} got ${d.title} from the online store`,
-  'spots.offered': (d) => `Open spots in ${d.session_name} offered to ${d.families} ${d.families === 1 ? 'family' : 'families'}`,
-  'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
+  'spots.offered': (d) => d.trial ? `Trial offer for ${d.session_name}${d.price_cents != null ? ` at ${d.price_cents === 0 ? 'no charge' : money(d.price_cents)}` : ''} sent to ${d.families} ${d.families === 1 ? 'family' : 'families'}` : `Open spots in ${d.session_name} offered to ${d.families} ${d.families === 1 ? 'family' : 'families'}`,
+  'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.trial_offer ? ` from a trial offer${d.price_cents != null ? ` (${d.price_cents === 0 ? 'free' : money(d.price_cents)})` : ''}` : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
   'booking.waitlisted': (d) => `${d.client_name} joined the waitlist for ${d.session_name}`,
   'booking.canceled': (d) => `${d.client_name} canceled ${d.session_name}${d.late ? ' (late)' : ''}`,
   'session.canceled': (d) => `${d.name} canceled${d.reason ? `: ${d.reason}` : ''}`,
@@ -125,12 +127,13 @@ const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', ca
 
 async function viewToday(main) {
   const staff = state.user.role !== 'front_desk';
-  const [d, rev, ag, flags, risk, spots] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null, staff ? get('/v1/open-spots').catch(() => null) : null]);
+  const mineSpots = state.user.role === 'coach' && hashQuery().get('mine') === '1';     // coaches: "My classes only" on the open-spots list
+  const [d, rev, ag, flags, risk, spots, team] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null,
+    staff ? get(`/v1/open-spots${mineSpots ? '?coach_id=me' : ''}`).catch(() => null) : null, isOwner() ? get('/v1/coach-summary').catch(() => null) : null]);
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
-  const m = d.metrics;
-  const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--primary', href: '#/sell' }, 'New sale') },
+  const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'New sale') },
     rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
       : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
   const attention = d.attention.map((a) => {
@@ -158,31 +161,24 @@ async function viewToday(main) {
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is running low` : `${a.count} items are running low`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name}: ${x.on_hand <= 0 ? 'out' : `${x.on_hand} left`}`).join(' · '))),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/sell/inventory' }, 'Inventory'));
     if (a.kind === 'results_waiting') return h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until you link them.`)),
-      h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until ${a.can_link === false ? 'a coach links' : 'you link'} them.`)),
+      a.can_link === false ? null : h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
     if (a.kind === 'trial_ending') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `Free trial ends ${date(a.trial_ends_at)}. First charge ${money(a.amount_cents)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.client_id}` }, 'View client'));
     if (a.kind === 'sale_pending') return h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, `${money(a.amount_cents)} ${METHOD_LABEL[a.method]} payment at ${a.location_name} is still waiting.`)),
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, `${a.amount_cents == null ? '' : `${money(a.amount_cents)} `}${METHOD_LABEL[a.method]} payment at ${a.location_name} is still waiting.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/sell' }, 'Review'));
     return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `No workout logged since ${date(a.last_workout_at)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.client_id}` }, 'Check in'));
   });
   fill(main, 
-    header('Today', isOwner() ? `Revenue, clients and anything that needs a decision. ${money(d.today_sales.cents)} in person today.` : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
-    !isOwner() ? h('div', { class: 'metrics' },
-      metric('Active clients', m.paying_clients + m.trialing_clients, `${m.trialing_clients} on free trial`),
-      metric('Sessions today', ag.sessions.length, `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked`),
-      metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)) :
-    h('div', { class: 'metrics' },
-      metric('Monthly recurring revenue', money(m.mrr_cents + d.teams.monthly_cents), d.teams.active_contracts ? `${money(m.mrr_cents)} memberships · ${money(d.teams.monthly_cents)} teams` : `${m.paying_clients} paying ${m.paying_clients === 1 ? 'client' : 'clients'}`),
-      metric('Active clients', m.paying_clients + m.trialing_clients, `${m.trialing_clients} on free trial`),
-      metric('Payments failed', m.past_due_clients, `${money(m.at_risk_cents)} at risk this month`, m.past_due_clients ? 'warn' : null),
-      metric('Workouts logged', m.workouts_last_7_days, 'Last 7 days', m.workouts_last_7_days ? 'good' : null)),
+    header('Today', isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
+    pulseBlock(d.pulse),
     agendaPanel,
-    spots?.data.length ? spotsPanel(spots) : null,
+    team ? coachesPanel(team) : null,
+    spots ? spotsPanel(spots, { mine: mineSpots }) : null,
     flags,
     risk?.data.length ? panel('Athletes to check on', { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick message usually brings them back.' },
       risk.data.slice(0, 6).map((r) => h('div', { class: 'list-item' },
@@ -196,19 +192,156 @@ async function viewToday(main) {
     revPanel);
 }
 
-// Classes in the next 2 days with open spots and nobody waiting. One tap offers the spots to families who fit.
-function spotsPanel(spots) {
+// The small-print summary under Today's header: many numbers, each with one line of detail. Tiles open the screen behind them.
+const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
+function pulseTile(label, value, detail, { tone, href } = {}) {
+  const body = [h('div', { class: 'pulse-label' }, label), h('div', { class: `pulse-value${tone ? ' pulse-value--' + tone : ''}` }, value), detail ? h('div', { class: 'pulse-detail' }, detail) : null];
+  return href ? h('a', { class: 'pulse-tile', href }, ...body) : h('div', { class: 'pulse-tile' }, ...body);
+}
+function pulseBlock(p) {
+  if (!p) return null;
+  const c = p.clients, att = p.attendance.came + p.attendance.missed, tiles = [];
+  if (p.money) {
+    const mo = p.money, diff = mo.month.total - mo.same_point_last_month;
+    tiles.push(
+      pulseTile('Collected this month', money(mo.month.total), mo.same_point_last_month || mo.month.total ? `${diff >= 0 ? '+' : '−'}${money(Math.abs(diff))} vs this point last month` : 'Nothing collected yet', { href: '#/billing' }),
+      pulseTile('In person today', money(mo.today_cents), `${mo.today_sales} ${mo.today_sales === 1 ? 'sale' : 'sales'}`, { href: '#/sell' }),
+      ...mo.locations.slice(0, 4).map((l) => pulseTile(`At ${l.name}`, money(l.cents), `This month · ${l.sales} ${l.sales === 1 ? 'sale' : 'sales'} in person`, { href: '#/sell' })),
+      pulseTile('Monthly recurring', money(mo.mrr_cents), `${money(mo.member_mrr_cents)} members · ${money(mo.team_mrr_cents)} teams`, { href: '#/billing' }),
+      pulseTile('Average per member', mo.paying_members ? money(Math.round(mo.member_mrr_cents / mo.paying_members)) : '–', `${mo.paying_members} paying ${mo.paying_members === 1 ? 'member' : 'members'}`, { href: '#/clients?status=current' }),
+      pulseTile('Average spend per client', money(mo.avg_spend_cents), `This month · ${mo.paying_clients_this_month} ${mo.paying_clients_this_month === 1 ? 'client' : 'clients'} paid`, { href: '#/billing' }));
+  }
+  tiles.push(
+    pulseTile('Active clients', c.active, `${c.trialing} on trial · ${c.new_this_month} added this month`, { href: '#/clients?status=current' }),
+    pulseTile('New members', p.new_members.this_month, p.new_members.this_month ? `This month${p.new_members.trialing ? ` · ${p.new_members.trialing} on trial` : ''}` : 'None yet this month', { tone: p.new_members.this_month ? 'good' : null, href: '#/clients?status=current' }),
+    pulseTile('Cancellations', c.canceled_this_month, c.canceled_this_month ? `This month · ${pct(c.canceled_this_month, c.active + c.canceled_this_month)} of members` : 'None this month', { tone: c.canceled_this_month ? 'warn' : null, href: '#/clients' }));
+  if (p.money) {
+    const mo = p.money;
+    tiles.push(
+      pulseTile('Failed payments', money(mo.failed_cents), mo.failed_invoices ? `${mo.failed_invoices} ${mo.failed_invoices === 1 ? 'charge' : 'charges'} to retry` : 'Everyone is paid up', { tone: mo.failed_invoices ? 'warn' : null, href: '#/billing' }),
+      pulseTile('Team invoices open', money(mo.team_open_cents), mo.team_overdue ? `${money(mo.team_overdue_cents)} overdue on ${mo.team_overdue}` : 'Nothing overdue', { tone: mo.team_overdue ? 'warn' : null, href: '#/teams' }));
+  }
+  tiles.push(
+    pulseTile('Sessions today', p.today.sessions, p.today.capacity ? `${p.today.booked} of ${p.today.capacity} spots filled (${pct(p.today.booked, p.today.capacity)})` : 'Nothing scheduled', { href: '#/schedule' }),
+    pulseTile('Attendance, 7 days', pct(p.attendance.came, att), att ? `${p.attendance.came} came · ${p.attendance.missed} no-shows` : 'No sessions checked in yet', { tone: att && p.attendance.came / att < 0.8 ? 'warn' : null }),
+    pulseTile('Booked, next 7 days', p.bookings_next_7_days, 'Spots booked on the schedule', { href: '#/schedule' }),
+    pulseTile('Workouts logged', p.workouts.last_7_days, `Last 7 days · ${p.workouts.athletes} ${p.workouts.athletes === 1 ? 'athlete' : 'athletes'}`, { tone: p.workouts.last_7_days ? 'good' : null, href: '#/programs' }),
+    pulseTile('Most active members', p.most_active.length ? p.most_active[0].name.split(' ')[0] : '–', p.most_active.length ? `30 days · ${p.most_active.map((a) => `${a.name.split(' ')[0]} ${a.sessions + a.workouts}`).join(' · ')}` : 'No sessions or workouts in 30 days', { href: p.most_active.length ? `#/clients/${p.most_active[0].client_id}` : '#/clients' }),
+    pulseTile('Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
+  return h('section', { class: 'pulse', 'aria-label': 'How the business is doing' }, ...tiles);
+}
+
+
+// Every class families book single spots in (group classes, clinics, camp days) with a spot left in the next 7 days,
+// whoever leads it. One tap offers the spots to families who fit; owners can also send a "try it for $X" trial offer.
+const offerLine = (o) => [
+  o.sent - o.trial_sent > 0 ? `${o.sent - o.trial_sent} offered` : null,
+  o.trial_sent ? `Trial offer sent${o.trial_price_cents != null ? ` at ${o.trial_price_cents === 0 ? 'no charge' : money(o.trial_price_cents)}` : ''} to ${o.trial_sent} ${o.trial_sent === 1 ? 'family' : 'families'}` : null,
+  o.sent ? `${o.opened} opened, ${o.booked} booked` : null].filter(Boolean).join(' · ');
+function spotsPanel(spots, { mine = false } = {}) {
   const auto = spots.mode === 'auto';
-  const mode = isOwner() ? select([['suggest', 'Send offers when I tap'], ['auto', 'Send offers automatically'], ['off', 'Don\'t show this']], { value: spots.mode, 'aria-label': 'Open spot offers', style: 'width:auto' }) : null;
-  if (mode) mode.addEventListener('change', () => busy(mode, async () => { await patch('/v1/settings', { open_spot_offers: mode.value }); toast(mode.value === 'auto' ? 'Offers go out on their own between 10 am and 7 pm.' : 'Saved.'); render(); }));
-  return panel('Classes with open spots', { subtitle: auto ? 'Offers go out on their own between 10 am and 7 pm, a day ahead. First family to tap the link gets the spot.' : 'Offer the spots to families who fit: regulars of the class first, then members and recent athletes. First to tap the link gets it.', action: mode },
-    spots.data.map((x) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('a', { href: `#/schedule/${x.id}`, class: 'strong', style: 'color:var(--steel)' }, x.name),
-        h('span', { class: 'small muted' }, `${new Intl.DateTimeFormat('en-US', { timeZone: tzName, weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(x.starts_at))} · ${x.location_name} · ${x.spots_left} of ${x.capacity} open`),
-        h('span', { class: 'small muted' }, [x.offers.sent ? `${x.offers.sent} offered, ${x.offers.opened} opened, ${x.offers.booked} booked` : null, x.families_who_fit ? `${x.families_who_fit} more ${x.families_who_fit === 1 ? 'family fits' : 'families fit'}` : 'No more families who fit'].filter(Boolean).join(' · '))),
-      x.families_who_fit ? btn(`Offer to ${Math.min(x.families_who_fit, x.spots_left * 4, 30)} ${Math.min(x.families_who_fit, x.spots_left * 4, 30) === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => {
-        const r = await post(`/v1/sessions/${x.id}/offer-spots`); toast(`Offered to ${r.sent} ${r.sent === 1 ? 'family' : 'families'}. First to tap gets it.`); render();
-      }), 'outline') : null)));
+  let action = null;
+  if (isOwner()) {
+    action = select([['suggest', 'Send offers when I tap'], ['auto', 'Send offers automatically'], ['off', 'Don\'t send offers']], { value: spots.mode, 'aria-label': 'Open spot offers', style: 'width:auto' });
+    action.addEventListener('change', () => busy(action, async () => { await patch('/v1/settings', { open_spot_offers: action.value }); toast(action.value === 'auto' ? 'Offers go out on their own between 10 am and 7 pm.' : action.value === 'off' ? 'Offers are off. Classes with open spots still show here.' : 'Saved.'); render(); }));
+  } else if (state.user.role === 'coach') {
+    const box = h('input', { type: 'checkbox', checked: mine });
+    box.addEventListener('change', () => { location.hash = box.checked ? '#/today?mine=1' : '#/today'; });
+    action = h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, box, h('span', null, 'My classes only'));
+  }
+  const subtitle = `Every class with a spot left in the next ${spots.days} days, soonest first. ${auto ? 'Offers go out on their own between 10 am and 7 pm for classes and clinics starting within 30 hours; send the rest by hand.' : spots.mode === 'off' ? 'Offers are off, so nothing goes out.' : 'Offer spots to families who fit: regulars first, then members and recent athletes. First to tap the link gets it.'}`;
+  const row = (x) => {
+    const n = x.offer_count;
+    return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { style: 'width:76px;flex-shrink:0;font:600 17px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('a', { href: `#/schedule/${x.id}`, class: 'strong', style: 'color:var(--steel)' }, x.name),
+        h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'}`),
+        h('span', { class: 'small' }, `${x.booked} of ${x.capacity} booked · `, h('span', { class: x.spots_left <= 2 ? 'warn-text' : '' }, `${x.spots_left} ${x.spots_left === 1 ? 'spot' : 'spots'} left`), ` · ${x.families_who_fit} ${x.families_who_fit === 1 ? 'family fits' : 'families fit'}`),
+        x.offers.sent ? h('span', { class: 'small muted' }, offerLine(x.offers)) : null,
+        x.can_offer ? null : h('span', { class: 'small muted' }, x.offer_note)),
+      h('div', { class: 'row wrap', style: 'gap:8px;margin-left:auto;justify-content:flex-end' },
+        kindBadge(x.kind),
+        x.can_offer ? btn(`Offer to ${n} ${n === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => {
+          const r = await post(`/v1/sessions/${x.id}/offer-spots`); toast(`Offered to ${r.sent} ${r.sent === 1 ? 'family' : 'families'}. First to tap gets it.`); render();
+        }), 'outline') : null,
+        isOwner() && x.can_trial ? btn('Trial offer', () => trialOfferDialog(x), 'ghost', { title: 'Send "try this session for $X"' }) : null));
+  };
+  const byDay = new Map();
+  for (const x of spots.data) { const k = dayOf(x.starts_at); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(x); }
+  const body = !spots.data.length ? [h('p', { class: 'muted' }, mine ? 'Your classes are full for the next week, or you don\'t lead any. Untick My classes only to see everyone\'s.' : 'Every class in the next week is full.')]
+    : spots.data.length <= 5 ? spots.data.map(row)
+      : [...byDay].map(([day, xs]) => h('div', null, h('div', { class: 'dp-label', style: 'margin-top:12px' }, `${day} · ${xs.reduce((t, x) => t + x.spots_left, 0)} open`), ...xs.map(row)));
+  return panel(`Classes with open spots${spots.data.length ? ` (${spots.data.length})` : ''}`, { subtitle, action }, ...body);
+}
+
+// Owner only: "try this session for $X". Price (the drop-in by default, $0 = free), how many families, and the message.
+async function trialOfferDialog(x) {
+  const d = document.getElementById('dialog');
+  let p;
+  try { p = await get(`/v1/sessions/${x.id}/trial-offer`); } catch (e) { return toast(e.message, 'warn'); }
+  const dollars = (c) => (c / 100).toFixed(c % 100 ? 2 : 0);
+  const price = input({ type: 'number', inputmode: 'decimal', min: '0', max: dollars(p.max_price_cents), step: '0.01', value: dollars(p.default_price_cents) });
+  const count = input({ type: 'number', inputmode: 'numeric', min: '1', max: String(Math.min(p.max_families, Math.max(p.families, 1))), value: String(Math.min(p.families, p.max_families)) });
+  const msg = h('textarea', { class: 'dp-input', style: 'min-height:96px', maxlength: '1000' }); msg.value = p.message;
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  const preview = h('div', { class: 'small', style: 'white-space:pre-wrap;background:var(--bg);border:1px solid var(--line-subtle);border-radius:8px;padding:12px' });
+  const cents = () => (price.value === '' ? NaN : Math.round(Number(price.value) * 100));
+  const priceWords = (c) => (c === 0 ? 'free' : money(c));
+  const ends = tzFmt(p.expires_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const update = () => {
+    const c = cents(), ok = Number.isInteger(c) && c >= 0 && c <= p.max_price_cents;
+    err.textContent = ok ? '' : `Set a price from $0 (free) to ${money(p.max_price_cents)}.`;
+    const pr = ok ? priceWords(c) : '…';
+    fill(preview, h('div', { class: 'strong' }, `Subject: Try ${p.session.name} ${c === 0 ? 'free' : `for ${pr}`}: ${ends}`), '\n',
+      `Hi Maria,\n\n${(msg.value.trim() || p.message).replaceAll('{athlete}', 'Ava').replaceAll('{price}', pr)}\n\n${p.session.spots_left === 1 ? 'There\'s one spot' : `There are ${p.session.spots_left} spots`}, and the first to book gets ${p.session.spots_left === 1 ? 'it' : 'them'}. The offer ends when the session starts. Book in one tap, no sign-in needed:\n[booking link]`);
+  };
+  for (const el of [price, msg]) el.addEventListener('input', update);
+  update();
+  const who = `${p.families} ${p.families === 1 ? 'family fits' : 'families fit'}: the right age, and a regular, a member or here in the last 45 days${p.offered_before ? `. ${p.offered_before} of them already had an open-spot offer for this class and haven't booked; their link switches to this price` : ''}. At most 2 offers a family a day.`;
+  fill(d, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+    try {
+      const r = await post(`/v1/sessions/${x.id}/trial-offer`, { price_cents: cents(), max_families: Number(count.value), message: msg.value });
+      d.close(); toast(`Trial offer sent to ${r.sent} ${r.sent === 1 ? 'family' : 'families'} at ${r.price_cents === 0 ? 'no charge' : money(r.price_cents)}. First to book gets it.`); render();
+    } catch (x2) { err.textContent = x2.message; }
+  }); } },
+    h('h2', { class: 'week-title', style: 'color:var(--steel);margin:0' }, 'Trial offer'),
+    h('p', { class: 'muted', style: 'margin:0' }, `${p.session.name} · ${ends} · ${p.session.location_name}${p.session.coach_name ? ` · ${p.session.coach_name}` : ''} · ${p.session.spots_left} ${p.session.spots_left === 1 ? 'spot' : 'spots'} left`),
+    h('div', { class: 'form-grid' },
+      field('Price ($)', price, `${p.session.drop_in_cents != null ? `Drop-in is ${money(p.session.drop_in_cents)}.` : `No drop-in price; up to ${money(p.max_price_cents)}.`} 0 makes it free. Charged to the family's card when they book; members whose membership covers the class aren't charged.`),
+      field('Send to up to', count, who)),
+    p.open_leads_with_email ? h('p', { class: 'small muted', style: 'margin:0' }, `${p.open_leads_with_email} open ${p.open_leads_with_email === 1 ? 'lead' : 'leads'} with an email ${p.open_leads_with_email === 1 ? 'isn\'t' : 'aren\'t'} included: booking from a link needs a family account and a signed waiver. Send them your sign-up link from Leads.`) : null,
+    field('Message', msg, '{athlete} becomes the athlete\'s first name and {price} the price. The booking link is added below it. Families who turned on texts also get a short text.'),
+    h('div', { class: 'dp-label' }, 'Preview, for a sample family'), preview,
+    h('p', { class: 'small muted', style: 'margin:0' }, `Valid until the session starts (${ends}). First to book gets each spot; after that the link says it's full.`),
+    err,
+    h('div', { class: 'row wrap' }, btn('Send trial offer', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+}
+
+// Owner only: every active coach at a glance (today, the next 7 days, attendance, days off). Tap a coach for their schedule.
+function coachesPanel(t) {
+  const shortDay = (iso) => tzFmt(iso, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const offText = (x) => { const f = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }); return `Off ${f(x.start_date)}${x.end_date !== x.start_date ? `–${f(x.end_date)}` : ''}${x.note ? ` (${x.note})` : ''}`; };
+  const row = (c) => {
+    const w = c.week, a = c.attendance_7_days, seen = a.came + a.missed, n = c.next_session;
+    return h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
+        h('a', { href: `#/schedule?coach=${c.id}`, class: 'strong', style: 'color:var(--steel)' }, c.name, c.role === 'owner' ? h('span', { class: 'small muted' }, ' · Owner') : null),
+        h('span', { class: 'small' }, c.today.sessions ? `Today: ${c.today.sessions} ${c.today.sessions === 1 ? 'session' : 'sessions'}, ${c.today.booked} booked` : 'Nothing today',
+          n ? h('span', { class: 'muted' }, ` · next ${n.starts_at < new Date(Date.now() + 86400000).toISOString() && dayOf(n.starts_at) === dayOf(new Date().toISOString()) ? timeOf(n.starts_at) : shortDay(n.starts_at)} ${n.name} (${n.booked}/${n.capacity})`) : null),
+        h('span', { class: 'small muted' }, [`Next 7 days: ${w.sessions} ${w.sessions === 1 ? 'session' : 'sessions'}`, w.classes ? `classes ${w.fill_pct}% full (${w.class_booked} of ${w.class_spots})` : null,
+          `${w.privates_booked} ${w.privates_booked === 1 ? 'private' : 'privates'} booked`, w.evaluations_booked ? `${w.evaluations_booked} ${w.evaluations_booked === 1 ? 'evaluation' : 'evaluations'}` : null].filter(Boolean).join(' · ')),
+        h('span', { class: 'small muted' }, seen ? `Last 7 days: ${a.came} came, ${a.missed} no-show${a.missed === 1 ? '' : 's'} (${Math.round((a.came / seen) * 100)}%)` : 'Last 7 days: no check-ins yet')),
+      h('div', { class: 'row wrap', style: 'gap:6px' }, ...c.time_off.slice(0, 2).map((x) => h('span', { class: 'dp-badge dp-badge--neutral' }, offText(x))),
+        h('a', { class: 'dp-btn dp-btn--ghost', href: `#/schedule?coach=${c.id}` }, 'Schedule')));
+  };
+  return panel('Coaches', { subtitle: 'Who is leading what. Fill rate counts group classes, clinics and camp days.' },
+    t.coaches.map(row),
+    t.no_coach.sessions ? h('div', { class: 'list-item' }, h('span', { class: 'grow small warn-text' }, `${t.no_coach.sessions} ${t.no_coach.sessions === 1 ? 'session' : 'sessions'} in the next 7 days ${t.no_coach.sessions === 1 ? 'has' : 'have'} no coach${t.no_coach.next ? `, starting with ${t.no_coach.next.name} ${shortDay(t.no_coach.next.starts_at)}` : ''}.`),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '#/schedule' }, 'Assign')) : null,
+    t.facility_time_off.length ? h('p', { class: 'small muted', style: 'margin:8px 0 0' }, `Facility closed: ${t.facility_time_off.map(offText).map((s) => s.replace(/^Off /, '')).join(' · ')}`) : null);
 }
 
 // ---------- Leads ----------
@@ -340,26 +473,36 @@ async function viewCampaigns(main) {
 }
 
 // ---------- Clients ----------
+// "Active" means the same as the Today tile: not archived, paid up or on a free trial. Archived clients only show
+// under the Archived filter (or as a hint when a search only finds archived ones).
+const CLIENT_VIEWS = [['', 'All clients'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['archived', 'Archived']];
+const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status) : c.status === view)));
 async function viewClients(main) {
-  const { data } = await get('/v1/clients');
+  const { data } = await get('/v1/clients?archived=all');
   const q = input({ type: 'search', placeholder: 'Name, athlete ID, email or family', id: 'client-search', 'aria-label': 'Search clients' });
-  const status = select([['', 'All statuses'], ['active', 'Active'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan']], { 'aria-label': 'Filter by status', style: 'width:180px' });
+  const start = hashQuery().get('status') ?? '';
+  const status = select(CLIENT_VIEWS.map(([k, label]) => [k, `${label} (${data.filter((c) => inClientView(c, k)).length})`]), { 'aria-label': 'Which clients', style: 'width:auto;min-width:180px', value: CLIENT_VIEWS.some(([k]) => k === start) ? start : '' });
   const body = h('tbody');
+  const hint = h('p', { class: 'small muted', style: 'margin:0' });
+  const matches = (c, s) => !s || c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.athlete_id ?? '').toLowerCase().includes(s) || (c.family?.name ?? '').toLowerCase().includes(s);
   const draw = () => {
     const s = q.value.trim().toLowerCase();
-    const rows = data.filter((c) => (!s || c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.family?.name ?? '').toLowerCase().includes(s)) && (!status.value || c.status === status.value));
+    const rows = data.filter((c) => matches(c, s) && inClientView(c, status.value));
+    const hidden = status.value === 'archived' ? 0 : data.filter((c) => c.archived_at && matches(c, s)).length;
+    fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); status.value = 'archived'; draw(); } }, 'Show archived')] : null);
     fill(body, ...(rows.length ? rows.map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => (location.hash = `#/clients/${c.id}`), onKeydown: (e) => { if (e.key === 'Enter') location.hash = `#/clients/${c.id}`; } },
       h('td', null, h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, c.name), h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), ` · ${c.family ? c.family.name : c.email ?? ''}`))),
       h('td', null, c.subscription?.plan_name ?? '—'),
-      h('td', null, badge(c.status)),
+      h('td', null, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status)),
       h('td', null, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
       h('td', { class: 'muted' }, ago(c.last_workout_at))))
-      : [h('tr', null, h('td', { colspan: '5', class: 'muted' }, data.length ? 'No clients match. Clear the search or filter.' : 'No clients yet. Add your first one.'))]));
+      : [h('tr', null, h('td', { colspan: '5', class: 'muted' }, data.length ? (status.value === 'archived' && !s ? 'No archived clients.' : 'No clients match. Clear the search or filter.') : 'No clients yet. Add your first one.'))]));
   };
   q.addEventListener('input', draw); status.addEventListener('change', draw); draw();
+  const current = data.filter((c) => inClientView(c, 'current')).length, archived = data.filter((c) => c.archived_at).length;
   fill(main, 
-    header('Clients', `${data.length} accounts, their plans and programs.`, h('div', { class: 'row' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import from a spreadsheet') : null, addClientBtn())),
-    panel(null, {}, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), status),
+    header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import from a spreadsheet') : null, addClientBtn())),
+    panel(null, {}, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), status), hint,
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
         h('thead', null, h('tr', null, ['Client', 'Plan', 'Status', 'Program', 'Last workout'].map((t) => h('th', null, t)))), body))));
 }
@@ -367,8 +510,8 @@ async function viewClients(main) {
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
-  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), get(`/v1/athlete-links?client_id=${id}`)]);
-  const [en, testLib, owed, products, badgeLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges')]);
+  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
+  const [en, testLib, owed, products, badgeLib, notesList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`)]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
@@ -381,7 +524,7 @@ async function viewClient(main, id) {
     sub ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Status'), h('dd', null, badge(sub.status))),
       h('div', null, h('dt', null, 'Plan'), h('dd', null, sub.plan_name)),
-      h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents))),
+      sub.price_cents == null ? null : h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents))),
       h('div', null, h('dt', null, sub.status === 'trialing' ? 'Trial ends' : 'Next charge'), h('dd', null, ['canceled', 'paused'].includes(sub.status) ? '—' : date(sub.current_period_end)))) : null,
     sub && sub.status !== 'canceled' ? h('div', { class: 'stack' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Change plan', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/plan`, { plan_id: planSel.value }); toast('Plan changed. New price applies from the next charge.'); render(); }), 'secondary')),
@@ -391,7 +534,7 @@ async function viewClient(main, id) {
       : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }))));
 
   const payments = panel('Payments', {}, inv.data.length ? inv.data.map((i) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow stack-tight' }, h('span', null, `${money(i.amount_cents)} · ${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
+    h('div', { class: 'grow stack-tight' }, h('span', null, `${i.amount_cents == null ? '' : `${money(i.amount_cents)} · `}${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
     badge(i.status),
     i.status === 'failed' ? btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Charge retried. Payment succeeded.') : toast('Charge declined again.', 'warn'); render(); }), 'outline') : null))
     : h('p', { class: 'muted' }, sub?.status === 'trialing' ? `No charges yet. The first charge happens when the trial ends on ${date(sub.trial_ends_at)}.` : 'No invoices yet.'));
@@ -423,7 +566,7 @@ async function viewClient(main, id) {
     h('div', { class: 'form-grid' }, field('Sport', pf.sport), field('Position', pf.position), field('School', pf.school), field('Grad year', pf.grad_year)),
     field('Medical notes', medical, 'Parents can update these in the portal.'),
     h('div', { class: 'form-grid' }, field('Emergency contact', pf.emergency_name), field('Emergency phone', pf.emergency_phone)),
-    field('Coach notes', notes, 'Only coaches see these.'),
+    field('Profile note', notes, 'One short note every staff member sees here. For dated notes, use Staff notes.'),
     h('div', { class: 'row' }, btn('Save changes', (e) => busy(e.currentTarget, async () => {
       await patch(`/v1/clients/${id}`, { name: name.value, email: email.value || null, phone: phone.value, notes: notes.value, medical_notes: medical.value, ...Object.fromEntries(Object.entries(pf).filter(([k, el]) => k !== 'athlete_id' || el.value.toUpperCase() !== c.athlete_id).map(([k, el]) => [k, k === 'grad_year' ? (el.value ? Number(el.value) : null) : el.value || null])) });
       toast('Changes saved.'); render();
@@ -496,10 +639,64 @@ async function viewClient(main, id) {
     devLinks.data.length ? h('p', { class: 'small muted' }, 'Linked devices: ', devLinks.data.map((l) => `${l.provider} ${l.external_id.replace(/^name:/, 'name ')}`).join(', ')) : null);
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
+  // Archive: owners and coaches. Refused with a membership; upcoming bookings are canceled only after a second yes.
+  const canArchive = state.user.role !== 'front_desk';
+  const archive = (e) => {
+    if (!confirm(`Archive ${first}? They leave the client list, search and pickers, and get no automatic emails or texts. Nothing is deleted and you can bring them back any time.`)) return;
+    busy(e.currentTarget, async () => {
+      try { await post(`/v1/clients/${id}/archive`); }
+      catch (err) { if (err.code !== 'confirm_required' || !confirm(`${err.message}\n\nArchive and cancel them?`)) throw err; await post(`/v1/clients/${id}/archive`, { confirm: true }); }
+      toast(`${first} is archived. Find them under Clients → Archived.`); render();
+    });
+  };
+  const restore = (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/restore`); toast(`${first} is back on the client list.`); render(); });
+  const pinned = notesList.data.filter((n) => n.pinned);
   fill(main,
-    header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id)), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients')),
+    header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
+      h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
+    c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
+    pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, staffNotesPanel(id, notesList.data), bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
+}
+
+// Staff notes: dated, with the author. Anyone on staff adds; authors change their own; owners delete any and pin any.
+// Coach-only notes never reach front desk (the server leaves them out), and front desk can't write them.
+function staffNotesPanel(clientId, notes) {
+  const role = state.user.role, me = state.user.id;
+  const body = h('textarea', { class: 'dp-input', style: 'min-height:72px', 'aria-label': 'New note', placeholder: 'What happened, what to watch for, who to call' });
+  const pin = h('input', { type: 'checkbox' }), coachOnly = h('input', { type: 'checkbox' });
+  const noteRow = (n) => {
+    const mine = n.author_id === me, wrap = h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' });
+    const view = () => fill(wrap,
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('span', { class: 'small muted' }, [n.author_name, date(n.created_at), n.updated_at ? 'edited' : null].filter(Boolean).join(' · '), n.pinned ? h('span', { class: 'dp-badge dp-badge--good', style: 'margin-left:8px' }, 'Pinned') : null, n.coach_only ? h('span', { class: 'dp-badge dp-badge--neutral', style: 'margin-left:8px' }, 'Coach only') : null),
+        h('div', { style: 'white-space:pre-wrap' }, n.body)),
+      h('div', { class: 'row', style: 'gap:4px' },
+        mine || role === 'owner' ? btn(n.pinned ? 'Unpin' : 'Pin', (e) => busy(e.currentTarget, async () => { await patch(`/v1/client-notes/${n.id}`, { pinned: !n.pinned }); render(); }), 'ghost') : null,
+        mine ? btn('Edit', edit, 'ghost') : null,
+        mine || role === 'owner' ? btn('Delete', (e) => { if (confirm('Delete this note?')) busy(e.currentTarget, async () => { await del(`/v1/client-notes/${n.id}`); toast('Note deleted.'); render(); }); }, 'ghost') : null));
+    const edit = () => {
+      const t = h('textarea', { class: 'dp-input', style: 'min-height:72px', 'aria-label': 'Edit note' }); t.value = n.body;
+      const co = h('input', { type: 'checkbox', checked: n.coach_only });
+      fill(wrap, h('div', { class: 'grow stack', style: 'min-width:200px' }, t,
+        role === 'front_desk' ? null : h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, co, h('span', null, 'Coach only (front desk won\'t see it)')),
+        h('div', { class: 'row' }, btn('Save note', (e) => busy(e.currentTarget, async () => { await patch(`/v1/client-notes/${n.id}`, { body: t.value, ...(role === 'front_desk' ? {} : { coach_only: co.checked }) }); toast('Note saved.'); render(); }), 'primary'), btn('Cancel', view, 'ghost'))));
+      t.focus();
+    };
+    view();
+    return wrap;
+  };
+  return panel('Staff notes', { subtitle: role === 'front_desk' ? 'Notes for everyone on staff. Coaches may also keep notes only they see.' : 'Dated notes for the team. Pinned ones show at the top of this page. Coach-only notes are hidden from front desk.' },
+    notes.length ? notes.map(noteRow) : h('p', { class: 'muted small', style: 'margin:0' }, 'No notes yet.'),
+    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      if (!body.value.trim()) throw new Error('Write the note first.');
+      await post(`/v1/clients/${clientId}/notes`, { body: body.value, pinned: pin.checked, ...(role === 'front_desk' ? {} : { coach_only: coachOnly.checked }) });
+      toast('Note added.'); render();
+    }); } }, body,
+      h('div', { class: 'row wrap', style: 'gap:16px' }, h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, pin, h('span', null, 'Pin to the top')),
+        role === 'front_desk' ? null : h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, coachOnly, h('span', null, 'Coach only'))),
+      h('div', null, btn('Add note', null, 'secondary', { type: 'submit' }))));
 }
 
 async function viewNewClient(main) {
@@ -578,7 +775,7 @@ function payLinksPanel(clientId, first, owed, products, render) {
 // Daily money checks: what the morning check found, newest day first.
 function moneyChecksPanel(checks, render) {
   const tone = { ok: ['All clear', 'good'], problems: ['To look at', 'warn'], error: ['Couldn\'t reach Stripe', 'warn'] };
-  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: new Date(Date.now() - 86400000).toISOString().slice(0, 10), style: 'width:170px' });
+  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: bizDate(-1), style: 'width:170px' });
   const run = (day) => (e) => busy(e.currentTarget, async () => {
     const c = await post('/v1/money-checks/run', { date: day });
     toast(c.status === 'ok' ? `Nothing unusual on ${ymd(c.date)}.` : c.status === 'error' ? c.error : `${c.problems} ${c.problems === 1 ? 'thing' : 'things'} to look at on ${ymd(c.date)}.`, c.status === 'ok' ? 'good' : 'warn'); render();
@@ -625,7 +822,7 @@ async function viewBilling(main) {
       btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
   filter.addEventListener('change', draw); draw();
 
-  const asOf = input({ type: 'date', value: new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10) });
+  const asOf = input({ type: 'date', value: bizDate(8) });
   const testPanel = state.testMode ? panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
     h('div', { class: 'row wrap' }, h('div', { style: 'width:200px' }, field('Run as of', asOf)),
       h('div', { style: 'align-self:flex-end' }, btn('Run billing', (e) => busy(e.currentTarget, async () => {
@@ -1139,6 +1336,8 @@ async function viewSetup(main) {
 const KIND_LABEL = { group: 'Group', camp: 'Camp', clinic: 'Clinic', team: 'Team', evaluation: 'Evaluation', private: 'Private' };
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 let tzName;
+// Today's date in the business's time zone (the browser's own zone until the settings have loaded), not UTC.
+const bizDate = (days = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: tzName, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + days * 86400000));
 const tzFmt = (iso, opts) => new Intl.DateTimeFormat('en-US', { timeZone: tzName, ...opts }).format(new Date(iso));
 const dayOf = (iso) => tzFmt(iso, { weekday: 'long', month: 'short', day: 'numeric' });
 const timeOf = (iso) => tzFmt(iso, { hour: 'numeric', minute: '2-digit' });
@@ -1149,13 +1348,21 @@ const coverBadge = (c) => h('span', { class: `dp-badge dp-badge--${COVER[c]?.[1]
 function sessionRow(x) {
   return h('a', { class: 'list-item', href: `#/schedule/${x.id}`, style: 'text-decoration:none;color:inherit' },
     h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
-    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.location_name} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
+    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
     x.unpaid_count ? h('span', { class: 'dp-badge dp-badge--warn' }, `${x.unpaid_count} unpaid`) : null,
     kindBadge(x.kind));
 }
 
+// Coach pickers: everyone who can lead a session, plus whoever is set now if their account was turned off since.
+const coachOptions = (coaches, current, currentName) => [['', 'No coach set'], ...coaches.map((c) => [c.id, c.name]), ...(current && !coaches.some((c) => c.id === current) ? [[current, `${currentName ?? 'Former coach'} (account off)`]] : [])];
+const coachPicker = (coaches, current, currentName, attrs = {}) => select(coachOptions(coaches, current, currentName), { value: current ?? '', ...attrs });
+const leads = () => state.user?.role !== 'front_desk';          // owners and coaches lead sessions and assign coaches
+const hashQuery = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
+
 async function viewSchedule(main) {
-  const [sched, series, locs, settings] = await Promise.all([get('/v1/schedule'), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings')]);
+  const mine = leads() && hashQuery().get('mine') === '1', onlyCoach = hashQuery().get('coach');     // ?coach=<id>: one coach's sessions (from Today's Coaches panel)
+  const [sched, series, locs, settings, coachList] = await Promise.all([get(`/v1/schedule${onlyCoach ? `?coach_id=${encodeURIComponent(onlyCoach)}` : mine ? '?coach_id=me' : ''}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings'), get('/v1/coaches')]);
+  const coaches = coachList.data;
   tzName = settings.timezone;
   const byDay = {};
   for (const x of sched.data) (byDay[dayOf(x.starts_at)] ??= []).push(x);
@@ -1163,17 +1370,18 @@ async function viewSchedule(main) {
   const f = { name: input(), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
     time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }), ageMin: input({ type: 'number', placeholder: 'Any' }), ageMax: input({ type: 'number', placeholder: 'Any' }),
     dropIn: input({ type: 'number', step: '0.01', placeholder: 'Not sold singly' }), reg: input({ type: 'number', step: '0.01', placeholder: 'Camps and clinics' }),
-    start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }) };
+    start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }),
+    coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
     const x = await post('/v1/class-series', { name: f.name.value, kind: f.kind.value, location_id: f.loc.value, weekdays, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value),
       age_min: f.ageMin.value ? Number(f.ageMin.value) : undefined, age_max: f.ageMax.value ? Number(f.ageMax.value) : undefined, drop_in_cents: dollars(f.dropIn), registration_cents: dollars(f.reg),
-      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined });
+      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined, coach_id: f.coach.value || null });
     toast(`${x.name} added: ${x.upcoming_sessions} sessions on the schedule.`); render();
   }); } },
-    h('div', { class: 'form-grid' }, field('Name', f.name), field('Type', f.kind)),
+    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, field('Name', f.name), field('Type', f.kind), field('Coach', f.coach, 'Leads every session. Swap in a sub on a single session.')),
     h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:12px' }, days)),
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap)),
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Min age', f.ageMin), field('Max age', f.ageMax), field('Drop-in ($)', f.dropIn), field('Registration ($)', f.reg)),
@@ -1182,24 +1390,52 @@ async function viewSchedule(main) {
     h('div', null, btn('Add to schedule', null, 'primary', { type: 'submit' })));
 
   const addPanel = panel('Add a class, camp or clinic', { subtitle: 'Sessions are created automatically. Weekly classes are always scheduled 8 weeks ahead.' }, form);
-  const seriesList = series.data.length ? series.data.map((x) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${x.start_time} · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}`)),
-    kindBadge(x.kind),
+  const seriesCoach = (x) => {
+    if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
+    const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${x.name}`, style: 'width:auto;max-width:180px' });
+    sel.addEventListener('change', () => busy(sel, async () => {
+      await patch(`/v1/class-series/${x.id}`, { coach_id: sel.value || null });
+      toast(sel.value ? `${sel.selectedOptions[0].textContent} now leads ${x.name}. Sessions with a sub keep their sub.` : `${x.name} has no coach set.`); render();
+    }));
+    return sel;
+  };
+  const seriesList = series.data.length ? series.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${x.start_time} · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}`)),
+    seriesCoach(x), kindBadge(x.kind),
     btn('Archive', (e) => { if (confirm(`Archive ${x.name}? Future sessions are canceled, credits returned and families emailed.`)) busy(e.currentTarget, async () => { await patch(`/v1/class-series/${x.id}`, { active: false }); toast('Archived.'); render(); }); }, 'ghost')))
     : [h('p', { class: 'muted' }, 'No classes yet. Add your first one below.')];
 
+  // "My sessions": only what you lead, kept in the address so Back and refresh keep it.
+  const mineBox = h('input', { type: 'checkbox', checked: mine });
+  mineBox.addEventListener('change', () => { location.hash = mineBox.checked ? '#/schedule?mine=1' : '#/schedule'; });
+  // Owners pick any coach; everyone sees whose sessions a ?coach= link is showing.
+  const coachSel = isOwner() ? select([['', 'Every coach'], ...coaches.map((c) => [c.id, c.name])], { value: onlyCoach ?? '', 'aria-label': 'Show sessions led by', style: 'width:auto' }) : null;
+  coachSel?.addEventListener('change', () => { location.hash = coachSel.value ? `#/schedule?coach=${coachSel.value}` : '#/schedule'; });
+  const coachName = onlyCoach ? coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach' : null;
+  const filterBar = isOwner() ? h('div', { class: 'row wrap small', style: 'gap:8px;min-height:44px' }, h('label', { class: 'muted', for: 'sched-coach' }, 'Show'), Object.assign(coachSel, { id: 'sched-coach' }), onlyCoach ? h('span', { class: 'muted' }, `${sched.data.length} ${sched.data.length === 1 ? 'session' : 'sessions'} in the next two weeks`) : null)
+    : onlyCoach ? h('div', { class: 'row wrap small', style: 'gap:8px;min-height:44px' }, h('span', null, `${coachName}'s sessions`), h('a', { href: '#/schedule' }, 'Show everyone'))
+    : leads() ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, mineBox, h('span', null, 'My sessions only'), mine ? h('span', { class: 'muted' }, ` · ${sched.data.length} in the next two weeks`) : null) : null;
   fill(main, 
     header('Schedule', 'Classes, camps, clinics, privates and evaluations for the next two weeks.', h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
       locs.data.length ? btn('Add class or camp', () => { addPanel.scrollIntoView({ behavior: 'smooth' }); f.name.focus({ preventScroll: true }); }) : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
-    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, 'Nothing scheduled in the next two weeks.')]),
+    filterBar,
+    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, onlyCoach ? `${coachName} doesn't lead anything in the next two weeks.` : mine ? 'You don\'t lead anything in the next two weeks. Untick My sessions to see everything.' : 'Nothing scheduled in the next two weeks.')]),
     panel('Classes & camps', {}, ...seriesList),
     locs.data.length ? addPanel : null);
 }
 
 async function viewSession(main, id) {
-  const [x, clientsList, settings, progs] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs')]);
+  const [x, clientsList, settings, progs, coachList] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs'), get('/v1/coaches')]);
   tzName = settings.timezone;
+  // Who leads this session. Changing it here only changes this one (a sub); the class keeps its coach.
+  const coachSel = leads() && x.status === 'scheduled' ? coachPicker(coachList.data, x.coach_id, x.coach_name, { 'aria-label': 'Coach for this session', style: 'width:auto;min-width:200px' }) : null;
+  coachSel?.addEventListener('change', () => busy(coachSel, async () => {
+    await patch(`/v1/sessions/${id}`, { coach_id: coachSel.value || null });
+    toast(coachSel.value ? `${coachSel.selectedOptions[0].textContent} leads this session.${x.series_id ? ' The rest of the class keeps its coach.' : ''}` : 'No coach set for this session.'); render();
+  }));
+  const coachLine = h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('span', { class: 'dp-label', style: 'margin:0' }, 'Coach'), coachSel ?? h('span', { class: 'strong' }, x.coach_name ?? 'No coach set'),
+    x.series_id && coachSel ? h('span', { class: 'small muted' }, 'Changes this session only. Change the whole class on the Schedule page.') : null);
   const active = x.roster.filter((r) => ['booked', 'attended', 'no_show'].includes(r.status));
   const waiting = x.roster.filter((r) => r.status === 'waitlisted');
   const done = x.roster.filter((r) => ['canceled', 'late_canceled'].includes(r.status));
@@ -1216,7 +1452,7 @@ async function viewSession(main, id) {
       render();
     });
   }, 'outline');
-  const row = (r) => h('div', { class: 'list-item' },
+  const row = (r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
     h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'aria-pressed': String(r.status === 'attended'), 'aria-label': `${r.status === 'attended' ? 'Checked in' : 'Check in'} ${r.name}`,
       onClick: (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/attendance`, { status: r.status === 'attended' ? 'booked' : 'attended' }); render(); }) }, r.status === 'attended' ? 'Here' : r.status === 'no_show' ? 'No-show' : 'Check in'),
     h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.name),
@@ -1255,7 +1491,8 @@ async function viewSession(main, id) {
       x.workout ? btn('Clear', (e) => busy(e.currentTarget, async () => { await put(`/v1/sessions/${id}/workout`, { workout_id: null }); toast('Cleared.'); render(); }), 'ghost') : null) : null);
 
   fill(main, 
-    header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
+    header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.coach_name ? ` · ${x.coach_name}` : ''}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
+    panel(null, {}, coachLine),
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
         x.team.athletes.some((a) => !a.present) ? btn('Everyone\'s here', (e) => busy(e.currentTarget, async () => {
           for (const a of x.team.athletes.filter((t) => !t.present)) await post(`/v1/sessions/${id}/team-attendance`, { roster_id: a.id, present: true });
@@ -1309,17 +1546,50 @@ function checkinPanel(locations, kiosks) {
       canManage ? btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/kiosks/${k.id}`); toast('That tablet can\'t check anyone in now.'); render(); }), 'ghost') : null))) : null);
 }
 
+// Days off: a coach's hide that coach's private and evaluation times; the whole facility's hide everyone's.
+function timeOffPanel(rows, coaches) {
+  const owner = isOwner();
+  const who = owner ? select([['', 'Whole facility'], ...coaches.map((c) => [c.id, c.name])], { value: '' }) : null;
+  const from = input({ type: 'date', value: bizDate(1) }), to = input({ type: 'date', value: bizDate(1) }), note = input({ placeholder: 'Optional, like Tournament weekend' });
+  const range = (t) => (t.start_date === t.end_date ? ymd(t.start_date) : `${ymd(t.start_date)} – ${ymd(t.end_date)}`);
+  const mayRemove = (t) => owner || t.user_id === state.user.id;
+  return panel('Time off', { subtitle: 'Private and evaluation times aren\'t offered on these days. Classes stay on the schedule: give them a sub on the session page.' },
+    rows.length ? rows.map((t) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.user_id ? t.coach_name : 'Whole facility'), h('span', { class: 'small muted' }, [range(t), t.note].filter(Boolean).join(' · '))),
+      leads() && mayRemove(t) ? btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/time-off/${t.id}`); toast('Removed. Those times are offered again.'); render(); }), 'ghost') : null))
+      : h('p', { class: 'muted', style: 'margin:0' }, 'No time off coming up.'),
+    !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const r = await post('/v1/time-off', { user_id: owner ? who.value || null : state.user.id, start_date: from.value, end_date: to.value || from.value, note: note.value || undefined });
+      const n = r.sessions_to_cover.length;
+      if (n) toast(`Saved. ${n} ${n === 1 ? 'session' : 'sessions'} on those days still ${n === 1 ? 'needs' : 'need'} a sub: ${r.sessions_to_cover.slice(0, 3).map((x) => `${tzFmt(x.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${x.name}`).join(', ')}${n > 3 ? '…' : ''}.`, 'warn');
+      else toast('Time off saved.');
+      await render();
+    }); } },
+      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, who ? field('Who', who) : null, field('First day', from), field('Last day', to), field('Note', note)),
+      h('div', null, btn(owner ? 'Add time off' : 'Add my time off', null, 'primary', { type: 'submit' }))));
+}
+
 async function viewScheduleSetup(main) {
-  const [av, locs, settings, kiosks] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks')]);
-  const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }) };
-  const hours = panel('Your hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Anything else on your schedule blocks the time.' },
-    ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
-      btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/availability/${x.id}`); render(); }), 'ghost'))) : [h('p', { class: 'muted' }, 'No hours yet.')]),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekday: Number(a.day.value), start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined });
+  const [av, locs, settings, kiosks, coachList, timeOff] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks'), get('/v1/coaches'), get('/v1/time-off')]);
+  tzName = settings.timezone;
+  const coaches = coachList.data;
+  const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }),
+    coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
+  const hoursCoach = (x) => {
+    if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
+    const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${DAY_NAMES[x.weekday]} ${x.start_time} hours`, style: 'width:auto;max-width:180px' });
+    sel.addEventListener('change', () => busy(sel, async () => { await patch(`/v1/availability/${x.id}`, { coach_id: sel.value || null }); toast(sel.value ? `These hours are ${sel.selectedOptions[0].textContent}'s now.` : 'These hours have no coach set.'); render(); }));
+    return sel;
+  };
+  const hours = panel('Hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Hours with a coach are blocked by anything that coach leads, anywhere, and by sessions at that place with no coach. Hours with no coach are blocked by anything at that place.' },
+    ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
+        x.coach_active === false ? h('span', { class: 'small warn-text' }, `${x.coach_name} can't lead sessions now (account turned off or moved to front desk), so these hours aren't offered. Pick another coach or remove them.`) : null),
+      hoursCoach(x),
+      leads() ? btn('Remove', (e) => { if (confirm(`Remove ${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time}? Times already booked stay booked.`)) busy(e.currentTarget, async () => { await del(`/v1/availability/${x.id}`); toast('Hours removed.'); render(); }); }, 'ghost') : null)) : [h('p', { class: 'muted' }, 'No hours yet.')]),
+    !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekday: Number(a.day.value), start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null });
       toast('Hours added.'); render();
-    }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Day', a.day)),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('From', a.from), field('To', a.to), field('Minutes each', a.len), field('Price ($)', a.price)),
+    }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Day', a.day), field('Coach', a.coach)),
+      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(120px,1fr))' }, field('From', a.from), field('To', a.to), field('Minutes each', a.len), field('Price ($)', a.price)),
       h('div', null, btn('Add hours', null, 'primary', { type: 'submit' }))));
 
   const shareSel = select([['reviewed', 'After I share a testing day (recommended)'], ['all', 'As soon as results are saved']], { value: settings.share_results ?? 'reviewed' });
@@ -1383,7 +1653,7 @@ async function viewScheduleSetup(main) {
       btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
       btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
     digestOut);
-  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
+  fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, timeOffPanel(timeOff.data, coaches), checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
     isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
 }
 
@@ -1438,7 +1708,7 @@ async function viewNewTeam(main) {
   const orgs = await get('/v1/organizations');
   const orgSel = select([['', 'A new school or club…'], ...orgs.data.map((o) => [o.id, o.name])], { value: '' });
   const o = { name: input(), kind: select([['school', 'School'], ['club', 'Club'], ['other', 'Other']]), contact: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), address: textarea() };
-  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }), end: input({ type: 'date' }),
+  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
     terms: select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']]), po: input() };
   const orgBox = h('div', { class: 'stack' },
     h('div', { class: 'form-grid' }, field('School or club name', o.name), field('Type', o.kind)),
@@ -1496,12 +1766,12 @@ async function viewTeam(main, id) {
   const rosterPanel = panel(`Roster · ${c.roster.length}`, { subtitle: c.sessions_held ? `Attendance across ${c.sessions_held} ${c.sessions_held === 1 ? 'session' : 'sessions'} so far` : 'Check athletes in from each team session.' },
     c.roster.length ? c.roster.map((r) => h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, [r.athlete_id, r.position, r.grad_year ? `Class of ${r.grad_year}` : null].filter(Boolean).join(' · '))),
-      c.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${c.sessions_held} · ${Math.round((r.sessions_attended / c.sessions_held) * 100)}%`) : null,
+      r.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${r.sessions_held} · ${Math.round((r.sessions_attended / r.sessions_held) * 100)}%`) : null,
       btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/team-contracts/${id}/roster/${r.id}`); render(); }), 'ghost'))) : h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below.'),
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/team-contracts/${id}/roster`, { names: names.value }); toast(`Roster now has ${r.data.length} athletes.`); render(); }); } },
       names, h('div', null, btn('Add to roster', null, 'secondary', { type: 'submit' }))));
 
-  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: new Date().toISOString().slice(0, 10) }) };
+  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: bizDate() }) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const schedPanel = panel('Team sessions', { subtitle: c.series.filter((x) => x.active).map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${x.start_time}`).join(' · ') || 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
     ended || !locs.data.length ? null : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
@@ -1544,7 +1814,8 @@ const PRESETS = [
 ];
 
 async function viewTesting(main) {
-  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), get('/v1/integrations'), get('/v1/queue')]);
+  const desk = state.user?.role === 'front_desk';          // front desk can't open devices or the results queue
+  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations'), desk ? { n: 0 } : get('/v1/queue')]);
   const connected = integrations.data.filter((i) => i.connected);
   fill(main,
     waiting.n ? h('div', { class: 'test-banner row', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waiting.n} ${waiting.n === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
@@ -1558,7 +1829,7 @@ async function viewTesting(main) {
 
 async function viewNewTesting(main) {
   const [lib, clientsList, contracts] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts')]);
-  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: new Date().toISOString().slice(0, 10) });
+  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: bizDate() });
   const team = select([['', 'Individual athletes'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
   const picked = new Set();
   const testBoxes = new Map();
@@ -1920,7 +2191,18 @@ async function viewStaff(main) {
       }, 'outline') : null,
       r.status === 'open' ? btn('Decline', (e) => { const reason = prompt('Why? (kept with the request)'); if (reason) busy(e.currentTarget, async () => { await post(`/v1/data-requests/${r.id}/decline`, { reason }); render(); }); }, 'ghost') : null))
       : h('p', { class: 'muted small' }, 'No requests yet.'));
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? h('div') : reqPanel), jobsPanel, auditPanel);
+  // Connection check: what the hosting proxy sent and which address the app picked, to confirm TRUST_PROXY.
+  const connOut = h('div', { class: 'stack-tight' });
+  const connPanel = panel('Connection check', { subtitle: 'Sign-in limits and the activity log go by the visitor\'s internet address. This shows which one the app sees for you, so you can confirm the TRUST_PROXY setting on each server.' },
+    connOut, h('div', null, btn('Check my connection', (ev) => busy(ev.currentTarget, async () => {
+      const c = await get('/v1/staff/connection');
+      const row = (label, value) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' }, h('span', { class: 'grow muted', style: 'min-width:180px' }, label), h('code', { style: 'word-break:break-all' }, value ?? 'none'));
+      const KIND = { private: 'hosting network', cloudflare: 'Cloudflare proxy', public: 'public' };
+      fill(connOut, row('X-Forwarded-For header', c.forwarded_for), row('Connection address', c.connection_address), row('Address the app decided on', c.decided_address), row('TRUST_PROXY', c.trust_proxy ?? 'not set'),
+        h('p', { class: 'strong', style: 'margin:8px 0 0' }, c.guidance),
+        ...(c.previews ?? []).map((p) => h('div', { class: 'small', style: `padding:2px 0${p.trust_proxy === c.proxies_trusted ? ';font-weight:600' : ''}` }, `With TRUST_PROXY=${p.trust_proxy} the app would pick: `, h('code', null, p.address), h('span', { class: 'muted' }, ` (${KIND[p.kind] ?? p.kind})${p.trust_proxy === c.proxies_trusted ? ' · now' : ''}`))));
+    }), 'secondary')));
+  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, jobsPanel, auditPanel);
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.
@@ -2021,7 +2303,7 @@ async function viewUpload(main) {
   const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px' });
   const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])]);
   const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const upDate = input({ type: 'date', value: new Date().toISOString().slice(0, 10), max: new Date().toISOString().slice(0, 10) });
+  const upDate = input({ type: 'date', value: bizDate(), max: bizDate() });
   async function doPreview() {
     const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDate.value || undefined };
     if (file.files[0]) {

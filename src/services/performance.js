@@ -1,4 +1,5 @@
-import { newId, v, notFound, badRequest, conflict, isDate, sha256 } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, isDate, sha256, localDate } from '../util.js';
+import { getSetting } from './families.js';
 import { emit } from './events.js';
 import { TESTS, CATEGORIES } from './test-library.js';
 import { convert, normalizeUnit, compatibleUnits } from './units.js';
@@ -274,7 +275,7 @@ export function parentFilter(ctx) {
 
 // ---------- Testing days ----------
 export function createSession(ctx, body) {
-  const date = body.date ?? ctx.now().slice(0, 10);
+  const date = body.date ?? localDate(ctx.now(), getSetting(ctx, 'timezone'));
   if (!isDate(date)) throw badRequest('date must look like 2026-10-05.');
   const tests = (body.tests ?? []).map((k) => getTest(ctx, k).key);
   let athletes = (body.athletes ?? []).map((a) => resolveAthlete(ctx, a)).filter(Boolean);

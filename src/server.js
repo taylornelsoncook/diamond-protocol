@@ -13,7 +13,7 @@ import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
 import { assignMissingIds } from './services/athlete-ids.js';
-import { can, audit, rateLimit, roleName } from './services/security.js';
+import { can, audit, rateLimit, roleName, hideMoney } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
 import { syncHawkin, migratePending } from './services/perf-import.js';
 import { runBilling } from './services/billing.js';
@@ -48,9 +48,9 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     // Hosting platforms end HTTPS at their proxy and forward plain HTTP; trust their header only when told to.
     const fwdProto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim();
-    if (process.env.TRUST_PROXY === 'true' && (fwdProto === 'https' || fwdProto === 'http')) url.protocol = `${fwdProto}:`;
+    if (proxyHops() && (fwdProto === 'https' || fwdProto === 'http')) url.protocol = `${fwdProto}:`;
     if (url.protocol === 'https:') res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
-    if (ctx.publicUrl?.startsWith('https://') && url.protocol === 'http:' && process.env.TRUST_PROXY === 'true' && url.pathname !== '/healthz') {
+    if (ctx.publicUrl?.startsWith('https://') && url.protocol === 'http:' && proxyHops() && url.pathname !== '/healthz') {
       res.writeHead(301, { location: `${ctx.publicUrl}${url.pathname}${url.search}` });
       return res.end();
     }
@@ -90,12 +90,13 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview'].includes(url.pathname) ? 30_000_000 : 1_000_000);
       const ip = clientIp(req);
       r.ip = ip;
+      r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
       r.kioskKey = req.headers['x-kiosk-key'];
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
-      if (route.path === '/portal/api/public/inquiry') rateLimit(`inquiry:${ip}`, 10, 60 * 60000);
+      if (route.path === '/portal/api/public/inquiry') { rateLimit(`inquiry:${ip}`, 10, 60 * 60000); rateLimit('inquiry:all', 60, 10 * 60000); }   // per address, and overall
       if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
       if (route.path.startsWith('/here-api/')) rateLimit(`here:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
@@ -136,7 +137,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         if (out.__file.stream) return out.__file.stream.pipe(res);
         return res.end(out.__file.body);
       }
-      return json(res, route.status, out);
+      return json(res, route.status, r.user ? hideMoney(r.user.role, req.method, route.path, out) : out);
     } catch (e) {
       if (e instanceof HttpError) return json(res, e.status, { error: { code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) } });
       console.error(e);
@@ -166,10 +167,16 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   return { server, ctx };
 }
 
-// Behind a hosting proxy the real address is in X-Forwarded-For; only trust it when TRUST_PROXY is set.
+// How many proxies sit in front of the app: TRUST_PROXY=true means one (Render's), or give the number (2 with another in front).
+const proxyHops = () => { const t = process.env.TRUST_PROXY ?? ''; return t === 'true' ? 1 : /^[1-9]$/.test(t) ? Number(t) : 0; };
+// Behind a hosting proxy the real address is in X-Forwarded-For; only trust it when TRUST_PROXY is set. Each proxy adds the
+// address it heard from at the end, so the client is that many entries from the end. Earlier entries are whatever the
+// sender wrote and would let anyone dodge the rate limits.
 function clientIp(req) {
-  if (process.env.TRUST_PROXY === 'true') return String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress;
-  return req.socket.remoteAddress;
+  const hops = proxyHops();
+  if (!hops) return req.socket.remoteAddress;
+  const list = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return list[Math.max(0, list.length - hops)] || req.socket.remoteAddress;
 }
 
 function authenticate(ctx, req, route, r, url) {

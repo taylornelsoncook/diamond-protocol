@@ -1,4 +1,4 @@
-import { newId, token, v, notFound, badRequest, conflict, isDate, addDaysToDate, localDate } from '../util.js';
+import { newId, token, v, notFound, badRequest, conflict, isDate, addDaysToDate, localDate, startOfLocalDay } from '../util.js';
 import { emit } from './events.js';
 import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
@@ -82,10 +82,15 @@ export function getContract(ctx, id, baseUrl) {
   const c = ctx.db.get('SELECT * FROM team_contracts WHERE id = ?', id);
   if (!c) throw notFound('Team contract');
   const sessions = ctx.db.all(`SELECT s.id, s.starts_at FROM class_sessions s JOIN class_series cs ON cs.id = s.series_id WHERE cs.contract_id = ? AND s.status = 'scheduled'`, id);
-  const held = sessions.filter((s) => s.starts_at <= ctx.now()).map((s) => s.id);
-  const roster = ctx.db.all('SELECT * FROM team_roster WHERE contract_id = ? AND active = 1 ORDER BY name', id).map((r) => ({
-    ...r, sessions_attended: held.length ? ctx.db.get(`SELECT COUNT(*) AS n FROM team_attendance WHERE roster_id = ? AND session_id IN (${held.map(() => '?').join(',')})`, r.id, ...held).n : 0
-  }));
+  const heldRows = sessions.filter((s) => s.starts_at <= ctx.now()), held = heldRows.map((s) => s.id);
+  // Each athlete's attendance counts from the day they joined the roster (and any earlier session they were marked at).
+  const zone = getSetting(ctx, 'timezone');
+  const roster = ctx.db.all('SELECT * FROM team_roster WHERE contract_id = ? AND active = 1 ORDER BY name', id).map((r) => {
+    const here = new Set(ctx.db.all('SELECT session_id FROM team_attendance WHERE roster_id = ?', r.id).map((x) => x.session_id));
+    const since = startOfLocalDay(r.created_at, zone);
+    const theirs = heldRows.filter((s) => s.starts_at >= since || here.has(s.id));
+    return { ...r, sessions_held: theirs.length, sessions_attended: theirs.filter((s) => here.has(s.id)).length };
+  });
   const invoices = ctx.db.all('SELECT * FROM team_invoices WHERE contract_id = ? ORDER BY issued_on DESC, number DESC', id).map((i) => shapeInvoice(ctx, i, baseUrl));
   return {
     ...c, org: getOrg(ctx, c.org_id), roster,

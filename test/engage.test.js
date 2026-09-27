@@ -152,8 +152,8 @@ test('messages: coach writes, athlete sees them unread, opening marks them read;
   assert.ok(acc.messages.find((x) => x.body === 'Bring water Thursday.' && x.team && !x.read));
   assert.ok(!(await athlete(cole)('GET', 'engage')).body.accountability.messages.some((x) => x.team));
   assert.equal((await coach('POST', `/v1/clients/${ava.id}/messages`, { body: '   ' })).status, 400);
-  // A parent opening the tab marks messages read for that athlete only.
-  assert.equal((await maria('POST', `/portal/api/athletes/${ava.id}/messages/read`)).body.read, 1);
+  // A parent keeps their own read state: both messages are still new to Maria, and reading them is hers alone.
+  assert.equal((await maria('POST', `/portal/api/athletes/${ava.id}/messages/read`)).body.read, 2);
 });
 
 test('athletes and parents write back; the coach who wrote last is emailed and sees it on Today', async () => {
@@ -166,6 +166,7 @@ test('athletes and parents write back; the coach who wrote last is emailed and s
   assert.match(mail()[1].body, /\/#\/clients\//);
 
   // Both sides see the whole conversation; replies never count as unread for the family.
+  await athlete(ava)('POST', 'messages/read');          // Ava opens the team message from earlier (Maria reading it didn't count for her)
   const acc = (await athlete(ava)('GET', 'engage')).body.accountability;
   assert.deepEqual(acc.messages.slice(0, 2).map((m) => [m.from, m.author]), [['parent', 'Maria Lopez'], ['athlete', 'Ava Lopez']]);
   assert.equal(acc.unread, 0);

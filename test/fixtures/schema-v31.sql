@@ -757,32 +757,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
 
--- ---- Background jobs ----
--- One row per finished run (kept 30 days). The webhook sender, which runs every 15 seconds, only records failures.
-CREATE TABLE IF NOT EXISTS job_runs (
-  id TEXT PRIMARY KEY,
-  job TEXT NOT NULL,
-  trigger TEXT NOT NULL DEFAULT 'schedule' CHECK (trigger IN ('schedule','manual')),
-  status TEXT NOT NULL CHECK (status IN ('ok','skipped','failed')),
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  duration_ms INTEGER,
-  result TEXT,
-  error TEXT,
-  instance TEXT
-);
-CREATE INDEX IF NOT EXISTS job_runs_job ON job_runs(job, started_at);
-CREATE INDEX IF NOT EXISTS job_runs_started ON job_runs(started_at);
--- Per job: which server copy holds it until when (so copies sharing this database don't both run it), and alert state.
-CREATE TABLE IF NOT EXISTS job_state (
-  job TEXT PRIMARY KEY,
-  lease_until TEXT,
-  holder TEXT,
-  fail_streak INTEGER NOT NULL DEFAULT 0,
-  last_ok_at TEXT,
-  alerted_at TEXT
-);
-
 -- ---- Terms, privacy and data requests ----
 -- Each parent's acceptance of each version of the terms and privacy policy.
 CREATE TABLE IF NOT EXISTS consents (
@@ -976,7 +950,6 @@ CREATE TABLE IF NOT EXISTS spot_offers (
   opened_at TEXT,
   booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
   booked_at TEXT,
-  price_cents INTEGER,                            -- a trial offer's special price (0 = free); NULL for a standard offer at the usual cover (version 32)
   UNIQUE (session_id, family_id)
 );
 -- Progress notes for parents (version 28): one per athlete per testing day, drafted by the app, approved by a coach.

@@ -1,5 +1,5 @@
-import { v, notFound, conflict, ageOn } from '../util.js';
-import { athleteProfile, getSession, parentFilter } from './performance.js';
+import { v, notFound, conflict, badRequest, HttpError, ageOn, isDate, sha256, token, newId } from '../util.js';
+import { athleteProfile, getSession, parentFilter, CATEGORIES } from './performance.js';
 import { getSetting } from './families.js';
 import { notifyFamily } from './mail.js';
 import { emit } from './events.js';
@@ -41,17 +41,36 @@ function growth(ctx, profile, client) {
 }
 
 // ---------- The report ----------
-export function athleteReport(ctx, clientId, { parentView = false } = {}) {
+// Optional period: from / to as YYYY-MM-DD (all time when both are empty).
+export function reportPeriod(q = {}) {
+  const from = q.from ? String(q.from) : null, to = q.to ? String(q.to) : null;
+  if ((from && !isDate(from)) || (to && !isDate(to))) throw badRequest('Dates need to look like 2026-09-01.');
+  if (from && to && from > to) throw badRequest('The start of the period has to be before the end.');
+  return { from, to };
+}
+const groupKey = (p) => `${p.test}|${p.metric}|${p.side ?? ''}`;
+export function athleteReport(ctx, clientId, { parentView = false, from = null, to = null } = {}) {
   const c = ctx.db.get('SELECT id, athlete_id, name, birth_date, sex, sport, position, school, grad_year FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Athlete');
-  const profile = athleteProfile(ctx, { client_id: c.id }, { parentView });
+  const profile = athleteProfile(ctx, { client_id: c.id }, { parentView, from, to });
+  // In the coach view, mark results the family can't see yet (from testing days that haven't been shared).
+  const familyDates = parentView ? null : new Map(athleteProfile(ctx, { client_id: c.id }, { parentView: true, from, to }).map((p) => [groupKey(p), new Set(p.history.map((x) => x.date))]));
   const tests = profile.filter((p) => p.headline && p.category !== 'body' && p.better !== 'none');
-  const pct = (p) => (p.change == null || !p.first.value ? null : ((p.better === 'lower' ? -p.change : p.change) / p.first.value) * 100);
-  const withPct = tests.map((p) => ({ test: p.test, test_name: p.test_name, category: p.category, metric_name: p.metric_name, unit: p.unit, decimals: p.decimals, better: p.better, side: p.side,
-    first: p.first, latest: p.latest, best: p.best, best_date: p.best_date, tests_count: p.tests_count, change: p.change, improved: p.improved, improvement_pct: pct(p) == null ? null : +pct(p).toFixed(1), history: p.history }));
+  const pct = (p, base) => (base == null || !base.value ? null : +(((p.better === 'lower' ? base.value - p.latest.value : p.latest.value - base.value) / base.value) * 100).toFixed(1));
+  const withPct = tests.map((p) => {
+    const previous = p.history.length > 1 ? p.history.at(-2) : null;
+    const unshared = familyDates ? p.history.filter((x) => !familyDates.get(groupKey(p))?.has(x.date)).length : 0;
+    return { test: p.test, test_name: p.test_name, category: p.category, metric_name: p.metric_name, unit: p.unit, decimals: p.decimals, better: p.better, side: p.side,
+      first: p.first, latest: p.latest, previous, best: p.best, best_date: p.best_date, tests_count: p.tests_count, change: p.change, improved: p.improved,
+      improvement_pct: p.history.length > 1 ? pct(p, p.first) : null,
+      change_last: previous ? p.latest.value - previous.value : null, improved_last: previous ? (p.better === 'lower' ? p.latest.value < previous.value : p.latest.value > previous.value) : null,
+      improvement_pct_last: previous ? pct(p, previous) : null, history: p.history, ...(familyDates ? { unshared_days: unshared } : {}) };
+  });
   const highlights = withPct.filter((t) => t.improvement_pct > 0).sort((a, b) => b.improvement_pct - a.improvement_pct).slice(0, 3);
-  const sessions = ctx.db.all(`SELECT DISTINCT s.id, s.name, s.date, s.parent_note, s.shared_at FROM perf_sessions s JOIN perf_results r ON r.session_id = s.id
-    WHERE r.client_id = ? AND r.voided = 0 ${parentView ? 'AND s.shared_at IS NOT NULL' : ''} ORDER BY s.date DESC`, c.id);
+  const daysSql = (withPeriod) => `SELECT DISTINCT s.id, s.name, s.date, s.parent_note, s.shared_at FROM perf_sessions s JOIN perf_results r ON r.session_id = s.id
+    WHERE r.client_id = ? AND r.voided = 0 ${parentView ? 'AND s.shared_at IS NOT NULL' : ''} ${withPeriod && from ? 'AND s.date >= ?' : ''} ${withPeriod && to ? 'AND s.date <= ?' : ''} ORDER BY s.date DESC`;
+  const sessions = ctx.db.all(daysSql(true), c.id, ...(from ? [from] : []), ...(to ? [to] : []));
+  const allSessions = ctx.db.all(daysSql(false), c.id).map((s) => ({ id: s.id, name: s.name, date: s.date, shared: !!s.shared_at }));
   // The coach's approved note for this athlete on the latest testing day.
   const last = sessions[0] ? { ...sessions[0], athlete_note: ctx.db.get('SELECT body FROM progress_notes WHERE client_id = ? AND perf_session_id = ? AND approved_at IS NOT NULL', c.id, sessions[0].id)?.body ?? null } : undefined;
   const short = (n) => n.replace(/\s*\(.*\)$/, '');
@@ -63,12 +82,81 @@ export function athleteReport(ctx, clientId, { parentView = false } = {}) {
   const all = [...profile].flatMap((p) => p.history.map((h) => h.date)).sort();
   return {
     athlete: { ...c, age: ageOn(c.birth_date, new Date().toISOString()) },
-    business: { name: getSetting(ctx, 'business_name') },
-    period: all.length ? { from: all[0], to: all.at(-1) } : null,
-    tests: withPct, highlights, latest_session: last ?? null, new_prs: newPrs, sessions,
+    business: { name: getSetting(ctx, 'business_name') }, categories: CATEGORIES.map(([key, name]) => ({ key, name })),
+    period: all.length ? { from: all[0], to: all.at(-1) } : null, filter: { from, to },
+    tests: withPct, highlights, latest_session: last ?? null, new_prs: newPrs, sessions, all_sessions: allSessions,
+    unshared_tests: withPct.filter((t) => t.unshared_days > 0).length,
     growth: growth(ctx, profile, c), generated_at: new Date().toISOString(),
     visibility: parentView ? (getSetting(ctx, 'share_results') === 'all' ? 'all' : 'shared') : 'coach'
   };
+}
+
+// ---------- Share links ----------
+// A private link to the family view of one athlete's report that works without signing in, for 7 days to a year,
+// until someone turns it off. The link's secret is 24 random bytes; only its hash is stored, and every wrong,
+// expired or turned-off link gets the same answer.
+export const LINK_DAYS = [7, 30, 90, 365];
+const MAX_LINKS = 10;
+const hashLink = (t) => sha256(`report-link:${t}`);
+const LINK_COLS = 'id, label, created_by_kind, created_by_name, created_at, expires_at, views, last_viewed_at';
+const linkGone = () => new HttpError(410, 'link_expired', 'This link has expired or been turned off. Ask the family or the coach for a new one.');
+export function listReportLinks(ctx, clientId) {
+  return ctx.db.all(`SELECT ${LINK_COLS} FROM report_links WHERE client_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`, clientId, ctx.now());
+}
+// by: { kind: 'staff' | 'parent', id, name }. The link's address comes back once, here, and is never shown again.
+export function createReportLink(ctx, clientId, body = {}, by = {}, baseUrl) {
+  const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', clientId);
+  if (!c) throw notFound('Athlete');
+  if (c.archived_at) throw badRequest(`${c.name} is archived. Restore the profile to share the report.`);
+  const days = Number(body.days ?? 30);
+  if (!LINK_DAYS.includes(days)) throw badRequest('Pick how long the link works: 7, 30, 90 or 365 days.');
+  const label = v.str(body.label, 'label', { max: 60, optional: true });
+  if (listReportLinks(ctx, c.id).length >= MAX_LINKS) throw badRequest(`${c.name.split(' ')[0]} already has ${MAX_LINKS} working links. Turn one off first.`);
+  const secret = token(24), id = newId('rl');
+  ctx.db.run(`INSERT INTO report_links (id, client_id, token_hash, label, created_by_kind, created_by_id, created_by_name, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, c.id, hashLink(secret), label, by.kind === 'parent' ? 'parent' : 'staff', by.id ?? null, by.name ? String(by.name).slice(0, 120) : null, ctx.now(), new Date(Date.parse(ctx.now()) + days * 864e5).toISOString());
+  return { ...ctx.db.get(`SELECT ${LINK_COLS} FROM report_links WHERE id = ?`, id), url: `${baseUrl ?? ctx.publicUrl ?? ''}/report.html#share=${secret}` };
+}
+export function revokeReportLink(ctx, clientId, linkId) {
+  const l = ctx.db.get('SELECT id, revoked_at FROM report_links WHERE id = ? AND client_id = ?', String(linkId ?? ''), clientId);
+  if (!l) throw notFound('Link');
+  if (!l.revoked_at) ctx.db.run('UPDATE report_links SET revoked_at = ? WHERE id = ?', ctx.now(), l.id);
+  return { id: l.id, revoked: true };
+}
+// Opens a working link: the family view (shared testing days only, unless the business shows everything), with the
+// age but never the date of birth or IDs. count=false for the same visitor changing the period, so opens aren't inflated.
+export function openReportLink(ctx, secret, { count = true, from = null, to = null } = {}) {
+  if (typeof secret !== 'string' || !/^[\w-]{20,64}$/.test(secret)) throw linkGone();
+  const l = ctx.db.get('SELECT l.id, l.client_id, l.expires_at, c.archived_at FROM report_links l JOIN clients c ON c.id = l.client_id WHERE l.token_hash = ? AND l.revoked_at IS NULL AND l.expires_at > ?', hashLink(secret), ctx.now());
+  if (!l || l.archived_at) throw linkGone();
+  const r = athleteReport(ctx, l.client_id, { parentView: true, from, to });
+  if (count) ctx.db.run('UPDATE report_links SET views = views + 1, last_viewed_at = ? WHERE id = ?', ctx.now(), l.id);
+  const { birth_date, athlete_id, id, ...athlete } = r.athlete;
+  return { ...r, athlete, sessions: r.sessions.map(({ id: _s, ...s }) => s), all_sessions: r.all_sessions.map(({ id: _s, ...s }) => s), latest_session: r.latest_session ? (({ id: _s, ...s }) => s)(r.latest_session) : null,
+    view: 'link', link: { expires_at: l.expires_at } };
+}
+
+// ---------- Email the report to the family ----------
+const fmtValue = (val, unit, decimals = 2) => (unit === 'in' && Math.abs(val) >= 48 ? `${Math.floor(val / 12)}' ${+(val % 12).toFixed(1)}"` : `${Number(val).toFixed(decimals)}${unit && !['ratio', 'level'].includes(unit) ? ` ${unit}` : ''}`);
+export function emailReport(ctx, clientId, body = {}, by = {}, baseUrl) {
+  const c = ctx.db.get('SELECT id, name, family_id, archived_at FROM clients WHERE id = ?', clientId);
+  if (!c) throw notFound('Athlete');
+  const first = c.name.split(' ')[0];
+  if (c.archived_at) throw badRequest(`${c.name} is archived. Restore the profile to email the report.`);
+  const parents = c.family_id ? ctx.db.all(`SELECT email FROM guardians WHERE family_id = ? AND email IS NOT NULL AND email != ''`, c.family_id) : [];
+  if (!parents.length) throw badRequest(`${first} has no parent email on file. Add a parent on the client profile first.`);
+  const note = v.str(body.note, 'note', { max: 2000, optional: true });
+  const r = athleteReport(ctx, c.id, { parentView: true });
+  if (!r.tests.length) throw badRequest(`${first} has no results the family can see yet. Share a testing day first.`);
+  const link = body.include_link ? createReportLink(ctx, c.id, { days: 90, label: 'Emailed to family' }, by, baseUrl) : null;
+  const lines = [`Here is ${first}'s progress report from ${r.business.name}.`, ''];
+  if (note) lines.push('From your coach:', note, '');
+  if (r.highlights.length) lines.push('Biggest improvements:', ...r.highlights.map((t) => `  ${t.test_name}: ${fmtValue(t.first.value, t.unit, t.decimals)} to ${fmtValue(t.latest.value, t.unit, t.decimals)} (+${t.improvement_pct}%)`), '');
+  if (r.new_prs.length) lines.push(`New personal records: ${r.new_prs.join(', ')}.`, '');
+  lines.push('Open, print or save the full report:', link ? link.url : `${baseUrl ?? ctx.publicUrl ?? ''}/parent`,
+    link ? 'This link works for 90 days without signing in. Please share it only with people you trust.' : 'Sign in to the parent portal with this email address to see it.');
+  notifyFamily(ctx, c.family_id, `${first}'s progress report`, lines.join('\n'));
+  return { emailed: parents.length, link: link ? { id: link.id, expires_at: link.expires_at } : null };
 }
 
 // ---------- Sharing a testing day with families ----------

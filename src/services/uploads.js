@@ -1,6 +1,5 @@
 import { newId, v, badRequest, notFound, localDate } from '../util.js';
 import { getSetting } from './families.js';
-import { RANGES } from './test-library.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { unitFromHeader } from './units.js';
 import { listTests, getTest, getSession, recordResults, resultExternalId } from './performance.js';
@@ -163,7 +162,7 @@ function checkUpload(ctx, { headers, rows, options }) {
       if (num == null) { err(rowNo, h, `"${row[h]}" isn't a number.`, profile.athlete_id); continue; }
       let value;
       try { value = convert(num, unit, metric.unit); } catch { err(rowNo, h, `${unit} can't be converted to ${metric.unit}.`, profile.athlete_id); continue; }
-      const range = RANGES[`${test.key}.${metric.key}`];
+      const range = metric.range;                              // the coach's own range when set, otherwise the built-in one
       if (range && (value < range[0] || value > range[1])) { err(rowNo, h, `${fmt(num, unit, 3)} isn't possible for ${test.name} (${range[0]}–${range[1]} ${metric.unit}). Is it in the wrong column?`, profile.athlete_id); continue; }
       if (!range && metric.better !== 'none' && value <= 0) { err(rowNo, h, 'Must be more than zero.', profile.athlete_id); continue; }
       if (col.side && test.sides !== 'lr') { err(rowNo, h, `${test.name} isn't tested by side.`, profile.athlete_id); continue; }

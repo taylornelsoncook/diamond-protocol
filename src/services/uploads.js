@@ -1,4 +1,5 @@
-import { newId, v, badRequest, notFound } from '../util.js';
+import { newId, v, badRequest, notFound, localDate } from '../util.js';
+import { getSetting } from './families.js';
 import { RANGES } from './test-library.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { unitFromHeader } from './units.js';
@@ -128,7 +129,7 @@ function checkUpload(ctx, { headers, rows, options }) {
   if (errors.length) return { errors, warnings, items: [], groups: [], session };
 
   const tests = new Map(), seen = new Map(), athleteCache = new Map(), bests = new Map();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate(ctx.now(), getSetting(ctx, 'timezone'));
   const items = [];
   rows.forEach((row, i) => {
     const rowNo = i + 2;

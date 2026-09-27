@@ -18,8 +18,9 @@ export function publicSchedule(ctx) {
     drop_in_cents: s.drop_in_cents ?? null, registration_cents: s.registration_cents ?? null
   }));
   // The next few evaluation times, at most three a day so one open afternoon doesn't fill the page.
-  const perDay = {};
-  const evaluations = openSlots(ctx, { kind: 'evaluation', days: DAYS }).filter((s) => { const d = localDate(s.starts_at, zone); perDay[d] = (perDay[d] ?? 0) + 1; return perDay[d] <= 3; })
+  // Two coaches free at the same time and place are one time on this page (the portal picks the coach).
+  const perDay = {}, seen = new Set();
+  const evaluations = openSlots(ctx, { kind: 'evaluation', days: DAYS }).filter((s) => { const k = `${s.starts_at} ${s.location_id}`; if (seen.has(k)) return false; seen.add(k); const d = localDate(s.starts_at, zone); perDay[d] = (perDay[d] ?? 0) + 1; return perDay[d] <= 3; })
     .slice(0, 12).map((s) => ({ starts_at: s.starts_at, location_name: s.location_name, price_cents: s.price_cents ?? null }));
   return { ...base, classes, evaluations };
 }

@@ -19,6 +19,9 @@ services:
     envVars:
       - key: DP_TEST_MODE
         value: "true"
+      # Render's Cloudflare edge plus its load balancer: two proxies (Staff & security > Connection check confirms it).
+      - key: TRUST_PROXY
+        value: "2"
       - key: DP_DEMO
         value: "1"
       - key: BUSINESS_TZ
@@ -39,6 +42,19 @@ services:
         sync: false
       - key: SMS_ONLY_TO
         sync: false
+      # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_KEY_ID
+        sync: false
+      - key: BACKUP_S3_SECRET
+        sync: false
+      - key: BACKUP_S3_PREFIX
+        value: staging/
+      - key: BACKUP_PASSPHRASE
+        sync: false
 
   # Production: real families. Deploys only when you press Manual Deploy.
   - type: web
@@ -57,6 +73,9 @@ services:
     envVars:
       - key: DP_TEST_MODE
         value: "false"
+      # Render's Cloudflare edge plus its load balancer: two proxies. Add one if you turn on your own Cloudflare proxy.
+      - key: TRUST_PROXY
+        value: "2"
       - key: BUSINESS_TZ
         value: America/Denver
       - key: PUBLIC_URL
@@ -84,4 +103,17 @@ services:
         sync: false
       # Optional: Claude rewords progress notes for parents (coaches still approve each one).
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_KEY_ID
+        sync: false
+      - key: BACKUP_S3_SECRET
+        sync: false
+      - key: BACKUP_S3_PREFIX
+        value: production/
+      - key: BACKUP_PASSPHRASE
         sync: false

@@ -80,6 +80,7 @@ export async function subscribe(ctx, clientId, planId, asOf = ctx.now()) {
   const plan = getPlan(ctx, planId);
   if (!plan.active) throw badRequest('That plan is no longer offered.');
   if (currentSubscription(ctx, clientId)) throw conflict('This client already has a subscription. Change its plan instead.');
+  if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) throw conflict('This client is archived. Restore them on their client page first.');
   const trial = plan.trial_days > 0;
   const sub = {
     id: newId('sub'),

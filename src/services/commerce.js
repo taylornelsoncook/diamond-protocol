@@ -232,8 +232,9 @@ export function getSale(ctx, id, { withSecret = false } = {}) {
   delete s.stripe_location_id;
   return s;
 }
-export function listSales(ctx, { since, locationId, clientId, status, limit = 100 } = {}) {
+export function listSales(ctx, { since, locationId, clientId, status, createdBy, limit = 100 } = {}) {
   const where = [], p = [];
+  if (createdBy) { where.push('s.created_by = ?'); p.push(createdBy); }
   if (since) { where.push('s.created_at >= ?'); p.push(since); }
   if (locationId) { where.push('s.location_id = ?'); p.push(locationId); }
   if (clientId) { where.push('s.client_id = ?'); p.push(clientId); }

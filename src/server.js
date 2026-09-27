@@ -13,12 +13,14 @@ import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
 import { assignMissingIds } from './services/athlete-ids.js';
-import { can, audit, rateLimit, roleName } from './services/security.js';
+import { can, audit, rateLimit, roleName, hideMoney } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
-import { syncAll as syncDevices, migratePending } from './services/perf-import.js';
+import { sendNewest as sendBackupOffsite } from './services/offsite.js';
+import { syncHawkin, migratePending } from './services/perf-import.js';
 import { runBilling } from './services/billing.js';
 import { createTestProvider } from './payments/test-provider.js';
 import { handleStripeEvent } from './services/commerce.js';
+import { createJobRunner } from './services/jobs.js';
 import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
 import { weeklyDigest } from './services/insights.js';
 import { runFollowUps } from './services/leads.js';
@@ -47,9 +49,9 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     // Hosting platforms end HTTPS at their proxy and forward plain HTTP; trust their header only when told to.
     const fwdProto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim();
-    if (process.env.TRUST_PROXY === 'true' && (fwdProto === 'https' || fwdProto === 'http')) url.protocol = `${fwdProto}:`;
+    if (proxyHops() && (fwdProto === 'https' || fwdProto === 'http')) url.protocol = `${fwdProto}:`;
     if (url.protocol === 'https:') res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
-    if (ctx.publicUrl?.startsWith('https://') && url.protocol === 'http:' && process.env.TRUST_PROXY === 'true' && url.pathname !== '/healthz') {
+    if (ctx.publicUrl?.startsWith('https://') && url.protocol === 'http:' && proxyHops() && url.pathname !== '/healthz') {
       res.writeHead(301, { location: `${ctx.publicUrl}${url.pathname}${url.search}` });
       return res.end();
     }
@@ -89,12 +91,13 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview'].includes(url.pathname) ? 30_000_000 : 1_000_000);
       const ip = clientIp(req);
       r.ip = ip;
+      r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
       r.kioskKey = req.headers['x-kiosk-key'];
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
-      if (route.path === '/portal/api/public/inquiry') rateLimit(`inquiry:${ip}`, 10, 60 * 60000);
+      if (route.path === '/portal/api/public/inquiry') { rateLimit(`inquiry:${ip}`, 10, 60 * 60000); rateLimit('inquiry:all', 60, 10 * 60000); }   // per address, and overall
       if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
       if (route.path.startsWith('/here-api/')) rateLimit(`here:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
@@ -135,7 +138,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         if (out.__file.stream) return out.__file.stream.pipe(res);
         return res.end(out.__file.body);
       }
-      return json(res, route.status, out);
+      return json(res, route.status, r.user ? hideMoney(r.user.role, req.method, route.path, out) : out);
     } catch (e) {
       if (e instanceof HttpError) return json(res, e.status, { error: { code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) } });
       console.error(e);
@@ -143,36 +146,45 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
     }
   });
 
-  let timers = [];
-  if (jobs) {
-    timers.push(setInterval(() => deliverPending(ctx).catch((e) => console.error('webhooks', e)), 15000));
-    timers.push(setInterval(() => runBilling(ctx).catch((e) => console.error('billing', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => runTeamBilling(ctx, { baseUrl: ctx.publicUrl }).catch((e) => console.error('team billing', e)), 60 * 60 * 1000));
-    runTeamBilling(ctx, { baseUrl: ctx.publicUrl }).catch((e) => console.error('team billing', e));
-    timers.push(setInterval(() => syncDevices(ctx), 15 * 60 * 1000));
-    if (dbFile !== ':memory:') {
-      const backup = () => { try { const b = dailyBackup(ctx); if (b) console.log(`Backup saved: ${b.name}`); } catch (e) { console.error('backup', e.message); } };
-      timers.push(setInterval(backup, 60 * 60 * 1000));
-      backup();
-    }
-    timers.push(setInterval(() => extendSchedule(ctx).catch((e) => console.error('schedule', e)), 6 * 60 * 60 * 1000));
-    timers.push(setInterval(() => sendReminders(ctx).catch((e) => console.error('reminders', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => weeklyDigest(ctx).catch((e) => console.error('weekly digest', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => runFollowUps(ctx).catch((e) => console.error('lead follow-up', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => runReviewRequests(ctx).catch((e) => console.error('review requests', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => runSlotFilling(ctx).catch((e) => console.error('open spots', e)), 60 * 60 * 1000));
-    timers.push(setInterval(() => runMoneyChecks(ctx).catch((e) => console.error('money checks', e)), 60 * 60 * 1000));
-    runBilling(ctx).catch((e) => console.error('billing', e));
-    extendSchedule(ctx).catch((e) => console.error('schedule', e));
+  // Background jobs: see services/jobs.js for run history, owner alerts and the one-copy-at-a-time lease.
+  const runner = ctx.jobs = createJobRunner(ctx);
+  const HOUR = 3600e3;
+  runner.define('webhooks', 15e3, () => deliverPending(ctx), { quiet: true });
+  runner.define('team-billing', HOUR, () => runTeamBilling(ctx, { baseUrl: ctx.publicUrl }), { atStart: true });
+  runner.define('hawkin-sync', 15 * 60e3, () => syncHawkin(ctx));
+  if (dbFile !== ':memory:') {
+    runner.define('daily-backup', HOUR, () => { const b = dailyBackup(ctx); if (!b) return { skipped: true }; console.log(`Backup saved: ${b.name}`); return { name: b.name, bytes: b.bytes }; }, { atStart: true });
+    // Sends the newest backup off-site (when storage is set up) and reads it back; a failed send is a failed run.
+    runner.define('offsite-backup', HOUR, async () => {
+      const r = await sendBackupOffsite(ctx);
+      if (!r) return { skipped: true };
+      if (!r.ok) throw new Error(`Off-site backup failed: ${r.error}`);
+      return r;
+    }, { atStart: true });
   }
-  server.on('close', () => { timers.forEach(clearInterval); ctx.db.close(); });
+  runner.define('billing', HOUR, () => runBilling(ctx), { atStart: true });
+  runner.define('extend-schedule', 6 * HOUR, () => extendSchedule(ctx), { atStart: true });
+  runner.define('text-reminders', HOUR, () => sendReminders(ctx));
+  runner.define('weekly-digest', HOUR, () => weeklyDigest(ctx));
+  runner.define('lead-follow-ups', HOUR, () => runFollowUps(ctx));
+  runner.define('review-requests', HOUR, () => runReviewRequests(ctx));
+  runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
+  runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
+  if (jobs) runner.start();
+  server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };
 }
 
-// Behind a hosting proxy the real address is in X-Forwarded-For; only trust it when TRUST_PROXY is set.
+// How many proxies sit in front of the app: TRUST_PROXY=true means one (Render's), or give the number (2 with another in front).
+const proxyHops = () => { const t = process.env.TRUST_PROXY ?? ''; return t === 'true' ? 1 : /^[1-9]$/.test(t) ? Number(t) : 0; };
+// Behind a hosting proxy the real address is in X-Forwarded-For; only trust it when TRUST_PROXY is set. Each proxy adds the
+// address it heard from at the end, so the client is that many entries from the end. Earlier entries are whatever the
+// sender wrote and would let anyone dodge the rate limits.
 function clientIp(req) {
-  if (process.env.TRUST_PROXY === 'true') return String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress;
-  return req.socket.remoteAddress;
+  const hops = proxyHops();
+  if (!hops) return req.socket.remoteAddress;
+  const list = String(req.headers['x-forwarded-for'] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  return list[Math.max(0, list.length - hops)] || req.socket.remoteAddress;
 }
 
 function authenticate(ctx, req, route, r, url) {

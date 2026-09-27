@@ -1,3 +1,4 @@
+-- The schema at version 30 (commit 7349d1e), kept as it was for test/migrations.test.js. Don't edit.
 -- Diamond Protocol schema. Money is stored in cents, times as ISO-8601 UTC strings, ids as prefixed strings.
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -74,8 +75,6 @@ CREATE TABLE IF NOT EXISTS clients (
   card_payment_method TEXT,
   card_brand TEXT,
   card_last4 TEXT,
-  archived_at TEXT,                      -- no longer training: hidden from lists, pickers and automatic messages (version 31)
-  archived_by TEXT,                      -- who archived them (staff name)
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -377,7 +376,6 @@ CREATE TABLE IF NOT EXISTS class_series (
   start_date TEXT NOT NULL,              -- YYYY-MM-DD
   end_date TEXT,                         -- YYYY-MM-DD; open-ended classes repeat until archived
   contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL,   -- team sessions belong to a contract
-  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,               -- who leads it (version 31)
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
@@ -395,11 +393,9 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled','canceled')),
   created_at TEXT NOT NULL,
   workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,   -- shown on the weight-room screen (version 23)
-  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,         -- who leads it: the class's coach, or a sub for this one session (version 31)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);
-CREATE INDEX IF NOT EXISTS class_sessions_coach ON class_sessions(coach_id, starts_at);
 CREATE TABLE IF NOT EXISTS enrollments (
   id TEXT PRIMARY KEY,
   series_id TEXT NOT NULL REFERENCES class_series(id) ON DELETE CASCADE,
@@ -434,17 +430,6 @@ CREATE TABLE IF NOT EXISTS availability (
   end_time TEXT NOT NULL,
   slot_minutes INTEGER NOT NULL CHECK (slot_minutes BETWEEN 15 AND 240),
   price_cents INTEGER,                   -- evaluations: price; privates use private credits or this drop-in price
-  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,   -- whose hours these are (version 31); empty = the place decides
-  created_at TEXT NOT NULL
-);
--- Days a coach (or, with no user_id, the whole facility) is off: their private and evaluation times aren't offered.
-CREATE TABLE IF NOT EXISTS time_off (
-  id TEXT PRIMARY KEY,
-  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-  start_date TEXT NOT NULL,              -- YYYY-MM-DD in the business time zone, inclusive
-  end_date TEXT NOT NULL,
-  note TEXT,
-  created_by TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -757,32 +742,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
 
--- ---- Background jobs ----
--- One row per finished run (kept 30 days). The webhook sender, which runs every 15 seconds, only records failures.
-CREATE TABLE IF NOT EXISTS job_runs (
-  id TEXT PRIMARY KEY,
-  job TEXT NOT NULL,
-  trigger TEXT NOT NULL DEFAULT 'schedule' CHECK (trigger IN ('schedule','manual')),
-  status TEXT NOT NULL CHECK (status IN ('ok','skipped','failed')),
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  duration_ms INTEGER,
-  result TEXT,
-  error TEXT,
-  instance TEXT
-);
-CREATE INDEX IF NOT EXISTS job_runs_job ON job_runs(job, started_at);
-CREATE INDEX IF NOT EXISTS job_runs_started ON job_runs(started_at);
--- Per job: which server copy holds it until when (so copies sharing this database don't both run it), and alert state.
-CREATE TABLE IF NOT EXISTS job_state (
-  job TEXT PRIMARY KEY,
-  lease_until TEXT,
-  holder TEXT,
-  fail_streak INTEGER NOT NULL DEFAULT 0,
-  last_ok_at TEXT,
-  alerted_at TEXT
-);
-
 -- ---- Terms, privacy and data requests ----
 -- Each parent's acceptance of each version of the terms and privacy policy.
 CREATE TABLE IF NOT EXISTS consents (
@@ -976,7 +935,6 @@ CREATE TABLE IF NOT EXISTS spot_offers (
   opened_at TEXT,
   booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
   booked_at TEXT,
-  price_cents INTEGER,                            -- a trial offer's special price (0 = free); NULL for a standard offer at the usual cover (version 32)
   UNIQUE (session_id, family_id)
 );
 -- Progress notes for parents (version 28): one per athlete per testing day, drafted by the app, approved by a coach.
@@ -1049,17 +1007,3 @@ CREATE TABLE IF NOT EXISTS lesson_assignments (
   CHECK ((lesson_id IS NULL) <> (course_id IS NULL)),
   CHECK ((client_id IS NULL) <> (contract_id IS NULL))
 );
--- Staff notes on a client: dated, with the author. Pinned notes show at the top of the client page; coach-only notes
--- are never shown to front desk.
-CREATE TABLE IF NOT EXISTS client_notes (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  author_id TEXT,
-  author_name TEXT NOT NULL,
-  body TEXT NOT NULL,
-  pinned INTEGER NOT NULL DEFAULT 0,
-  coach_only INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT
-);
-CREATE INDEX IF NOT EXISTS client_notes_client ON client_notes(client_id, created_at);

@@ -100,8 +100,8 @@ const EVENT_TEXT = {
   'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
   'purchase.completed': (d) => `${d.client_name} got ${d.title} from the online store`,
-  'spots.offered': (d) => `Open spots in ${d.session_name} offered to ${d.families} ${d.families === 1 ? 'family' : 'families'}`,
-  'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
+  'spots.offered': (d) => d.trial ? `Trial offer for ${d.session_name}${d.price_cents != null ? ` at ${d.price_cents === 0 ? 'no charge' : money(d.price_cents)}` : ''} sent to ${d.families} ${d.families === 1 ? 'family' : 'families'}` : `Open spots in ${d.session_name} offered to ${d.families} ${d.families === 1 ? 'family' : 'families'}`,
+  'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.trial_offer ? ` from a trial offer${d.price_cents != null ? ` (${d.price_cents === 0 ? 'free' : money(d.price_cents)})` : ''}` : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
   'booking.waitlisted': (d) => `${d.client_name} joined the waitlist for ${d.session_name}`,
   'booking.canceled': (d) => `${d.client_name} canceled ${d.session_name}${d.late ? ' (late)' : ''}`,
   'session.canceled': (d) => `${d.name} canceled${d.reason ? `: ${d.reason}` : ''}`,
@@ -127,11 +127,13 @@ const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', ca
 
 async function viewToday(main) {
   const staff = state.user.role !== 'front_desk';
-  const [d, rev, ag, flags, risk, spots] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null, staff ? get('/v1/open-spots').catch(() => null) : null]);
+  const mineSpots = state.user.role === 'coach' && hashQuery().get('mine') === '1';     // coaches: "My classes only" on the open-spots list
+  const [d, rev, ag, flags, risk, spots, team] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null,
+    staff ? get(`/v1/open-spots${mineSpots ? '?coach_id=me' : ''}`).catch(() => null) : null, isOwner() ? get('/v1/coach-summary').catch(() => null) : null]);
   tzName = ag.timezone;
   const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
     ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
-  const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--primary', href: '#/sell' }, 'New sale') },
+  const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'New sale') },
     rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
       : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
   const attention = d.attention.map((a) => {
@@ -175,7 +177,8 @@ async function viewToday(main) {
     header('Today', isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
     pulseBlock(d.pulse),
     agendaPanel,
-    spots?.data.length ? spotsPanel(spots) : null,
+    team ? coachesPanel(team) : null,
+    spots ? spotsPanel(spots, { mine: mineSpots }) : null,
     flags,
     risk?.data.length ? panel('Athletes to check on', { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick message usually brings them back.' },
       risk.data.slice(0, 6).map((r) => h('div', { class: 'list-item' },
@@ -229,19 +232,116 @@ function pulseBlock(p) {
 }
 
 
-// Classes in the next 2 days with open spots and nobody waiting. One tap offers the spots to families who fit.
-function spotsPanel(spots) {
+// Every class families book single spots in (group classes, clinics, camp days) with a spot left in the next 7 days,
+// whoever leads it. One tap offers the spots to families who fit; owners can also send a "try it for $X" trial offer.
+const offerLine = (o) => [
+  o.sent - o.trial_sent > 0 ? `${o.sent - o.trial_sent} offered` : null,
+  o.trial_sent ? `Trial offer sent${o.trial_price_cents != null ? ` at ${o.trial_price_cents === 0 ? 'no charge' : money(o.trial_price_cents)}` : ''} to ${o.trial_sent} ${o.trial_sent === 1 ? 'family' : 'families'}` : null,
+  o.sent ? `${o.opened} opened, ${o.booked} booked` : null].filter(Boolean).join(' · ');
+function spotsPanel(spots, { mine = false } = {}) {
   const auto = spots.mode === 'auto';
-  const mode = isOwner() ? select([['suggest', 'Send offers when I tap'], ['auto', 'Send offers automatically'], ['off', 'Don\'t show this']], { value: spots.mode, 'aria-label': 'Open spot offers', style: 'width:auto' }) : null;
-  if (mode) mode.addEventListener('change', () => busy(mode, async () => { await patch('/v1/settings', { open_spot_offers: mode.value }); toast(mode.value === 'auto' ? 'Offers go out on their own between 10 am and 7 pm.' : 'Saved.'); render(); }));
-  return panel('Classes with open spots', { subtitle: auto ? 'Offers go out on their own between 10 am and 7 pm, a day ahead. First family to tap the link gets the spot.' : 'Offer the spots to families who fit: regulars of the class first, then members and recent athletes. First to tap the link gets it.', action: mode },
-    spots.data.map((x) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('a', { href: `#/schedule/${x.id}`, class: 'strong', style: 'color:var(--steel)' }, x.name),
-        h('span', { class: 'small muted' }, `${new Intl.DateTimeFormat('en-US', { timeZone: tzName, weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(x.starts_at))} · ${x.location_name} · ${x.spots_left} of ${x.capacity} open`),
-        h('span', { class: 'small muted' }, [x.offers.sent ? `${x.offers.sent} offered, ${x.offers.opened} opened, ${x.offers.booked} booked` : null, x.families_who_fit ? `${x.families_who_fit} more ${x.families_who_fit === 1 ? 'family fits' : 'families fit'}` : 'No more families who fit'].filter(Boolean).join(' · '))),
-      x.families_who_fit ? btn(`Offer to ${Math.min(x.families_who_fit, x.spots_left * 4, 30)} ${Math.min(x.families_who_fit, x.spots_left * 4, 30) === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => {
-        const r = await post(`/v1/sessions/${x.id}/offer-spots`); toast(`Offered to ${r.sent} ${r.sent === 1 ? 'family' : 'families'}. First to tap gets it.`); render();
-      }), 'outline') : null)));
+  let action = null;
+  if (isOwner()) {
+    action = select([['suggest', 'Send offers when I tap'], ['auto', 'Send offers automatically'], ['off', 'Don\'t send offers']], { value: spots.mode, 'aria-label': 'Open spot offers', style: 'width:auto' });
+    action.addEventListener('change', () => busy(action, async () => { await patch('/v1/settings', { open_spot_offers: action.value }); toast(action.value === 'auto' ? 'Offers go out on their own between 10 am and 7 pm.' : action.value === 'off' ? 'Offers are off. Classes with open spots still show here.' : 'Saved.'); render(); }));
+  } else if (state.user.role === 'coach') {
+    const box = h('input', { type: 'checkbox', checked: mine });
+    box.addEventListener('change', () => { location.hash = box.checked ? '#/today?mine=1' : '#/today'; });
+    action = h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, box, h('span', null, 'My classes only'));
+  }
+  const subtitle = `Every class with a spot left in the next ${spots.days} days, soonest first. ${auto ? 'Offers go out on their own between 10 am and 7 pm for classes and clinics starting within 30 hours; send the rest by hand.' : spots.mode === 'off' ? 'Offers are off, so nothing goes out.' : 'Offer spots to families who fit: regulars first, then members and recent athletes. First to tap the link gets it.'}`;
+  const row = (x) => {
+    const n = x.offer_count;
+    return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { style: 'width:76px;flex-shrink:0;font:600 17px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('a', { href: `#/schedule/${x.id}`, class: 'strong', style: 'color:var(--steel)' }, x.name),
+        h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'}`),
+        h('span', { class: 'small' }, `${x.booked} of ${x.capacity} booked · `, h('span', { class: x.spots_left <= 2 ? 'warn-text' : '' }, `${x.spots_left} ${x.spots_left === 1 ? 'spot' : 'spots'} left`), ` · ${x.families_who_fit} ${x.families_who_fit === 1 ? 'family fits' : 'families fit'}`),
+        x.offers.sent ? h('span', { class: 'small muted' }, offerLine(x.offers)) : null,
+        x.can_offer ? null : h('span', { class: 'small muted' }, x.offer_note)),
+      h('div', { class: 'row wrap', style: 'gap:8px;margin-left:auto;justify-content:flex-end' },
+        kindBadge(x.kind),
+        x.can_offer ? btn(`Offer to ${n} ${n === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => {
+          const r = await post(`/v1/sessions/${x.id}/offer-spots`); toast(`Offered to ${r.sent} ${r.sent === 1 ? 'family' : 'families'}. First to tap gets it.`); render();
+        }), 'outline') : null,
+        isOwner() && x.can_trial ? btn('Trial offer', () => trialOfferDialog(x), 'ghost', { title: 'Send "try this session for $X"' }) : null));
+  };
+  const byDay = new Map();
+  for (const x of spots.data) { const k = dayOf(x.starts_at); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(x); }
+  const body = !spots.data.length ? [h('p', { class: 'muted' }, mine ? 'Your classes are full for the next week, or you don\'t lead any. Untick My classes only to see everyone\'s.' : 'Every class in the next week is full.')]
+    : spots.data.length <= 5 ? spots.data.map(row)
+      : [...byDay].map(([day, xs]) => h('div', null, h('div', { class: 'dp-label', style: 'margin-top:12px' }, `${day} · ${xs.reduce((t, x) => t + x.spots_left, 0)} open`), ...xs.map(row)));
+  return panel(`Classes with open spots${spots.data.length ? ` (${spots.data.length})` : ''}`, { subtitle, action }, ...body);
+}
+
+// Owner only: "try this session for $X". Price (the drop-in by default, $0 = free), how many families, and the message.
+async function trialOfferDialog(x) {
+  const d = document.getElementById('dialog');
+  let p;
+  try { p = await get(`/v1/sessions/${x.id}/trial-offer`); } catch (e) { return toast(e.message, 'warn'); }
+  const dollars = (c) => (c / 100).toFixed(c % 100 ? 2 : 0);
+  const price = input({ type: 'number', inputmode: 'decimal', min: '0', max: dollars(p.max_price_cents), step: '0.01', value: dollars(p.default_price_cents) });
+  const count = input({ type: 'number', inputmode: 'numeric', min: '1', max: String(Math.min(p.max_families, Math.max(p.families, 1))), value: String(Math.min(p.families, p.max_families)) });
+  const msg = h('textarea', { class: 'dp-input', style: 'min-height:96px', maxlength: '1000' }); msg.value = p.message;
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  const preview = h('div', { class: 'small', style: 'white-space:pre-wrap;background:var(--bg);border:1px solid var(--line-subtle);border-radius:8px;padding:12px' });
+  const cents = () => (price.value === '' ? NaN : Math.round(Number(price.value) * 100));
+  const priceWords = (c) => (c === 0 ? 'free' : money(c));
+  const ends = tzFmt(p.expires_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const update = () => {
+    const c = cents(), ok = Number.isInteger(c) && c >= 0 && c <= p.max_price_cents;
+    err.textContent = ok ? '' : `Set a price from $0 (free) to ${money(p.max_price_cents)}.`;
+    const pr = ok ? priceWords(c) : '…';
+    fill(preview, h('div', { class: 'strong' }, `Subject: Try ${p.session.name} ${c === 0 ? 'free' : `for ${pr}`}: ${ends}`), '\n',
+      `Hi Maria,\n\n${(msg.value.trim() || p.message).replaceAll('{athlete}', 'Ava').replaceAll('{price}', pr)}\n\n${p.session.spots_left === 1 ? 'There\'s one spot' : `There are ${p.session.spots_left} spots`}, and the first to book gets ${p.session.spots_left === 1 ? 'it' : 'them'}. The offer ends when the session starts. Book in one tap, no sign-in needed:\n[booking link]`);
+  };
+  for (const el of [price, msg]) el.addEventListener('input', update);
+  update();
+  const who = `${p.families} ${p.families === 1 ? 'family fits' : 'families fit'}: the right age, and a regular, a member or here in the last 45 days${p.offered_before ? `. ${p.offered_before} of them already had an open-spot offer for this class and haven't booked; their link switches to this price` : ''}. At most 2 offers a family a day.`;
+  fill(d, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+    try {
+      const r = await post(`/v1/sessions/${x.id}/trial-offer`, { price_cents: cents(), max_families: Number(count.value), message: msg.value });
+      d.close(); toast(`Trial offer sent to ${r.sent} ${r.sent === 1 ? 'family' : 'families'} at ${r.price_cents === 0 ? 'no charge' : money(r.price_cents)}. First to book gets it.`); render();
+    } catch (x2) { err.textContent = x2.message; }
+  }); } },
+    h('h2', { class: 'week-title', style: 'color:var(--steel);margin:0' }, 'Trial offer'),
+    h('p', { class: 'muted', style: 'margin:0' }, `${p.session.name} · ${ends} · ${p.session.location_name}${p.session.coach_name ? ` · ${p.session.coach_name}` : ''} · ${p.session.spots_left} ${p.session.spots_left === 1 ? 'spot' : 'spots'} left`),
+    h('div', { class: 'form-grid' },
+      field('Price ($)', price, `${p.session.drop_in_cents != null ? `Drop-in is ${money(p.session.drop_in_cents)}.` : `No drop-in price; up to ${money(p.max_price_cents)}.`} 0 makes it free. Charged to the family's card when they book; members whose membership covers the class aren't charged.`),
+      field('Send to up to', count, who)),
+    p.open_leads_with_email ? h('p', { class: 'small muted', style: 'margin:0' }, `${p.open_leads_with_email} open ${p.open_leads_with_email === 1 ? 'lead' : 'leads'} with an email ${p.open_leads_with_email === 1 ? 'isn\'t' : 'aren\'t'} included: booking from a link needs a family account and a signed waiver. Send them your sign-up link from Leads.`) : null,
+    field('Message', msg, '{athlete} becomes the athlete\'s first name and {price} the price. The booking link is added below it. Families who turned on texts also get a short text.'),
+    h('div', { class: 'dp-label' }, 'Preview, for a sample family'), preview,
+    h('p', { class: 'small muted', style: 'margin:0' }, `Valid until the session starts (${ends}). First to book gets each spot; after that the link says it's full.`),
+    err,
+    h('div', { class: 'row wrap' }, btn('Send trial offer', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+}
+
+// Owner only: every active coach at a glance (today, the next 7 days, attendance, days off). Tap a coach for their schedule.
+function coachesPanel(t) {
+  const shortDay = (iso) => tzFmt(iso, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const offText = (x) => { const f = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }); return `Off ${f(x.start_date)}${x.end_date !== x.start_date ? `–${f(x.end_date)}` : ''}${x.note ? ` (${x.note})` : ''}`; };
+  const row = (c) => {
+    const w = c.week, a = c.attendance_7_days, seen = a.came + a.missed, n = c.next_session;
+    return h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
+        h('a', { href: `#/schedule?coach=${c.id}`, class: 'strong', style: 'color:var(--steel)' }, c.name, c.role === 'owner' ? h('span', { class: 'small muted' }, ' · Owner') : null),
+        h('span', { class: 'small' }, c.today.sessions ? `Today: ${c.today.sessions} ${c.today.sessions === 1 ? 'session' : 'sessions'}, ${c.today.booked} booked` : 'Nothing today',
+          n ? h('span', { class: 'muted' }, ` · next ${n.starts_at < new Date(Date.now() + 86400000).toISOString() && dayOf(n.starts_at) === dayOf(new Date().toISOString()) ? timeOf(n.starts_at) : shortDay(n.starts_at)} ${n.name} (${n.booked}/${n.capacity})`) : null),
+        h('span', { class: 'small muted' }, [`Next 7 days: ${w.sessions} ${w.sessions === 1 ? 'session' : 'sessions'}`, w.classes ? `classes ${w.fill_pct}% full (${w.class_booked} of ${w.class_spots})` : null,
+          `${w.privates_booked} ${w.privates_booked === 1 ? 'private' : 'privates'} booked`, w.evaluations_booked ? `${w.evaluations_booked} ${w.evaluations_booked === 1 ? 'evaluation' : 'evaluations'}` : null].filter(Boolean).join(' · ')),
+        h('span', { class: 'small muted' }, seen ? `Last 7 days: ${a.came} came, ${a.missed} no-show${a.missed === 1 ? '' : 's'} (${Math.round((a.came / seen) * 100)}%)` : 'Last 7 days: no check-ins yet')),
+      h('div', { class: 'row wrap', style: 'gap:6px' }, ...c.time_off.slice(0, 2).map((x) => h('span', { class: 'dp-badge dp-badge--neutral' }, offText(x))),
+        h('a', { class: 'dp-btn dp-btn--ghost', href: `#/schedule?coach=${c.id}` }, 'Schedule')));
+  };
+  return panel('Coaches', { subtitle: 'Who is leading what. Fill rate counts group classes, clinics and camp days.' },
+    t.coaches.map(row),
+    t.no_coach.sessions ? h('div', { class: 'list-item' }, h('span', { class: 'grow small warn-text' }, `${t.no_coach.sessions} ${t.no_coach.sessions === 1 ? 'session' : 'sessions'} in the next 7 days ${t.no_coach.sessions === 1 ? 'has' : 'have'} no coach${t.no_coach.next ? `, starting with ${t.no_coach.next.name} ${shortDay(t.no_coach.next.starts_at)}` : ''}.`),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '#/schedule' }, 'Assign')) : null,
+    t.facility_time_off.length ? h('p', { class: 'small muted', style: 'margin:8px 0 0' }, `Facility closed: ${t.facility_time_off.map(offText).map((s) => s.replace(/^Off /, '')).join(' · ')}`) : null);
 }
 
 // ---------- Leads ----------
@@ -1260,8 +1360,8 @@ const leads = () => state.user?.role !== 'front_desk';          // owners and co
 const hashQuery = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
 
 async function viewSchedule(main) {
-  const mine = leads() && hashQuery().get('mine') === '1';
-  const [sched, series, locs, settings, coachList] = await Promise.all([get(`/v1/schedule${mine ? '?coach_id=me' : ''}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings'), get('/v1/coaches')]);
+  const mine = leads() && hashQuery().get('mine') === '1', onlyCoach = hashQuery().get('coach');     // ?coach=<id>: one coach's sessions (from Today's Coaches panel)
+  const [sched, series, locs, settings, coachList] = await Promise.all([get(`/v1/schedule${onlyCoach ? `?coach_id=${encodeURIComponent(onlyCoach)}` : mine ? '?coach_id=me' : ''}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings'), get('/v1/coaches')]);
   const coaches = coachList.data;
   tzName = settings.timezone;
   const byDay = {};
@@ -1308,13 +1408,19 @@ async function viewSchedule(main) {
   // "My sessions": only what you lead, kept in the address so Back and refresh keep it.
   const mineBox = h('input', { type: 'checkbox', checked: mine });
   mineBox.addEventListener('change', () => { location.hash = mineBox.checked ? '#/schedule?mine=1' : '#/schedule'; });
-  const filterBar = leads() ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, mineBox, h('span', null, 'My sessions only'), mine ? h('span', { class: 'muted' }, ` · ${sched.data.length} in the next two weeks`) : null) : null;
+  // Owners pick any coach; everyone sees whose sessions a ?coach= link is showing.
+  const coachSel = isOwner() ? select([['', 'Every coach'], ...coaches.map((c) => [c.id, c.name])], { value: onlyCoach ?? '', 'aria-label': 'Show sessions led by', style: 'width:auto' }) : null;
+  coachSel?.addEventListener('change', () => { location.hash = coachSel.value ? `#/schedule?coach=${coachSel.value}` : '#/schedule'; });
+  const coachName = onlyCoach ? coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach' : null;
+  const filterBar = isOwner() ? h('div', { class: 'row wrap small', style: 'gap:8px;min-height:44px' }, h('label', { class: 'muted', for: 'sched-coach' }, 'Show'), Object.assign(coachSel, { id: 'sched-coach' }), onlyCoach ? h('span', { class: 'muted' }, `${sched.data.length} ${sched.data.length === 1 ? 'session' : 'sessions'} in the next two weeks`) : null)
+    : onlyCoach ? h('div', { class: 'row wrap small', style: 'gap:8px;min-height:44px' }, h('span', null, `${coachName}'s sessions`), h('a', { href: '#/schedule' }, 'Show everyone'))
+    : leads() ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, mineBox, h('span', null, 'My sessions only'), mine ? h('span', { class: 'muted' }, ` · ${sched.data.length} in the next two weeks`) : null) : null;
   fill(main, 
     header('Schedule', 'Classes, camps, clinics, privates and evaluations for the next two weeks.', h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
       locs.data.length ? btn('Add class or camp', () => { addPanel.scrollIntoView({ behavior: 'smooth' }); f.name.focus({ preventScroll: true }); }) : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
     filterBar,
-    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, mine ? 'You don\'t lead anything in the next two weeks. Untick My sessions to see everything.' : 'Nothing scheduled in the next two weeks.')]),
+    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, onlyCoach ? `${coachName} doesn't lead anything in the next two weeks.` : mine ? 'You don\'t lead anything in the next two weeks. Untick My sessions to see everything.' : 'Nothing scheduled in the next two weeks.')]),
     panel('Classes & camps', {}, ...seriesList),
     locs.data.length ? addPanel : null);
 }

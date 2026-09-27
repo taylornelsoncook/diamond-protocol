@@ -20,13 +20,15 @@ async function load() {
 function render(o, note) {
   const fmt = (iso, opt) => new Intl.DateTimeFormat('en-US', { timeZone: o.timezone, ...opt }).format(new Date(iso));
   const s = o.session;
-  document.title = `Open spot · ${o.business_name}`;
-  const head = [h('p', { class: 'small muted', style: 'margin:0;letter-spacing:.08em;text-transform:uppercase' }, 'Open spot'),
+  document.title = `${o.trial ? 'Trial offer' : 'Open spot'} · ${o.business_name}`;
+  const t = o.trial, free = t?.price_cents === 0;
+  const head = [h('p', { class: 'small muted', style: 'margin:0;letter-spacing:.08em;text-transform:uppercase' }, t ? (free ? 'Free trial session' : `Try it for ${money(t.price_cents)}`) : 'Open spot'),
     h('h1', { class: 'p-title', style: 'margin:0' }, s.name),
     h('p', { style: 'margin:0' }, `${fmt(s.starts_at, { weekday: 'long', month: 'long', day: 'numeric' })}, ${fmt(s.starts_at, { hour: 'numeric', minute: '2-digit' })}–${fmt(s.ends_at, { hour: 'numeric', minute: '2-digit' })} · ${s.location_name}`)];
   const booked = o.athletes.filter((a) => a.status === 'booked');
   if (note || booked.length) return shell(...head, h('div', { class: 'dp-panel', style: 'background:var(--green-deep);border-color:var(--green)' }, h('p', { class: 'strong', style: 'margin:0' }, note ?? `${booked.map((a) => a.first_name).join(' and ')} ${booked.length > 1 ? 'are' : 'is'} booked. See you there!`)),
     h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/parent' }, 'Open the parent portal'));
+  if (t?.used) return shell(...head, h('p', { class: 'muted', style: 'margin:0' }, 'This trial offer has already been used.'), h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/book' }, 'See what else is open'));
   const closed = { full: 'Sorry, that spot was just taken. We\'ll let you know next time one opens.', started: 'This session has already started.', canceled: 'This session was canceled.' }[o.status];
   if (closed) return shell(...head, h('p', { class: 'muted', style: 'margin:0' }, closed), h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/book' }, 'See what else is open'));
   if (!o.waiver_signed) return shell(...head, h('p', { style: 'margin:0' }, 'Sign the waiver in the parent portal first (Family tab), then come back to this link.'), h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/parent' }, 'Open the parent portal'));
@@ -36,7 +38,7 @@ function render(o, note) {
       const r = await api('POST', '/book', { athlete_id: a.id, ...(pay ? { pay: 'card_on_file' } : {}) });
       render(r, r.message);
     } catch (e) {
-      if (e.status === 402 && !pay && s.drop_in_cents && o.card_last4) {
+      if (e.status === 402 && !t && !pay && s.drop_in_cents && o.card_last4) {
         if (confirm(`${e.message}\n\nPay ${money(s.drop_in_cents)} with the card ending ${o.card_last4}?`)) return take(a, true)();
         return;
       }
@@ -47,7 +49,10 @@ function render(o, note) {
   shell(...head,
     h('p', { class: `strong ${s.spots_left <= 1 ? 'warn-text' : ''}`, style: 'margin:0' }, s.spots_left === 1 ? 'One spot left. First to book gets it.' : `${s.spots_left} spots left.`),
     ...o.athletes.map((a) => a.status === 'waitlisted' ? h('p', { class: 'muted', style: 'margin:0' }, `${a.first_name} is on the waitlist.`)
-      : btn(`Book ${a.first_name}`, (e) => busy(e.currentTarget, take(a)), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block' })),
-    h('p', { class: 'small muted', style: 'margin:0' }, `Covered by a membership or session pack when ${o.athletes.length > 1 ? 'they have' : 'there\'s'} one${s.drop_in_cents ? `; otherwise ${money(s.drop_in_cents)} drop-in` : ''}. Cancel from the parent portal if plans change.`));
+      : btn(t ? `Book ${a.first_name} ${free ? 'free' : `for ${money(t.price_cents)}`}` : `Book ${a.first_name}`, (e) => busy(e.currentTarget, take(a)), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block' })),
+    t && !free && !o.card_last4 ? h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/parent' }, 'Add a card in the parent portal') : null,
+    h('p', { class: 'small muted', style: 'margin:0' }, t ? (free ? 'Nothing to pay. The offer ends when the session starts. Cancel from the parent portal if plans change.'
+      : `${money(t.price_cents)} instead of ${s.drop_in_cents != null ? `the ${money(s.drop_in_cents)} drop-in` : 'the usual price'}, charged to ${o.card_last4 ? `the card ending ${o.card_last4}` : 'your card on file'} when you book (a membership that covers this class covers it instead). The offer ends when the session starts.`)
+      : `Covered by a membership or session pack when ${o.athletes.length > 1 ? 'they have' : 'there\'s'} one${s.drop_in_cents ? `; otherwise ${money(s.drop_in_cents)} drop-in` : ''}. Cancel from the parent portal if plans change.`));
 }
 load();

@@ -2,6 +2,7 @@ import { newId, token, sha256, hashPassword, verifyPassword, v, notFound, HttpEr
 import { listEvents } from './events.js';
 import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
+import { inventory } from './inventory.js';
 
 const SESSION_DAYS = 14;
 
@@ -115,6 +116,8 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   const waiting = q.n ? [{ kind: 'results_waiting', count: q.n, groups: q.groups }] : [];
   const fresh = db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ?`, weekAgo);
   if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
+  const low = inventory(ctx).low;
+  if (low.length) waiting.push({ kind: 'low_stock', count: low.length, items: low.slice(0, 4).map((x) => ({ name: x.name, on_hand: x.on_hand })) });
   if (role !== 'owner') {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
     return { today_sales: null, metrics: { paying_clients: active.n, trialing_clients: trialing, workouts_last_7_days: workouts }, teams: null,

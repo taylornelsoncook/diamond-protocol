@@ -23,6 +23,7 @@ import * as insights from './services/insights.js';
 import * as leads from './services/leads.js';
 import * as paylinks from './services/paylinks.js';
 import * as checkin from './services/checkin.js';
+import * as inventory from './services/inventory.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -124,6 +125,11 @@ export const routes = [
   ['GET', '/v1/products', 'any', 'Point of sale', 'What you sell in person: sessions, packs, gear.', (ctx, r) => list(commerce.listProducts(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['POST', '/v1/products', 'any', 'Point of sale', 'Add a product: name, kind (session, pack, gear, other), price_cents, sessions (for packs).', (ctx, r) => commerce.createProduct(ctx, r.body), 201],
   ['PATCH', '/v1/products/:id', 'any', 'Point of sale', 'Update a product. Set active=false to stop selling it.', (ctx, r) => commerce.updateProduct(ctx, r.params.id, r.body)],
+  ['GET', '/v1/inventory', 'any', 'Point of sale', 'Gear that counts its stock: what\'s on hand per size, and what\'s running low.', (ctx) => inventory.inventory(ctx)],
+  ['POST', '/v1/products/:id/variants', 'any', 'Point of sale', 'Add a size or color to a product: name (like M or Youth L), sku.', (ctx, r) => inventory.addVariant(ctx, r.params.id, r.body), 201],
+  ['PATCH', '/v1/products/:id/variants/:vid', 'any', 'Point of sale', 'Rename a size or stop selling it (active=false).', (ctx, r) => inventory.updateVariant(ctx, r.params.id, r.params.vid, r.body)],
+  ['POST', '/v1/products/:id/stock', 'any', 'Point of sale', 'Change stock: reason received (quantity arrived), count (quantity on the shelf) or adjust (+/-), with variant_id for a size and an optional note.', (ctx, r) => inventory.recordStock(ctx, r.params.id, r.body, r.user?.name ?? 'API'), 201],
+  ['GET', '/v1/products/:id/stock', 'any', 'Point of sale', 'Stock history for a product, newest first.', (ctx, r) => list(inventory.stockHistory(ctx, r.params.id))],
   ['GET', '/v1/sales', 'any', 'Point of sale', 'In-person sales, newest first. Filter with ?location_id=, ?client_id=, ?status=, ?since=.', (ctx, r) => list(commerce.listSales(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined, locationId: r.query.location_id, clientId: r.query.client_id, status: r.query.status }))],
   ['POST', '/v1/sales', 'any', 'Point of sale', 'Start a sale: location_id, method (tap_to_pay, reader, card_on_file, cash), items [{product_id, quantity}] and/or custom {description, amount_cents}, optional client_id, save_card, reader_id. For tap_to_pay the response includes tap_to_pay.client_secret and tap_to_pay.location_ref for the iPhone app.', (ctx, r) => commerce.createSale(ctx, r.body, r.user?.id ?? r.apiKey?.id), 201],
   ['GET', '/v1/sales/:id', 'any', 'Point of sale', 'A sale with its items.', (ctx, r) => commerce.getSale(ctx, r.params.id, { withSecret: true })],

@@ -62,6 +62,7 @@ function targetFor(ctx, body) {
   if (kind === 'product') {
     const p = ctx.db.get('SELECT * FROM products WHERE id = ?', v.str(body.product_id, 'product_id'));
     if (!p || !p.active) throw notFound('Product');
+    if (ctx.db.get('SELECT COUNT(*) AS n FROM product_variants WHERE product_id = ? AND active = 1', p.id).n > 1) throw badRequest(`${p.name} comes in sizes, which a pay link can't ask for yet. Use "A set amount" and put the size in what it's for.`);
     return { kind, clientId, productId: p.id, amount: p.price_cents, description: `${p.name} for ${name}` };
   }
   const description = String(body.description ?? '').trim();

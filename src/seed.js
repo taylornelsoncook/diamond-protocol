@@ -15,6 +15,7 @@ import * as clients from './services/clients.js';
 import * as programs from './services/programs.js';
 import { createUser } from './services/access.js';
 import * as engage from './services/engage.js';
+import * as inventory from './services/inventory.js';
 import { addDays } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -99,7 +100,8 @@ const park = await commerce.createLocation(ctx, { name: 'Sample Park', kind: 'pa
 const single = commerce.createProduct(ctx, { name: 'Single session', kind: 'session', price_cents: 8000 });
 const five = commerce.createProduct(ctx, { name: '5-session pack', kind: 'pack', price_cents: 37500, sessions: 5 });
 commerce.createProduct(ctx, { name: '10-session pack', kind: 'pack', price_cents: 70000, sessions: 10 });
-const shirt = commerce.createProduct(ctx, { name: 'DP T-shirt', kind: 'gear', price_cents: 3000 });
+const shirt = commerce.createProduct(ctx, { name: 'DP T-shirt', kind: 'gear', price_cents: 3000, track_stock: true, low_stock_at: 2 });
+for (const [size, n] of [['Youth M', 6], ['S', 5], ['M', 8], ['L', 2]]) inventory.recordStock(ctx, shirt.id, { reason: 'received', variant_id: inventory.addVariant(ctx, shirt.id, { name: size }).id, quantity: n }, 'Sample data');
 await commerce.registerReader(ctx, { registration_code: 'simulated-wpe', label: 'Front desk', location_id: facility.id });
 const walkIn = await clients.createClient(ctx, { name: 'Jordan Lee', email: 'jordan.lee@example.com', program_id: strength.id });
 async function sell(body, outcome = 'approved') {
@@ -108,7 +110,7 @@ async function sell(body, outcome = 'approved') {
 }
 await sell({ location_id: park.id, method: 'tap_to_pay', client_id: walkIn.id, items: [{ product_id: five.id }], save_card: true });
 await sell({ location_id: mobile.id, method: 'tap_to_pay', client_id: made['Priya Nair'].id, items: [{ product_id: single.id }] });
-await sell({ location_id: facility.id, method: 'cash', items: [{ product_id: shirt.id }] });
+await sell({ location_id: facility.id, method: 'cash', items: [{ product_id: shirt.id, variant_id: inventory.activeVariants(ctx, shirt.id).find((x) => x.name === 'M').id }] });
 commerce.checkIn(ctx, walkIn.id, { location_id: park.id, credit_type: 'private' });
 commerce.checkIn(ctx, made['Maya Okafor'].id, { location_id: facility.id });
 

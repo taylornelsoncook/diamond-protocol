@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -47,7 +47,8 @@ const ADDED_TABLES = {
   13: ['texts'],                                                          // text messages
   14: ['leads'],                                                          // leads and follow-up
   15: ['pay_links'],                                                      // pay links
-  16: ['kiosks']                                                          // self check-in tablets
+  16: ['kiosks'],                                                         // self check-in tablets
+  17: ['product_variants', 'stock_moves']                                 // retail inventory
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))"],   // athlete_id: version 6, sex: version 10
@@ -57,6 +58,8 @@ const ADDED_COLUMNS = {
   guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT'],               // version 13
   bookings: ['reminded_at TEXT'],                                         // version 13
   locations: ['checkin_code TEXT'],                                       // version 16
+  products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
+  sale_items: ['variant_id TEXT'],                                        // version 17
   class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL']       // version 4
 };
 

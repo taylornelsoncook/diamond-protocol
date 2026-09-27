@@ -50,7 +50,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : viewSell, clients: id ? viewClient : viewClients, leads: viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -94,6 +94,7 @@ const EVENT_TEXT = {
   'sale.completed': (d) => `${d.client_name} paid ${money(d.amount_cents)} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
   'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment of ${money(d.amount_cents)} from ${d.client_name} didn't go through`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
+  'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
   'booking.created': (d) => `${d.client_name} booked ${d.session_name}${d.from_waitlist ? ' from the waitlist' : ''}${d.coverage === 'unpaid' ? ' (unpaid)' : ''}`,
   'booking.waitlisted': (d) => `${d.client_name} joined the waitlist for ${d.session_name}`,
@@ -146,6 +147,9 @@ async function viewToday(main) {
     if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
+    if (a.kind === 'low_stock') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is running low` : `${a.count} items are running low`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name}: ${x.on_hand <= 0 ? 'out' : `${x.on_hand} left`}`).join(' · '))),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/sell/inventory' }, 'Inventory'));
     if (a.kind === 'results_waiting') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} test ${a.count === 1 ? 'result is' : 'results are'} waiting to be linked`), h('span', { class: 'small muted' }, `From ${a.groups} unrecognized ${a.groups === 1 ? 'athlete' : 'athletes'}. They stay out of every profile until you link them.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them'));
@@ -695,7 +699,8 @@ async function viewSell(main) {
     return;
   }
   const preClient = new URLSearchParams(location.hash.split('?')[1] || '').get('client');
-  const cart = new Map();                                       // product_id -> quantity
+  const cart = new Map();                                       // "product_id" or "product_id:size_id" -> quantity
+  const cartItem = (key) => { const [pid, vid] = key.split(':'); const p = prods.data.find((x) => x.id === pid); const size = vid && p.variants.find((x) => x.id === vid); return { p, vid, name: size ? `${p.name} (${size.name})` : p.name }; };
   let custom = null;
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { value: remember.get('dp_location') || locs.data[0].id, 'aria-label': 'Location' });
   locSel.addEventListener('change', () => { remember.set('dp_location', locSel.value); draw(); });
@@ -710,16 +715,16 @@ async function viewSell(main) {
   const progress = h('div');
 
   const client = () => clients.data.find((c) => c.id === cliSel.value);
-  const total = () => [...cart].reduce((t, [id, q]) => t + prods.data.find((p) => p.id === id).price_cents * q, 0) + (custom?.amount_cents || 0);
+  const total = () => [...cart].reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (custom?.amount_cents || 0);
 
   function draw() {
     const c = client();
     fill(cartBox, ...[...cart].map(([id, q]) => {
-      const p = prods.data.find((x) => x.id === id);
-      return h('div', { class: 'row' }, h('span', { class: 'grow' }, p.name), 
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One fewer ${p.name}`, onClick: () => { q > 1 ? cart.set(id, q - 1) : cart.delete(id); draw(); } }, '−'),
+      const { p, name } = cartItem(id);
+      return h('div', { class: 'row' }, h('span', { class: 'grow' }, name), 
+        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One fewer ${name}`, onClick: () => { q > 1 ? cart.set(id, q - 1) : cart.delete(id); draw(); } }, '−'),
         h('span', { style: 'min-width:24px;text-align:center' }, q),
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One more ${p.name}`, onClick: () => { cart.set(id, q + 1); draw(); } }, '+'),
+        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One more ${name}`, onClick: () => { cart.set(id, q + 1); draw(); } }, '+'),
         h('span', { style: 'min-width:80px;text-align:right' }, money(p.price_cents * q)));
     }), custom ? h('div', { class: 'row' }, h('span', { class: 'grow' }, custom.description), btn('Remove', () => { custom = null; draw(); }, 'ghost'), h('span', { style: 'min-width:80px;text-align:right' }, money(custom.amount_cents))) : null);
     if (!cart.size && !custom) cartBox.append(h('p', { class: 'muted' }, 'Tap a product to add it.'));
@@ -743,7 +748,7 @@ async function viewSell(main) {
 
   async function startSale() {
     err.textContent = '';
-    const body = { location_id: locSel.value, method: method.value, client_id: cliSel.value || undefined, items: [...cart].map(([product_id, quantity]) => ({ product_id, quantity })), custom: custom || undefined,
+    const body = { location_id: locSel.value, method: method.value, client_id: cliSel.value || undefined, items: [...cart].map(([key, quantity]) => { const [product_id, variant_id] = key.split(':'); return { product_id, variant_id, quantity }; }), custom: custom || undefined,
       save_card: saveCard.checked && !!cliSel.value, reader_id: method.value === 'reader' ? readerSel.value : undefined };
     await busy(charge, async () => {
       try { const sale = await post('/v1/sales', body); follow(sale); }
@@ -756,7 +761,7 @@ async function viewSell(main) {
     clearTimeout(timer);
     if (sale.status === 'succeeded') {
       toast(`${money(sale.amount_cents)} paid${sale.card_last4 ? ` with card ending ${sale.card_last4}` : ''}.`);
-      cart.clear(); custom = null; fill(progress); draw(); refreshRecent(); return;
+      cart.clear(); custom = null; fill(progress); draw(); refreshRecent(); refreshStock(); return;
     }
     if (sale.status !== 'pending') {
       fill(progress, h('div', { class: 'dp-panel', style: 'border-color:var(--amber)' }, h('p', { class: 'warn-text strong' }, sale.status === 'canceled' ? 'Payment canceled.' : `Payment didn't go through. ${sale.failure_reason ?? ''}`), h('p', { class: 'small muted' }, 'Nothing was charged. Fix the issue and charge again.')));
@@ -798,8 +803,27 @@ async function viewSell(main) {
       : [h('p', { class: 'muted' }, 'No sales in the last 7 days.')]));
   }
 
-  const productGrid = h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px' }, prods.data.map((p) => h('button', { type: 'button', class: 'dp-panel', style: 'text-align:left;cursor:pointer;padding:14px;gap:4px', onClick: () => { cart.set(p.id, (cart.get(p.id) || 0) + 1); draw(); } },
-    h('span', { class: 'strong' }, p.name), h('span', { style: 'font:600 22px/1 var(--font-display);color:var(--green-bright)' }, money(p.price_cents)), p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null)));
+  // Gear with sizes asks which size; stock left shows on the tile (selling past zero is allowed: the shelf is the truth).
+  const sizeBox = h('div');
+  const addToCart = (key) => { cart.set(key, (cart.get(key) || 0) + 1); fill(sizeBox); draw(); };
+  const left = (n) => (n <= 0 ? h('span', { class: 'small warn-text' }, 'Out of stock') : h('span', { class: `small ${n <= 3 ? 'warn-text' : 'muted'}` }, `${n} left`));
+  const pickSize = (p, sizes) => fill(sizeBox, h('div', { class: 'dp-panel', style: 'gap:10px' },
+    h('div', { class: 'row' }, h('span', { class: 'grow strong' }, `Which size of ${p.name}?`), btn('Cancel', () => fill(sizeBox), 'ghost')),
+    h('div', { class: 'row wrap', style: 'gap:8px' }, sizes.map((x) => h('button', { type: 'button', class: 'dp-btn dp-btn--secondary', style: 'min-height:52px;min-width:72px;flex-direction:column;gap:2px', onClick: () => addToCart(`${p.id}:${x.id}`) },
+      h('span', { class: 'strong' }, x.name), p.track_stock ? left(x.on_hand) : null)))));
+  const productGrid = h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px' });
+  function drawProducts() {
+    fill(productGrid, ...prods.data.map((p) => {
+      const sizes = (p.variants ?? []).filter((x) => x.active);
+      return h('button', { type: 'button', class: 'dp-panel', style: 'text-align:left;cursor:pointer;padding:14px;gap:4px', onClick: () => (sizes.length > 1 ? pickSize(p, sizes) : addToCart(sizes.length ? `${p.id}:${sizes[0].id}` : p.id)) },
+        h('span', { class: 'strong' }, p.name), h('span', { style: 'font:600 22px/1 var(--font-display);color:var(--green-bright)' }, money(p.price_cents)),
+        p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null,
+        sizes.length > 1 ? h('span', { class: 'small muted' }, sizes.map((x) => x.name).join(' · ')) : null,
+        p.track_stock ? left(p.on_hand) : null);
+    }));
+  }
+  async function refreshStock() { if (!prods.data.some((p) => p.track_stock)) return; prods.data = (await get('/v1/products')).data; drawProducts(); }
+  drawProducts();
   // Monthly memberships renew on the card saved for the client (or their family), so starting one needs that card.
   const memberBox = h('div');
   function startMembership(p) {
@@ -835,11 +859,11 @@ async function viewSell(main) {
     h('div', { class: 'grow' }, customDesc), customAmt, btn('Add', null, 'secondary', { type: 'submit' }));
 
   fill(main, 
-    header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', setupLink()),
+    header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', h('div', { class: 'row wrap' }, prods.data.some((p) => p.track_stock) ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Inventory') : null, setupLink())),
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         panel(null, {}, h('div', { class: 'form-grid' }, field('Where', locSel), field('Who', cliSel))),
-        panel('Products', {}, productGrid, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
+        panel('Products', {}, productGrid, sizeBox, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
         planGrid ? panel('Monthly memberships', { subtitle: 'Choose who it\'s for above, then tap a membership. It renews on their saved card.' }, planGrid) : null,
         memberBox),
       h('div', { class: 'stack', style: 'gap:24px' },
@@ -847,6 +871,57 @@ async function viewSell(main) {
         panel('Sale', {}, cartBox, h('div', { class: 'row', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' }, h('span', { class: 'grow muted' }, 'Total'), totalBox), methodBox, err, charge))),
     panel('Recent sales', { subtitle: 'Last 7 days' }, recent));
   draw(); drawRecent(sales.data);
+}
+
+// ---------- Inventory ----------
+const MOVE_TEXT = { sale: 'Sold', refund: 'Refunded, back on the shelf', received: 'Delivery', count: 'Shelf count', adjust: 'Adjusted' };
+async function viewInventory(main) {
+  const [inv, prods] = await Promise.all([get('/v1/inventory'), get('/v1/products')]);
+  const manage = state.user.role !== 'front_desk';
+  const ask = (text, fallback = '') => { const a = prompt(text, fallback); if (a === null || a.trim() === '') return null; return a.trim(); };
+  const move = (p, x, reason) => (e) => {
+    const label = x ? `${p.name} (${x.name})` : p.name;
+    const a = ask({ received: `How many ${label} arrived?`, count: `How many ${label} are on the shelf right now?`, adjust: `Add or take off how many ${label}? Use a minus for fewer, like -1.` }[reason]);
+    if (a === null) return;
+    const note = reason === 'adjust' ? prompt('Why? (Optional, like "Damaged" or "Gave to a coach")') ?? '' : '';
+    busy(e.currentTarget, async () => {
+      try { const r = await post(`/v1/products/${p.id}/stock`, { reason, variant_id: x?.id, quantity: Number(a), note: note || undefined }); toast(`${label}: ${r.on_hand} on hand.`); render(); }
+      catch (err) { toast(err.message, 'warn'); }
+    });
+  };
+  const count = (n, low) => h('span', { class: `dp-badge dp-badge--${n <= 0 || low ? 'warn' : 'good'}`, style: 'min-width:56px;text-align:center' }, n <= 0 ? (n < 0 ? `${n} (recount)` : 'Out') : `${n}`);
+  const history = (p) => {
+    const box = h('div', { class: 'stack-tight' });
+    return h('details', { onToggle: async (e) => { if (!e.target.open || box.childElementCount) return; const { data } = await get(`/v1/products/${p.id}/stock`);
+      fill(box, ...(data.length ? data.map((m) => h('div', { class: 'row small', style: 'gap:10px' }, h('span', { class: 'muted', style: 'width:92px;flex-shrink:0' }, ago(m.created_at)), h('span', { class: 'grow' }, `${MOVE_TEXT[m.reason]}${m.size ? ` · ${m.size}` : ''}${m.note ? ` · ${m.note}` : ''}${m.created_by ? ` · ${m.created_by}` : ''}`), h('span', { class: 'strong', style: 'min-width:40px;text-align:right' }, m.delta > 0 ? `+${m.delta}` : `${m.delta}`)))
+        : [h('p', { class: 'small muted' }, 'No changes yet.')])); } },
+    h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'Recent changes'), box);
+  };
+  const cards = inv.data.map((p) => {
+    const sizes = p.variants.filter((x) => x.active);
+    const rows = sizes.length ? sizes.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('span', { class: 'grow strong', style: 'flex:1 1 110px' }, x.name, x.sku ? h('span', { class: 'small muted' }, ` · ${x.sku}`) : null), count(x.on_hand, x.low),
+      btn('Delivery', move(p, x, 'received'), 'outline'), btn('Count', move(p, x, 'count'), 'ghost'), btn('Adjust', move(p, x, 'adjust'), 'ghost'),
+      manage ? btn('Stop selling', (e) => { if (confirm(`Stop selling ${p.name} in ${x.name}?`)) busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}/variants/${x.id}`, { active: false }); render(); }); }, 'ghost') : null))
+      : [h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('span', { class: 'grow strong' }, 'On hand'), count(p.on_hand, p.low), btn('Delivery', move(p, null, 'received'), 'outline'), btn('Count', move(p, null, 'count'), 'ghost'), btn('Adjust', move(p, null, 'adjust'), 'ghost'))];
+    const sizeName = input({ placeholder: 'Like M or Youth L', 'aria-label': `New size for ${p.name}`, style: 'max-width:180px' });
+    return panel(p.name, { subtitle: `${p.on_hand} on hand${sizes.length ? ` across ${sizes.length} sizes` : ''} · ${p.low_stock_at == null ? 'No low-stock warning' : `Warns at ${p.low_stock_at} or fewer${sizes.length ? ' in a size' : ''}`}` },
+      ...rows,
+      p.unsized_on_hand ? h('p', { class: 'small muted' }, `${p.unsized_on_hand} counted before sizes were added. Count each size to set the real numbers.`) : null,
+      manage ? h('form', { class: 'row wrap', style: 'gap:8px;border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        try { await post(`/v1/products/${p.id}/variants`, { name: sizeName.value }); toast(`${sizeName.value} added. Record a delivery or count to set how many you have.`); render(); } catch (err) { toast(err.message, 'warn'); }
+      }); } }, sizeName, btn('Add size', null, 'secondary', { type: 'submit' }),
+        h('span', { class: 'grow' }),
+        btn('Low-stock warning', (e) => { const a = prompt(`Warn on Today when ${p.name}${sizes.length ? ' in any size' : ''} is down to how many? Leave blank to turn it off.`, p.low_stock_at ?? ''); if (a === null) return; busy(e.currentTarget, async () => { try { await patch(`/v1/products/${p.id}`, { low_stock_at: a.trim() === '' ? null : Number(a) }); render(); } catch (err) { toast(err.message, 'warn'); } }); }, 'ghost'),
+        btn('Stop counting', (e) => { if (confirm(`Stop counting stock for ${p.name}? Its history is kept.`)) busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { track_stock: false }); render(); }); }, 'ghost')) : null,
+      history(p));
+  });
+  const untracked = prods.data.filter((p) => !p.track_stock && ['gear', 'other'].includes(p.kind));
+  const pick = select(untracked.map((p) => [p.id, p.name]), { 'aria-label': 'Product to count' });
+  const startPanel = manage && untracked.length ? panel('Count another product', { subtitle: 'For gear you keep on a shelf. Sessions and packs don\'t need counting.' },
+    h('div', { class: 'row wrap', style: 'gap:8px' }, pick, btn('Start counting', (e) => busy(e.currentTarget, async () => { await patch(`/v1/products/${pick.value}`, { track_stock: true, low_stock_at: 2 }); toast('Now add its sizes (if any) and record what\'s on the shelf.'); render(); }), 'secondary'))) : null;
+  fill(main, header('Inventory', inv.low.length ? `${inv.low.length} running low: ${inv.low.map((x) => x.name).join(', ')}.` : 'What\'s on the shelf. Sales take stock out and full refunds put it back.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'Back to point of sale')),
+    ...(cards.length ? cards : [h('div', { class: 'empty' }, h('p', null, manage ? 'Nothing is counted yet. Choose a product below to start.' : 'Nothing is counted yet. Ask the owner to turn on stock counting for gear.'))]),
+    startPanel);
 }
 
 async function viewSetup(main) {
@@ -868,21 +943,24 @@ async function viewSetup(main) {
       h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('City', f.city), field('State', f.state), field('ZIP', f.zip)),
       h('div', null, btn('Add location', null, 'primary', { type: 'submit' }))));
 
-  const pf = { name: input(), kind: select([['session', 'Single session'], ['pack', 'Session pack'], ['gear', 'Gear'], ['other', 'Other']]), price: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), sessions: input({ type: 'number', min: '2', value: '10' }), type: select([['private', 'Private sessions'], ['group', 'Group classes']]) };
+  const pf = { name: input(), kind: select([['session', 'Single session'], ['pack', 'Session pack'], ['gear', 'Gear'], ['other', 'Other']]), price: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), sessions: input({ type: 'number', min: '2', value: '10' }), type: select([['private', 'Private sessions'], ['group', 'Group classes']]), stock: h('input', { type: 'checkbox', checked: true }) };
   const sessionsField = field('Sessions in pack', pf.sessions), typeField = field('Counts as', pf.type);
-  const syncKind = () => { sessionsField.style.display = pf.kind.value === 'pack' ? '' : 'none'; typeField.style.display = ['pack', 'session'].includes(pf.kind.value) ? '' : 'none'; };
+  const stockField = h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, pf.stock, h('span', null, 'Count stock (sizes and deliveries in Inventory)'));
+  const syncKind = () => { sessionsField.style.display = pf.kind.value === 'pack' ? '' : 'none'; typeField.style.display = ['pack', 'session'].includes(pf.kind.value) ? '' : 'none'; stockField.style.display = pf.kind.value === 'gear' ? '' : 'none'; };
   pf.kind.addEventListener('change', syncKind); syncKind();
   const prodPanel = panel('Products', { subtitle: 'Sessions and packs add session credits to the client. Members check in on their membership.' },
     ...prods.data.map((p) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (not sold)')), h('span', { class: 'small muted' }, `${money(p.price_cents)}${p.kind === 'pack' ? ` · ${p.sessions} ${p.credit_type} sessions` : p.kind === 'session' ? ` · 1 ${p.credit_type} session` : ''}`)),
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (not sold)')), h('span', { class: 'small muted' }, `${money(p.price_cents)}${p.kind === 'pack' ? ` · ${p.sessions} ${p.credit_type} sessions` : p.kind === 'session' ? ` · 1 ${p.credit_type} session` : ''}${p.track_stock ? ` · ${p.on_hand} on hand` : ''}`)),
+      p.track_stock ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Stock') : null,
       btn('Price', (e) => { const a = prompt(`New price for ${p.name}?`, (p.price_cents / 100).toFixed(2)); if (a === null) return; busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { price_cents: Math.round(Number(a) * 100) }); toast('Price updated.'); render(); }); }, 'ghost'),
       btn(p.active ? 'Stop selling' : 'Sell again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { active: !p.active }); render(); }), 'ghost'))),
     h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/products', { name: pf.name.value, kind: pf.kind.value, price_cents: Math.round(Number(pf.price.value) * 100), sessions: pf.kind.value === 'pack' ? Number(pf.sessions.value) : undefined, credit_type: pf.type.value });
-      toast('Product added.'); render();
+      await post('/v1/products', { name: pf.name.value, kind: pf.kind.value, price_cents: Math.round(Number(pf.price.value) * 100), sessions: pf.kind.value === 'pack' ? Number(pf.sessions.value) : undefined, credit_type: pf.type.value, track_stock: pf.kind.value === 'gear' && pf.stock.checked, low_stock_at: pf.kind.value === 'gear' && pf.stock.checked ? 2 : undefined });
+      toast(pf.kind.value === 'gear' && pf.stock.checked ? 'Product added. Add sizes and what\'s on the shelf in Inventory.' : 'Product added.'); render();
     }); } },
       h('div', { class: 'form-grid' }, field('Product name', pf.name), field('Type', pf.kind)),
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Price ($)', pf.price), sessionsField, typeField),
+      stockField,
       h('div', null, btn('Add product', null, 'primary', { type: 'submit' }))));
 
   const rf = { code: input({ placeholder: 'three-words-code', autocapitalize: 'none' }), label: input({ placeholder: 'Front desk' }), loc: select(locs.data.filter((l) => l.active).map((l) => [l.id, l.name])) };

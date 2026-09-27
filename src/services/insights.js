@@ -3,6 +3,7 @@ import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
 import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
+import { inventory } from './inventory.js';
 
 // The app reading its own data: which athletes look like they're drifting away, and a Monday summary for the owner.
 
@@ -73,6 +74,7 @@ export function buildDigest(ctx, asOf = ctx.now()) {
   const waiting = queueCount(ctx).n;
   const deletions = ctx.db.get(`SELECT COUNT(*) AS n FROM data_requests WHERE status = 'open' AND kind = 'delete'`).n;
   const workouts = ctx.db.get('SELECT COUNT(*) AS n FROM workout_logs WHERE completed_at >= ?', iso(-7)).n;
+  const low = inventory(ctx).low;
 
   // Three things worth doing this week, most urgent first.
   const zone = getSetting(ctx, 'timezone');
@@ -88,6 +90,7 @@ export function buildDigest(ctx, asOf = ctx.now()) {
   }
   if (untouched) actions.push(`Reach out to ${untouched === 1 ? 'a family' : `${untouched} families`} who asked about training (Leads).`);
   if (emptiest.length && emptiest[0].open / emptiest[0].capacity >= 0.5) actions.push(`Fill ${emptiest[0].name} on ${when(emptiest[0].starts_at)}: ${emptiest[0].open} of ${emptiest[0].capacity} spots open.`);
+  if (low.length) actions.push(`Reorder ${low.length > 2 ? `${low.slice(0, 2).map((x) => x.name).join(', ')} and ${low.length - 2} more` : low.map((x) => x.name).join(' and ')}: running low (Point of sale).`);
   if (waiting) actions.push(`Link ${waiting} test ${waiting === 1 ? 'result' : 'results'} waiting in Testing.`);
 
   return {
@@ -95,7 +98,7 @@ export function buildDigest(ctx, asOf = ctx.now()) {
     change_pct: prior.total ? Math.round(((week.total - prior.total) / prior.total) * 100) : null,
     members, joined, left, inquiries: leads.n, inquiries_signed_up: leads.won ?? 0, failed_payments: failed.length, overdue_school_invoices: overdue.length,
     at_risk: risk, open_spots: openSpots, emptiest: emptiest.map((s) => ({ id: s.id, name: s.name, starts_at: s.starts_at, open: s.open, capacity: s.capacity })),
-    results_waiting: waiting, deletion_requests: deletions, workouts_logged: workouts, actions: actions.slice(0, 3)
+    results_waiting: waiting, low_stock: low.map((x) => ({ name: x.name, on_hand: x.on_hand })), deletion_requests: deletions, workouts_logged: workouts, actions: actions.slice(0, 3)
   };
 }
 
@@ -117,7 +120,7 @@ export function digestText(ctx, d) {
   ];
   if (d.at_risk.length) lines.push('Athletes who may be drifting away:', ...d.at_risk.map((r) => `- ${r.name}: ${r.reasons.join('; ')}`), '');
   if (d.open_spots) lines.push(`Open spots in group classes and clinics over the next 7 days: ${d.open_spots}.`, ...d.emptiest.map((s) => `- ${s.name}, ${when(s.starts_at)}: ${s.open} of ${s.capacity} open`), '');
-  const other = [d.failed_payments && `${d.failed_payments} failed membership ${d.failed_payments === 1 ? 'payment' : 'payments'}`, d.overdue_school_invoices && `${d.overdue_school_invoices} overdue school ${d.overdue_school_invoices === 1 ? 'invoice' : 'invoices'}`, d.results_waiting && `${d.results_waiting} test results waiting to be linked`].filter(Boolean);
+  const other = [d.failed_payments && `${d.failed_payments} failed membership ${d.failed_payments === 1 ? 'payment' : 'payments'}`, d.overdue_school_invoices && `${d.overdue_school_invoices} overdue school ${d.overdue_school_invoices === 1 ? 'invoice' : 'invoices'}`, d.results_waiting && `${d.results_waiting} test results waiting to be linked`, d.low_stock?.length && `${d.low_stock.length} ${d.low_stock.length === 1 ? 'item' : 'items'} running low`].filter(Boolean);
   if (other.length) lines.push(`Also on the Today screen: ${other.join(', ')}.`, '');
   lines.push(`Open the dashboard: ${ctx.publicUrl ?? ''}/`, '', 'Turn this email off in Schedule → Hours & settings.');
   return lines.join('\n');

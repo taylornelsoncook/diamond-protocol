@@ -225,8 +225,34 @@ CREATE TABLE IF NOT EXISTS products (
   sessions INTEGER NOT NULL DEFAULT 0 CHECK (sessions >= 0),
   credit_type TEXT NOT NULL DEFAULT 'private' CHECK (credit_type IN ('private','group')),
   active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  track_stock INTEGER NOT NULL DEFAULT 0,        -- version 17: count what's on the shelf (gear)
+  low_stock_at INTEGER                           -- warn on Today at or below this many (per size)
+);
+-- Sizes or colors of a product (version 17). Stock is kept per size when a product has them.
+CREATE TABLE IF NOT EXISTS product_variants (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sku TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS product_variants_product ON product_variants(product_id);
+-- Stock is a ledger (version 17): what's on hand is the sum of the moves. A sale takes stock out, a full refund
+-- puts it back, a delivery adds it, a count sets it to what's really on the shelf.
+CREATE TABLE IF NOT EXISTS stock_moves (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  variant_id TEXT REFERENCES product_variants(id) ON DELETE SET NULL,
+  delta INTEGER NOT NULL,
+  reason TEXT NOT NULL CHECK (reason IN ('sale','refund','received','count','adjust')),
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stock_moves_product ON stock_moves(product_id, variant_id);
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
@@ -255,7 +281,8 @@ CREATE TABLE IF NOT EXISTS sale_items (
   name TEXT NOT NULL,
   unit_price_cents INTEGER NOT NULL,
   quantity INTEGER NOT NULL CHECK (quantity > 0),
-  sessions INTEGER NOT NULL DEFAULT 0
+  sessions INTEGER NOT NULL DEFAULT 0,
+  variant_id TEXT                                -- version 17: the size sold
 );
 -- Session credits are a ledger per type: +N when a pack is bought, -1 per booking or walk-in check-in,
 -- +1 back when a booking is canceled in time, negative on refund.

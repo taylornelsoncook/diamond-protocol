@@ -134,6 +134,14 @@ export function linkAthlete(ctx, body) {
     provider, ext, body.external_name ?? null, target.client_id ?? null, target.roster_id ?? null, ctx.now());
   return { provider, external_id: ext, ...target, name: athleteName(ctx, target) };
 }
+// Everyone results can go to: clients (not archived) and active team roster players, with their Athlete ID. No money.
+export function listAthletes(ctx) {
+  return [
+    ...ctx.db.all('SELECT id AS client_id, NULL AS roster_id, name, athlete_id, NULL AS team FROM clients WHERE archived_at IS NULL'),
+    ...ctx.db.all(`SELECT NULL AS client_id, r.id AS roster_id, r.name, r.athlete_id, o.name || ' ' || t.name AS team FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id
+      JOIN organizations o ON o.id = t.org_id WHERE r.active = 1 AND t.status = 'active'`)
+  ].map((a) => Object.fromEntries(Object.entries(a).filter(([, x]) => x != null))).sort((a, b) => a.name.localeCompare(b.name));
+}
 export function listLinks(ctx, { provider, client_id, roster_id } = {}) {
   const where = [], p = [];
   if (provider) { where.push('l.provider = ?'); p.push(provider); }
@@ -202,6 +210,14 @@ export function recordResults(ctx, items, { source = 'api', provider = null, ses
           return;
         }
         if (externalId && ctx.db.get('SELECT id FROM perf_results WHERE source = ? AND external_id = ?', src, externalId)) { out.duplicates++; return; }
+        // One value per attempt on a testing day: the same value again is a repeat (a double tap), a different one is refused.
+        const slotSession = raw.session_id ?? sessionId, attemptNo = raw.attempt != null && raw.attempt !== '' ? Number(raw.attempt) : null;
+        if (slotSession && attemptNo != null) {
+          const taken = ctx.db.get(`SELECT value FROM perf_results WHERE session_id = ? AND ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND attempt = ? AND voided = 0`,
+            slotSession, who.client_id ?? who.roster_id, test.id, metric.key, side ?? '', attemptNo);
+          if (taken && Math.abs(taken.value - value) < 1e-9) { out.duplicates++; return; }
+          if (taken) throw badRequest(`Attempt ${attemptNo} already has ${+taken.value.toFixed(metric.decimals + 1)} ${metric.unit}. Delete it first to enter a new value.`);
+        }
         const pk = `${who.client_id ?? who.roster_id}|${test.id}|${metric.key}|${side ?? ''}`;
         if (!prevBest.has(pk)) prevBest.set(pk, metric.better === 'none' ? null : ctx.db.get(
           `SELECT ${metric.better === 'lower' ? 'MIN' : 'MAX'}(value) AS best FROM perf_results WHERE ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND voided = 0 AND COALESCE(side, '') = ?`,
@@ -377,7 +393,7 @@ export function removeSessionAthlete(ctx, id, athleteRef, { confirm = false } = 
   if (!a) throw notFound('That athlete on this day');
   const col = a.client_id ? 'client_id' : 'roster_id';
   const n = ctx.db.get(`SELECT COUNT(*) AS n FROM perf_results WHERE session_id = ? AND ${col} = ? AND voided = 0`, id, a.client_id ?? a.roster_id).n;
-  if (n && !confirm) throw needsConfirm(`${a.name} has ${plural(n, 'result')} on this day. Removing ${a.name.split(' ')[0]} deletes them.`, { results: n });
+  if (n && !confirm) throw needsConfirm(`${a.name} has ${plural(n, 'result')} on this day. Removing ${a.name.split(' ')[0]} deletes ${n === 1 ? 'it' : 'them'}.`, { results: n });
   const planned = JSON.parse(ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id).athletes).filter((x) => !sameAthlete(x, a));
   ctx.db.tx(() => {
     ctx.db.run(`DELETE FROM perf_results WHERE session_id = ? AND ${col} = ?`, id, a.client_id ?? a.roster_id);
@@ -390,7 +406,7 @@ export function deleteSession(ctx, id, { confirm = false, role = 'owner' } = {})
   const s = getSession(ctx, id);
   if (s.shared_at && role !== 'owner') throw new HttpError(403, 'forbidden', 'Families already have these results. Only the owner can delete a shared testing day.');
   const n = ctx.db.get('SELECT COUNT(*) AS n FROM perf_results WHERE session_id = ? AND voided = 0', id).n;
-  if (n && !confirm) throw needsConfirm(`${s.name} has ${plural(n, 'result')}. Deleting the day deletes them from every profile.`, { results: n });
+  if (n && !confirm) throw needsConfirm(`${s.name} has ${plural(n, 'result')}. Deleting the day deletes ${n === 1 ? 'it' : 'them'} from every profile.`, { results: n });
   ctx.db.tx(() => {
     ctx.db.run('DELETE FROM perf_results WHERE session_id = ?', id);
     ctx.db.run('DELETE FROM perf_sessions WHERE id = ?', id);

@@ -281,3 +281,24 @@ test('link a device ahead: waiting results are linked, the device name is kept, 
   assert.equal(redo.status, 201);
   assert.equal(redo.body.external_name, 'Runner 0');
 });
+
+test('one value per attempt on a testing day: a double tap is ignored, a different value is refused', async () => {
+  const d = (await coach('POST', '/v1/testing-sessions', { name: 'Slots', date: '2026-09-21', tests: ['dash_40yd'], athletes: [{ client_id: dana.id }] })).body;
+  const one = { session_id: d.id, results: [{ client_id: dana.id, test: 'dash_40yd', value: 5.5, attempt: 1, source: 'manual' }] };
+  assert.equal((await desk('POST', '/v1/results', one)).body.created, 1);
+  const again = (await desk('POST', '/v1/results', one)).body;
+  assert.deepEqual([again.created, again.duplicates], [0, 1]);
+  const other = (await desk('POST', '/v1/results', { ...one, results: [{ ...one.results[0], value: 5.4 }] })).body;
+  assert.match(other.errors[0].message, /Attempt 1 already has 5\.5/);
+  assert.equal((await desk('DELETE', '/v1/results/x')).status, 403, 'front desk can\'t delete results');
+});
+
+test('the athlete list for linking has clients and roster players with IDs, never money, and not for front desk', async () => {
+  const list = (await coach('GET', '/v1/athletes')).body.data;
+  assert.ok(list.some((a) => a.client_id === ava.id && a.athlete_id === ava.athlete_id));
+  assert.ok(!list.some((a) => a.client_id === arch.id), 'archived clients are left out');
+  assert.ok(list.every((a) => !Object.keys(a).some((k) => k.endsWith('_cents'))));
+  assert.equal((await desk('GET', '/v1/athletes')).status, 403);
+  assert.equal((await desk('GET', '/v1/queue')).status, 403);
+  assert.equal((await desk('POST', '/v1/athlete-links', { provider: 'swift', external_id: 'x', client_id: ava.id })).status, 403);
+});

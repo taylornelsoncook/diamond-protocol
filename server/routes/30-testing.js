@@ -363,7 +363,8 @@ function routes(api) {
     res.send(sheet.toCSV(rows));
   }));
 
-  const uploadOpts = (b) => ({ day_id: b.day_id || null, date: b.date || null, test_id: b.test_id || null, filename: b.filename || '', source: b.source || null });
+  const uploadSource = (v) => { const t = String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 40); return t || null; };
+  const uploadOpts = (b) => ({ day_id: b.day_id || null, date: b.date || null, test_id: b.test_id || null, filename: b.filename || '', source: uploadSource(b.source) });
   const publicCheck = (c) => { const { _items, _pending, ...rest } = c; return rest; };
   api.post('/testing/upload/check', OC, h(async (req, res) => {
     const rows = await readUploadBody(req.body || {});
@@ -374,8 +375,18 @@ function routes(api) {
     const rows = await readUploadBody(req.body || {});
     const c = upload.checkSheet(rows, uploadOpts(req.body));
     if (!c.ok) return res.status(400).json({ error: "This sheet can't be saved. Nothing was saved.", ...publicCheck(c) });
-    const out = upload.saveSheet(c, (req.body.confirmed || []).map(String), req);
+    const out = upload.saveSheet(c, (Array.isArray(req.body.confirmed) ? req.body.confirmed : []).map(String), req, { filename: req.body.filename });
     if (out.error) throw bad(out.error, { need: out.need });
+    res.json({ ok: true, ...out });
+  }));
+  api.get('/testing/uploads', OC, (req, res) => {
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+    res.json(upload.recentBatches(limit));
+  });
+  api.post('/testing/uploads/:id/undo', OC, h(async (req, res) => {
+    const out = upload.undoBatch(Number(req.params.id), req);
+    if (out.notFound) throw notFound('That upload');
+    if (out.error) throw bad(out.error);
     res.json({ ok: true, ...out });
   }));
 
@@ -392,8 +403,10 @@ function routes(api) {
     const list = ids(req.body.ids);
     if (!list.length) throw bad('Tick the results to discard.');
     let n = 0;
+    const first = get(`SELECT source, sender_label, sender_key FROM pending_results WHERE id IN (${list.map(() => '?').join(',')}) LIMIT 1`, ...list);
     tx(() => { for (const id of list) n += Number(run('DELETE FROM pending_results WHERE id=?', id).changes); });
-    log(req, 'Discarded waiting results', `${n} result${n === 1 ? '' : 's'}`);
+    if (!n) throw bad('Those results were already linked or discarded.');
+    log(req, 'Discarded waiting results', `${n} result${n === 1 ? '' : 's'}${first ? ` from ${first.sender_label || first.sender_key} (${first.source})` : ''}`);
     res.json({ ok: true, discarded: n });
   }));
 
@@ -403,8 +416,9 @@ function routes(api) {
     res.json({
       pending: pendingSummary(),
       hawkin: { connected: !!token, region: setting('hawkin_region', 'Americas'), token_hint: token && req.staff.role === 'owner' ? '••••' + String(token).slice(-4) : null, status: setting('hawkin_status') },
-      links: all(`SELECT l.id, l.source, l.sender_key, l.sender_label, l.created_at, a.id AS athlete_id, a.code, a.first_name, a.last_name
+      links: all(`SELECT l.id, l.source, l.sender_key, l.sender_label, l.created_at, a.id AS athlete_id, a.code, a.first_name, a.last_name, a.archived
         FROM device_links l JOIN athletes a ON a.id=l.athlete_id ORDER BY l.source, l.sender_key`),
+      sources: [...new Set([...all('SELECT DISTINCT source FROM device_links UNION SELECT DISTINCT source FROM pending_results').map((r) => r.source), ...upload.SOURCES.filter((x) => x !== 'Import')])].filter(Boolean).sort((a, b) => a.localeCompare(b)),
       app_url: appUrl(),
     });
   });
@@ -423,12 +437,44 @@ function routes(api) {
     res.json({ ok: true });
   }));
   api.post('/testing/hawkin/sync', OWNER, h(async (_req, res) => res.json(await hawkin.sync())));
-  api.delete('/testing/links/:id', OC, h(async (req, res) => {
+  // Link a device ID or name to an athlete ahead of time (or move a link). Anything already waiting from that
+  // sender is linked to the athlete too.
+  const linkAthlete = (id) => {
+    const a = get('SELECT id, code, first_name, last_name, archived FROM athletes WHERE id=?', Number(id));
+    if (!a) throw bad('Pick the athlete this device belongs to.');
+    if (a.archived) throw bad(`${a.first_name} ${a.last_name} is archived. Pick someone else.`);
+    return a;
+  };
+  api.post('/testing/links', OC, h(async (req, res) => {
+    const source = String(req.body.source ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    const key = String(req.body.sender_key ?? '').trim().slice(0, 120);
+    if (!source) throw bad('Say which system the results come from, like Hawkin or Freelap.');
+    if (!key) throw bad('Enter the device ID or the name the device uses for this athlete.');
+    const a = linkAthlete(req.body.athlete_id);
+    const label = String(req.body.sender_label ?? '').trim().slice(0, 120) || key;
+    const existing = get('SELECT * FROM device_links WHERE source=? COLLATE NOCASE AND sender_key=?', source, key);
+    let id;
+    if (existing) { run('UPDATE device_links SET athlete_id=?, sender_label=? WHERE id=?', a.id, existing.sender_label || label, existing.id); id = existing.id; }
+    else id = insert('device_links', { source, sender_key: key, sender_label: label, athlete_id: a.id });
+    const waiting = all('SELECT id FROM pending_results WHERE source=? COLLATE NOCASE AND sender_key=?', source, key).map((r) => r.id);
+    const linked = waiting.length ? core.linkPending(waiting, a.id, false, req) : { linked: 0, prs: 0 };
+    log(req, existing ? 'Moved device link' : 'Linked device', `${label} (${source}) to ${a.first_name} ${a.last_name}`);
+    res.json({ ok: true, id, moved: !!existing && existing.athlete_id !== a.id, linked: linked.linked || 0, prs: linked.prs || 0 });
+  }));
+  api.patch('/testing/links/:id', OC, h(async (req, res) => {
     const l = get('SELECT * FROM device_links WHERE id=?', Number(req.params.id));
     if (!l) throw notFound('That device link');
-    run('DELETE FROM device_links WHERE id=?', l.id);
-    log(req, 'Unlinked device', `${l.sender_label || l.sender_key} (${l.source})`);
+    const a = linkAthlete(req.body.athlete_id);
+    run('UPDATE device_links SET athlete_id=? WHERE id=?', a.id, l.id);
+    log(req, 'Moved device link', `${l.sender_label || l.sender_key} (${l.source}) to ${a.first_name} ${a.last_name}`);
     res.json({ ok: true });
+  }));
+  api.delete('/testing/links/:id', OC, h(async (req, res) => {
+    const l = get('SELECT l.*, a.first_name, a.last_name FROM device_links l LEFT JOIN athletes a ON a.id=l.athlete_id WHERE l.id=?', Number(req.params.id));
+    if (!l) throw notFound('That device link');
+    run('DELETE FROM device_links WHERE id=?', l.id);
+    log(req, 'Unlinked device', `${l.sender_label || l.sender_key} (${l.source})${l.first_name ? ` from ${l.first_name} ${l.last_name}` : ''}`);
+    res.json({ ok: true, link: { source: l.source, sender_key: l.sender_key, sender_label: l.sender_label, athlete_id: l.athlete_id } });
   }));
 
   // ---- open API ----

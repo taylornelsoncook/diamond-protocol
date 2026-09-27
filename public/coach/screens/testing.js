@@ -824,117 +824,346 @@ async function shareModal(ctx, day) {
 }
 
 // ============ Upload results ============
+const UP_STYLE = raw(`<style>
+.tst-drop{display:flex;align-items:center;gap:14px;min-height:72px;padding:14px 16px;border:1px dashed var(--control-border);border-radius:var(--radius-md);background:var(--surface);cursor:pointer;color:var(--steel-muted)}
+.tst-drop:hover,.tst-drop.over,.tst-drop:focus-within{border-color:var(--green-mid);color:var(--steel)}
+.tst-drop.over{background:var(--green-deep)}
+.tst-drop strong{color:var(--steel)}
+.tst-file{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:8px 8px 8px 16px;border:1px solid var(--green-mid);border-radius:var(--radius-md);background:var(--green-deep);color:var(--green-soft)}
+.tst-file .btn{min-height:44px}
+.tst-sum{display:flex;flex-wrap:wrap;gap:8px}
+.tst-up-tools{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.tst-up-tools .input{flex:1;min-width:180px}
+.tst-up-tools .seg button{min-height:44px}
+.tst-was{font-size:13px;color:var(--steel-muted);white-space:nowrap}
+.tst-vals{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.tst-recent .list-row{padding:12px 0;align-items:center}
+.tst-recent .btn,.tst-q .btn-sm,.tst-links .btn-sm,.tst-rej .btn,.tst-hk .btn{min-height:44px}
+.tst-qrows{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.tst-qrow{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:10px;align-items:center;min-height:52px;padding:4px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.tst-qrow input{width:22px;height:22px;justify-self:center;accent-color:var(--green-mid)}
+.tst-qrow .strong{white-space:nowrap}
+.tst-qhead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tst-qhead .btn{min-height:44px}
+.tst-lrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.tst-lrow:first-child{border-top:0}
+.tst-lrow .btn-row{flex-wrap:nowrap}
+.tst-copy{position:relative}
+.tst-copy .btn{position:absolute;top:8px;right:8px;min-height:36px}
+@media (max-width:700px){
+  .tst-probs thead{display:none}
+  .tst-probs tr{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .tst-probs td{border:0;padding:0}
+  .tst-probs td.p-fix{grid-column:1/-1}
+  .tst-probs td.p-row::before{content:'Row '}
+  .tst-probs td.p-ath{grid-column:1/-1;font-size:13px}
+  .tst-qrow{grid-template-columns:44px minmax(0,1fr) auto}
+  .tst-qrow .q-date{grid-column:2/-1;font-size:13px;margin-top:-6px}
+  .tst-lrow{grid-template-columns:minmax(0,1fr) auto}
+  .tst-lrow .l-who{grid-column:1/-1;order:3}
+  .tst-drop{min-height:64px}
+}
+</style>`);
+const SOURCE_CHOICES = ['OVR', 'VALD', 'Swift', 'Freelap', 'Hawkin', 'Brower', 'Dashr', 'Rapsodo'];
+const MAX_UPLOAD = 3.5 * 1024 * 1024;
+const shortDate = (d) => fmtDate(d, { year: String(d || '').slice(0, 4) !== String(new Date().getFullYear()) });
+function csvDownload(rows, filename) {
+  const cell = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const blob = new Blob(['﻿' + rows.map((r) => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.append(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+// Type-ahead athlete search: calls onPick(athlete). Enter picks the first match, arrow keys move through the list.
+function bindPicker(input, box, onPick) {
+  let list = [];
+  const draw = () => {
+    mount(box, list.length ? list.map((a, i) => html`<button type="button" data-sg="${i}"><span>${name(a)}</span><span class="mono small muted">${a.code}</span></button>`)
+      : html`<div class="small muted" style="padding:10px 12px">No athlete matches. Try part of the name or the Athlete ID.</div>`);
+    box.hidden = false;
+  };
+  const search = debounce(async () => {
+    const term = input.value.trim();
+    if (term.length < 2) { box.hidden = true; list = []; return; }
+    list = await api.get(`/athletes/search?q=${encodeURIComponent(term)}`).catch(() => []);
+    if (input.value.trim() === term) draw();
+  }, 180);
+  input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
+  input.addEventListener('input', search);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); if (list[0] && !box.hidden) onPick(list[0]); }
+    else if (e.key === 'ArrowDown' && !box.hidden) { e.preventDefault(); box.querySelector('button')?.focus(); }
+    else if (e.key === 'Escape') box.hidden = true;
+  });
+  box.addEventListener('keydown', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); (b.nextElementSibling || b).focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); (b.previousElementSibling || input).focus(); }
+    else if (e.key === 'Escape') { box.hidden = true; input.focus(); }
+  });
+  box.addEventListener('click', (e) => { const b = e.target.closest('[data-sg]'); if (b) { e.stopPropagation(); onPick(list[Number(b.dataset.sg)]); } });
+}
+// A modal to pick an athlete; resolves with the athlete or null.
+function pickAthleteModal(title, intro) {
+  let picked = null;
+  return modal({
+    title,
+    body: html`${intro ? html`<p style="margin:0">${intro}</p>` : ''}<div class="tst-picker"><label class="label" for="pk-q">Athlete</label><input class="input" id="pk-q" autocomplete="off" placeholder="Type a name or Athlete ID"><div class="tst-sugg" hidden></div></div>`,
+    actions: [{ label: 'Cancel', value: null }],
+    onMount: (body, close) => bindPicker(body.querySelector('#pk-q'), body.querySelector('.tst-sugg'), (a) => { picked = a; close(picked); }),
+  });
+}
+
 async function renderUpload(ctx) {
-  const o = await api.get('/testing/options');
+  const [o, recent] = await Promise.all([api.get('/testing/options'), api.get('/testing/uploads').catch(() => [])]);
   if (!ctx.isCurrent()) return;
-  const state = { payload: null, filename: '', check: null, confirmed: new Set() };
+  const state = { payload: null, filename: '', file: null, text: '', day: ctx.query.day || '', date: localISO(), test: '', source: '', check: null, confirmed: new Set(), show: 'all', term: '', recent };
   const dayOpts = (sel) => html`<option value="">No testing day</option>${o.days.map((d) => html`<option value="${d.id}" ${String(d.id) === String(sel ?? '') ? raw('selected') : ''}>${d.name} (${fmtDate(d.date)})</option>`)}`;
-  mount(ctx.el, html`${STYLE}
+  mount(ctx.el, html`${STYLE}${UP_STYLE}
     ${header('Upload results', 'All or nothing: a sheet is saved only when every row matches a real Athlete ID and every value fits its test.', back())}
-    <div id="stage"></div>`);
+    <div id="stage" class="stack"></div>`);
   const stage = ctx.el.querySelector('#stage');
+  const top = () => window.scrollTo(0, 0);
+
+  async function readFile(file) {
+    if (file.size > MAX_UPLOAD) throw new Error(`${file.name} is ${(file.size / 1048576).toFixed(1)} MB. Upload files up to 3.5 MB, or split the sheet in two.`);
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  // Check the current file or pasted rows with the current options. Shows the rejected or review stage.
+  async function runCheck(btn, errEl) {
+    if (errEl) errEl.textContent = '';
+    try {
+      if (state.file) { state.payload = { file_base64: await readFile(state.file) }; state.filename = state.file.name; }
+      else if (state.text.trim()) { state.payload = { text: state.text }; state.filename = 'the pasted rows'; }
+      else { if (errEl) errEl.textContent = 'Choose a file or paste rows from your spreadsheet.'; return; }
+      Object.assign(state.payload, { filename: state.file?.name || '', day_id: state.day || null, date: state.date, test_id: state.test || null, source: state.source || null });
+      if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = 'Checking…'; }
+      state.check = await api.post('/testing/upload/check', state.payload);
+      state.confirmed = new Set(); state.show = 'all'; state.term = '';
+      state.check.ok ? drawReview() : drawRejected();
+      top();
+    } catch (e) {
+      if (errEl) errEl.textContent = e.message; else toastError(e);
+      if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = btn.dataset.label || 'Check the sheet'; }
+    }
+  }
+  // File chooser with drag and drop. onChange runs after a file is picked or removed.
+  const fileBox = () => (state.file
+    ? html`<div class="tst-file"><span class="row" style="gap:10px;min-width:0">${icon('check')}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${state.file.name}</span><span class="small">${Math.max(1, Math.round(state.file.size / 1024))} KB</span></span>
+        <button type="button" class="btn btn-ghost btn-sm" data-unfile>Remove</button></div>`
+    : html`<label class="tst-drop" data-drop>${icon('upload', 24)}<span><strong>Drop the file here</strong> or choose it<br><span class="small">Excel or CSV, up to 3.5 MB</span></span>
+        <input class="sr-only" type="file" data-file accept=".xlsx,.csv,.tsv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>`);
+  function bindFile(root, onChange) {
+    const drop = root.querySelector('[data-drop]');
+    root.querySelector('[data-file]')?.addEventListener('change', (e) => { if (e.target.files[0]) { state.file = e.target.files[0]; onChange(); } });
+    root.querySelector('[data-unfile]')?.addEventListener('click', () => { state.file = null; onChange(); });
+    if (!drop) return;
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer?.files?.[0]; if (f) { state.file = f; onChange(); } });
+  }
+
+  function recentPanel() {
+    if (!state.recent.length) return '';
+    return html`<section class="panel tst-recent"><div><h2 class="panel-title">Recent uploads</h2>
+      <p class="panel-sub">Undo takes an upload back out: new results are removed and replaced values go back to what they were. Anything changed since is left alone.</p></div>
+      <div class="list">${state.recent.map((b) => html`<div class="list-row">
+        <div class="grow"><div class="strong">${b.filename || 'Pasted rows'}</div>
+          <div class="small muted">${relTime(b.created_at)}${b.by_name ? ` by ${b.by_name}` : ''}${b.day_name ? ` · ${b.day_name}` : ''} · ${plural(b.saved, 'result')}${b.replaced ? ` (${b.replaced} replaced)` : ''}${b.pending ? ` · ${b.pending} sent to waiting` : ''}${b.source && b.source !== 'Import' ? ` · ${b.source}` : ''}</div>
+          ${b.undone_at ? html`<div class="small muted">Undone ${relTime(b.undone_at)}${b.undone_by_name ? ` by ${b.undone_by_name}` : ''}: ${b.undo_summary}</div>` : ''}</div>
+        ${b.undone_at ? badge('off', 'Undone') : html`${b.day_id && b.day_exists ? html`<a class="btn btn-ghost btn-sm" href="/app/testing/day/${b.day_id}">Open day</a>` : ''}<button class="btn btn-sm" data-undo="${b.id}">Undo</button>`}
+      </div>`)}</div></section>`;
+  }
+  async function undo(id, after) {
+    const b = state.recent.find((x) => x.id === id);
+    const what = b ? `${b.filename || 'the pasted rows'} (${plural(b.saved + b.pending, 'result')})` : 'this upload';
+    if (!(await confirmDialog('Undo upload', `Take ${what} back out? New results are removed from profiles and any values it replaced go back to what they were. Results changed since the upload are left alone.`, 'Undo upload', 'warn'))) return;
+    try {
+      const r = await api.post(`/testing/uploads/${id}/undo`);
+      const parts = [r.removed && `${plural(r.removed, 'result')} removed`, r.restored && `${r.restored} put back`, r.pending_removed && `${r.pending_removed} waiting dropped`].filter(Boolean);
+      toast(`Upload undone.${parts.length ? ` ${parts.join(', ')}.` : ''}${r.kept ? ` ${r.kept} changed since, left alone.` : ''}`);
+      state.recent = await api.get('/testing/uploads').catch(() => state.recent);
+      after();
+    } catch (err) { toastError(err); }
+  }
+  const bindRecent = (after) => stage.querySelectorAll('[data-undo]').forEach((b) => b.addEventListener('click', () => undo(Number(b.dataset.undo), after)));
 
   function drawForm() {
     mount(stage, html`<div class="grid-2">
       <section class="panel"><div><h2 class="panel-title">1. Get the sheet</h2>
         <p class="panel-sub">Every athlete's ID is filled in, with a column for each test and attempt. Fill it in on paper, a laptop, or a phone.</p></div>
-        <div class="field"><label class="label" for="g-day">Testing day</label><select class="input" id="g-day">${dayOpts(ctx.query.day)}</select></div>
+        <div class="field"><label class="label" for="g-day">Testing day</label><select class="input" id="g-day">${dayOpts(state.day)}</select></div>
         <div class="form-grid" id="g-alt">
           <div class="field"><label class="label" for="g-team">Team</label><select class="input" id="g-team"><option value="">Choose athletes later</option>${o.teams.map((t) => html`<option value="${t.id}">${t.team_name}</option>`)}</select></div>
           <div class="field"><label class="label" for="g-preset">Tests</label><select class="input" id="g-preset">${Object.keys(o.presets).map((p) => html`<option>${p}</option>`)}</select></div>
         </div>
-        <div class="btn-row"><a class="btn btn-primary" id="dl-x" download>${icon('download')}Download Excel</a><a class="btn btn-ghost" id="dl-c" download>Download CSV (Google Sheets)</a></div>
+        <p class="small muted" id="g-note" style="margin:0"></p>
+        <div class="btn-row"><a class="btn" id="dl-x" download>${icon('download')}Download Excel</a><a class="btn btn-ghost" id="dl-c" download>Download CSV (Google Sheets)</a></div>
       </section>
       <form class="panel" id="up" novalidate><div><h2 class="panel-title">2. Upload it</h2>
         <p class="panel-sub">Every row needs a real Athlete ID and every value has to fit its test. If anything is off, nothing is saved and you'll see exactly what to fix.</p></div>
-        <div class="field"><label class="label" for="file">File (Excel or CSV)</label><input class="input" id="file" type="file" accept=".xlsx,.csv,.tsv,.txt,text/csv"></div>
-        <div class="field"><label class="sr-only" for="paste">Paste rows</label><textarea class="input" id="paste" rows="3" placeholder="Or paste rows straight from Excel or Google Sheets, header row included."></textarea></div>
-        <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-          <div class="field"><label class="label" for="u-day">Add to testing day</label><select class="input" id="u-day">${dayOpts(ctx.query.day)}</select></div>
-          <div class="field"><label class="label" for="u-date">Date for rows without one</label><input class="input" id="u-date" type="date" value="${localISO()}"></div>
-          <div class="field"><label class="label" for="u-test">Device export with one test?</label><select class="input" id="u-test"><option value="">It's our sheet or has a test column</option>
-            ${o.tests.map((t) => html`<option value="${t.id}">${t.name} (${t.unit})</option>`)}</select></div>
+        <div id="filebox">${fileBox()}</div>
+        <div class="field"><label class="sr-only" for="paste">Paste rows</label><textarea class="input" id="paste" rows="4" placeholder="Or paste rows straight from Excel or Google Sheets, header row included." ${state.file ? raw('disabled') : ''}>${state.file ? '' : state.text}</textarea>
+          ${state.file ? html`<span class="small muted">Using the file. Remove it to paste rows instead.</span>` : ''}</div>
+        <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr))">
+          <div class="field"><label class="label" for="u-day">Add to testing day</label><select class="input" id="u-day">${dayOpts(state.day)}</select></div>
+          <div class="field"><label class="label" for="u-date">Date for rows without one</label><input class="input" id="u-date" type="date" value="${state.date}" ${state.day ? raw('disabled') : ''}>
+            ${state.day ? html`<span class="small muted">Uses the testing day's date.</span>` : ''}</div>
+          <div class="field"><label class="label" for="u-src">Where it's from</label><select class="input" id="u-src"><option value="">Work it out from the file</option>
+            ${SOURCE_CHOICES.map((x) => html`<option ${state.source === x ? raw('selected') : ''}>${x}</option>`)}</select></div>
+          <div class="field"><label class="label" for="u-test">One-test device export</label><select class="input" id="u-test"><option value="">No, it has test columns</option>
+            ${o.tests.map((t) => html`<option value="${t.id}" ${String(state.test) === String(t.id) ? raw('selected') : ''}>${t.name} (${t.unit})</option>`)}</select></div>
         </div>
         <div class="error" id="u-err" role="alert"></div>
         <div><button class="btn btn-primary">Check the sheet</button></div>
-      </form></div>`);
+      </form></div>
+      ${recentPanel()}`);
     const gDay = stage.querySelector('#g-day'), gTeam = stage.querySelector('#g-team'), gPreset = stage.querySelector('#g-preset');
     const links = () => {
       const q = gDay.value ? `day_id=${gDay.value}` : `preset=${encodeURIComponent(gPreset.value)}${gTeam.value ? `&team_id=${gTeam.value}` : ''}`;
       stage.querySelector('#dl-x').href = `/api/testing/sheet?${q}&format=xlsx`;
       stage.querySelector('#dl-c').href = `/api/testing/sheet?${q}&format=csv`;
       gTeam.disabled = gPreset.disabled = !!gDay.value;
+      stage.querySelector('#g-note').textContent = gDay.value ? 'Results already entered for this day are filled in, so the sheet doubles as a backup.'
+        : gTeam.value ? '' : 'No team chosen: the sheet has the test columns and blank rows. Add each athlete\'s ID.';
     };
     [gDay, gTeam, gPreset].forEach((s) => s.addEventListener('change', links)); links();
+    // Picking a day to download also points the upload at it, unless one is already chosen.
+    gDay.addEventListener('change', () => { if (gDay.value && !state.day) { state.day = gDay.value; state.text = stage.querySelector('#paste').value || state.text; drawForm(); } });
+    stage.querySelector('#paste').addEventListener('input', (e) => { state.text = e.target.value; });
+    stage.querySelector('#u-day').addEventListener('change', (e) => { state.day = e.target.value; drawForm(); });
+    stage.querySelector('#u-date').addEventListener('change', (e) => { state.date = e.target.value || localISO(); });
+    stage.querySelector('#u-src').addEventListener('change', (e) => { state.source = e.target.value; });
+    stage.querySelector('#u-test').addEventListener('change', (e) => { state.test = e.target.value; });
+    bindFile(stage.querySelector('#filebox'), () => {
+      state.text = stage.querySelector('#paste')?.value || state.text;
+      drawForm();
+      if (state.file && state.file.size > MAX_UPLOAD) stage.querySelector('#u-err').textContent = `${state.file.name} is ${(state.file.size / 1048576).toFixed(1)} MB. Upload files up to 3.5 MB, or split the sheet in two.`;
+    });
+    bindRecent(drawForm);
     const f = stage.querySelector('#up');
-    f.onsubmit = async (e) => {
-      e.preventDefault();
-      const err = stage.querySelector('#u-err'); err.textContent = '';
-      const file = stage.querySelector('#file').files[0];
-      const paste = stage.querySelector('#paste').value;
-      try {
-        if (file) {
-          const buf = new Uint8Array(await file.arrayBuffer());
-          let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-          state.payload = { file_base64: btoa(bin) }; state.filename = file.name;
-        } else if (paste.trim()) { state.payload = { text: paste }; state.filename = 'the pasted rows'; }
-        else { err.textContent = 'Choose a file or paste rows from your spreadsheet.'; return; }
-        Object.assign(state.payload, { filename: file?.name || '', day_id: stage.querySelector('#u-day').value || null, date: stage.querySelector('#u-date').value, test_id: stage.querySelector('#u-test').value || null });
-        const btn = f.querySelector('button'); btn.disabled = true; btn.textContent = 'Checking…';
-        state.check = await api.post('/testing/upload/check', state.payload);
-        state.confirmed = new Set();
-        state.check.ok ? drawReview() : drawRejected();
-      } catch (e2) { err.textContent = e2.message; const btn = f.querySelector('button'); btn.disabled = false; btn.textContent = 'Check the sheet'; }
-    };
+    f.onsubmit = (e) => { e.preventDefault(); runCheck(f.querySelector('.btn-primary'), stage.querySelector('#u-err')); };
   }
 
   function drawRejected() {
     const c = state.check;
+    const n = c.problems.length;
+    const pasted = !state.file;
     mount(stage, html`<section class="panel tst-rej"><h2 class="panel-title">This sheet can't be saved</h2>
-      <p style="margin:0">Nothing was saved. ${c.problems.length === 1 ? '1 problem needs' : `${c.problems.length} problems need`} fixing in ${state.filename}. Fix ${c.problems.length === 1 ? 'it' : 'them'}, save, and upload the sheet again.</p>
-      <div class="table-wrap" style="border:0;background:transparent"><table class="table"><thead><tr><th>Row</th><th>Column</th><th>Athlete</th><th>What to fix</th></tr></thead>
-      <tbody>${c.problems.map((p) => html`<tr><td>${p.row}</td><td>${p.column}</td><td class="mono">${p.athlete}</td><td>${p.problem}</td></tr>`)}</tbody></table></div>
-      <div><button class="btn btn-primary" id="again">Upload the fixed sheet</button></div></section>`);
-    stage.querySelector('#again').onclick = () => { drawForm(); window.scrollTo(0, 0); };
+      <p style="margin:0">Nothing was saved. ${n === 1 ? '1 problem needs' : `${n} problems need`} fixing in ${state.filename}${state.check.source && state.check.source !== 'Import' ? ` (read as ${state.check.source})` : ''}. Fix ${n === 1 ? 'it' : 'them'} and check the sheet again.</p>
+      <div class="table-wrap" style="border:0;background:transparent"><table class="table tst-probs"><thead><tr><th>Row</th><th>Column</th><th>Athlete</th><th>What to fix</th></tr></thead>
+      <tbody>${c.problems.map((p) => html`<tr><td class="p-row strong">${p.row || '—'}</td><td class="p-col">${p.column}</td><td class="mono p-ath">${p.athlete}</td><td class="p-fix">${p.problem}</td></tr>`)}</tbody></table></div>
+      <div><button class="btn btn-ghost" id="dl-probs">${icon('download')}Download this list</button></div>
+    </section>
+    <section class="panel"><div><h2 class="panel-title">Fix and check again</h2>
+      <p class="panel-sub">${pasted ? 'Fix the rows here, or in your spreadsheet and paste them again.' : `Fix ${state.file.name} in your spreadsheet, save it, and choose it again.`} The testing day and other options stay as they were.</p></div>
+      ${pasted ? html`<div class="field"><label class="sr-only" for="fix-paste">Rows</label><textarea class="input mono" id="fix-paste" rows="${Math.min(14, Math.max(5, state.text.split('\n').length + 1))}" style="font-size:13px">${state.text}</textarea></div>`
+        : html`<div id="fix-file">${fileBox()}</div>`}
+      <div class="error" id="fix-err" role="alert"></div>
+      <div class="btn-row"><button class="btn btn-primary" id="again">Check again</button><button class="btn btn-ghost" id="opts">Change options</button></div>
+    </section>`);
+    stage.querySelector('#dl-probs').onclick = () => csvDownload([['Row', 'Column', 'Athlete', 'What to fix'], ...c.problems.map((p) => [p.row, p.column, p.athlete, p.problem])], 'sheet-problems.csv');
+    stage.querySelector('#fix-paste')?.addEventListener('input', (e) => { state.text = e.target.value; });
+    const ff = stage.querySelector('#fix-file');
+    if (ff) {
+      const hadFile = state.file;
+      state.file = null; // the saved file must be chosen again
+      mount(ff, fileBox());
+      const rebind = () => { mount(ff, fileBox()); bindFile(ff, rebind); };
+      bindFile(ff, rebind);
+      stage.querySelector('#again').textContent = 'Check the fixed file';
+      stage.querySelector('#opts').addEventListener('click', () => { if (!state.file) state.file = hadFile; });
+    }
+    stage.querySelector('#again').onclick = (e) => {
+      if (ff && !state.file) { stage.querySelector('#fix-err').textContent = 'Choose the fixed file first.'; return; }
+      runCheck(e.currentTarget, stage.querySelector('#fix-err'));
+    };
+    stage.querySelector('#opts').onclick = () => { drawForm(); top(); };
   }
 
   function drawReview() {
     const c = state.check;
+    const sum = c.summary || { created: c.count, replacing: 0, unchanged: 0, prs: 0 };
     const need = c.unusual.filter((u) => !state.confirmed.has(u.key)).length;
-    const unusualKeys = new Set(c.unusual.map((u) => u.key));
+    const total = c.count + c.pending.length;
+    const allSame = sum.unchanged === c.count && !c.pending.length;
+    const big = c.count > 12;
     mount(stage, html`<section class="panel"><div><h2 class="panel-title">3. Every row checks out</h2>
       <p class="panel-sub">${plural(c.count, 'result')} for ${plural(c.athletes.length, 'athlete')}, each matched by Athlete ID${c.day ? `, going to ${c.day.name}` : ''}. Saving adds all of them at once.${c.pending.length ? ` ${c.pending.length === 1 ? '1 result has' : `${c.pending.length} results have`} no Athlete ID and will wait to be linked.` : ''}</p></div>
-      ${c.unusual.length ? html`<div class="tst-confirm"><h3 class="panel-title">Confirm ${c.unusual.length === 1 ? 'this value' : 'these values'}</h3>
+      <div class="tst-sum">
+        ${sum.created ? html`<span class="badge badge-good">${sum.created} new</span>` : ''}
+        ${sum.replacing ? html`<span class="badge badge-warn">${sum.replacing} ${sum.replacing === 1 ? 'replaces an earlier value' : 'replace earlier values'}</span>` : ''}
+        ${sum.unchanged ? html`<span class="badge badge-muted">${sum.unchanged} already saved</span>` : ''}
+        ${sum.prs ? html`<span class="badge badge-good">${plural(sum.prs, 'PR')}</span>` : ''}
+        ${c.pending.length ? html`<span class="badge badge-muted">${c.pending.length} to link</span>` : ''}
+        <span class="badge badge-neutral">Read as ${c.format === 'wide' ? 'our sheet' : c.source === 'Import' ? 'a results export' : `a ${c.source} export`}</span>
+      </div>
+      ${allSame ? html`<p class="small muted" style="margin:0">Everything on this sheet is already saved. Saving again changes nothing.</p>` : ''}
+      ${c.unusual.length ? html`<div class="tst-confirm"><div class="spread"><h3 class="panel-title">Confirm ${c.unusual.length === 1 ? 'this value' : 'these values'}</h3>
+          ${c.unusual.length >= 3 && need ? html`<button class="btn btn-ghost btn-sm" id="tick-all" style="min-height:44px">Tick all ${c.unusual.length}</button>` : ''}</div>
         <p class="small muted" style="margin:0">They're possible but unusual. Tick each one that's right. If one is a mistake, fix the sheet and upload it again.</p>
-        ${c.unusual.map((u) => html`<label class="check small"><input type="checkbox" data-key="${u.key}" ${state.confirmed.has(u.key) ? raw('checked') : ''}>
+        ${c.unusual.map((u) => html`<label class="check small" style="min-height:44px;align-items:center"><input type="checkbox" data-key="${u.key}" ${state.confirmed.has(u.key) ? raw('checked') : ''}>
           <span><span class="muted">Row ${u.row}, ${u.column}:</span> ${u.message}</span></label>`)}</div>` : ''}
-      ${c.athletes.map((a) => {
-        const open = a.results.filter((r) => unusualKeys.has(r.key) && !state.confirmed.has(r.key)).length;
-        return html`<div class="tst-ath"><div class="spread"><span class="strong">${a.name}</span>
-          <span class="row" style="gap:10px"><span class="tst-code">${a.code}</span><span class="small muted">${plural(a.results.length, 'result')}</span>${open ? badge('failed', 'Confirm') : ''}</span></div>
-          <div class="list" style="margin-top:6px">${a.results.map((r) => html`<div class="list-row"><span class="grow">${r.test} #${r.attempt}</span>
-            <span class="muted small tst-hide-sm">${fmtDate(r.date)}</span><span class="strong" style="white-space:nowrap">${fmtValue(r.value, r.unit)}</span>${r.unusual ? badge(state.confirmed.has(r.key) ? 'active' : 'failed', state.confirmed.has(r.key) ? 'Confirmed' : 'Unusual') : ''}</div>`)}</div></div>`;
-      })}
+      ${big ? html`<div class="tst-up-tools">
+        <div class="seg" role="group" aria-label="Show">${[['all', 'All'], ['look', 'Needs a look'], ['pr', 'PRs']].map(([k, l]) => html`<button type="button" data-show="${k}" aria-pressed="${state.show === k}">${l}</button>`)}</div>
+        <label class="sr-only" for="rv-q">Find an athlete</label><input class="input" id="rv-q" type="search" placeholder="Find an athlete by name or ID" value="${state.term}" autocomplete="off"></div>` : ''}
+      <div id="ath" class="stack"></div>
       ${c.pending.length ? html`<div class="tst-ath"><div class="spread"><span class="strong">Waiting to be linked</span><span class="small muted">${plural(c.pending.length, 'result')}</span></div>
-        <div class="list" style="margin-top:6px">${c.pending.map((p) => html`<div class="list-row"><span class="grow">${p.sender} · ${p.test}</span><span class="muted small">${fmtDate(p.date)}</span><span class="strong">${fmtValue(p.value, p.unit)}</span></div>`)}</div></div>` : ''}
-      <div class="btn-row"><button class="btn btn-primary" id="save" ${need ? raw('disabled') : ''}>${need ? `Confirm ${need} more to save` : `Save ${plural(c.count + c.pending.length, 'result')}`}</button>
+        <div class="list" style="margin-top:6px">${c.pending.map((p) => html`<div class="list-row"><span class="grow">${p.sender} · ${p.test}</span><span class="muted small">${shortDate(p.date)}</span><span class="strong">${fmtValue(p.value, p.unit)}</span></div>`)}</div></div>` : ''}
+      <div class="btn-row"><button class="btn btn-primary" id="save" ${need ? raw('disabled') : ''}>${need ? `Confirm ${need} more to save` : `Save ${plural(total, 'result')}`}</button>
         <button class="btn btn-ghost" id="over">Start over</button></div></section>`);
+    drawAthletes();
     stage.querySelectorAll('[data-key]').forEach((cb) => cb.addEventListener('change', () => { cb.checked ? state.confirmed.add(cb.dataset.key) : state.confirmed.delete(cb.dataset.key); drawReview(); }));
-    stage.querySelector('#over').onclick = drawForm;
+    stage.querySelector('#tick-all')?.addEventListener('click', () => { c.unusual.forEach((u) => state.confirmed.add(u.key)); drawReview(); });
+    stage.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => { state.show = b.dataset.show; stage.querySelectorAll('[data-show]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); drawAthletes(); }));
+    stage.querySelector('#rv-q')?.addEventListener('input', debounce((e) => { state.term = e.target.value; drawAthletes(); }, 120));
+    stage.querySelector('#over').onclick = () => { drawForm(); top(); };
     stage.querySelector('#save').onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = 'Saving…';
       try {
         const r = await api.post('/testing/upload/save', { ...state.payload, confirmed: [...state.confirmed] });
-        mount(stage, html`<section class="panel"><h2 class="panel-title">Saved</h2>
-          <p style="margin:0">${plural(r.saved, 'result')} ${r.saved === 1 ? 'is' : 'are'} in ${plural(r.athletes, 'profile')}${r.prs ? `, with ${plural(r.prs, 'new PR')}` : ''}.${r.pending ? ` ${plural(r.pending, 'result')} ${r.pending === 1 ? 'is' : 'are'} waiting to be linked.` : ''} Uploading the same sheet again won't double-count.</p>
-          <div class="btn-row">${c.day ? html`<a class="btn btn-primary" href="/app/testing/day/${c.day.id}">Open ${c.day.name}</a>` : ''}
-          ${r.pending ? html`<a class="btn" href="/app/testing/queue">Link waiting results</a>` : ''}<button class="btn btn-ghost" id="another">Upload another sheet</button></div></section>`);
-        stage.querySelector('#another').onclick = drawForm;
+        state.recent = await api.get('/testing/uploads').catch(() => state.recent);
+        drawSaved(r);
         toast(`Saved ${plural(r.saved, 'result')}.`);
       } catch (err) {
         if (err.data?.problems) { state.check = err.data; drawRejected(); } else { toastError(err); drawReview(); }
       }
     };
+  }
+  function drawAthletes() {
+    const c = state.check;
+    const unusualKeys = new Set(c.unusual.map((u) => u.key));
+    const term = state.term.trim().toLowerCase();
+    const keep = (r) => state.show === 'all' || (state.show === 'pr' ? r.pr : (unusualKeys.has(r.key) || r.replaces != null));
+    const groups = c.athletes.filter((a) => !term || `${a.name} ${a.code}`.toLowerCase().includes(term))
+      .map((a) => ({ ...a, shown: a.results.filter(keep) })).filter((a) => a.shown.length);
+    const el = stage.querySelector('#ath');
+    if (!groups.length) { mount(el, html`<div class="empty">Nothing matches. ${state.show === 'look' ? 'No values are unusual or replace an earlier one.' : ''}</div>`); return; }
+    mount(el, groups.map((a) => {
+      const open = a.results.filter((r) => unusualKeys.has(r.key) && !state.confirmed.has(r.key)).length;
+      return html`<div class="tst-ath"><div class="spread"><span class="strong">${a.name}</span>
+        <span class="row" style="gap:10px"><span class="tst-code">${a.code}</span><span class="small muted">${plural(a.results.length, 'result')}</span>${open ? badge('failed', 'Confirm') : ''}</span></div>
+        <div class="list" style="margin-top:6px">${a.shown.map((r) => html`<div class="list-row"><span class="grow">${r.test} #${r.attempt}${r.prev_best != null && !r.same ? html`<span class="small muted tst-hide-sm"> · best ${fmtValue(r.prev_best, r.unit)}</span>` : ''}</span>
+          <span class="muted small tst-hide-sm">${shortDate(r.date)}</span>
+          <span class="tst-vals">${r.replaces != null ? html`<span class="tst-was">was ${fmtValue(r.replaces, r.unit)}</span>` : ''}<span class="strong" style="white-space:nowrap">${fmtValue(r.value, r.unit)}</span>
+          ${r.pr ? badge('active', 'PR') : ''}${r.same ? badge('off', 'Already saved') : ''}${r.unusual ? badge(state.confirmed.has(r.key) ? 'active' : 'failed', state.confirmed.has(r.key) ? 'Confirmed' : 'Unusual') : ''}</span></div>`)}</div></div>`;
+    }));
+  }
+  function drawSaved(r) {
+    const c = state.check;
+    const changed = (r.created ?? r.saved) + (r.replaced ?? 0);
+    mount(stage, html`<section class="panel"><h2 class="panel-title">Saved</h2>
+      <p style="margin:0">${changed || r.pending ? `${plural(r.saved, 'result')} ${r.saved === 1 ? 'is' : 'are'} in ${plural(r.athletes, 'profile')}${r.prs ? `, with ${plural(r.prs, 'new PR')}` : ''}.` : 'Everything on this sheet was already saved, so nothing changed.'}
+        ${r.replaced ? ` ${plural(r.replaced, 'earlier value')} replaced.` : ''}${r.unchanged && changed ? ` ${r.unchanged} already saved, left as they were.` : ''}${r.pending ? ` ${plural(r.pending, 'result')} ${r.pending === 1 ? 'is' : 'are'} waiting to be linked.` : ''} Uploading the same sheet again won't double-count.</p>
+      <div class="btn-row">${c.day ? html`<a class="btn btn-primary" href="/app/testing/day/${c.day.id}">Open ${c.day.name}</a>` : ''}
+        ${r.pending ? html`<a class="btn ${c.day ? '' : 'btn-primary'}" href="/app/testing/queue">Link waiting results</a>` : ''}
+        <button class="btn ${c.day || r.pending ? 'btn-ghost' : 'btn-primary'}" id="another">Upload another sheet</button>
+        ${r.batch_id ? html`<button class="btn btn-ghost" id="undo-this">Undo this upload</button>` : ''}</div></section>
+      ${recentPanel()}`);
+    stage.querySelector('#another').onclick = () => { state.file = null; state.text = ''; drawForm(); top(); };
+    stage.querySelector('#undo-this')?.addEventListener('click', () => undo(r.batch_id, () => { drawForm(); top(); }));
+    bindRecent(() => drawSaved(r));
   }
   drawForm();
 }
@@ -943,68 +1172,102 @@ async function renderUpload(ctx) {
 async function renderQueue(ctx) {
   const groups = await api.get('/testing/pending');
   if (!ctx.isCurrent()) return;
-  mount(ctx.el, html`${STYLE}
+  const view = { source: 'all', term: '' };
+  const sources = [...new Set(groups.map((g) => g.source))].sort();
+  mount(ctx.el, html`${STYLE}${UP_STYLE}
     ${header('Waiting to be linked', "These results arrived without an Athlete ID or a device you've linked. None of them are in a profile yet.", back())}
     <p class="small muted" style="margin:0">Pick who each set belongs to and link it. Linking is all or nothing, and nothing is ever matched by name on its own. Tip: enter Athlete IDs as names on your devices and results skip this step.</p>
-    <div class="stack" id="cards">${groups.length ? '' : html`<div class="empty">Nothing is waiting. Every result is in a profile.</div>`}</div>`);
+    <p class="small" id="q-count" style="margin:0" aria-live="polite"></p>
+    ${groups.length > 3 ? html`<div class="tst-up-tools">
+      ${sources.length > 1 ? html`<div class="seg" role="group" aria-label="Source">${['all', ...sources].map((s) => html`<button type="button" data-src="${s}" aria-pressed="${s === 'all'}">${s === 'all' ? 'All' : s}</button>`)}</div>` : ''}
+      <label class="sr-only" for="q-find">Find a sender</label><input class="input" id="q-find" type="search" placeholder="Find a sender, device ID or test" autocomplete="off"></div>` : ''}
+    <div class="stack" id="cards"></div>`);
   const cards = ctx.el.querySelector('#cards');
+  const live = new Set(groups);
+  const updateCount = () => {
+    const n = [...live].reduce((s, g) => s + g.results.length, 0);
+    ctx.el.querySelector('#q-count').textContent = live.size ? `${plural(n, 'result')} from ${plural(live.size, 'sender')}.` : '';
+    if (!live.size) mount(cards, html`<div class="empty">Nothing is waiting. Every result is in a profile. <a href="/app/testing">Back to Testing</a></div>`);
+  };
+  const filter = () => {
+    const term = view.term.trim().toLowerCase();
+    let shown = 0;
+    for (const g of live) {
+      const ok = (view.source === 'all' || g.source === view.source) && (!term || `${g.sender_label} ${g.sender_key} ${g.source} ${g.results.map((r) => r.test).join(' ')}`.toLowerCase().includes(term));
+      g.el.hidden = !ok; if (ok) shown++;
+    }
+    let none = cards.querySelector('.q-none');
+    if (!shown && live.size) { if (!none) { none = document.createElement('div'); none.className = 'empty q-none'; none.textContent = 'No senders match.'; cards.append(none); } }
+    else none?.remove();
+  };
+  const remove = (g) => { live.delete(g); g.el.remove(); updateCount(); filter(); };
+  ctx.el.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => { view.source = b.dataset.src; ctx.el.querySelectorAll('[data-src]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); filter(); }));
+  ctx.el.querySelector('#q-find')?.addEventListener('input', debounce((e) => { view.term = e.target.value; filter(); }, 120));
+
   groups.forEach((g, gi) => {
     const el = document.createElement('section');
     el.className = 'panel tst-q';
+    g.el = el;
     cards.append(el);
-    const st = { athlete: null, remember: true, ticked: new Set(g.results.map((r) => r.id)) };
+    const st = { athlete: null, remember: true, ticked: new Set(g.results.map((r) => r.id)), busy: false };
     const senderDesc = g.sender_key !== g.sender_label ? `device ID ${g.sender_key}` : `"${g.sender_label}"`;
     function draw() {
-      const n = st.ticked.size;
+      const n = st.ticked.size, all = n === g.results.length;
       mount(el, html`<div><h2 class="panel-title">${g.sender_label}</h2>
         <p class="panel-sub">${g.source}${g.sender_key !== g.sender_label ? ` · device ID ${g.sender_key}` : ''} · ${plural(g.results.length, 'result')} · received ${relTime(g.received_at)}</p></div>
         ${st.athlete ? html`<div class="banner info"><span>Linking to <strong>${name(st.athlete)}</strong> (${st.athlete.code})</span><button class="btn btn-ghost btn-sm" data-clear>Change</button></div>`
         : html`${g.suggestions.length ? html`<div class="row"><span class="small muted">Could be:</span>${g.suggestions.map((a) => html`<button class="btn btn-sm" data-pick="${a.id}">${name(a)} (${a.code})</button>`)}</div>` : ''}
           <div class="tst-picker"><label class="sr-only" for="q${gi}">Find athlete</label><input class="input" id="q${gi}" autocomplete="off" placeholder="Type a name or Athlete ID, then pick from the list"><div class="tst-sugg" hidden></div></div>`}
-        <div class="table-wrap" style="border:0;background:transparent"><table class="table"><thead><tr><th><span class="sr-only">Include</span></th><th>Test</th><th>Result</th><th>Tested</th><th class="tst-hide-sm">Device</th></tr></thead>
-        <tbody>${g.results.map((r) => html`<tr><td style="width:44px"><input type="checkbox" style="width:20px;height:20px;accent-color:var(--green-mid)" data-r="${r.id}" aria-label="Include ${r.test}" ${st.ticked.has(r.id) ? raw('checked') : ''}></td>
-          <td>${r.test}</td><td class="strong">${fmtValue(r.value, r.unit)}</td><td>${fmtDate(r.recorded_at)}</td><td class="muted tst-hide-sm">${g.source}</td></tr>`)}</tbody></table></div>
-        <label class="check small"><input type="checkbox" data-remember ${st.remember ? raw('checked') : ''}> Remember: send future results from ${senderDesc} (${g.source}) straight to ${st.athlete ? name(st.athlete) : 'this athlete'}</label>
-        <div class="btn-row"><button class="btn btn-primary" data-link ${!st.athlete || !n ? raw('disabled') : ''}>Link ${plural(n, 'result')}</button>
-          <button class="btn btn-ghost" data-discard ${n ? '' : raw('disabled')}>Discard selected</button></div>`);
+        <div class="tst-qhead"><span class="small muted">${n === g.results.length ? 'All results included' : `${n} of ${g.results.length} included`}</span>
+          ${g.results.length > 1 ? html`<button type="button" class="btn btn-ghost btn-sm" data-all>${all ? 'Untick all' : 'Tick all'}</button>` : ''}</div>
+        <div class="tst-qrows">${g.results.map((r) => html`<label class="tst-qrow"><input type="checkbox" data-r="${r.id}" aria-label="Include ${r.test} ${fmtValue(r.value, r.unit)}" ${st.ticked.has(r.id) ? raw('checked') : ''}>
+          <span>${r.test}</span><span class="strong">${fmtValue(r.value, r.unit)}</span><span class="muted small q-date">${shortDate(r.recorded_at)}</span></label>`)}</div>
+        <label class="check small" style="min-height:44px;align-items:center"><input type="checkbox" data-remember ${st.remember ? raw('checked') : ''}> Remember: send future results from ${senderDesc} (${g.source}) straight to ${st.athlete ? name(st.athlete) : 'this athlete'}</label>
+        <div class="btn-row"><button class="btn btn-primary" data-link ${!st.athlete || !n || st.busy ? raw('disabled') : ''}>${st.athlete ? `Link ${plural(n, 'result')} to ${st.athlete.first_name}` : `Link ${plural(n, 'result')}`}</button>
+          <button class="btn btn-ghost" data-discard ${n && !st.busy ? '' : raw('disabled')}>${all ? 'Discard all' : 'Discard selected'}</button></div>`);
       const q = el.querySelector('.tst-picker input');
-      if (q) {
-        const box = el.querySelector('.tst-sugg');
-        q.addEventListener('input', debounce(async () => {
-          const term = q.value.trim();
-          if (term.length < 2) { box.hidden = true; return; }
-          const list = await api.get(`/athletes/search?q=${encodeURIComponent(term)}`).catch(() => []);
-          mount(box, list.length ? list.map((a) => html`<button type="button" data-pick="${a.id}" data-json="${JSON.stringify(a)}"><span>${name(a)}</span><span class="mono small muted">${a.code}</span></button>`) : html`<div class="small muted" style="padding:10px 12px">No athlete matches.</div>`);
-          box.hidden = false;
-        }, 200));
-      }
+      if (q) bindPicker(q, el.querySelector('.tst-sugg'), (a) => { st.athlete = a; draw(); el.querySelector('[data-link]')?.focus(); });
     }
     el.addEventListener('click', async (e) => {
       const pick = e.target.closest('[data-pick]');
-      if (pick) { st.athlete = pick.dataset.json ? JSON.parse(pick.dataset.json) : g.suggestions.find((a) => a.id === Number(pick.dataset.pick)); draw(); return; }
-      if (e.target.closest('[data-clear]')) { st.athlete = null; draw(); return; }
+      if (pick && !pick.closest('.tst-sugg')) { st.athlete = g.suggestions.find((a) => a.id === Number(pick.dataset.pick)); draw(); el.querySelector('[data-link]')?.focus(); return; }
+      if (e.target.closest('[data-clear]')) { st.athlete = null; draw(); el.querySelector('.tst-picker input')?.focus(); return; }
+      if (e.target.closest('[data-all]')) { st.ticked = st.ticked.size === g.results.length ? new Set() : new Set(g.results.map((r) => r.id)); draw(); return; }
       if (e.target.closest('[data-link]')) {
+        st.busy = true; draw();
         try {
           const r = await api.post('/testing/pending/link', { ids: [...st.ticked], athlete_id: st.athlete.id, remember: st.remember });
-          toast(`Linked ${plural(r.linked, 'result')} to ${name(st.athlete)}.${r.prs ? ` ${plural(r.prs, 'new PR')}.` : ''}`);
-          ctx.reload();
-        } catch (err) { toastError(err); }
+          toast(`Linked ${plural(r.linked, 'result')} to ${name(st.athlete)}.${r.prs ? ` ${plural(r.prs, 'new PR')}.` : ''}${st.remember ? ' Future results go straight in.' : ''}`);
+          g.results = g.results.filter((x) => !st.ticked.has(x.id));
+          if (!g.results.length) remove(g); else { st.ticked = new Set(g.results.map((x) => x.id)); st.busy = false; draw(); updateCount(); }
+        } catch (err) { st.busy = false; draw(); toastError(err); }
         return;
       }
       if (e.target.closest('[data-discard]')) {
-        if (!(await confirmDialog('Discard results', `Discard ${plural(st.ticked.size, 'result')} from ${g.sender_label}? They won't go into any profile.`, 'Discard', 'warn'))) return;
-        try { await api.post('/testing/pending/discard', { ids: [...st.ticked] }); toast('Discarded.'); ctx.reload(); } catch (err) { toastError(err); }
+        if (!(await confirmDialog('Discard results', `Discard ${plural(st.ticked.size, 'result')} from ${g.sender_label}? They won't go into any profile, and this can't be undone.`, 'Discard', 'warn'))) return;
+        try {
+          const r = await api.post('/testing/pending/discard', { ids: [...st.ticked] });
+          toast(`Discarded ${plural(r.discarded, 'result')}.`);
+          g.results = g.results.filter((x) => !st.ticked.has(x.id));
+          if (!g.results.length) remove(g); else { st.ticked = new Set(g.results.map((x) => x.id)); draw(); updateCount(); }
+        } catch (err) { toastError(err); }
       }
     });
     el.addEventListener('change', (e) => {
-      if (e.target.dataset.r) { e.target.checked ? st.ticked.add(Number(e.target.dataset.r)) : st.ticked.delete(Number(e.target.dataset.r)); draw(); }
+      if (e.target.dataset.r) { e.target.checked ? st.ticked.add(Number(e.target.dataset.r)) : st.ticked.delete(Number(e.target.dataset.r)); draw(); el.querySelector(`[data-r="${e.target.dataset.r}"]`)?.focus(); }
       if (e.target.hasAttribute('data-remember')) st.remember = e.target.checked;
     });
     draw();
   });
+  updateCount();
+  document.addEventListener('click', function close(e) {
+    if (!ctx.isCurrent()) { document.removeEventListener('click', close); return; }
+    if (!e.target.closest('.tst-picker')) ctx.el.querySelectorAll('.tst-sugg').forEach((b) => { b.hidden = true; });
+  });
 }
 
 // ============ Devices & imports ============
+let lastUnlinked = null; // the link just removed, so the next render can offer Undo
 async function renderDevices(ctx) {
   const d = await api.get('/testing/devices');
   if (!ctx.isCurrent()) return;
@@ -1015,46 +1278,118 @@ async function renderDevices(ctx) {
   -H "Authorization: Bearer dp_live_..." -H "Content-Type: application/json" \\
   -d '{"source":"gates","device_id":"LANE-3","athlete_code":"AVALOP2026",
        "test":"40-yard dash","value":4.71,"ref":"run-8812"}'`;
-  mount(ctx.el, html`${STYLE}
+  // One green button per view: linking waiting results comes first, then connecting Hawkin.
+  const primary = d.pending.count ? 'pending' : owner && !hk.connected ? 'hawkin' : null;
+  const undoLink = lastUnlinked; lastUnlinked = null;
+  mount(ctx.el, html`${STYLE}${UP_STYLE}
     ${header('Devices & imports', 'Get results in from anywhere: live connections, file imports, the open API, or by hand.', back())}
     ${d.pending.count ? html`<section class="panel"><div><h2 class="panel-title">Waiting to be linked</h2>
       <p class="panel-sub">${plural(d.pending.count, 'result')} from ${plural(d.pending.senders, 'unrecognized sender')}. Nothing lands in a profile until you link it.</p></div>
       <a class="btn btn-primary btn-block" href="/app/testing/queue">Link them</a></section>` : ''}
-    <section class="panel"><div class="panel-head"><div><h2 class="panel-title">Hawkin Dynamics force plates</h2>
+    <section class="panel tst-hk"><div class="panel-head"><div><h2 class="panel-title">Hawkin Dynamics force plates</h2>
       <p class="panel-sub">Connect once with an integration token from Hawkin (Settings, then Integrations). New tests sync every 15 minutes.</p></div>
-      ${hk.connected ? badge('active', 'Connected') : badge('off', 'Not connected')}</div>
-      ${hk.connected ? html`<p class="small ${hk.status && !hk.status.ok ? 'warn-text' : 'muted'}" style="margin:0">${hk.status ? `Last sync ${relTime(hk.status.at)}: ${hk.status.message}` : 'Waiting for the first sync.'}${hk.token_hint ? ` Token ${hk.token_hint}, ${hk.region}.` : ''}</p>
-        ${owner ? html`<div class="btn-row"><button class="btn" id="hk-sync">Sync now</button><button class="btn btn-ghost" id="hk-off">Disconnect</button></div>` : ''}`
+      ${hk.connected ? (hk.status && !hk.status.ok ? badge('failed', 'Needs attention') : badge('active', 'Connected')) : badge('off', 'Not connected')}</div>
+      ${hk.connected ? html`<p class="small ${hk.status && !hk.status.ok ? 'warn-text' : 'muted'}" style="margin:0" id="hk-status">${hk.status ? `Last sync ${relTime(hk.status.at)}: ${hk.status.message}` : 'Waiting for the first sync.'}${hk.token_hint ? ` Token ${hk.token_hint}, ${hk.region}.` : ''}</p>
+        ${hk.status && !hk.status.ok && !owner ? html`<p class="small muted" style="margin:0">An owner can paste a new token here.</p>` : ''}
+        ${owner ? html`<div class="btn-row"><button class="btn" id="hk-sync">Sync now</button>${hk.status && !hk.status.ok ? html`<button class="btn" id="hk-new">Paste a new token</button>` : ''}<button class="btn btn-ghost" id="hk-off">Disconnect</button></div>` : ''}`
       : owner ? html`<form class="row" id="hk" style="align-items:flex-end" novalidate>
           <div class="field" style="flex:1;min-width:220px"><label class="label" for="hk-t">Integration token</label><input class="input mono" id="hk-t" name="token" autocomplete="off" placeholder="Integration token from Hawkin"></div>
           <div class="field"><label class="label" for="hk-r">Region</label><select class="input" id="hk-r" name="region"><option>Americas</option><option>Europe</option><option>Asia Pacific</option></select></div>
-          <button class="btn btn-primary">Connect</button></form>`
+          <button class="btn ${primary === 'hawkin' ? 'btn-primary' : ''}">Connect</button></form>`
         : html`<p class="small muted" style="margin:0">Not connected. An owner can paste the integration token here.</p>`}
+      <p class="small muted" style="margin:0">Tip: put each athlete's Athlete ID in their Hawkin profile (External ID) and results go straight in. Otherwise they wait to be linked once.</p>
     </section>
     <section class="panel"><div><h2 class="panel-title">Import a file</h2>
       <p class="panel-sub">OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.</p></div>
-      <p class="small muted" style="margin:0">In OVR Connect, open the profile tab and export your history, then upload the file here. Rows with an Athlete ID go straight to that profile; the rest wait to be linked.</p>
-      <div><a class="btn btn-primary" href="/app/testing/upload">Upload results</a></div></section>
+      <p class="small muted" style="margin:0">In OVR Connect, open the profile tab and export your history, then upload the file here. Rows with an Athlete ID go straight to that profile; the rest wait to be linked. Every upload can be undone from Recent uploads.</p>
+      <div><a class="btn" href="/app/testing/upload">${icon('upload')}Upload results</a></div></section>
     <section class="panel"><div><h2 class="panel-title">Send results from any system</h2>
       <p class="panel-sub">Any timing system, app or script can post results to the open API with an API key. Values in other units are converted, athletes are matched by Athlete ID or a linked device, and resending the same result is ignored.</p></div>
-      <pre class="tst-pre">${curl}</pre>
+      <div class="tst-copy"><pre class="tst-pre">${curl}</pre><button class="btn btn-sm" id="copy-curl" type="button">Copy</button></div>
       <p class="small muted" style="margin:0">Send one result or an array. Fields: athlete_code or athlete_id, device_id, device_name, source, test, value, unit, recorded_at, ref.</p>
       <div class="btn-row">${owner ? html`<a class="btn" href="/app/integrations">API keys</a>` : ''}<a class="btn btn-ghost" href="/docs/api">Full API reference</a></div></section>
-    <section class="panel"><div><h2 class="panel-title">Linked device IDs</h2>
+    <section class="panel tst-links"><div class="panel-head"><div><h2 class="panel-title">Linked device IDs</h2>
       <p class="panel-sub">Results from these device IDs and names go straight to the athlete. Everything else needs an Athlete ID or waits for you.</p></div>
-      ${d.links.length ? html`<div class="list">${d.links.map((l) => html`<div class="list-row"><div class="grow"><div class="strong">${l.sender_label || l.sender_key}</div>
-          <div class="small muted">${l.source}${l.sender_label && l.sender_label !== l.sender_key ? ` · ${l.sender_key}` : ''} · linked ${fmtDate(l.created_at)}</div></div>
-          <span>${l.first_name} ${l.last_name} <span class="mono small muted">${l.code}</span></span>
-          <button class="btn btn-ghost btn-sm" data-unlink="${l.id}">Unlink</button></div>`)}</div>`
-      : html`<p class="small muted" style="margin:0">None yet. Links are created when you link waiting results and choose to remember them.</p>`}</section>`);
+      <button class="btn" id="add-link">${icon('plus')}Link a device</button></div>
+      ${undoLink ? html`<div class="banner info" id="undo-bar"><span>Unlinked ${undoLink.sender_label || undoLink.sender_key} (${undoLink.source}).</span><button class="btn btn-ghost btn-sm" id="undo-unlink" style="min-height:44px">Undo</button></div>` : ''}
+      ${d.links.length > 6 ? html`<div><label class="sr-only" for="l-find">Find a device</label><input class="input" id="l-find" type="search" placeholder="Find a device, source or athlete" autocomplete="off"></div>` : ''}
+      <div id="links">${d.links.length ? d.links.map((l) => html`<div class="tst-lrow" data-row="${l.id}" data-text="${`${l.sender_label} ${l.sender_key} ${l.source} ${l.first_name} ${l.last_name} ${l.code}`.toLowerCase()}">
+          <div><div class="strong">${l.sender_label || l.sender_key}</div>
+            <div class="small muted">${l.source}${l.sender_label && l.sender_label !== l.sender_key ? ` · ${l.sender_key}` : ''} · linked ${fmtDate(l.created_at)}</div></div>
+          <div class="l-who">${l.first_name} ${l.last_name} <span class="mono small muted">${l.code}</span>${l.archived ? html` ${badge('off', 'Archived')}` : ''}</div>
+          <div class="btn-row"><button class="btn btn-ghost btn-sm" data-move="${l.id}" aria-label="Change the athlete for ${l.sender_label || l.sender_key}">Change</button><button class="btn btn-ghost btn-sm" data-unlink="${l.id}">Unlink</button></div></div>`)
+      : html`<p class="small muted" style="margin:0">None yet. Links are created when you link waiting results and choose to remember them, or with Link a device.</p>`}</div></section>`);
   const f = ctx.el.querySelector('#hk');
-  if (f) f.onsubmit = async (e) => { e.preventDefault(); try { await api.put('/testing/hawkin', formData(f)); toast('Hawkin connected.'); ctx.reload(); } catch (err) { toastError(err); } };
-  ctx.el.querySelector('#hk-sync')?.addEventListener('click', async () => { const r = await api.post('/testing/hawkin/sync').catch(toastError); if (r) { toast(r.error ? r.error : 'Sync finished.', r.error ? 'warn' : 'good'); ctx.reload(); } });
-  ctx.el.querySelector('#hk-off')?.addEventListener('click', async () => { if (await confirmDialog('Disconnect Hawkin', 'New force plate tests stop syncing. Results already saved stay in profiles.', 'Disconnect', 'warn')) { await api.del('/testing/hawkin'); ctx.reload(); } });
-  ctx.el.querySelectorAll('[data-unlink]').forEach((b) => b.addEventListener('click', async () => {
-    if (!(await confirmDialog('Unlink device', 'Future results from this device will wait to be linked again.', 'Unlink', 'warn'))) return;
-    try { await api.del(`/testing/links/${b.dataset.unlink}`); toast('Unlinked.'); ctx.reload(); } catch (err) { toastError(err); }
+  if (f) f.onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = f.querySelector('button'); btn.disabled = true;
+    try { await api.put('/testing/hawkin', formData(f)); toast('Hawkin connected. The first sync runs within 15 minutes.'); ctx.reload(); } catch (err) { toastError(err); btn.disabled = false; }
+  };
+  ctx.el.querySelector('#hk-sync')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Syncing…';
+    const r = await api.post('/testing/hawkin/sync').catch((err) => { toastError(err); return null; });
+    if (r) { toast(r.error ? r.error : `Sync finished. ${r.saved || 0} saved, ${r.pending || 0} waiting to be linked.`, r.error ? 'warn' : 'good'); ctx.reload(); }
+    else { b.disabled = false; b.textContent = 'Sync now'; }
+  });
+  ctx.el.querySelector('#hk-new')?.addEventListener('click', async () => {
+    const v = await modal({ title: 'Paste a new Hawkin token', body: html`<div class="field"><label class="label" for="hk-t2">Integration token</label><input class="input mono" id="hk-t2" autocomplete="off"></div>
+      <div class="field"><label class="label" for="hk-r2">Region</label><select class="input" id="hk-r2">${['Americas', 'Europe', 'Asia Pacific'].map((x) => html`<option ${x === hk.region ? raw('selected') : ''}>${x}</option>`)}</select></div>`,
+    actions: [{ label: 'Cancel', value: null }, { label: 'Save token', kind: 'primary', onClick: async (body) => { await api.put('/testing/hawkin', { token: body.querySelector('#hk-t2').value, region: body.querySelector('#hk-r2').value }); return true; } }] });
+    if (v) { toast('Token saved.'); ctx.reload(); }
+  });
+  ctx.el.querySelector('#hk-off')?.addEventListener('click', async () => {
+    if (!(await confirmDialog('Disconnect Hawkin', 'New force plate tests stop syncing. Results already saved stay in profiles.', 'Disconnect', 'warn'))) return;
+    try { await api.del('/testing/hawkin'); toast('Hawkin disconnected.'); ctx.reload(); } catch (err) { toastError(err); }
+  });
+  ctx.el.querySelector('#copy-curl')?.addEventListener('click', async (e) => {
+    try { await navigator.clipboard.writeText(curl); e.currentTarget.textContent = 'Copied'; } catch { toast('Select the example and copy it.', 'warn'); }
+  });
+  ctx.el.querySelector('#l-find')?.addEventListener('input', debounce((e) => {
+    const t = e.target.value.trim().toLowerCase();
+    ctx.el.querySelectorAll('[data-row]').forEach((r) => { r.hidden = !!t && !r.dataset.text.includes(t); });
+  }, 120));
+  ctx.el.querySelector('#add-link').addEventListener('click', async () => {
+    let athlete = null;
+    const r = await modal({
+      title: 'Link a device',
+      body: html`<p style="margin:0" class="small muted">Results from this device ID or name will go straight to the athlete. Anything already waiting from it is linked now.</p>
+        <div class="field"><label class="label" for="nl-src">Comes from</label><input class="input" id="nl-src" list="nl-srcs" autocomplete="off" placeholder="Hawkin, Freelap, OVR, gates…"><datalist id="nl-srcs">${d.sources.map((s) => html`<option value="${s}">`)}</datalist></div>
+        <div class="field"><label class="label" for="nl-key">Device ID or the name it uses</label><input class="input" id="nl-key" autocomplete="off" placeholder="e.g. FL-107 or Coley P"></div>
+        <div class="tst-picker"><label class="label" for="nl-q">Athlete</label><input class="input" id="nl-q" autocomplete="off" placeholder="Type a name or Athlete ID"><div class="tst-sugg" hidden></div>
+          <p class="small" id="nl-who" style="margin:6px 0 0"></p></div>`,
+      actions: [{ label: 'Cancel', value: null }, { label: 'Link device', kind: 'primary', onClick: async (body) => {
+        if (!athlete) throw new Error('Pick the athlete from the list.');
+        return api.post('/testing/links', { source: body.querySelector('#nl-src').value, sender_key: body.querySelector('#nl-key').value, athlete_id: athlete.id });
+      } }],
+      onMount: (body) => bindPicker(body.querySelector('#nl-q'), body.querySelector('.tst-sugg'), (a) => {
+        athlete = a; body.querySelector('.tst-sugg').hidden = true; body.querySelector('#nl-q').value = name(a);
+        body.querySelector('#nl-who').textContent = `Linking to ${name(a)} (${a.code}).`;
+      }),
+    });
+    if (r) { toast(`${r.moved ? 'Link moved' : 'Device linked'}.${r.linked ? ` ${plural(r.linked, 'waiting result')} linked too.` : ''}`); ctx.reload(); }
+  });
+  ctx.el.querySelectorAll('[data-move]').forEach((b) => b.addEventListener('click', async () => {
+    const l = d.links.find((x) => x.id === Number(b.dataset.move));
+    const a = await pickAthleteModal('Change athlete', `Future results from ${l.sender_label || l.sender_key} (${l.source}) will go to the athlete you pick. Results already saved stay where they are.`);
+    if (!a) return;
+    try { await api.patch(`/testing/links/${l.id}`, { athlete_id: a.id }); toast(`${l.sender_label || l.sender_key} now goes to ${name(a)}.`); ctx.reload(); } catch (err) { toastError(err); }
   }));
+  ctx.el.querySelectorAll('[data-unlink]').forEach((b) => b.addEventListener('click', async () => {
+    const l = d.links.find((x) => x.id === Number(b.dataset.unlink));
+    if (!(await confirmDialog('Unlink device', `Future results from ${l.sender_label || l.sender_key} (${l.source}) will wait to be linked again instead of going to ${l.first_name} ${l.last_name}. Results already saved stay in the profile.`, 'Unlink', 'warn'))) return;
+    try {
+      const r = await api.del(`/testing/links/${l.id}`);
+      lastUnlinked = r.link;
+      toast('Unlinked.');
+      ctx.reload();
+    } catch (err) { toastError(err); }
+  }));
+  ctx.el.querySelector('#undo-unlink')?.addEventListener('click', async () => {
+    try {
+      await api.post('/testing/links', undoLink);
+      toast('Link restored.'); ctx.reload();
+    } catch (err) { toastError(err); }
+  });
 }
 
 // ============ Test library ============

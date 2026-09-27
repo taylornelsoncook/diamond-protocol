@@ -239,9 +239,15 @@ function pendingGroups() {
   }
   return [...groups.values()].map((g) => ({ ...g, suggestions: suggest(g.sender_label).concat(g.sender_label !== g.sender_key ? suggest(g.sender_key) : []).filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i).slice(0, 3) }));
 }
+// A waiting result keeps where it came from once linked: an uploaded file, the open API, or a device.
+function pendingSource(ref) {
+  const pre = String(ref || '').split(':')[0];
+  return pre === 'upload' ? 'upload' : pre === 'api' ? 'api' : 'device';
+}
 function linkPending(ids, athleteId, remember, req) {
   const a = get('SELECT * FROM athletes WHERE id=?', athleteId);
   if (!a) return { error: 'Pick an athlete to link these results to.' };
+  if (a.archived) return { error: `${athleteName(a)} is archived. Restore the profile first, or pick someone else.` };
   const rows = ids.map((id) => get('SELECT * FROM pending_results WHERE id=?', id)).filter(Boolean);
   if (!rows.length) return { error: 'Those results were already linked or discarded.' };
   let prs = 0;
@@ -249,7 +255,7 @@ function linkPending(ids, athleteId, remember, req) {
     for (const p of rows) {
       const t = get('SELECT * FROM tests WHERE id=?', p.test_id) || findTest(p.test_name);
       if (!t) continue;
-      const r = saveResult({ athlete_id: a.id, test: t, value: p.value, unit_entered: p.unit, source: 'device', source_ref: p.source_ref || `pending:${p.id}`, recorded_at: p.recorded_at }, { req });
+      const r = saveResult({ athlete_id: a.id, test: t, value: p.value, unit_entered: p.unit, source: pendingSource(p.source_ref), source_ref: p.source_ref || `pending:${p.id}`, recorded_at: p.recorded_at }, { req });
       if (r.pr) prs++;
       run('DELETE FROM pending_results WHERE id=?', p.id);
     }
@@ -347,5 +353,5 @@ function progress(athleteId, { view = 'staff', visibility = 'shared' } = {}) {
 
 module.exports = {
   unitsFor, normUnit, convert, parseEntry, fmtValue, fmtRange, round, findTest, inRange, better, bestOf, checkValue,
-  previousBest, saveResult, emitResult, ingest, suggest, nameScore, pendingGroups, linkPending, growthEstimate, decimalAge, progress, athleteName,
+  previousBest, saveResult, emitResult, ingest, suggest, nameScore, pendingGroups, linkPending, pendingSource, growthEstimate, decimalAge, progress, athleteName,
 };

@@ -49,12 +49,13 @@ The jobs you'll do most, step by step. Each step links to its screen.
 
 - Upload resultsDownload the sheet with every Athlete ID filled in.
 - Upload resultsFill it in during testing, then upload it.
-- Upload: a sheet with mistakesFix anything it finds and upload again. Nothing is saved until the sheet is clean.
-- Upload: review and saveConfirm unusual values and save everything at once.
+- Upload: a sheet with mistakesFix anything it finds and check again. Nothing is saved until the sheet is clean.
+- Upload: review and saveSee what's new, what replaces an earlier value and any PRs, confirm unusual values and save everything at once.
+- Upload resultsSaved the wrong sheet? Undo it from Recent uploads.
 
 ### Device results into profiles
 
-- Devices & importsConnect Hawkin, or export from OVR or another system.
+- Devices & importsConnect Hawkin, or export from OVR or another system. Link a device ahead of time if you know whose it is.
 - Upload resultsResults carrying an Athlete ID go straight to the right profile.
 - Waiting to be linkedAnything else waits. Link it once with Remember on.
 - Devices & importsFrom then on, that device's results go straight in.
@@ -307,9 +308,10 @@ _Where: Testing, then Upload results_
 
 Get paper or spreadsheet results into profiles, safely.
 
-- Get the sheet: pick a testing day (or a team and a preset) and download Excel or CSV. Every athlete's ID is already filled in, with a column for each test and attempt.
+- Get the sheet: pick a testing day (or a team and a preset) and download Excel or CSV. Every athlete's ID is already filled in, with a column for each test and attempt. A testing day's sheet also carries the results already entered, so it doubles as a backup. Picking a day here also points the upload at it.
 - Fill it in on paper, a laptop or a phone.
-- Upload it (or paste rows from Excel or Google Sheets), choose the testing day, and Check the sheet.
+- Upload it: drop the file on the box or choose it (Excel or CSV, up to 3.5 MB), or paste rows from Excel or Google Sheets. Choose the testing day (rows then take the day's date; otherwise set the date for rows without one). Where it's from is worked out from the file, or pick OVR, VALD, Swift, Freelap and the rest so device links match. For a device file with a single value column, pick its test under One-test device export. Then Check the sheet.
+- Recent uploads lists the last ten uploads with who saved them, the testing day and the counts. Undo takes one back out: new results are removed, values it replaced go back to what they were, and results it sent to waiting are dropped. Anything changed or linked since the upload is left alone, and the undo is recorded on the list and in the activity log.
 
 > Note: All or nothing: a sheet is saved only when every row matches a real Athlete ID and every value fits its test.
 
@@ -321,9 +323,8 @@ _Where: Upload results, after checking_
 
 If anything is wrong, nothing is saved, and you see exactly what to fix.
 
-- Read the list: spreadsheet row, column, athlete and the problem. For example, an ID that belongs to someone else, a broad jump typed in the 40 column, or a word where a number goes.
-- Fix the sheet and save it.
-- Upload the fixed sheet.
+- Read the list: spreadsheet row, column, athlete and the problem. For example, an ID that belongs to someone else, a broad jump typed in the 40 column, or a word where a number goes. On a phone each problem is its own card. Download this list saves it as a CSV to work from.
+- Fix and check again, right below the list: pasted rows can be fixed in place; for a file, fix and save it, then choose it again. The testing day and other options stay as they were (Change options goes back to them).
 
 ### Upload: review and save
 
@@ -333,9 +334,10 @@ _Where: Upload results, after checking_
 
 A clean sheet, sorted by athlete, ready to save in one go.
 
-- Check the results under each athlete.
-- Tick each unusual value that's right, such as a time far better than the athlete's best. If one is a mistake, fix the sheet instead.
-- Save. Every result lands in each profile and on the testing day at once. Uploading the same sheet again never double-counts.
+- The summary says how many results are new, how many replace an earlier value, how many are already saved, how many are PRs, and how the file was read (our sheet, or a named export).
+- Check the results under each athlete. Each shows the athlete's previous best, a PR badge, "was …" when it replaces a different value, and Already saved when nothing would change. On big sheets, show only what Needs a look (unusual or replacing) or PRs, or find an athlete.
+- Tick each unusual value that's right, such as a time far better than the athlete's best (Tick all appears when there are three or more). If one is a mistake, fix the sheet instead.
+- Save. Every result lands in each profile and on the testing day at once. Values already saved are left exactly as they were, so a stopwatch time keeps its hand-timed label. Uploading the same sheet again never double-counts. After saving, open the day, link any waiting results, or Undo this upload.
 
 ### Waiting to be linked
 
@@ -345,11 +347,11 @@ _Where: Testing, then the waiting banner_
 
 Results that arrived without an Athlete ID or a device you've linked. None of them are in a profile yet.
 
-- Each card is one sender, like "Coley P" from OVR or a jump mat's device ID, with every result it sent.
-- Tap a suggested name, or type a name or Athlete ID and pick from the list.
-- Untick any result that doesn't belong, or keep them all.
+- Each card is one sender, like "Coley P" from OVR or a jump mat's device ID, with every result it sent. With more than three senders, filter by source or find a sender, device ID or test.
+- Tap a suggested name, or type a name or Athlete ID and pick from the list (Enter picks the first match; arrow keys move through it).
+- Untick any result that doesn't belong, or keep them all (Tick all and Untick all switch them at once).
 - Leave Remember on to send that device's future results straight to this athlete.
-- Link, or Discard results you don't want.
+- Link (the button names the athlete), or Discard results you don't want after a confirmation. The card goes away when it's done and the rest of the page stays as it is. Linked results keep where they came from (upload, API or device). Archived athletes can't be linked.
 
 ### Devices & imports
 
@@ -359,10 +361,11 @@ _Where: Testing, then Devices_
 
 How results get in automatically.
 
-- Hawkin Dynamics: paste an integration token once (owner only). New force plate tests sync every 15 minutes.
-- Import a file: exports from OVR, VALD, Swift, Freelap and others go through Upload results.
-- Send results from any system: the open API example for timing systems and scripts.
-- Linked device IDs: every device ID or name you've linked to an athlete, with Unlink.
+- Waiting to be linked: a shortcut to the results still waiting, when there are any.
+- Hawkin Dynamics: paste an integration token once (owner only). New force plate tests sync every 15 minutes; owners can Sync now. When a sync fails the badge says Needs attention and the owner can paste a new token. Put each athlete's Athlete ID in Hawkin as their External ID and results go straight in.
+- Import a file: exports from OVR, VALD, Swift, Freelap and others go through Upload results, and can be undone there.
+- Send results from any system: the open API example for timing systems and scripts, with Copy.
+- Linked device IDs: every device ID or name you've linked to an athlete. Link a device adds one ahead of time (system, device ID or name, athlete) and links anything already waiting from it. Change moves a link to another athlete; Unlink asks first and offers Undo. Find a device when the list is long.
 
 ### Test library
 

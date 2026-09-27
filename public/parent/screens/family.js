@@ -58,8 +58,8 @@ function cardSection(me, acct) {
       : html`<p class="warn-text" style="margin:0">No card on file.</p>`}
     ${due.map((i) => html`<div class="fm-due"><div class="grow"><div class="strong">${money(i.amount_cents)} past due</div>
         <div class="small">${i.description || 'Membership'}${i.athlete ? ` for ${i.athlete}` : ''}. Declined ${fmtDate(i.issued_at)}.</div></div>
-        ${canRetry ? html`<button type="button" class="btn btn-warn btn-sm" data-act="retry" data-id="${i.id}">Try again</button>` : ''}</div>`)}
-    ${due.length ? html`<p class="small muted" style="margin:0">${canRetry ? `Try again charges the ${f.card_label}. ` : ''}Saving a new card tries ${due.length === 1 ? 'it' : 'them'} again right away.</p>` : ''}
+        ${canRetry && i.can_retry !== false ? html`<button type="button" class="btn btn-warn btn-sm" data-act="retry" data-id="${i.id}">Try again</button>` : ''}</div>`)}
+    ${due.length ? html`<p class="small muted" style="margin:0">${canRetry && due.some((i) => i.can_retry !== false) ? `Try again charges the ${f.card_label}. ` : ''}Saving a new card tries ${due.length === 1 ? 'it' : 'them'} again right away.</p>` : ''}
     <div class="btn-row"><a class="btn ${f.card_last4 || !f.waiver_current ? '' : 'btn-primary'}" href="/parent/card">${f.card_last4 ? 'Replace card' : 'Add a card'}</a>
       ${f.card_last4 && me.settings.payments_mode !== 'live' ? html`<button type="button" class="btn btn-ghost" data-act="remove-card">Remove card</button>` : ''}</div>
     <p class="small muted" style="margin:0">Cards are stored by Stripe. ${me.settings.business_name} never sees your full card number.</p>

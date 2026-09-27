@@ -8,7 +8,7 @@ const { h, bad, notFound, log, makeAthleteCode, randomToken, sha256, sendEmail, 
 const { requireParent } = require('../auth');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
-const { luhnValid, cardBrand, parseExpiry, familyPayments, paidThisYear, pastDue, cardRemovalBlock, phoneOk, PARENT_RETRY_MAX } = require('../services/parent-card');
+const { luhnValid, cardBrand, parseExpiry, localDay, familyPayments, paidThisYear, pastDue, cardRemovalBlock, phoneOk, PARENT_RETRY_MAX } = require('../services/parent-card');
 const cal = require('../services/parent-calendar');
 const { endAt, bookedBetween, clashIn, clashText, whenText } = require('../services/parent-book');
 const programs = require('../services/parent-programs');
@@ -467,9 +467,10 @@ function routes(api) {
     log(req, f.card_last4 ? 'Replaced card' : 'Added card', `${card.card_brand} ending ${card.card_last4}`);
     tellOtherParents(req, `Card on file changed for the ${f.name}`,
       `${req.parent.name} ${f.card_last4 ? `replaced the ${cardLabel(f)} with` : 'added'} a ${card.card_brand} ending ${card.card_last4} (expires ${card.card_exp}). It pays for memberships, packs, camps and drop-ins for everyone in the family.`);
-    // Past-due membership charges are retried on the new card.
+    // Past-due membership charges are retried on the new card, however many times the old one was tried
+    // (the Family tab and the card page both promise this).
     let retried = 0, paid = 0;
-    for (const inv of all("SELECT id FROM invoices WHERE family_id=? AND status='failed' AND kind='membership' AND attempts<4", f.id)) {
+    for (const inv of all("SELECT id FROM invoices WHERE family_id=? AND status='failed' AND kind='membership'", f.id)) {
       const r = billing.retryFailed({ invoiceId: inv.id }); retried += r.tried; paid += r.paid;
     }
     res.json({ ok: true, ...card, card_label: `${card.card_brand} ending ${card.card_last4}`, retried, paid });
@@ -508,9 +509,17 @@ function routes(api) {
     return out;
   }
 
+  // One family can't hold the same athlete name twice (case doesn't matter). The message uses the name as it's saved.
+  function sameNameCheck(familyId, first, last, exceptId = 0) {
+    const twin = get('SELECT first_name, last_name FROM athletes WHERE family_id=? AND archived=0 AND id<>? AND first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE',
+      familyId, exceptId, first, last);
+    if (twin) throw bad(`${twin.first_name} ${twin.last_name} is already on your account. Open their details below to update them.`);
+  }
+
   api.put('/parent/athletes/:id', h(async (req, res) => {
     const a = ownAthlete(req, req.params.id);
     const patch = cleanAthlete(req.body || {});
+    if ('first_name' in patch || 'last_name' in patch) sameNameCheck(a.family_id, patch.first_name ?? a.first_name, patch.last_name ?? a.last_name, a.id);
     update('athletes', a.id, patch);
     log(req, 'Updated athlete', `${athleteName({ ...a, ...patch })}: ${Object.keys(patch).join(', ')}`);
     res.json(athleteSummary(get('SELECT * FROM athletes WHERE id=?', a.id)));
@@ -519,9 +528,7 @@ function routes(api) {
   api.post('/parent/athletes', h(async (req, res) => {
     const d = cleanAthlete(req.body || {}, { requireName: true });
     const f = family(req);
-    if (get('SELECT 1 FROM athletes WHERE family_id=? AND archived=0 AND first_name=? COLLATE NOCASE AND last_name=? COLLATE NOCASE', f.id, d.first_name, d.last_name)) {
-      throw bad(`${d.first_name} ${d.last_name} is already on your account. Open their details below to update them.`);
-    }
+    sameNameCheck(f.id, d.first_name, d.last_name);
     if (get('SELECT COUNT(*) n FROM athletes WHERE family_id=? AND archived=0', f.id).n >= MAX_ATHLETES) throw bad('That is the most athletes one account can hold. Ask the front desk to add more.');
     const id = insert('athletes', { ...d, code: makeAthleteCode(d.first_name, d.last_name), family_id: f.id, workout_token: randomToken(12) });
     const a = get('SELECT * FROM athletes WHERE id=?', id);
@@ -572,7 +579,7 @@ function routes(api) {
       req.parent.id, new Date().toISOString(), sha256(req.cookies?.dp_parent || '')).n;
     res.json({
       payments: pay.items, more_payments: pay.more, paid_this_year_cents: paidThisYear(f.id),
-      past_due: due.map((i) => ({ id: i.id, description: i.description, athlete: i.athlete_first, amount_cents: i.amount_cents, issued_at: i.issued_at })),
+      past_due: due.map((i) => ({ id: i.id, description: i.description, athlete: i.athlete_first, amount_cents: i.amount_cents, issued_at: i.issued_at, can_retry: i.attempts < PARENT_RETRY_MAX })),
       card_remove_block: f.card_last4 ? cardRemovalBlock(f.id) : null,
       other_sessions: others,
     });
@@ -614,10 +621,11 @@ function routes(api) {
     const recent = (waiverCopies.get(req.parent.id) || []).filter((t) => now - t < 36e5);
     if (recent.length >= 3) throw bad('We sent a few copies already. Check your email, or try again in an hour.');
     waiverCopies.set(req.parent.id, [...recent, now]);
-    const signed = String(f.waiver_signed_at || '');
-    const when = new Date(signed.length === 10 ? `${signed}T12:00:00` : signed).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    // The day it was signed in the business time zone (waiver_signed_at is UTC ISO; older rows are plain dates).
+    const day = localDay(f.waiver_signed_at);
+    const when = day ? ` on ${new Date(`${day}T12:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}` : '';
     sendEmail(req.parent.email, `Your signed waiver: ${businessName()}`,
-      `Hi ${firstName(req.parent.name)},\n\nHere is the waiver for the ${f.name}, signed by ${f.waiver_signed_by} on ${when} (version ${f.waiver_version}).\n\n${setting('waiver_text', '')}\n\nSigned: ${f.waiver_signed_by}\n\n${businessName()}`);
+      `Hi ${firstName(req.parent.name)},\n\nHere is the waiver for the ${f.name}, signed by ${f.waiver_signed_by}${when} (version ${f.waiver_version}).\n\n${setting('waiver_text', '')}\n\nSigned: ${f.waiver_signed_by}\n\n${businessName()}`);
     log(req, 'Emailed waiver copy', `${f.name} to ${req.parent.email}`);
     res.json({ ok: true, email: req.parent.email });
   }));

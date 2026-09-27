@@ -286,3 +286,63 @@ test('sign out everywhere else keeps this session and ends the others', async ()
   assert.equal((await call('GET', '/parent/account', null, here)).data.other_sessions, 0);
   assert.ok(get("SELECT 1 FROM activity WHERE action='Signed out other devices'"));
 });
+
+// ---- review fixes ----
+test('review: a new card retries every past-due membership charge, even one tried four or more times', async () => {
+  const { fid, emails } = makeFamily({ card: false });
+  const inv = insert('invoices', { number: 'DP-RV-1', kind: 'membership', family_id: fid, description: 'Membership', amount_cents: 18900, status: 'failed', attempts: 5, view_token: 'tok-rv-1' });
+  const c = await signIn(emails[0]);
+  assert.equal((await call('GET', '/parent/me', null, c)).data.family.past_due_cents, 18900);
+  const r = await call('PUT', '/parent/card', { number: '4242424242424242', exp: '10/31', cvc: '123', zip: '84604' }, c);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.paid, 1);
+  assert.equal(get('SELECT status FROM invoices WHERE id=?', inv).status, 'paid');
+  assert.equal((await call('GET', '/parent/me', null, c)).data.family.past_due_cents, 0);
+});
+
+test('review: a past-due charge tried too often says so, so the portal hides Try again', async () => {
+  const { fid, emails } = makeFamily();
+  insert('invoices', { number: 'DP-RV-2', kind: 'membership', family_id: fid, description: 'Membership', amount_cents: 18900, status: 'failed', attempts: 8, view_token: 'tok-rv-2' });
+  insert('invoices', { number: 'DP-RV-3', kind: 'membership', family_id: fid, description: 'Membership', amount_cents: 18900, status: 'failed', attempts: 2, view_token: 'tok-rv-3' });
+  const acct = (await call('GET', '/parent/account', null, await signIn(emails[0]))).data;
+  assert.deepEqual(acct.past_due.map((p) => p.can_retry), [false, true]);
+});
+
+test('review: payment dates and the year total follow the business time zone, not UTC', async () => {
+  const { localDay, paidThisYear, familyPayments } = require('../server/services/parent-card');
+  assert.equal(localDay('2026-09-27T03:30:00.000Z'), '2026-09-26', 'an evening payment in Provo');
+  assert.equal(localDay('2026-09-27 03:30:00'), '2026-09-26', 'SQLite UTC timestamps too');
+  assert.equal(localDay('2026-09-27'), '2026-09-27', 'plain dates stay as they are');
+  assert.equal(localDay(null), null);
+  const { fid } = makeFamily();
+  insert('invoices', { number: 'DP-RV-4', kind: 'charge', family_id: fid, description: 'Pack', amount_cents: 5000, status: 'paid', paid_at: '2026-01-01T04:00:00.000Z', view_token: 'tok-rv-4' });
+  insert('invoices', { number: 'DP-RV-5', kind: 'charge', family_id: fid, description: 'Pack', amount_cents: 7000, status: 'paid', paid_at: '2026-01-01T09:00:00.000Z', view_token: 'tok-rv-5' });
+  assert.equal(paidThisYear(fid, 2026), 7000, 'New Year\'s Eve in Provo belongs to last year');
+  assert.equal(paidThisYear(fid, 2025), 5000);
+  const rows = familyPayments(fid).items;
+  assert.equal(rows.find((p) => p.number === 'DP-RV-4').date, '2025-12-31');
+});
+
+test('review: the waiver copy dates the signature in the business time zone', async () => {
+  const { fid, emails } = makeFamily({ waiver: true });
+  run("UPDATE families SET waiver_signed_at='2026-06-02T03:15:00.000Z' WHERE id=?", fid);
+  const c = await signIn(emails[0]);
+  const mark = lastOutbox();
+  assert.equal((await call('POST', '/parent/waiver/copy', {}, c)).status, 200);
+  assert.match(outboxSince(mark)[0].body, /signed by Pat Test on June 1, 2026/);
+});
+
+test('review: renaming an athlete to a brother or sister\'s name is refused, in their saved spelling', async () => {
+  const { fid, emails } = makeFamily();
+  const c = await signIn(emails[0]);
+  const kid = get('SELECT * FROM athletes WHERE family_id=?', fid);
+  const sib = await call('POST', '/parent/athletes', { first_name: 'Jo', last_name: 'Smith' }, c);
+  assert.equal(sib.status, 200);
+  const dup = await call('POST', '/parent/athletes', { first_name: 'jo', last_name: 'SMITH' }, c);
+  assert.equal(dup.status, 400);
+  assert.match(dup.data.error, /^Jo Smith is already/);
+  const ren = await call('PUT', `/parent/athletes/${kid.id}`, { first_name: 'JO', last_name: 'smith' }, c);
+  assert.equal(ren.status, 400);
+  assert.match(ren.data.error, /^Jo Smith is already/);
+  assert.equal((await call('PUT', `/parent/athletes/${sib.data.id}`, { first_name: 'Jo', last_name: 'Smith', school: 'Provo High' }, c)).status, 200, 'saving yourself is fine');
+});

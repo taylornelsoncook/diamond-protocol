@@ -34,7 +34,20 @@ function parseExpiry(v, now = new Date()) {
 }
 
 // ---- family account: payments, past-due charges, what blocks removing the card ----
-const { all, get } = require('../db');
+const { all, get, setting } = require('../db');
+
+// The business-zone calendar day of a stored timestamp. paid_at is UTC ISO, so an evening payment
+// in Provo is already "tomorrow" in UTC; plain dates (issued_at) are kept as they are.
+function localDay(v) {
+  const s = String(v || '');
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+  if (isNaN(d)) return s.slice(0, 10) || null;
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: setting('timezone', 'America/Denver'), year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
 
 // A parent can try a declined membership charge again from the portal, up to this many attempts in all.
 const PARENT_RETRY_MAX = 8;
@@ -52,21 +65,22 @@ function familyPayments(familyId, limit = 100) {
     more,
     items: rows.slice(0, limit).map((r) => ({
       id: r.id, number: r.number, description: r.description, athlete: r.athlete_first || null, amount_cents: r.amount_cents,
-      status: r.status, refund: r.amount_cents < 0, date: (r.paid_at || r.issued_at || '').slice(0, 10) || null,
+      status: r.status, refund: r.amount_cents < 0, date: localDay(r.paid_at || r.issued_at),
       receipt: r.status === 'paid' ? r.view_token : null,
       can_retry: r.status === 'failed' && r.kind === 'membership' && r.attempts < PARENT_RETRY_MAX,
     })),
   };
 }
 
-// Money paid (net of refunds) since Jan 1 of this year.
-function paidThisYear(familyId, year = new Date().getFullYear()) {
-  return get(`SELECT COALESCE(SUM(amount_cents),0) n FROM invoices WHERE family_id=? AND status='paid' AND kind IN ('membership','charge')
-    AND COALESCE(paid_at, issued_at) >= ?`, familyId, `${year}-01-01`).n;
+// Money paid (net of refunds) since Jan 1 of this year, by the business-zone calendar.
+function paidThisYear(familyId, year = Number(localDay(new Date().toISOString()).slice(0, 4))) {
+  const rows = all(`SELECT amount_cents, COALESCE(paid_at, issued_at) AS at FROM invoices WHERE family_id=? AND status='paid' AND kind IN ('membership','charge')
+    AND COALESCE(paid_at, issued_at) >= ?`, familyId, `${year - 1}-12-31`);
+  return rows.filter((r) => String(localDay(r.at)).startsWith(`${year}-`)).reduce((n, r) => n + r.amount_cents, 0);
 }
 
 function pastDue(familyId) {
-  return all(`SELECT i.id, i.description, i.amount_cents, i.issued_at, a.first_name AS athlete_first FROM invoices i LEFT JOIN athletes a ON a.id=i.athlete_id
+  return all(`SELECT i.id, i.description, i.amount_cents, i.issued_at, i.attempts, a.first_name AS athlete_first FROM invoices i LEFT JOIN athletes a ON a.id=i.athlete_id
     WHERE i.family_id=? AND i.status='failed' AND i.kind='membership' ORDER BY i.id`, familyId);
 }
 
@@ -86,4 +100,4 @@ function phoneOk(v) {
   return d.length >= 7 && d.length <= 15 && /^[\d\s()+.\-x]+$/i.test(String(v));
 }
 
-module.exports = { luhnValid, cardBrand, parseExpiry, familyPayments, paidThisYear, pastDue, cardRemovalBlock, phoneOk, PARENT_RETRY_MAX };
+module.exports = { luhnValid, cardBrand, parseExpiry, localDay, familyPayments, paidThisYear, pastDue, cardRemovalBlock, phoneOk, PARENT_RETRY_MAX };

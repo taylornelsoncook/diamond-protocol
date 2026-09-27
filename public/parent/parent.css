@@ -250,7 +250,7 @@ details.panel:not([open]){gap:0}
 .fm-ath-name{font-weight:600;font-size:16px;line-height:22px}
 .fm-ath-meta{font-weight:400;font-size:13px;line-height:18px;color:var(--steel-muted);overflow-wrap:anywhere}
 .fm-ath-flag{flex-shrink:0}
-.fm-ath > summary{min-height:44px}
+details.fm-ath > summary,#add-athlete > summary{min-height:44px}
 .fm-ath-top{display:flex;flex-direction:column;gap:6px;padding:10px 0 4px;border-top:1px solid var(--line-subtle)}
 .fm-id{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .fm-id .mono{color:var(--steel)}

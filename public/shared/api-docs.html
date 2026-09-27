@@ -47,14 +47,14 @@ pre code{background:none;padding:0}
     <span class="grp">Basics</span>
     <a href="#auth">Authentication</a><a href="#access">Access levels</a><a href="#errors">Errors</a>
     <span class="grp">Endpoints</span>
-    <a href="#athletes">List athletes</a><a href="#athlete">Get an athlete</a><a href="#athlete-results">Athlete results</a><a href="#tests">List tests</a><a href="#programs">List programs</a><a href="#events">List sessions</a><a href="#results">Send results</a>
+    <a href="#athletes">List athletes</a><a href="#athlete">Get an athlete</a><a href="#athlete-results">Athlete results</a><a href="#tests">List tests</a><a href="#programs">List programs</a><a href="#events">List sessions</a><a href="#results">Send results</a><a href="#leads">List leads</a><a href="#lead">Get a lead</a><a href="#lead-create">Create a lead</a>
     <span class="grp">Webhooks</span>
     <a href="#webhooks">Payload</a><a href="#events-list">Events</a><a href="#retries">Retries</a><a href="#verify">Verify signatures</a>
   </nav>
 
   <main class="ad-main">
     <div class="page-header"><div><h1 class="page-title">API reference</h1>
-      <p class="page-sub">Read athletes, results, programs and sessions, and send test results from devices and other systems. Base URL: <code class="base">https://your-site</code>/api/v1</p></div></div>
+      <p class="page-sub">Read athletes, results, programs, sessions and CRM leads, send test results from devices and other systems, and add leads from your own forms. Base URL: <code class="base">https://your-site</code>/api/v1</p></div></div>
 
     <section class="ep" id="auth">
       <h2>Authentication</h2>
@@ -220,6 +220,55 @@ pre code{background:none;padding:0}
   "errors": [ { "index": 1, "error": "\"Vert jump\" doesn't match a test in the library." } ] }</pre>
     </section>
 
+    <section class="ep" id="leads">
+      <div class="ep-head"><span class="verb">GET</span><span class="path">/api/v1/leads</span></div>
+      <p>CRM leads, newest first: people who asked about training but aren't clients yet (and those who became members or were lost).</p>
+      <div class="params-wrap"><table class="params"><thead><tr><th>Query</th><th>Description</th></tr></thead><tbody>
+        <tr><td>stage</td><td>Optional. One of <code>new</code>, <code>contacted</code>, <code>evaluation</code>, <code>trial</code>, <code>member</code>, <code>lost</code>.</td></tr>
+        <tr><td>since</td><td>Optional. Leads that first got in touch on or after a date, like <code>2026-09-01</code>.</td></tr>
+        <tr><td>limit</td><td>Optional. 1–500, default 100.</td></tr>
+        <tr><td>offset</td><td>Optional. For paging, default 0.</td></tr>
+      </tbody></table></div>
+      <pre class="code">curl <span class="base">https://your-site</span>/api/v1/leads?stage=new&amp;limit=1 \
+  -H "Authorization: Bearer dp_live_…"
+
+{
+  "data": [
+    { "id": 57, "parent_name": "Sarah Miller", "email": "sarah.miller@example.com", "phone": "+18015550188",
+      "athletes": [ { "name": "Jake", "age": 13, "grad_year": 2031 } ], "sport": "Baseball", "position": "Pitcher",
+      "source": "website", "source_detail": null, "interest": "evaluation", "stage": "new", "lost_reason": null,
+      "first_contact": "2026-09-27", "stage_changed_at": "2026-09-27 17:02:11", "family_id": null, "created_at": "2026-09-27 17:02:11" }
+  ],
+  "total": 3, "limit": 1, "offset": 0
+}</pre>
+    </section>
+
+    <section class="ep" id="lead">
+      <div class="ep-head"><span class="verb">GET</span><span class="path">/api/v1/leads/:id</span></div>
+      <p>One lead by ID, in the same shape. <code>family_id</code> is set once the lead became a client (or a former client was put back in the pipeline).</p>
+    </section>
+
+    <section class="ep" id="lead-create">
+      <div class="ep-head"><span class="verb post">POST</span><span class="path">/api/v1/leads</span></div>
+      <p>Needs a key that can read and send. Adds a New lead, for example from your own website form. If the email or phone is already on a lead or a client family you get <code>409</code> with <code>duplicates</code>; send <code>"allow_duplicate": true</code> to add it anyway. Fires <code>lead.created</code>.</p>
+      <div class="params-wrap"><table class="params"><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody>
+        <tr><td>parent_name</td><td>Required. The parent's name, or the athlete's for an adult.</td></tr>
+        <tr><td>email, phone</td><td>At least one. Phones in any format are saved as E.164, like <code>+18015550188</code>.</td></tr>
+        <tr><td>athletes</td><td>Optional. <code>[{ "name": "Jake", "age": 13, "grad_year": 2031 }]</code>, up to 6.</td></tr>
+        <tr><td>sport, position</td><td>Optional.</td></tr>
+        <tr><td>source</td><td>Optional, default <code>other</code>: <code>website</code>, <code>phone</code>, <code>walk_in</code>, <code>referral</code> (then <code>source_detail</code> says who), <code>camp</code>, <code>team</code>, <code>social</code>, <code>other</code>.</td></tr>
+        <tr><td>interest</td><td>Optional: <code>evaluation</code>, <code>group</code>, <code>privates</code>, <code>team</code>, <code>camp</code>.</td></tr>
+        <tr><td>notes</td><td>Optional. Up to 2,000 characters.</td></tr>
+      </tbody></table></div>
+      <pre class="code">curl -X POST <span class="base">https://your-site</span>/api/v1/leads \
+  -H "Authorization: Bearer dp_live_…" -H "Content-Type: application/json" \
+  -d '{"parent_name":"Sarah Miller","email":"sarah.miller@example.com","phone":"801-555-0188","source":"website","interest":"evaluation","athletes":[{"name":"Jake","age":13}]}'
+
+HTTP/1.1 201 Created
+{ "data": { "id": 58, "parent_name": "Sarah Miller", "stage": "new", "source": "website", … } }</pre>
+      <p>No API key? The public form endpoint <code>POST /api/public/enquiry</code> takes <code>parent_name</code>, <code>email</code>, <code>phone</code>, <code>athlete_name</code>, <code>athlete_age</code>, <code>grad_year</code>, <code>sport</code>, <code>interest</code>, <code>message</code> and <code>sms_opt_in</code>, and emails the owners. It's rate limited, and a filled-in <code>website</code> field is treated as spam.</p>
+    </section>
+
     <h2 id="webhooks">Webhooks</h2>
     <section class="ep">
       <p>Add a webhook in <a href="/app/integrations">API &amp; integrations</a> with the events you want. When one happens we <code>POST</code> JSON to your URL straight away. Answer with any 2xx status within 8 seconds. Every delivery is listed under the webhook with what we sent and what your server answered.</p>
@@ -260,6 +309,8 @@ x-dp-delivery: 4821
         <tr><td>result.created</td><td>A test result is saved to a profile.</td></tr>
         <tr><td>pr.set</td><td>A result is a personal record.</td></tr>
         <tr><td>workout.completed</td><td>An athlete finishes a workout in the workout app.</td></tr>
+        <tr><td>lead.created</td><td>A new lead is added: the website form, staff, an import or the API. <code>data</code>: <code>id</code>, <code>parent_name</code>, <code>email</code>, <code>phone</code>, <code>athletes</code>, <code>sport</code>, <code>source</code>, <code>source_detail</code>, <code>interest</code>, <code>stage</code>, <code>first_contact</code>, <code>family_id</code>.</td></tr>
+        <tr><td>lead.stage_changed</td><td>A lead moves stage, by staff or automatically (an evaluation booked, a trial, a membership). <code>data</code>: <code>id</code>, <code>parent_name</code>, <code>from</code>, <code>to</code>, <code>lost_reason</code>, <code>auto</code>, <code>family_id</code>.</td></tr>
         <tr><td>program.assigned</td><td>A program is assigned to an athlete. <code>data</code>: <code>athlete_code</code>, <code>athlete</code>, <code>program_id</code>, <code>program</code>, <code>started</code>, <code>workout_url</code>.</td></tr>
       </tbody></table></div>
     </section>

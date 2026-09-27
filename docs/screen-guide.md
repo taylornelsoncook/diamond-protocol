@@ -7,21 +7,21 @@
 
 A tour of the Diamond Protocol platform: the coach dashboard, the parent portal, the pages schools and athletes see, and the iPhone app. Each screen shows who can use it and the steps for its main job. The workflows below connect them end to end.
 
-- 27 coach dashboard screens
+- 34 coach dashboard screens
  
 - 8 parent portal screens
  
-- 3 shared pages
+- 5 shared pages
  
 - 5 iPhone app tabs
 
  ContentsWorkflows
 Coach dashboard
-Sign inTodayScheduleSession rosterHours & settingsPoint of salePoint of sale setupClientsNew clientClient profileTeamsTeam contractNew team contractTestingNew testing dayTesting dayUpload resultsUpload: a sheet with mistakesUpload: review and saveWaiting to be linkedDevices & importsTest libraryBillingProgramsProgram builderAPI & integrationsStaff & security
+Sign inTodayScheduleSession rosterHours & settingsPoint of salePoint of sale setupClientsNew clientClient profileCRM pipelineLeadCRM tasksGroup messagesCRM reportsCRM import & exportCRM settingsTeamsTeam contractNew team contractTestingNew testing dayTesting dayUpload resultsUpload: a sheet with mistakesUpload: review and saveWaiting to be linkedDevices & importsTest libraryBillingProgramsProgram builderAPI & integrationsStaff & security
 Parent portal
 Sign inSign-in codeHomeBook: classesBook: privates and evaluationsProgressProgramsFamily
 Shared pages
-Printable progress reportSchool invoiceAthlete workout app
+Printable progress reportSchool invoiceAthlete workout appWebsite enquiry formUnsubscribe
 iPhone app
 DP Coach
 
@@ -36,6 +36,16 @@ The jobs you'll do most, step by step. Each step links to its screen.
 - FamilyThey sign the waiver and add a card on the Family tab.
 - Book: classesThey book a class, or buy a pack first on the Programs tab.
 - Session rosterOn the day, you check them in on the roster.
+
+### Enquiry to member
+
+- Website enquiry formA parent fills in the enquiry form on your website. It arrives as a New lead and the owners get an email.
+- CRM pipelineYou see it in New on the CRM board (or add a lead yourself for a phone call or walk-in; the form warns when the email or phone is already on file).
+- LeadCall them and Log call (Reached moves them to Contacted), or send the After an enquiry email or a text. Add a task to call back.
+- LeadBook evaluation picks an open evaluation time. The lead moves to Evaluation booked; nothing is charged yet.
+- LeadConvert to client creates the family, the parent's portal login and the athletes from the lead, with notes carried over and the athlete booked into the evaluation. Start a free trial there and the lead moves to Trial.
+- Client profileWhen the trial becomes a paid membership the lead moves to Member by itself. If the trial ends without joining, Put back in pipeline from the profile or the CRM.
+- CRM reportsReports show how many leads became members, by source, and how long it took.
 
 ### Testing day to parent report
 
@@ -256,6 +266,93 @@ Everything about one athlete in one place, tied together by their Athlete ID.
 - Test results with PRs and a printable progress report, and their training program with the workout app link.
 - Profile: birthday, sex (for growth estimates), sport, position, school, grad year, athlete phone and email, medical notes, emergency contact and coach-only notes. Unsaved changes are flagged and survive other actions on the page.
 - Archive (owner, coach) takes a client off the list, search and rosters and cancels their upcoming bookings with credits back; an archived profile has a Restore client button at the top.
+- Contact history (owners and front desk): the family's recent CRM timeline (emails, texts, calls, evaluation bookings, trial and membership events; payments for owners), links to their leads, and Email, Text and Add task. A family whose trial ended without joining gets Put back in pipeline.
+
+### CRM pipeline
+
+_Where: CRM_
+
+[Owner] [Front desk] 
+
+Everyone who has asked about training but isn't a client yet, and where each of them is on the way to membership.
+
+- Stages: New, Contacted, Evaluation booked, Trial, Member and Lost. Lost needs a reason (price, schedule, distance, went elsewhere, no response, or other with a note).
+- Board: a column per stage with counts. Each card shows the athletes, source and interest, days in the stage, the owner and any task due. Move opens a list of stages (arrow keys and Enter work; on a phone it's a full-width list); choosing Lost asks why. Member and Lost show the last 30 days, with a link to the rest.
+- List: search by name, email, phone digits or athlete; filter by stage, source, owner and interest; sort by newest, oldest, longest without contact, longest in stage, next task due or name.
+- Leads with no contact for 7 days are stale: an amber edge and "No contact in 12 days". Tick "No contact in 7+ days" to see only those.
+- Leads move by themselves from what really happens: logging a call that reached them (or an email or text) moves New to Contacted; an evaluation booked moves them to Evaluation booked; a free trial to Trial; a paid membership to Member. Automatic moves only go forward, say "Automatic" on the timeline, and a Lost lead comes back only when they start a trial or join.
+- My tasks shows your open tasks, overdue first, with a tick to mark one done.
+- Trials that ended without joining lists families whose free trial ended with no membership; Put back in pipeline adds them as a Contacted lead linked to the family.
+- Add lead: parent name, email, phone (any format; saved as an international number), athletes with age or grad year (add as many as the family has), sport and position, where they came from (website form, phone call, walk-in, referral with who referred them, camp, team or school, social media, other), what they're interested in, the owner, the date they first got in touch, notes, and whether they said it's OK to text. If the email or phone matches another lead or a client family, the form links to the existing record first; Add lead anyway still works.
+
+> Note: Coaches have no CRM. The front desk works leads, books evaluations and sees their own tasks; reports, group messages, import and export, settings, deleting leads and prices are owner-only, and the server refuses them.
+
+### Lead
+
+_Where: CRM, then a lead_
+
+[Owner] [Front desk] 
+
+One lead: who they are, what's been said, what's next.
+
+- The header shows the stage, days in stage and last contact. Stale leads get an amber banner.
+- Actions: Call, Log call (Reached, Left a voicemail or No answer, with notes), Add note, Email (start from a template; an unsubscribe link is added), Text (start from a template; the character and text count update as you type), Book evaluation (open evaluation times for the next 3 weeks; the time is held for the lead and nothing is charged), Move stage and Add task.
+- Convert to client (the one green button) opens a review of the parent and athletes from the lead: add birthdays if you have them, choose a plan and (owners) a starting program, and Create client account. It uses the same rules as New client, so duplicates and existing logins are caught. Notes carry over to the client profile and a held evaluation gets the athlete booked in. The front desk can start a free trial but not a paid plan.
+- Details (Edit changes any field), Contact preferences (email subscribed or unsubscribed; texts OK with how and when they agreed, or STOP), Evaluations (with Cancel), Tasks and the Timeline: calls, notes, emails, texts sent and received, stage changes, bookings, trial and membership events, and payments (owners only), newest first.
+- Owners can delete a lead (not while an evaluation is held); moving them to Lost keeps the history.
+
+### CRM tasks
+
+_Where: CRM, then Tasks_
+
+[Owner] [Front desk] 
+
+Follow-ups with a due date, linked to a lead or a family.
+
+- Overdue (amber), Today and Coming up, with a tick to mark done and Undo. Owners can switch between Mine and Everyone's; the front desk only ever sees their own.
+- Add task: what needs doing, the due date and who it's for (owners and front desk).
+- Overdue and today's tasks also show in Needs your attention on the assignee's Today, with Mark done.
+
+### Group messages
+
+_Where: CRM, then Group messages_
+
+[Owner] 
+
+Email or text a group, and see exactly who gets it before you send.
+
+- Who it's for: leads by stage (lost for a reason, like schedule), interest and source, or families whose trial ended without joining.
+- Send as Email or Text, then Show who gets it: the count, the list, and who's left out and why (no email, unsubscribed, no mobile number, no OK to text, replied STOP).
+- The message: start from a template; {first_name}, {athlete}, {business} and {staff} fill in for each person. Texts show the character and text count.
+- Send asks once more with the first person's opening line. If the group changed since the preview, nothing is sent and you're asked to check again. Every message lands on each person's timeline.
+
+### CRM reports
+
+_Where: CRM, then Reports_
+
+[Owner] 
+
+For leads that first got in touch in a period (the last 30 days, 90 days, 12 months or any dates): new leads, how many became members, the conversion rate, and days from first contact to member (average and median); leads and conversion by source, where they are now by stage, and why leads were lost.
+
+### CRM import & export
+
+_Where: CRM, then Import & export_
+
+[Owner] 
+
+- Import: choose a CSV or paste rows. Parent name and an email or phone are needed; athlete, age, grad year, sport, position, source, referred by, interest, stage, owner, notes and created date are optional. Check rows shows every row as New, Already on file (another lead or a client, or earlier in the file) or Problem with the reason. Save the new ones and skip the problems, and optionally add the ones already on file too. Download a sample shows the columns.
+- Export: a CSV of every lead, or one stage, with contacts, source, stage, owner, days in stage, last contact and contact preferences.
+
+### CRM settings
+
+_Where: CRM, then Settings_
+
+[Owner] 
+
+- Website enquiry form: open it, copy its link, and copy the embed code for your own website. The JSON endpoint and POST /api/v1/leads are there for your own forms.
+- Enquiry emails: who gets an email for each enquiry (blank means the owners).
+- Templates: After an enquiry, After an evaluation, Trial ending and Win-back. Edit the name, subject and message, or reset them.
+- Texting: whether a texting service is connected (until then texts are saved to the outbox), and the address for incoming texts.
 
 ### Teams
 
@@ -510,12 +607,13 @@ _Where: API & integrations_
 Connect Diamond Protocol to other software, and see at a glance whether those connections are working.
 
 - A status strip at the top shows API keys (active, errors in 30 days), webhooks (active, paused, failing), email (sending or not connected, failed this week) and exercise video coverage. Amber means something needs a look; each tile opens its tab.
-- Tabs: API keys, Webhooks, Email outbox, Exercise video. The tab is kept in the address (`?tab=webhooks`) and arrow keys move between tabs.
+- Tabs: API keys, Webhooks, Email outbox, Text outbox, Exercise video. The tab is kept in the address (`?tab=webhooks`) and arrow keys move between tabs.
 - **API keys.** Create a key with a label and an access level: Read only (athletes, results, tests, programs, sessions) or Read and send results. The key is shown once. Each key shows when it was last used and its requests and errors in the last 30 days; Requests opens the log (method, path, answer, error, time) kept for 30 days. Edit renames a key or changes its access level without changing the key. Revoke asks first; revoked keys fold away under Revoked keys. A read-only key that tries to send data gets a 403 with a plain reason.
 - **Quick start** shows copyable curl examples (list athletes, an athlete's results, send a result) using this site's address, and links to the API reference.
 - **Webhooks.** Add a webhook with an optional name, a URL and the events to send; every event is listed with what it means, with Select all and Clear. The signing secret is shown once, then you're offered a test.ping. Each webhook shows its events, last 7 days sent and failed, the secret hint and its recent deliveries; a webhook whose last 3 deliveries failed is marked Failing with an amber banner. Send test event sends test.ping or a realistic sample of any subscribed event (marked `"test": true`). A delivery opens to show the answer code, time taken, the plain reason for a failure (like "Connection refused"), their response body, what was sent, tries so far and when it will be tried next, with Resend. All deliveries lists every delivery with Failed and Delivered filters and an event filter. Resend failed sends every failed delivery from the last 7 days again. Edit changes name, URL and events; Pause stops sending; New signing secret replaces the secret (shown once); Delete asks first. The same URL can't be added twice (a trailing slash or different capitals in the address don't make it a different URL).
 - Failed deliveries are retried automatically after 5 minutes, 30 minutes and 2 hours (four tries within a day), but not while the webhook is paused. A delivery left showing sending after a restart is treated as failed: it can be resent and is retried. Every request carries `x-dp-signature`, `x-dp-event` and `x-dp-delivery` (the same on retries, so receivers can skip repeats).
 - **Email outbox.** Every email the platform has sent or logged, newest first, with a banner saying whether email is really sent (and through what). Filter by All, Failed, Held, Not sent and Sent with counts; search matches address, subject and text. Each email opens to show its text, any error and how many times it was tried, with Copy text (to send it yourself while no email service is connected), Send again and Send to another address (both send a new copy and keep the original; only when an email service is connected). Send test email checks the connection.
+- **Text outbox.** Every text from the CRM, the automatic STOP and HELP replies, and texts people send back, with filters (Failed, Held, Not sent, Sent, Received) and search. A banner says whether a texting service is connected. In test mode, Simulate a reply pretends a number texted in, to try STOP, START and HELP.
 - **Exercise video.** How many exercises have a demo video that plays in the workout app, how many exercises in programs have none, and where videos are hosted. Exercises that need a video are listed most-used first (only those in a program by default), with links that can't play marked Can't play; paste a YouTube, Vimeo or video-file link and Save right there. Links go to the exercise library.
 - The API reference (/docs/api) documents every endpoint (athletes, an athlete's results, the test library, programs, sessions, send results), access levels, errors, webhook headers, events, retries and signature checks, with a Copy button on every example.
 
@@ -676,6 +774,22 @@ What the school's athletic director or treasurer sees.
 - Invoice number, dates, PO, team, who it's billed to, what it covers and the amount due.
 - How to pay: online by card or bank transfer, or by check with your instructions and the invoice number to write on the memo. Past-due invoices say how many days late they are.
 - Print or save as PDF. Paid invoices show a Paid stamp. Questions go back by replying to the invoice email.
+
+### Website enquiry form
+
+_Where: /enquire, or embedded on your website_
+
+What a parent fills in to ask about training.
+
+- Name, email, mobile phone (optional), the athlete's name, age and grad year, sport and position, what they're interested in and a message.
+- An optional "OK to text me" box with the wording carriers expect (frequency, rates, STOP and HELP, not required to train). Ticking it records their consent on the lead.
+- Send enquiry creates a New lead with source Website form (or adds to their open lead if they write in again) and emails the owners. A hidden field and a limit of 5 enquiries per 10 minutes from one address keep bots out.
+
+### Unsubscribe
+
+_Where: the link at the end of every CRM email_
+
+Shows the (partly hidden) address and one button, Unsubscribe. Group emails leave that person out from then on, and one-to-one CRM emails are refused. Account emails like receipts still arrive.
 
 ### Athlete workout app
 

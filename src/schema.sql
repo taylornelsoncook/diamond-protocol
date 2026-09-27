@@ -230,7 +230,7 @@ CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
   location_id TEXT NOT NULL REFERENCES locations(id),
-  method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash')),
+  method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash','online')),   -- online: paid through a pay link (version 15)
   status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed','canceled','refunded','partially_refunded')),
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   refunded_cents INTEGER NOT NULL DEFAULT 0,
@@ -416,6 +416,33 @@ CREATE TABLE IF NOT EXISTS leads (
 );
 CREATE INDEX IF NOT EXISTS leads_status ON leads(status, next_follow_up_at);
 CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
+
+-- Pay links: a page a parent opens from an email or text to pay one thing without signing in: a membership payment
+-- that didn't go through, an unpaid session, a pack, or a set amount. The link is the token; it expires after 30 days.
+CREATE TABLE IF NOT EXISTS pay_links (
+  id TEXT PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('invoice','booking','product','custom')),
+  invoice_id TEXT REFERENCES invoices(id) ON DELETE SET NULL,
+  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+  description TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','paid','settled','canceled')),   -- settled: paid some other way first
+  checkout_ref TEXT,
+  checkout_started_at TEXT,
+  payment_ref TEXT,
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  sent_to TEXT,
+  sent_at TEXT,
+  paid_at TEXT,
+  expires_at TEXT NOT NULL,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pay_links_invoice ON pay_links(invoice_id);
+CREATE INDEX IF NOT EXISTS pay_links_client ON pay_links(client_id, status);
 
 -- ---- Team contracts: schools and clubs pay a monthly fee; athletes are on a roster ----
 CREATE TABLE IF NOT EXISTS organizations (

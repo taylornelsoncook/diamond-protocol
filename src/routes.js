@@ -21,6 +21,7 @@ import { listOutbox, sendEmail, mailMode } from './services/mail.js';
 import * as sms from './services/sms.js';
 import * as insights from './services/insights.js';
 import * as leads from './services/leads.js';
+import * as paylinks from './services/paylinks.js';
 import { portalRoutes } from './portal-routes.js';
 import { HttpError, v, badRequest } from './util.js';
 
@@ -69,6 +70,16 @@ export const routes = [
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
   ['GET', '/v1/invoices', 'any', 'Billing', 'List invoices. Filter with ?status= (open, paid, failed, void).', (ctx, r) => list(billing.listInvoices(ctx, { status: r.query.status }))],
   ['POST', '/v1/invoices/:id/retry', 'any', 'Billing', 'Charge a failed invoice again now.', (ctx, r) => billing.retryInvoice(ctx, r.params.id)],
+  ['GET', '/v1/pay-links', 'any', 'Billing', 'Pay links, newest first. Filter with ?status= (open, paid, settled, canceled) or ?client_id=.', (ctx, r) => paylinks.listPayLinks(ctx, { status: r.query.status, clientId: r.query.client_id })],
+  ['POST', '/v1/pay-links', 'any', 'Billing', 'Make a pay link: kind (invoice with invoice_id, booking with booking_id, product with client_id and product_id, custom with client_id, description and amount_cents); send=true emails parents and texts those who turned texts on.', (ctx, r) => paylinks.createPayLink(ctx, r.body, r.user?.name ?? 'API'), 201],
+  ['GET', '/v1/pay-links/:id', 'any', 'Billing', 'A pay link and its public URL.', (ctx, r) => paylinks.getPayLink(ctx, r.params.id)],
+  ['POST', '/v1/pay-links/:id/send', 'any', 'Billing', 'Email and text the link to the family again.', (ctx, r) => paylinks.sendPayLink(ctx, r.params.id)],
+  ['POST', '/v1/pay-links/:id/cancel', 'any', 'Billing', 'Stop a link from being paid.', (ctx, r) => paylinks.cancelPayLink(ctx, r.params.id)],
+  ['GET', '/v1/clients/:id/owed', 'any', 'Billing', 'What a client owes now (failed membership payments, unpaid sessions) and their open pay links.', (ctx, r) => { clients.getClient(ctx, r.params.id); return paylinks.owedBy(ctx, r.params.id); }],
+  ['GET', '/pay-api/:token', 'public', 'Billing', 'The parent\'s pay page (the link in the email or text).', (ctx, r) => paylinks.publicPayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/checkout', 'public', 'Billing', 'Start paying by card on Stripe\'s secure page.', (ctx, r) => paylinks.checkoutPayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/confirm', 'public', 'Billing', 'Back from Stripe: record the payment if it went through.', (ctx, r) => paylinks.confirmPayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/simulate', 'public', 'Billing', 'Test mode only: mark the link paid.', (ctx, r) => paylinks.simulatePayLink(ctx, r.params.token)],
   ['POST', '/v1/billing/run', 'any', 'Billing', 'Run renewals and scheduled retries now. In test mode, pass as_of to run for a future date.', (ctx, r) => {
     let asOf = ctx.now();
     if (r.body.as_of !== undefined) {

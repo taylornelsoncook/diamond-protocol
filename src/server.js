@@ -73,6 +73,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
       if (route.path === '/portal/api/public/inquiry') rateLimit(`inquiry:${ip}`, 10, 60 * 60000);
+      if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
       catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
@@ -231,7 +232,7 @@ async function readJson(req, limit = 1_000_000) {
 }
 
 async function serveStatic(res, pathname) {
-  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : pathname.slice(1));
+  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });
   try {

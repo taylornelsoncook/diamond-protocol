@@ -2,7 +2,9 @@ import { newId, v, notFound, badRequest, conflict, HttpError } from '../util.js'
 import { emit } from './events.js';
 import { payerFor } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
+import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
+import { retryWithNewCard } from './billing.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
 const hasAddress = (l) => !!(l.address_line1 && l.city && l.state && l.postal_code);
@@ -154,8 +156,11 @@ export async function addTestCard(ctx, clientId) {
   const payer = payerFor(ctx, clientId);
   await ensureCustomer(ctx, payer);
   saveCard(ctx, payer, ctx.payments.testCard());
+  await retryFailed(ctx, payer);
   return cardSummary(ctx, clientId);
 }
+// A new card pays any membership payment that failed on the old one.
+const retryFailed = (ctx, payer) => retryWithNewCard(ctx, payer.table === 'families' ? { familyId: payer.id } : { clientId: payer.id }).catch((e) => console.error('retry', e.message));
 export function removeCard(ctx, clientId) {
   saveCard(ctx, payerFor(ctx, clientId), {});
   return cardSummary(ctx, clientId);
@@ -358,6 +363,29 @@ function completeSale(ctx, id, { card, savedCard }) {
     });
   });
   if (completed) saleReceipt(ctx, id).catch((e) => console.error('receipt', e.message));
+  if (completed && savedCard) { const s = ctx.db.get('SELECT client_id, save_card FROM sales WHERE id = ?', id); if (s.client_id && s.save_card) retryFailed(ctx, payerFor(ctx, s.client_id)); }
+}
+
+// Online sales need a sales location; one named "Online" is created the first time.
+export function onlineLocation(ctx) {
+  const l = ctx.db.get(`SELECT id FROM locations WHERE name = 'Online' AND kind = 'other'`);
+  if (l) return l.id;
+  const id = newId('loc');
+  ctx.db.run(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES (?, 'Online', 'other', 'US', 0, ?)`, id, ctx.now());
+  return id;
+}
+// A payment that already happened online (a pay link): record it as a sale so it shows in sales, reports and receipts,
+// adds any sessions from a pack, and settles an unpaid booking (note 'booking:<id>').
+export function recordOnlineSale(ctx, { clientId, productId, description, amountCents, note, paymentRef, actor }) {
+  const id = newId('sale');
+  const p = productId ? ctx.db.get('SELECT * FROM products WHERE id = ?', productId) : null;
+  ctx.db.tx(() => {
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_by, created_at) VALUES (?, ?, ?, 'online', 'pending', ?, ?, ?, ?, ?)`,
+      id, clientId ?? null, onlineLocation(ctx), amountCents, paymentRef ?? null, note ?? null, actor ?? 'Pay link', ctx.now());
+    ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, 1, ?)', newId('si'), id, p?.id ?? null, description.slice(0, 80), amountCents, p?.sessions ?? 0);
+  });
+  completeSale(ctx, id, {});
+  return id;
 }
 
 // Ask the payment provider where an in-person payment stands and record the result.
@@ -439,11 +467,11 @@ export async function handleStripeEvent(ctx, event) {
     const s = ctx.db.get('SELECT id FROM sales WHERE payment_ref = ?', obj.id);
     if (s) await syncSale(ctx, s.id);
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
-    await handleInvoiceCheckout(ctx, event.type, obj);
+    if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
     const info = await ctx.payments.getSetupSession(obj.id);
     const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
-    if (payer && info.paymentMethod) saveCard(ctx, payer, info);
+    if (payer && info.paymentMethod) { saveCard(ctx, payer, info); await retryFailed(ctx, payer); }
   }
   return { received: true };
 }

@@ -1,6 +1,7 @@
 import { getSetting, payerFor } from './families.js';
 import { sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
+import { invoicePayLink } from './paylinks.js';
 
 // Automatic emails. Each kind can be turned off in Hours & settings; everything lands in the outbox either way.
 export const EMAIL_KINDS = {
@@ -45,17 +46,17 @@ export async function saleReceipt(ctx, saleId) {
   const payer = payerFor(ctx, s.client_id);
   const athlete = ctx.db.get('SELECT name FROM clients WHERE id = ?', s.client_id);
   const items = ctx.db.all('SELECT name, quantity, unit_price_cents FROM sale_items WHERE sale_id = ?', saleId);
-  const how = { card_on_file: `card ending ${s.card_last4 ?? payer.card_last4 ?? ''}`, tap_to_pay: `card ending ${s.card_last4 ?? ''}`, reader: `card ending ${s.card_last4 ?? ''}`, cash: 'cash' }[s.method];
+  const how = { card_on_file: `card ending ${s.card_last4 ?? payer.card_last4 ?? ''}`, tap_to_pay: `card ending ${s.card_last4 ?? ''}`, reader: `card ending ${s.card_last4 ?? ''}`, cash: 'cash', online: 'card online' }[s.method];
   await send(ctx, payer.email, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
     `Thanks! Here's your receipt.\n\n${items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`).join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how.trim()} on ${day(ctx, s.completed_at ?? s.created_at)}\nFor ${athlete?.name ?? ''} at ${s.location_name}\nReceipt ${s.id}\n\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
 }
-export async function membershipReceipt(ctx, invoiceId) {
+export async function membershipReceipt(ctx, invoiceId, { how } = {}) {
   if (!on(ctx, 'receipts')) return;
   const inv = ctx.db.get(`SELECT i.*, p.name AS plan_name, c.name AS client_name FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
   if (!inv || inv.status !== 'paid' || !inv.amount_cents) return;
   const payer = payerFor(ctx, inv.client_id);
   await send(ctx, payer.email, `Receipt from ${biz(ctx)}: ${money(inv.amount_cents)} membership`,
-    `Thanks! ${inv.client_name}'s ${inv.plan_name} is paid through ${day(ctx, inv.period_end)}.\n\nAmount: ${money(inv.amount_cents)}\nPaid by card ending ${payer.card_last4 ?? ''} on ${day(ctx, inv.paid_at)}\nReceipt ${inv.id}\n\n${biz(ctx)}`);
+    `Thanks! ${inv.client_name}'s ${inv.plan_name} is paid through ${day(ctx, inv.period_end)}.\n\nAmount: ${money(inv.amount_cents)}\nPaid by ${how ?? `card ending ${payer.card_last4 ?? ''}`} on ${day(ctx, inv.paid_at)}\nReceipt ${inv.id}\n\n${biz(ctx)}`);
 }
 
 // ---------- Trial ending ----------
@@ -79,7 +80,8 @@ export async function paymentFailed(ctx, invoiceId) {
   const inv = ctx.db.get(`SELECT i.*, p.name AS plan_name, c.name AS client_name, c.family_id, s.status AS sub_status FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
   if (!inv || !['failed', 'void'].includes(inv.status)) return;
   const payer = payerFor(ctx, inv.client_id);
-  const fix = payer.table === 'families' ? `Update the card in the parent portal: ${base(ctx)}/parent (Family tab).` : 'Reply to this email and we\'ll send you a secure link to update your card.';
+  const link = inv.status === 'failed' && inv.sub_status !== 'canceled' ? invoicePayLink(ctx, inv.id) : null;
+  const fix = `${link ? `Pay it now by card, no sign-in needed: ${link}\n\nOr ` : ''}${payer.table === 'families' ? `${link ? 'u' : 'U'}pdate the card in the parent portal and we'll charge it right away: ${base(ctx)}/parent (Family tab).` : `${link ? 'r' : 'R'}eply to this email and we'll send you a secure link to update your card.`}`;
   const text = inv.status === 'void' || inv.sub_status === 'canceled'
     ? `Hi ${first(payer.name)},\n\nWe tried several times but couldn't charge ${money(inv.amount_cents)} for ${inv.client_name}'s ${inv.plan_name}, so the membership has been canceled.\n\nTo start again, ${payer.table === 'families' ? `add a working card at ${base(ctx)}/parent and choose a membership under Programs` : 'reply to this email'}.\n\n${biz(ctx)}`
     : `Hi ${first(payer.name)},\n\nThe ${money(inv.amount_cents)} payment for ${inv.client_name}'s ${inv.plan_name} didn't go through${inv.last_error ? ` (${inv.last_error})` : ''}. ${fix}\n\nWe'll try again on ${day(ctx, inv.next_retry_at)}. Training continues in the meantime.\n\n${biz(ctx)}`;
@@ -87,5 +89,5 @@ export async function paymentFailed(ctx, invoiceId) {
   if (on(ctx, 'payment_failed')) for (const to of recipients) await send(ctx, to, inv.status === 'void' ? `${first(inv.client_name)}'s membership was canceled` : `Payment didn't go through for ${first(inv.client_name)}'s membership`, text);
   if (inv.family_id) textFamily(ctx, inv.family_id, 'payment_failed', inv.status === 'void' || inv.sub_status === 'canceled'
     ? `We couldn't charge ${money(inv.amount_cents)} for ${first(inv.client_name)}'s ${inv.plan_name}, so the membership was canceled. To start again, add a working card in the parent portal: ${base(ctx)}/parent`
-    : `The ${money(inv.amount_cents)} payment for ${first(inv.client_name)}'s ${inv.plan_name} didn't go through. Update your card: ${base(ctx)}/parent (Family tab). We'll try again ${day(ctx, inv.next_retry_at)}.`);
+    : `The ${money(inv.amount_cents)} payment for ${first(inv.client_name)}'s ${inv.plan_name} didn't go through. ${link ? `Pay now: ${link} (or update your card in the parent portal).` : `Update your card: ${base(ctx)}/parent (Family tab).`} We'll try again ${day(ctx, inv.next_retry_at)}.`);
 }

@@ -117,7 +117,7 @@ const EVENT_TEXT = {
   'integration.synced': (d) => `${d.results} results synced from ${d.provider === 'hawkin' ? 'Hawkin Dynamics' : d.provider}`,
   'client.card_updated': (d) => d.card_last4 ? `${d.client_name} saved a card ending ${d.card_last4}` : `${d.client_name}'s saved card was removed`
 };
-const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash' };
+const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Pay link' };
 
 async function viewToday(main) {
   const [d, rev, ag, flags, risk] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), state.user.role !== 'front_desk' ? get('/v1/at-risk').catch(() => null) : null]);
@@ -263,7 +263,7 @@ async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), get(`/v1/athlete-links?client_id=${id}`)]);
-  const [en, testLib] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests')]);
+  const [en, testLib, owed, products] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null]);
   const eng = clientPanels(c, en, testLib.data);
   tzName = settings.timezone;
   const fam = c.family;
@@ -290,6 +290,8 @@ async function viewClient(main, id) {
     badge(i.status),
     i.status === 'failed' ? btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Charge retried. Payment succeeded.') : toast('Charge declined again.', 'warn'); render(); }), 'outline') : null))
     : h('p', { class: 'muted' }, sub?.status === 'trialing' ? `No charges yet. The first charge happens when the trial ends on ${date(sub.trial_ends_at)}.` : 'No invoices yet.'));
+
+  const payLinks = owed ? payLinksPanel(id, first, owed, products.data, render) : null;
 
   const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { value: c.program?.id ?? '', 'aria-label': 'Program' });
   const appUrl = location.origin + c.app_link;
@@ -392,7 +394,7 @@ async function viewClient(main, id) {
   fill(main,
     header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id)), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients')),
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.education, training, account)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, bookingsPanel, eng.messages, perfPanel, eng.targets, eng.education, training, account)));
 }
 
 async function viewNewClient(main) {
@@ -436,8 +438,40 @@ async function viewNewClient(main) {
 }
 
 // ---------- Billing ----------
+// ---------- Pay links ----------
+const sentText = (l) => (l.emailed || l.texted ? `Pay link sent${l.emailed ? ` by email${l.texted ? ' and text' : ''}` : ' by text'}.` : 'Pay link ready.');
+const copyLink = async (url) => { await navigator.clipboard?.writeText(url).catch(() => {}); toast('Pay link copied. Paste it into a text or email.'); };
+function payLinkActions(l, render) {
+  return h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
+    btn('Copy', () => copyLink(l.url), 'outline'),
+    btn('Send again', (e) => busy(e.currentTarget, async () => { toast(sentText(await post(`/v1/pay-links/${l.id}/send`))); render(); }), 'ghost'),
+    btn('Cancel', (e) => busy(e.currentTarget, async () => { await post(`/v1/pay-links/${l.id}/cancel`); toast('Link canceled. It can\'t be paid now.'); render(); }), 'ghost'));
+}
+function payLinksPanel(clientId, first, owed, products, render) {
+  const make = (body, send) => (e) => busy(e.currentTarget, async () => {
+    const l = await post('/v1/pay-links', { ...body, send });
+    if (send) toast(sentText(l)); else await copyLink(l.url);
+    render();
+  });
+  const kind = select([['custom', 'A set amount'], ...products.filter((p) => p.active !== false).map((p) => [p.id, `${p.name} (${money(p.price_cents)})`])], { 'aria-label': 'What to charge for' });
+  const desc = input({ placeholder: 'What it\'s for, e.g. Summer camp deposit', maxlength: '80' }), amount = input({ type: 'number', min: '1', step: '0.01', inputmode: 'decimal', placeholder: 'Amount ($)' });
+  const custom = h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr' }, desc, amount);
+  kind.addEventListener('change', () => { custom.hidden = kind.value !== 'custom'; });
+  const body = () => (kind.value === 'custom' ? { kind: 'custom', client_id: clientId, description: desc.value, amount_cents: Math.round(Number(amount.value) * 100) } : { kind: 'product', client_id: clientId, product_id: kind.value });
+  const openFor = (o) => owed.open_links.find((l) => (o.invoice_id && l.invoice_id === o.invoice_id) || (o.booking_id && l.booking_id === o.booking_id));
+  return panel('Pay links', { subtitle: `Send ${first}'s family a link to pay by card, no sign-in needed. Emails go to every parent; texts go to parents who turned them on.` },
+    owed.data.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Owed now'), owed.data.map((o) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, o.description), h('span', { class: 'small muted' }, `${money(o.amount_cents)}${openFor(o)?.sent_at ? ` · link sent ${ago(openFor(o).sent_at)}` : ''}`)),
+      btn('Send pay link', make(o, true), 'outline'), btn('Copy link', make(o, false), 'ghost')))) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing owed right now.'),
+    owed.open_links.filter((l) => l.kind === 'product' || l.kind === 'custom').map((l) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, l.description), h('span', { class: 'small muted' }, `${money(l.amount_cents)} · ${l.sent_at ? `sent ${ago(l.sent_at)}` : 'not sent yet'}`)), payLinkActions(l, render))),
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer' }, 'Ask for something else'),
+      h('div', { class: 'stack', style: 'margin-top:12px' }, kind, custom,
+        h('div', { class: 'row wrap' }, btn('Send pay link', (e) => make(body(), true)(e), 'secondary'), btn('Copy link', (e) => make(body(), false)(e), 'ghost')))));
+}
+
 async function viewBilling(main) {
-  const [plans, inv] = await Promise.all([get('/v1/plans?include_inactive=true'), get('/v1/invoices')]);
+  const [plans, inv, links] = await Promise.all([get('/v1/plans?include_inactive=true'), get('/v1/invoices'), get('/v1/pay-links')]);
   const pname = input(), price = input({ type: 'number', min: '0', step: '1', inputmode: 'decimal' }), trial = input({ type: 'number', min: '0', max: '90', value: '7' });
   const addPlan = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     await post('/v1/plans', { name: pname.value, price_cents: Math.round(Number(price.value) * 100), trial_days: Number(trial.value) }); toast('Plan created.'); render();
@@ -457,7 +491,9 @@ async function viewBilling(main) {
   const draw = () => fill(tbody, ...inv.data.filter((i) => !filter.value || i.status === filter.value).map((i) => h('tr', null,
     h('td', null, h('a', { href: `#/clients/${i.client_id}`, style: 'color:var(--steel)', class: 'strong' }, i.client_name)), h('td', null, i.plan_name), h('td', null, money(i.amount_cents)),
     h('td', { class: 'muted' }, date(i.created_at)), h('td', null, badge(i.status)),
-    h('td', null, i.status === 'failed' ? btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Payment succeeded.') : toast('Declined again.', 'warn'); render(); }), 'outline') : null))));
+    h('td', null, i.status === 'failed' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
+      btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Payment succeeded.') : toast('Declined again.', 'warn'); render(); }), 'outline'),
+      btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
   filter.addEventListener('change', draw); draw();
 
   const asOf = input({ type: 'date', value: new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10) });
@@ -471,6 +507,11 @@ async function viewBilling(main) {
   fill(main, 
     header('Billing', 'Plans, invoices and failed payments.'),
     plansPanel,
+    panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },
+      links.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['For', 'Client', 'Amount', 'Sent', 'Status', ''].map((t) => h('th', null, t)))),
+        h('tbody', null, links.data.slice(0, 25).map((l) => h('tr', null, h('td', null, l.description), h('td', null, l.client_id ? h('a', { href: `#/clients/${l.client_id}`, style: 'color:var(--steel)' }, l.client_name) : '—'),
+          h('td', null, money(l.amount_cents)), h('td', { class: 'muted small' }, l.sent_at ? ago(l.sent_at) : l.created_by === 'Automatic' ? 'With the failed-payment email' : 'Not sent'),
+          h('td', null, badge(l.paid_at ? 'paid' : l.status)), h('td', null, l.status === 'open' ? payLinkActions(l, render) : null)))))) : h('p', { class: 'muted' }, 'No pay links yet.')),
     panel('Invoices', { action: filter }, inv.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Client', 'Plan', 'Amount', 'Date', 'Status', ''].map((t) => h('th', null, t)))), tbody)) : h('p', { class: 'muted' }, 'No invoices yet. They appear when trials end and memberships renew.')),
     testPanel);
 }

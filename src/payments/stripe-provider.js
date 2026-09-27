@@ -123,14 +123,18 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       });
       return { id: s.id, url: s.url };
     },
-    // Hosted payment page for a team invoice: card, or US bank account (ACH) when billing in USD.
-    async checkoutPayment({ amountCents, description, email, metadata, successUrl, cancelUrl, idempotencyKey }) {
+    // Hosted payment page for a team invoice: card, or US bank account (ACH) when billing in USD. Pay links pass cardOnly.
+    async checkoutPayment({ amountCents, description, email, metadata, successUrl, cancelUrl, idempotencyKey, cardOnly = false }) {
       const s = await call('POST', '/v1/checkout/sessions', {
-        mode: 'payment', payment_method_types: currency === 'usd' ? ['card', 'us_bank_account'] : ['card'], customer_email: email ?? undefined,
+        mode: 'payment', payment_method_types: currency === 'usd' && !cardOnly ? ['card', 'us_bank_account'] : ['card'], customer_email: email ?? undefined,
         line_items: [{ price_data: { currency, unit_amount: amountCents, product_data: { name: description } }, quantity: 1 }],
         metadata, payment_intent_data: { metadata }, success_url: successUrl, cancel_url: cancelUrl
       }, { idempotencyKey });
       return { id: s.id, url: s.url };
+    },
+    async getCheckoutSession(id) {
+      const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`);
+      return { paid: s.payment_status === 'paid', ref: s.payment_intent ?? s.id, metadata: s.metadata ?? {} };
     },
     async getSetupSession(id) {
       const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`, { expand: ['setup_intent.payment_method'] });

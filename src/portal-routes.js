@@ -23,14 +23,6 @@ function requireWaiver(ctx, r) {
   if (!families.getFamily(ctx, r.guardian.family_id).waiver.signed) throw conflict('Sign the waiver on the Family tab before booking.');
 }
 const familyPayer = (ctx, r) => commerce.payerById(ctx, 'families', r.guardian.family_id);
-// Online purchases need a sales location; one named "Online" is created the first time.
-function onlineLocation(ctx) {
-  const l = ctx.db.get(`SELECT id FROM locations WHERE name = 'Online' AND kind = 'other'`);
-  if (l) return l.id;
-  const id = newId('loc');
-  ctx.db.run(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES (?, 'Online', 'other', 'US', 0, ?)`, id, ctx.now());
-  return id;
-}
 function athleteSummary(ctx, id) {
   const c = clients.getClient(ctx, id);
   return {
@@ -134,7 +126,7 @@ export const portalRoutes = [
     const c = athleteOf(ctx, r, r.body.athlete_id);
     const p = commerce.getProduct(ctx, v.str(r.body.product_id, 'product_id'));
     if (!['session', 'pack'].includes(p.kind) || !p.active) throw badRequest('That item isn\'t sold online.');
-    const sale = await commerce.createSale(ctx, { location_id: onlineLocation(ctx), method: 'card_on_file', client_id: c.id, items: [{ product_id: p.id, quantity: 1 }] }, r.guardian.id, { online: true });
+    const sale = await commerce.createSale(ctx, { location_id: commerce.onlineLocation(ctx), method: 'card_on_file', client_id: c.id, items: [{ product_id: p.id, quantity: 1 }] }, r.guardian.id, { online: true });
     if (sale.status !== 'succeeded') throw conflict(`The card was declined: ${sale.failure_reason}`);
     return { sale, athlete: athleteSummary(ctx, c.id) };
   }],

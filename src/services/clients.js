@@ -2,13 +2,22 @@ import { newId, token, v, notFound, conflict, badRequest, HttpError } from '../u
 import { emit } from './events.js';
 import * as billing from './billing.js';
 import * as programs from './programs.js';
-import { createFamilyWithGuardian, athleteFields, payerFor, getFamily } from './families.js';
+import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSetting } from './families.js';
 import { newAthleteId, validateAthleteId } from './athlete-ids.js';
-import { welcomeFamily, welcomeClient } from './notify.js';
+import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
 
 const LIST_SQL = `
   SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
+    c.school, c.grad_year, TRIM(COALESCE(c.medical_notes, '')) != '' AS medical, f.waiver_version,
+    pg.name AS parent_name, pg.email AS parent_email, pg.phone AS parent_phone,
+    (SELECT GROUP_CONCAT(g.name || ' ' || g.email || ' ' || COALESCE(g.phone, ''), ' ') FROM guardians g WHERE g.family_id = c.family_id) AS guardian_text,
+    (SELECT MAX(k.created_at) FROM check_ins k WHERE k.client_id = c.id) AS last_check_in_at,
+    (SELECT MAX(x.starts_at) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE b.client_id = c.id AND b.status = 'attended') AS last_attended_at,
+    (SELECT GROUP_CONCAT(tc.id || '|' || o.name || ' ' || tc.name, char(10)) FROM team_roster t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = tc.org_id
+      WHERE t.client_id = c.id AND t.active = 1 AND tc.status = 'active') AS team_list,
+    (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1) AS pinned_all,
+    (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1 AND n.coach_only = 0) AS pinned_shared,
     s.id AS subscription_id, s.status AS subscription_status, s.current_period_end, s.trial_ends_at,
     p.id AS plan_id, p.name AS plan_name, p.price_cents,
     a.program_id, pr.name AS program_name,
@@ -21,9 +30,10 @@ const LIST_SQL = `
   LEFT JOIN plans p ON p.id = s.plan_id
   LEFT JOIN assignments a ON a.client_id = c.id AND a.active = 1
   LEFT JOIN programs pr ON pr.id = a.program_id
-  LEFT JOIN families f ON f.id = c.family_id`;
+  LEFT JOIN families f ON f.id = c.family_id
+  LEFT JOIN guardians pg ON pg.id = (SELECT id FROM guardians WHERE family_id = c.family_id ORDER BY is_primary DESC, created_at LIMIT 1)`;
 
-const shape = (r) => ({
+const shape = (r, waiverVersion = 1, role = 'owner') => ({
   id: r.id, athlete_id: r.athlete_id, name: r.name, email: r.email ?? null, phone: r.phone ?? null, created_at: r.created_at,
   family: r.family_id ? { id: r.family_id, name: r.family_name } : null,
   birth_date: r.birth_date ?? null, sport: r.sport ?? null,
@@ -37,43 +47,105 @@ const shape = (r) => ({
   credits: { private: r.private_credits ?? 0, group: r.group_credits ?? 0 },
   session_credits: (r.private_credits ?? 0) + (r.group_credits ?? 0),
   has_card: !!r.has_card,
-  archived_at: r.archived_at ?? null, archived_by: r.archived_by ?? null
+  archived_at: r.archived_at ?? null, archived_by: r.archived_by ?? null,
+  school: r.school ?? null, grad_year: r.grad_year ?? null,
+  primary_parent: r.parent_email ? { name: r.parent_name, email: r.parent_email, phone: r.parent_phone ?? null } : null,
+  teams: r.team_list ? r.team_list.split('\n').map((x) => { const [id, ...name] = x.split('|'); return { id, name: name.join('|') }; }) : [],
+  // Flags for the list: medical notes on file, the family's waiver isn't signed (current version), no saved card.
+  flags: { medical: !!r.medical, no_waiver: !!r.family_id && Number(r.waiver_version ?? 0) !== waiverVersion, no_card: !r.has_card },
+  // Pinned staff notes: front desk never counts coach-only ones.
+  pinned_notes: role === 'front_desk' ? r.pinned_shared ?? 0 : r.pinned_all ?? 0,
+  // Last seen: the latest check-in (desk, door, kiosk or roster) or logged workout.
+  last_visit_at: [r.last_check_in_at, r.last_attended_at].filter(Boolean).sort().pop() ?? null,
+  last_seen_at: [r.last_check_in_at, r.last_attended_at, r.last_workout_at].filter(Boolean).sort().pop() ?? null,
+  _search: r.guardian_text ?? ''
 });
+const shapeAll = (ctx, rows, role) => { const wv = Number(getSetting(ctx, 'waiver_version')); return rows.map((r) => shape(r, wv, role)); };
+const strip = ({ _search, ...c }) => c;
 
 // "Active client" means one thing everywhere (the Today metric, the client list's Active filter, the owner summary):
 // not archived, with a membership that is paid up or on a free trial.
 export const ACTIVE_STATUSES = ['active', 'trialing'];
 export const isActiveClient = (c) => !c.archived_at && ACTIVE_STATUSES.includes(c.status);
-const matches = (c, q) => { const s = q.toLowerCase(); return c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.athlete_id ?? '').toLowerCase().includes(s) || (c.family?.name ?? '').toLowerCase().includes(s); };
+// Search: name, Athlete ID, email, family, school, or any parent's name, email or phone. Phone numbers also match on
+// their digits, so 8015550142 or (801) 555-0142 find 801-555-0142.
+const digitsOf = (x) => String(x ?? '').replace(/\D/g, '');
+export function matches(c, q) {
+  const s = String(q ?? '').trim().toLowerCase();
+  if (!s) return true;
+  const text = [c.name, c.email, c.athlete_id, c.family?.name, c.school, c.phone, c._search].filter(Boolean).join(' ').toLowerCase();
+  if (text.includes(s)) return true;
+  const d = digitsOf(s);
+  return /^[\d\s().+-]+$/.test(s) && d.length >= 4 && [c.phone, ...String(c._search ?? '').split(' ')].some((p) => digitsOf(p).includes(d));
+}
+
+// Views on top of the membership statuses: team (on a school or club team roster, no membership) and no_waiver
+// (the family hasn't signed the current waiver). They count current clients only; archived clients are their own view.
+export const CLIENT_VIEWS = ['current', 'active', 'trialing', 'past_due', 'paused', 'canceled', 'none', 'team', 'no_waiver'];
+export function inView(c, view) {
+  if (!view) return true;
+  if (view === 'current') return isActiveClient(c);
+  if (view === 'team') return c.teams.length > 0 && ['none', 'canceled'].includes(c.status);
+  if (view === 'no_waiver') return c.flags.no_waiver;
+  return c.status === view;
+}
+export const CLIENT_SORTS = ['name', 'last_seen', 'newest'];
+const sorters = {
+  name: null,
+  last_seen: (a, b) => (a.last_seen_at ?? '').localeCompare(b.last_seen_at ?? '') || a.name.localeCompare(b.name),   // longest since seen first, never seen at the top
+  newest: (a, b) => b.created_at.localeCompare(a.created_at)
+};
 
 // Archived clients are left out unless asked for: archived=true lists only them, archived=all everyone.
-// status=current is the active clients above; any other status is the membership status (none = no membership).
-export function listClients(ctx, { q, status, archived } = {}) {
-  let rows = ctx.db.all(`${LIST_SQL} ORDER BY c.name COLLATE NOCASE`).map(shape);
+// status=current is the active clients above; team and no_waiver are the views above; any other status is the membership
+// status (none = no membership). sort: name (default), last_seen (longest since seen first) or newest.
+export function listClients(ctx, { q, status, archived, sort, role } = {}) {
+  if (sort && !CLIENT_SORTS.includes(sort)) throw badRequest(`sort must be one of ${CLIENT_SORTS.join(', ')}.`);
+  let rows = shapeAll(ctx, ctx.db.all(`${LIST_SQL} ORDER BY c.name COLLATE NOCASE`), role);
   if (q) rows = rows.filter((c) => matches(c, q));
   if (archived === 'true') rows = rows.filter((c) => c.archived_at);
   else if (archived !== 'all') rows = rows.filter((c) => !c.archived_at);
-  if (status === 'current') rows = rows.filter(isActiveClient);
-  else if (status) rows = rows.filter((c) => c.status === status);
-  return rows;
+  if (status) rows = rows.filter((c) => !c.archived_at && inView(c, status));
+  if (sorters[sort]) rows.sort(sorters[sort]);
+  return rows.map(strip);
 }
 // How many archived clients a search would have found, so the list can say where to look.
-export const archivedMatches = (ctx, q) => ctx.db.all(`${LIST_SQL} WHERE c.archived_at IS NOT NULL`).map(shape).filter((c) => !q || matches(c, q)).length;
+export const archivedMatches = (ctx, q) => shapeAll(ctx, ctx.db.all(`${LIST_SQL} WHERE c.archived_at IS NOT NULL`)).filter((c) => !q || matches(c, q)).length;
 export function clientCounts(ctx) {
-  const out = { current: 0, active: 0, trialing: 0, past_due: 0, paused: 0, canceled: 0, none: 0, archived: 0, total: 0 };
-  for (const c of ctx.db.all(LIST_SQL).map(shape)) {
+  const out = { current: 0, active: 0, trialing: 0, past_due: 0, paused: 0, canceled: 0, none: 0, team: 0, no_waiver: 0, archived: 0, total: 0 };
+  for (const c of shapeAll(ctx, ctx.db.all(LIST_SQL))) {
     if (c.archived_at) { out.archived++; continue; }
     out.total++;
     out[c.status] = (out[c.status] ?? 0) + 1;
     if (isActiveClient(c)) out.current++;
+    if (inView(c, 'team')) out.team++;
+    if (c.flags.no_waiver) out.no_waiver++;
   }
   return out;
 }
 
-export function getClient(ctx, id, { withSecrets = false } = {}) {
+// The current view as a spreadsheet (owner only): contact details, membership and last seen, never amounts. Cells a
+// spreadsheet would run as a formula (=, +, -, @, tab or return first) get a leading apostrophe; plain numbers stay numbers.
+const STATUS_LABEL = { active: 'Active', trialing: 'Trial', past_due: 'Past due', paused: 'Paused', canceled: 'Canceled', none: 'No plan' };
+// US numbers saved for texts (+15125550100) read as (512) 555-0100, which a spreadsheet keeps as text.
+const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
+export const csvCell = (x) => { let s = String(x ?? ''); if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+export function exportClients(ctx, query = {}) {
+  const rows = listClients(ctx, query);
+  const zone = getSetting(ctx, 'timezone');
+  const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: zone }) : '');
+  const head = ['Athlete ID', 'Name', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Email', 'Phone', 'Birthday', 'Grad year', 'Sport', 'School', 'Status', 'Plan', 'Program', 'Teams', 'Waiver signed', 'Card on file', 'Medical notes on file', 'Last seen', 'Client since', 'Archived'];
+  const lines = rows.map((c) => [c.athlete_id, c.name, c.family?.name, c.primary_parent?.name, c.primary_parent?.email, phoneText(c.primary_parent?.phone), c.email, phoneText(c.phone), c.birth_date, c.grad_year, c.sport, c.school,
+    STATUS_LABEL[c.status] ?? c.status, c.subscription?.plan_name, c.program?.name, c.teams.map((t) => t.name).join('; '), c.family ? (c.flags.no_waiver ? 'No' : 'Yes') : '', c.has_card ? 'Yes' : 'No', c.flags.medical ? 'Yes' : 'No',
+    day(c.last_seen_at), day(c.created_at), day(c.archived_at)]);
+  const body = [head, ...lines].map((r) => r.map(csvCell).join(',')).join('\r\n');
+  return { filename: `clients-${day(ctx.now())}.csv`, type: 'text/csv; charset=utf-8', body: Buffer.from(`\uFEFF${body}\r\n`), count: rows.length };
+}
+
+export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {}) {
   const r = ctx.db.get(`${LIST_SQL} WHERE c.id = ?`, id);
   if (!r) throw notFound('Client');
-  const c = shape(r);
+  const c = strip(shapeAll(ctx, [r], role)[0]);
   const extra = ctx.db.get('SELECT * FROM clients WHERE id = ?', id);
   const payer = payerFor(ctx, id);
   c.notes = extra.notes ?? null;
@@ -178,8 +250,63 @@ export function deleteNote(ctx, id, actor) {
   return { id, deleted: true };
 }
 
+// ---------- Duplicate checks (staff adding a client) ----------
+// Before staff create an account: an email that already belongs to a client or a parent login is refused, with a link
+// to that record (a parent login means "add a sibling to that family"). The same name with the same birthday (or no
+// birthday on one side), or a phone number already on file, is probably someone we have: the answer lists them, and
+// the account can be created anyway. Archived clients count, so an old client comes back instead of
+// getting a second Athlete ID. The dashboard asks for that check with check_duplicates: true (an integration adding
+// clients through the API isn't asked a question it can't answer, unless it sends it too); saying "create anyway"
+// sends it again as false. Only staff get these details; the parent portal and public sign-up never do.
+const normName = (x) => String(x ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+const last10 = (p) => String(p ?? '').replace(/\D/g, '').slice(-10);
+const dupRow = (ctx, id, reason) => {
+  const c = ctx.db.get('SELECT c.id, c.name, c.athlete_id, c.birth_date, c.archived_at, f.name AS family_name FROM clients c LEFT JOIN families f ON f.id = c.family_id WHERE c.id = ?', id);
+  return { id: c.id, name: c.name, athlete_id: c.athlete_id, birth_date: c.birth_date ?? null, family_name: c.family_name ?? null, archived: !!c.archived_at, reason };
+};
+function checkDuplicates(ctx, { name, email, phone, birthDate, parent, familyId, skipSoft = false }) {
+  if (email) {
+    const c = ctx.db.get('SELECT id FROM clients WHERE email = ?', email);
+    if (c) { const e = new HttpError(409, 'duplicate_email', `${email} already belongs to a client. Open their profile instead.`); e.details = { duplicates: [dupRow(ctx, c.id, 'email')] }; throw e; }
+  }
+  if (parent?.email) {
+    const g = ctx.db.get('SELECT g.family_id, f.name AS family_name FROM guardians g JOIN families f ON f.id = g.family_id WHERE g.email = ?', String(parent.email).trim().toLowerCase());
+    if (g) {
+      const kid = ctx.db.get('SELECT id FROM clients WHERE family_id = ? ORDER BY archived_at IS NOT NULL, created_at LIMIT 1', g.family_id);
+      const e = new HttpError(409, 'parent_exists', `${String(parent.email).trim()} already signs in for the ${g.family_name}. Add the athlete to that family instead, so they share one login and card.`);
+      e.details = { family: { id: g.family_id, name: g.family_name }, duplicates: kid ? [dupRow(ctx, kid.id, 'parent_email')] : [] };
+      throw e;
+    }
+  }
+  if (skipSoft) return;
+  const found = new Map();
+  for (const c of ctx.db.all('SELECT id, name, birth_date FROM clients WHERE lower(trim(name)) = ?', normName(name))) {
+    if (normName(c.name) === normName(name) && (!birthDate || !c.birth_date || c.birth_date === birthDate)) found.set(c.id, 'name');
+  }
+  // Phones: the athlete's own, and (for a new family) the parent's. A sibling shares the family's phone, so it's not checked.
+  const phones = [phone, familyId ? null : parent?.phone].map(last10).filter((d) => d.length >= 7);
+  if (phones.length) {
+    for (const c of ctx.db.all(`SELECT c.id, c.family_id, c.phone, (SELECT GROUP_CONCAT(COALESCE(g.phone, ''), ' ') FROM guardians g WHERE g.family_id = c.family_id) AS parent_phones FROM clients c
+        WHERE c.phone IS NOT NULL OR c.family_id IS NOT NULL`)) {
+      if (found.has(c.id) || (familyId && c.family_id === familyId)) continue;
+      const theirs = [c.phone, ...String(c.parent_phones ?? '').split(' ')].map(last10).filter((d) => d.length >= 7);
+      if (phones.some((d) => theirs.includes(d))) found.set(c.id, 'phone');
+    }
+  }
+  if (found.size) {
+    const list = [...found].slice(0, 5).map(([id, reason]) => dupRow(ctx, id, reason));
+    const e = new HttpError(409, 'possible_duplicate', list.length === 1
+      ? `${list[0].name} (${list[0].athlete_id}${list[0].archived ? ', archived' : ''}) has the same ${list[0].reason === 'phone' ? 'phone number' : `name${birthDate && list[0].birth_date ? ' and birthday' : ''}`}. Open their profile, or create a new account anyway.`
+      : `${list.length} clients look like the same person. Open one of them, or create a new account anyway.`);
+    e.details = { duplicates: list };
+    throw e;
+  }
+}
+
 // Create the account, start the subscription (trial first if the plan has one) and assign a program.
-export async function createClient(ctx, body) {
+// staff: { role } when staff add the client from the dashboard or the API: duplicates are checked (see above) and
+// front desk can't assign a program (that's for coaches).
+export async function createClient(ctx, body, { staff } = {}) {
   const name = v.str(body.name, 'name', { max: 120 });
   const hasParent = !!(body.family_id || body.parent);
   // Athletes with a parent account don't need their own email; adults paying for themselves do.
@@ -190,6 +317,9 @@ export async function createClient(ctx, body) {
   if (body.plan_id) billing.getPlan(ctx, body.plan_id);
   if (body.program_id) programs.getProgram(ctx, body.program_id);
   if (body.family_id) getFamily(ctx, body.family_id);
+  if (staff?.role === 'front_desk' && body.program_id) throw new HttpError(403, 'forbidden', 'Only coaches and owners assign programs. Leave it for a coach.');
+  if (staff && body.check_duplicates !== undefined && typeof body.check_duplicates !== 'boolean') throw badRequest('check_duplicates must be true or false.');
+  if (staff) checkDuplicates(ctx, { name, email, phone, birthDate: profile.birth_date, parent: body.family_id ? null : body.parent, familyId: body.family_id, skipSoft: body.check_duplicates !== true });
   if (email && ctx.db.get('SELECT id FROM clients WHERE email = ?', email)) throw conflict('A client with this email already exists.');
 
   const id = newId('cli');
@@ -239,3 +369,41 @@ export function resetAppLink(ctx, id) {
 }
 
 export const clientByToken = (ctx, t) => (t ? ctx.db.get('SELECT * FROM clients WHERE access_token = ?', String(t)) : undefined);
+
+// Email the private workout-app link to the athlete (their own email, if they have one) and their parents.
+// Archived clients get nothing: bring them back first.
+export async function emailAppLink(ctx, id) {
+  const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', id);
+  if (!c) throw notFound('Client');
+  const first = c.name.split(' ')[0];
+  if (c.archived_at) throw conflict(`${first} is archived. Bring them back before sending the app link.`);
+  const sentTo = await sendAppLink(ctx, id);
+  if (!sentTo.length) throw conflict(`There's no email to send it to. Add ${first}'s email${c.family_id ? ' or a parent\'s' : ''} first, or copy the link.`);
+  return { sent_to: sentTo };
+}
+
+// ---------- Attendance ----------
+// Visits are roster check-ins (desk, door code, tablet) and walk-in check-ins. A booking is a no-show when the roster
+// says so, or when the session is over and nobody checked them in; one in a session that's still running isn't a
+// no-show yet. A late cancel counts on the session's date, even when that's later today.
+export function attendance(ctx, id) {
+  getClient(ctx, id);
+  const now = ctx.now(), daysAgo = (d) => new Date(Date.parse(now) - d * 86400000).toISOString();
+  const since30 = daysAgo(30), since90 = daysAgo(90);
+  const outcome = (b) => (b.status === 'attended' ? 'attended' : b.status === 'late_canceled' ? 'late_cancel' : b.status === 'no_show' || b.ends_at <= now ? 'no_show' : b.starts_at <= now ? 'in_progress' : null);
+  const sessions = ctx.db.all(`SELECT b.id, b.status, s.id AS session_id, s.name AS session_name, s.kind, s.starts_at, s.ends_at, l.name AS location_name
+      FROM bookings b JOIN class_sessions s ON s.id = b.session_id JOIN locations l ON l.id = s.location_id
+      WHERE b.client_id = ? AND s.status = 'scheduled' AND s.starts_at >= ? AND b.status IN ('attended','no_show','booked','late_canceled')`, id, since90)
+    .map((b) => ({ id: b.id, outcome: outcome(b), at: b.starts_at, session_id: b.session_id, session_name: b.session_name, kind: b.kind, location_name: b.location_name }))
+    .filter((b) => b.outcome && (b.outcome === 'late_cancel' || b.at <= now));
+  const walkIns = ctx.db.all(`SELECT k.id, k.created_at, l.name AS location_name FROM check_ins k JOIN locations l ON l.id = k.location_id WHERE k.client_id = ? AND k.created_at >= ?`, id, since90)
+    .map((k) => ({ id: k.id, outcome: 'walk_in', at: k.created_at, session_id: null, session_name: null, kind: null, location_name: k.location_name }));
+  const all = [...sessions, ...walkIns];
+  const count = (since, ...outcomes) => all.filter((x) => outcomes.includes(x.outcome) && x.at >= since).length;
+  const lastVisit = [ctx.db.get(`SELECT MAX(s.starts_at) AS t FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended'`, id).t,
+    ctx.db.get('SELECT MAX(created_at) AS t FROM check_ins WHERE client_id = ?', id).t].filter(Boolean).sort().pop() ?? null;
+  return {
+    summary: { visits_30: count(since30, 'attended', 'walk_in'), no_shows_30: count(since30, 'no_show'), late_cancels_30: count(since30, 'late_cancel'), visits_90: count(since90, 'attended', 'walk_in'), last_visit_at: lastVisit },
+    recent: all.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12)
+  };
+}

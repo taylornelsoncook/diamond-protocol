@@ -38,6 +38,28 @@ export async function welcomeClient(ctx, clientId) {
     `Hi ${first(c.name)},\n\nYour account is ready. Your workouts are here (this link is just for you, so keep it private):\n${base(ctx)}/app?token=${c.access_token}\n\nSee you soon,\n${biz(ctx)}`);
 }
 
+// Sent by hand from the client profile, so the "welcome" switch doesn't stop them.
+// The private workout-app link, to the athlete's own email and the family's parents. Returns who it went to.
+export async function sendAppLink(ctx, clientId) {
+  const c = ctx.db.get('SELECT name, email, access_token, family_id FROM clients WHERE id = ?', clientId);
+  const to = [...new Map([...(c.email ? [{ name: c.name, email: c.email }] : []), ...(c.family_id ? familyEmails(ctx, c.family_id) : [])].map((x) => [x.email.toLowerCase(), x])).values()];
+  const link = `${base(ctx)}/app?token=${c.access_token}`;
+  for (const x of to) {
+    const self = x.email.toLowerCase() === (c.email ?? '').toLowerCase();
+    await send(ctx, x.email, `${self ? 'Your' : `${first(c.name)}'s`} workout app link`,
+      `Hi ${first(x.name)},\n\n${self ? 'Your' : `${first(c.name)}'s`} workouts, check-ins and progress are here:\n${link}\n\nThis link is private: anyone who has it can open ${self ? 'your' : `${first(c.name)}'s`} app, so don't share it. Add it to the home screen for one-tap access.\n\n${biz(ctx)}`);
+  }
+  return to.map((x) => x.email);
+}
+// Re-send a parent the portal sign-in details (lost the welcome email, or staff just fixed a typo in the address).
+export async function portalInvite(ctx, guardianId) {
+  const g = ctx.db.get('SELECT name, email, family_id FROM guardians WHERE id = ?', guardianId);
+  const kids = ctx.db.all('SELECT name FROM clients WHERE family_id = ? AND archived_at IS NULL ORDER BY name', g.family_id).map((k) => first(k.name));
+  await send(ctx, g.email, `Sign in to ${biz(ctx)}`,
+    `Hi ${first(g.name)},\n\nHere's how to sign in to the parent portal${kids.length ? ` for ${kids.join(' and ')}` : ''}: go to ${base(ctx)}/parent and enter this email address (${g.email}). We'll email you a code each time, so there's no password to remember.\n\nIn the portal you can sign the waiver, save a card, book sessions and see progress.\n\n${biz(ctx)}`);
+  return g.email;
+}
+
 // ---------- Receipts ----------
 export async function saleReceipt(ctx, saleId) {
   if (!on(ctx, 'receipts')) return;

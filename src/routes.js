@@ -33,6 +33,7 @@ import * as spots from './services/spots.js';
 import * as notes from './services/notes.js';
 import * as moneychecks from './services/moneychecks.js';
 import { portalRoutes } from './portal-routes.js';
+import { portalInvite } from './services/notify.js';
 import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocalDay } from './util.js';
 
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
@@ -67,14 +68,20 @@ export const routes = [
     .filter((e) => !r.user || r.user.role === 'owner' || !security.OWNER_EVENTS.test(e.type)))],
 
   // Clients
-  ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name, athlete ID, email or family) and ?status= (a membership status, none, or current for active clients: paid up or on a free trial). Archived clients are left out: ?archived=true lists only them, ?archived=all everyone. archived_matches says how many archived clients the search would have found.', (ctx, r) => {
-    const out = list(clients.listClients(ctx, r.query));
+  ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name, athlete ID, email, family, school, or a parent\'s name, email or phone; phone numbers also match on digits) and ?status= (a membership status, none, current for active clients: paid up or on a free trial, team for athletes on a school or club team with no membership, or no_waiver for families who haven\'t signed the current waiver). ?sort= name (default), last_seen (longest since last seen first) or newest. Each client has flags (medical, no_waiver, no_card), pinned_notes, teams and last_seen_at (latest check-in or workout). Archived clients are left out: ?archived=true lists only them, ?archived=all everyone. archived_matches says how many archived clients the search would have found.', (ctx, r) => {
+    const out = list(clients.listClients(ctx, { ...r.query, role: r.user?.role }));
     return r.query.archived === 'true' || r.query.archived === 'all' ? out : { ...out, archived_matches: clients.archivedMatches(ctx, r.query.q) };
   }],
-  ['GET', '/v1/client-counts', 'any', 'Clients', 'How many clients have each membership status, how many are active (current: paid up or on a free trial) and how many are archived.', (ctx) => clients.clientCounts(ctx)],
-  ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program.', (ctx, r) => clients.createClient(ctx, r.body), 201],
-  ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: true })],
-  ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone or notes.', (ctx, r) => clients.updateClient(ctx, r.params.id, r.body)],
+  ['GET', '/v1/client-counts', 'any', 'Clients', 'How many clients have each membership status, how many are active (current: paid up or on a free trial), on a team with no membership (team), missing the current waiver (no_waiver) and archived.', (ctx) => clients.clientCounts(ctx)],
+  ['GET', '/v1/client-export', 'any', 'Clients', 'Owner only. The client list as a CSV file (contact details, membership, waiver, last seen; never amounts), with the same ?q=, ?status=, ?sort= and ?archived= as GET /v1/clients.', (ctx, r) => {
+    const file = clients.exportClients(ctx, r.query);
+    security.audit(ctx, { ...(r.user ? { actor_type: 'staff', actor_id: r.user.id, actor_name: r.user.name, role: r.user.role } : { actor_type: 'api_key', actor_id: r.apiKey?.id, actor_name: r.apiKey?.label }), action: `exported ${file.count} ${file.count === 1 ? 'client' : 'clients'} as CSV`, target: null, status: 200, ip: r.ip });
+    return { __file: file };
+  }],
+  ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program (not front desk). Refused with 409 duplicate_email when the email belongs to a client, parent_exists when the parent\'s email already signs in for a family (add the athlete to that family instead), and possible_duplicate when a client has the same name and birthday (archived clients too) or the same phone number; details.duplicates lists them (possible_duplicate only with check_duplicates: true, which the dashboard sends; resend without it to create the account anyway).', (ctx, r) => clients.createClient(ctx, r.body, { staff: { role: r.user?.role ?? 'owner' } }), 201],
+  ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role })],
+  ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone, notes and profile fields (birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, athlete_id).', (ctx, r) => { clients.updateClient(ctx, r.params.id, r.body); return clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role }); }],
+  ['GET', '/v1/clients/:id/attendance', 'any', 'Clients', 'Attendance: visits (roster and walk-in check-ins), no-shows and late cancels in the last 30 days, visits in 90 days, the last visit, and the 12 most recent outcomes (attended, walk_in, no_show, late_cancel, in_progress). A booking in a session that is still running isn\'t a no-show yet.', (ctx, r) => clients.attendance(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/archive', 'any', 'Clients', 'Archive a client who stopped training (owner and coach): hidden from lists, search, pickers and automatic messages; nothing is deleted. Refused while they have a membership. Upcoming bookings and standing spots are canceled, which needs confirm: true.', (ctx, r) => clients.archiveClient(ctx, r.params.id, r.body, r.user)],
   ['POST', '/v1/clients/:id/restore', 'any', 'Clients', 'Bring an archived client back.', (ctx, r) => clients.restoreClient(ctx, r.params.id, r.user)],
   ['GET', '/v1/clients/:id/notes', 'any', 'Clients', 'Staff notes on a client, pinned first, then newest. Front desk doesn\'t get coach-only notes.', (ctx, r) => list(clients.listNotes(ctx, r.params.id, noteActor(r)))],
@@ -82,6 +89,7 @@ export const routes = [
   ['PATCH', '/v1/client-notes/:id', 'any', 'Clients', 'Change a staff note: body, pinned, coach_only. Only its author can change it; owners can pin or unpin any note.', (ctx, r) => clients.updateNote(ctx, r.params.id, r.body, noteActor(r))],
   ['DELETE', '/v1/client-notes/:id', 'any', 'Clients', 'Delete a staff note: owners any, everyone else their own.', (ctx, r) => clients.deleteNote(ctx, r.params.id, noteActor(r))],
   ['POST', '/v1/clients/:id/app-link', 'any', 'Clients', 'Issue a new private app link. The old link stops working.', (ctx, r) => clients.resetAppLink(ctx, r.params.id)],
+  ['POST', '/v1/clients/:id/app-link/email', 'any', 'Clients', 'Email the private workout-app link to the athlete\'s own email and their parents. sent_to lists the addresses. Refused for archived clients.', (ctx, r) => clients.emailAppLink(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/subscription', 'any', 'Clients', 'Start a subscription on plan_id.', async (ctx, r) => billing.subscribe(ctx, r.params.id, v.str(r.body.plan_id, 'plan_id')), 201],
   ['POST', '/v1/clients/:id/subscription/pause', 'any', 'Clients', 'Pause billing and app access.', (ctx, r) => billing.pause(ctx, subOf(ctx, r.params.id))],
   ['POST', '/v1/clients/:id/subscription/resume', 'any', 'Clients', 'Resume a paused subscription. Starts a new period and charges today.', (ctx, r) => billing.resume(ctx, subOf(ctx, r.params.id))],
@@ -219,8 +227,11 @@ export const routes = [
   ['GET', '/v1/families/:id', 'any', 'Families', 'A family with parents, athletes, card and waiver.', (ctx, r) => { const f = families.getFamily(ctx, r.params.id); return { ...f, athletes: f.athlete_ids.map((id) => clients.getClient(ctx, id)) }; }],
   ['PATCH', '/v1/families/:id', 'any', 'Families', 'Rename a family.', (ctx, r) => families.updateFamily(ctx, r.params.id, r.body)],
   ['POST', '/v1/families/:id/guardians', 'any', 'Families', 'Add a parent or guardian who can sign in to the portal.', (ctx, r) => families.addGuardian(ctx, r.params.id, r.body), 201],
-  ['DELETE', '/v1/families/:id/guardians/:gid', 'any', 'Families', 'Remove a parent (a family keeps at least one).', (ctx, r) => families.removeGuardian(ctx, r.params.id, r.params.gid)],
-  ['POST', '/v1/families/:id/athletes', 'any', 'Families', 'Add an athlete to a family: name, birth_date, sport and profile fields, optional plan_id and program_id.', (ctx, r) => clients.createClient(ctx, { ...r.body, family_id: r.params.id }), 201],
+  ['PATCH', '/v1/families/:id/guardians/:gid', 'any', 'Families', 'Fix a parent\'s name, email, phone or relationship. An athlete in the family with the same email keeps it in step. A new phone number turns texts off until the parent turns them on again.', (ctx, r) => families.updateGuardian(ctx, r.params.id, r.params.gid, r.body)],
+  ['POST', '/v1/families/:id/guardians/:gid/welcome', 'any', 'Families', 'Email the parent how to sign in to the parent portal again.', async (ctx, r) => { families.getFamily(ctx, r.params.id); if (!ctx.db.get('SELECT 1 FROM guardians WHERE id = ? AND family_id = ?', r.params.gid, r.params.id)) throw notFound('Parent'); return { sent_to: await portalInvite(ctx, r.params.gid) }; }],
+  ['DELETE', '/v1/families/:id/guardians/:gid', 'any', 'Families', 'Remove a parent (a family keeps at least one). Their portal sign-in ends at once.', (ctx, r) => families.removeGuardian(ctx, r.params.id, r.params.gid)],
+  ['POST', '/v1/families/:id/waiver', 'any', 'Families', 'Record a waiver signed on paper at the desk: signed_by (the parent\'s name). Refused when the current waiver is already signed.', (ctx, r) => families.recordPaperWaiver(ctx, r.params.id, r.body, r.user ?? { name: r.apiKey?.label ?? 'API' })],
+  ['POST', '/v1/families/:id/athletes', 'any', 'Families', 'Add an athlete to a family: name, birth_date, sport and profile fields, optional plan_id and program_id (not front desk). With check_duplicates: true, refused with 409 possible_duplicate when a client has the same name and birthday.', (ctx, r) => clients.createClient(ctx, { ...r.body, family_id: r.params.id }, { staff: { role: r.user?.role ?? 'owner' } }), 201],
   ['GET', '/v1/client-import/template', 'any', 'Clients', 'Spreadsheet template for importing clients (Excel, or ?format=csv).', (ctx, r) => ({ __file: clientImport.importTemplate(r.query.format) })],
   ['POST', '/v1/client-import/preview', 'any', 'Clients', 'Check a client spreadsheet (csv, or xlsx_base64). Returns every problem by row, or exactly the families and Athlete IDs that will be created. Nothing is saved.', (ctx, r) => clientImport.previewImport(ctx, r.body)],
   ['POST', '/v1/client-import/commit', 'any', 'Clients', 'Import a checked spreadsheet: preview_id, send_welcome (email new families and adults their sign-in details). All or nothing.', (ctx, r) => clientImport.commitImport(ctx, r.body), 201],

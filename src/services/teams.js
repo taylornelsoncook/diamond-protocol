@@ -259,7 +259,7 @@ export async function updateContract(ctx, id, body, sched = {}, baseUrl) {
   }
   const endChanged = (end ?? null) !== (c.end_date ?? null);
   const name = body.name !== undefined ? teamName(body.name) : c.name;
-  const monthly = body.monthly_cents !== undefined ? feeCents(body.monthly_cents) : c.monthly_cents;
+  const monthly = body.monthly_cents !== undefined && Number(body.monthly_cents) !== c.monthly_cents ? feeCents(body.monthly_cents) : c.monthly_cents;   // an unchanged fee always saves
   const terms = body.terms_days !== undefined ? termsDays(body.terms_days) : c.terms_days;
   const po = body.po_number !== undefined ? v.str(body.po_number, 'po_number', { max: 60, optional: true }) : c.po_number;
   const notes = body.notes !== undefined ? v.str(body.notes, 'notes', { max: 2000, optional: true }) : c.notes;
@@ -371,7 +371,7 @@ export function addRoster(ctx, contractId, body) {
     ctx.db.tx(() => insertRoster(ctx, contractId, { name: nm, position: v.str(body.position, 'position', { max: 60, optional: true }), grad_year: v.int(body.grad_year, 'grad_year', { min: 2000, max: 2060, optional: true }), client_id: clientId }));
     return { roster: getContract(ctx, contractId).roster, added: 1, linked: clientId ? 1 : 0, skipped: 0 };
   }
-  const links = body.links && typeof body.links === 'object' ? body.links : {};
+  const links = Object.fromEntries(Object.entries(body.links && typeof body.links === 'object' ? body.links : {}).filter(([, x]) => x && x !== 'new'));   // 'new' = add as a new athlete
   return ctx.db.tx(() => {
     const plan = checkRoster(ctx, contractId, body);
     if (plan.counts.error) {
@@ -379,7 +379,7 @@ export function addRoster(ctx, contractId, body) {
       e.details = plan.rows.filter((r) => r.error).map((r) => ({ line: r.line, message: r.error }));
       throw e;
     }
-    for (const n of Object.keys(links)) if (links[n] && !plan.rows.some((r) => String(r.line) === String(n) && r.status === 'match')) throw conflict(`Line ${n} no longer matches a client. Check the list again.`);
+    for (const n of Object.keys(links)) if (!plan.rows.some((r) => String(r.line) === String(n) && r.status === 'match')) throw conflict(`Line ${n} no longer matches a client. Check the list again.`);
     let added = 0, linked = 0;
     for (const r of plan.rows) {
       if (r.status === 'skip') continue;

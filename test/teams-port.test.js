@@ -91,7 +91,7 @@ test('names that match a client you already have can be linked instead of added 
   assert.equal(plan.rows[0].matches[0].id, ava.id);
   assert.equal((await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'ava lopez\nSofia Ramirez', links: { 1: 'cli_not_a_match' } })).status, 409, 'a link must be one of the matches');
   assert.equal((await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'ava lopez\nSofia Ramirez', links: { 2: ava.id } })).status, 409, 'a line that doesn\'t match can\'t be linked');
-  const r = (await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'ava lopez, Winger, 2031\nZoe Patel\nSofia Ramirez', links: { 1: ava.id } })).body;
+  const r = (await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'ava lopez, Winger, 2031\nZoe Patel\nSofia Ramirez', links: { 1: ava.id, 3: 'new' } })).body;
   assert.deepEqual([r.added, r.linked, r.skipped], [1, 1, 1]);
   const row = r.data.find((x) => x.client_id === ava.id);
   assert.deepEqual([row.name, row.position, row.grad_year], ['Ava Lopez', 'Winger', 2031]);
@@ -262,6 +262,9 @@ test('restarting an ended contract bills from the next billing day, never the mo
   // Saving the ended contract unchanged (the form sends every field) doesn't restart it.
   const same = (await owner('PATCH', `/v1/team-contracts/${c.id}`, { name: 'Varsity', monthly_cents: 100000, end_date: ended.end_date, terms_days: 30, po_number: null, notes: 'Paused for the holidays' })).body;
   assert.deepEqual([same.status, same.restarted, same.notes], ['ended', false, 'Paused for the holidays']);
+  app.ctx.db.run('UPDATE team_contracts SET monthly_cents = 0 WHERE id = ?', c.id);
+  assert.equal((await owner('PATCH', `/v1/team-contracts/${c.id}`, { monthly_cents: 0, notes: 'Free season' })).status, 200, 'an old $0 contract still saves unchanged');
+  assert.equal((await owner('PATCH', `/v1/team-contracts/${c.id}`, { monthly_cents: 100000 })).body.monthly_cents, 100000);
   assert.equal((await owner('PATCH', `/v1/team-contracts/${c.id}`, { end_date: addDaysToDate(today(), -1) })).body.status, 'ended', 'an end date still in the past doesn\'t restart it');
   // Three months later the school signs up again.
   const ctx = later(92);

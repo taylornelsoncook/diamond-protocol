@@ -112,6 +112,7 @@ const EVENT_TEXT = {
   'team_invoice.paid': (d) => `${d.org_name} paid invoice ${d.number} (${money(d.amount_cents)}, ${d.method})`,
   'team_invoice.overdue': (d) => `Invoice ${d.number} to ${d.org_name} is past due`,
   'team_invoice.voided': (d) => `Invoice ${d.number} voided`,
+  'team_invoice.paid_twice': (d) => `Invoice ${d.number} was paid online after it was already ${d.status === 'void' ? 'voided' : 'paid'}: ${money(d.amount_cents)} to refund or credit`,
   'results.recorded': (d) => `${d.count} test ${d.count === 1 ? 'result' : 'results'} recorded for ${d.athletes} ${d.athletes === 1 ? 'athlete' : 'athletes'}${d.source && d.source !== 'manual' ? ` (${d.source.replace(/^(csv|api):/, '')})` : ''}`,
   'performance.pr': (d) => `New PR: ${d.athlete_name}, ${d.test_name} ${fmtResult(d.value, d.unit, 2)}${d.side ? ` (${d.side === 'L' ? 'left' : 'right'})` : ''}`,
   'testing.shared': (d) => `${d.name} shared with families${d.families_notified ? ` (${d.families_notified} emailed)` : ''}`,

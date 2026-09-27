@@ -294,7 +294,7 @@ function renderChangePassword() {
 }
 
 async function boot() {
-  try { me = await api.get('/auth/staff/me', { noRedirect: true }); }
+  try { me = await api.get('/auth/staff/me?probe=1', { noRedirect: true }); }
   catch { me = null; }
   if (me && !me.must_change) settings = await api.get('/settings').catch(() => null);
   render();

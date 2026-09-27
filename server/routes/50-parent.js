@@ -4,7 +4,7 @@
 // (GET /api/parent/athletes/:id/progress lives in the testing area.)
 'use strict';
 const { get, all, run, insert, update, tx, setting } = require('../db');
-const { h, bad, notFound, log, makeAthleteCode, randomToken, sha256, sendEmail, payments, addDays, ageOn, money, businessName, appUrl } = require('../lib');
+const { h, bad, notFound, log, makeAthleteCode, randomToken, sha256, sendEmail, payments, addDays, ageOn, money, businessName, appUrl, whenLocal } = require('../lib');
 const { requireParent } = require('../auth');
 const booking = require('../services/booking');
 const billing = require('../services/billing');
@@ -63,13 +63,14 @@ function athleteSummary(a) {
     membership: membershipOf(a), member_left: leftOf(billing.memberSessionsLeft(a.id, booking.todayLocal())),
   };
 }
-// Sessions attended (checked in) in the last 30 days and the latest one, for Home.
+// Sessions attended (checked in) in the last 30 days and the latest one, for Home. Counted the same way as
+// Attendance on the client profile (services/clients.visits), so staff and family see the same number.
 function attendanceOf(athleteId) {
   const now = booking.nowLocal();
   const since = addDays(now.slice(0, 10), -30) + 'T00:00';
   const r = get(`SELECT COUNT(*) n, MAX(e.starts_at) last FROM bookings b JOIN events e ON e.id=b.event_id
-    WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND e.starts_at<=? AND e.starts_at>=?`, athleteId, now, since);
-  const last = r.last || get('SELECT MAX(e.starts_at) s FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.checked_in_at IS NOT NULL AND e.starts_at<=?', athleteId, now)?.s || null;
+    WHERE b.athlete_id=? AND b.status='booked' AND e.cancelled=0 AND b.checked_in_at IS NOT NULL AND e.starts_at<? AND e.starts_at>=?`, athleteId, now, since);
+  const last = r.last || get("SELECT MAX(e.starts_at) s FROM bookings b JOIN events e ON e.id=b.event_id WHERE b.athlete_id=? AND b.status='booked' AND e.cancelled=0 AND b.checked_in_at IS NOT NULL AND e.starts_at<?", athleteId, now)?.s || null;
   return { last_30: r.n, last_at: last };
 }
 // Link the calendar apps use; the portal's own address when the app URL isn't configured.
@@ -180,7 +181,7 @@ function routes(api) {
       }
     }
     const b = booking.book(e.id, a.id, { source: 'parent', payWith: pay, requireCovered: true });
-    log(req, b.status === 'waitlist' ? 'Joined waitlist' : 'Booked session', `${athleteName(a)}: ${e.name}, ${e.starts_at.replace('T', ' ')}${b.coverage === 'paid' && b.paid_cents ? ` (drop-in ${money(b.paid_cents)})` : ''}`);
+    log(req, b.status === 'waitlist' ? 'Joined waitlist' : 'Booked session', `${athleteName(a)}: ${e.name}, ${whenLocal(e.starts_at)}${b.coverage === 'paid' && b.paid_cents ? ` (drop-in ${money(b.paid_cents)})` : ''}`);
     res.json(b);
   }));
 

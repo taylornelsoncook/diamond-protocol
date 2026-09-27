@@ -85,7 +85,7 @@ function demo() {
   const T = today();
   tx(() => {
     setSetting('business_address', '1450 N Industrial Pkwy, Provo, UT 84604');
-    setSetting('pay_instructions', 'Make checks payable to Diamond Protocol and mail to the address above, or pay online.');
+    setSetting('pay_instructions', 'Make checks payable to Diamond Protocol and mail them to our address.');
 
     const staff = DEMO_LOGINS.map(([name, email, role, pw]) => insert('staff', { name, email, role, pw_hash: hashPassword(pw), must_change: 0 }));
     const [ownerId, coachId] = staff;

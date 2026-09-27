@@ -2,7 +2,7 @@
 // and a few weeks of team-session attendance. Sales belong to the floor seed.
 'use strict';
 const { get, all, run, insert, tx } = require('../db');
-const { nextInvoiceNumber, randomToken, today, addDays, addMonths, money, businessName, appUrl } = require('../lib');
+const { nextInvoiceNumber, randomToken, today, addDays, addMonths, money, businessName, appUrl, monthLabel } = require('../lib');
 const schools = require('../services/money-schools');
 
 function seed() {
@@ -23,12 +23,12 @@ function seed() {
       const last = i === dates.length - 1;
       if (declines && last) {
         const issued = addDays(T, m === parkOlivia ? -1 : -4);
-        rows.push({ date: issued, inv: { kind: 'membership', family_id: m.family_id, athlete_id: m.athlete_id, membership_id: m.id, description: `${m.plan_name}: ${issued.slice(0, 7)}`,
+        rows.push({ date: issued, inv: { kind: 'membership', family_id: m.family_id, athlete_id: m.athlete_id, membership_id: m.id, description: `${m.plan_name}: ${monthLabel(issued)}`,
           amount_cents: m.price_cents, status: 'failed', issued_at: issued, period: issued.slice(0, 7), pay_method: 'card',
           attempts: m === parkOlivia ? 1 : 2, next_retry: addDays(T, m === parkOlivia ? 2 : 1) } });
         return;
       }
-      rows.push({ date: d, inv: { kind: 'membership', family_id: m.family_id, athlete_id: m.athlete_id, membership_id: m.id, description: `${m.plan_name}: ${d.slice(0, 7)}`,
+      rows.push({ date: d, inv: { kind: 'membership', family_id: m.family_id, athlete_id: m.athlete_id, membership_id: m.id, description: `${m.plan_name}: ${monthLabel(d)}`,
         amount_cents: m.price_cents, status: 'paid', issued_at: d, period: d.slice(0, 7), paid_at: `${d}T15:00:00.000Z`, pay_method: 'card', charge_id: 'ch_test_' + randomToken(9), attempts: 1 } });
     });
   }

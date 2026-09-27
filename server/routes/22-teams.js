@@ -63,8 +63,9 @@ function recentSessions(teamId, n = 8) {
   // roster: who was on the team that day (on the roster now and added by then, or booked into it), so athletes added
   // later don't make old sessions look empty.
   return all(`SELECT e.id, e.starts_at, (SELECT COUNT(*) FROM bookings b WHERE b.event_id=e.id AND b.checked_in_at IS NOT NULL) AS here,
-      (SELECT COUNT(*) FROM athletes a WHERE a.archived=0 AND (a.team_id=e.team_id AND COALESCE(a.team_since, substr(a.created_at,1,10)) <= substr(e.starts_at,1,10)
-        OR EXISTS (SELECT 1 FROM bookings b WHERE b.event_id=e.id AND b.athlete_id=a.id))) AS roster
+      (SELECT COUNT(*) FROM athletes a WHERE a.team_id=e.team_id AND a.archived=0 AND COALESCE(a.team_since, substr(a.created_at,1,10)) <= substr(e.starts_at,1,10))
+      + (SELECT COUNT(DISTINCT b.athlete_id) FROM bookings b JOIN athletes a ON a.id=b.athlete_id WHERE b.event_id=e.id AND a.archived=0
+        AND NOT (a.team_id IS e.team_id AND COALESCE(a.team_since, substr(a.created_at,1,10)) <= substr(e.starts_at,1,10))) AS roster
     FROM events e WHERE e.team_id=? AND e.type='team' AND e.cancelled=0 AND e.starts_at < ? ORDER BY e.starts_at DESC LIMIT ?`, teamId, booking.nowLocal(), n);
 }
 

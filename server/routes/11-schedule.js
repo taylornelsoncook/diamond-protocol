@@ -261,7 +261,7 @@ function routes(api) {
       if (last4 === '0002') throw bad('Card declined. Try another card or take cash.');
     }
     const result = tx(() => {
-      const r = billing.charge({ family_id: a.family_id, athlete_id: a.id, amount_cents: amount, description: `${e.name}, ${e.starts_at.replace('T', ' ')}`, method });
+      const r = billing.charge({ family_id: a.family_id, athlete_id: a.id, amount_cents: amount, description: `${e.name}, ${require('../lib').whenLocal(e.starts_at)}`, method });
       if (!r.ok) {
         // A declined tap at the session shouldn't retry later on its own.
         if (r.invoice_id) update('invoices', r.invoice_id, { status: 'void', next_retry: null });
@@ -297,7 +297,7 @@ function routes(api) {
     if (e.team_id) {
       const t = get('SELECT team_name, billing_email, contact_email FROM team_contracts t LEFT JOIN schools s ON s.id=t.school_id WHERE t.id=?', e.team_id);
       const to = t?.billing_email || t?.contact_email;
-      if (to) { sendEmail(to, `Cancelled: ${e.name} on ${e.starts_at.slice(0, 10)}`, `${e.name} for ${t.team_name} on ${when(e)} is cancelled. Reason: ${reason}.`); teamNotified = true; }
+      if (to) { sendEmail(to, `Cancelled: ${e.name} on ${when(e).split(', ').slice(0, 2).join(', ')}`, `${e.name} for ${t.team_name} on ${when(e)} is cancelled. Reason: ${reason}.`); teamNotified = true; }
     }
     log(req, 'Cancelled session', `${e.name} · ${when(e)} · ${reason} · ${n} famil${n === 1 ? 'y' : 'ies'} notified`);
     res.json({ ok: true, notified: n, team_notified: teamNotified });

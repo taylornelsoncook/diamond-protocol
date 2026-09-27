@@ -96,7 +96,11 @@ function seed() {
       const day = addDays(T, -Math.min(ago, daysIntoMonth));
       const created = ago === 0 ? null : `${day} 18:${String(10 + ago).padStart(2, '0')}:00`;
       const row = { location_id: loc[kind], athlete_id: a?.id || null, family_id: a?.family_id || null, items: JSON.stringify(lines), total_cents: total, discount_cents: discount, method, status: 'paid', charge_id: r.charge_id, staff_id: staff?.id || owner.id };
-      if (created) row.created_at = created;
+      if (created) {
+        row.created_at = created;
+        // The sale's invoice carries the same day, so Billing's "collected this month" and its invoice list agree with Point of sale.
+        if (r.invoice_id) update('invoices', r.invoice_id, { issued_at: day, paid_at: created.replace(' ', 'T') + '.000Z' });
+      }
       if (receipt) row.receipt_sent_at = new Date().toISOString();
       insert('sales', row);
     };

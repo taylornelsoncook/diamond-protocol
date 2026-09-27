@@ -17,7 +17,7 @@ function renewAsOf(asOf) {
       const fam = billing.familyOf(m.athlete_id);
       const plan = get('SELECT * FROM plans WHERE id=?', m.plan_id);
       const amount = m.price_cents ?? plan.price_cents;
-      const r = billing.charge({ family_id: fam?.id, athlete_id: m.athlete_id, amount_cents: amount, description: `${plan.name}: ${m.next_charge.slice(0, 7)}`, kind: 'membership', membership_id: m.id, period: m.next_charge.slice(0, 7) });
+      const r = billing.charge({ family_id: fam?.id, athlete_id: m.athlete_id, amount_cents: amount, description: `${plan.name}: ${require('../lib').monthLabel(m.next_charge)}`, kind: 'membership', membership_id: m.id, period: m.next_charge.slice(0, 7) });
       if (r.ok) {
         charged++;
         update('memberships', m.id, { status: 'active', next_charge: addMonths(m.next_charge, 1) });

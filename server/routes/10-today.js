@@ -49,7 +49,8 @@ function activeClients(T) {
 }
 
 function workoutsLogged() {
-  return get("SELECT COUNT(*) n FROM workout_logs WHERE finished_at IS NOT NULL AND substr(finished_at,1,10) >= date('now','-7 days')").n;
+  // Same count as "Workouts logged this week" on Programs: finished in the last 7 days, archived athletes left out.
+  return get("SELECT COUNT(*) n FROM workout_logs l JOIN athletes a ON a.id=l.athlete_id WHERE a.archived=0 AND l.finished_at >= datetime('now','-7 days')").n;
 }
 
 // Sales net of refunds, by local date.
@@ -243,7 +244,7 @@ function routes(api) {
       out.metrics = [
         { key: 'mrr', label: 'Monthly recurring revenue', value: money(mrr.total), note: `${money(mrr.memberships)} memberships · ${money(mrr.teams)} teams`, href: '/app/billing' },
         { key: 'clients', label: 'Active clients', value: String(clients.n), note: clients.trial ? `${clients.trial} on free trial` : 'None on free trial', href: '/app/clients' },
-        { key: 'failed', label: 'Payments failed', value: String(failed.n), tone: failed.n ? 'warn' : '', note: failed.n ? `${money(failed.c)} at risk this month` : 'Nothing at risk', href: '/app/billing' },
+        { key: 'failed', label: 'Payments failed', value: String(failed.n), tone: failed.n ? 'warn' : '', note: failed.n ? `${money(failed.c)} at risk` : 'Nothing at risk', href: '/app/billing' },
         { key: 'workouts', label: 'Workouts logged', value: String(workoutsLogged()), tone: 'good', note: 'Last 7 days', href: '/app/programs' },
       ];
       out.revenue = {

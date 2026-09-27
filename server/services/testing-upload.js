@@ -188,6 +188,7 @@ function checkSheet(rows, opts = {}) {
   // What each result would do: new, replace a different value, or change nothing. Plus PR context.
   // Unusual values: much better than the athlete's best, or at the edge of what's possible.
   const unusual = [];
+  const sheetBest = new Map(); // athlete|test -> best value earlier in this sheet, so two attempts that both beat the old best count one PR, as saving does
   for (const it of items) {
     const t = it.test;
     const existing = day ? get('SELECT id, value FROM results WHERE athlete_id=? AND test_id=? AND day_id=? AND attempt=?', it.athlete.id, t.id, day.id, it.attempt)
@@ -196,7 +197,10 @@ function checkSheet(rows, opts = {}) {
     it.same = !!existing && Math.abs(existing.value - it.value) < 1e-9;
     const prev = core.previousBest(t, it.athlete.id, { day_id: day ? day.id : null, attempt: it.attempt, source_ref: it.ref });
     it.prev_best = prev;
-    it.pr = prev != null && core.better(t, it.value, prev);
+    const k = `${it.athlete.id}|${t.id}`, earlier = sheetBest.get(k);
+    const bar = earlier == null ? prev : prev == null || core.better(t, earlier, prev) ? earlier : prev;
+    it.pr = bar != null && core.better(t, it.value, bar);
+    if (earlier == null || core.better(t, it.value, earlier)) sheetBest.set(k, it.value);
     let msg = null;
     if (prev != null && prev !== 0) {
       const imp = (t.lower_better ? prev - it.value : it.value - prev) / Math.abs(prev);

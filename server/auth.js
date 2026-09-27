@@ -125,8 +125,9 @@ router.post('/staff/login', h(async (req, res) => {
 
 router.post('/staff/logout', (req, res) => { endSession(req, res, 'staff'); res.json({ ok: true }); });
 
+// ?probe=1 (the dashboard opening) answers 200 with null when signed out, like /parent/session, so the sign-in page logs no error.
 router.get('/staff/me', (req, res) => {
-  if (!req.staff) return res.status(401).json({ error: 'Please sign in.' });
+  if (!req.staff) return req.query.probe ? res.json(null) : res.status(401).json({ error: 'Please sign in.' });
   res.json({ ...req.staff, business: businessName() });
 });
 

@@ -52,6 +52,12 @@ function nextInvoiceDate(c, asOf = today()) {
   return null;
 }
 
+// How to pay by check, for emails: the pay instructions plus the address, since an email has no letterhead above it.
+function payText() {
+  const how = String(setting('pay_instructions', '') || '').trim();
+  const where = String(setting('business_address', '') || '').trim();
+  return (how ? `\n\n${how}` : '') + (where ? `\n\nOur address: ${where}` : '');
+}
 function emailInvoice(invoiceId, { reminder = false } = {}) {
   const inv = get('SELECT * FROM invoices WHERE id=?', invoiceId);
   if (!inv) throw bad("That invoice wasn't found.");
@@ -64,7 +70,7 @@ function emailInvoice(invoiceId, { reminder = false } = {}) {
     : `Invoice ${inv.number} from ${businessName()}: ${money(inv.amount_cents)}`;
   const body = `Hi ${String(who).split(' ')[0]},\n\n` +
     (reminder ? `Invoice ${inv.number} for ${money(inv.amount_cents)} was due on ${fmtLong(inv.due_date)} and is still open.` : `Here is invoice ${inv.number} for ${money(inv.amount_cents)}${inv.due_date ? `, due ${fmtLong(inv.due_date)}` : ''}.`) +
-    `\n\n${inv.description || ''}\n\nView, print or pay online:\n${invoiceUrl(inv)}\n\n${setting('pay_instructions', '') || ''}\n\nThank you,\n${businessName()}`;
+    `\n\n${inv.description || ''}\n\nView, print or pay online:\n${invoiceUrl(inv)}${payText()}\n\nThank you,\n${businessName()}`;
   sendEmail(to, subject, body);
   return to;
 }
@@ -157,7 +163,7 @@ function emailStatement(contractId) {
   const lines = open.map((i) => `${i.number}  ${money(i.amount_cents)}  ${i.due_date ? `${i.due_date < T ? 'was due' : 'due'} ${fmtLong(i.due_date)}` : ''}\n${i.description || ''}\n${invoiceUrl(i)}`).join('\n\n');
   const who = String(c.billing_name || c.contact_name || c.school_name).split(' ')[0];
   sendEmail(to, `Statement from ${businessName()}: ${money(total)} open for ${c.team_name}`,
-    `Hi ${who},\n\nHere is where the ${c.team_name} account stands. ${open.length === 1 ? 'One invoice is' : `${open.length} invoices are`} open, ${money(total)} in all.\n\n${lines}\n\nEach link lets you view, print or pay that invoice online.\n\n${setting('pay_instructions', '') || ''}\n\nThank you,\n${businessName()}`);
+    `Hi ${who},\n\nHere is where the ${c.team_name} account stands. ${open.length === 1 ? 'One invoice is' : `${open.length} invoices are`} open, ${money(total)} in all.\n\n${lines}\n\nEach link lets you view, print or pay that invoice online.${payText()}\n\nThank you,\n${businessName()}`);
   return { to, count: open.length, total_cents: total };
 }
 

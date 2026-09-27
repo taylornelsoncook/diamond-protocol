@@ -188,6 +188,20 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (id INTEGER PRIMARY KEY, webhook_i
 CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY, to_email TEXT NOT NULL, subject TEXT NOT NULL, body TEXT NOT NULL, status TEXT DEFAULT 'logged', created_at TEXT DEFAULT (datetime('now')));
 CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY, actor TEXT, action TEXT NOT NULL, detail TEXT, ip TEXT, kind TEXT DEFAULT 'change', created_at TEXT DEFAULT (datetime('now')));
 CREATE INDEX IF NOT EXISTS activity_time ON activity(created_at);
+
+-- Lookups by athlete and family that every list screen makes (client list, Today, Billing, programs).
+CREATE INDEX IF NOT EXISTS bookings_athlete ON bookings(athlete_id, status);
+CREATE INDEX IF NOT EXISTS memberships_athlete ON memberships(athlete_id);
+CREATE INDEX IF NOT EXISTS workout_logs_athlete ON workout_logs(athlete_id);
+CREATE INDEX IF NOT EXISTS athletes_family ON athletes(family_id);
+CREATE INDEX IF NOT EXISTS athletes_team ON athletes(team_id);
+CREATE INDEX IF NOT EXISTS athletes_program ON athletes(program_id);
+CREATE INDEX IF NOT EXISTS parents_family ON parents(family_id);
+CREATE INDEX IF NOT EXISTS invoices_family ON invoices(family_id);
+CREATE INDEX IF NOT EXISTS invoices_membership ON invoices(membership_id);
+CREATE INDEX IF NOT EXISTS invoices_contract ON invoices(contract_id);
+CREATE INDEX IF NOT EXISTS invoices_status ON invoices(status);
+CREATE INDEX IF NOT EXISTS sales_time ON sales(created_at);
 `;
 db.exec(SCHEMA);
 

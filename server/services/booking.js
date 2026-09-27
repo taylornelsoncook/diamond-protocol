@@ -2,7 +2,7 @@
 // Event times are local wall-clock strings ("2026-09-28T16:30") in the business time zone from settings.
 'use strict';
 const { get, all, run, insert, update, tx, setting } = require('../db');
-const { bad, sendEmail, emit, addDays, ageOn, money } = require('../lib');
+const { bad, sendEmail, emit, addDays, ageOn, money, whenLocal } = require('../lib');
 const billing = require('./billing');
 const floorUtil = require('./floor-util'); // time off, and the schedule columns it adds on start
 
@@ -78,7 +78,7 @@ function cover(event, athlete, { payWith = null, dryRun = false } = {}) {
   }
   if (!event.price_cents) return { coverage: 'paid' };
   if (payWith === 'card' && !dryRun) {
-    const r = billing.charge({ family_id: athlete.family_id, athlete_id: athlete.id, amount_cents: event.price_cents, description: `${event.name}, ${event.starts_at.replace('T', ' ')}`, method: 'card' });
+    const r = billing.charge({ family_id: athlete.family_id, athlete_id: athlete.id, amount_cents: event.price_cents, description: `${event.name}, ${whenLocal(event.starts_at)}`, method: 'card' });
     if (!r.ok) {
       run("UPDATE invoices SET status='void', next_retry=NULL WHERE id=?", r.invoice_id); // booking refused, so never retry it
       throw bad(r.error || 'The card was declined.');
@@ -122,8 +122,22 @@ function restore(b) {
     const e = get('SELECT type FROM events WHERE id=?', b.event_id);
     run(`UPDATE athletes SET ${e.type === 'private' ? 'private_credits' : 'group_credits'}=${e.type === 'private' ? 'private_credits' : 'group_credits'}+1 WHERE id=?`, b.athlete_id);
   } else if (b.coverage === 'paid' && b.paid_cents > 0) {
-    const inv = get("SELECT id FROM invoices WHERE athlete_id=? AND amount_cents=? AND status='paid' AND kind='charge' ORDER BY id DESC LIMIT 1", b.athlete_id, b.paid_cents);
-    if (inv) billing.refundInvoice(inv.id, b.paid_cents);
+    // A drop-in collected at the session has a sale: refund what's left of that sale's own charge and mark the sale
+    // refunded, so Point of sale and Today's in-person takings drop along with Billing, whoever cancels (staff or the
+    // family). A sale already refunded at Point of sale isn't refunded twice.
+    const sale = get('SELECT * FROM sales WHERE booking_id=? ORDER BY id DESC LIMIT 1', b.id);
+    if (sale) {
+      const left = sale.total_cents - (sale.refunded_cents || 0);
+      const inv = sale.charge_id ? get("SELECT id FROM invoices WHERE charge_id=? AND status='paid' AND amount_cents>0", sale.charge_id) : null;
+      if (left > 0 && ['paid', 'partial_refund'].includes(sale.status)) {
+        if (inv) billing.refundInvoice(inv.id, left);
+        run("UPDATE sales SET status='refunded', refunded_cents=total_cents WHERE id=?", sale.id);
+      }
+    } else {
+      const inv = get("SELECT id, amount_cents FROM invoices WHERE athlete_id=? AND amount_cents=? AND status='paid' AND kind='charge' ORDER BY id DESC LIMIT 1", b.athlete_id, b.paid_cents);
+      const left = inv ? inv.amount_cents - billing.refundedCents(inv.id) : 0;
+      if (left > 0) billing.refundInvoice(inv.id, Math.min(left, b.paid_cents));
+    }
   }
 }
 
@@ -153,7 +167,7 @@ function promoteWaitlist(eventId) {
   const c = cover(e, a, {});
   update('bookings', w.id, { status: 'booked', coverage: c.coverage });
   const to = a.family_id ? billing.billingEmail(a.family_id) : a.email;
-  sendEmail(to, `${a.first_name} is in: ${e.name}`, `A spot opened up. ${a.first_name} is now booked for ${e.name} on ${e.starts_at.replace('T', ' at ')}.${c.coverage === 'unpaid' ? ` The drop-in price is ${money(e.price_cents)}, due at the session.` : ''}`);
+  sendEmail(to, `${a.first_name} is in: ${e.name}`, `A spot opened up. ${a.first_name} is now booked for ${e.name} on ${whenLocal(e.starts_at)}.${c.coverage === 'unpaid' ? ` The drop-in price is ${money(e.price_cents)}, due at the session.` : ''}`);
   return w.id;
 }
 
@@ -169,7 +183,7 @@ function cancelEvent(eventId, reason) {
       update('bookings', b.id, { status: 'cancelled' });
       const a = get('SELECT * FROM athletes WHERE id=?', b.athlete_id);
       const to = a.family_id ? billing.billingEmail(a.family_id) : a.email;
-      if (b.status === 'booked') sendEmail(to, `Cancelled: ${e.name} on ${e.starts_at.slice(0, 10)}`, `${e.name} on ${e.starts_at.replace('T', ' at ')} is cancelled.${reason ? ` Reason: ${reason}.` : ''} ${b.coverage === 'credit' ? 'The session credit is back on your account.' : b.coverage === 'paid' ? 'Your drop-in payment has been refunded.' : ''}`.trim());
+      if (b.status === 'booked') sendEmail(to, `Cancelled: ${e.name} on ${whenLocal(e.starts_at).split(' at ')[0]}`, `${e.name} on ${whenLocal(e.starts_at)} is cancelled.${reason ? ` Reason: ${reason}.` : ''} ${b.coverage === 'credit' ? 'The session credit is back on your account.' : b.coverage === 'paid' ? 'Your drop-in payment has been refunded.' : ''}`.trim());
     }
     return list.length;
   });

@@ -24,9 +24,17 @@ function localDateOf(ts) {
   const s = String(ts);
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
   if (Number.isNaN(d.getTime())) return s.slice(0, 10);
-  let tz = setting('timezone', 'America/Denver');
-  try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); } catch { tz = 'America/Denver'; }
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  return dayFormat(setting('timezone', 'America/Denver')).format(d);
+}
+// Building a formatter is slow; long lists (exports, the activity log) format thousands of dates.
+const dayFormats = new Map();
+function dayFormat(tz) {
+  if (!dayFormats.has(tz)) {
+    let f;
+    try { f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }); } catch { f = null; }
+    dayFormats.set(tz, f || new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit' }));
+  }
+  return dayFormats.get(tz);
 }
 
 const EVENT_COLS = `e.*, l.name AS location, l.address AS location_address, s.name AS coach,

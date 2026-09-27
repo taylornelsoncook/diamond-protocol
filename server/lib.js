@@ -83,8 +83,19 @@ function nextInvoiceNumber(prefix = 'DP') {
   const n = r ? Number(r.number.split('-').pop()) + 1 : 1;
   return `${prefix}-${y}-${String(n).padStart(4, '0')}`;
 }
+// For invoice descriptions, receipts and emails: "Sun, Sep 27 at 5:30 PM" from a local wall-clock "YYYY-MM-DDTHH:MM",
+// and "August 2026" from "2026-08".
+function whenLocal(startsAt) {
+  const d = new Date(String(startsAt).slice(0, 16) + ':00Z');
+  if (Number.isNaN(d.getTime())) return String(startsAt);
+  return `${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })} at ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' })}`;
+}
+function monthLabel(ym) {
+  const d = new Date(String(ym).slice(0, 7) + '-15T12:00:00Z');
+  return Number.isNaN(d.getTime()) ? String(ym) : d.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
 const businessName = () => setting('business_name', 'Diamond Protocol');
 // Render sets RENDER_EXTERNAL_URL automatically, so email links work without extra setup.
 const appUrl = () => (process.env.DP_APP_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + (process.env.PORT || 3000)).replace(/\/$/, '');
 
-module.exports = { randomToken, sha256, HttpError, bad, notFound, h, makeAthleteCode, sendEmail, log, emit, WEBHOOK_EVENTS, payments, money, today, localDate, addDays, addMonths, ageOn, nextInvoiceNumber, businessName, appUrl };
+module.exports = { randomToken, sha256, HttpError, bad, notFound, h, makeAthleteCode, sendEmail, log, emit, WEBHOOK_EVENTS, payments, money, today, localDate, addDays, addMonths, ageOn, nextInvoiceNumber, businessName, appUrl, whenLocal, monthLabel };

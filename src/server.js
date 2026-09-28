@@ -9,7 +9,7 @@ import { userForSession, keyForSecret, logApiRequest } from './services/access.j
 import { clientByToken } from './services/clients.js';
 import { deliverPending } from './services/events.js';
 import { guardianForToken } from './services/families.js';
-import { familyLock, lockMessage, OPEN_WHILE_LOCKED } from './services/lockout.js';
+import { familyLock, clientLock, lockMessage, athleteLockMessage, OPEN_WHILE_LOCKED } from './services/lockout.js';
 import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
@@ -246,6 +246,8 @@ function authenticate(ctx, req, route, r, url) {
   if (route.auth === 'client') {
     r.client = clientByToken(ctx, req.headers['x-client-token'] || url.searchParams.get('token'));
     if (!r.client) throw new HttpError(401, 'invalid_link', 'This app link is not valid. Ask your coach for a new one.');
+    // Locked out over a declined payment: only the app's home answers (and says why) until it's paid (lockout.js).
+    if (route.path !== '/app/api/home' && clientLock(ctx, r.client.id)) throw new HttpError(402, 'payment_locked', athleteLockMessage);
     return;
   }
   const bearer = (req.headers.authorization || '').match(/^Bearer\s+(.+)$/i)?.[1];

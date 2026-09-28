@@ -154,6 +154,7 @@ test('changing a plan with the difference charges the rest of this paid month no
   // Half the month is left.
   const start = addDays(new Date().toISOString(), -15), end = addDays(new Date().toISOString(), 15);
   db().run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ? WHERE id = ?', start, end, s0.id);
+  db().run('UPDATE invoices SET period_start = ?, period_end = ? WHERE subscription_id = ?', start, end, s0.id);   // the month's $100 payment
   const r = await owner('POST', `/v1/clients/${m.id}/subscription/plan`, { plan_id: big.id, when: 'difference' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const c = r.body.change.charged;
@@ -164,13 +165,42 @@ test('changing a plan with the difference charges the rest of this paid month no
   assert.equal(inv.period_end, end);
   const listed = (await owner('GET', `/v1/billing/invoices?q=${encodeURIComponent('plan change')}`)).body.data;
   assert.ok(listed.some((x) => x.id === inv.id), 'the invoice says what it was for');
-  // Moving down charges nothing.
-  const down = await owner('POST', `/v1/clients/${m.id}/subscription/plan`, { plan_id: plan.id, when: 'difference' });
-  assert.deepEqual([down.body.plan_id, down.body.change.charged, down.body.change.difference_cents < 0], [plan.id, null, true]);
+  // Moving down charges nothing; moving back up again charges nothing more, since those days are already paid at Elite.
+  const down = await owner('POST', `/v1/clients/${m.id}/subscription/plan`, { plan_id: plan.id, when: 'now' });
+  assert.equal(down.body.change.charged, null);
+  const up = await owner('POST', `/v1/clients/${m.id}/subscription/plan`, { plan_id: big.id, when: 'difference' });
+  assert.deepEqual([up.body.plan_id, up.body.change.charged], [big.id, null], 'never charged twice for the same days');
+  assert.ok(Math.abs(up.body.change.difference_cents) <= 5);
+  const down2 = await owner('POST', `/v1/clients/${m.id}/subscription/plan`, { plan_id: plan.id, when: 'difference' });
+  assert.deepEqual([down2.body.change.charged, down2.body.change.difference_cents < 0], [null, true], 'a cheaper plan charges nothing');
   // A trial has nothing paid to top up.
   const t = await member({ planId: trialPlan.id });
   assert.equal((await owner('POST', `/v1/clients/${t.id}/subscription/plan`, { plan_id: big.id, when: 'difference' })).status, 409);
   assert.equal((await owner('POST', `/v1/clients/${t.id}/subscription/plan`, { plan_id: big.id, when: 'later' })).status, 400);
+});
+
+test('a declined difference is a one-off: the membership stays active and the family isn\'t locked; no card, no charge', async () => {
+  const m = await member();
+  db().run(`UPDATE families SET card_status = 'declining' WHERE id = ?`, m.family_id);
+  await owner('PATCH', '/v1/settings', { payment_lock_tries: 1 });
+  const r = await owner('POST', `/v1/clients/${m.id}/subscription/plan`, { plan_id: big.id, when: 'difference' });
+  assert.equal(r.body.change.charged.status, 'failed');
+  const inv = invoices(m.id).at(-1);
+  assert.deepEqual([inv.status, inv.next_retry_at], ['failed', null], 'not retried on its own');
+  assert.equal(subOf(m.id).status, 'active', 'the membership stays paid up');
+  assert.equal((await (await parent(m.email))('GET', '/portal/api/me')).body.payment_lock, null, 'never locks the family');
+  await runBilling(app.ctx, addDays(new Date().toISOString(), 3.5));
+  assert.equal(subOf(m.id).status, 'active');
+  await owner('PATCH', '/v1/settings', { payment_lock_tries: 2 });
+  // No saved card: refused before anything changes.
+  const n = ++seq;
+  const c = (await owner('POST', '/v1/clients', { name: `Nocard ${n}`, parent: { name: 'P', email: `nocard${n}@example.com` } })).body;
+  await owner('POST', `/v1/clients/${c.id}/subscription`, { plan_id: plan.id });
+  db().run(`UPDATE subscriptions SET status = 'active' WHERE client_id = ?`, c.id);
+  const nc = await owner('POST', `/v1/clients/${c.id}/subscription/plan`, { plan_id: big.id, when: 'difference' });
+  assert.equal(nc.status, 409);
+  assert.match(nc.body.error.message, /card/);
+  assert.equal(subOf(c.id).plan_id, plan.id);
 });
 
 // ---------------------------------------------------------------- lockout
@@ -200,12 +230,15 @@ test('a family whose payment declined on the first charge and the first retry ca
     assert.equal(r.body.error.code, 'payment_locked');
   }
   assert.equal((await fam('GET', '/portal/api/payments')).status, 200, 'payments still work');
+  assert.notEqual((await fam('PATCH', `/portal/api/athletes/${m.id}`, { medical_notes: 'Asthma inhaler in bag' })).status, 402, 'medical notes never wait on a payment');
+  assert.notEqual((await fam('PATCH', '/portal/api/texts', { texts: false })).status, 402, 'nor turning texts off');
   assert.notEqual((await fam('POST', '/portal/api/card/setup-link')).status, 402, 'so does the card');
   assert.equal((await fam('GET', `/portal/api/payments/membership/${invoices(m.id)[0].id}`)).status !== 402, true, 'and receipts');
   // The athlete app is closed too.
   const home = (await athleteApp(m.id)('GET', '/app/api/home')).body;
   assert.equal(home.locked, true);
   assert.match(home.message, /parent/);
+  assert.equal((await athleteApp(m.id)('GET', '/app/api/engage')).status, 402, 'the rest of the app waits too');
   // Staff see it on the client page; coaches without the amount.
   assert.equal((await owner('GET', `/v1/clients/${m.id}`)).body.payment_locked.amount_cents, 10000);
   const seen = (await coach('GET', `/v1/clients/${m.id}`)).body.payment_locked;
@@ -217,6 +250,7 @@ test('a family whose payment declined on the first charge and the first retry ca
   assert.equal((await fam('GET', '/portal/api/me')).body.payment_lock, null);
   assert.equal((await fam('GET', '/portal/api/schedule')).status, 200);
   assert.equal((await athleteApp(m.id)('GET', '/app/api/home')).body.locked, false);
+  assert.equal((await athleteApp(m.id)('GET', '/app/api/engage')).status, 200);
 });
 
 test('a locked athlete checks in at the desk, not the tablet; the owner can turn the lockout off', async () => {
@@ -270,6 +304,8 @@ test('Education tabs decide who reads a lesson; coach\'s education is public and
   assert.equal((await owner('POST', '/v1/lesson-assignments', { lesson_id: cz.id, client_id: athlete.id })).status, 409);
   assert.equal((await owner('POST', '/v1/lesson-assignments', { lesson_id: par.id, client_id: athlete.id })).status, 409);
   assert.equal((await owner('POST', '/v1/lesson-assignments', { lesson_id: blog.id, client_id: athlete.id })).status, 201);
+  assert.equal((await owner('PATCH', `/v1/lessons/${blog.id}`, { category: 'coach' })).status, 409, 'assigned reading can\'t move where athletes can\'t open it');
+  assert.equal((await owner('PATCH', `/v1/lessons/${blog.id}`, { category: 'research' })).status, 200);
   // A lesson in a course follows the course.
   const pc = (await owner('POST', '/v1/courses', { title: 'Parents 101', audience: 'parents' })).body;
   assert.equal((await owner('POST', '/v1/lessons', { title: 'In a course', course_id: pc.id })).body.category, 'parent');
@@ -278,7 +314,7 @@ test('Education tabs decide who reads a lesson; coach\'s education is public and
   assert.equal(db().get(`SELECT category FROM lessons WHERE title = 'In a course'`).category, 'athlete', 'a course\'s lessons follow its audience');
   const edu = (await owner('GET', '/v1/education')).body;
   assert.ok(edu.categories.coach);
-  assert.ok(edu.stats.by_category.blog >= 1);
+  assert.ok(edu.stats.by_category.research >= 2);
   assert.equal((await desk('POST', '/v1/lessons', { title: 'desk', category: 'blog' })).status, 403, 'front desk only looks');
 });
 

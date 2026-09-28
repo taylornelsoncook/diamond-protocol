@@ -707,6 +707,11 @@ export function createLesson(ctx, body = {}) {
 export function updateLesson(ctx, id, body = {}) {
   const cur = getLesson(ctx, id);
   const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0, quiz: cur.quiz ? JSON.stringify(cur.quiz) : null });
+  // Athletes can't open parent or coach's education, so reading assigned to them would be stuck open.
+  if (['parent', 'coach'].includes(f.category) && f.category !== cur.category) {
+    const n = ctx.db.get('SELECT COUNT(*) AS n FROM lesson_assignments WHERE lesson_id = ?', id).n;
+    if (n) throw conflict(`"${cur.title}" is assigned to athletes ${n === 1 ? 'once' : `${n} times`}. Remove ${n === 1 ? 'that assignment' : 'those assignments'} on the Assigned tab first, then move it to ${EDU_CATEGORIES[f.category]}.`);
+  }
   const position = f.course_id !== cur.course_id && f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : cur.position;
   ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, category = ?, updated_at = ? WHERE id = ?',
     f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, ctx.now(), id);

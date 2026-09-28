@@ -5,8 +5,8 @@
 // While locked:
 //   - the parent portal answers only sign-in, the family's card, payments (receipts and Try again), their own details,
 //     agreements, the waiver, devices, the data export and deletion requests; everything else is 402 payment_locked;
-//   - the family's athletes can't open the workout app, book from an open-spot link or check themselves in (door QR or
-//     tablet).
+//   - the family's athletes can't use the workout app (every /app/api route but home, which says why), book from an
+//     open-spot link or check themselves in (door QR or tablet).
 // Staff can still book and check them in at the desk (and take the payment there); the client page says they're locked.
 // A family is locked when any of its athletes' payments is; an adult with no family when their own is.
 import { getSetting } from './families.js';
@@ -15,7 +15,7 @@ export const LOCK_TRIES = [0, 1, 2, 3];      // 0 = never lock; 4 automatic trie
 export const lockTries = (ctx) => Number(getSetting(ctx, 'payment_lock_tries'));
 
 const LOCKING = `FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN clients c ON c.id = i.client_id
-  WHERE i.status = 'failed' AND s.status = 'past_due' AND i.auto_attempts >= ?`;
+  WHERE i.status = 'failed' AND s.status = 'past_due' AND i.note IS NULL AND i.auto_attempts >= ?`;   // a plan change's one-off difference never locks
 function lockOf(ctx, rows) {
   if (!rows.length) return null;
   const cents = rows.reduce((t, r) => t + r.amount_cents, 0);
@@ -42,7 +42,10 @@ export const OPEN_WHILE_LOCKED = new Set([
   'GET /portal/api/payments', 'GET /portal/api/payments/membership/:id', 'POST /portal/api/payments/:id/retry',
   'POST /portal/api/agreements', 'POST /portal/api/waiver', 'POST /portal/api/waiver/email',
   'GET /portal/api/devices', 'POST /portal/api/devices/sign-out-others',
-  'GET /portal/api/export', 'POST /portal/api/deletion-request'
+  'GET /portal/api/export', 'POST /portal/api/deletion-request',
+  // Safety and consent never wait on a payment: medical notes and emergency contacts, turning texts off, and adding the
+  // other parent (who may be the one to pay).
+  'PATCH /portal/api/athletes/:id', 'PATCH /portal/api/texts', 'POST /portal/api/guardians'
 ]);
 export const lockMessage = (lock) => `A membership payment of $${(lock.amount_cents / 100).toFixed(2).replace(/\.00$/, '')} didn't go through. Update your card or try the payment again on the Family tab; everything opens again as soon as it's paid.`;
 export const athleteLockMessage = 'A membership payment didn\'t go through. Ask your parent to update the card in the parent portal, and you\'re back in as soon as it\'s paid.';

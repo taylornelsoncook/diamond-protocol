@@ -220,10 +220,10 @@ export function familyPayments(ctx, familyId, { all = false } = {}) {
     FROM sales s JOIN clients c ON c.id = s.client_id WHERE c.family_id = ? AND s.status IN ('succeeded','partially_refunded','refunded')`, familyId)
     .map((s) => ({ kind: 'sale', id: s.id, date: s.completed_at ?? s.created_at, description: s.description || 'Payment', athlete_name: first(s.athlete_name), amount_cents: s.amount_cents, refunded_cents: s.refunded_cents,
       method: commerce.METHOD_LABEL[s.method] ?? s.method, card_last4: s.card_last4, receipt_url: s.receipt_token ? `/receipt/${s.receipt_token}` : null }));
-  const invoices = ctx.db.all(`SELECT i.id, i.amount_cents, i.refunded_cents, i.paid_at, i.paid_method, i.period_start, i.period_end, p.name AS plan_name, c.name AS athlete_name
+  const invoices = ctx.db.all(`SELECT i.id, i.amount_cents, i.refunded_cents, i.paid_at, i.paid_method, i.period_start, i.period_end, i.note, p.name AS plan_name, c.name AS athlete_name
     FROM invoices i JOIN clients c ON c.id = i.client_id JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id
     WHERE c.family_id = ? AND i.status = 'paid' AND i.amount_cents > 0`, familyId)
-    .map((i) => ({ kind: 'membership', id: i.id, date: i.paid_at, description: `${i.plan_name} membership`, athlete_name: first(i.athlete_name), amount_cents: i.amount_cents, refunded_cents: i.refunded_cents,
+    .map((i) => ({ kind: 'membership', id: i.id, date: i.paid_at, description: i.note ?? `${i.plan_name} membership`, athlete_name: first(i.athlete_name), amount_cents: i.amount_cents, refunded_cents: i.refunded_cents,
       method: i.paid_method ? billing.HAND_METHODS[i.paid_method] ?? 'Other' : 'Card on file', card_last4: null, receipt_url: null }));
   const rows = [...sales, ...invoices].filter((x) => x.date).sort((a, b) => b.date.localeCompare(a.date));
   const paidThisYear = rows.filter((x) => localDate(x.date, zone).slice(0, 4) === year).reduce((n, x) => n + x.amount_cents - (x.refunded_cents ?? 0), 0);

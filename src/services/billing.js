@@ -144,8 +144,8 @@ export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
   if (when === 'difference') {
     if (s.status !== 'active') throw conflict(s.status === 'trialing' ? 'Nothing has been charged yet during the free trial. Choose Start now: the trial ends on the new plan\'s price.'
       : s.status === 'past_due' ? 'This month\'s payment was declined. Collect it first, or choose Start now.' : 'A paused membership has no paid month to top up. Choose Start now or at renewal.');
-    const total = Date.parse(s.current_period_end) - Date.parse(s.current_period_start), left = Date.parse(s.current_period_end) - Date.parse(ctx.now());
-    diff = total > 0 && left > 0 ? Math.round(((plan.price_cents - s.price_cents) * left) / total) : 0;
+    if (!payerFor(ctx, s.client_id).card_payment_method) throw conflict('There\'s no card on file to charge the difference. Add a card first, or choose Start now.');
+    diff = differenceCents(ctx, s, plan.price_cents);
   }
   ctx.db.run('UPDATE subscriptions SET plan_id = ?, pending_plan_id = NULL, pending_set_at = NULL, updated_at = ? WHERE id = ?', planId, ctx.now(), subId);
   const after = getSubscription(ctx, subId);
@@ -155,10 +155,27 @@ export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
     const id = newId('inv');
     ctx.db.run(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, note)
       VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, diff, ctx.now(), s.current_period_end, ctx.now(), `Plan change: ${s.plan_name} to ${plan.name}, the rest of this month`);
-    const inv = await attemptCharge(ctx, id, ctx.now());
-    charged = { invoice_id: id, amount_cents: diff, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null };
+    try {
+      const inv = await attemptCharge(ctx, id, ctx.now());
+      charged = { invoice_id: id, amount_cents: diff, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null };
+    } catch (e) {
+      // The card processor didn't answer: the plan has changed and the charge is left to retry from Billing.
+      ctx.db.run(`UPDATE invoices SET status = 'failed', last_error = ? WHERE id = ? AND status = 'open'`, String(e.message ?? e).slice(0, 300), id);
+      charged = { invoice_id: id, amount_cents: diff, status: 'failed', error: 'The card processor didn\'t answer. Retry the charge from Billing.' };
+    }
   }
   return { subscription: getSubscription(ctx, subId), when, charged, difference_cents: when === 'difference' ? diff : null };
+}
+// The price difference for the rest of the paid month: what the new plan costs for the time left, less what was already
+// paid toward that time (the month's payment and any earlier differences, after refunds, each spread over the time it
+// covered). So changing back and forth within a month never charges twice for the same days.
+function differenceCents(ctx, s, newPrice) {
+  const now = Date.parse(ctx.now()), end = Date.parse(s.current_period_end), start = Date.parse(s.current_period_start);
+  if (!(end > now) || !(end > start)) return 0;
+  const owed = (newPrice * (end - now)) / (end - start);
+  const paid = ctx.db.all(`SELECT amount_cents - refunded_cents AS net, period_start, period_end FROM invoices WHERE subscription_id = ? AND status = 'paid' AND period_end = ?`, s.id, s.current_period_end)
+    .reduce((t, i) => { const a = Date.parse(i.period_start), b = Date.parse(i.period_end); return b > a ? t + (Math.max(0, i.net) * Math.min(1, (b - now) / (b - a))) : t; }, 0);
+  return Math.round(owed - paid);
 }
 export function cancelPendingPlan(ctx, subId) {
   const s = getSubscription(ctx, subId);
@@ -280,15 +297,18 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
     if (result.ok) {
       recordPaid(ctx, inv, s, { attempts, autoAttempts, ref: result.ref });
     } else {
-      const giveUp = !manual && autoAttempts >= MAX_ATTEMPTS;
-      const nextRetry = giveUp ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
+      // A one-off charge (a plan change's difference, invoices.note) that declines stays for the owner or the parent to retry:
+      // it never makes the membership past due, retries on its own, cancels it or locks the family out.
+      const oneOff = !!inv.note;
+      const giveUp = !oneOff && !manual && autoAttempts >= MAX_ATTEMPTS;
+      const nextRetry = giveUp || oneOff ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
       ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, auto_attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
         attempts, autoAttempts, result.error, nextRetry, result.ref ?? null, inv.id);
       emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, automatic_attempts: autoAttempts, manual, source, error: result.error, final: giveUp });
       if (giveUp) {
         ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id);
         setStatus(ctx, s.id, 'canceled', { canceled_at: ctx.now() });
-      } else if (s.status !== 'canceled') {
+      } else if (s.status !== 'canceled' && !oneOff) {
         setStatus(ctx, s.id, 'past_due');
       }
     }
@@ -827,7 +847,7 @@ export function billingSummary(ctx) {
   const failed = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(i.amount_cents), 0) AS c, COALESCE(SUM(CASE WHEN (${cardSql()}) IS NULL THEN 1 ELSE 0 END), 0) AS no_card
     FROM invoices i JOIN clients c ON c.id = i.client_id LEFT JOIN families f ON f.id = c.family_id WHERE i.status = 'failed'`);
   const school = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS c, COALESCE(SUM(due_on < ?), 0) AS overdue_n, COALESCE(SUM(CASE WHEN due_on < ? THEN amount_cents ELSE 0 END), 0) AS overdue_c FROM team_invoices WHERE status = 'open'`, today, today);
-  const upcoming = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(p.price_cents), 0) AS c, COALESCE(SUM(s.status = 'trialing'), 0) AS trials FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+  const upcoming = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE((SELECT pp.price_cents FROM plans pp WHERE pp.id = s.pending_plan_id), p.price_cents)), 0) AS c, COALESCE(SUM(s.status = 'trialing'), 0) AS trials FROM subscriptions s JOIN plans p ON p.id = s.plan_id
     WHERE s.status IN ('active','trialing') AND s.current_period_end <= ?`, week);
   const month = moneyIn(ctx, monthStart, now), day = moneyIn(ctx, todayRange.from, todayRange.to);
   const { counts } = listBillingInvoices(ctx, { limit: 1 });

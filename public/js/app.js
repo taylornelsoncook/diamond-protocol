@@ -1502,7 +1502,7 @@ async function viewBilling(main) {
     const act = (path, msg, ask) => (e) => { if (ask && !confirm(ask)) return; busy(e.currentTarget, async () => { await post(`/v1/clients/${m.client_id}/subscription/${path}`); toast(msg); render(); }); };
     if (m.status === 'canceled') return null;
     return h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap' },
-      livePlans.some((p) => p.id !== m.plan_id) ? btn('Change plan', () => changePlanDialog(m, livePlans), 'outline', { 'aria-label': `Change ${m.client_name}'s plan` }) : null,
+      livePlans.some((p) => p.id !== m.plan_id) ? btn('Change plan', () => changePlanDialog(m, plans.data), 'outline', { 'aria-label': `Change ${m.client_name}'s plan` }) : null,
       m.pending_plan_name ? btn('Cancel change', cancelPlanChange(m), 'ghost', { 'aria-label': `Cancel ${m.client_name}'s move to ${m.pending_plan_name}` }) : null,
       ['active', 'trialing'].includes(m.status) ? btn('Pause', act('pause', 'Paused. Nothing is charged until you resume.'), 'ghost', { 'aria-label': `Pause ${m.client_name}'s membership` }) : null,
       m.status === 'paused' ? btn('Resume', act('resume', 'Resumed. A new month started today.', `Resume ${m.client_name}'s membership? A new month starts today and ${money(m.price_cents)} is charged now.`), 'ghost') : null,
@@ -2123,13 +2123,14 @@ function changePlanDialog(m, plans) {
   const plan = select(choices.map((p) => [p.id, `${p.name} (${money(p.price_cents)}/mo)`]), { value: m.pending_plan_id && choices.some((p) => p.id === m.pending_plan_id) ? m.pending_plan_id : choices[0].id });
   const ends = m.status === 'trialing' ? 'when the free trial ends' : `at the renewal on ${date(m.current_period_end)}`;
   const when = select([['now', 'Start now'], ['renewal', `Wait until the end of this membership (${ends})`], ...(m.status === 'active' ? [['difference', 'Start now and charge the difference now']] : [])], { value: 'now' });
-  const cur = plans.find((p) => p.id === m.plan_id);
+  // The server works out the exact difference (what was already paid this month counts); this is the monthly gap.
+  const cur = plans.find((p) => p.id === m.plan_id) ?? { name: m.plan_name, price_cents: m.price_cents };   // a retired plan still has its price
   const note = h('p', { class: 'small muted', style: 'margin:0' });
   const explain = () => {
     const p = choices.find((x) => x.id === plan.value), diff = p && cur ? p.price_cents - cur.price_cents : 0;
     note.textContent = when.value === 'now' ? `${first} moves to ${p.name} today. Nothing is charged now; the next renewal charges ${money(p.price_cents)}.`
       : when.value === 'renewal' ? `${first} stays on ${cur?.name ?? 'the current plan'} until ${m.status === 'trialing' ? 'the trial ends' : date(m.current_period_end)}, then moves to ${p.name} and is charged ${money(p.price_cents)}.`
-      : diff > 0 ? `${first} moves to ${p.name} today, and the card on file is charged the ${money(diff)} a month difference for the days left in this paid month. The renewal on ${date(m.current_period_end)} charges ${money(p.price_cents)}.`
+      : diff > 0 ? `${first} moves to ${p.name} today, and the card on file is charged the difference for the days left in this paid month (up to ${money(diff)}, less anything already paid toward them). The renewal on ${date(m.current_period_end)} charges ${money(p.price_cents)}.`
       : `${p.name} costs the same or less, so nothing is charged now. ${first} moves today; the renewal charges ${money(p.price_cents)}.`;
   };
   plan.addEventListener('change', explain); when.addEventListener('change', explain); explain();
@@ -2139,8 +2140,8 @@ function changePlanDialog(m, plans) {
     const name = choices.find((p) => p.id === plan.value)?.name;
     const c = out.change?.charged;
     if (when.value === 'renewal') return `${first} moves to ${name} at the renewal.`;
-    if (c && c.status !== 'paid') { toast(`${first} is on ${name} now, but the ${money(c.amount_cents)} difference was declined${c.error ? ` (${c.error})` : ''}. It retries like any declined payment.`, 'warn'); return null; }
-    return c ? `${first} is on ${name} now. Charged ${money(c.amount_cents)} for the rest of this month.` : `${first} is on ${name} now.`;
+    if (c && c.status !== 'paid') { toast(`${first} is on ${name} now, but the ${money(c.amount_cents)} difference didn't go through${c.error ? ` (${c.error})` : ''}. Retry it from Billing; it doesn't make the membership past due.`, 'warn'); return null; }
+    return c ? `${first} is on ${name} now. Charged ${money(c.amount_cents)} for the rest of this month.` : when.value === 'difference' ? `${first} is on ${name} now. Nothing more to charge for this month.` : `${first} is on ${name} now.`;
   });
 }
 const cancelPlanChange = (m) => (e) => { if (confirm(`Cancel ${m.client_name.split(' ')[0]}'s move to ${m.pending_plan_name}? They stay on their current plan.`)) busy(e.currentTarget, async () => { await del(`/v1/clients/${m.client_id}/subscription/pending-plan`); toast('Plan change canceled.'); render(); }); };

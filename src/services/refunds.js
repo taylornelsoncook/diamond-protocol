@@ -1,10 +1,11 @@
-// The refunds report (Billing → Refunds, owner only): every refund that went back to a family, newest first, with the
+// The refunds report (Billing → Refunds, owner only): the refunds the app records that went back to a family, newest first, with the
 // athlete's name and how to reach the family (the athlete's own email and phone, or else the primary parent's).
 // Three kinds of refund are listed, the same ones Billing and Today count:
 //   membership: a refund of a membership payment (invoice_refunds; in the app or in the Stripe dashboard)
 //   sale:       a refund or undo of an in-person or online sale (sale_refunds; in the app or in the Stripe dashboard)
 //   paid_twice: a card approval that came in after the membership was already paid, refunded automatically
 //               (invoice_charges.late_outcome = 'refunded')
+// A pay link paid twice is refunded automatically too, but only emailed to the owners (no row), so it isn't listed here.
 // Dates are business-local days (?from=, ?to=); a refund counts on the day the money went back.
 import { badRequest, isDate, zonedToUtc, addDaysToDate, localDate } from '../util.js';
 import { getSetting } from './families.js';
@@ -38,7 +39,7 @@ function rows(ctx, f) {
   if (!f.kind || f.kind === 'membership') out.push(...ctx.db.all(`
     SELECT r.id, 'membership' AS kind, r.created_at AS refunded_at, r.amount_cents, r.reason, r.source, COALESCE((SELECT u.name FROM users u WHERE u.id = r.created_by), r.created_by) AS created_by,
       c.id AS client_id, c.name AS athlete_name, c.athlete_id, ${CONTACT('c')},
-      'Membership: ' || COALESCE(p.name, 'plan') AS what, i.id AS invoice_id, NULL AS sale_id
+      COALESCE(i.note, 'Membership: ' || COALESCE(p.name, 'plan')) AS what, i.id AS invoice_id, NULL AS sale_id
     FROM invoice_refunds r JOIN invoices i ON i.id = r.invoice_id
     LEFT JOIN clients c ON c.id = i.client_id LEFT JOIN subscriptions s ON s.id = i.subscription_id LEFT JOIN plans p ON p.id = s.plan_id
     WHERE r.created_at >= ? AND r.created_at < ?`, f.from, f.to));
@@ -53,7 +54,7 @@ function rows(ctx, f) {
   if (!f.kind || f.kind === 'paid_twice') out.push(...ctx.db.all(`
     SELECT ch.id, 'paid_twice' AS kind, ch.late_at AS refunded_at, ch.amount_cents, 'Charged ' || COALESCE(ch.late_reason, 'after it was paid') AS reason, 'app' AS source, 'Automatic' AS created_by,
       c.id AS client_id, c.name AS athlete_name, c.athlete_id, ${CONTACT('c')},
-      'Membership: ' || COALESCE(p.name, 'plan') AS what, i.id AS invoice_id, NULL AS sale_id
+      COALESCE(i.note, 'Membership: ' || COALESCE(p.name, 'plan')) AS what, i.id AS invoice_id, NULL AS sale_id
     FROM invoice_charges ch JOIN invoices i ON i.id = ch.invoice_id
     LEFT JOIN clients c ON c.id = i.client_id LEFT JOIN subscriptions s ON s.id = i.subscription_id LEFT JOIN plans p ON p.id = s.plan_id
     WHERE ch.late_outcome = 'refunded' AND ch.late_at >= ? AND ch.late_at < ?`, f.from, f.to));

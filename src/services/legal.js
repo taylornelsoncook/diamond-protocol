@@ -101,7 +101,7 @@ export async function requestDeletion(ctx, guardian, body = {}) {
     id, fam.id, fam.name, `${guardian.name} <${guardian.email}>`, v.str(body.note, 'note', { max: 1000, optional: true }), ctx.now());
   emit(ctx, 'family.deletion_requested', { request_id: id, family_id: fam.id, family_name: fam.name, requested_by: guardian.name });
   for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
-    sendEmail(ctx, { to: o.email, subject: `Deletion request: ${fam.name}`, text: `${guardian.name} (${guardian.email}) asked for the ${fam.name}'s data to be deleted.\n\nReview it under Staff & security → Data requests.` }).catch(() => {});
+    sendEmail(ctx, { to: o.email, subject: `Deletion request: ${fam.name}`, text: `${guardian.name} (${guardian.email}) asked for the ${fam.name}'s data to be deleted.\n\nReview it under Settings → Data requests.` }).catch(() => {});
   }
   await sendEmail(ctx, { to: guardian.email, subject: 'We received your deletion request', text: `We received your request to delete the ${fam.name}'s account and data. We'll email you when it's done.\n\n${getSetting(ctx, 'business_name')}` });
   return listDataRequests(ctx).find((r) => r.id === id);

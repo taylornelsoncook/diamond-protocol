@@ -215,3 +215,13 @@ test('deleting a week athletes logged needs confirm, and says how many logs go',
   const copy = await coach('POST', `/v1/programs/${p.id}/weeks/1/copy`, { to: 1, through: 1 });
   assert.equal(copy.status, 400);
 });
+
+test('a program with only archived clients on it can be deleted; current clients block it', async () => {
+  const p = (await coach('POST', '/v1/programs', { name: 'Old block', weeks: 1 })).body;
+  await coach('POST', `/v1/programs/${p.id}/assign`, { client_id: ben.id });
+  assert.equal((await coach('DELETE', `/v1/programs/${p.id}`)).status, 409);
+  app.ctx.db.run('UPDATE clients SET archived_at = ? WHERE id = ?', app.ctx.now(), ben.id);
+  assert.equal((await coach('DELETE', `/v1/programs/${p.id}`)).status, 200);
+  app.ctx.db.run('UPDATE clients SET archived_at = NULL WHERE id = ?', ben.id);
+  assert.equal((await desk('DELETE', `/v1/programs/${p.id}`)).status, 403);
+});

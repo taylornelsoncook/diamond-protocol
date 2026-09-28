@@ -1,6 +1,6 @@
-import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel, videoEmbed, playIcon } from './ui.js';
-import { saleForm } from './shop-admin.js';
+import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, flagsPanel, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
+import { initPrograms, viewPrograms, viewProgram, workoutRow } from './programs-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -18,10 +18,11 @@ const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
 const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'education'] };
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'] };   // front desk: programs read-only
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
+initPrograms({ api, render, header, role: () => state.user?.role, pulseTile: (...a) => pulseTile(...a) });
 
 // ---------- Shell ----------
 async function boot() {
@@ -106,7 +107,7 @@ const EVENT_TEXT = {
   'invoice.paid': (d) => `Payment of ${money(d.amount_cents)} received from ${d.client_name}`,
   'invoice.payment_failed': (d) => `Payment of ${money(d.amount_cents)} failed for ${d.client_name}${d.final ? '. Membership canceled.' : ''}`,
   'program.assigned': (d) => `${d.client_name} started ${d.program_name}`,
-  'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises)`,
+  'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises${d.sets ? `, ${d.sets} ${d.sets === 1 ? 'set' : 'sets'}` : ''}${d.effort ? `, effort ${d.effort}/10` : ''})${d.bests?.length ? `. New best: ${d.bests.map((b) => `${b.name} ${b.weight} lb`).join(', ')}` : ''}`,
   'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
   'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment${d.amount_cents == null ? '' : ` of ${money(d.amount_cents)}`} from ${d.client_name} didn't go through`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
@@ -438,7 +439,6 @@ async function viewLeads(main) {
     chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel, reviewPanel);
 }
 
-const LOAD_LIFT = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_clean_1rm: 'power clean' };
 // ---------- Announcement emails ----------
 const GROUPS = [['everyone', 'All families'], ['members', 'Members'], ['lapsed', 'Lapsed members (canceled in the last year)'], ['no_membership', 'Families without a membership'], ['leads', 'Families who asked about training']];
 async function viewCampaigns(main) {
@@ -631,7 +631,7 @@ async function viewClient(main, id) {
       btn('Copy app link', async () => { await navigator.clipboard.writeText(appUrl); toast('App link copied.'); }, 'outline'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
       role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
-    logs.data.length ? h('div', null, logs.data.slice(0, 5).map((l) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${l.workout_title} · week ${l.week}, day ${l.day}`), h('span', { class: 'muted' }, ago(l.completed_at))))) : null);
+    logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null);
 
   // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
   // leaving the page asks first.
@@ -1133,109 +1133,7 @@ async function viewBilling(main) {
 }
 
 // ---------- Programs ----------
-async function viewPrograms(main) {
-  const [progs, exs, shop] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), isOwner() ? get('/v1/shop') : null]);
-  const name = input(), weeks = input({ type: 'number', min: '1', max: '52', value: '8' }), level = select([['Beginner', 'Beginner'], ['Intermediate', 'Intermediate'], ['Advanced', 'Advanced'], ['All levels', 'All levels']]);
-  const create = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    const p = await post('/v1/programs', { name: name.value, weeks: Number(weeks.value), level: level.value }); toast('Program created. Add its first workout.'); location.hash = `#/programs/${p.id}`;
-  }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('Program name', name), field('Weeks', weeks), field('Level', level)), h('div', null, btn('Create program', null, 'primary', { type: 'submit' })));
-
-  const exName = input(), exUrl = input({ type: 'url', placeholder: 'https://youtube.com/watch?v=…' }), exCue = input({ placeholder: 'One or two coaching cues' });
-  const addEx = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await post('/v1/exercises', { name: exName.value, video_url: exUrl.value || undefined, instructions: exCue.value || undefined }); toast('Exercise added to the library.'); render();
-  }); } }, h('div', { class: 'form-grid' }, field('Exercise name', exName), field('Demo video link', exUrl, 'YouTube, Vimeo or a direct .mp4 link.')), field('Coaching cues', exCue), h('div', null, btn('Add exercise', null, 'secondary', { type: 'submit' })));
-
-  fill(main, 
-    header('Programs', 'Build training, attach demo videos and assign to clients.'),
-    h('div', { class: 'split' },
-      h('div', { class: 'stack', style: 'gap:24px' },
-        progs.data.length ? h('div', { class: 'workouts' }, progs.data.map((p) => h('a', { href: `#/programs/${p.id}`, class: 'dp-panel', style: 'text-decoration:none;color:inherit' },
-          h('div', { class: 'week-title', style: 'color:var(--steel)' }, p.name),
-          h('div', { class: 'small muted' }, `${p.weeks} weeks · ${p.level ?? 'Any level'} · ${p.workout_count} ${p.workout_count === 1 ? 'workout' : 'workouts'} · ${p.client_count} ${p.client_count === 1 ? 'client' : 'clients'}`)))) : h('div', { class: 'empty' }, 'No programs yet. Create your first one below.'),
-        panel('New program', {}, create),
-        shop ? storePanel(shop) : null),
-      panel('Exercise library', { subtitle: `${exs.data.length} exercises` },
-        h('div', null, exs.data.map((x) => h('div', { class: 'list-item' },
-          h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon()),
-          h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, x.video_url ? 'Has demo video' : 'No video yet')),
-          btn('Edit', () => editExercise(x), 'ghost')))),
-        addEx)));
-}
-
-// Owners: what's in the online store and the link to share.
-function storePanel(shop) {
-  const listed = [...shop.programs, ...shop.courses].filter((x) => x.listed);
-  const link = `${location.origin}/shop`;
-  return panel('Online store', { subtitle: listed.length ? `${listed.length} for sale · ${shop.last_30_days.sold} sold in the last 30 days (${money(shop.last_30_days.cents)})` : 'Nothing for sale yet. Open a program and use Sell online, or a course on the Education tab.' },
-    listed.map((x) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title), h('span', { class: 'small muted' }, `${x.kind === 'program' ? 'Program' : 'Course'} · ${money(x.price_cents)} · ${x.sold} sold`)),
-      x.kind === 'program' ? h('a', { class: 'dp-btn dp-btn--ghost', href: `#/programs/${x.id}` }, 'Open') : null)),
-    h('div', { class: 'row wrap' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
-      btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website and Instagram.')), 'ghost'),
-      h('a', { class: 'dp-btn dp-btn--ghost', href: '/shop', target: '_blank', rel: 'noopener' }, 'View')));
-}
-
-function showVideo(x) {
-  const d = document.getElementById('dialog');
-  fill(d, h('div', { class: 'stack' },
-    h('div', { class: 'row' }, h('h2', { class: 'week-title grow', style: 'color:var(--steel)' }, x.name), btn('Close', () => d.close(), 'ghost')),
-    videoEmbed(x.video_url, x.name), x.instructions ? h('p', { class: 'muted' }, x.instructions) : null));
-  d.addEventListener('close', () => fill(d), { once: true });
-  d.showModal();
-}
-function editExercise(x) {
-  const d = document.getElementById('dialog');
-  const name = input({ value: x.name }), url = input({ type: 'url', value: x.video_url ?? '' }), cue = h('textarea', { class: 'dp-input' }); cue.value = x.instructions ?? '';
-  fill(d, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await patch(`/v1/exercises/${x.id}`, { name: name.value, video_url: url.value || null, instructions: cue.value || null }); d.close(); toast('Exercise saved.'); render();
-  }); } },
-    h('h2', { class: 'week-title', style: 'color:var(--steel)' }, 'Edit exercise'), field('Name', name), field('Demo video link', url, 'YouTube, Vimeo or a direct .mp4 link.'), field('Coaching cues', cue),
-    h('div', { class: 'row' }, btn('Save exercise', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
-  d.showModal();
-}
-
-async function viewProgram(main, id) {
-  const [p, exs, clients, shop] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), get('/v1/clients'), isOwner() ? get('/v1/shop') : null]);
-  const who = select([['', 'Choose a client'], ...clients.data.filter((c) => !['canceled'].includes(c.status)).map((c) => [c.id, c.name])], { 'aria-label': 'Client to assign' });
-  const assign = h('div', { class: 'row' }, h('div', { style: 'width:220px' }, who), btn('Assign program', (e) => busy(e.currentTarget, async () => {
-    if (!who.value) throw new Error('Choose a client first.');
-    await post(`/v1/programs/${id}/assign`, { client_id: who.value }); toast(`${p.name} assigned.`); render();
-  })));
-
-  const weeks = [...new Set(p.workouts.map((w) => w.week))];
-  const workoutCard = (w) => {
-    const exSel = select([['', 'Choose exercise'], ...exs.data.map((x) => [x.id, x.name])], { 'aria-label': `Exercise for ${w.title}` });
-    const rx = input({ placeholder: 'Sets × reps, e.g. 3 × 10', 'aria-label': 'Sets and reps' });
-    const lt = select([['', 'Weight: coach sets it'], ['squat_1rm', '% of back squat max'], ['bench_1rm', '% of bench press max'], ['power_clean_1rm', '% of power clean max']], { 'aria-label': 'Weight from a tested max' });
-    const lp = input({ type: 'number', min: '30', max: '110', inputmode: 'numeric', placeholder: '%', 'aria-label': 'Percent of max', style: 'width:80px' });
-    return h('div', { class: 'workout' },
-      h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}`), h('span', { class: 'strong' }, w.title)),
-        btn('Delete', (e) => { if (confirm(`Delete ${w.title}?`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`); toast('Workout deleted.'); render(); }); }, 'ghost')),
-      w.exercises.length ? w.exercises.map((x) => h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon()),
-        h('div', { class: 'grow stack-tight' }, h('span', null, x.name), h('span', { class: 'small muted' }, `${x.prescription}${x.load_test ? ` · ${x.load_pct}% of ${LOAD_LIFT[x.load_test]} max` : ''}`)),
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `Remove ${x.name}`, onClick: (e) => busy(e.currentTarget, async () => { await del(`/v1/workout-exercises/${x.id}`); render(); }) }, 'Remove')))
-        : h('p', { class: 'small muted' }, 'No exercises yet.'),
-      h('form', { class: 'row wrap', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-        if (!exSel.value) throw new Error('Choose an exercise to add.');
-        await post(`/v1/workouts/${w.id}/exercises`, { exercise_id: exSel.value, prescription: rx.value, load_test: lt.value || undefined, load_pct: lt.value ? Number(lp.value) : undefined }); render();
-      }); } }, h('div', { style: 'flex:1 1 100%' }, exSel), h('div', { class: 'grow' }, rx), lt, lp, btn('Add exercise', null, 'secondary', { type: 'submit' })),
-      h('p', { class: 'small muted', style: 'margin:0' }, 'A weight from a max updates itself each time the athlete tests again, rounded to 5 lb.'));
-  };
-
-  const wk = input({ type: 'number', min: '1', max: String(p.weeks), value: String(weeks.length ? Math.max(...weeks) : 1) }), dy = input({ type: 'number', min: '1', max: '7', value: '1' }), title = input({ placeholder: 'Lower body' });
-  const addWorkout = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await post(`/v1/programs/${id}/workouts`, { week: Number(wk.value), day: Number(dy.value), title: title.value }); toast('Workout added.'); render();
-  }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:1fr 1fr 2fr' }, field('Week', wk), field('Day', dy), field('Workout title', title)), h('div', null, btn('Add workout', null, 'secondary', { type: 'submit' })));
-
-  fill(main, 
-    header(p.name, `${p.weeks} weeks · ${p.level ?? 'Any level'} · ${p.clients.length ? 'On it: ' + p.clients.map((c) => c.name.split(' ')[0]).join(', ') : 'Nobody assigned yet'}`, assign),
-    ...weeks.map((n) => h('section', { class: 'stack' }, h('h2', { class: 'week-title' }, `Week ${n}`), h('div', { class: 'workouts' }, p.workouts.filter((w) => w.week === n).map(workoutCard)))),
-    weeks.length ? null : h('div', { class: 'empty' }, 'No workouts yet. Add the first one below.'),
-    panel('Add a workout', {}, addWorkout),
-    shop ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => render())) : null,
-    h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
-      btn('Delete program', (e) => { if (confirm(`Delete ${p.name}? This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost')));
-}
+// The Programs page and the program builder live in programs-coach.js.
 
 // ---------- Integrations ----------
 async function viewIntegrations(main) {

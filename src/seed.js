@@ -19,7 +19,7 @@ import { createUser } from './services/access.js';
 import * as engage from './services/engage.js';
 import * as inventory from './services/inventory.js';
 import * as shop from './services/shop.js';
-import { addDays } from './util.js';
+import { addDays, newId } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
 if (ctx.db.get('SELECT COUNT(*) AS n FROM users').n) { console.log('Database already has an account. Delete the data folder to start fresh.'); process.exit(0); }
@@ -312,6 +312,27 @@ clients.addNote(ctx, lopez.id, { body: 'Lost confidence after a tough club seaso
 clients.addNote(ctx, lopez.id, { body: 'Asked about the fall camp dates at the desk. Sent the link.' }, { id: desk.id, name: 'Jess Moreno', role: 'front_desk' });
 const owen = await clients.createClient(ctx, { name: 'Owen Fischer', birth_date: '2010-04-18', sport: 'Baseball', parent: { name: 'Karen Fischer', email: 'karen.fischer@example.com', phone: '555-0144' }, send_welcome: false });
 await clients.archiveClient(ctx, owen.id, {}, { name: 'Head Coach' });
+
+// Programs (batch B8): library categories, and sets, effort and notes on Ava's logged workouts, so the builder, the
+// Programs page feed and the athlete app's history have something to show.
+for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], ['lunge', 'Lower body'], ['squat', 'Lower body'], ['plank', 'Core'], ['pushup', 'Upper body'], ['row', 'Upper body'],
+  ['press', 'Upper body'], ['incline', 'Upper body'], ['pulldown', 'Upper body'], ['swing', 'Power'], ['bike', 'Conditioning']]) programs.updateExercise(ctx, ex[key].id, { category });
+{
+  const avaLogs = ctx.db.all('SELECT id, workout_id, completed_at FROM workout_logs WHERE client_id = ? ORDER BY completed_at', lopez.id);
+  avaLogs.forEach((l, i) => {
+    const items = ctx.db.all('SELECT we.id, we.exercise_id, we.prescription, e.name FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position', l.workout_id);
+    for (const x of items) {
+      const rx = programs.parseRx(x.prescription);
+      for (let n = 1; n <= rx.sets; n++) {
+        const weight = rx.reps == null || ['pushup', 'plank'].some((k) => ex[k].id === x.exercise_id) ? null : 20 + i * 5;
+        ctx.db.run('INSERT INTO workout_sets (id, workout_log_id, workout_exercise_id, exercise_id, exercise_name, set_no, weight, reps, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          newId('set'), l.id, x.id, x.exercise_id, x.name, n, weight, rx.reps, l.completed_at);
+      }
+    }
+    ctx.db.run('UPDATE workout_logs SET rpe = ?, started_at = ?, notes = ? WHERE id = ?', [6, 7, 5, 8, 7, 6][i % 6], new Date(Date.parse(l.completed_at) - (38 + i * 3) * 60000).toISOString(),
+      i === avaLogs.length - 1 ? 'Lunges felt easier today.' : null, l.id);
+  });
+}
 
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);

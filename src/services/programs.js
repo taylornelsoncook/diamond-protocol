@@ -150,9 +150,10 @@ export function updateProgram(ctx, id, body) {
     weeks, id);
   return getProgram(ctx, id);
 }
+// Refused while current clients are on it. Archived clients still on it (not shown on the program) are taken off.
 export function deleteProgram(ctx, id) {
   getProgram(ctx, id);
-  const on = ctx.db.get('SELECT COUNT(*) AS n FROM assignments WHERE program_id = ? AND active = 1', id).n;
+  const on = ctx.db.get('SELECT COUNT(*) AS n FROM assignments a JOIN clients c ON c.id = a.client_id WHERE a.program_id = ? AND a.active = 1 AND c.archived_at IS NULL', id).n;
   if (on) throw conflict(`${on} ${on === 1 ? 'client is' : 'clients are'} on this program. Move them to another program or remove them first.`);
   ctx.db.run('DELETE FROM programs WHERE id = ?', id);
   return { id, deleted: true };
@@ -642,10 +643,12 @@ export function logDetail(ctx, client, logId) {
   // Sets of exercises the coach has since taken out of the workout still show.
   const gone = ctx.db.all('SELECT DISTINCT workout_exercise_id AS id, exercise_name AS name FROM workout_sets WHERE workout_log_id = ?', l.id).filter((g) => !items.some((i) => i.id === g.id));
   const strip = ({ workout_exercise_id, ...s }) => s;
+  const rxOf = (rx) => { const r = parseRx(rx); return { target_sets: r.sets, target_reps: r.reps }; };
   return {
     id: l.id, title: l.workout_title, week: l.week, day: l.day, program_name: l.program_name, completed_at: l.completed_at, rpe: l.rpe, notes: l.notes,
     minutes: minutesOf(l), on_screen: !!l.session_id, bests: bestsOf(ctx, l.id), can_reopen: !reopenBlock(ctx, client.id, l),
-    exercises: [...items.map((i) => ({ id: i.id, name: i.name, prescription: i.prescription, done: done.has(i.id), sets: sets.filter((s) => s.workout_exercise_id === i.id).map(strip) })),
+    workout_id: l.workout_id,
+    exercises: [...items.map((i) => ({ id: i.id, exercise_id: i.exercise_id, name: i.name, prescription: i.prescription, ...rxOf(i.prescription), done: done.has(i.id), sets: sets.filter((s) => s.workout_exercise_id === i.id).map(strip) })),
       ...gone.map((g) => ({ id: g.id, name: g.name, prescription: null, done: true, removed: true, sets: sets.filter((s) => s.workout_exercise_id === g.id).map(strip) }))]
   };
 }

@@ -42,6 +42,9 @@ services:
         sync: false
       - key: SMS_ONLY_TO
         sync: false
+      # Optional: Claude reads program PDFs (Programs > Build from a PDF) and rewords progress notes.
+      - key: ANTHROPIC_API_KEY
+        sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT
         sync: false
@@ -101,7 +104,7 @@ services:
         sync: false
       - key: TWILIO_FROM
         sync: false
-      # Optional: Claude rewords progress notes for parents (coaches still approve each one).
+      # Optional: Claude reads program PDFs (Programs > Build from a PDF) and rewords progress notes for parents.
       - key: ANTHROPIC_API_KEY
         sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.

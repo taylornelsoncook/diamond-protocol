@@ -2,15 +2,18 @@
 // in the program builder's format: weeks, days, exercises, sets and reps, and a weight as a percent of a tested max
 // where the file says so. Nothing is saved from the draft: the coach checks and edits it, chooses a library exercise
 // for every line (or adds a new one), and only then saves it, all at once, as a new program or as weeks added to one.
-// Exercise names are never matched silently: an exact library name is picked for the coach to see, a close one is
-// marked "check it", anything else is offered as a new exercise.
+// Exercise names are never matched silently: an exact library name is picked for the coach to see, a close one is only
+// suggested (the coach presses Use it), anything else is offered as a new exercise.
 // Needs ANTHROPIC_API_KEY (the owner adds it in Render). The file goes to Anthropic to be read and nothing else.
 import { newId, v, badRequest, notFound, HttpError } from '../util.js';
 import { CATEGORIES, LOAD_TESTS, getProgram, loadInput } from './programs.js';
 import { rateLimit } from './security.js';
 
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;      // Anthropic takes up to 32 MB a request; base64 adds a third
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 3.7 * 1024 * 1024;            // Anthropic's 5 MB image limit counts the base64 text
+const MAX_PAGES = 100;
+const MAX_LIBRARY_NAMES = 1500;                         // a bigger library isn't listed for Claude; names are matched here
+const DAILY_READS = 150;                                // for the whole business, so a slip can't run up a bill
 const MAX_WORKOUTS = 7 * 52, MAX_EXERCISES = 30, MAX_LINES = 1500;
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced', 'All levels'];
 const MODEL = () => process.env.DP_WORKOUT_MODEL || 'claude-opus-5';
@@ -30,13 +33,21 @@ function fileBlock(body) {
   const ext = (name.match(/\.([a-z0-9]+)$/i)?.[1] ?? '').toLowerCase();
   const type = KINDS[ext];
   if (!type) throw badRequest('Choose a PDF, or a photo (PNG, JPG or WebP). For Word or Pages, save it as a PDF first.');
-  const b64 = String(f.data_base64 ?? '').replace(/\s/g, '');
+  let b64 = String(f.data_base64 ?? '');
+  if (/\s/.test(b64)) b64 = b64.replace(/\s/g, '');
   if (!b64 || !/^[A-Za-z0-9+/]+=*$/.test(b64)) throw badRequest('That file came through empty. Choose it again.');
   const buf = Buffer.from(b64, 'base64');
   const max = type === 'application/pdf' ? MAX_FILE_BYTES : MAX_IMAGE_BYTES;
-  if (buf.length > max) throw badRequest(`That file is ${(buf.length / 1024 / 1024).toFixed(1)} MB. The limit is ${max / 1024 / 1024} MB: split the PDF, or take a smaller photo.`);
-  if (type === 'application/pdf' && !buf.subarray(0, 1024).toString('latin1').includes('%PDF')) throw badRequest('That file isn\'t a PDF. Choose the PDF again, or save the program as a PDF first.');
-  if (type === 'application/pdf' && /\/Encrypt\b/.test(buf.toString('latin1'))) throw badRequest('This PDF is password-protected. Save a copy without a password and choose that.');
+  if (buf.length > max) throw badRequest(type === 'application/pdf'
+    ? `That PDF is ${(buf.length / 1024 / 1024).toFixed(1)} MB. The limit is ${MAX_FILE_BYTES / 1024 / 1024} MB: split it into parts.`
+    : `That photo is ${(buf.length / 1024 / 1024).toFixed(1)} MB. The limit is 3.7 MB: take a screenshot of it, or send a smaller size.`);
+  if (type === 'application/pdf') {
+    if (!buf.subarray(0, 1024).toString('latin1').includes('%PDF')) throw badRequest('That file isn\'t a PDF. Choose the PDF again, or save the program as a PDF first.');
+    const text = buf.toString('latin1');
+    if (/\/Encrypt\b/.test(text)) throw badRequest('This PDF is password-protected. Save a copy without a password and choose that.');
+    const pages = (text.match(/\/Type\s*\/Page(?![s\w])/g) ?? []).length;
+    if (pages > MAX_PAGES) throw badRequest(`That PDF has ${pages} pages. Bring in up to ${MAX_PAGES} pages at a time: split it into parts.`);
+  }
   return { name, block: type === 'application/pdf'
     ? { type: 'document', source: { type: 'base64', media_type: type, data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: type, data: b64 } } };
@@ -74,8 +85,8 @@ The app's format:
 - Anything you can't place or read clearly goes in unclear as one short sentence each, in plain English, saying where it is in the file.
 - If the file isn't a training program, set is_program to false and leave workouts empty.
 
-The coach's exercise library (one per line):
-${library.length ? library.map((e) => e.name).join('\n') : '(empty)'}`;
+${library.length > MAX_LIBRARY_NAMES ? 'The coach\'s library is too big to list here, so leave library_match as "".' : `The coach's exercise library (one per line):
+${library.length ? library.map((e) => e.name).join('\n') : '(empty)'}`}`;
 }
 
 // Calls the Messages API with the file and asks for the draft as JSON. Tests and local runs can set ctx.readWorkoutFile.
@@ -85,27 +96,58 @@ async function askClaude(ctx, file, library) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new HttpError(503, 'ai_not_set_up', 'Reading a PDF needs the Anthropic key. The owner adds ANTHROPIC_API_KEY in Render (see CHECKLIST.md), then this works.');
   const model = MODEL();
-  const body = { model, max_tokens: 32000, system,
-    thinking: { type: 'adaptive' }, output_config: { effort: 'high', format: { type: 'json_schema', schema: DRAFT_SCHEMA } },
+  // Streamed, so a long program never hits a timeout halfway (after it's been paid for). Medium effort: copying a program
+  // out of a file needs care, not long reasoning, and it keeps the coach's wait short.
+  const body = { model, max_tokens: 64000, stream: true, system,
+    thinking: { type: 'adaptive' }, output_config: { effort: 'medium', format: { type: 'json_schema', schema: DRAFT_SCHEMA } },
     messages: [{ role: 'user', content: [file.block, { type: 'text', text: 'Read this program and fill in the draft.' }] }] };
   const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
   if (model === 'claude-opus-5') { body.fallbacks = 'default'; headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; }   // a declined read is retried on another model
   let res;
-  try { res = await fetch(`${API()}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(300000) }); }
+  const signal = AbortSignal.timeout(15 * 60000);
+  try { res = await fetch(`${API()}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body), signal }); }
   catch (e) { throw new HttpError(502, 'ai_unavailable', e?.name === 'TimeoutError' ? 'Reading the file took too long. Try again, or split a long PDF into parts.' : 'We couldn\'t reach Anthropic to read the file. Try again in a minute.'); }
-  const d = await res.json().catch(() => null);
   if (!res.ok) {
+    const d = await res.json().catch(() => null);
     const why = d?.error?.message ?? `status ${res.status}`;
     console.error('workout import: Anthropic said', why);
     if (res.status === 401 || res.status === 403) throw new HttpError(502, 'ai_key', 'The Anthropic key in Render isn\'t working. The owner checks ANTHROPIC_API_KEY.');
     if (res.status === 429 || res.status === 529 || res.status >= 500) throw new HttpError(502, 'ai_busy', 'Anthropic is busy right now. Try again in a minute.');
-    if (/pages?|too (large|long)|exceed/i.test(why)) throw badRequest('That file is too long to read in one go. Split the PDF into parts (a few weeks each) and bring them in one at a time.');
+    if (/pages?|too (large|long)|exceed/i.test(why)) throw badRequest(file.block.type === 'image' ? 'That photo is too big to read. Take a screenshot of it, or send a smaller size.' : 'That file is too long to read in one go. Split the PDF into parts (a few weeks each) and bring them in one at a time.');
     throw badRequest('We couldn\'t read that file. Check it opens, or save it as a PDF again and try once more.');
   }
+  let d;
+  try { d = await readStream(res); }
+  catch (e) { throw new HttpError(502, 'ai_unavailable', e?.name === 'TimeoutError' ? 'Reading the file took too long. Try again, or split a long PDF into parts.' : `Reading stopped partway (${e.message}). Try again in a minute.`); }
   if (d?.stop_reason === 'refusal') throw badRequest('We couldn\'t read that file as a training program. Check it\'s the right file.');
   if (d?.stop_reason === 'max_tokens') throw badRequest('That program is too long to read in one go. Split the PDF into parts (a few weeks each) and bring them in one at a time.');
   const text = d?.content?.find((b) => b.type === 'text')?.text;
   try { return JSON.parse(text); } catch { throw badRequest('We couldn\'t read that file. Try again, or save it as a PDF again first.'); }
+}
+
+// The streamed answer (server-sent events): the text of the answer and why it stopped. When a declined answer is taken
+// over by the fallback model partway, the text before the switch is dropped.
+async function readStream(res) {
+  let text = '', stop = null, buf = '';
+  const handle = (data) => {
+    let e; try { e = JSON.parse(data); } catch { return; }
+    if (e.type === 'content_block_start' && e.content_block?.type === 'fallback') text = '';
+    else if (e.type === 'content_block_start' && e.content_block?.type === 'text') text += e.content_block.text ?? '';
+    else if (e.type === 'content_block_delta' && e.delta?.type === 'text_delta') text += e.delta.text;
+    else if (e.type === 'message_delta' && e.delta?.stop_reason) stop = e.delta.stop_reason;
+    else if (e.type === 'error') throw new Error(e.error?.message ?? 'stream error');
+  };
+  const decoder = new TextDecoder();
+  for await (const chunk of res.body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const event = buf.slice(0, i); buf = buf.slice(i + 2);
+      const data = event.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n');
+      if (data) handle(data);
+    }
+  }
+  return { stop_reason: stop, content: [{ type: 'text', text }] };
 }
 
 // ---------- Matching exercise names to the library ----------
@@ -142,6 +184,7 @@ function matchExercise(name, claudeMatch, library) {
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 export async function draftFromFile(ctx, body, user) {
   if (user?.id) rateLimit(`workout-import:${user.id}`, 20, 60 * 60000);   // each read costs a little; 20 an hour is plenty
+  rateLimit('workout-import:all', DAILY_READS, 24 * 60 * 60000);
   const file = fileBlock(body);
   const library = ctx.db.all('SELECT id, name, category FROM exercises ORDER BY name COLLATE NOCASE');
   const raw = await askClaude(ctx, file, library);
@@ -162,10 +205,11 @@ export async function draftFromFile(ctx, body, user) {
       return { name, ...matchExercise(name, x?.library_match, library), prescription: clean(x?.prescription, 80),
         load_test: lift && pct >= 30 && pct <= 110 ? lift : null, load_pct: lift && pct >= 30 && pct <= 110 ? pct : null, note: clean(x?.note, 200) };
     }).filter((x) => x.name);
-    if ((w.exercises?.length ?? 0) > MAX_EXERCISES) notes.push(`Week ${week}, day ${day} has more than ${MAX_EXERCISES} exercises; only the first ${MAX_EXERCISES} are in the draft.`);
+    if (Array.isArray(w.exercises) && w.exercises.length > MAX_EXERCISES) notes.push(`Week ${week}, day ${day} has more than ${MAX_EXERCISES} exercises; only the first ${MAX_EXERCISES} are in the draft.`);
     workouts.push({ week, day, title: clean(w.title, 120) || `Day ${day}`, exercises });
   }
   if (raw.workouts.length > MAX_WORKOUTS) notes.push(`The file has more than ${MAX_WORKOUTS} workouts; only the first ${MAX_WORKOUTS} are in the draft.`);
+  if (!workouts.length) throw badRequest('We couldn\'t place any workouts from that file in weeks and days. Check it\'s the right file, or try a clearer copy.');
   workouts.sort((a, b) => a.week - b.week || a.day - b.day);
   const lines = workouts.flatMap((w) => w.exercises);
   return {
@@ -183,7 +227,8 @@ export async function draftFromFile(ctx, body, user) {
 // Every line is checked first; any problem and nothing is saved. New exercises with the same name are added once.
 export function saveImport(ctx, body = {}) {
   const problems = [];
-  const where = (w, i) => `Week ${w.week ?? '?'}, day ${w.day ?? '?'}${i != null ? `, exercise ${i + 1}` : ''}`;
+  const where = (w, i) => `Week ${w?.week ?? '?'}, day ${w?.day ?? '?'}${i != null ? `, exercise ${i + 1}` : ''}`;
+  const text = (x) => (typeof x === 'string' ? x : x == null ? '' : null);   // null: not text at all
   const target = body.program_id ? getProgram(ctx, v.str(body.program_id, 'program_id')) : null;
   const prog = target ? null : {
     name: v.str(body.program?.name, 'program name', { max: 120 }),
@@ -201,20 +246,23 @@ export function saveImport(ctx, body = {}) {
   let lines = 0;
   const workouts = [];
   for (const w of list) {
-    const week = Number(w?.week), day = Number(w?.day);
+    if (!w || typeof w !== 'object') { problems.push('One of the workouts is empty. Remove it.'); continue; }
+    const week = Number(w.week), day = Number(w.day);
     if (!Number.isInteger(week) || week < 1 || week > 52) { problems.push(`${where(w)}: the week must be 1 to 52.`); continue; }
     if (!Number.isInteger(day) || day < 1 || day > 7) { problems.push(`${where(w)}: the day must be 1 to 7.`); continue; }
     const key = `${week}-${day}`;
     if (seen.has(key)) problems.push(`${where(w)} is in the draft twice. Change one of them.`);
     else if (taken.has(key)) problems.push(`${where(w)} already has a workout in ${target.name}. Change the week or day, or remove it from the draft.`);
     seen.add(key);
-    const title = clean(w.title, 120) || `Day ${day}`;
+    if (text(w.title) === null) problems.push(`${where(w)}: the title must be text.`);
+    const title = clean(text(w.title), 120) || `Day ${day}`;
     const exs = Array.isArray(w.exercises) ? w.exercises : [];
     if (!exs.length) problems.push(`${where(w)} has no exercises. Add one or remove the day.`);
     if (exs.length > MAX_EXERCISES) problems.push(`${where(w)} has more than ${MAX_EXERCISES} exercises.`);
     const out = [];
     exs.slice(0, MAX_EXERCISES).forEach((x, i) => {
       lines++;
+      if (text(x?.prescription) === null) { problems.push(`${where(w, i)}: the sets and reps must be text, like 3 × 8.`); return; }
       const rx = clean(x?.prescription, 200);
       if (!rx) problems.push(`${where(w, i)}: add the sets and reps, like 3 × 8.`);
       else if (rx.length > 80) problems.push(`${where(w, i)}: the sets and reps are ${rx.length} characters; keep them to 80.`);

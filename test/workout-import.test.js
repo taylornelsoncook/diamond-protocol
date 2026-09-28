@@ -159,10 +159,25 @@ test('front desk can\'t read or save; without the key the page says what to do',
 test('the request to Anthropic: the file, the model, structured output and the fallback; errors in plain words', async () => {
   delete app.ctx.readWorkoutFile;
   const got = [];
-  let reply = { status: 200, body: { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(DRAFT) }] } };
+  // A streamed answer, split in odd places like the network does; before: text from a model that declined partway.
+  const sse = (text, stop = 'end_turn', { before = '' } = {}) => [
+    { type: 'message_start', message: { id: 'msg_1' } },
+    ...(before ? [{ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: before } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'fallback', from: { model: 'claude-opus-5' }, to: { model: 'claude-opus-4-8' } } }] : []),
+    { type: 'content_block_start', index: 2, content_block: { type: 'thinking', thinking: '' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'thinking_delta', thinking: '' } },
+    { type: 'content_block_start', index: 3, content_block: { type: 'text', text: '' } },
+    ...text.match(/.{1,40}/gs).map((t) => ({ type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: t } })),
+    { type: 'message_delta', delta: { stop_reason: stop } }, { type: 'message_stop' }
+  ].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  let reply = { status: 200, stream: sse(JSON.stringify(DRAFT)) };
   const fake = http.createServer((req, res) => {
     let b = ''; req.on('data', (c) => { b += c; });
-    req.on('end', () => { got.push({ url: req.url, headers: req.headers, body: JSON.parse(b) }); res.writeHead(reply.status, { 'content-type': 'application/json' }); res.end(JSON.stringify(reply.body)); });
+    req.on('end', () => {
+      got.push({ url: req.url, headers: req.headers, body: JSON.parse(b) });
+      if (reply.stream) { res.writeHead(200, { 'content-type': 'text/event-stream' }); const s = reply.stream; const cut = Math.floor(s.length / 3); res.write(s.slice(0, cut)); setTimeout(() => { res.write(s.slice(cut, cut * 2 + 7)); res.end(s.slice(cut * 2 + 7)); }, 5); return; }
+      res.writeHead(reply.status, { 'content-type': 'application/json' }); res.end(JSON.stringify(reply.body));
+    });
   });
   await new Promise((r) => fake.listen(0, r));
   const saved = { key: process.env.ANTHROPIC_API_KEY, url: process.env.ANTHROPIC_BASE_URL };
@@ -179,14 +194,21 @@ test('the request to Anthropic: the file, the model, structured output and the f
     assert.equal(q.body.fallbacks, 'default');
     assert.equal(q.body.output_config.format.type, 'json_schema');
     assert.deepEqual(q.body.thinking, { type: 'adaptive' });
+    assert.equal(q.body.stream, true);
+    assert.equal(r.body.workouts.length, 3, 'the streamed answer is read in full');
+    // A model that declined partway: its text is dropped and the fallback's answer is used.
+    reply = { status: 200, stream: sse(JSON.stringify(DRAFT), 'end_turn', { before: '{"is_program": tr' }) };
+    const fb = await coach('POST', '/v1/programs/import/draft', { file: PDF });
+    assert.equal(fb.status, 200, fb.text);
+    assert.equal(fb.body.program.name, 'Summer strength');
     assert.equal(q.body.messages[0].content[0].type, 'document');
     assert.equal(q.body.messages[0].content[0].source.data, PDF.data_base64);
     for (const [status, body, re] of [
       [401, { error: { message: 'invalid x-api-key' } }, /key in Render isn't working/],
       [529, { error: { message: 'Overloaded' } }, /busy/],
-      [200, { stop_reason: 'max_tokens', content: [] }, /too long to read in one go/],
-      [200, { stop_reason: 'refusal', content: [] }, /couldn't read that file as a training program/]]) {
-      reply = { status, body };
+      [200, 'max_tokens', /too long to read in one go/],
+      [200, 'refusal', /couldn't read that file as a training program/]]) {
+      reply = status === 200 ? { stream: sse('{"is_program": true', body) } : { status, body };
       const e = await coach('POST', '/v1/programs/import/draft', { file: PDF });
       assert.ok(e.status >= 400, `${status}: ${e.text}`);
       assert.match(e.body.error.message, re);
@@ -196,4 +218,30 @@ test('the request to Anthropic: the file, the model, structured output and the f
     if (saved.key) process.env.ANTHROPIC_API_KEY = saved.key; else delete process.env.ANTHROPIC_API_KEY;
     if (saved.url) process.env.ANTHROPIC_BASE_URL = saved.url; else delete process.env.ANTHROPIC_BASE_URL;
   }
+});
+
+test('odd input and odd answers get plain words, never a crash', async () => {
+  // Saving: a missing workout, non-text fields.
+  const r = await coach('POST', '/v1/programs/import', { program: { name: 'P' }, workouts: [null, { week: 1, day: 1, title: { x: 1 }, exercises: [{ exercise_id: squat.id, prescription: 5 }] }] });
+  assert.equal(r.status, 400, r.text);
+  assert.deepEqual(r.body.error.details.problems, ['One of the workouts is empty. Remove it.', 'Week 1, day 1: the title must be text.', 'Week 1, day 1, exercise 1: the sets and reps must be text, like 3 × 8.']);
+  // An answer with nothing that fits in weeks and days.
+  app.ctx.readWorkoutFile = async () => ({ is_program: true, program: { name: 'x', description: '', level: '' }, workouts: ['x', 5, null, { week: 0, day: 1, title: 'Zero', exercises: [] }], unclear: 'not a list' });
+  assert.match((await coach('POST', '/v1/programs/import/draft', { file: PDF })).body.error.message, /couldn't place any workouts/);
+  // A photo over Anthropic's limit; a PDF with too many pages.
+  const big = { name: 'board.png', data_base64: Buffer.alloc(3.8 * 1024 * 1024).toString('base64') };
+  assert.match((await coach('POST', '/v1/programs/import/draft', { file: big })).body.error.message, /photo is 3\.8 MB\. The limit is 3\.7 MB/);
+  const pages = Buffer.from(`%PDF-1.4\n${'1 0 obj << /Type /Page >> endobj\n'.repeat(101)}%%EOF`).toString('base64');
+  assert.match((await coach('POST', '/v1/programs/import/draft', { file: { name: 'long.pdf', data_base64: pages } })).body.error.message, /101 pages/);
+});
+
+test('a library too big to list isn\'t sent to Claude; names are still matched here', async () => {
+  const d = db();
+  d.tx(() => { for (let i = 0; i < 1501; i++) d.run('INSERT INTO exercises (id, name, created_at) VALUES (?, ?, ?)', `ex_bulk_${i}`, `Drill number ${i}`, '2026-09-01T00:00:00Z'); });
+  const r = await coach('POST', '/v1/programs/import/draft', { file: PDF });
+  assert.equal(r.status, 200, r.text);
+  assert.match(seen.system, /too big to list/);
+  assert.doesNotMatch(seen.system, /Drill number 7/);
+  assert.equal(r.body.workouts[0].exercises[0].exercise_id, squat.id, 'Back Squats still matches Back squat');
+  d.run("DELETE FROM exercises WHERE id LIKE 'ex_bulk_%'");
 });

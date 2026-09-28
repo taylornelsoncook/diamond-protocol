@@ -229,3 +229,7 @@ td .dp-badge{white-space:nowrap}
   .pos-bar:not([hidden]){display:flex;position:fixed;left:0;right:0;bottom:0;z-index:30;gap:12px;align-items:center;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));background:var(--black);border-top:1px solid var(--line)}
   .main:has(.pos-bar:not([hidden])){padding-bottom:96px}
 }
+/* Schedule and Today: how many are checked in, as a thin bar (batch B2/B3). */
+.ck{display:inline-flex;align-items:center;gap:8px}
+.ck-bar{display:inline-block;width:88px;height:6px;border-radius:3px;background:var(--control-border);overflow:hidden}
+.ck-fill{display:block;height:100%;background:var(--green-bright)}

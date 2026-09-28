@@ -164,13 +164,13 @@ export function goalsFor(ctx, clientId) {
       checks = dates.filter((d) => d >= ws);
     }
     const progress = perWeek.get(ws) ?? 0, met = (w) => (perWeek.get(w) ?? 0) >= g.target;
-    const firstWeek = weekStart(localDate(g.created_at, tz));
+    const startDay = localDate(g.created_at, tz), firstWeek = weekStart(startDay);
     let inRow = 0;
     for (let w = met(ws) ? ws : lastWs; w >= firstWeek && inRow < 52 && met(w); w = addDaysToDate(w, -7)) inRow++;
     return { id: g.id, title: g.title, kind: g.kind, kind_label: GOAL_KINDS[g.kind], target: g.target, progress, done: progress >= g.target,
       team: !!g.contract_id, checked_today: checks.includes(t), week_start: ws, week_end: we,
       last_week: lastWs >= firstWeek ? { week_start: lastWs, progress: perWeek.get(lastWs) ?? 0, done: met(lastWs) } : null, weeks_in_row: inRow,
-      days: g.kind === 'custom' ? week.map((d) => ({ date: d, checked: checks.includes(d), today: d === t, future: d > t })) : null };
+      days: g.kind === 'custom' ? week.map((d) => ({ date: d, checked: checks.includes(d), today: d === t, future: d > t, before_start: d < startDay })) : null };
   });
 }
 // The athlete (or a parent) ticks a custom goal once per day: today, or a day missed earlier this week (never a future
@@ -181,6 +181,7 @@ export function checkGoal(ctx, clientId, goalId, done = true, date = null) {
   if (g.kind !== 'custom') throw badRequest('This goal counts itself from training and check-ins.');
   const t = today(ctx), d = blank(date) ? t : date;
   if (!isDate(d) || d > t || d < weekStart(t)) throw badRequest('Tick off a day from this week, up to today.');
+  if (done && d < localDate(g.created_at, zone(ctx))) throw badRequest(`This goal was set on ${fmtDay(localDate(g.created_at, zone(ctx)))}. Tick off a day from then on.`);
   if (done) ctx.db.run('INSERT OR IGNORE INTO goal_checks (goal_id, client_id, date) VALUES (?, ?, ?)', g.id, clientId, d);
   else ctx.db.run('DELETE FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date = ?', g.id, clientId, d);
   return goalsFor(ctx, clientId).find((x) => x.id === g.id);
@@ -337,7 +338,7 @@ function targetsFor(ctx, clientId, tests) {
       if (lower ? best <= x.target : best >= x.target) pct = 100;
       else if (first != null && first !== x.target) pct = Math.max(0, Math.min(99, Math.round(((lower ? first - best : best - first) / Math.abs(x.target - first)) * 100)));
     }
-    const gap = best == null || pct === 100 ? null : lower ? best - x.target : x.target - best;
+    const gap = best == null || pct === 100 ? null : +(lower ? best - x.target : x.target - best).toFixed(Math.max(m.decimals ?? 2, 1));   // no float noise (0.19, not 0.19000000000000039)
     return { id: x.id, test: x.key, test_name: x.name, unit: m.unit, better: m.better, target: x.target, due_date: x.due_date, best, first, pct, reached: pct === 100,
       best_text: fmtValue(best, m.unit, m.decimals), target_text: fmtValue(x.target, m.unit, m.decimals),
       gap, gap_text: gapText(gap, m.unit, m.decimals), overdue: pct !== 100 && !!x.due_date && x.due_date < t };

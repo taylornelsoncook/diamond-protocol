@@ -250,12 +250,17 @@ test('library tools: duplicate as a draft at the end, reorder refuses duplicates
   const x = (await coach('POST', '/v1/lesson-assignments', { lesson_id: solo.id, client_id: kid.id })).body;
   await athlete(kid)('GET', `lessons/${solo.id}`);
   await coach('POST', `/v1/lesson-assignments/${x.id}/remind`);
+  await athlete(kid)('POST', 'messages', { body: 'Read it' });
+  assert.equal(app.ctx.db.get(`SELECT actor_name FROM audit_log WHERE actor_type = 'athlete' AND actor_id = ?`, kid.id).actor_name, 'Gone Kid');
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM lesson_views WHERE client_id = ?', kid.id).n, 1);
   const exp = await owner('GET', `/v1/families/${kid.family.id}/export`);
   assert.equal(exp.body.athletes[0].lessons_opened.length, 1, 'the family export includes lessons opened');
   assert.equal((await owner('DELETE', `/v1/families/${kid.family.id}`, { confirm: kid.family.name })).status, 200);
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM lesson_views WHERE client_id = ?', kid.id).n, 0);
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM lesson_reminders WHERE client_id = ?', kid.id).n, 0);
+  // The audit log keeps the action, but not the deleted athlete's name.
+  const rows = app.ctx.db.all(`SELECT actor_name FROM audit_log WHERE actor_type = 'athlete' AND actor_id = ?`, kid.id);
+  assert.ok(rows.length && rows.every((r) => r.actor_name === null), 'no name left in the audit log');
 });
 
 test('custom goals: tick a missed day this week, never a future day or last week; last week and weeks in a row', async () => {
@@ -282,6 +287,16 @@ test('custom goals: tick a missed day this week, never a future day or last week
     assert.equal(r.body.weeks_in_row, 3, 'this week, last week and the week before');
     r = await me('POST', `goals/${g.id}/check`, { done: false, date: mon });
     assert.equal(r.body.weeks_in_row, 2, 'this week no longer met');
+  });
+  // A goal set on Wednesday can't be ticked for the Monday before it existed.
+  await at(`${wed}T17:00:00.000Z`, async () => {
+    const fresh = (await coach('POST', `/v1/clients/${dee.id}/goals`, { kind: 'custom', target: 3, title: 'Foam roll' })).body;
+    const r = await me('POST', `goals/${fresh.id}/check`, { done: true, date: mon });
+    assert.equal(r.status, 400, 'not before the goal was set');
+    assert.match(r.body.error.message, /was set on Oct 7/);
+    const v = (await me('GET', 'engage')).body.accountability.goals.find((x) => x.id === fresh.id);
+    assert.deepEqual(v.days.slice(0, 3).map((d) => d.before_start), [true, true, false]);
+    assert.equal((await me('POST', `goals/${fresh.id}/check`, { done: true, date: wed })).status, 200);
   });
   // A parent can tick a missed day too.
   await at(`${wed}T17:00:00.000Z`, async () => {
@@ -324,10 +339,14 @@ test('targets say how far there is to go and when they are past their date', asy
   await coach('POST', '/v1/results', { session_id: day.id, results: [{ client_id: dee.id, test: 'broad_jump', value: 70, recorded_at: `${day.date}T15:00:00.000Z` }] });
   await coach('POST', `/v1/testing-sessions/${day.id}/share`, { notify: false });
   await coach('POST', `/v1/clients/${dee.id}/targets`, { test: 'broad_jump', target: '6\'', due_date: addDaysToDate(todayLocal(), 10) });
-  let tg = (await athlete(dee)('GET', 'engage')).body.performance.targets[0];
+  await coach('POST', '/v1/results', { session_id: day.id, results: [{ client_id: dee.id, test: 'dash_40yd', value: 5.94, recorded_at: `${day.date}T15:00:00.000Z` }] });
+  await coach('POST', `/v1/clients/${dee.id}/targets`, { test: 'dash_40yd', target: 5.75 });
+  const dash = (await athlete(dee)('GET', 'engage')).body.performance.targets.find((x) => x.test === 'dash_40yd');
+  assert.equal(dash?.gap, 0.19, 'the gap is rounded, not 0.19000000000000039');
+  let tg = (await athlete(dee)('GET', 'engage')).body.performance.targets.find((x) => x.test === 'broad_jump');
   assert.deepEqual([tg.gap, tg.gap_text, tg.overdue], [2, '2 in to go', false]);
   const later = `${addDaysToDate(todayLocal(), 12)}T17:00:00.000Z`;
-  await at(later, async () => { tg = (await athlete(dee)('GET', 'engage')).body.performance.targets[0]; });
+  await at(later, async () => { tg = (await athlete(dee)('GET', 'engage')).body.performance.targets.find((x) => x.test === 'broad_jump'); });
   assert.equal(tg.overdue, true);
 });
 

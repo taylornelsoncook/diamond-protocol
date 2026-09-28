@@ -160,8 +160,8 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
       list.length ? h('div', { class: 'eg-list' }, list.map((g) => {
         const pct = Math.round(Math.min(1, g.progress / g.target) * 100);
         const strip = g.days ? h('div', { class: 'eg-week', role: 'group', 'aria-label': `${g.title}: days done this week` }, g.days.map((d) => h('button', {
-          type: 'button', class: `eg-wday${d.today ? ' eg-wday--today' : ''}`, 'aria-pressed': String(d.checked), disabled: d.future, 'data-goal': g.id, 'data-day': d.date,
-          'aria-label': `${day(d.date, { weekday: 'long' })}${d.today ? ' (today)' : ''}: ${d.checked ? 'done' : d.future ? 'still to come' : 'not done'}`,
+          type: 'button', class: `eg-wday${d.today ? ' eg-wday--today' : ''}`, 'aria-pressed': String(d.checked), disabled: d.future || (d.before_start && !d.checked), 'data-goal': g.id, 'data-day': d.date,
+          'aria-label': `${day(d.date, { weekday: 'long' })}${d.today ? ' (today)' : ''}: ${d.checked ? 'done' : d.future ? 'still to come' : d.before_start ? 'before the goal was set' : 'not done'}`,
           onClick: (e) => tick(e.currentTarget, g, d.date, !d.checked)
         }, h('span', { 'aria-hidden': 'true' }, weekdayShort(d.date)), h('b', { 'aria-hidden': 'true' }, d.checked ? '✓' : Number(d.date.slice(8)))))) : null;
         return h('div', { class: 'eg-item' },
@@ -204,7 +204,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
     const pad = (new Date(`${a.calendar[0].date}T12:00:00Z`).getUTCDay() + 6) % 7;
     const cell = (d) => {
       const what = [d.trained ? 'trained' : null, d.checked_in ? 'checked in' : null].filter(Boolean).join(', ') || 'no activity';
-      return h('button', { type: 'button', class: `eg-day${d.trained ? ' eg-day--trained' : ''}${d.date === a.today ? ' eg-day--today' : ''}`, role: 'listitem', 'aria-pressed': String(dayOpen === d.date),
+      return h('button', { type: 'button', class: `eg-day${d.trained ? ' eg-day--trained' : ''}${d.date === a.today ? ' eg-day--today' : ''}`, 'aria-pressed': String(dayOpen === d.date),
         'aria-label': `${day(d.date, { weekday: 'long' })}${d.date === a.today ? ' (today)' : ''}: ${what}`, 'data-day': d.date,
         onClick: () => { dayOpen = dayOpen === d.date ? null : d.date; rerender(); el.querySelector(`.eg-cal [data-day="${d.date}"]`)?.focus(); } },
         h('span', { class: 'eg-day-n', 'aria-hidden': 'true' }, Number(d.date.slice(8))), d.checked_in ? h('span', { class: 'eg-dot', 'aria-hidden': 'true' }) : null);
@@ -212,7 +212,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
     const open = a.calendar.find((d) => d.date === dayOpen);
     return section('Last 4 weeks', `${day(a.calendar[0].date)} to today. Tap a day to see what happened.`,
       h('div', { class: 'eg-cal eg-cal-head', 'aria-hidden': 'true' }, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => h('span', null, x))),
-      h('div', { class: 'eg-cal', role: 'list', 'aria-label': 'Training and check-ins, last 28 days' }, Array.from({ length: pad }, () => h('div', { class: 'eg-day eg-day--empty', 'aria-hidden': 'true' })), a.calendar.map(cell)),
+      h('div', { class: 'eg-cal', role: 'group', 'aria-label': 'Training and check-ins, last 28 days' }, Array.from({ length: pad }, () => h('div', { class: 'eg-day eg-day--empty', 'aria-hidden': 'true' })), a.calendar.map(cell)),
       h('div', { class: 'eg-legend small muted' }, h('span', null, h('span', { class: 'eg-key eg-day--trained' }), 'Trained'), h('span', null, h('span', { class: 'eg-key' }, h('span', { class: 'eg-dot' })), 'Checked in')),
       open ? dayDetail(open, a.today) : null);
   }

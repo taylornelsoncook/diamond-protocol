@@ -133,6 +133,8 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
     ctx.db.run('DELETE FROM guardian_lesson_progress WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
     ctx.db.run('DELETE FROM guardian_message_reads WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
+    // The audit log keeps what was done and by which record, but not the names of the family's parents or athletes.
+    ctx.db.run(`UPDATE audit_log SET actor_name = NULL WHERE (actor_type = 'parent' AND actor_id IN (SELECT id FROM guardians WHERE family_id = ?)) OR (actor_type = 'athlete' AND actor_id IN (${kids.map(() => '?').join(', ') || 'NULL'}))`, familyId, ...kids);
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);
     const note = `Deleted by ${actor?.name ?? 'an owner'} on ${ctx.now().slice(0, 10)}`;

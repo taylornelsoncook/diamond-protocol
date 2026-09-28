@@ -122,9 +122,15 @@ export async function readTable(ctx, body) {
 }
 
 // ---------- Values ----------
+// Commas: 1,234 or 12,345.6 are thousands; 65,3 is a decimal comma (spreadsheets outside the US); anything else is refused.
 const num = (s) => {
-  const t = String(s ?? '').trim().replace(/[,\s]/g, '').replace(/%$/, '');
+  let t = String(s ?? '').trim().replace(/\s/g, '').replace(/%$/, '');
   if (t === '' || t === '-' || t === '--') return null;
+  if (t.includes(',')) {
+    if (/^[-+]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+    else if (/^[-+]?\d+,\d+$/.test(t)) t = t.replace(',', '.');
+    else return NaN;
+  }
   const n = Number(t);
   return Number.isFinite(n) ? n : NaN;
 };
@@ -232,6 +238,7 @@ function customMapping(table, mapping) {
   if (list.length > MAX_CUSTOM_METRICS) throw badRequest(`Bring in up to ${MAX_CUSTOM_METRICS} columns at a time.`);
   const keys = new Set();
   return { date_column: date, metrics: list.map((m) => {
+    if (!m || typeof m !== 'object') throw badRequest('Each column to bring in needs a column name.');
     const column = v.str(m.column, 'column', { max: 200 });
     if (!table.headers.includes(column)) throw badRequest(`There's no column called "${column}" in the file.`);
     if (column === date) throw badRequest('The date column can\'t also be a number to bring in.');
@@ -267,7 +274,7 @@ function athlete(ctx, clientId) {
 async function prepare(ctx, clientId, body) {
   const c = athlete(ctx, clientId);
   const table = await readTable(ctx, body);
-  const format = body.format && FORMATS[body.format] ? body.format : detectFormat(table.headers);
+  const format = typeof body.format === 'string' && Object.hasOwn(FORMATS, body.format) ? body.format : detectFormat(table.headers);
   const f = FORMATS[format];
   if (f.needs && !f.needs.every((col) => table.headers.includes(col))) throw badRequest(`That file doesn't have the columns of a ${f.label}.`);
   const mapping = f.custom ? customMapping(table, body.mapping) : null;
@@ -310,16 +317,26 @@ export async function commitImport(ctx, clientId, body = {}, who) {
   ctx.db.tx(() => {
     ctx.db.run(`INSERT INTO data_imports (id, client_id, source, file_kind, filename, rows, days, workouts, from_day, to_day, created_by, created_by_kind, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, c.id, format, p.table.kind, p.table.filename, p.table.rows.length, s.days, built.workouts.length, s.from, s.to, who?.name ?? null, who?.kind ?? 'staff', now);
+    // A value already on file stays with the import that brought it when it's the same; a different one is replaced
+    // and the old one kept in data_import_replaced, so undoing this import puts it back.
     for (const m of built.metrics) {
-      ctx.db.run(`INSERT INTO athlete_metrics (client_id, day, metric, value, label, unit, source, import_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (client_id, metric, day) DO UPDATE SET value = excluded.value, label = excluded.label, unit = excluded.unit, source = excluded.source, import_id = excluded.import_id, updated_at = excluded.updated_at`,
-        c.id, m.day, m.metric, m.value, m.label, m.unit, format, id, now);
+      const cur = ctx.db.get('SELECT value, label, unit, source, import_id, updated_at FROM athlete_metrics WHERE client_id = ? AND metric = ? AND day = ?', c.id, m.metric, m.day);
+      if (cur && cur.value === m.value && (cur.label ?? null) === (m.label ?? null) && (cur.unit ?? null) === (m.unit ?? null)) continue;
+      if (cur) {
+        ctx.db.run(`INSERT INTO data_import_replaced (import_id, client_id, metric, day, value, label, unit, source, prior_import_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, c.id, m.metric, m.day, cur.value, cur.label, cur.unit, cur.source, cur.import_id, cur.updated_at);
+        ctx.db.run('UPDATE athlete_metrics SET value = ?, label = ?, unit = ?, source = ?, import_id = ?, updated_at = ? WHERE client_id = ? AND metric = ? AND day = ?',
+          m.value, m.label, m.unit, format, id, now, c.id, m.metric, m.day);
+      } else {
+        ctx.db.run('INSERT INTO athlete_metrics (client_id, day, metric, value, label, unit, source, import_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          c.id, m.day, m.metric, m.value, m.label, m.unit, format, id, now);
+      }
     }
+    // A workout already on file stays with the import that brought it.
     for (const w of built.workouts) {
       ctx.db.run(`INSERT INTO athlete_workouts (id, client_id, source, started_at, ended_at, day, minutes, activity, strain, calories, avg_hr, max_hr, import_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (client_id, source, started_at) DO UPDATE SET ended_at = excluded.ended_at, day = excluded.day, minutes = excluded.minutes, activity = excluded.activity, strain = excluded.strain,
-          calories = excluded.calories, avg_hr = excluded.avg_hr, max_hr = excluded.max_hr, import_id = excluded.import_id`,
+        ON CONFLICT (client_id, source, started_at) DO NOTHING`,
         newId('awk'), c.id, format, w.started_at, w.ended_at, w.day, w.minutes, w.activity, w.strain, w.calories, w.avg_hr, w.max_hr, id);
     }
   });
@@ -332,8 +349,9 @@ export function listImports(ctx, { clientId, limit = 20 } = {}) {
   return rows.map((d) => ({ ...d, format_label: FORMATS[d.source]?.label ?? d.source,
     kept: ctx.db.get('SELECT COUNT(*) AS n FROM athlete_metrics WHERE import_id = ?', d.id).n + ctx.db.get('SELECT COUNT(*) AS n FROM athlete_workouts WHERE import_id = ?', d.id).n }));
 }
-// Undo removes what this import saved (values a later import replaced belong to that one now). parentFamily: a parent
-// may undo only an import for one of their own athletes.
+// Undo takes out what this import saved and puts back any value it replaced; values a later import replaced belong to
+// that one now (and undoing it later goes back to what was there before this one). familyId: a parent may undo only an
+// import for one of their own athletes, and only one a parent brought in.
 export function undoImport(ctx, id, who, { familyId } = {}) {
   const d = ctx.db.get('SELECT d.*, c.family_id FROM data_imports d JOIN clients c ON c.id = d.client_id WHERE d.id = ?', v.str(id, 'id'));
   if (!d || (familyId && d.family_id !== familyId)) throw notFound('Import');
@@ -341,7 +359,22 @@ export function undoImport(ctx, id, who, { familyId } = {}) {
   if (who?.kind === 'parent' && d.created_by_kind !== 'parent') throw conflict('Your coach brought that file in. Ask them if it needs to come out.');
   let metrics = 0, workouts = 0;
   ctx.db.tx(() => {
-    metrics = ctx.db.run('DELETE FROM athlete_metrics WHERE import_id = ?', d.id).changes;
+    const before = (metric, day) => ctx.db.get('SELECT * FROM data_import_replaced WHERE import_id = ? AND metric = ? AND day = ?', d.id, metric, day);
+    for (const r of ctx.db.all('SELECT metric, day FROM athlete_metrics WHERE import_id = ?', d.id)) {
+      const b = before(r.metric, r.day);
+      if (b) ctx.db.run('UPDATE athlete_metrics SET value = ?, label = ?, unit = ?, source = ?, import_id = ?, updated_at = ? WHERE client_id = ? AND metric = ? AND day = ?',
+        b.value, b.label, b.unit, b.source, b.prior_import_id, b.updated_at, d.client_id, r.metric, r.day);
+      else ctx.db.run('DELETE FROM athlete_metrics WHERE client_id = ? AND metric = ? AND day = ?', d.client_id, r.metric, r.day);
+      metrics++;
+    }
+    // A later import that replaced this one's value now goes back to what was there before this one, if it's undone.
+    for (const r of ctx.db.all('SELECT import_id, metric, day FROM data_import_replaced WHERE prior_import_id = ?', d.id)) {
+      const b = before(r.metric, r.day);
+      if (b) ctx.db.run('UPDATE data_import_replaced SET value = ?, label = ?, unit = ?, source = ?, prior_import_id = ?, updated_at = ? WHERE import_id = ? AND metric = ? AND day = ?',
+        b.value, b.label, b.unit, b.source, b.prior_import_id, b.updated_at, r.import_id, r.metric, r.day);
+      else ctx.db.run('DELETE FROM data_import_replaced WHERE import_id = ? AND metric = ? AND day = ?', r.import_id, r.metric, r.day);
+    }
+    ctx.db.run('DELETE FROM data_import_replaced WHERE import_id = ?', d.id);
     workouts = ctx.db.run('DELETE FROM athlete_workouts WHERE import_id = ?', d.id).changes;
     ctx.db.run('UPDATE data_imports SET undone_at = ?, undone_by = ? WHERE id = ?', ctx.now(), who?.name ?? null, d.id);
   });

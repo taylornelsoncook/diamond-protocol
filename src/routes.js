@@ -625,7 +625,7 @@ export const routes = [
   ['DELETE', '/v1/lesson-assignments/:id', 'any', 'Education', 'Remove an assignment. Completed lessons stay completed.', (ctx, r) => engage.unassign(ctx, r.params.id)],
 
   // Client app (authenticated by the client's private link token)
-  ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
+  ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => r.client.archived_at ? { has_data: false, metrics: [], workouts: [], imports: 0 } : dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
   ['GET', '/app/api/home', 'client', 'Client app', 'The client\'s next workout and progress.', (ctx, r) => programs.clientHome(ctx, r.client)],
   ['POST', '/app/api/workouts/:id/complete', 'client', 'Client app', 'Log a finished workout: exercise_ids done, sets (workout_exercise_id, set_no 1-12, weight lb, reps), rpe (effort 1-10), notes, started_at and finished_at (from the phone; kept when within the last 72 hours). request_id (the phone\'s id for this Finish) returns the first save for a resend. If the workout was logged on the weight-room screen, the sets join that log.', (ctx, r) => programs.completeWorkout(ctx, r.client, r.params.id, r.body), 201],
   ['GET', '/app/api/logs/:id', 'client', 'Client app', 'One of your finished workouts: each exercise, done or not, its sets, effort and note, and whether it can still be reopened.', (ctx, r) => programs.logDetail(ctx, r.client, r.params.id)],

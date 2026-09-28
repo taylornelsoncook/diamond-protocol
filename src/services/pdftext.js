@@ -5,6 +5,16 @@
 // Compressed streams (FlateDecode), compressed object streams (PDF 1.5+) and fonts with a ToUnicode map are supported.
 import { inflateSync } from 'node:zlib';
 
+// Limits, so an odd or hostile file can't tie up the server: decompressed bytes in all, map entries in all
+// (font maps, widths, packed objects) and pieces of text.
+const MAX_INFLATE = 32 * 1024 * 1024, MAX_ENTRIES = 500000, MAX_RUNS = 200000;
+const TOO_BIG = 'This PDF is too large or complex to read. Export the data as a CSV or Excel file instead.';
+let budget = null;
+function spend(kind, n) {
+  if (!budget) return;
+  budget[kind] -= n;
+  if (budget[kind] < 0) throw new Error(TOO_BIG);
+}
 const NO_TEXT = 'This PDF has no text we can read (it may be a scan or a photo). Export the data as a CSV or Excel file instead, or use a PDF made by the app itself.';
 
 // ---------- Objects ----------
@@ -24,7 +34,7 @@ function parseObjects(buf) {
       dict = body.slice(0, si);
       const nl = body.slice(si).match(/^stream(\r\n|\n|\r)/)[0].length;
       const from = start + si + nl;
-      const len = dict.match(/\/Length\s+(\d+)(?!\s+\d+\s+R)/);
+      const len = dict.match(/\/Length\s+(\d+)\b(?!\s+\d+\s+R)/);   // a reference (/Length 12 0 R): find endstream instead
       let to = len ? from + Number(len[1]) : src.lastIndexOf('endstream', end);
       if (!len) while (to > from && /[\r\n]/.test(src[to - 1])) to--;
       stream = buf.subarray(from, Math.min(to, end));
@@ -40,8 +50,10 @@ function parseObjects(buf) {
     const text = data.toString('latin1');
     const n = Number(o.dict.match(/\/N\s+(\d+)/)?.[1] ?? 0), first = Number(o.dict.match(/\/First\s+(\d+)/)?.[1] ?? 0);
     const nums = text.slice(0, first).trim().split(/\s+/).map(Number);
-    for (let i = 0; i < n; i++) {
-      const id = nums[i * 2], off = first + nums[i * 2 + 1], next = i + 1 < n ? first + nums[(i + 1) * 2 + 1] : text.length;
+    const count = Math.min(n, Math.floor(nums.length / 2));
+    spend('entries', count);
+    for (let i = 0; i < count; i++) {
+      const id = nums[i * 2], off = first + nums[i * 2 + 1], next = i + 1 < count ? first + nums[(i + 1) * 2 + 1] : text.length;
       if (!objs.has(id)) objs.set(id, { dict: text.slice(off, next), stream: null });
     }
   }
@@ -51,7 +63,18 @@ function decode(o) {
   if (!o?.stream) return null;
   if (!/\/Filter/.test(o.dict)) return Buffer.from(o.stream);
   if (!/\/FlateDecode/.test(o.dict) || /\/(DCTDecode|JPXDecode|CCITTFaxDecode|JBIG2Decode|LZWDecode|ASCII85Decode)/.test(o.dict)) return null;
-  try { return inflateSync(o.stream); } catch { try { return inflateSync(o.stream, { finishFlush: 2 }); } catch { return null; } }
+  if (o.decoded !== undefined) return o.decoded;
+  const max = budget ? Math.max(1, budget.inflate) : MAX_INFLATE;
+  let out = null;
+  try { out = inflateSync(o.stream, { maxOutputLength: max }); }
+  catch (e) {
+    if (e?.code === 'ERR_BUFFER_TOO_LARGE' || e instanceof RangeError) throw new Error(TOO_BIG);
+    try { out = inflateSync(o.stream, { finishFlush: 2, maxOutputLength: max }); }
+    catch (e2) { if (e2?.code === 'ERR_BUFFER_TOO_LARGE' || e2 instanceof RangeError) throw new Error(TOO_BIG); out = null; }
+  }
+  if (out) spend('inflate', out.length);
+  o.decoded = out;                                 // each stream is inflated (and counted) once
+  return out;
 }
 const ref = (s) => { const m = String(s ?? '').match(/^\s*(\d+)\s+\d+\s+R/); return m ? Number(m[1]) : null; };
 // The value after /Key in a dictionary: a reference, a <<dictionary>>, an [array] or a single token.
@@ -82,30 +105,35 @@ function parseCmap(text) {
   const map = new Map();
   let bytes = 1;
   for (const b of text.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
-    for (const p of b[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]*)>/g)) { map.set(parseInt(p[1], 16), hexToStr(p[2])); bytes = Math.max(bytes, p[1].length / 2); }
+    for (const p of b[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]*)>/g)) { spend('entries', 1); map.set(parseInt(p[1], 16), hexToStr(p[2])); bytes = Math.max(bytes, p[1].length / 2); }
   }
   for (const b of text.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
     for (const p of b[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(\[[^\]]*\]|<[0-9a-fA-F]*>)/g)) {
       const lo = parseInt(p[1], 16), hi = parseInt(p[2], 16);
       bytes = Math.max(bytes, p[1].length / 2);
-      if (p[3][0] === '[') { [...p[3].matchAll(/<([0-9a-fA-F]*)>/g)].forEach((h, k) => map.set(lo + k, hexToStr(h[1]))); continue; }
+      if (p[3][0] === '[') { [...p[3].matchAll(/<([0-9a-fA-F]*)>/g)].forEach((h, k) => { spend('entries', 1); map.set(lo + k, hexToStr(h[1])); }); continue; }
       const base = p[3].slice(1, -1);
       const start = parseInt(base.slice(-4), 16), prefix = hexToStr(base.slice(0, -4));
+      spend('entries', Math.max(0, Math.min(hi - lo + 1, 65536)));
       for (let c = lo; c <= hi && c - lo < 65536; c++) map.set(c, prefix + String.fromCharCode(start + c - lo));
     }
   }
   return { map, bytes };
 }
-function fontsOf(objs, pageDict) {
+function fontsOf(objs, pageDict, cache) {
   let res = entry(pageDict, 'Resources'), d = pageDict, guard = 0;
   while (!res && guard++ < 20) { const p = ref(entry(d, 'Parent')); if (p == null) break; d = objs.get(p)?.dict ?? ''; res = entry(d, 'Resources'); }
   const fontDict = resolve(objs, entry(resolve(objs, res ?? ''), 'Font') ?? '');
   const fonts = new Map();
   for (const f of String(fontDict).matchAll(/\/([^\s/<>[\]()]+)\s+(\d+\s+\d+\s+R)/g)) {
-    const fd = objs.get(ref(f[2]))?.dict ?? '';
+    const fid = ref(f[2]);
+    if (cache.has(fid)) { fonts.set(f[1], cache.get(fid)); continue; }
+    const fd = objs.get(fid)?.dict ?? '';
     const tu = ref(entry(fd, 'ToUnicode'));
     const cmap = tu != null ? decode(objs.get(tu)) : null;
-    fonts.set(f[1], { cmap: cmap ? parseCmap(cmap.toString('latin1')) : null, identity: /Identity-H/.test(fd), ...widthsOf(objs, fd) });
+    const font = { cmap: cmap ? parseCmap(cmap.toString('latin1')) : null, identity: /Identity-H/.test(fd), ...widthsOf(objs, fd) };
+    cache.set(fid, font);                          // pages sharing a font read it once
+    fonts.set(f[1], font);
   }
   return fonts;
 }
@@ -117,7 +145,9 @@ function widthsOf(objs, fd) {
   const w = entry(fd, 'Widths');
   if (w) {
     const first = Number(entry(fd, 'FirstChar') ?? 0);
-    nums(ref(w) != null ? objs.get(ref(w))?.dict : w).forEach((x, i) => widths.set(first + i, x));
+    const list = nums(ref(w) != null ? objs.get(ref(w))?.dict : w);
+    spend('entries', list.length);
+    list.forEach((x, i) => widths.set(first + i, x));
     return { widths, dw: 500 };
   }
   const desc = entry(fd, 'DescendantFonts');
@@ -133,9 +163,9 @@ function widthsOf(objs, fd) {
     const c = Number(toks[i]);
     if (toks[i + 1] === '[') {
       let k = i + 2, n = 0;
-      while (toks[k] !== ']' && k < toks.length) widths.set(c + n++, Number(toks[k++]));
+      while (toks[k] !== ']' && k < toks.length) { spend('entries', 1); widths.set(c + n++, Number(toks[k++])); }
       i = k + 1;
-    } else { const c2 = Number(toks[i + 1]), wv = Number(toks[i + 2]); for (let x = c; x <= c2 && x - c < 65536; x++) widths.set(x, wv); i += 3; }
+    } else { const c2 = Number(toks[i + 1]), wv = Number(toks[i + 2]); spend('entries', Math.max(0, Math.min(c2 - c + 1, 65536))); for (let x = c; x <= c2 && x - c < 65536; x++) widths.set(x, wv); i += 3; }
   }
   return { widths, dw };
 }
@@ -269,7 +299,9 @@ function linesOf(runs) {
     rs.sort((a, b) => b.y - a.y || a.x - b.x);
     const rows = [];
     for (const r of rs) {
-      const row = rows.find((x) => Math.abs(x.y - r.y) <= Math.max(2, r.size * 0.4));
+      // Sorted top to bottom, so the only row close enough is the last one started.
+      const last = rows.at(-1);
+      const row = last && Math.abs(last.y - r.y) <= Math.max(2, r.size * 0.4) ? last : null;
       if (row) row.runs.push(r); else rows.push({ y: r.y, runs: [r] });
     }
     rows.sort((a, b) => b.y - a.y);
@@ -308,6 +340,10 @@ export function pdfTable(buf) {
 }
 // Every line of text on every page, split into cells.
 export function pdfLines(buf) {
+  budget = { inflate: MAX_INFLATE, entries: MAX_ENTRIES };
+  try { return readLines(buf); } finally { budget = null; }
+}
+function readLines(buf) {
   if (!Buffer.isBuffer(buf) || !buf.subarray(0, 1024).toString('latin1').includes('%PDF')) throw new Error('That file isn\'t a PDF. Choose the PDF again, or export a CSV or Excel file.');
   if (/\/Encrypt\b/.test(buf.toString('latin1'))) throw new Error('This PDF is password-protected. Save a copy without a password, or export a CSV or Excel file.');
   const objs = parseObjects(buf);
@@ -323,13 +359,16 @@ export function pdfLines(buf) {
   const root = [...objs].find(([, o]) => /\/Type\s*\/Pages/.test(o.dict) && !/\/Parent\s/.test(o.dict));
   if (root) walk(root[0]);
   for (const id of pageIds) if (!order.includes(id)) order.push(id);
-  const runs = [];
+  const runs = [], fontCache = new Map();
   order.forEach((id, pageNo) => {
     const d = objs.get(id).dict;
     const c = entry(d, 'Contents');
     const ids = c?.startsWith('[') ? [...c.matchAll(/(\d+)\s+\d+\s+R/g)].map((x) => Number(x[1])) : [ref(c)].filter((x) => x != null);
     const content = ids.map((x) => decode(objs.get(x))?.toString('latin1') ?? '').join('\n');
-    runs.push(...runsOf(content, fontsOf(objs, d), pageNo));
+    for (const r of runsOf(content, fontsOf(objs, d, fontCache), pageNo)) {
+      if (runs.length >= MAX_RUNS) throw new Error(TOO_BIG);
+      runs.push(r);
+    }
   });
   return { lines: linesOf(runs).filter((l) => l.cells.length), pages: order.length };
 }

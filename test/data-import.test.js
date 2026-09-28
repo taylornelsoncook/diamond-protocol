@@ -107,7 +107,7 @@ test('readers: dates, Google Sheets links and text PDFs (plain and compressed)',
   assert.throws(() => pdfTable(makePdf([])), /no table/);
 });
 
-test('WHOOP cycles, sleeps and workouts are recognized, checked and saved; a re-import replaces days, undo removes', async () => {
+test('WHOOP cycles, sleeps and workouts are recognized, checked and saved; a re-import replaces days, undo puts them back', async () => {
   const p = (await coach('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('physiological_cycles.csv', CYCLES) })).body;
   assert.equal(p.format, 'whoop_cycles');
   assert.deepEqual([p.days, p.from, p.to, p.problem_count, p.ready], [3, '2026-09-25', '2026-09-27', 0, true]);
@@ -136,10 +136,10 @@ test('WHOOP cycles, sleeps and workouts are recognized, checked and saved; a re-
   assert.deepEqual([rec.latest, rec.avg_7, rec.headline, rec.series.length], [{ day: '2026-09-27', value: 62 }, 60.7, true, 3]);
   assert.equal(d.workouts[0].activity, 'Soccer');
   assert.equal(d.workouts[0].started_at, '2026-09-27T16:32:00.000Z', 'local time in UTC-06:00');
-  // Undo the sleeps import: its values go; the cycle file's values it replaced don't come back.
+  // Undo the sleeps import: its values go and the cycle file's value it replaced comes back.
   const u = (await owner('POST', `/v1/data-imports/${sleepImport.id}/undo`)).body;
   assert.ok(u.removed_values > 0);
-  assert.equal(values(ava.id, 'sleep_min').find((x) => x.day === '2026-09-27'), undefined);
+  assert.equal(values(ava.id, 'sleep_min').find((x) => x.day === '2026-09-27').value, 413);
   assert.equal((await owner('POST', `/v1/data-imports/${sleepImport.id}/undo`)).status, 409);
   const list = (await owner('GET', `/v1/data-imports?client_id=${ava.id}`)).body.data;
   assert.equal(list.length, 3);
@@ -231,6 +231,54 @@ test('an archived athlete takes no imports; the family export has the data and d
   const del = await owner('DELETE', `/v1/families/${fam}`, { confirm: 'Gone family' });
   assert.equal(del.status, 200, JSON.stringify(del.body));
   for (const t of ['athlete_metrics', 'athlete_workouts', 'data_imports']) assert.equal(db().get(`SELECT COUNT(*) AS n FROM ${t} WHERE client_id = ?`, c.id).n, 0, t);
+});
+
+test('undo puts back what an import replaced, and a parent\'s undo never takes out the coach\'s data', async () => {
+  const grip = (rows) => ({ ...csv('grip.csv', `Date,Grip (kg)\n${rows.map(([d, x]) => `${d},${x}`).join('\n')}\n`), mapping: { date_column: 'Date', metrics: [{ column: 'Grip (kg)', label: 'Grip', unit: 'kg' }] } });
+  const now = () => Object.fromEntries(values(ava.id, 'custom:grip').map((r) => [r.day, r.value]));
+  const A = await coach('POST', '/v1/data-imports', { client_id: ava.id, ...grip([['2025-01-01', 40], ['2025-01-02', 41], ['2025-01-03', 42]]) });
+  assert.equal(A.status, 201, A.text);
+  const B = await maria('POST', `/portal/api/athletes/${ava.id}/data-imports`, grip([['2025-01-02', 41], ['2025-01-03', 50], ['2025-01-04', 44]]));
+  assert.equal(B.status, 201, B.text);
+  const C = await owner('POST', '/v1/data-imports', { client_id: ava.id, ...grip([['2025-01-03', 60]]) });
+  assert.deepEqual(now(), { '2025-01-01': 40, '2025-01-02': 41, '2025-01-03': 60, '2025-01-04': 44 });
+  assert.equal((await maria('POST', `/portal/api/data-imports/${A.body.id}/undo`)).status, 409, 'not the coach\'s import');
+  assert.equal((await maria('POST', `/portal/api/data-imports/${B.body.id}/undo`)).status, 200);
+  assert.deepEqual(now(), { '2025-01-01': 40, '2025-01-02': 41, '2025-01-03': 60 }, 'the coach\'s days stay; only the parent\'s new day goes');
+  assert.equal((await owner('POST', `/v1/data-imports/${C.body.id}/undo`)).status, 200);
+  assert.deepEqual(now(), { '2025-01-01': 40, '2025-01-02': 41, '2025-01-03': 42 }, 'back to the coach\'s value, skipping the undone import');
+  assert.equal((await coach('POST', `/v1/data-imports/${A.body.id}/undo`)).status, 200);
+  assert.deepEqual(now(), {});
+  assert.equal(db().get('SELECT COUNT(*) AS n FROM data_import_replaced').n, 0);
+});
+
+test('odd input gets a clear answer: decimal commas, bad formats and mappings, heavy or unusual PDFs', async () => {
+  const p = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('eu.csv', 'Date,Weight (kg),Steps\n2025-02-01,"65,3","12,345"\n2025-02-02,"1,2,3",9000\n'), mapping: { date_column: 'Date', metrics: [{ column: 'Weight (kg)' }, { column: 'Steps' }] } });
+  assert.equal(p.status, 200, p.text);
+  assert.equal(p.body.problem_count, 1, 'only "1,2,3" is refused');
+  assert.equal(p.body.problems[0].row, 3);
+  for (const format of ['__proto__', 'constructor', 'toString']) {
+    const r = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, format, ...csv('cycles.csv', CYCLES) });
+    assert.equal(r.status, 200, `${format}: ${r.text}`);
+    assert.equal(r.body.format, 'whoop_cycles');
+  }
+  const m = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('x.csv', 'Date,A\n2025-01-01,1\n'), mapping: { date_column: 'Date', metrics: [null] } });
+  assert.equal(m.status, 400, m.text);
+  // A stream length given as a reference (/Length 12 0 R) is found by its endstream.
+  const rows = [['Date', 'Recovery %'], ['2026-09-01', '71'], ['2026-09-02', '55']];
+  const pdf = makePdf(rows).toString('latin1').replace(/\/Length \d+/, '/Length 12 0 R');
+  assert.deepEqual(pdfTable(Buffer.from(pdf, 'latin1')).rows.map((r) => r.Date), ['2026-09-01', '2026-09-02']);
+  // Small files that would unpack to far too much, or ask for millions of font entries, are refused quickly.
+  const bomb = deflateSync(Buffer.alloc(200 * 1024 * 1024), { level: 9 });
+  const bombPdf = Buffer.concat([Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Type /Page /Contents 2 0 R >>\nendobj\n2 0 obj\n<< /Length ${bomb.length} /Filter /FlateDecode >>\nstream\n`, 'latin1'), bomb, Buffer.from('\nendstream\nendobj\n%%EOF\n', 'latin1')]);
+  let t = Date.now();
+  assert.throws(() => pdfTable(bombPdf), /too large or complex/);
+  const cmap = `beginbfrange\n${'<0000><FFFF><0000>\n'.repeat(2000)}endbfrange`;
+  const cmapPdf = Buffer.from(`%PDF-1.4\n1 0 obj\n<< /Type /Page /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>\nendobj\n3 0 obj\n<< /Type /Font /ToUnicode 4 0 R >>\nendobj\n4 0 obj\n<< /Length ${cmap.length} >>\nstream\n${cmap}\nendstream\nendobj\n5 0 obj\n<< /Length 30 >>\nstream\nBT /F1 10 Tf (hi) Tj ET\nendstream\nendobj\n%%EOF\n`, 'latin1');
+  assert.throws(() => pdfTable(cmapPdf), /too large or complex/);
+  const objstm = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /ObjStm /N 300000000 /First 4 /Length 8 >>\nstream\n1 0 2 0\nendstream\nendobj\n%%EOF\n', 'latin1');
+  assert.throws(() => pdfTable(objstm), /no text/);
+  assert.ok(Date.now() - t < 3000, `took ${Date.now() - t} ms`);
 });
 
 test('a version 46 database gains the outside-data tables, opened twice', () => {

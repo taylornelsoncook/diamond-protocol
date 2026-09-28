@@ -87,7 +87,7 @@ const ADDED_TABLES = {
   44: ['lesson_views', 'lesson_reminders'],
   // ---- Version 45 (batch B15, CRM): stage history, contact log, follow-up tasks, message templates ----
   45: ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates'],
-  47: ['data_imports', 'athlete_metrics', 'athlete_workouts']                  // outside data: wearables and spreadsheets brought in by hand
+  47: ['data_imports', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced']                  // outside data: wearables and spreadsheets brought in by hand
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',

@@ -1515,6 +1515,22 @@ CREATE TABLE IF NOT EXISTS athlete_metrics (
   PRIMARY KEY (client_id, metric, day)
 );
 CREATE INDEX IF NOT EXISTS athlete_metrics_import ON athlete_metrics(import_id);
+-- The value an import replaced (a different number for the same athlete, metric and day), so undoing that import puts it
+-- back. prior_import_id is the import that had saved it (empty: none, or it came in before this table).
+CREATE TABLE IF NOT EXISTS data_import_replaced (
+  import_id TEXT NOT NULL REFERENCES data_imports(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  metric TEXT NOT NULL,
+  day TEXT NOT NULL,
+  value REAL NOT NULL,
+  label TEXT,
+  unit TEXT,
+  source TEXT NOT NULL,
+  prior_import_id TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (import_id, metric, day)
+);
+CREATE INDEX IF NOT EXISTS data_import_replaced_prior ON data_import_replaced(prior_import_id);
 -- Workouts a wearable recorded (not the programs athletes log in the app: those are workout_logs).
 CREATE TABLE IF NOT EXISTS athlete_workouts (
   id TEXT PRIMARY KEY,

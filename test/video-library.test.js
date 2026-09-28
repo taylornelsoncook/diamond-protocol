@@ -56,13 +56,16 @@ before(async () => {
   writeFileSync(join(computer, 'notes.txt'), 'not a video');
   writeFileSync(join(drive, 'Extra', 'back squat.mp4'), 'the same exercise again');
   writeFileSync(join(drive, 'Copenhagen plank copy.mp4'), 'video five');
+  writeFileSync(join(drive, 'Cafe\u0301 squat.mp4'), 'accent written apart, as Macs do');      // NFD
+  writeFileSync(join(computer, 'Caf\u00e9 squat.mp4'), 'accent written together');           // NFC: the same name
+  writeFileSync(join(computer, 'Pogo short.mp4'), 'a half-second clip');
   // A stand-in ffmpeg: copies the video, writes a still for -frames:v.
   const bin = join(dir, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'ffmpeg'), `#!/bin/sh
 if [ "$1" = "-version" ]; then exit 0; fi
 for a in "$@"; do out="$a"; done
 prev=""; src=""; for a in "$@"; do if [ "$prev" = "-i" ]; then src="$a"; fi; prev="$a"; done
-case "$*" in *-frames:v*) printf 'JPEG' > "$out" ;; *) cp "$src" "$out" ;; esac
+case "$*" in *"-ss 1 "*short*) exit 0 ;; *-frames:v*) printf 'JPEG' > "$out" ;; *) cp "$src" "$out" ;; esac
 `);
   chmodSync(join(bin, 'ffmpeg'), 0o755);
   process.env.PATH = `${bin}:${process.env.PATH}`;
@@ -77,9 +80,9 @@ test('names come from the file names; hidden files and other files are left out;
   assert.equal(exerciseName('Copenhagen plank copy.mp4'), 'Copenhagen plank');
   assert.equal(exerciseName('Push-up.m4v'), 'Push-up');
   const s = scan([join(dir, 'computer'), join(dir, 'drive')]);
-  assert.deepEqual(s.found.map((f) => [f.name, f.category]), [['Band pull apart', ''], ['Back squat', 'Lower body'], ['Walking lunge', 'Lower body'], ['Push-up', ''], ['Copenhagen plank', '']]);
-  assert.equal(s.duplicates.length, 1);
-  assert.match(s.duplicates[0], /back squat\.mp4/);
+  assert.deepEqual(s.found.map((f) => [f.name, f.category]), [['Band pull apart', ''], ['Café squat', ''], ['Back squat', 'Lower body'], ['Walking lunge', 'Lower body'], ['Pogo short', ''], ['Push-up', ''], ['Copenhagen plank', '']]);
+  assert.equal(s.duplicates.length, 2, 'the accent written apart is the same name');
+  assert.ok(s.duplicates.some((d) => /back squat\.mp4/.test(d)));
   assert.throws(() => scan([join(dir, 'nope')]), /There's no folder/);
 });
 
@@ -87,37 +90,42 @@ test('the upload: a quick-loading copy and a still for each, signed, cached for 
   const lines = [];
   const cwd = mkdtempSync(join(tmpdir(), 'dp-videos-run-'));
   const r = await upload([join(dir, 'computer'), join(dir, 'drive'), '--skip-check', '--jobs', '2'], { env: ENV(), log: (l) => lines.push(l), cwd });
-  assert.deepEqual([r.found, r.uploaded, r.failed, r.duplicates], [5, 5, 0, 1]);
+  assert.deepEqual([r.found, r.uploaded, r.failed, r.duplicates], [7, 7, 0, 2]);
   const videos = puts.filter((p) => p.url.endsWith('.mp4')), stills = puts.filter((p) => p.url.endsWith('.jpg'));
-  assert.equal(videos.length, 5, 'every video converted to .mp4');
-  assert.equal(stills.length, 5);
+  assert.equal(videos.length, 7, 'every video converted to .mp4');
+  assert.equal(stills.length, 7, 'a clip under a second gets its still from the start');
   for (const p of puts) {
     assert.equal(p.method, 'PUT');
     assert.match(p.url, /^\/dp-videos\/exercises\/[a-z0-9-]+-[0-9a-f]{10}\.(mp4|jpg)$/);
+    assert.ok(!/%/.test(p.url), 'keys are plain letters, numbers and dashes');
     assert.match(p.headers.authorization, /^AWS4-HMAC-SHA256 Credential=key\//);
     assert.equal(p.headers['cache-control'], 'public, max-age=31536000, immutable');
   }
   assert.equal(videos[0].headers['content-type'], 'video/mp4');
   const csv = readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n');
   assert.equal(csv[0], 'Name,Category,Video URL,Poster URL');
-  assert.equal(csv.length, 6);
+  assert.equal(csv.length, 8);
   assert.ok(csv.some((l) => /^Back squat,Lower body,https:\/\/videos\.example\.com\/exercises\/back-squat-[0-9a-f]{10}\.mp4,https:\/\/videos\.example\.com\/exercises\/back-squat-[0-9a-f]{10}\.jpg$/.test(l)), csv.join('\n'));
-  assert.match(readFileSync(join(cwd, 'video-upload-report.txt'), 'utf8'), /Same name as another video \(skipped, 1\)/);
+  assert.match(readFileSync(join(cwd, 'video-upload-report.txt'), 'utf8'), /Same name as another video \(skipped, 2\)/);
   assert.ok(lines.some((l) => /Settings → Exercise library → Import a list/.test(l)));
   // Again: nothing new to send, the same list.
   const before = puts.length;
   const again = await upload([join(dir, 'computer'), join(dir, 'drive'), '--skip-check'], { env: ENV(), log: () => {}, cwd });
   assert.equal(puts.length, before, 'nothing uploaded twice');
   assert.equal(again.uploaded, 0);
-  assert.equal(readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n').length, 6);
+  assert.equal(readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n').length, 8);
   // A dry run needs no settings and uploads nothing; missing settings are named.
   const dry = await upload([join(dir, 'computer'), '--dry-run'], { env: {}, log: () => {}, cwd });
   assert.equal(dry.uploaded, 0);
   await assert.rejects(upload([join(dir, 'computer'), '--skip-check'], { env: {}, log: () => {}, cwd: mkdtempSync(join(tmpdir(), 'dp-x-')) }), /Missing settings: VIDEO_S3_ENDPOINT/);
+  // A typo never starts a real upload; options need their values; the bucket isn't part of the endpoint.
+  await assert.rejects(upload([join(dir, 'computer'), '--dryrun'], { env: ENV(), log: () => {}, cwd }), /no option called --dryrun/);
+  await assert.rejects(upload([join(dir, 'computer'), '--out'], { env: ENV(), log: () => {}, cwd }), /--out needs a value/);
+  await assert.rejects(upload([join(dir, 'computer'), '--skip-check'], { env: { ...ENV(), VIDEO_S3_ENDPOINT: `${s3url}/dp-videos` }, log: () => {}, cwd: mkdtempSync(join(tmpdir(), 'dp-x-')) }), /without the bucket name/);
   // The list comes into the app.
   const p = await owner('POST', '/v1/exercises/import/preview', { csv: readFileSync(join(cwd, 'video-library.csv'), 'utf8') });
   assert.equal(p.status, 200, p.text);
-  assert.deepEqual([p.body.new, p.body.new_with_video, p.body.problem_count, p.body.ready], [5, 5, 0, true]);
+  assert.deepEqual([p.body.new, p.body.new_with_video, p.body.problem_count, p.body.ready], [7, 7, 0, true]);
   const s = await owner('POST', '/v1/exercises/import', { csv: readFileSync(join(cwd, 'video-library.csv'), 'utf8') });
   assert.equal(s.status, 201, s.text);
   const sq = (await owner('GET', '/v1/exercises?q=back squat')).body.data[0];
@@ -160,6 +168,13 @@ test('the import: owner only, checked first, every problem by row and column; na
   assert.equal(replace.body.updated, 1, 'only the back squat has a different video');
   const sq = (await owner('GET', '/v1/exercises?q=back squat')).body.data[0];
   assert.deepEqual([sq.video_url, sq.poster_url], ['https://videos.example.com/x/new-squat.mp4', null]);
+  // The same video again with no still column: nothing changes and the still stays.
+  const dbug = (await owner('GET', '/v1/exercises?q=Deadbug')).body.data[0];
+  const same = (await owner('POST', '/v1/exercises/import/preview', { csv: `Name,Video\nDeadbug,${dbug.video_url}\n`, existing: 'replace_video' })).body;
+  assert.deepEqual([same.updated, same.skipped_sample[0].reason], [0, 'already has this video']);
+  // Headers: "Video URL" wins over a plain "Link"; an accent written apart matches the library's.
+  const cols = (await owner('POST', '/v1/exercises/import/preview', { csv: 'Exercise,Link,Video URL\nCafe\u0301 squat,https://example.com/page,https://videos.example.com/cs.mp4\n' })).body;
+  assert.deepEqual([cols.columns.video_url, cols.new, cols.skipped], ['Video URL', 0, 1]);
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM exercises WHERE name = ? COLLATE NOCASE', 'back squat').n, 1, 'never a second Back squat');
 });
 

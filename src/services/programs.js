@@ -28,7 +28,8 @@ export function listExercises(ctx, { q, category: cat, filter } = {}) {
     inPrograms.get(r.exercise_id).push({ id: r.id, name: r.name });
   }
   const needle = String(q ?? '').trim().toLowerCase();
-  return ctx.db.all(`SELECT e.*, (SELECT COUNT(*) FROM workout_exercises we WHERE we.exercise_id = e.id) AS uses FROM exercises e ORDER BY e.name COLLATE NOCASE`)
+  const uses = new Map(ctx.db.all('SELECT exercise_id, COUNT(*) AS n FROM workout_exercises GROUP BY exercise_id').map((r) => [r.exercise_id, r.n]));
+  return ctx.db.all('SELECT e.* FROM exercises e ORDER BY e.name COLLATE NOCASE').map((e) => ({ ...e, uses: uses.get(e.id) ?? 0 }))
     .map((e) => ({ ...e, programs: inPrograms.get(e.id) ?? [] }))
     .filter((e) => (!needle || e.name.toLowerCase().includes(needle) || (e.instructions ?? '').toLowerCase().includes(needle))
       && (!cat || e.category === cat) && (filter !== 'no_video' || !e.video_url) && (filter !== 'unused' || !e.uses));
@@ -41,7 +42,7 @@ export function getExercise(ctx, id) {
 export function createExercise(ctx, body) {
   const e = {
     id: newId('ex'),
-    name: uniqueName(ctx, v.str(body.name, 'name', { max: 120 })),
+    name: uniqueName(ctx, v.str(body.name, 'name', { max: 120 }).normalize('NFC')),
     video_url: v.url(body.video_url, 'video_url', { optional: true }),
     poster_url: v.url(body.poster_url, 'poster_url', { optional: true }),
     instructions: v.str(body.instructions, 'instructions', { max: 4000, optional: true }),
@@ -56,7 +57,7 @@ export function updateExercise(ctx, id, body) {
   const newVideo = body.video_url !== undefined ? v.url(body.video_url, 'video_url', { optional: true }) : e.video_url;
   const poster = body.poster_url !== undefined ? v.url(body.poster_url, 'poster_url', { optional: true }) : newVideo === e.video_url ? e.poster_url : null;
   ctx.db.run('UPDATE exercises SET name = ?, video_url = ?, poster_url = ?, instructions = ?, category = ? WHERE id = ?',
-    body.name !== undefined ? uniqueName(ctx, v.str(body.name, 'name', { max: 120 }), id) : e.name,
+    body.name !== undefined ? uniqueName(ctx, v.str(body.name, 'name', { max: 120 }).normalize('NFC'), id) : e.name,
     newVideo, poster,
     body.instructions !== undefined ? v.str(body.instructions, 'instructions', { max: 4000, optional: true }) : e.instructions,
     body.category !== undefined ? category(body.category) : e.category,

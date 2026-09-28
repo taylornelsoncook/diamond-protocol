@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   load_test TEXT,                                -- version 21: weight as a percent of this tested max (squat_1rm...)
   load_pct INTEGER
 );
+CREATE INDEX IF NOT EXISTS workout_exercises_exercise ON workout_exercises(exercise_id);   -- the library's use counts (a big video library)
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

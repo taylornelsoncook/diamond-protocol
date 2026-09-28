@@ -50,7 +50,7 @@ function showVideo(x) {
 }
 const playBtn = (x) => {
   const b = h('button', { type: 'button', class: `dp-ex-play${x.poster_url ? ' dp-ex-play--poster' : ''}`, 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon());
-  if (x.poster_url) b.style.backgroundImage = `url("${encodeURI(x.poster_url).replace(/"/g, '%22')}")`;
+  if (x.poster_url) b.style.backgroundImage = `url("${x.poster_url.replace(/["\\\n\r]/g, encodeURIComponent)}")`;   // already a checked https link; only quotes need escaping
   return b;
 };
 async function sendLink(c) {

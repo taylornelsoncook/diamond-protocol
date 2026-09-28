@@ -19,7 +19,7 @@ const COLUMNS = {
   instructions: ['instructions', 'cues', 'coachingcues', 'notes', 'description']
 };
 const key = (h) => String(h).toLowerCase().replace(/[^a-z0-9]/g, '');
-const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
+const clean = (s) => String(s ?? '').normalize('NFC').replace(/\s+/g, ' ').trim();   // Macs and drives often write accents apart (NFD)
 const catOf = (s) => CATEGORIES.find((c) => c.toLowerCase() === clean(s).toLowerCase()) ?? null;
 function httpsUrl(s) {
   let u; try { u = new URL(s); } catch { return null; }
@@ -31,11 +31,16 @@ function check(ctx, body) {
   if (typeof text !== 'string' || !text.trim()) throw badRequest('Choose the CSV file with the exercises (the upload tool writes video-library.csv).');
   const t = parseCsv(text);
   const col = {};
-  for (const [field, names] of Object.entries(COLUMNS)) col[field] = t.headers.find((h) => names.includes(key(h))) ?? null;
+  // The best-named header for each column wins (Video URL before a plain Link), each header used once.
+  const used = new Set();
+  for (const [field, names] of Object.entries(COLUMNS)) {
+    col[field] = names.map((n) => t.headers.find((h) => !used.has(h) && key(h) === n)).find(Boolean) ?? null;
+    if (col[field]) used.add(col[field]);
+  }
   if (!col.name) throw badRequest(`The file needs a column with the exercise names, called Name or Exercise. Its columns are: ${t.headers.join(', ')}.`);
   if (t.rows.length > MAX_ROWS) throw badRequest(`That's ${t.rows.length.toLocaleString()} rows. Bring in up to ${MAX_ROWS.toLocaleString()} at a time.`);
   const existing = EXISTING.includes(body.existing) ? body.existing : 'skip';
-  const library = new Map(ctx.db.all('SELECT id, name, video_url, poster_url FROM exercises').map((e) => [e.name.toLowerCase(), e]));
+  const library = new Map(ctx.db.all('SELECT id, name, video_url, poster_url FROM exercises').map((e) => [e.name.normalize('NFC').toLowerCase(), e]));
   const problems = [], seen = new Map(), add = [], update = [], skipped = [];
   let unknownCats = 0;
   t.rows.forEach((r, i) => {
@@ -61,10 +66,11 @@ function check(ctx, body) {
     const item = { row, name, category, video_url: video, poster_url: poster, instructions: instructions || null };
     const have = library.get(lower);
     if (!have) return add.push(item);
-    const changes = existing === 'replace_video' ? !!video && (video !== have.video_url || poster !== have.poster_url)
+    // A still only changes when the file gives one; the same video with no still in the file keeps the one it has.
+    const changes = existing === 'replace_video' ? !!video && (video !== have.video_url || (!!poster && poster !== have.poster_url))
       : existing === 'add_video' ? !!video && !have.video_url : false;
-    if (changes) update.push({ ...item, id: have.id, library_name: have.name });
-    else skipped.push({ row, name: have.name, reason: have.video_url && existing === 'add_video' ? 'already has a video' : existing === 'skip' ? 'already in the library' : 'no video to add' });
+    if (changes) update.push({ ...item, poster_url: poster ?? (video === have.video_url ? have.poster_url : null), id: have.id, library_name: have.name });
+    else skipped.push({ row, name: have.name, reason: existing === 'skip' ? 'already in the library' : !video ? 'no video in the file' : existing === 'add_video' ? 'already has a video' : 'already has this video' });
   });
   const notes = [];
   if (unknownCats) notes.push(`${unknownCats.toLocaleString()} ${unknownCats === 1 ? 'category isn\'t' : 'categories aren\'t'} one of ${CATEGORIES.join(', ')}; ${unknownCats === 1 ? 'that exercise comes' : 'those exercises come'} in with no category (you can set it later).`);

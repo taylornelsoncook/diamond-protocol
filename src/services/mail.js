@@ -1,4 +1,4 @@
-import { newId } from '../util.js';
+import { newId, v, notFound, conflict, badRequest } from '../util.js';
 
 // Every email is recorded in the outbox. With RESEND_API_KEY set, it's also sent through Resend
 // as a branded HTML email with a plain-text copy. Without it (local and test mode), coaches can read
@@ -54,7 +54,10 @@ ${logo}<tr><td style="padding:28px 28px 12px">${paras}</td></tr>
 </table></td></tr></table></body></html>`;
 }
 
-export async function sendEmail(ctx, { to, subject, text }) {
+// sensitive: the email holds a password or a private link (sign-in, reset). It is marked so it's never sent to another
+// address from the outbox, and secret (a string or a list) is hidden from the outbox's copy once the email really went
+// out; while nothing is sent (no email service, or held on a staging copy) the outbox is the only copy, so it stays.
+export async function sendEmail(ctx, { to, subject, text, sensitive = false, secret = null }) {
   const id = newId('msg');
   let status = 'logged', error = null;
   if (clean(ctx.mail?.resendKey)) {
@@ -73,10 +76,52 @@ export async function sendEmail(ctx, { to, subject, text }) {
       } catch (e) { status = 'failed'; error = e.message; }
     }
   }
-  ctx.db.run('INSERT INTO outbox (id, to_email, subject, body, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, to, subject, text, status, error, ctx.now());
+  let kept = text;
+  if (status !== 'logged') for (const s of [secret].flat().filter(Boolean)) kept = kept.split(s).join('[hidden once sent]');
+  ctx.db.run('INSERT INTO outbox (id, to_email, subject, body, status, error, created_at, sensitive) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, to, subject, kept, status, error, ctx.now(), sensitive || privateContent(subject, text) ? 1 : 0);
   return { id, status: error?.startsWith('Held:') ? 'held' : status, error };
 }
-export const listOutbox = (ctx, limit = 50) => ctx.db.all('SELECT * FROM outbox ORDER BY created_at DESC, rowid DESC LIMIT ?', limit);
+// Emails that carry a way in (a sign-in or sign-up code, a password, a reset link, an athlete's app link, a pay, invoice,
+// receipt, report or offer link, a personal unsubscribe link) go only to the address they were written for.
+const PRIVATE = /(sign-in code|sign-up code|one-time password|[?&#](token|reset|share)=|\/(pay|here|spot|receipt|invoice|r|c)\/[\w-]{8,}|\/app\?)/i;
+export const privateContent = (subject, text) => PRIVATE.test(subject) || PRIVATE.test(text);
+
+// The outbox: status (sent, failed, held, not_sent), q (address, subject or text), newest first, with counts by status.
+const OUTBOX_STATUS = { sent: `status = 'sent'`, failed: `status = 'failed'`, held: `status = 'logged' AND error LIKE 'Held:%'`, not_sent: `status = 'logged' AND (error IS NULL OR error NOT LIKE 'Held:%')` };
+export function listOutbox(ctx, q = {}) {
+  if (typeof q === 'number') q = { limit: q };
+  const where = [], p = [];
+  if (q.status) {
+    if (!OUTBOX_STATUS[q.status]) throw badRequest('status must be sent, failed, held or not_sent.');
+    where.push(OUTBOX_STATUS[q.status]);
+  }
+  const text = String(q.q ?? '').trim().slice(0, 100);
+  if (text) { const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`; where.push(`(to_email LIKE ? ESCAPE '\\' OR subject LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')`); p.push(like, like, like); }
+  const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200), offset = Math.max(Math.floor(Number(q.offset)) || 0, 0);
+  return ctx.db.all(`SELECT id, to_email, subject, body, status, error, created_at, sensitive FROM outbox ${w} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`, ...p, limit, offset)
+    .map((m) => ({ ...m, status: m.status === 'logged' && m.error?.startsWith('Held:') ? 'held' : m.status, sensitive: !!m.sensitive }));
+}
+export function outboxCounts(ctx, q = {}) {
+  const out = {};
+  for (const [k, cond] of Object.entries(OUTBOX_STATUS)) out[k] = ctx.db.get(`SELECT COUNT(*) AS n FROM outbox WHERE ${cond}`).n;
+  if (q.q) out.matching = listOutbox(ctx, { q: q.q, status: q.status, limit: 200 }).length;
+  return out;
+}
+// Send an outbox email again as a new message: to the same address, or (for emails without a way in) another one.
+export async function resendEmail(ctx, id, body = {}) {
+  const m = ctx.db.get('SELECT * FROM outbox WHERE id = ?', id);
+  if (!m) throw notFound('Email');
+  const to = body.to === undefined || body.to === '' ? m.to_email : v.email(body.to);
+  const elsewhere = to.toLowerCase() !== m.to_email.toLowerCase();
+  if (elsewhere && (m.sensitive || privateContent(m.subject, m.body))) throw conflict('This email holds a sign-in code, password or private link, so it only goes to the address it was written for. Send them a new one instead (a new code, reset or link).');
+  if (m.body.includes('[hidden once sent]')) throw conflict('Part of this email was hidden after it was sent (a password or link), so it can\'t be sent again. Send a new one instead.');
+  if (mailMode(ctx) === 'test') throw badRequest('No email service is connected, so nothing can be sent. Set RESEND_API_KEY on the server.');
+  const out = await sendEmail(ctx, { to, subject: m.subject, text: m.body, sensitive: !!m.sensitive });
+  if (out.status === 'held') throw badRequest(`This server only delivers to ${ctx.mail.onlyTo}.`);
+  if (out.status !== 'sent') throw badRequest(out.error || 'The email service refused the message.');
+  return { ok: true, id: out.id, to };
+}
 
 // Fire-and-forget notification to every guardian in a family.
 export function notifyFamily(ctx, familyId, subject, text) {

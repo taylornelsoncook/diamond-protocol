@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb } from './db.js';
 import { routes, openApiSpec } from './routes.js';
 import { HttpError } from './util.js';
-import { userForSession, keyForSecret } from './services/access.js';
+import { userForSession, keyForSecret, logApiRequest } from './services/access.js';
 import { clientByToken } from './services/clients.js';
 import { deliverPending } from './services/events.js';
 import { guardianForToken } from './services/families.js';
@@ -14,7 +14,7 @@ import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
 import { seedPresets } from './services/library.js';
 import { assignMissingIds } from './services/athlete-ids.js';
-import { can, audit, rateLimit, roleName, hideMoney } from './services/security.js';
+import { can, keyAllows, audit, rateLimit, roleName, hideMoney } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
 import { sendNewest as sendBackupOffsite } from './services/offsite.js';
 import { syncHawkin, migratePending } from './services/perf-import.js';
@@ -30,6 +30,7 @@ import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { followCampaignLink } from './services/campaigns.js';
 
+const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
 const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
@@ -39,8 +40,10 @@ const CSP = [
   "frame-src https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
 
-export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, sms = {}, jobs = true, hawkinBaseUrl } = {}) {
-  const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, sms, hawkinBaseUrl, now: () => new Date().toISOString() };
+// allowPrivateWebhooks: webhooks may go to addresses inside a private network (this computer, the office network). Only
+// for local development and the tests: on by default in test mode without a PUBLIC_URL, off everywhere else.
+export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, sms = {}, jobs = true, hawkinBaseUrl, allowPrivateWebhooks = testMode && !publicUrl } = {}) {
+  const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, sms, hawkinBaseUrl, allowPrivateWebhooks, now: () => new Date().toISOString() };
   syncLibrary(ctx);
   seedPresets(ctx);
   assignMissingIds(ctx);
@@ -94,10 +97,14 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       const ip = clientIp(req);
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
+      r.userAgent = req.headers['user-agent'] ?? null;
       r.kioskKey = req.headers['x-kiosk-key'];
       r.reportLink = req.headers['x-report-link'];         // a report share link's secret: in a header, so it stays out of addresses and logs
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);
+      // Forgot password: a few asks per address an hour (and a ceiling for everyone), and a limit on trying reset links.
+      if (route.path === '/auth/forgot') { rateLimit(`forgot:${ip}`, 5, 60 * 60000); rateLimit('forgot:all', 100, 60 * 60000); }
+      if (route.path === '/auth/reset' || route.path === '/auth/reset/check') rateLimit(`reset:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
       if (route.path === '/portal/api/public/inquiry') { rateLimit(`inquiry:${ip}`, 10, 60 * 60000); rateLimit('inquiry:all', 60, 10 * 60000); }   // per address, and overall
@@ -112,18 +119,29 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
       catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
-      const auditable = req.method !== 'GET' && route.path !== '/stripe/webhook';
+      // Reads are logged only when they hand out something private: a backup file, the activity log itself as a CSV, or a
+      // webhook signing secret.
+      const auditable = (req.method !== 'GET' && route.path !== '/stripe/webhook') || (req.method === 'GET' && AUDITED_READS.test(route.path));
+      // Every request made with an API key goes in that key's request log (never the body or the query string).
+      if (r.apiKey) {
+        const started = Date.now(), key = r.apiKey;
+        res.on('finish', () => logApiRequest(ctx, { key_id: key.id, method: req.method, path: url.pathname, status: res.statusCode, duration_ms: Date.now() - started, ip, error: res.dpError }));
+      }
       res.on('finish', () => {
-        if (!auditable && res.statusCode !== 403 && !(route.path.startsWith('/v1/backups/') && req.method === 'GET')) return;
+        if (!auditable && res.statusCode !== 403) return;
+        const typed = ['/auth/login', '/auth/token', '/auth/forgot'].includes(route.path) ? String(r.body?.email ?? '').slice(0, 120) : route.path === '/auth/reset' ? r.auditName ?? null : null;
         const actor = r.user ? { actor_type: 'staff', actor_id: r.user.id, actor_name: r.user.name, role: r.user.role }
           : r.apiKey ? { actor_type: 'api_key', actor_id: r.apiKey.id, actor_name: r.apiKey.label } : r.guardian ? { actor_type: 'parent', actor_id: r.guardian.id, actor_name: r.guardian.name }
-          : { actor_type: 'public', actor_name: route.path === '/auth/login' || route.path === '/auth/token' ? String(r.body?.email ?? '').slice(0, 120) : null };
+          : { actor_type: 'public', actor_name: typed };
         audit(ctx, { ...actor, action: route.path === '/auth/login' || route.path === '/auth/token' ? 'sign-in' : `${req.method} ${route.path}`, target: Object.values(r.params)[0] ?? null, status: res.statusCode, ip });
       });
       if (r.user) {
         const passwordFree = ['/auth/me', '/auth/password', '/auth/logout'].includes(route.path);
         if (r.user.must_change_password && !passwordFree) throw new HttpError(403, 'password_change_required', 'Choose a new password before continuing.');
         if (!can(r.user.role, req.method, route.path)) throw new HttpError(403, 'forbidden', `Your role (${roleName(r.user.role)}) can't do this. Ask the owner.`);
+      }
+      if (r.apiKey && !keyAllows(r.apiKey.scope, req.method, route.path)) {
+        throw new HttpError(403, 'key_scope', r.apiKey.scope === 'results' ? 'This API key can read and send test results only. Ask the owner for a key with full access.' : 'This API key is read only. Ask the owner for a key that can send data.');
       }
       if (route.path === '/auth/login') {
         const out = route.handler(ctx, r);
@@ -138,6 +156,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       if (route.path === '/portal/api/logout') res.setHeader('set-cookie', cookie('dp_family', '', 0, url.protocol === 'https:'));
       const out = await route.handler(ctx, r);
+      if (route.path === '/auth/reset') r.auditName = out?.email ?? null;
       if (out?.__file) {
         res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': `attachment; filename="${out.__file.filename}"`, 'cache-control': 'no-store' });
         if (out.__file.stream) return out.__file.stream.pipe(res);
@@ -145,7 +164,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       return json(res, route.status, r.user ? hideMoney(r.user.role, req.method, route.path, out) : out);
     } catch (e) {
-      if (e instanceof HttpError) return json(res, e.status, { error: { code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) } });
+      if (e instanceof HttpError) { res.dpError = e.message; return json(res, e.status, { error: { code: e.code, message: e.message, ...(e.details ? { details: e.details } : {}) } }); }
       console.error(e);
       return json(res, 500, { error: { code: 'server_error', message: 'Something went wrong on our side. Try again.' } });
     }

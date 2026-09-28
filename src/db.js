@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 40;
+const SCHEMA_VERSION = 42;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -76,7 +76,9 @@ const ADDED_TABLES = {
   // ---- Version 39: Schedule and Today (batches B2 and B3): follow-ups hidden from Today for a while ----
   39: ['today_snoozes'],
   // ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
-  40: ['workout_sets']
+  40: ['workout_sets'],
+  // ---- Version 42 (batch B14): API key request log, staff "forgot password" links ----
+  42: ['api_requests', 'password_resets']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -113,7 +115,13 @@ const ADDED_COLUMNS = {
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
-  exercises: ['category TEXT']
+  exercises: ['category TEXT'],
+  // ---- Version 42 (batch B14): API & integrations, Staff & security ----
+  sessions: ['id TEXT', 'kind TEXT', 'created_at TEXT', 'last_seen_at TEXT', 'ip TEXT', 'user_agent TEXT'],   // devices a staff member is signed in on
+  api_keys: ["scope TEXT NOT NULL DEFAULT 'full' CHECK (scope IN ('read','results','full'))"],                 // access levels (existing keys keep full access)
+  webhook_endpoints: ['label TEXT', 'previous_secret TEXT', 'previous_secret_until TEXT', 'secret_rotated_at TEXT', 'failures INTEGER NOT NULL DEFAULT 0'],
+  webhook_deliveries: ['event_type TEXT', 'payload TEXT', 'test INTEGER NOT NULL DEFAULT 0', 'last_attempt_at TEXT', 'duration_ms INTEGER', 'response_body TEXT'],   // then rebuilt, below
+  outbox: ['sensitive INTEGER NOT NULL DEFAULT 0']
 };
 
 function migrate(raw, schema) {
@@ -151,6 +159,14 @@ function migrate(raw, schema) {
   // booking when it's paid. The note is left as it was (it is only a note now).
   if (version < 38 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
     raw.exec(`UPDATE sales SET booking_id = substr(note, 9) WHERE booking_id IS NULL AND note LIKE 'booking:%' AND substr(note, 9) IN (SELECT b.id FROM bookings b WHERE b.client_id = sales.client_id)`);
+  }
+  // ---- Version 42 (batch B14): API & integrations, Staff & security ----
+  // Webhook deliveries: test events have no event row and a delivery can be 'sending', so the table is rebuilt (its rows
+  // are copied as they are). Devices signed in before this version get a device id; their sign-in time and address
+  // weren't recorded and stay empty.
+  if (version < 42) {
+    rebuild(raw, schema, ['webhook_deliveries']);
+    raw.exec(`UPDATE sessions SET id = 'ses_' || lower(hex(randomblob(8))) WHERE id IS NULL`);
   }
 }
 

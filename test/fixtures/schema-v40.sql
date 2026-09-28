@@ -15,13 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL,
-  id TEXT,                               -- version 42: names a device in "signed in on" lists (the token hash never leaves the server)
-  kind TEXT,                             -- version 42: web or app (the iPhone app)
-  created_at TEXT,                       -- version 42: when they signed in on this device
-  last_seen_at TEXT,                     -- version 42: last request (written at most every 5 minutes)
-  ip TEXT,                               -- version 42: address at sign-in
-  user_agent TEXT                        -- version 42: browser or app at sign-in
+  expires_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS plans (
   id TEXT PRIMARY KEY,
@@ -207,8 +201,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key_hash TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
   last_used_at TEXT,
-  revoked_at TEXT,
-  scope TEXT NOT NULL DEFAULT 'full' CHECK (scope IN ('read','results','full'))   -- version 42: read only, read and send results, or full access
+  revoked_at TEXT
 );
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id TEXT PRIMARY KEY,
@@ -216,12 +209,7 @@ CREATE TABLE IF NOT EXISTS webhook_endpoints (
   secret TEXT NOT NULL,
   events TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  label TEXT,                            -- version 42: a name for the receiving system
-  previous_secret TEXT,                  -- version 42: after a new signing secret, the old one also signs until previous_secret_until
-  previous_secret_until TEXT,
-  secret_rotated_at TEXT,
-  failures INTEGER NOT NULL DEFAULT 0    -- version 42: failed tries in a row (3 or more = failing)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -230,24 +218,16 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_created ON events(created_at);
--- Version 42 rebuilt this table: test events have no event row (event_id empty, event_type and payload instead), and a
--- delivery is marked 'sending' while one server copy sends it, so nothing sends it twice.
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id TEXT PRIMARY KEY,
   endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
-  event_id TEXT REFERENCES events(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('pending','sending','succeeded','failed')),
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   response_code INTEGER,
   last_error TEXT,
   next_attempt_at TEXT,
-  created_at TEXT NOT NULL,
-  event_type TEXT,                       -- version 42: a test event's type
-  payload TEXT,                          -- version 42: a test event's body
-  test INTEGER NOT NULL DEFAULT 0,       -- version 42: sent with Send test event
-  last_attempt_at TEXT,                  -- version 42
-  duration_ms INTEGER,                   -- version 42: how long the receiver took to answer
-  response_body TEXT                     -- version 42: the start of the receiver's answer
+  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_pending ON webhook_deliveries(status, next_attempt_at);
 
@@ -545,8 +525,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   body TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('logged','sent','failed')),
   error TEXT,
-  created_at TEXT NOT NULL,
-  sensitive INTEGER NOT NULL DEFAULT 0   -- version 42: held a password or a private link; never sent to another address
+  created_at TEXT NOT NULL
 );
 -- Text messages sent to parents (out) and their replies (in). Without Twilio settings they're only logged here.
 CREATE TABLE IF NOT EXISTS texts (
@@ -1251,32 +1230,3 @@ CREATE TABLE IF NOT EXISTS workout_sets (
 CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);
 CREATE UNIQUE INDEX IF NOT EXISTS workout_logs_request ON workout_logs(client_id, request_id) WHERE request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS workout_logs_workout ON workout_logs(workout_id);
-
--- ---------- Version 42: API & integrations, Staff & security (batch B14) ----------
--- Every request made with an API key, kept 30 days: never the body or the query string.
-CREATE TABLE IF NOT EXISTS api_requests (
-  id TEXT PRIMARY KEY,
-  key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-  at TEXT NOT NULL,
-  method TEXT NOT NULL,
-  path TEXT NOT NULL,
-  status INTEGER NOT NULL,
-  duration_ms INTEGER,
-  ip TEXT,
-  error TEXT                             -- the error message sent back
-);
-CREATE INDEX IF NOT EXISTS api_requests_key ON api_requests(key_id, at);
-CREATE INDEX IF NOT EXISTS api_requests_at ON api_requests(at);
--- "Forgot password" links for staff: only a hash of the secret, single use, 30 minutes.
-CREATE TABLE IF NOT EXISTS password_resets (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash TEXT NOT NULL UNIQUE,
-  expires_at TEXT NOT NULL,
-  used_at TEXT,
-  ip TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS password_resets_user ON password_resets(user_id, created_at);
-CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS webhook_deliveries_endpoint ON webhook_deliveries(endpoint_id, created_at);

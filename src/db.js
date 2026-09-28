@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 47;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import)
+const SCHEMA_VERSION = 48;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -128,7 +128,7 @@ const ADDED_COLUMNS = {
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
-  exercises: ['category TEXT'],
+  exercises: ['category TEXT', 'poster_url TEXT'],   // category: version 40; poster_url: version 48 (the still shown before a video plays)
   // ---- Version 41 (batches B12 and B13): the card's expiry, signed-in devices (card_exp on clients, calendar feed on guardians and the note on bookings: see above)
   families: ['card_exp TEXT'],
   portal_sessions: ['created_at TEXT', 'user_agent TEXT', 'last_seen_at TEXT'],

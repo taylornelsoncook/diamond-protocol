@@ -155,8 +155,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   video_url TEXT,
   instructions TEXT,
   created_at TEXT NOT NULL,
-  category TEXT,                                 -- version 40: Speed, Power, Lower body... (programs.js CATEGORIES)
-  poster_url TEXT                                -- version 48: the still shown before the video plays (the video library upload)
+  category TEXT                                  -- version 40: Speed, Power, Lower body... (programs.js CATEGORIES)
 );
 CREATE TABLE IF NOT EXISTS programs (
   id TEXT PRIMARY KEY,

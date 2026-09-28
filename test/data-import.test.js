@@ -292,7 +292,7 @@ test('a version 46 database gains the outside-data tables, opened twice', () => 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 47, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 48, `round ${round}`);
       for (const t of ['data_imports', 'athlete_metrics', 'athlete_workouts']) assert.ok(d.all(`PRAGMA table_info(${t})`).length, t);
       assert.equal(d.get(`SELECT name FROM clients WHERE id = 'cli_1'`).name, 'Ava');
       d.close();

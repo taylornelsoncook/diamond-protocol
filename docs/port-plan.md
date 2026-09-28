@@ -10,7 +10,7 @@
 - Also done: **B8** Programs builder + athlete Workout tab (schema 40): exercise categories, copy/delete weeks, copy and swap workouts, Undo, duplicate programs, client progress and the Programs page; set-by-set logging in the app (`workout_sets`, effort, one save per Finish by `request_id`, reopen for 2 hours), shared with the weight-room screen.
 - Next: B12/B13 parent portal → B14 API & integrations + Staff & security → B11 Education + engage tabs → B15 CRM on top of `leads.js`/`sms.js`/`campaigns.js`.
 - The old version's code is readable with `git show d6b36a2:<path>` (commits `2342d22..d6b36a2`; each old tab has an "<Tab>: ..." commit whose body lists its improvements). Re-implement against the current code; never copy old files.
-- Owner decisions still open: whether coach-only staff notes stay out of the parent's self-service data export; whether coaches should work leads in the CRM (old version: no CRM access for coaches).
+- Also done: **the owner's decisions** (schema 43, recorded in CLAUDE.md "Rules we decided"): the owner's retries don't count toward canceling a membership; card approvals that arrive after an invoice was paid another way (or voided) are refunded once and the owner told (`invoice_charges` tracks every try); coach clashes are warnings with "Save anyway"; waitlisted families hear about moved sessions; deleting a program or workout keeps athletes' logged workouts; coach-only notes stay out of family exports; coaches see only the leads the owner gives them (`leads.coach_id`; for B15 too); only the owner gives discounts (staff limit 0); the 72-hour offline window and front desk's parent edits stay as they are. No owner decisions are open.
 
 Below is the original comparison, made against the competitor-roadmap tip (`100505c`). Rows marked ALREADY need no work; PARTIAL and MISSING are the work; N/A were old-code-only fixes.
 
@@ -425,7 +425,7 @@ Legend: **A** = ALREADY, **P** = PARTIAL, **M** = MISSING, **N** = N/A. "(bug pr
 | 17 | Web form can't switch on texts for an existing lead's phone | A | 100505c |
 | 18 | Leads in the open API | A | `/v1/leads*` |
 | 19 | `lead.created` / `lead.stage_changed` webhooks | A | `lead.created` / `lead.updated` (name differs) |
-| 20 | Roles: front desk works leads + own tasks, no reports/group/import/money; coaches no CRM | P | front desk list/add/edit leads; **coaches have full lead access** except delete (policy decision) |
+| 20 | Roles: front desk works leads + own tasks, no reports/group/import/money; coaches no CRM | P | owner decision (schema 43): owners and front desk work every lead; coaches see and work only leads the owner gave them (`leads.coach_id`), can't add, delete or reassign. B15 keeps this |
 | 21 | Pipeline board with keyboard/phone Move menu | M | |
 | 22 | Lead list search, filters, sort; stale amber; trials that ended | P | stage chips |
 | 23 | Lead page: call, log call, note, email, text, book evaluation, move stage, tasks, contact preferences, convert, timeline | P | stage, notes, "I reached out", stop follow-up, delete |
@@ -505,5 +505,5 @@ Suggested order: B0 -> B1 -> B7 (low conflict, warms up) -> B10 -> B9 -> B4 -> B
 4. **engage.js / programs.js / client.js** were reworked on competitor-roadmap (replies, readiness loads, badges, quizzes, TV logging). B8 and B11 must be re-designed against that code, not replayed.
 5. **CRM duplication risk**: competitor-roadmap already has leads, follow-up, texts, campaigns and opt-outs with different stage names and event names. B15 must extend those tables/services; the old `crm.js` (75 KB) and `crm.js` screen (88 KB) cannot be copied.
 6. **Payments overlap**: invoice refunds, voids and card retries (B6) overlap thread `vrx31w` (Stripe webhooks: renewals, dashboard refunds, disputes) and competitor-roadmap's `withLock` double-charge protection and pay links; reuse their locking and refund paths.
-7. **Policy differences to confirm with the owner**: coaches currently have CRM access in the new base (old work: none); new base "Active clients" is by subscription status (old: archive flag); old work's front-desk permissions were stricter in places.
+7. **Policy differences to confirm with the owner**: settled (schema 43): coaches see only the leads the owner gives them; new base "Active clients" is by subscription status (old: archive flag); old work's front-desk permissions were stricter in places (front desk keeps editing parents, re-sending sign-in and recording paper waivers).
 8. Old-code-only review fixes (no-body 500s, listener stacking, phone layout) are N/A but their tests are a useful checklist; do not port tests blindly (CommonJS vs ESM, different fixtures).

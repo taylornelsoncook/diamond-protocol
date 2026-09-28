@@ -455,7 +455,7 @@ function historyPanel(home) {
           row.replaceWith(fresh);
           fresh.querySelector('.c-hist-head').focus();
         } }, h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.workout_title),
-          h('span', { class: 'small muted' }, [shortDate(l.completed_at), `${l.exercises_logged} of ${l.exercises_total} exercises`, l.sets ? `${l.sets} sets` : null, l.rpe ? `effort ${l.rpe}/10` : null, l.on_screen ? 'weight-room screen' : null].filter(Boolean).join(' · '))),
+          h('span', { class: 'small muted' }, [shortDate(l.completed_at), l.program_deleted ? `${l.program_name ?? 'Program'} (since removed by your coach)` : null, `${l.exercises_logged} of ${l.exercises_total} exercises`, l.sets ? `${l.sets} sets` : null, l.rpe ? `effort ${l.rpe}/10` : null, l.on_screen ? 'weight-room screen' : null].filter(Boolean).join(' · '))),
         h('span', { 'aria-hidden': 'true', class: 'muted' }, open ? '−' : '+')), open ? body : null);
       if (open) {
         const fillBody = (d) => fill(body,

@@ -106,7 +106,7 @@ export async function viewPrograms(main) {
 
 // One logged workout in a feed.
 export function workoutRow(l) {
-  const bits = [`${l.program_name} · week ${l.week}, day ${l.day}`, `${l.exercises_logged} of ${l.exercises_total} exercises`, l.sets ? plural(l.sets, 'set') : null,
+  const bits = [`${l.program_name} · week ${l.week}, day ${l.day}`, l.program_deleted ? 'deleted from the program since (the log stays)' : null, `${l.exercises_logged} of ${l.exercises_total} exercises`, l.sets ? plural(l.sets, 'set') : null,
     l.rpe ? `effort ${l.rpe}/10` : null, l.minutes ? `${l.minutes} min` : null, l.source === 'screen' ? 'weight-room screen' : null].filter(Boolean);
   return h('div', { class: 'list-item', style: 'align-items:flex-start' },
     h('div', { class: 'grow stack-tight' },
@@ -234,7 +234,7 @@ export async function viewProgram(main, id) {
       days.length < 7 ? btn('Add day', () => dayDialog(p, week, reload), 'secondary') : null,
       days.length ? btn('Copy week', () => copyWeekDialog(p, week, reload), 'ghost') : null,
       days.length || (isLast && p.weeks > 1) ? btn('Delete week', (e) => {
-        const msg = days.length ? `Delete week ${week}'s ${plural(days.length, 'workout')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs go too.` : ''}${isLast && p.weeks > 1 ? ' The program becomes shorter.' : ''}` : `Delete the empty week ${week}? The program becomes ${plural(p.weeks - 1, 'week')}.`;
+        const msg = days.length ? `Delete week ${week}'s ${plural(days.length, 'workout')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''}${isLast && p.weeks > 1 ? ' The program becomes shorter.' : ''}` : `Delete the empty week ${week}? The program becomes ${plural(p.weeks - 1, 'week')}.`;
         if (!confirm(msg)) return;
         busy(e.currentTarget, async () => { await del(`/v1/programs/${id}/weeks/${week}`, { confirm: true }); toast(`Week ${week} deleted.`); reload(Math.min(week, isLast && p.weeks > 1 ? p.weeks - 1 : p.weeks)); });
       }, 'ghost') : null) : null;
@@ -253,7 +253,7 @@ export async function viewProgram(main, id) {
     tabsBox, weekBox,
     shop ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render())) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
-      edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs go too.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
+      edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
   go(week);
   draw();
 }
@@ -374,7 +374,7 @@ function workoutCard(p, w, exs, edit, reload) {
       btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'secondary'),
       h('span', { class: 'grow' }),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost', { 'aria-label': `Copy ${w.title}` }),
-      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs go too.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
+      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
 }
 function renameDialog(w, reload) {
   const title = input({ value: w.title });

@@ -206,12 +206,12 @@ test('clients on a program and the Programs page: progress, needs a check-in, fi
   app.ctx.db.run('UPDATE clients SET archived_at = NULL WHERE id = ?', ava.id);
 });
 
-test('deleting a week athletes logged needs confirm, and says how many logs go', async () => {
+test('deleting a week athletes logged needs confirm, and says those logs stay in their history', async () => {
   const p = (await coach('GET', '/v1/programs')).body.data.find((x) => x.name === 'Speed');
   const r = await coach('DELETE', `/v1/programs/${p.id}/weeks/1`, {});
   assert.equal(r.status, 409);
   assert.equal(r.body.error.code, 'confirm_needed');
-  assert.match(r.body.error.message, /Week 1 has 2 logged workouts\. Removing it takes those logs out of the athletes' history\./);
+  assert.match(r.body.error.message, /Week 1 has 2 logged workouts\. Those logs stay in the athletes' history but leave this program's numbers\./);
   const copy = await coach('POST', `/v1/programs/${p.id}/weeks/1/copy`, { to: 1, through: 1 });
   assert.equal(copy.status, 400);
   // One workout on its own: the same question.

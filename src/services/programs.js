@@ -150,13 +150,36 @@ export function updateProgram(ctx, id, body) {
     weeks, id);
   return getProgram(ctx, id);
 }
+// Owner decision: deleting a program or workout keeps every athlete's logged workouts (and their sets) in their history.
+// Before the workout goes, each of its logs is given what it was (program, workout, week and day, and the exercises with
+// whether each was done), so the log reads the same without it; the log's workout and assignment become empty, so it
+// drops out of the program's numbers but stays in the athlete's history, the app, the client page and exports.
+function keepLogsOf(ctx, workoutIds) {
+  for (const wid of workoutIds) {
+    const w = ctx.db.get('SELECT w.*, p.name AS program_name FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ?', wid);
+    if (!w) continue;
+    const items = ctx.db.all('SELECT we.id, we.exercise_id, e.name, we.prescription FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position', wid);
+    for (const l of ctx.db.all('SELECT id FROM workout_logs WHERE workout_id = ?', wid)) {
+      const done = new Set(ctx.db.all('SELECT workout_exercise_id FROM exercise_logs WHERE workout_log_id = ?', l.id).map((r) => r.workout_exercise_id));
+      ctx.db.run('UPDATE workout_logs SET program_id = ?, program_name = ?, workout_title = ?, workout_week = ?, workout_day = ?, exercises_snapshot = ? WHERE id = ?',
+        w.program_id, w.program_name, w.title, w.week, w.day, JSON.stringify(items.map((i) => ({ ...i, done: done.has(i.id) }))), l.id);
+    }
+  }
+}
+const deleteWorkouts = (ctx, ids) => { keepLogsOf(ctx, ids); for (const id of ids) ctx.db.run('DELETE FROM workouts WHERE id = ?', id); };
+
 // Refused while current clients are on it. Archived clients still on it (not shown on the program) are taken off.
+// Athletes' logged workouts stay in their history (keepLogsOf).
 export function deleteProgram(ctx, id) {
   getProgram(ctx, id);
   const on = ctx.db.get('SELECT COUNT(*) AS n FROM assignments a JOIN clients c ON c.id = a.client_id WHERE a.program_id = ? AND a.active = 1 AND c.archived_at IS NULL', id).n;
   if (on) throw conflict(`${on} ${on === 1 ? 'client is' : 'clients are'} on this program. Move them to another program or remove them first.`);
-  ctx.db.run('DELETE FROM programs WHERE id = ?', id);
-  return { id, deleted: true };
+  const kept = ctx.db.get('SELECT COUNT(*) AS n FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE w.program_id = ?', id).n;
+  ctx.db.tx(() => {
+    keepLogsOf(ctx, ctx.db.all('SELECT id FROM workouts WHERE program_id = ?', id).map((w) => w.id));
+    ctx.db.run('DELETE FROM programs WHERE id = ?', id);
+  });
+  return { id, deleted: true, logs_kept: kept };
 }
 
 const workoutRow = (ctx, id) => {
@@ -188,11 +211,11 @@ export function updateWorkout(ctx, workoutId, body) {
   ctx.db.run('UPDATE workouts SET title = ? WHERE id = ?', v.str(body.title, 'title', { max: 120 }), workoutId);
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
-// Like clearing a week, removing a workout athletes logged needs confirm: true (their logs go with it).
+// Like clearing a week, removing a workout athletes logged needs confirm: true (their logs stay in their history).
 export function deleteWorkout(ctx, workoutId, body = {}) {
   const w = workoutRow(ctx, workoutId);
   guardLogged(ctx, [workoutId], body?.confirm, w.title);
-  ctx.db.run('DELETE FROM workouts WHERE id = ?', workoutId);
+  ctx.db.tx(() => deleteWorkouts(ctx, [workoutId]));
   return { id: workoutId, deleted: true };
 }
 // Copy a workout to another week and day (default: the next free day of that week).
@@ -203,12 +226,13 @@ export function copyWorkout(ctx, workoutId, body = {}) {
   const id = ctx.db.tx(() => copyWorkoutInto(ctx, w, w.program_id, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? w.title));
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === id);
 }
-// Removing workouts athletes already logged takes their logs with them, so it needs confirm: true.
+// Removing workouts athletes already logged needs confirm: true. Their logs stay in the athletes' history (keepLogsOf)
+// but leave the program's numbers.
 function guardLogged(ctx, ids, confirm, what) {
   if (!ids.length) return;
   const n = ctx.db.get(`SELECT COUNT(*) AS n FROM workout_logs WHERE workout_id IN (${ids.map(() => '?').join(', ')})`, ...ids).n;
   if (n && confirm !== true) {
-    const e = new HttpError(409, 'confirm_needed', `${what} ${n === 1 ? 'has 1 logged workout' : `has ${n} logged workouts`}. Removing it takes ${n === 1 ? 'that log' : 'those logs'} out of the athletes' history. Send confirm: true to go ahead.`);
+    const e = new HttpError(409, 'confirm_needed', `${what} ${n === 1 ? 'has 1 logged workout' : `has ${n} logged workouts`}. ${n === 1 ? 'That log stays' : 'Those logs stay'} in the athletes' history but ${n === 1 ? 'leaves' : 'leave'} this program's numbers. Send confirm: true to go ahead.`);
     e.details = { logs: n };
     throw e;
   }
@@ -235,7 +259,7 @@ export function copyWeek(ctx, programId, fromWeek, body = {}) {
   const replaced = p.workouts.filter((w) => taken.includes(w.week)).map((w) => w.id);
   guardLogged(ctx, replaced, body.confirm, taken.length === 1 ? `Week ${taken[0]}` : `Weeks ${taken.join(', ')}`);
   ctx.db.tx(() => {
-    for (const id of replaced) ctx.db.run('DELETE FROM workouts WHERE id = ?', id);
+    deleteWorkouts(ctx, replaced);
     for (const w of targets) for (const s of src) copyWorkoutInto(ctx, s, programId, w, s.day);
     if (through > p.weeks) setWeeks(ctx, programId, through);
   });
@@ -249,7 +273,7 @@ export function deleteWeek(ctx, programId, week, body = {}) {
   if (!ids.length && n !== p.weeks) throw badRequest(`Week ${n} has no workouts.`);
   guardLogged(ctx, ids, body.confirm, `Week ${n}`);
   ctx.db.tx(() => {
-    for (const id of ids) ctx.db.run('DELETE FROM workouts WHERE id = ?', id);
+    deleteWorkouts(ctx, ids);
     if (n >= p.weeks && p.weeks > 1) setWeeks(ctx, programId, Math.max(1, lastWeekOf(ctx, programId), n - 1));
   });
   return programDetail(ctx, programId);
@@ -389,11 +413,16 @@ export function clientProgress(ctx, { programId, clientId } = {}) {
 }
 
 // ---- Logged workouts ----
-const LOG_COLS = `l.id, l.client_id, c.name AS client_name, l.workout_id, w.title AS workout_title, w.week, w.day, pr.id AS program_id, pr.name AS program_name,
+// A log whose program or workout was deleted reads from what was kept on it (program_deleted says so; program_id is empty).
+const LOG_COLS = `l.id, l.client_id, c.name AS client_name, l.workout_id, COALESCE(w.title, l.workout_title) AS workout_title, COALESCE(w.week, l.workout_week) AS week,
+  COALESCE(w.day, l.workout_day) AS day, pr.id AS program_id, COALESCE(pr.name, l.program_name) AS program_name, (w.id IS NULL) AS program_deleted,
   l.notes, l.rpe, l.completed_at, l.started_at, l.edited_at, l.session_id,
-  (SELECT COUNT(*) FROM exercise_logs x WHERE x.workout_log_id = l.id) AS exercises_logged,
-  (SELECT COUNT(*) FROM workout_exercises we WHERE we.workout_id = l.workout_id) AS exercises_total,
+  CASE WHEN w.id IS NULL THEN (SELECT COUNT(*) FROM json_each(COALESCE(l.exercises_snapshot, '[]')) j WHERE json_extract(j.value, '$.done'))
+    ELSE (SELECT COUNT(*) FROM exercise_logs x WHERE x.workout_log_id = l.id) END AS exercises_logged,
+  CASE WHEN w.id IS NULL THEN json_array_length(COALESCE(l.exercises_snapshot, '[]'))
+    ELSE (SELECT COUNT(*) FROM workout_exercises we WHERE we.workout_id = l.workout_id) END AS exercises_total,
   (SELECT COUNT(*) FROM workout_sets s WHERE s.workout_log_id = l.id) AS sets`;
+const LOG_FROM = 'FROM workout_logs l JOIN clients c ON c.id = l.client_id LEFT JOIN workouts w ON w.id = l.workout_id LEFT JOIN programs pr ON pr.id = w.program_id';
 // Minutes from the first set to Finish, when that looks like a real session.
 const minutesOf = (l) => {
   if (!l.started_at) return null;
@@ -408,7 +437,7 @@ export function bestsOf(ctx, logId) {
     FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id WHERE s.workout_log_id = ? AND s.weight > 0 AND s.exercise_id IS NOT NULL
     GROUP BY s.exercise_id ORDER BY MIN(s.rowid)`, logId).filter((b) => b.previous != null && b.weight > b.previous);
 }
-const shapeLog = (ctx, l) => ({ ...l, source: l.session_id ? 'screen' : 'app', minutes: minutesOf(l), bests: l.sets ? bestsOf(ctx, l.id) : [] });
+const shapeLog = (ctx, l) => ({ ...l, program_deleted: !!l.program_deleted, source: l.session_id ? 'screen' : 'app', minutes: minutesOf(l), bests: l.sets ? bestsOf(ctx, l.id) : [] });
 
 // Completed workouts, newest first: effort, sets, new bests, notes. Archived clients are left out of the feed across
 // clients (a client's own page still lists theirs).
@@ -418,7 +447,7 @@ export function listCompletions(ctx, { clientId, programId, since, limit = 50 } 
   if (programId) { where.push('pr.id = ?'); params.push(programId); }
   if (since) { where.push('l.completed_at >= ?'); params.push(since); }
   return ctx.db.all(
-    `SELECT ${LOG_COLS} FROM workout_logs l JOIN clients c ON c.id = l.client_id JOIN workouts w ON w.id = l.workout_id JOIN programs pr ON pr.id = w.program_id
+    `SELECT ${LOG_COLS} ${LOG_FROM}
      WHERE ${where.join(' AND ')} ORDER BY l.completed_at DESC, l.rowid DESC LIMIT ?`, ...params, limit).map((l) => shapeLog(ctx, l));
 }
 // The Programs page: workouts logged this week, who is on a program, who needs a check-in, who finished, and the feed.
@@ -528,9 +557,9 @@ function reopenBlock(ctx, clientId, l) {
   return null;
 }
 function recentLogs(ctx, clientId, limit = 10) {
-  return ctx.db.all(`SELECT ${LOG_COLS} FROM workout_logs l JOIN clients c ON c.id = l.client_id JOIN workouts w ON w.id = l.workout_id JOIN programs pr ON pr.id = w.program_id
+  return ctx.db.all(`SELECT ${LOG_COLS} ${LOG_FROM}
     WHERE l.client_id = ? ORDER BY l.completed_at DESC, l.rowid DESC LIMIT ?`, clientId, limit)
-    .map(({ client_id, client_name, session_id, started_at, ...l }) => ({ ...l, on_screen: !!session_id, minutes: minutesOf({ ...l, started_at }) }));
+    .map(({ client_id, client_name, session_id, started_at, ...l }) => ({ ...l, program_deleted: !!l.program_deleted, on_screen: !!session_id, minutes: minutesOf({ ...l, started_at }) }));
 }
 function reopenId(ctx, clientId) {
   const l = ctx.db.get('SELECT * FROM workout_logs WHERE client_id = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1', clientId);
@@ -569,7 +598,7 @@ export function clientHome(ctx, client) {
 
 // What the done screen shows.
 function finishedSummary(ctx, logId, extra = {}) {
-  const l = ctx.db.get(`SELECT ${LOG_COLS} FROM workout_logs l JOIN clients c ON c.id = l.client_id JOIN workouts w ON w.id = l.workout_id JOIN programs pr ON pr.id = w.program_id WHERE l.id = ?`, logId);
+  const l = ctx.db.get(`SELECT ${LOG_COLS} ${LOG_FROM} WHERE l.id = ?`, logId);
   return { id: l.id, title: l.workout_title, week: l.week, day: l.day, program_name: l.program_name, exercises_logged: l.exercises_logged, exercises_total: l.exercises_total,
     sets: l.sets, rpe: l.rpe, notes: l.notes, minutes: minutesOf(l), bests: bestsOf(ctx, l.id), completed_at: l.completed_at, reopen_hours: REOPEN_HOURS, ...extra };
 }
@@ -623,6 +652,7 @@ export function editLog(ctx, client, logId, body = {}) {
   if (!access.open) throw conflict(access.message);
   const l = ctx.db.get('SELECT * FROM workout_logs WHERE id = ? AND client_id = ?', String(logId), client.id);
   if (!l) throw notFound('Workout');
+  if (!l.workout_id) throw conflict('Your coach removed this workout from your program, so it can\'t be reopened. It stays in your history.');
   const why = reopenBlock(ctx, client.id, l);
   if (why) throw conflict(why);
   const data = readLog(ctx, l.workout_id, body);
@@ -637,20 +667,23 @@ export function editLog(ctx, client, logId, body = {}) {
 
 // One finished workout in full, for the athlete who logged it: every exercise, whether it was done, and its sets.
 export function logDetail(ctx, client, logId) {
-  const l = ctx.db.get(`SELECT ${LOG_COLS} FROM workout_logs l JOIN clients c ON c.id = l.client_id JOIN workouts w ON w.id = l.workout_id JOIN programs pr ON pr.id = w.program_id
+  const l = ctx.db.get(`SELECT ${LOG_COLS} ${LOG_FROM}
     WHERE l.id = ? AND l.client_id = ?`, String(logId), client.id);
   if (!l) throw notFound('Workout');
   const done = new Set(ctx.db.all('SELECT workout_exercise_id FROM exercise_logs WHERE workout_log_id = ?', l.id).map((r) => r.workout_exercise_id));
   const sets = setsOf(ctx, l.id);
-  const items = ctx.db.all(`SELECT we.id, we.prescription, e.name, e.id AS exercise_id FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position`, l.workout_id);
+  // A deleted workout's exercises come from what was kept on the log, with whether each was done.
+  const kept = l.workout_id ? null : (() => { try { return JSON.parse(ctx.db.get('SELECT exercises_snapshot FROM workout_logs WHERE id = ?', l.id).exercises_snapshot || '[]'); } catch { return []; } })();
+  if (kept) for (const k of kept) if (k.done) done.add(k.id);
+  const items = kept ?? ctx.db.all(`SELECT we.id, we.prescription, e.name, e.id AS exercise_id FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position`, l.workout_id);
   // Sets of exercises the coach has since taken out of the workout still show.
   const gone = ctx.db.all('SELECT DISTINCT workout_exercise_id AS id, exercise_name AS name FROM workout_sets WHERE workout_log_id = ?', l.id).filter((g) => !items.some((i) => i.id === g.id));
   const strip = ({ workout_exercise_id, ...s }) => s;
   const rxOf = (rx) => { const r = parseRx(rx); return { target_sets: r.sets, target_reps: r.reps }; };
   return {
     id: l.id, title: l.workout_title, week: l.week, day: l.day, program_name: l.program_name, completed_at: l.completed_at, rpe: l.rpe, notes: l.notes,
-    minutes: minutesOf(l), on_screen: !!l.session_id, bests: bestsOf(ctx, l.id), can_reopen: !reopenBlock(ctx, client.id, l),
-    workout_id: l.workout_id,
+    minutes: minutesOf(l), on_screen: !!l.session_id, bests: bestsOf(ctx, l.id), can_reopen: !!l.workout_id && !reopenBlock(ctx, client.id, l),
+    workout_id: l.workout_id, program_deleted: !l.workout_id,
     exercises: [...items.map((i) => ({ id: i.id, exercise_id: i.exercise_id, name: i.name, prescription: i.prescription, ...rxOf(i.prescription), done: done.has(i.id), sets: sets.filter((s) => s.workout_exercise_id === i.id).map(strip) })),
       ...gone.map((g) => ({ id: g.id, name: g.name, prescription: null, done: true, removed: true, sets: sets.filter((s) => s.workout_exercise_id === g.id).map(strip) }))]
   };

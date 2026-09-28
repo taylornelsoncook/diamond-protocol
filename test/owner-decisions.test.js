@@ -254,6 +254,42 @@ test('an older try the bank approves while the invoice is still owed pays it; a 
   assert.equal(refunds.length, 0);
 });
 
+// Stripe doesn't promise one delivery or the order of events. A refund Stripe keeps refusing tells the owner once, not on
+// every repeat of the event. A try whose call errored and that the webhook then settled has used its idempotency key, so
+// the next try gets a new one (the same key with another try's metadata would be refused by Stripe forever).
+test('a refund Stripe keeps refusing emails the owner once; a try settled by the webhook after its call errored isn\'t reused', async () => {
+  const m = await member({ declining: true });
+  const real = app.ctx.payments.chargeSaved;
+  app.ctx.payments.chargeSaved = async () => ({ ok: false, ref: `pi_cash_${m.id}`, error: 'The bank asked the cardholder to approve this payment.' });
+  await owner('POST', `/v1/invoices/${m.inv.id}/retry`);
+  app.ctx.payments.chargeSaved = real;
+  assert.equal((await owner('POST', `/v1/invoices/${m.inv.id}/payments`, { method: 'cash' })).status, 200);
+  const before = outboxTo('owner@test.dev').length;
+  refunds.length = 0; refundFails = true;
+  for (let i = 0; i < 3; i++) await webhook('payment_intent.succeeded', { id: `pi_cash_${m.id}`, metadata: { invoice_id: m.inv.id } });
+  refundFails = false;
+  assert.equal(refunds.length, 3, 'each repeat asks Stripe again, with the same key');
+  assert.equal(new Set(refunds.map((r) => r.idempotencyKey)).size, 1);
+  assert.deepEqual(outboxTo('owner@test.dev').slice(before).map((x) => x.subject), [`Refund needed: $150 charged twice for Athlete${seq} Decide`]);
+  assert.equal((await owner('GET', '/v1/events?type=invoice.paid_twice')).body.data.filter((e) => e.data.invoice_id === m.inv.id).length, 1);
+  await webhook('payment_intent.succeeded', { id: `pi_cash_${m.id}`, metadata: { invoice_id: m.inv.id } });
+  assert.deepEqual(outboxTo('owner@test.dev').slice(before).map((x) => x.subject.split(':')[0]), ['Refund needed', 'Refunded a late card charge'], 'then once when it goes through');
+
+  const n = await member({ declining: true });
+  const keys = [];
+  app.ctx.payments.chargeSaved = async (a) => { keys.push(a.idempotencyKey); throw new Error('Network timeout talking to Stripe'); };
+  await assert.rejects(() => attemptCharge(app.ctx, n.inv.id, app.ctx.now(), { source: 'owner' }), /timeout/);
+  const errored = db().get(`SELECT * FROM invoice_charges WHERE invoice_id = ? AND status = 'error'`, n.inv.id);
+  await webhook('payment_intent.payment_failed', { id: `pi_lost_${n.id}`, metadata: { invoice_id: n.inv.id, charge_attempt_id: errored.id }, last_payment_error: { message: 'Your card was declined.' } });
+  app.ctx.payments.chargeSaved = async (a) => { keys.push(a.idempotencyKey); return { ok: false, ref: `pi_next_${n.id}`, error: 'Declined' }; };
+  await owner('POST', `/v1/invoices/${n.inv.id}/retry`);
+  app.ctx.payments.chargeSaved = real;
+  assert.deepEqual(keys, [`${n.inv.id}:2`, `${n.inv.id}:3`], 'a new key after the settled try');
+  assert.deepEqual(db().all('SELECT attempt, status, ref FROM invoice_charges WHERE invoice_id = ? ORDER BY rowid', n.inv.id).map((r) => [r.attempt, r.status, r.ref]),
+    [[1, 'declined', null], [2, 'declined', `pi_lost_${n.id}`], [3, 'declined', `pi_next_${n.id}`]]);
+  assert.equal(invoice(n.inv.id).attempts, 3);
+});
+
 // ---------------------------------------------------------------- 3. coach double-booking
 test('a coach clash (another session at that time anywhere, or a day off) is a warning: 409 with warnings until confirm', async () => {
   const d = day(5);
@@ -375,6 +411,7 @@ test('deleting a workout or a program keeps the athlete\'s logged workouts and s
   const home = (await athlete('GET', '/app/api/home')).body;
   assert.equal(home.history.length, 2);
   assert.ok(home.history.every((l) => l.program_deleted));
+  assert.equal(home.reopen_id, null, 'the latest log\'s workout was removed, so nothing is offered for reopening');
   const detail = (await athlete('GET', `/app/api/logs/${home.history[0].id}`)).body;
   assert.equal(detail.exercises[0].name, 'Trap bar deadlift');
   assert.equal(detail.exercises[0].done, true);

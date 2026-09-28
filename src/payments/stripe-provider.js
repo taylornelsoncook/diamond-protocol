@@ -50,7 +50,7 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
         }, { idempotencyKey });
         // 'processing' counts as paid; if it fails later the payment_intent.payment_failed webhook reopens the invoice.
         // The PaymentIntent id comes back either way so webhooks can find the invoice.
-        return ['succeeded', 'processing'].includes(pi.status) ? { ok: true, ref: pi.id } : { ok: false, ref: pi.id, error: `Payment ${pi.status.replace(/_/g, ' ')}.` };
+        return ['succeeded', 'processing'].includes(pi.status) ? { ok: true, ref: pi.id, processing: pi.status === 'processing' } : { ok: false, ref: pi.id, error: `Payment ${pi.status.replace(/_/g, ' ')}.` };
       } catch (e) {
         if (e.status === 402 || e.stripe?.type === 'card_error') return { ok: false, ref: e.stripe?.payment_intent?.id ?? null, error: e.message };
         throw e;

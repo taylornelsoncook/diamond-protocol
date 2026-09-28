@@ -563,7 +563,7 @@ function recentLogs(ctx, clientId, limit = 10) {
 }
 function reopenId(ctx, clientId) {
   const l = ctx.db.get('SELECT * FROM workout_logs WHERE client_id = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1', clientId);
-  return l && !reopenBlock(ctx, clientId, l) ? l.id : null;
+  return l && l.workout_id && !reopenBlock(ctx, clientId, l) ? l.id : null;      // a removed workout can't be reopened
 }
 // One exercise as the app shows it: today's weight from a tested max, sets and reps to log, last time and best weight.
 function appExercise(ctx, clientId, x, drop) {

@@ -202,14 +202,17 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
   if (onlyIfFailed && inv.status !== 'failed') return inv;
   if (inv.status === 'void') throw conflict('This invoice was voided and cannot be charged.');
   const client = payerFor(ctx, inv.client_id);          // a family's card pays for its athletes
-  const attempts = inv.attempts + 1;
+  // A try the webhook settled after its call errored (or a charge left waiting) has used its idempotency key at Stripe, so
+  // the next try goes past it (the same key with a new try's metadata would be refused by Stripe).
+  const settled = ctx.db.get(`SELECT MAX(attempt) AS n FROM invoice_charges WHERE invoice_id = ? AND status IN ('succeeded','declined')`, inv.id)?.n ?? 0;
+  const attempts = Math.max(inv.attempts, settled) + 1;
   const autoAttempts = manual ? inv.auto_attempts : inv.auto_attempts + 1;
   let attemptId = null, result;
   if (inv.amount_cents === 0) result = { ok: true, ref: null };
   else {
     // A try whose call to Stripe errored before an answer came back is tried again with the same idempotency key, so it
     // reuses that row (Stripe needs the same metadata with the same key, and returns the first charge if it went through).
-    const errored = ctx.db.get(`SELECT id FROM invoice_charges WHERE invoice_id = ? AND attempt = ? AND status = 'error' ORDER BY created_at DESC LIMIT 1`, inv.id, attempts);
+    const errored = ctx.db.get(`SELECT id FROM invoice_charges WHERE invoice_id = ? AND attempt = ? AND status IN ('error','pending') ORDER BY created_at DESC LIMIT 1`, inv.id, attempts);
     attemptId = errored?.id ?? newId('ich');
     if (errored) ctx.db.run(`UPDATE invoice_charges SET status = 'pending', manual = ?, source = ?, error = NULL, settled_at = NULL WHERE id = ?`, manual ? 1 : 0, source, attemptId);
     else ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`, attemptId, inv.id, attempts, manual ? 1 : 0, source, inv.amount_cents, ctx.now());
@@ -223,7 +226,9 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
 
   ctx.db.tx(() => {
     const s = getSubscription(ctx, inv.subscription_id);
-    if (attemptId) ctx.db.run(`UPDATE invoice_charges SET status = ?, ref = COALESCE(?, ref), error = ?, settled_at = ? WHERE id = ?`, result.ok ? 'succeeded' : 'declined', result.ref ?? null, result.ok ? null : result.error ?? null, ctx.now(), attemptId);
+    // A payment Stripe is still processing counts as paid but stays 'pending' (waiting on the bank) until its webhook: only
+    // a charge the bank confirmed is final, so a failure event arriving after it (out of order) is stale (reconcile).
+    if (attemptId) ctx.db.run(`UPDATE invoice_charges SET status = ?, ref = COALESCE(?, ref), error = ?, settled_at = ? WHERE id = ?`, result.ok ? (result.processing ? 'pending' : 'succeeded') : 'declined', result.ref ?? null, result.ok ? null : result.error ?? null, result.processing ? null : ctx.now(), attemptId);
     if (result.ok) {
       recordPaid(ctx, inv, s, { attempts, autoAttempts, ref: result.ref });
     } else {
@@ -291,7 +296,7 @@ async function reconcile(ctx, invoiceId, { ref, succeeded, error, attemptId }) {
     // A charge from before every try was written down: add it now so it's matched (and refunded) only once.
     const id = newId('ich');
     ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, ref, status, created_at, settled_at) VALUES (?, ?, ?, 0, 'automatic', ?, ?, ?, ?, ?)`,
-      id, inv.id, inv.attempts, inv.amount_cents, ref, inv.status === 'paid' && !inv.paid_method ? 'succeeded' : 'declined', inv.created_at, ctx.now());
+      id, inv.id, inv.attempts, inv.amount_cents, ref, inv.status === 'paid' && !inv.paid_method ? 'pending' : 'declined', inv.created_at, ctx.now());   // pending: it may still have been processing
     a = ctx.db.get('SELECT * FROM invoice_charges WHERE id = ?', id);
   }
   if (!a) return 'ignored';
@@ -308,7 +313,10 @@ async function reconcile(ctx, invoiceId, { ref, succeeded, error, attemptId }) {
     if (inv.status === 'paid' && !inv.paid_method && inv.payment_ref === ref) return 'unchanged';   // the payment itself
     return refundLateCharge(ctx, inv, { ...a, ref });
   }
-  if (a.status === 'pending' || a.status === 'succeeded' || a.status === 'error') ctx.db.run(`UPDATE invoice_charges SET status = 'declined', error = ?, settled_at = ? WHERE id = ?`, error || 'The payment failed after it was taken.', ctx.now(), a.id);
+  // Stripe doesn't promise the order of events, and a PaymentIntent that succeeded never fails afterwards: a failure event
+  // for a charge the bank confirmed is an older one arriving late, and changes nothing (the invoice stays paid).
+  if (a.status === 'succeeded') return 'unchanged';
+  if (a.status === 'pending' || a.status === 'error') ctx.db.run(`UPDATE invoice_charges SET status = 'declined', error = ?, settled_at = ? WHERE id = ?`, error || 'The payment failed after it was taken.', ctx.now(), a.id);
   if (inv.status === 'paid' && !inv.paid_method && inv.payment_ref === ref && !inv.refunded_cents) {
     const giveUp = inv.auto_attempts >= MAX_ATTEMPTS;
     ctx.db.tx(() => {
@@ -335,6 +343,11 @@ async function refundLateCharge(ctx, inv, a) {
   const why = inv.status === 'void' ? 'void' : inv.paid_method ? 'hand' : 'other';
   const reason = LATE_REASON[why](inv);
   const r = await ctx.payments.refund({ paymentRef: a.ref, amountCents: a.amount_cents, idempotencyKey: `invoice-paid-twice-${inv.id}-${a.ref}` });
+  // The owner hears once per outcome: a repeated event that finds the refund still refused changes nothing they need to know.
+  if (!r.ok && a.late_outcome === 'refund_failed') {
+    ctx.db.run('UPDATE invoice_charges SET refund_error = ? WHERE id = ?', String(r.error ?? 'Refund failed').slice(0, 300), a.id);
+    return 'paid_twice';
+  }
   ctx.db.tx(() => {
     ctx.db.run(`UPDATE invoice_charges SET late_outcome = ?, late_reason = ?, late_at = COALESCE(late_at, ?), refund_ref = ?, refund_error = ? WHERE id = ?`,
       r.ok ? 'refunded' : 'refund_failed', reason, ctx.now(), r.ok ? r.ref ?? null : null, r.ok ? null : String(r.error ?? 'Refund failed').slice(0, 300), a.id);

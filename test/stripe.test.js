@@ -33,7 +33,7 @@ const fake = http.createServer((req, res) => {
     if (p === '/v1/payment_intents' && req.method === 'POST') {
       if (body.off_session === 'true') {
         if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.', payment_intent: { id: nid('pi'), status: 'requires_payment_method' } } });
-        return send(200, { id: nid('pi'), status: 'succeeded' });
+        return send(200, { id: nid('pi'), status: body.payment_method === 'pm_processing' ? 'processing' : 'succeeded' });
       }
       const pi = { id: nid('pi'), client_secret: 'pi_secret_x', status: 'requires_payment_method', body };
       intents.set(pi.id, pi);
@@ -172,7 +172,8 @@ const invoiceOf = (id) => app.ctx.db.get('SELECT * FROM invoices WHERE id = ?', 
 const subOf = (id) => app.ctx.db.get('SELECT * FROM subscriptions WHERE id = ?', id);
 let sub, inv;
 test('a renewal that fails after it was taken reopens the invoice; a late success closes it', async () => {
-  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
+  // Stripe answered "processing": counted as paid, waiting on the bank.
+  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_processing' WHERE id = ?`, client.id);
   const plan = (await call('POST', '/v1/plans', { name: 'Monthly', price_cents: 15000, trial_days: 0 })).body;
   sub = (await call('POST', `/v1/clients/${client.id}/subscription`, { plan_id: plan.id })).body;
   inv = app.ctx.db.get('SELECT * FROM invoices WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1', sub.id);
@@ -194,6 +195,11 @@ test('a renewal that fails after it was taken reopens the invoice; a late succes
   assert.equal(now.status, 'paid');
   assert.equal(now.next_retry_at, null);
   assert.equal(subOf(sub.id).status, 'active');
+  // Stripe doesn't promise the order of events: the failure delivered again after the success is stale (a PaymentIntent
+  // that succeeded never fails), so the invoice stays paid and isn't charged again.
+  await webhook({ type: 'payment_intent.payment_failed', data: { object: pi } });
+  assert.equal(invoiceOf(inv.id).status, 'paid', 'a stale failure after the success changes nothing');
+  assert.equal(app.ctx.db.get('SELECT status FROM invoice_charges WHERE ref = ?', inv.payment_ref).status, 'succeeded');
   assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'invoice.payment_failed' AND data LIKE ?`, `%${inv.id}%`).n, 1);
 });
 

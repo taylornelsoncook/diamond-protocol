@@ -106,7 +106,10 @@ export function pulse(ctx, { role = 'owner' } = {}) {
   const db = ctx.db, now = ctx.now(), { thisStart, prevStart, sameDayLastMonth, dayStart } = monthStarts(ctx);
   const dayEnd = addDays(dayStart, 1), weekAgo = addDays(now, -7), weekAhead = addDays(now, 7);
   const counts = clientCounts(ctx);
-  const newClients = db.get(`SELECT COUNT(*) AS n FROM clients WHERE archived_at IS NULL AND created_at >= ?`, thisStart).n;
+  // Team roster athletes are clients too, but a new team-only athlete (put on a roster: no family, never a membership) isn't
+  // a new client here. A family's athlete who is also on a team still counts, as before.
+  const newClients = db.get(`SELECT COUNT(*) AS n FROM clients c WHERE c.archived_at IS NULL AND c.created_at >= ?
+    AND NOT (c.family_id IS NULL AND EXISTS (SELECT 1 FROM team_roster r WHERE r.client_id = c.id) AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.client_id = c.id))`, thisStart).n;
   const canceled = db.get(`SELECT COUNT(DISTINCT client_id) AS n FROM subscriptions WHERE status = 'canceled' AND canceled_at >= ?`, thisStart).n;
   const today = db.get(`SELECT COUNT(DISTINCT s.id) AS sessions, COALESCE(SUM(s.capacity), 0) AS capacity,
       (SELECT COUNT(*) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE x.status = 'scheduled' AND x.starts_at >= ? AND x.starts_at < ? AND b.status IN ('booked','attended','no_show')) AS booked

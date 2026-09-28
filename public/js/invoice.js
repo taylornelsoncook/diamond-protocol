@@ -31,7 +31,8 @@ function render(i) {
         h('img', { src: '/brand/logo.png', alt: i.from.name }),
         h('div', null, h('div', { class: 'inv-title' }, 'Invoice'),
           h('dl', { class: 'inv-meta' }, h('dt', null, 'Number'), h('dd', null, i.number), h('dt', null, 'Issued'), h('dd', null, fmt(i.issued_on)), h('dt', null, 'Due'), h('dd', null, fmt(i.due_on)),
-            i.po_number ? [h('dt', null, 'PO'), h('dd', null, i.po_number)] : null))),
+            i.po_number ? [h('dt', null, 'PO'), h('dd', null, i.po_number)] : null,
+            i.team_name ? [h('dt', null, 'Team'), h('dd', { class: 'inv-team' }, i.team_name)] : null))),
       paid ? h('div', { class: 'inv-stamp', style: 'color:var(--green-bright)' }, `Paid ${fmt(i.paid_on)}`) : voided ? h('div', { class: 'inv-stamp', style: 'color:var(--steel-muted)' }, 'Void') : overdue ? h('div', { class: 'inv-stamp', style: 'color:var(--amber)' }, 'Past due') : null,
       h('div', { class: 'inv-parties' },
         h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Bill to'), h('p', { class: 'strong' }, i.bill_to.name), i.bill_to.contact ? h('p', null, `Attn: ${i.bill_to.contact}`) : null, i.bill_to.address ? h('p', { class: 'muted' }, i.bill_to.address) : null),
@@ -40,7 +41,12 @@ function render(i) {
         h('thead', null, h('tr', null, h('th', null, 'Description'), h('th', { class: 'amt' }, 'Amount'))),
         h('tbody', null, i.lines.map((l) => h('tr', null, h('td', null, l.description), h('td', { class: 'amt' }, money(l.amount_cents)))))),
       h('div', { class: 'inv-total' }, h('span', { class: 'muted' }, paid ? 'Paid' : 'Amount due'), h('b', null, money(i.amount_cents))),
-      !paid && !voided && i.from.payment_instructions ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How to pay'), h('p', { class: 'muted', style: 'margin:0;white-space:pre-line' }, i.from.payment_instructions)) : null),
+      !paid && !voided ? h('div', { class: 'inv-how' }, h('div', { class: 'dp-label' }, 'How to pay'),
+        i.can_pay_online ? h('p', null, h('span', { class: 'inv-how-k' }, 'Online: '), 'card or bank transfer with the Pay online button below this invoice.') : null,
+        i.from.payment_instructions ? h('p', null, h('span', { class: 'inv-how-k' }, i.can_pay_online ? 'By check: ' : 'To pay: '), i.from.payment_instructions) : null,
+        h('p', null, `Write ${i.number} on the check memo or payment note so we can match it.`),
+        overdue && i.days_past_due ? h('p', { class: 'warn-text' }, `This invoice is ${i.days_past_due} ${i.days_past_due === 1 ? 'day' : 'days'} past due. Please pay it as soon as you can, or reply to the invoice email if something is holding it up.`) : null) : null,
+      h('p', { class: 'inv-note' }, 'Questions about this invoice? Reply to the email it came with and we\'ll help.')),
     actions);
 }
 

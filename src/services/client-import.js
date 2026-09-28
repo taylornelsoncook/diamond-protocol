@@ -1,4 +1,4 @@
-import { newId, token, v, badRequest, notFound, HttpError } from '../util.js';
+import { newId, token, v, badRequest, notFound, HttpError, isDate } from '../util.js';
 import { createFamilyWithGuardian, addGuardian } from './families.js';
 import { newAthleteId } from './athlete-ids.js';
 import { readUpload, excelDate } from './uploads.js';
@@ -69,7 +69,7 @@ function parseRows(ctx, headers, rows) {
       b = String(excelDate(b));
       const us = b.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
       if (us) b = `${us[3].length === 2 ? (Number(us[3]) > 30 ? '19' : '20') + us[3] : us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(b) || Number.isNaN(Date.parse(b)) || b > new Date().toISOString().slice(0, 10) || b < '1920-01-01') err(row, map.birth_date, `"${val(r, 'birth_date')}" isn't a birthday. Use 2013-03-10.`);
+      if (!isDate(b) || b > new Date().toISOString().slice(0, 10) || b < '1920-01-01') err(row, map.birth_date, `"${val(r, 'birth_date')}" isn't a birthday. Use 2013-03-10.`);
     }
     let sex = val(r, 'sex').toLowerCase();
     if (sex) { sex = { m: 'M', male: 'M', boy: 'M', f: 'F', female: 'F', girl: 'F' }[sex]; if (!sex) err(row, map.sex, 'Sex should be M or F (or leave it empty).'); }

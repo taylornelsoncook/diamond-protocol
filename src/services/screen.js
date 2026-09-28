@@ -31,15 +31,16 @@ export function workoutView(ctx, workoutId) {
       load: x.load_test ? `${x.load_pct}% of ${LOAD_TESTS[x.load_test]} max` : null })) };
 }
 
-// Who can log in a session: booked athletes, plus team roster athletes who have an athlete profile.
+// Who can log in a session: booked athletes, plus the team's roster athletes (each has a profile).
 function athletesIn(ctx, s) {
   const out = bookingsIn(ctx, s.id).map((b) => ({ ref: `b_${b.id}`, client_id: b.client_id, name: b.name, booking_id: b.id, here: b.status === 'attended' }));
   const team = teamRosterFor(ctx, s);
   if (team) {
     const seen = new Set(out.map((a) => a.client_id));
-    for (const r of ctx.db.all('SELECT id, client_id, name FROM team_roster WHERE contract_id = ? AND active = 1 AND client_id IS NOT NULL ORDER BY name', team.contract_id)) {
+    for (const r of team.athletes) {
       if (seen.has(r.client_id)) continue;
-      out.push({ ref: `r_${r.id}`, client_id: r.client_id, name: r.name, roster_id: r.id, here: team.athletes.some((a) => a.id === r.id && a.present) });
+      seen.add(r.client_id);
+      out.push({ ref: `r_${r.id}`, client_id: r.client_id, name: r.name, team: true, here: r.present });
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -102,7 +103,7 @@ export function screenLog(ctx, key, body = {}, asOf = ctx.now()) {
     ctx.db.run('INSERT INTO workout_logs (id, client_id, assignment_id, workout_id, notes, completed_at, session_id) VALUES (?, ?, ?, ?, NULL, ?, ?)', id, client.id, assignmentId, w.id, ctx.now(), s.id);
     for (const x of ids) ctx.db.run('INSERT INTO exercise_logs (workout_log_id, workout_exercise_id) VALUES (?, ?)', id, x);
     if (a.booking_id && !a.here) checkInBooking(ctx, a.booking_id);
-    if (a.roster_id) ctx.db.run('INSERT INTO team_attendance (session_id, roster_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', s.id, a.roster_id, ctx.now());
+    if (a.team) ctx.db.run('INSERT INTO team_attendance (session_id, client_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', s.id, a.client_id, ctx.now());
   });
   emit(ctx, 'workout.completed', { workout_log_id: id, client_id: client.id, client_name: client.name, workout_id: w.id, workout_title: w.title, program_name: w.program_name, exercises_logged: ids.length, exercises_total: valid.size, session_id: s.id });
   return { name: client.name.split(' ')[0], logged: true, exercises_logged: ids.length };

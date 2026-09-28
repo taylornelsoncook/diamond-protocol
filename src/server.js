@@ -12,6 +12,7 @@ import { guardianForToken } from './services/families.js';
 import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
+import { seedPresets } from './services/library.js';
 import { assignMissingIds } from './services/athlete-ids.js';
 import { can, audit, rateLimit, roleName, hideMoney } from './services/security.js';
 import { dailyBackup } from './services/backups.js';
@@ -41,6 +42,7 @@ const CSP = [
 export function createApp({ dbFile = ':memory:', testMode = false, payments = createTestProvider(), publicUrl, mail = {}, sms = {}, jobs = true, hawkinBaseUrl } = {}) {
   const ctx = { db: openDb(dbFile), dbFile, testMode, payments, publicUrl, mail, sms, hawkinBaseUrl, now: () => new Date().toISOString() };
   syncLibrary(ctx);
+  seedPresets(ctx);
   assignMissingIds(ctx);
   migratePending(ctx);
   ctx.onEvent = () => setImmediate(() => deliverPending(ctx).catch(() => {}));
@@ -93,17 +95,20 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
       r.kioskKey = req.headers['x-kiosk-key'];
+      r.reportLink = req.headers['x-report-link'];         // a report share link's secret: in a header, so it stays out of addresses and logs
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
       if (route.path === '/portal/api/public/inquiry') { rateLimit(`inquiry:${ip}`, 10, 60 * 60000); rateLimit('inquiry:all', 60, 10 * 60000); }   // per address, and overall
       if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
+      if (route.path.startsWith('/receipt-api/')) rateLimit(`receipt:${ip}`, 60, 15 * 60000);
       if (route.path.startsWith('/here-api/')) rateLimit(`here:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
       if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/shop') rateLimit(`shop:${ip}`, 120, 15 * 60000);
       if (route.path.startsWith('/portal/api/public/spot/')) rateLimit(`spot:${ip}`, 60, 15 * 60000);
+      if (route.path === '/portal/api/public/report') rateLimit(`report:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
       catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
@@ -274,7 +279,7 @@ async function readJson(req, limit = 1_000_000) {
 }
 
 async function serveStatic(res, pathname) {
-  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : pathname.slice(1));
+  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : /^\/receipt\/[\w-]+$/.test(pathname) ? 'receipt.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });
   try {

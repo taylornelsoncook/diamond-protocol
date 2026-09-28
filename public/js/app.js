@@ -29,10 +29,23 @@ async function boot() {
   NAV = state.user ? ALL_NAV.filter(([k]) => !NAV_FOR[state.user.role] || NAV_FOR[state.user.role].includes(k)) : ALL_NAV;
   render();
 }
-window.addEventListener('hashchange', render);
+// A page with unsaved changes (a client's profile) sets leaveGuard; moving to another page asks first.
+let leaveGuard = null, lastHash = location.hash, returning = false;
+window.addEventListener('hashchange', () => {
+  if (returning) { returning = false; return; }
+  const msg = leaveGuard?.check(location.hash);
+  if (msg) {
+    if (!confirm(msg)) { returning = true; location.hash = lastHash; return; }
+    leaveGuard.discard();
+  }
+  lastHash = location.hash;
+  render();
+});
+window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { e.preventDefault(); e.returnValue = ''; } });
 
 function render() {
-  if (!state.user) return renderLogin();
+  leaveGuard = null;                                  // the view sets it again if it has unsaved changes
+  if (!state.user) { profileDrafts.clear(); forgetSale(); return renderLogin(); }   // signed out: the next person never sees these edits or the open sale
   if (state.user.must_change_password) return renderPasswordChange(true);
   const [section, id] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const current = NAV.some(([k]) => k === section) ? section : 'today';
@@ -112,6 +125,7 @@ const EVENT_TEXT = {
   'team_invoice.paid': (d) => `${d.org_name} paid invoice ${d.number} (${money(d.amount_cents)}, ${d.method})`,
   'team_invoice.overdue': (d) => `Invoice ${d.number} to ${d.org_name} is past due`,
   'team_invoice.voided': (d) => `Invoice ${d.number} voided`,
+  'team_invoice.paid_twice': (d) => `Invoice ${d.number} was paid online after it was already ${d.status === 'void' ? 'voided' : 'paid'}: ${money(d.amount_cents)} to refund or credit`,
   'results.recorded': (d) => `${d.count} test ${d.count === 1 ? 'result' : 'results'} recorded for ${d.athletes} ${d.athletes === 1 ? 'athlete' : 'athletes'}${d.source && d.source !== 'manual' ? ` (${d.source.replace(/^(csv|api):/, '')})` : ''}`,
   'performance.pr': (d) => `New PR: ${d.athlete_name}, ${d.test_name} ${fmtResult(d.value, d.unit, 2)}${d.side ? ` (${d.side === 'L' ? 'left' : 'right'})` : ''}`,
   'testing.shared': (d) => `${d.name} shared with families${d.families_notified ? ` (${d.families_notified} emailed)` : ''}`,
@@ -475,51 +489,113 @@ async function viewCampaigns(main) {
 // ---------- Clients ----------
 // "Active" means the same as the Today tile: not archived, paid up or on a free trial. Archived clients only show
 // under the Archived filter (or as a hint when a search only finds archived ones).
-const CLIENT_VIEWS = [['', 'All clients'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['archived', 'Archived']];
-const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status) : c.status === view)));
+// Views over the client list, the same as the server's ?status= (clients.js#inView). Archived clients are their own view.
+const CLIENT_VIEWS = [['', 'All'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['team', 'Team only'], ['no_waiver', 'No waiver'], ['archived', 'Archived']];
+const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status)
+  : view === 'team' ? c.teams?.length > 0 && ['none', 'canceled'].includes(c.status) : view === 'no_waiver' ? !!c.flags?.no_waiver : c.status === view)));
+// Search: name, Athlete ID, email, family, school, parents; phone numbers on their digits too (clients.js#matches).
+const digitsOf = (x) => String(x ?? '').replace(/\D/g, '');
+const clientMatches = (c, q) => {
+  const s = q.trim().toLowerCase();
+  if (!s) return true;
+  if ([c.name, c.email, c.athlete_id, c.family?.name, c.school, c.phone, ...(c.parents ?? []).flatMap((p) => [p.name, p.email, p.phone])].filter(Boolean).join(' ').toLowerCase().includes(s)) return true;
+  const d = digitsOf(s);
+  return /^[\d\s().+-]+$/.test(s) && d.length >= 4 && [c.phone, ...(c.parents ?? []).map((p) => p.phone)].some((p) => digitsOf(p).includes(d));
+};
+const CLIENT_SORTS = [['name', 'Name'], ['last_seen', 'Longest since seen'], ['newest', 'Newest']];
+const clientsUi = { q: '', view: null, sort: 'name', shown: 100 };
+const clientFlags = (c) => [
+  c.flags?.medical ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Medical') : null,
+  c.flags?.no_waiver ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'No waiver') : null,
+  c.flags?.no_card && c.family ? h('span', { class: 'dp-badge dp-badge--muted' }, 'No card') : null,
+  c.pinned_notes ? h('span', { class: 'dp-badge dp-badge--good' }, c.pinned_notes === 1 ? 'Pinned note' : `${c.pinned_notes} pinned notes`) : null];
+
 async function viewClients(main) {
-  const { data } = await get('/v1/clients?archived=all');
-  const q = input({ type: 'search', placeholder: 'Name, athlete ID, email or family', id: 'client-search', 'aria-label': 'Search clients' });
-  const start = hashQuery().get('status') ?? '';
-  const status = select(CLIENT_VIEWS.map(([k, label]) => [k, `${label} (${data.filter((c) => inClientView(c, k)).length})`]), { 'aria-label': 'Which clients', style: 'width:auto;min-width:180px', value: CLIENT_VIEWS.some(([k]) => k === start) ? start : '' });
+  let data;
+  try { ({ data } = await get('/v1/clients?archived=all')); }
+  catch (e) {
+    return fill(main, header('Clients', null, addClientBtn()),
+      panel('The client list didn\'t load', { subtitle: e.message }, h('div', { class: 'row' }, btn('Try again', (ev) => busy(ev.currentTarget, () => viewClients(main)), 'secondary'))));
+  }
+  const start = hashQuery().get('status');
+  if (start != null && CLIENT_VIEWS.some(([k]) => k === start)) clientsUi.view = start;
+  if (clientsUi.view == null) clientsUi.view = '';
+  const count = (k) => data.filter((c) => inClientView(c, k)).length;
+  const q = input({ type: 'search', placeholder: 'Name, athlete ID, email, family or phone', id: 'client-search', 'aria-label': 'Search clients', value: clientsUi.q, autocomplete: 'off' });
+  const sort = select(CLIENT_SORTS, { 'aria-label': 'Sort clients', style: 'width:auto;min-width:170px', value: clientsUi.sort });
+  const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Which clients' });
   const body = h('tbody');
   const hint = h('p', { class: 'small muted', style: 'margin:0' });
-  const matches = (c, s) => !s || c.name.toLowerCase().includes(s) || (c.email ?? '').includes(s) || (c.athlete_id ?? '').toLowerCase().includes(s) || (c.family?.name ?? '').toLowerCase().includes(s);
-  const draw = () => {
-    const s = q.value.trim().toLowerCase();
-    const rows = data.filter((c) => matches(c, s) && inClientView(c, status.value));
-    const hidden = status.value === 'archived' ? 0 : data.filter((c) => c.archived_at && matches(c, s)).length;
-    fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); status.value = 'archived'; draw(); } }, 'Show archived')] : null);
-    fill(body, ...(rows.length ? rows.map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => (location.hash = `#/clients/${c.id}`), onKeydown: (e) => { if (e.key === 'Enter') location.hash = `#/clients/${c.id}`; } },
-      h('td', null, h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, c.name), h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), ` · ${c.family ? c.family.name : c.email ?? ''}`))),
-      h('td', null, c.subscription?.plan_name ?? '—'),
-      h('td', null, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status)),
-      h('td', null, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
-      h('td', { class: 'muted' }, ago(c.last_workout_at))))
-      : [h('tr', null, h('td', { colspan: '5', class: 'muted' }, data.length ? (status.value === 'archived' && !s ? 'No archived clients.' : 'No clients match. Clear the search or filter.') : 'No clients yet. Add your first one.'))]));
+  const more = h('div', { class: 'row' });
+  const shownRows = () => {
+    const rows = data.filter((c) => clientMatches(c, clientsUi.q) && inClientView(c, clientsUi.view));
+    if (clientsUi.sort === 'last_seen') rows.sort((a, b) => (a.last_seen_at ?? '').localeCompare(b.last_seen_at ?? '') || a.name.localeCompare(b.name));
+    else if (clientsUi.sort === 'newest') rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return rows;
   };
-  q.addEventListener('input', draw); status.addEventListener('change', draw); draw();
-  const current = data.filter((c) => inClientView(c, 'current')).length, archived = data.filter((c) => c.archived_at).length;
-  fill(main, 
-    header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import from a spreadsheet') : null, addClientBtn())),
-    panel(null, {}, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), status), hint,
+  const open = (c) => { location.hash = `#/clients/${c.id}`; };
+  const draw = () => {
+    const rows = shownRows(), s = clientsUi.q.trim();
+    // Always offer All, Active and Archived; the other views only when someone is in them.
+    fill(views, CLIENT_VIEWS.filter(([k]) => ['', 'current', 'archived'].includes(k) || count(k) || clientsUi.view === k).map(([k, label]) =>
+      h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(clientsUi.view === k), onClick: () => { clientsUi.view = k; clientsUi.shown = 100; draw(); } }, label, h('span', { class: 'muted' }, String(count(k))))));
+    const hidden = clientsUi.view === 'archived' ? 0 : data.filter((c) => c.archived_at && clientMatches(c, s)).length;
+    fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); clientsUi.view = 'archived'; draw(); } }, 'Show archived')] : null);
+    fill(body, ...(rows.length ? rows.slice(0, clientsUi.shown).map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => open(c), onKeydown: (e) => { if (e.key === 'Enter') open(c); } },
+      h('td', null, h('div', { class: 'stack-tight' },
+        h('span', { class: 'row wrap', style: 'gap:6px' }, h('span', { class: 'strong' }, c.name), ...clientFlags(c)),
+        h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), [c.family ? c.family.name : c.email, c.grad_year ? `Class of ${c.grad_year}` : null, c.teams?.length ? c.teams.map((t) => t.name).join(', ') : null].filter(Boolean).map((x) => ` · ${x}`).join('')))),
+      h('td', null, h('div', { class: 'stack-tight', style: 'align-items:flex-start' }, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status), c.subscription?.plan_name ? h('span', { class: 'small muted' }, c.subscription.plan_name) : null)),
+      h('td', { class: 'cl-program' }, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
+      h('td', { class: 'muted' }, ago(c.last_seen_at))))
+      : [h('tr', null, h('td', { colspan: '4', class: 'muted' }, data.length ? (clientsUi.view === 'archived' && !s ? 'No archived clients.' : s ? `No clients match "${s}". Check the spelling, or clear the search.` : 'Nobody in this view.') : 'No clients yet. Add your first one.'))]));
+    fill(more, rows.length > clientsUi.shown ? [h('span', { class: 'small muted grow' }, `Showing ${clientsUi.shown} of ${rows.length}.`), btn('Show 100 more', () => { clientsUi.shown += 100; draw(); }, 'secondary')] : null);
+  };
+  q.addEventListener('input', () => { clientsUi.q = q.value; clientsUi.shown = 100; draw(); });
+  // Enter opens the only match of what's typed; Escape clears the search.
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && q.value) { e.preventDefault(); q.value = clientsUi.q = ''; draw(); }
+    if (e.key === 'Enter') { const rows = shownRows(); if (rows.length === 1) open(rows[0]); else if (rows.length) toast(`${rows.length} clients match. Keep typing, or pick one.`, 'warn'); }
+  });
+  sort.addEventListener('change', () => { clientsUi.sort = sort.value; draw(); });
+  draw();
+  const current = count('current'), archived = count('archived');
+  const csv = isOwner() ? btn('Download CSV', (e) => busy(e.currentTarget, async () => {
+    const p = new URLSearchParams({ sort: clientsUi.sort });
+    if (clientsUi.q.trim()) p.set('q', clientsUi.q.trim());
+    if (clientsUi.view === 'archived') p.set('archived', 'true'); else if (clientsUi.view) p.set('status', clientsUi.view);
+    await download(`/v1/client-export?${p}`);
+  }), 'secondary', { title: 'The clients in this view, with contact details. No amounts.' }) : null;
+  fill(main,
+    header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row wrap' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import') : null, csv, addClientBtn())),
+    panel(null, {}, views, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), sort), hint,
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
-        h('thead', null, h('tr', null, ['Client', 'Plan', 'Status', 'Program', 'Last workout'].map((t) => h('th', null, t)))), body))));
+        h('thead', null, h('tr', null, ['Client', 'Membership', 'Program', 'Last seen'].map((t) => h('th', { class: t === 'Program' ? 'cl-program' : null }, t)))), body)), more));
+  if (clientsUi.q) q.focus();
 }
+
+// Unsaved profile edits, kept per client while other actions on the page redraw it, and asked about before leaving.
+const profileDrafts = new Map();
+const telHref = (p) => `tel:${String(p ?? '').replace(/[^\d+]/g, '')}`;
+const smsHref = (p) => `sms:${String(p ?? '').replace(/[^\d+]/g, '')}`;
+const OUTCOME = { attended: ['Came', 'good'], walk_in: ['Walk-in', 'good'], no_show: ['No-show', 'warn'], late_cancel: ['Late cancel', 'neutral'], in_progress: ['Happening now', 'muted'] };
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
-  const [en, testLib, owed, products, badgeLib, notesList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`)]);
+  const [en, testLib, owed, products, badgeLib, notesList, att, famList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
   const first = c.name.split(' ')[0];
+  const role = state.user.role;
   const act = (path, msg, body) => (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/${path}`, body); toast(msg); render(); });
+  const sectionId = (el, key) => { if (el) el.id = `cl-${key}`; return el; };
 
-  const planSel = select(plans.data.map((p) => [p.id, `${p.name}, ${money(p.price_cents)}/mo`]), { value: sub?.plan_id, 'aria-label': 'Plan' });
+  const planSel = select(plans.data.map((p) => [p.id, `${p.name}${p.price_cents == null ? '' : `, ${money(p.price_cents)}/mo`}`]), { value: sub?.plan_id, 'aria-label': 'Plan' });
   const membership = panel('Membership', { subtitle: sub ? null : 'No active plan.' },
     sub ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Status'), h('dd', null, badge(sub.status))),
@@ -529,9 +605,9 @@ async function viewClient(main, id) {
     sub && sub.status !== 'canceled' ? h('div', { class: 'stack' },
       h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Change plan', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/plan`, { plan_id: planSel.value }); toast('Plan changed. New price applies from the next charge.'); render(); }), 'secondary')),
       h('div', { class: 'row wrap' },
-        sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.')) : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
+        sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.'), 'secondary') : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
         btn('Cancel subscription', (e) => { if (confirm(`Cancel ${first}'s subscription now? Open invoices will be voided.`)) act('cancel', 'Subscription canceled.')(e); }, 'ghost')))
-      : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }))));
+      : c.archived_at ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }), 'secondary')));
 
   const payments = panel('Payments', {}, inv.data.length ? inv.data.map((i) => h('div', { class: 'list-item' },
     h('div', { class: 'grow stack-tight' }, h('span', null, `${i.amount_cents == null ? '' : `${money(i.amount_cents)} · `}${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
@@ -543,40 +619,76 @@ async function viewClient(main, id) {
 
   const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { value: c.program?.id ?? '', 'aria-label': 'Program' });
   const appUrl = location.origin + c.app_link;
-  const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${c.workouts_completed} ${c.workouts_completed === 1 ? 'workout' : 'workouts'} logged.` : 'No program assigned yet.' },
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
+  const appTo = [c.email, ...(fam?.guardians ?? []).map((g) => g.email)].filter(Boolean);
+  const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${plural(c.workouts_completed, 'workout')} logged.` : 'No program assigned yet.' },
+    role === 'front_desk' ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
       if (!progSel.value) throw new Error('Choose a program first.');
       await post(`/v1/programs/${progSel.value}/assign`, { client_id: id }); toast(`Program assigned to ${first}.`); render();
     }), 'secondary')),
-    h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `Send this to ${first}. Anyone with the link can see their workouts.`)),
+    h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),
     h('div', { class: 'row wrap' },
+      !c.archived_at && appTo.length ? btn('Email app link', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/app-link/email`); toast(`App link emailed to ${r.sent_to.join(' and ')}.`); }), 'secondary', { title: `Sends it to ${appTo.join(', ')}` }) : null,
       btn('Copy app link', async () => { await navigator.clipboard.writeText(appUrl); toast('App link copied.'); }, 'outline'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
-      btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
+      role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
     logs.data.length ? h('div', null, logs.data.slice(0, 5).map((l) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${l.workout_title} · week ${l.week}, day ${l.day}`), h('span', { class: 'muted' }, ago(l.completed_at))))) : null);
 
-  const name = input({ value: c.name }), email = input({ type: 'email', value: c.email ?? '' }), phone = input({ value: c.phone ?? '' });
-  const pf = { sex: select([['', 'Not set'], ['M', 'Male'], ['F', 'Female']], { value: c.sex ?? '' }), athlete_id: input({ value: c.athlete_id ?? '', style: 'font-family:var(--font-mono);text-transform:uppercase' }), birth_date: input({ type: 'date', value: c.birth_date ?? '' }), sport: input({ value: c.sport ?? '' }), position: input({ value: c.position ?? '' }), school: input({ value: c.school ?? '' }), grad_year: input({ type: 'number', value: c.grad_year ?? '' }),
-    emergency_name: input({ value: c.emergency_name ?? '' }), emergency_phone: input({ value: c.emergency_phone ?? '' }) };
-  const medical = h('textarea', { class: 'dp-input' }); medical.value = c.medical_notes ?? '';
-  const notes = h('textarea', { class: 'dp-input' }); notes.value = c.notes ?? '';
+  // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
+  // leaving the page asks first.
+  const draft = profileDrafts.get(id) ?? {};
+  const orig = { name: c.name, email: c.email ?? '', phone: c.phone ?? '', sex: c.sex ?? '', athlete_id: c.athlete_id ?? '', birth_date: c.birth_date ?? '', sport: c.sport ?? '', position: c.position ?? '', school: c.school ?? '', grad_year: c.grad_year == null ? '' : String(c.grad_year),
+    emergency_name: c.emergency_name ?? '', emergency_phone: c.emergency_phone ?? '', medical_notes: c.medical_notes ?? '', notes: c.notes ?? '' };
+  const val = (k) => draft[k] ?? orig[k];
+  const f = {
+    name: input({ value: val('name'), autocomplete: 'off' }), email: input({ type: 'email', value: val('email'), autocomplete: 'off' }), phone: input({ type: 'tel', value: val('phone'), autocomplete: 'off' }),
+    sex: select([['', 'Not set'], ['M', 'Male'], ['F', 'Female']], { value: val('sex') }), athlete_id: input({ value: val('athlete_id'), style: 'font-family:var(--font-mono);text-transform:uppercase', autocomplete: 'off' }),
+    birth_date: input({ type: 'date', value: val('birth_date'), max: bizDate() }), sport: input({ value: val('sport') }), position: input({ value: val('position') }), school: input({ value: val('school') }),
+    grad_year: input({ type: 'number', inputmode: 'numeric', min: '2000', max: '2060', value: val('grad_year') }),
+    emergency_name: input({ value: val('emergency_name') }), emergency_phone: input({ type: 'tel', value: val('emergency_phone') }),
+    medical_notes: h('textarea', { class: 'dp-input' }), notes: h('textarea', { class: 'dp-input' })
+  };
+  f.medical_notes.value = val('medical_notes'); f.notes.value = val('notes');
+  const unsaved = h('span', { class: 'dp-badge dp-badge--warn', role: 'status', style: 'display:none' }, 'Unsaved changes');
+  const saveBtn = btn('Save changes', null, 'secondary');
+  const discardBtn = btn('Discard changes', () => { profileDrafts.delete(id); render(); }, 'ghost', { style: 'display:none' });
+  const guard = { check: (next) => (profileDrafts.has(id) && !String(next ?? '').startsWith(`#/clients/${id}`) ? `You have unsaved changes to ${first}'s profile. Leave without saving?` : null), discard: () => profileDrafts.delete(id) };
+  leaveGuard = guard;
+  const isDirty = () => Object.entries(f).some(([k, el]) => el.value !== orig[k]);
+  const syncDirty = () => {
+    if (leaveGuard !== guard) return;                 // a late change event from a page that was just left
+    const d = Object.fromEntries(Object.entries(f).filter(([k, el]) => el.value !== orig[k]).map(([k, el]) => [k, el.value]));
+    if (Object.keys(d).length) profileDrafts.set(id, d); else profileDrafts.delete(id);
+    const dirty = !!Object.keys(d).length;
+    unsaved.style.display = discardBtn.style.display = dirty ? '' : 'none';
+    saveBtn.className = `dp-btn dp-btn--${dirty ? 'primary' : 'secondary'}`;
+  };
+  for (const el of Object.values(f)) { el.addEventListener('input', syncDirty); el.addEventListener('change', syncDirty); }
+  saveBtn.addEventListener('click', (e) => busy(e.currentTarget, async () => {
+    if (!isDirty()) return toast('Nothing to save. Change a field first.', 'warn');
+    const body = {};
+    for (const [k, el] of Object.entries(f)) {
+      if (el.value === orig[k]) continue;
+      body[k] = k === 'grad_year' ? (el.value ? Number(el.value) : null) : k === 'name' ? el.value : el.value.trim() === '' ? null : el.value;
+    }
+    await patch(`/v1/clients/${id}`, body);
+    profileDrafts.delete(id);
+    toast('Changes saved.'); render();
+  }));
   const account = panel('Profile', {},
-    h('div', { class: 'form-grid' }, field('Full name', name), field(fam ? 'Athlete email (optional)' : 'Email', email), field('Phone', phone), field('Birthday', pf.birth_date)),
-    h('div', { class: 'form-grid' }, field('Athlete ID', pf.athlete_id, 'Connects every result, file and device to this athlete.'), field('Sex', pf.sex, 'Only used for growth-spurt estimates.')),
-    h('div', { class: 'form-grid' }, field('Sport', pf.sport), field('Position', pf.position), field('School', pf.school), field('Grad year', pf.grad_year)),
-    field('Medical notes', medical, 'Parents can update these in the portal.'),
-    h('div', { class: 'form-grid' }, field('Emergency contact', pf.emergency_name), field('Emergency phone', pf.emergency_phone)),
-    field('Profile note', notes, 'One short note every staff member sees here. For dated notes, use Staff notes.'),
-    h('div', { class: 'row' }, btn('Save changes', (e) => busy(e.currentTarget, async () => {
-      await patch(`/v1/clients/${id}`, { name: name.value, email: email.value || null, phone: phone.value, notes: notes.value, medical_notes: medical.value, ...Object.fromEntries(Object.entries(pf).filter(([k, el]) => k !== 'athlete_id' || el.value.toUpperCase() !== c.athlete_id).map(([k, el]) => [k, k === 'grad_year' ? (el.value ? Number(el.value) : null) : el.value || null])) });
-      toast('Changes saved.'); render();
-    }))),
+    h('div', { class: 'form-grid' }, field('Full name', f.name), field(fam ? 'Athlete email (optional)' : 'Email', f.email), field(fam ? 'Athlete phone (optional)' : 'Phone', f.phone), field('Birthday', f.birth_date)),
+    h('div', { class: 'form-grid' }, field('Athlete ID', f.athlete_id, 'Connects every result, file and device to this athlete.'), field('Sex', f.sex, 'Only used for growth-spurt estimates.')),
+    h('div', { class: 'form-grid' }, field('Sport', f.sport), field('Position', f.position), field('School', f.school), field('Grad year', f.grad_year)),
+    field('Medical notes', f.medical_notes, 'Allergies, injuries, conditions. Parents can update these in the portal.'),
+    h('div', { class: 'form-grid' }, field('Emergency contact', f.emergency_name), field('Emergency phone', f.emergency_phone)),
+    field('Profile note', f.notes, 'One short note every staff member sees here. For dated notes, use Staff notes.'),
+    h('div', { class: 'row wrap' }, saveBtn, discardBtn, unsaved),
     state.testMode ? h('div', { class: 'row wrap small' }, h('span', { class: 'grow muted' }, `Test card: ${c.card_status === 'declining' ? 'declines every charge' : 'charges succeed'}.`),
       btn(c.card_status === 'declining' ? 'Make card succeed' : 'Make card decline', (e) => busy(e.currentTarget, async () => { await patch(`/v1/clients/${id}`, { card_status: c.card_status === 'declining' ? 'ok' : 'declining' }); render(); }), 'ghost')) : null);
+  syncDirty();
 
   const card = c.card.on_file
     ? h('div', { class: 'row wrap' }, h('span', { class: 'grow' }, `${(c.card.brand || 'Card').replace(/^./, (x) => x.toUpperCase())} ending ${c.card.last4 ?? '••••'}`),
-        btn('Remove card', (e) => { if (confirm('Remove the saved card? Membership renewals will fail until a new card is added.')) busy(e.currentTarget, async () => { await del(`/v1/clients/${id}/card`); toast('Card removed.'); render(); }); }, 'ghost'))
+        role === 'front_desk' ? null : btn('Remove card', (e) => { if (confirm('Remove the saved card? Membership renewals will fail until a new card is added.')) busy(e.currentTarget, async () => { await del(`/v1/clients/${id}/card`); toast('Card removed.'); render(); }); }, 'ghost'))
     : h('p', { class: 'muted' }, `No card saved. Save one when ${first} taps to pay, or send a secure link.`);
   const cardActions = h('div', { class: 'row wrap' },
     state.payments.provider === 'stripe' ? btn(c.card.on_file ? 'Send link to update card' : 'Copy card link for client', (e) => busy(e.currentTarget, async () => {
@@ -587,26 +699,74 @@ async function viewClient(main, id) {
     state.payments.can_simulate && !c.card.on_file ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/card/test`); toast('Test card added.'); render(); }), 'ghost') : null);
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { 'aria-label': 'Check-in location', value: (() => { try { return localStorage.getItem('dp_location'); } catch { return null; } })() || locs.data[0]?.id });
   const member = ['active', 'trialing', 'past_due'].includes(c.status);
-  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${c.credits.private} private ${c.credits.private === 1 ? 'session' : 'sessions'} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
+  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${plural(c.credits.private, 'private session')} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
     card, cardActions,
-    locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
+    c.archived_at ? null : locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
       // Members and athletes with group credits use a group session; otherwise a private credit.
       const r = await post(`/v1/clients/${id}/check-ins`, { location_id: locSel.value, credit_type: member || c.credits.group > 0 ? 'group' : 'private' });
       toast(r.covered_by === 'membership' ? `${first} checked in.` : `${first} checked in. ${r.credits_left} ${r.credit_type} ${r.credits_left === 1 ? 'session' : 'sessions'} left.`); render();
     }), 'secondary')) : h('p', { class: 'small muted' }, 'Add a location in Point of sale setup to check clients in.'),
-    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--primary', href: `#/sell?client=${id}` }, 'Sell to ' + first),
-      btn('Adjust sessions', (e) => {
+    h('div', { class: 'row wrap' }, h('a', { class: `dp-btn dp-btn--${c.archived_at ? 'secondary' : 'primary'}`, href: `#/sell?client=${id}` }, 'Sell to ' + first),
+      role === 'front_desk' ? null : btn('Adjust sessions', (e) => {
         const t = prompt('Which kind? Type "group" or "private".', 'group'); if (!t) return;
         const type = t.trim().toLowerCase(); if (!['group', 'private'].includes(type)) return toast('Type group or private.', 'warn');
         const a = prompt(`Add or remove ${type} sessions (e.g. 2 or -1):`, '1'); if (!a) return;
         busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/credits`, { delta: Number(a), credit_type: type, note: 'Coach adjustment' }); toast(`${r.balance} ${type} sessions left.`); render(); });
       }, 'ghost')),
     sales.data.length || visits.data.length ? h('div', null,
-      ...sales.data.slice(0, 4).map((x) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${x.description ?? 'Sale'} · ${x.location_name}`), badge(x.status), h('span', { class: 'muted' }, money(x.amount_cents)))),
+      ...sales.data.slice(0, 4).map((x) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${x.description ?? 'Sale'} · ${x.location_name}`), badge(x.status), x.amount_cents == null ? null : h('span', { class: 'muted' }, money(x.amount_cents)))),
       ...visits.data.slice(0, 4).map((k) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `Checked in at ${k.location_name}`), h('span', { class: 'muted' }, ago(k.created_at))))) : null);
 
-  const gName = input(), gEmail = input({ type: 'email' }), gPhone = input({ type: 'tel' });
-  const sibName = input(), sibBirth = input({ type: 'date' });
+  // Family: parents with call, text and email, fix their details, re-send the sign-in email, remove a second parent,
+  // record a paper waiver, add a sibling or a parent.
+  const guardianRow = (g) => {
+    const wrap = h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' });
+    const view = () => fill(wrap,
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('span', { class: 'strong' }, g.name, g.is_primary ? h('span', { class: 'small muted' }, ' (primary)') : null, g.relationship ? h('span', { class: 'small muted' }, ` · ${g.relationship}`) : null),
+        h('span', { class: 'small muted' }, [g.email, g.phone ? phoneText(g.phone) : null, { on: 'Gets texts', stopped: 'Replied STOP to texts' }[g.texts]].filter(Boolean).join(' · '))),
+      h('div', { class: 'row wrap', style: 'gap:4px' },
+        g.phone ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(g.phone) }, 'Call') : null,
+        g.phone ? h('a', { class: 'dp-btn dp-btn--ghost', href: smsHref(g.phone) }, 'Text') : null,
+        h('a', { class: 'dp-btn dp-btn--ghost', href: `mailto:${g.email}` }, 'Email'),
+        btn('Edit', edit, 'ghost'),
+        btn('Send sign-in email', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/families/${fam.id}/guardians/${g.id}/welcome`); toast(`Sign-in email sent to ${r.sent_to}.`); }), 'ghost'),
+        role !== 'front_desk' && fam.guardians.length > 1 ? btn('Remove', (e) => { if (confirm(`Remove ${g.name} from the ${fam.name}? Their portal sign-in stops working now.`)) busy(e.currentTarget, async () => { await del(`/v1/families/${fam.id}/guardians/${g.id}`); toast(`${g.name} removed.`); render(); }); }, 'ghost') : null));
+    const edit = () => {
+      const ef = { name: input({ value: g.name, autocomplete: 'off' }), email: input({ type: 'email', value: g.email, autocomplete: 'off' }), phone: input({ type: 'tel', value: g.phone ? phoneText(g.phone) : '', autocomplete: 'off' }) };
+      const err = h('div', { class: 'dp-error', role: 'alert' });
+      fill(wrap, h('form', { class: 'grow stack', style: 'min-width:200px', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+        const body = {};
+        if (ef.name.value.trim() !== g.name) body.name = ef.name.value;
+        if (ef.email.value.trim().toLowerCase() !== g.email.toLowerCase()) body.email = ef.email.value;
+        if (ef.phone.value.replace(/\D/g, '').slice(-10) !== String(g.phone ?? '').replace(/\D/g, '').slice(-10)) body.phone = ef.phone.value.trim() || null;
+        if (!Object.keys(body).length) return view();
+        try {
+          const r = await patch(`/v1/families/${fam.id}/guardians/${g.id}`, body);
+          toast(`${ef.name.value.trim().split(' ')[0]}'s details saved.${body.email ? ' Send the sign-in email so they know the new address.' : ''}${r.texts_turned_off ? ' Texts are off for the new number until they turn them on in the portal.' : ''}`);
+          render();
+        } catch (x) { err.textContent = x.message; }
+      }); } },
+        h('div', { class: 'form-grid cols-3' }, field('Name', ef.name), field('Email (they sign in with it)', ef.email), field('Phone', ef.phone)), err,
+        h('div', { class: 'row' }, btn('Save parent', null, 'secondary', { type: 'submit' }), btn('Cancel', view, 'ghost'))));
+      ef.name.focus();
+    };
+    view();
+    return wrap;
+  };
+  const gName = input({ autocomplete: 'off' }), gEmail = input({ type: 'email', autocomplete: 'off' }), gPhone = input({ type: 'tel', autocomplete: 'off' });
+  const sibName = input({ autocomplete: 'off' }), sibBirth = input({ type: 'date', max: bizDate() });
+  const addSibling = async (checked = true) => {
+    try {
+      const x = await post(`/v1/families/${fam.id}/athletes`, { name: sibName.value, birth_date: sibBirth.value || undefined, check_duplicates: checked });
+      toast(`${x.name} added to ${fam.name}.`); location.hash = `#/clients/${x.id}`;
+    } catch (err) {
+      if (err.code !== 'possible_duplicate') throw err;
+      const d = err.details.duplicates;
+      if (confirm(`${err.message}\n\n${d.map((x) => `${x.name} (${x.athlete_id}${x.archived ? ', archived' : ''})`).join('\n')}\n\nAdd ${sibName.value.trim()} as a new athlete anyway?`)) await addSibling(false);
+    }
+  };
+  const paperBy = input({ autocomplete: 'off', value: fam?.guardians[0]?.name ?? '', 'aria-label': 'Parent who signed' });
   const famData = fam && isOwner() ? h('div', { class: 'row wrap small', style: 'gap:8px' },
     btn('Download family data', (e) => busy(e.currentTarget, () => download(`/v1/families/${fam.id}/export`)), 'ghost'),
     btn('Delete family data', (e) => {
@@ -614,21 +774,105 @@ async function viewClient(main, id) {
       if (!typed) return;
       busy(e.currentTarget, async () => { await del(`/v1/families/${fam.id}`, { confirm: typed }); toast('Family data deleted.'); location.hash = '#/clients'; });
     }, 'ghost')) : null;
+  const openAdd = hashQuery().get('add') === 'sibling';
   const familyPanel = fam ? panel(fam.name, { subtitle: fam.waiver.signed ? `Waiver signed ${date(fam.waiver.signed_at)} by ${fam.waiver.signed_by?.split(' <')[0]}` : 'Waiver not signed yet. Parents sign it in the portal before booking.' },
-      ...fam.guardians.map((g) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, g.name, g.is_primary ? h('span', { class: 'small muted' }, ' (primary)') : null), h('span', { class: 'small muted' }, [g.email, g.phone, { on: 'Gets texts', stopped: 'Replied STOP to texts' }[g.texts]].filter(Boolean).join(' · '))),
-        btn('Copy portal link', async () => { await navigator.clipboard.writeText(`${location.origin}/parent`).catch(() => {}); toast(`Portal link copied. ${g.name.split(' ')[0]} signs in with ${g.email}.`); }, 'ghost'))),
+      ...fam.guardians.map(guardianRow),
+      fam.waiver.signed ? null : h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        if (!paperBy.value.trim()) throw new Error('Enter the name of the parent who signed.');
+        if (!confirm(`Record that ${paperBy.value.trim()} signed the current waiver on paper today? Keep the paper copy.`)) return;
+        await post(`/v1/families/${fam.id}/waiver`, { signed_by: paperBy.value }); toast('Paper waiver recorded.'); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('Signed on paper at the desk by', paperBy)), btn('Record paper waiver', null, 'secondary', { type: 'submit' })),
       fam.siblings.length ? h('p', { class: 'small' }, 'Siblings: ', ...fam.siblings.map((x, i) => [i ? ', ' : '', h('a', { href: `#/clients/${x.id}` }, x.name)])) : null,
       famData,
-      h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'Add sibling or parent'),
-        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const x = await post(`/v1/families/${fam.id}/athletes`, { name: sibName.value, birth_date: sibBirth.value || undefined }); toast(`${x.name} added to ${fam.name}.`); location.hash = `#/clients/${x.id}`; }); } },
+      h('details', { open: openAdd }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add sibling or parent'),
+        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { if (!sibName.value.trim()) throw new Error('Enter the sibling\'s full name.'); await addSibling(); }); } },
           h('div', { class: 'grow' }, field('Sibling name', sibName)), field('Birthday', sibBirth), h('div', { style: 'align-self:flex-end' }, btn('Add sibling', null, 'secondary', { type: 'submit' }))),
-        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { await post(`/v1/families/${fam.id}/guardians`, { name: gName.value, email: gEmail.value, phone: gPhone.value || undefined }); toast('Parent added.'); render(); }); } },
+        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { await post(`/v1/families/${fam.id}/guardians`, { name: gName.value, email: gEmail.value, phone: gPhone.value || undefined }); toast(`Parent added. ${gName.value.trim().split(' ')[0]} signs in with ${gEmail.value.trim()}.`); render(); }); } },
           h('div', { class: 'grow' }, field('Parent name', gName)), field('Email', gEmail), field('Phone', gPhone), h('div', { style: 'align-self:flex-end' }, btn('Add parent', null, 'secondary', { type: 'submit' })))))
     : null;
-  const bookingsPanel = panel('Upcoming sessions', { action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
-    upcoming.data.length ? upcoming.data.slice(0, 8).map((b) => h('a', { class: 'list-item small', href: `#/schedule/${b.session_id}`, style: 'text-decoration:none;color:inherit' },
-      h('span', { class: 'grow' }, `${tzFmt(b.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${timeOf(b.starts_at)} · ${b.session_name}`), b.status === 'waitlisted' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Waitlist') : coverBadge(b.coverage)))
-      : h('p', { class: 'muted small' }, 'Nothing booked.'));
+
+  // No family yet (a team roster athlete, or an adult): add a parent, or put them in a family you already have, so the
+  // parents see them in the portal. Owners and coaches only.
+  const noFamilyPanel = !fam && famList && !c.archived_at ? (() => {
+    const np = { name: input({ autocomplete: 'off' }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }) };
+    const pick = famList.data.length ? select([['', 'Choose a family'], ...famList.data.map((x) => [x.id, `${x.name}${x.guardians ? ` (${x.guardians})` : ''}`])], { 'aria-label': 'Family' }) : null;
+    return panel('Family', { subtitle: `${first} isn't in a family yet. Add a parent so they can sign in to the parent portal and see ${first}'s results and team news.` },
+      h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        if (!np.name.value.trim() || !np.email.value.trim()) throw new Error('Enter the parent\'s name and email.');
+        await post(`/v1/clients/${id}/family`, { parent: { name: np.name.value, email: np.email.value, phone: np.phone.value || undefined } });
+        toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/parent with ${np.email.value.trim()}.`); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:160px' }, field('Parent name', np.name)), field('Email', np.email), field('Phone', np.phone), btn('Add parent', null, 'secondary', { type: 'submit' })),
+      pick ? h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        if (!pick.value) throw new Error('Choose the family first.');
+        const name = pick.selectedOptions[0].textContent;
+        if (!confirm(`Put ${first} in ${name}? Its parents will see ${first}'s profile, results and messages in the portal.`)) return;
+        await post(`/v1/clients/${id}/family`, { family_id: pick.value }); toast(`${first} is in the family now.`); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('Or a family you already have', pick)), btn('Put in this family', null, 'ghost', { type: 'submit' })) : null);
+  })() : null;
+
+  // Upcoming sessions: book one from here (next two weeks) and cancel (credits back, card payments refunded, waitlist moves up).
+  const lateHours = Number(settings.late_cancel_hours ?? 12);
+  const cancelBooking = (b) => {
+    const late = b.status === 'booked' && Date.parse(b.starts_at) - Date.now() < lateHours * 3600000;
+    const done = (r) => { toast(r.late ? r.message : `Canceled.${b.coverage === 'credit' ? ` ${first}'s session credit is back.` : b.coverage === 'paid' ? ' The card payment is refunded.' : ''}`); render(); };
+    teamDialog(`Cancel ${first}'s ${b.status === 'waitlisted' ? 'waitlist spot' : 'booking'}?`,
+      h('p', null, `${b.session_name}, ${tzFmt(b.starts_at, { weekday: 'long', month: 'short', day: 'numeric' })} at ${timeOf(b.starts_at)}.`,
+        late ? ` It starts in less than ${lateHours} hours: a late cancel keeps the session used (credit or payment). You can give it back instead.` : b.coverage === 'credit' ? ' The session credit goes back.' : b.coverage === 'paid' ? ' The card payment is refunded.' : ''),
+      late ? [{ label: 'Give the session back', variant: 'secondary', onClick: async () => done(await post(`/v1/bookings/${b.id}/cancel`, { waive: true })) },
+        { label: 'Late cancel', variant: 'ghost', onClick: async () => done(await post(`/v1/bookings/${b.id}/cancel`, { waive: false })) }, { label: 'Keep it', variant: 'ghost' }]
+        : [{ label: `Cancel ${b.status === 'waitlisted' ? 'waitlist spot' : 'booking'}`, variant: 'secondary', onClick: async () => done(await post(`/v1/bookings/${b.id}/cancel`, { waive: false })) }, { label: 'Keep it', variant: 'ghost' }]);
+  };
+  const bookDialog = async () => {
+    const sched = (await get('/v1/schedule')).data;
+    const mine = new Set(upcoming.data.map((b) => b.session_id));
+    const options = sched.filter((s) => ['group', 'clinic', 'camp', 'evaluation'].includes(s.kind) && !mine.has(s.id) && Date.parse(s.starts_at) > Date.now());
+    const search = input({ type: 'search', placeholder: 'Class, coach or place', 'aria-label': 'Find a session', autocomplete: 'off' });
+    const pay = select([['', member || c.credits.group || c.credits.private ? 'Use the membership or a session left, otherwise pay at the session' : 'Pay at the session'], ...(c.card.on_file ? [['card_on_file', 'Charge the card on file for the drop-in']] : [])], { 'aria-label': 'How it\'s paid for' });
+    const box = h('div', { class: 'stack-tight', style: 'max-height:50vh;overflow:auto' });
+    const book = async (s, e, overrideAge = false) => {
+      const b = e.currentTarget; b.disabled = true;
+      try {
+        const r = await post(`/v1/sessions/${s.id}/bookings`, { client_id: id, pay: pay.value || undefined, override_age: overrideAge || undefined });
+        document.getElementById('dialog').close();
+        toast(r.status === 'waitlisted' ? `${first} is on the waitlist for ${s.name}. The family is emailed if a spot opens.` : `${first} is booked for ${s.name}.${r.coverage === 'unpaid' ? ' Payment is due at the session.' : ''}`);
+        render();
+      } catch (x) {
+        if (/This session is for ages/.test(x.message) && !overrideAge && confirm(`${x.message}\n\nBook anyway?`)) { b.disabled = false; return book(s, { currentTarget: b }, true); }
+        toast(x.message, 'warn');
+      } finally { b.disabled = false; }
+    };
+    const draw = () => {
+      const q = search.value.trim().toLowerCase();
+      const rows = options.filter((s) => !q || `${s.name} ${s.coach_name ?? ''} ${s.location_name}`.toLowerCase().includes(q));
+      fill(box, rows.length ? rows.slice(0, 60).map((s) => {
+        const full = s.booked_count >= s.capacity;
+        return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+          h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, s.name),
+            h('span', { class: 'small muted' }, `${tzFmt(s.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${timeOf(s.starts_at)} · ${s.location_name}${s.coach_name ? ` · ${s.coach_name}` : ''} · ${full ? `full${s.waitlist_count ? `, ${s.waitlist_count} waiting` : ''}` : `${s.capacity - s.booked_count} ${s.capacity - s.booked_count === 1 ? 'spot' : 'spots'} left`}`)),
+          btn(full ? 'Join waitlist' : 'Book', (e) => book(s, e), 'secondary'));
+      }) : h('p', { class: 'muted' }, options.length ? `No sessions match "${search.value.trim()}".` : 'No classes, clinics, camps or evaluations with room in the next two weeks. Privates are booked from open hours in Schedule.'));
+    };
+    search.addEventListener('input', draw); draw();
+    teamDialog(`Book a session for ${first}`, h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, 'The next two weeks. When a session is full, the booking joins the waitlist.'), search, field('How it\'s paid for', pay), box), [{ label: 'Close', variant: 'ghost' }]);
+    search.focus();
+  };
+  const bookingsPanel = panel('Upcoming sessions', { action: c.archived_at ? null : btn('Book a session', (e) => busy(e.currentTarget, bookDialog), 'secondary') },
+    upcoming.data.length ? upcoming.data.slice(0, 10).map((b) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+      h('a', { class: 'grow', href: `#/schedule/${b.session_id}`, style: 'color:inherit;min-width:180px' }, `${tzFmt(b.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })} ${timeOf(b.starts_at)} · ${b.session_name}`),
+      b.status === 'waitlisted' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Waitlist') : coverBadge(b.coverage),
+      btn('Cancel', () => cancelBooking(b), 'ghost', { 'aria-label': `Cancel ${b.session_name}` })))
+      : h('p', { class: 'muted small' }, 'Nothing booked.'),
+    upcoming.data.length > 10 ? h('p', { class: 'small muted' }, `And ${upcoming.data.length - 10} more. See Schedule.`) : null);
+
+  const sum = att.summary;
+  const attendancePanel = panel('Attendance', { subtitle: sum.last_visit_at ? `Last here ${ago(sum.last_visit_at).toLowerCase()}.` : 'Not checked in yet.' },
+    h('div', { class: 'pulse' },
+      pulseTile('Visits', sum.visits_30, 'Last 30 days'), pulseTile('No-shows', sum.no_shows_30, 'Last 30 days', { tone: sum.no_shows_30 ? 'warn' : null }),
+      pulseTile('Late cancels', sum.late_cancels_30, 'Last 30 days'), pulseTile('Visits', sum.visits_90, 'Last 90 days')),
+    att.recent.length ? h('div', null, att.recent.slice(0, 8).map((r) => h('div', { class: 'list-item small' },
+      h('span', { class: 'grow' }, `${tzFmt(r.at, { weekday: 'short', month: 'short', day: 'numeric' })} · ${r.session_name ?? `Checked in at ${r.location_name}`}`),
+      h('span', { class: `dp-badge dp-badge--${OUTCOME[r.outcome][1]}` }, OUTCOME[r.outcome][0])))) : null);
+
   const headline = perfData.data.filter((p) => p.headline && p.better !== 'none');
   const perfPanel = panel('Testing', { subtitle: headline.length ? 'Best result and change since the first test.' : null, action: headline.length ? h('a', { class: 'dp-btn dp-btn--secondary', href: `/report.html?client=${id}`, target: '_blank' }, 'Progress report') : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing days') },
     headline.length ? headline.slice(0, 12).map((p) => h('div', { class: 'list-item small' },
@@ -640,7 +884,7 @@ async function viewClient(main, id) {
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
   // Archive: owners and coaches. Refused with a membership; upcoming bookings are canceled only after a second yes.
-  const canArchive = state.user.role !== 'front_desk';
+  const canArchive = role !== 'front_desk';
   const archive = (e) => {
     if (!confirm(`Archive ${first}? They leave the client list, search and pickers, and get no automatic emails or texts. Nothing is deleted and you can bring them back any time.`)) return;
     busy(e.currentTarget, async () => {
@@ -651,13 +895,28 @@ async function viewClient(main, id) {
   };
   const restore = (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/restore`); toast(`${first} is back on the client list.`); render(); });
   const pinned = notesList.data.filter((n) => n.pinned);
+  // Who to call: the primary parent, or the client themselves.
+  const contact = fam?.guardians[0] ?? (c.phone || c.email ? { name: c.name, phone: c.phone, email: c.email } : null);
+  const contactRow = contact ? h('div', { class: 'row wrap', style: 'gap:8px' },
+    h('span', { class: 'small muted' }, fam ? `${contact.name.split(' ')[0]} (parent):` : 'Contact:'),
+    contact.phone ? h('a', { class: 'dp-btn dp-btn--secondary', href: telHref(contact.phone) }, 'Call') : null,
+    contact.phone ? h('a', { class: 'dp-btn dp-btn--secondary', href: smsHref(contact.phone) }, 'Text') : null,
+    contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
+    c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
+  const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
+  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks]];
+  const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
+  const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
-    header(h('span', { class: 'row', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
+    header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
       h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
     c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
-    c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}${c.emergency_name ? ` · Emergency: ${c.emergency_name} ${c.emergency_phone ?? ''}` : ''}`) : null,
+    c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}`, c.emergency_name || c.emergency_phone ? [' · Emergency: ', c.emergency_name ?? '', ' ', c.emergency_phone ? h('a', { href: telHref(c.emergency_phone), style: 'color:inherit;text-decoration:underline' }, c.emergency_phone) : null] : null) : null,
     pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, familyPanel, eng.accountability, eng.goals, membership, sessionsPanel, payments, payLinks), h('div', { class: 'stack', style: 'gap:24px' }, staffNotesPanel(id, notesList.data), bookingsPanel, eng.messages, perfPanel, eng.targets, eng.badges, eng.education, training, account)));
+    contactRow || teamsLine ? h('div', { class: 'stack-tight' }, contactRow, teamsLine) : null,
+    h('nav', { class: 'tm-jump', 'aria-label': 'Sections' }, jumps.map(([el, label]) => h('button', { type: 'button', onClick: () => el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, left.map(([el]) => el)), h('div', { class: 'stack', style: 'gap:24px' }, right.map(([el]) => el))));
+  if (openAdd) sibName.focus();
 }
 
 // Staff notes: dated, with the author. Anyone on staff adds; authors change their own; owners delete any and pin any.
@@ -701,42 +960,71 @@ function staffNotesPanel(clientId, notes) {
 
 async function viewNewClient(main) {
   const [plans, progs] = await Promise.all([get('/v1/plans'), get('/v1/programs')]);
+  const canProgram = state.user.role !== 'front_desk';         // assigning programs is for coaches
   const isAthlete = h('input', { type: 'checkbox', checked: true, id: 'is-athlete' });
-  const name = input({ autocomplete: 'off', required: true }), email = input({ type: 'email', autocomplete: 'off' }), phone = input();
-  const birth = input({ type: 'date' }), sport = input(), school = input();
-  const pName = input(), pEmail = input({ type: 'email' }), pPhone = input({ type: 'tel' });
-  const plan = select([['', 'No subscription yet'], ...plans.data.map((p) => [p.id, `${p.name}, ${money(p.price_cents)}/mo${p.trial_days ? `, ${p.trial_days}-day trial` : ''}`])], { value: '' });
+  const f = {
+    name: input({ autocomplete: 'off', required: true }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }),
+    birth_date: input({ type: 'date', max: bizDate(), min: '1900-01-01' }), sport: input(), position: input(), school: input(), grad_year: input({ type: 'number', inputmode: 'numeric', min: '2000', max: '2060', placeholder: 'e.g. 2030' }),
+    athlete_phone: input({ type: 'tel', autocomplete: 'off' }),
+    medical_notes: h('textarea', { class: 'dp-input', style: 'min-height:64px', placeholder: 'Allergies, injuries, conditions' }), emergency_name: input({ autocomplete: 'off' }), emergency_phone: input({ type: 'tel', autocomplete: 'off' }),
+    pName: input({ autocomplete: 'off' }), pEmail: input({ type: 'email', autocomplete: 'off' }), pPhone: input({ type: 'tel', autocomplete: 'off' })
+  };
+  const plan = select([['', 'No subscription yet'], ...plans.data.map((p) => [p.id, `${p.name}${p.price_cents == null ? '' : `, ${money(p.price_cents)}/mo`}${p.trial_days ? `, ${p.trial_days}-day trial` : ''}`])], { value: '' });
   const prog = select([['', 'Assign later'], ...progs.data.map((p) => [p.id, p.name])], { value: '' });
   const err = h('div', { class: 'dp-error', role: 'alert' });
+  const dupBox = h('div', { 'aria-live': 'polite' });
   const submit = btn('Create account', null, 'primary', { type: 'submit' });
   const parentBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Parent or guardian (pays and signs in to the parent portal)'),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Parent name', pName), field('Parent email', pEmail), field('Parent phone', pPhone)));
-  const athleteBox = h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Birthday', birth), field('Sport', sport), field('School', school));
-  const emailField = field('Email', email), phoneField = field('Phone (optional)', phone);
+    h('div', { class: 'form-grid cols-3' }, field('Parent name', f.pName), field('Parent email', f.pEmail), field('Parent phone', f.pPhone)));
+  const athleteBox = h('div', { class: 'stack' },
+    h('div', { class: 'form-grid cols-4' }, field('Birthday', f.birth_date), field('Sport', f.sport), field('Position (optional)', f.position), field('Grad year (optional)', f.grad_year)),
+    h('div', { class: 'form-grid cols-3' }, field('School', f.school), field('Athlete phone (optional)', f.athlete_phone)));
+  const emailField = field('Email', f.email), phoneField = field('Phone (optional)', f.phone);
+  const health = h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Medical notes and emergency contact (optional)'),
+    h('div', { class: 'stack', style: 'margin-top:8px' }, field('Medical notes', f.medical_notes, 'Shown to coaches at the top of the profile and on rosters.'),
+      h('div', { class: 'form-grid cols-3' }, field('Emergency contact', f.emergency_name), field('Emergency phone', f.emergency_phone))));
   const sync = () => { parentBox.style.display = athleteBox.style.display = isAthlete.checked ? '' : 'none'; emailField.style.display = phoneField.style.display = isAthlete.checked ? 'none' : ''; };
-  isAthlete.addEventListener('change', sync);
+  isAthlete.addEventListener('change', () => { sync(); fill(dupBox); });
+  const val = (el) => el.value.trim() || undefined;
+  // Only the fields on screen are sent: switching between athlete and adult never leaks the hidden ones.
+  const athleteBody = () => ({ name: f.name.value, birth_date: val(f.birth_date), sport: val(f.sport), position: val(f.position), school: val(f.school), grad_year: f.grad_year.value ? Number(f.grad_year.value) : undefined, phone: val(f.athlete_phone) });
+  const common = () => ({ plan_id: plan.value || undefined, program_id: canProgram ? prog.value || undefined : undefined, medical_notes: val(f.medical_notes), emergency_name: val(f.emergency_name), emergency_phone: val(f.emergency_phone) });
+  const body = () => (isAthlete.checked ? { ...athleteBody(), ...common(), parent: { name: f.pName.value, email: f.pEmail.value, phone: val(f.pPhone) } } : { name: f.name.value, email: f.email.value, phone: val(f.phone), ...common() });
+  const done = (c) => {
+    toast(c.family && isAthlete.checked ? `${c.name.split(' ')[0]} added. ${f.pName.value.split(' ')[0] || 'The parent'} can sign in at ${location.origin}/parent with ${f.pEmail.value.trim()}.` : `Account created for ${c.name.split(' ')[0]}.`);
+    location.hash = `#/clients/${c.id}`;
+  };
+  const dupLink = (d) => h('a', { href: `#/clients/${d.id}` }, `${d.name} (${d.athlete_id}${d.archived ? ', archived' : ''}${d.family_name ? `, ${d.family_name}` : ''}${d.birth_date ? `, born ${date(`${d.birth_date}T12:00:00`)}` : ''})`);
+  const create = async (checked) => {
+    err.textContent = ''; fill(dupBox);
+    try { done(await post('/v1/clients', { ...body(), check_duplicates: checked })); }
+    catch (x) {
+      const d = x.details?.duplicates ?? [];
+      if (x.code === 'possible_duplicate') {
+        const anyway = btn('Create a new account anyway', (e) => busy(e.currentTarget, () => create(false)), 'ghost');
+        fill(dupBox, h('div', { class: 'dp-panel stack-tight', role: 'alert', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong' }, x.message), ...d.map((y) => h('div', null, dupLink(y), y.reason === 'phone' ? h('span', { class: 'small muted' }, ' · same phone number') : null)), h('div', { class: 'row' }, anyway)));
+      } else if (x.code === 'parent_exists') {
+        const fam = x.details.family, kid = d[0];
+        const addHere = btn(`Add ${f.name.value.trim().split(' ')[0] || 'the athlete'} to the ${fam.name}`, (e) => busy(e.currentTarget, async () => {
+          done(await post(`/v1/families/${fam.id}/athletes`, { ...athleteBody(), ...common(), check_duplicates: true }));
+        }), 'secondary');
+        fill(dupBox, h('div', { class: 'dp-panel stack-tight', role: 'alert', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong' }, x.message),
+          kid ? h('div', null, 'Open ', h('a', { href: `#/clients/${kid.id}?add=sibling` }, `${kid.name} (${kid.athlete_id})`), ' and use Add sibling, or add them here.') : null, h('div', { class: 'row' }, isAthlete.checked ? addHere : null)));
+      } else if (x.code === 'duplicate_email') {
+        fill(dupBox, h('div', { class: 'dp-panel stack-tight', role: 'alert', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong' }, x.message), ...d.map((y) => h('div', null, 'Open ', dupLink(y)))));
+      } else err.textContent = x.message;
+    }
+  };
   fill(main,
     header('New client', 'Creates the account, the parent login, the plan and the program in one step.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'Cancel')),
-    h('form', { class: 'dp-panel', style: 'max-width:760px', onSubmit: (e) => {
-      e.preventDefault(); err.textContent = '';
-      busy(submit, async () => {
-        try {
-          const body = { name: name.value, plan_id: plan.value || undefined, program_id: prog.value || undefined };
-          if (isAthlete.checked) Object.assign(body, { birth_date: birth.value || undefined, sport: sport.value || undefined, school: school.value || undefined, parent: { name: pName.value, email: pEmail.value, phone: pPhone.value || undefined } });
-          else Object.assign(body, { email: email.value, phone: phone.value || undefined });
-          const c = await post('/v1/clients', body);
-          toast(isAthlete.checked ? `${c.name.split(' ')[0]} added. ${pName.value.split(' ')[0]} can sign in at ${location.origin}/parent with ${pEmail.value}.` : `Account created for ${c.name.split(' ')[0]}.`);
-          location.hash = `#/clients/${c.id}`;
-        } catch (x) { err.textContent = x.message; }
-      });
-    } },
+    h('form', { class: 'dp-panel stack', style: 'max-width:820px', onSubmit: (e) => { e.preventDefault(); busy(submit, () => create(true)); } },
       h('label', { class: 'row', style: 'gap:10px;min-height:44px' }, isAthlete, h('span', null, 'Athlete with a parent who pays')),
-      h('div', { class: 'form-grid' }, field('Full name', name), emailField, phoneField),
-      athleteBox, parentBox,
-      h('div', { class: 'form-grid' }, field('Subscription plan', plan, 'With a trial, the first charge happens when it ends.'), field('Starting program', prog)),
+      h('div', { class: 'form-grid' }, field('Full name', f.name), emailField, phoneField),
+      athleteBox, parentBox, health,
+      h('div', { class: 'form-grid' }, field('Subscription plan', plan, 'With a trial, the first charge happens when it ends.'), canProgram ? field('Starting program', prog) : null),
       h('p', { class: 'small muted' }, 'Adding a sibling? Open the brother or sister and use "Add sibling" instead, so the family shares one login and card.'),
-      err, h('div', { class: 'row' }, submit)));
-  sync(); name.focus();
+      dupBox, err, h('div', { class: 'row' }, submit)));
+  sync(); f.name.focus();
 }
 
 // ---------- Billing ----------
@@ -1031,151 +1319,152 @@ async function viewIntegrations(main) {
 const remember = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
 const setupLink = () => h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell/setup' }, 'Locations, products & readers');
 
+// The sale in progress lives here and in this tab's session storage, so it survives leaving the screen or a reload.
+// requestId goes with the charge: pressing Charge twice (or a retry after a dropped connection) can't charge twice.
+const newRequestId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+const emptySale = () => ({ clientId: '', cart: [], custom: null, discount: null, requestId: newRequestId() });
+let saleDraft = null;
+function loadSale() {
+  if (saleDraft) return saleDraft;
+  try { saleDraft = JSON.parse(sessionStorage.getItem('dp_sale')); } catch { saleDraft = null; }
+  if (!saleDraft || !Array.isArray(saleDraft.cart)) saleDraft = emptySale();
+  return saleDraft;
+}
+const storeSale = () => { try { sessionStorage.setItem('dp_sale', JSON.stringify(saleDraft)); } catch { /* ignore */ } };
+const resetSale = (clientId = '') => { saleDraft = { ...emptySale(), clientId }; storeSale(); return saleDraft; };
+const forgetSale = () => { saleDraft = null; try { sessionStorage.removeItem('dp_sale'); } catch { /* ignore */ } };
+const signedMoney = (c) => (c < 0 ? `-${money(-c)}` : money(c));
+const MEMBER_WORD = { active: 'Member', trialing: 'Free trial', past_due: 'Member, payment past due', paused: 'Membership paused' };
+// Where a receipt goes by default: the family's primary parent, or the client's own email.
+const receiptAddress = (c) => (c ? (c.family ? c.parents?.[0]?.email : c.email) ?? null : null);
+
 async function viewSell(main) {
-  const [locs, prods, clients, readers, sales, plans] = await Promise.all([get('/v1/locations'), get('/v1/products'), get('/v1/clients'), get('/v1/readers'), get('/v1/sales?since=' + encodeURIComponent(new Date(Date.now() - 7 * 86400000).toISOString())), get('/v1/plans')]);
+  const role = state.user.role, seesTakings = role !== 'coach';
+  const [locs, prods, clients, readers, plans, settings] = await Promise.all([get('/v1/locations'), get('/v1/products'), get('/v1/clients'), get('/v1/readers'), get('/v1/plans'), get('/v1/settings').catch(() => ({}))]);
   if (!locs.data.length || !prods.data.length) {
     fill(main, header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', setupLink()),
       h('div', { class: 'empty' }, h('p', null, `Add ${!locs.data.length ? 'the places you train' : ''}${!locs.data.length && !prods.data.length ? ' and ' : ''}${!prods.data.length ? 'what you sell (sessions, packs, gear)' : ''} to start taking payments.`),
         h('p', { style: 'margin-top:12px' }, h('a', { class: 'dp-btn dp-btn--primary', href: '#/sell/setup' }, 'Set up point of sale'))));
     return;
   }
-  const preClient = new URLSearchParams(location.hash.split('?')[1] || '').get('client');
-  const cart = new Map();                                       // "product_id" or "product_id:size_id" -> quantity
-  const cartItem = (key) => { const [pid, vid] = key.split(':'); const p = prods.data.find((x) => x.id === pid); const size = vid && p.variants.find((x) => x.id === vid); return { p, vid, name: size ? `${p.name} (${size.name})` : p.name }; };
-  let custom = null;
-  const locSel = select(locs.data.map((l) => [l.id, l.name]), { value: remember.get('dp_location') || locs.data[0].id, 'aria-label': 'Location' });
-  locSel.addEventListener('change', () => { remember.set('dp_location', locSel.value); draw(); });
-  const cliSel = select([['', 'Walk-in (no account)'], ...clients.data.map((c) => [c.id, `${c.name}${c.credits.group ? ` · ${c.credits.group} group` : ''}${c.credits.private ? ` · ${c.credits.private} private` : ''}`])], { value: preClient || '', 'aria-label': 'Client' });
-  cliSel.addEventListener('change', draw);
-  const method = { value: remember.get('dp_method') || 'tap_to_pay' };
-  const saveCard = h('input', { type: 'checkbox', id: 'save-card', checked: true });
-  const readerSel = select(readers.data.map((r) => [r.id, `${r.label} (${r.location_name})`]), { 'aria-label': 'Reader' });
-  const customDesc = input({ placeholder: 'Description', 'aria-label': 'Custom item description' }), customAmt = input({ type: 'number', min: '1', step: '0.01', inputmode: 'decimal', placeholder: '$', 'aria-label': 'Custom amount in dollars', style: 'width:110px' });
-  const cartBox = h('div', { class: 'stack' }), totalBox = h('div', { style: 'font:600 44px/1 var(--font-display)' }), methodBox = h('div', { class: 'stack' }), err = h('div', { class: 'dp-error', role: 'alert' });
-  const charge = btn('Charge', () => startSale(), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:56px;font-size:17px' });
-  const progress = h('div');
+  const discountMax = role === 'owner' ? 100 : Number(settings.staff_discount_max_pct ?? 0);
+  if (settings.timezone) tzName = settings.timezone;
+  const cartItem = (key) => { const [pid, vid] = key.split(':'); const p = prods.data.find((x) => x.id === pid); if (!p) return null; const size = vid && (p.variants ?? []).find((x) => x.id === vid && x.active); if (vid && !size) return null; return { p, vid, name: size ? `${p.name} (${size.name})` : p.name }; };
+  const sale = loadSale();
+  sale.cart = sale.cart.filter(([key]) => cartItem(key));        // anything no longer sold drops off
+  if (sale.clientId && !clients.data.some((c) => c.id === sale.clientId)) sale.clientId = '';
+  // "Sell to" from a client profile: if someone else's sale is still open, say so before it could be charged to the wrong person.
+  const preClient = hashQuery().get('client');
+  let clash = null;
+  if (preClient && preClient !== sale.clientId && clients.data.some((c) => c.id === preClient)) {
+    if (sale.cart.length || sale.custom) clash = preClient; else sale.clientId = preClient;
+  }
+  storeSale();
+  const client = () => clients.data.find((c) => c.id === sale.clientId);
+  const firstName = (c) => c.name.split(' ')[0];
 
-  const client = () => clients.data.find((c) => c.id === cliSel.value);
-  const total = () => [...cart].reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (custom?.amount_cents || 0);
-
-  function draw() {
+  // ----- Where and who -----
+  const locSel = select(locs.data.map((l) => [l.id, l.name]), { value: locs.data.some((l) => l.id === remember.get('dp_location')) ? remember.get('dp_location') : locs.data[0].id, 'aria-label': 'Location' });
+  locSel.addEventListener('change', () => { remember.set('dp_location', locSel.value); drawSale(); drawTakings(); });
+  const clashBox = h('div');
+  const clientBox = h('div', { class: 'stack-tight' });
+  const search = input({ type: 'search', placeholder: 'Name, parent, email or phone', 'aria-label': 'Find a client', autocomplete: 'off', role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'pos-hits', 'aria-autocomplete': 'list' });
+  const hitsBox = h('div', { id: 'pos-hits', role: 'listbox', class: 'pos-hits' });
+  let hits = [], active = 0;
+  const digits = (x) => String(x ?? '').replace(/\D/g, '');
+  const matchClient = (c, q) => {
+    const d = digits(q);
+    return [c.name, c.email, c.athlete_id, c.family?.name, ...(c.parents ?? []).flatMap((p) => [p.name, p.email])].some((x) => x && x.toLowerCase().includes(q))
+      || (d.length >= 4 && [c.phone, ...(c.parents ?? []).map((p) => p.phone)].some((x) => digits(x).includes(d)));
+  };
+  function drawHits() {
+    const q = search.value.trim().toLowerCase();
+    hits = q ? clients.data.filter((c) => matchClient(c, q)).slice(0, 8) : [];
+    active = Math.min(active, Math.max(hits.length - 1, 0));
+    search.setAttribute('aria-expanded', hits.length ? 'true' : 'false');
+    fill(hitsBox, q && !hits.length ? h('p', { class: 'small muted', style: 'margin:0' }, 'No client matches. Check the spelling, or sell to a walk-in.')
+      : hits.map((c, i) => h('button', { type: 'button', role: 'option', id: `pos-hit-${i}`, 'aria-selected': i === active ? 'true' : 'false', class: 'pos-hit', onClick: () => pickClient(c) },
+        h('span', { class: 'strong' }, c.name), h('span', { class: 'small muted' }, [c.family?.name, c.parents?.[0]?.name].filter(Boolean).join(' · ') || c.email || ''))));
+    if (hits.length) search.setAttribute('aria-activedescendant', `pos-hit-${active}`); else search.removeAttribute('aria-activedescendant');
+  }
+  search.addEventListener('input', () => { active = 0; drawHits(); });
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && hits.length) { active = (active + 1) % hits.length; drawHits(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp' && hits.length) { active = (active - 1 + hits.length) % hits.length; drawHits(); e.preventDefault(); }
+    else if (e.key === 'Enter' && hits[active]) { e.preventDefault(); pickClient(hits[active]); }
+    else if (e.key === 'Escape') { search.value = ''; drawHits(); }
+  });
+  function pickClient(c) { sale.clientId = c?.id ?? ''; search.value = ''; hits = []; receipt.to = null; receipt.on = null; editingReceipt = false; receiptTo.value = ''; changed(); }   // a typed receipt address never carries over to someone else
+  function drawClient() {
     const c = client();
-    fill(cartBox, ...[...cart].map(([id, q]) => {
-      const { p, name } = cartItem(id);
-      return h('div', { class: 'row' }, h('span', { class: 'grow' }, name), 
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One fewer ${name}`, onClick: () => { q > 1 ? cart.set(id, q - 1) : cart.delete(id); draw(); } }, '−'),
-        h('span', { style: 'min-width:24px;text-align:center' }, q),
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `One more ${name}`, onClick: () => { cart.set(id, q + 1); draw(); } }, '+'),
-        h('span', { style: 'min-width:80px;text-align:right' }, money(p.price_cents * q)));
-    }), custom ? h('div', { class: 'row' }, h('span', { class: 'grow' }, custom.description), btn('Remove', () => { custom = null; draw(); }, 'ghost'), h('span', { style: 'min-width:80px;text-align:right' }, money(custom.amount_cents))) : null);
-    if (!cart.size && !custom) cartBox.append(h('p', { class: 'muted' }, 'Tap a product to add it.'));
-    totalBox.textContent = money(total());
-    const loc = locs.data.find((l) => l.id === locSel.value);
-    const options = [
-      ['tap_to_pay', 'Tap to Pay on iPhone', loc?.card_ready ? 'Client taps their card or phone on your iPhone.' : `Add an address to ${loc?.name} in setup first.`, !loc?.card_ready],
-      ['reader', 'Front-desk reader', readers.data.length ? 'Sends the charge to the reader.' : 'Register a reader in setup first.', !readers.data.length],
-      ['card_on_file', 'Card on file', c?.has_card ? 'Charges their saved card now.' : c ? 'No saved card for this client.' : 'Choose a client with a saved card.', !c?.has_card],
-      ['cash', 'Cash', 'Record a cash payment.', false]
-    ];
-    if (options.find(([k]) => k === method.value)?.[3]) method.value = options.find((o) => !o[3])[0];
-    fill(methodBox, h('div', { class: 'dp-label' }, 'Payment'), ...options.map(([k, label, hint, disabled]) => h('label', { class: 'row', style: `gap:10px;min-height:44px;${disabled ? 'opacity:.5' : 'cursor:pointer'}` },
-      h('input', { type: 'radio', name: 'method', value: k, checked: method.value === k, disabled, onChange: () => { method.value = k; remember.set('dp_method', k); draw(); } }),
-      h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, label), h('span', { class: 'small muted' }, hint)))),
-      method.value === 'reader' ? h('div', { style: 'padding-left:28px' }, readerSel) : null,
-      ['tap_to_pay', 'reader'].includes(method.value) && c ? h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, saveCard, h('span', null, `Save this card for ${c.name.split(' ')[0]}'s future payments (with their OK)`)) : null);
-    charge.textContent = total() ? `Charge ${money(total())}` : 'Charge';
-    charge.disabled = !total();
+    if (!c) return fill(clientBox, search, hitsBox, h('span', { class: 'small muted' }, 'Walk-in unless you choose someone. Packs and memberships need a client.'));
+    const sub = c.subscription && c.subscription.status !== 'canceled' ? c.subscription : null;
+    fill(clientBox, h('div', { class: 'pos-client' },
+      h('div', { class: 'grow stack-tight' },
+        h('span', { class: 'strong' }, c.name),
+        h('span', { class: 'small muted' }, sub ? `${MEMBER_WORD[sub.status] ?? 'Member'}: ${sub.plan_name}` : 'No membership'),
+        h('span', { class: 'small muted' }, `${c.credits.group} group · ${c.credits.private} private ${c.credits.group + c.credits.private === 1 ? 'session' : 'sessions'} left · ${c.has_card ? 'Card on file' : 'No card on file'}`)),
+      btn('Walk-in instead', () => pickClient(null), 'ghost')));
+  }
+  function drawClash() {
+    if (!clash) return fill(clashBox);
+    const other = client(), next = clients.data.find((c) => c.id === clash);
+    fill(clashBox, h('div', { class: 'dp-panel', style: 'border-color:var(--amber);gap:8px' },
+      h('p', { class: 'warn-text', style: 'margin:0' }, `A sale for ${other ? other.name : 'a walk-in'} is still open. Clear it before selling to ${next.name}, or keep it.`),
+      h('div', { class: 'row wrap' },
+        btn(`Clear sale and sell to ${firstName(next)}`, () => { resetSale(clash); Object.assign(sale, saleDraft); clash = null; changed(); }, 'secondary'),
+        btn(`Keep ${other ? `${firstName(other)}'s` : 'this'} sale`, () => { clash = null; drawClash(); }, 'ghost'))));
   }
 
-  async function startSale() {
-    err.textContent = '';
-    const body = { location_id: locSel.value, method: method.value, client_id: cliSel.value || undefined, items: [...cart].map(([key, quantity]) => { const [product_id, variant_id] = key.split(':'); return { product_id, variant_id, quantity }; }), custom: custom || undefined,
-      save_card: saveCard.checked && !!cliSel.value, reader_id: method.value === 'reader' ? readerSel.value : undefined };
-    await busy(charge, async () => {
-      try { const sale = await post('/v1/sales', body); follow(sale); }
-      catch (e) { err.textContent = e.message; }
-    });
-  }
-
-  let timer;
-  function follow(sale) {
-    clearTimeout(timer);
-    if (sale.status === 'succeeded') {
-      toast(`${money(sale.amount_cents)} paid${sale.card_last4 ? ` with card ending ${sale.card_last4}` : ''}.`);
-      cart.clear(); custom = null; fill(progress); draw(); refreshRecent(); refreshStock(); return;
-    }
-    if (sale.status !== 'pending') {
-      fill(progress, h('div', { class: 'dp-panel', style: 'border-color:var(--amber)' }, h('p', { class: 'warn-text strong' }, sale.status === 'canceled' ? 'Payment canceled.' : `Payment didn't go through. ${sale.failure_reason ?? ''}`), h('p', { class: 'small muted' }, 'Nothing was charged. Fix the issue and charge again.')));
-      refreshRecent(); return;
-    }
-    const simulate = state.payments.can_simulate ? h('div', { class: 'row wrap' },
-      btn('Simulate approved tap', (e) => busy(e.currentTarget, async () => follow(await post(`/v1/sales/${sale.id}/simulate`, { outcome: 'approved' }))), 'outline'),
-      btn('Simulate decline', (e) => busy(e.currentTarget, async () => follow(await post(`/v1/sales/${sale.id}/simulate`, { outcome: 'declined' }))), 'ghost')) : null;
-    fill(progress, h('div', { class: 'dp-panel', style: 'border-color:var(--green-mid)' },
-      h('div', { class: 'week-title', style: 'color:var(--steel)' }, `Waiting for ${money(sale.amount_cents)}`),
-      h('p', { class: 'muted' }, sale.method === 'reader' ? `Ask the client to tap, insert or swipe on ${sale.reader_label}.` : 'Open the Diamond Protocol coach app on your iPhone. The payment is waiting there for the client to tap.'),
-      simulate,
-      h('div', { class: 'row' }, btn('Cancel payment', (e) => busy(e.currentTarget, async () => follow(await post(`/v1/sales/${sale.id}/cancel`))), 'secondary'))));
-    progress.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    timer = setTimeout(async () => { if (!document.body.contains(progress)) return; try { follow(await post(`/v1/sales/${sale.id}/sync`)); } catch { timer = setTimeout(() => follow(sale), 4000); } }, 3000);
-  }
-
-  const recent = h('div');
-  async function refreshRecent() {
-    const { data } = await get('/v1/sales?since=' + encodeURIComponent(new Date(Date.now() - 7 * 86400000).toISOString()));
-    drawRecent(data);
-  }
-  function drawRecent(data) {
-    fill(recent, ...(data.length ? data.slice(0, 25).map((x) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${x.client_name ?? 'Walk-in'} · ${money(x.amount_cents)}`),
-        h('span', { class: 'small muted' }, `${x.description ?? ''} · ${x.location_name} · ${METHOD_LABEL[x.method]}${x.card_last4 ? ` ••${x.card_last4}` : ''} · ${ago(x.created_at)}`),
-        x.status === 'failed' && x.failure_reason ? h('span', { class: 'small warn-text' }, x.failure_reason) : null,
-        x.refunded_cents && x.status === 'partially_refunded' ? h('span', { class: 'small muted' }, `${money(x.refunded_cents)} refunded`) : null),
-      badge(x.status),
-      ['succeeded', 'partially_refunded'].includes(x.status) ? btn('Refund', (e) => {
-        const left = x.amount_cents - x.refunded_cents;
-        const answer = prompt(`Refund how much? Up to ${money(left)}.`, (left / 100).toFixed(2));
-        if (answer === null) return;
-        const cents = Math.round(Number(answer) * 100);
-        if (!cents || cents < 0) return toast('Enter an amount like 25.00.', 'warn');
-        busy(e.currentTarget, async () => { await post(`/v1/sales/${x.id}/refund`, { amount_cents: cents }); toast(`${money(cents)} refunded.`); refreshRecent(); });
-      }, 'ghost') : null,
-      x.status === 'pending' ? btn('Check', (e) => busy(e.currentTarget, async () => { follow(await post(`/v1/sales/${x.id}/sync`)); })) : null))
-      : [h('p', { class: 'muted' }, 'No sales in the last 7 days.')]));
-  }
-
-  // Gear with sizes asks which size; stock left shows on the tile (selling past zero is allowed: the shelf is the truth).
+  // ----- Products -----
+  const inCart = (pid) => sale.cart.reduce((n, [key, q]) => n + (key.split(':')[0] === pid ? q : 0), 0);
   const sizeBox = h('div');
-  const addToCart = (key) => { cart.set(key, (cart.get(key) || 0) + 1); fill(sizeBox); draw(); };
+  const addToCart = (key) => { const line = sale.cart.find(([k]) => k === key); if (line) line[1]++; else sale.cart.push([key, 1]); fill(sizeBox); changed(); };
   const left = (n) => (n <= 0 ? h('span', { class: 'small warn-text' }, 'Out of stock') : h('span', { class: `small ${n <= 3 ? 'warn-text' : 'muted'}` }, `${n} left`));
   const pickSize = (p, sizes) => fill(sizeBox, h('div', { class: 'dp-panel', style: 'gap:10px' },
     h('div', { class: 'row' }, h('span', { class: 'grow strong' }, `Which size of ${p.name}?`), btn('Cancel', () => fill(sizeBox), 'ghost')),
     h('div', { class: 'row wrap', style: 'gap:8px' }, sizes.map((x) => h('button', { type: 'button', class: 'dp-btn dp-btn--secondary', style: 'min-height:52px;min-width:72px;flex-direction:column;gap:2px', onClick: () => addToCart(`${p.id}:${x.id}`) },
       h('span', { class: 'strong' }, x.name), p.track_stock ? left(x.on_hand) : null)))));
-  const productGrid = h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px' });
+  const prodSearch = input({ type: 'search', placeholder: 'Find a product', 'aria-label': 'Find a product' });
+  prodSearch.addEventListener('input', () => drawProducts());
+  const productGrid = h('div', { class: 'pos-tiles' });
   function drawProducts() {
-    fill(productGrid, ...prods.data.map((p) => {
-      const sizes = (p.variants ?? []).filter((x) => x.active);
-      return h('button', { type: 'button', class: 'dp-panel', style: 'text-align:left;cursor:pointer;padding:14px;gap:4px', onClick: () => (sizes.length > 1 ? pickSize(p, sizes) : addToCart(sizes.length ? `${p.id}:${sizes[0].id}` : p.id)) },
-        h('span', { class: 'strong' }, p.name), h('span', { style: 'font:600 22px/1 var(--font-display);color:var(--green-bright)' }, money(p.price_cents)),
+    const q = prodSearch.value.trim().toLowerCase();
+    const shown = prods.data.filter((p) => !q || p.name.toLowerCase().includes(q));
+    fill(productGrid, shown.length ? shown.map((p) => {
+      const sizes = (p.variants ?? []).filter((x) => x.active), n = inCart(p.id);
+      return h('button', { type: 'button', class: 'dp-panel pos-tile', 'aria-label': `${p.name}, ${money(p.price_cents)}${n ? `, ${n} in the sale` : ''}`, onClick: () => (sizes.length > 1 ? pickSize(p, sizes) : addToCart(sizes.length ? `${p.id}:${sizes[0].id}` : p.id)) },
+        n ? h('span', { class: 'pos-count', 'aria-hidden': 'true' }, n) : null,
+        h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents)),
         p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null,
         sizes.length > 1 ? h('span', { class: 'small muted' }, sizes.map((x) => x.name).join(' · ')) : null,
         p.track_stock ? left(p.on_hand) : null);
-    }));
+    }) : h('p', { class: 'muted' }, 'No product matches.'));
   }
   async function refreshStock() { if (!prods.data.some((p) => p.track_stock)) return; prods.data = (await get('/v1/products')).data; drawProducts(); }
-  drawProducts();
-  // Monthly memberships renew on the card saved for the client (or their family), so starting one needs that card.
+  const customDesc = input({ placeholder: 'Description', 'aria-label': 'Custom item description', maxlength: '80' }), customAmt = input({ type: 'number', min: '0.01', step: '0.01', inputmode: 'decimal', placeholder: '$', 'aria-label': 'Custom amount in dollars', style: 'width:110px' });
+  const customForm = h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); const cents = Math.round(Number(customAmt.value) * 100); if (!customDesc.value.trim() || !(cents > 0)) return toast('Enter a description and an amount above $0.', 'warn'); sale.custom = { description: customDesc.value.trim(), amount_cents: cents }; customDesc.value = ''; customAmt.value = ''; changed(); } },
+    h('div', { class: 'grow', style: 'min-width:160px' }, customDesc), customAmt, btn('Add', null, 'secondary', { type: 'submit' }));
+
+  // ----- Monthly memberships (renew on the saved card) -----
   const memberBox = h('div');
+  const planList = plans.data.filter((p) => p.active !== false && p.price_cents != null);
+  const planGrid = h('div', { class: 'pos-tiles' });
+  function drawPlans() {
+    const c = client(), sub = c?.subscription && c.subscription.status !== 'canceled' ? c.subscription : null;
+    fill(planGrid, planList.map((p) => h('button', { type: 'button', class: 'dp-panel pos-tile', disabled: !!sub, title: sub ? `${firstName(c)} already has ${sub.plan_name}` : null, onClick: () => startMembership(p) },
+      h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
+      h('span', { class: 'small muted' }, sub ? `${firstName(c)} already has ${sub.plan_name}` : p.trial_days ? `${p.trial_days}-day free trial` : 'Billed monthly'))));
+  }
   function startMembership(p) {
     const c = client();
-    if (!c) { toast('Choose who the membership is for first.', 'warn'); cliSel.focus(); return; }
-    const first = c.name.split(' ')[0];
+    if (!c) { toast('Choose who the membership is for first.', 'warn'); search.focus(); return; }
+    const first = firstName(c);
     const when = p.trial_days ? `Free for ${p.trial_days} day${p.trial_days === 1 ? '' : 's'}, then ${money(p.price_cents)} every month.` : `${money(p.price_cents)} today, then every month.`;
-    const done = (sub) => { toast(sub.status === 'trialing' ? `${first} is on ${p.name}. The trial ends ${date(sub.trial_ends_at)}.` : `${first} is on ${p.name}. Renews ${date(sub.current_period_end)}.`); fill(memberBox); };
+    const done = (sub) => { toast(sub.status === 'trialing' ? `${first} is on ${p.name}. The trial ends ${date(sub.trial_ends_at)}.` : `${first} is on ${p.name}. Renews ${date(sub.current_period_end)}.`); c.subscription = { status: sub.status, plan_name: p.name }; fill(memberBox); drawClient(); drawPlans(); };
     const start = btn(p.trial_days ? 'Start free trial' : `Charge ${money(p.price_cents)} and start`, (e) => busy(e.currentTarget, async () => {
       try { done(await post(`/v1/clients/${c.id}/subscription`, { plan_id: p.id })); } catch (err) { toast(err.message, 'warn'); }
-    }));
+    }), 'secondary');
     const needCard = h('div', { class: 'stack' },
       h('p', { class: 'warn-text', style: 'margin:0' }, `${first} has no card on file. Monthly memberships renew on a saved card.`),
       h('div', { class: 'row wrap' },
@@ -1185,33 +1474,312 @@ async function viewSell(main) {
             fill(needCard, h('p', { style: 'margin:0' }, 'Send this link to the client or parent. They add their card on Stripe\'s secure page, then you start the membership here.'), h('input', { class: 'dp-input mono', readonly: true, value: url, onFocus: (ev) => ev.target.select() }));
           } catch (err) { toast(err.message, 'warn'); }
         }), 'outline'),
-        state.payments.can_simulate ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${c.id}/card/test`); c.has_card = 1; startMembership(p); }), 'ghost') : null),
+        state.payments.can_simulate ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${c.id}/card/test`); c.has_card = true; drawClient(); startMembership(p); }), 'ghost') : null),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Or charge a first sale by Tap to Pay with "Save this card" ticked, then start the membership.'));
     fill(memberBox, panel(`Start ${p.name}`, { subtitle: `${c.name} · ${when}` },
-      c.subscription?.status && c.subscription.status !== 'canceled' ? h('p', { class: 'warn-text', style: 'margin:0' }, `${first} already has a membership (${c.subscription.plan_name}). Change it on their client page.`)
-        : c.has_card ? h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, 'Bills the card on file every month.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost')))
-        : needCard));
+      c.has_card ? h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, 'Bills the card on file every month.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost'))) : needCard));
     memberBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
-  const planGrid = plans.data.filter((p) => p.active !== false && p.price_cents != null).length ? h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px' }, plans.data.filter((p) => p.active !== false && p.price_cents != null).map((p) => h('button', { type: 'button', class: 'dp-panel', style: 'text-align:left;cursor:pointer;padding:14px;gap:4px', onClick: () => startMembership(p) },
-    h('span', { class: 'strong' }, p.name), h('span', { style: 'font:600 22px/1 var(--font-display);color:var(--green-bright)' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
-    h('span', { class: 'small muted' }, p.trial_days ? `${p.trial_days}-day free trial` : 'Billed monthly')))) : null;
-  const customForm = h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); const cents = Math.round(Number(customAmt.value) * 100); if (!customDesc.value.trim() || !cents) return toast('Enter a description and an amount.', 'warn'); custom = { description: customDesc.value.trim(), amount_cents: cents }; customDesc.value = ''; customAmt.value = ''; draw(); } },
-    h('div', { class: 'grow' }, customDesc), customAmt, btn('Add', null, 'secondary', { type: 'submit' }));
 
-  fill(main, 
+  // ----- The sale -----
+  const subtotal = () => sale.cart.reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (sale.custom?.amount_cents || 0);
+  const discountCents = () => { const d = sale.discount; if (!d || !(d.value > 0)) return 0; return d.type === 'percent' ? Math.round(subtotal() * d.value / 100) : d.value; };
+  const total = () => Math.max(subtotal() - discountCents(), 0);
+  const itemCount = () => sale.cart.reduce((n, [, q]) => n + q, 0) + (sale.custom ? 1 : 0);
+  const method = { value: remember.get('dp_method') || 'tap_to_pay' };
+  const saveCard = h('input', { type: 'checkbox', checked: true });
+  const receipt = { on: null, to: null };           // on: null = the default for this client; to: an address typed at the counter
+  const receiptBox = h('input', { type: 'checkbox', onChange: (e) => { receipt.on = e.target.checked; drawSale(); } });
+  const receiptTo = input({ type: 'email', placeholder: 'Email for the receipt', 'aria-label': 'Email for the receipt', autocomplete: 'off', onInput: (e) => { receipt.to = e.target.value.trim() || null; } });
+  let editingReceipt = false;
+  const cashIn = input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal', placeholder: '$', 'aria-label': 'Cash received in dollars', style: 'width:120px' });
+  const changeBox = h('span', { class: 'strong' });
+  cashIn.addEventListener('input', () => drawChange());
+  const readerSel = select([], { 'aria-label': 'Reader' });
+  const cartBox = h('div', { class: 'stack-tight' }), totalsBox = h('div', { class: 'stack-tight' }), methodBox = h('div', { class: 'stack' }), discountBox = h('div'), err = h('div', { class: 'dp-error', role: 'alert' });
+  const charge = btn('Charge', () => startSale(), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:56px;font-size:17px' });
+  const progress = h('div'), lastBox = h('div');
+  let cleared = null, clearedTimer;
+  const salePanel = panel('Sale', {}, cartBox, discountBox, totalsBox, methodBox, err, charge);
+  salePanel.id = 'pos-sale';
+
+  function drawCart() {
+    fill(cartBox, sale.cart.map(([key, q], i) => {
+      const { p, name } = cartItem(key);
+      return h('div', { class: 'row pos-line' }, h('span', { class: 'grow' }, name),
+        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost pos-qty', 'aria-label': `One fewer ${name}`, onClick: () => { if (q > 1) sale.cart[i][1]--; else sale.cart.splice(i, 1); changed(); } }, '−'),
+        h('span', { style: 'min-width:24px;text-align:center', 'aria-label': `${q} of ${name}` }, q),
+        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost pos-qty', 'aria-label': `One more ${name}`, onClick: () => { sale.cart[i][1] = Math.min(q + 1, 99); changed(); } }, '+'),
+        h('span', { style: 'min-width:72px;text-align:right' }, money(p.price_cents * q)));
+    }),
+    sale.custom ? h('div', { class: 'row pos-line' }, h('span', { class: 'grow' }, sale.custom.description), btn('Remove', () => { sale.custom = null; changed(); }, 'ghost'), h('span', { style: 'min-width:72px;text-align:right' }, money(sale.custom.amount_cents))) : null,
+    !itemCount() ? h('p', { class: 'muted', style: 'margin:0' }, cleared ? '' : 'Tap a product to add it.') : null,
+    cleared ? h('div', { class: 'row small', style: 'gap:8px' }, h('span', { class: 'grow muted' }, 'Sale cleared.'), btn('Undo', () => { Object.assign(sale, cleared); cleared = null; clearTimeout(clearedTimer); changed(); }, 'ghost')) : null,
+    itemCount() ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Clear sale', () => {
+      cleared = JSON.parse(JSON.stringify({ cart: sale.cart, custom: sale.custom, discount: sale.discount }));
+      Object.assign(sale, { cart: [], custom: null, discount: null }); clearTimeout(clearedTimer); clearedTimer = setTimeout(() => { cleared = null; drawCart(); }, 10000); changed();
+    }, 'ghost')) : null);
+  }
+  function drawDiscount() {
+    if (!itemCount() || !(discountMax > 0)) return fill(discountBox);
+    const d = sale.discount;
+    if (!d) return fill(discountBox, h('div', { class: 'row' }, btn('Add discount', () => { sale.discount = { type: 'percent', value: 0, reason: '' }; changed(); setTimeout(() => discountBox.querySelector('input')?.focus(), 0); }, 'ghost')));
+    const typeBtn = (t, label) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': d.type === t ? 'true' : 'false', onClick: () => { if (d.type !== t) { d.type = t; d.value = 0; changed(); } } }, label);
+    const val = input({ type: 'number', inputmode: 'decimal', min: d.type === 'percent' ? '1' : '0.01', max: d.type === 'percent' ? String(Math.min(discountMax, 99)) : null, step: d.type === 'percent' ? '1' : '0.01',
+      value: d.value ? (d.type === 'percent' ? String(d.value) : (d.value / 100).toFixed(2)) : '', 'aria-label': d.type === 'percent' ? 'Discount percent' : 'Discount in dollars', style: 'width:100px' });
+    val.addEventListener('input', () => { const n = Number(val.value); d.value = d.type === 'percent' ? Math.floor(n) || 0 : Math.round(n * 100) || 0; storeSale(); drawTotals(); drawDiscountNote(); });
+    const why = input({ value: d.reason ?? '', placeholder: 'Why? Like "Sibling discount"', 'aria-label': 'Reason for the discount', maxlength: '80' });
+    why.addEventListener('input', () => { d.reason = why.value; storeSale(); drawDiscountNote(); });
+    const note = h('p', { class: 'small', style: 'margin:0' });
+    function drawDiscountNote() {
+      const cents = discountCents(), sub = subtotal();
+      const msg = cents >= sub ? `A discount has to leave something to pay (the sale is ${money(sub)}).`
+        : role !== 'owner' && (d.type === 'percent' ? d.value > discountMax : cents * 100 > sub * discountMax) ? `You can give up to ${discountMax}% off (${money(Math.floor(sub * discountMax / 100))} here). Ask the owner for more.`
+          : cents && !d.reason?.trim() ? 'Add a reason. It shows on the receipt and in the sales list.' : '';
+      note.textContent = msg || (role !== 'owner' ? `You can give up to ${discountMax}% off.` : '');
+      note.className = `small ${msg ? 'warn-text' : 'muted'}`;
+    }
+    drawDiscountNote();
+    fill(discountBox, h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' },
+      h('div', { class: 'row wrap', style: 'gap:8px' }, h('span', { class: 'dp-label grow' }, 'Discount'), typeBtn('percent', '% off'), typeBtn('amount', '$ off'), btn('Remove', () => { sale.discount = null; changed(); }, 'ghost')),
+      h('div', { class: 'row wrap', style: 'gap:8px' }, val, h('div', { class: 'grow', style: 'min-width:180px' }, why)), note));
+  }
+  function drawTotals() {
+    const cents = discountCents();
+    fill(totalsBox, h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' },
+      cents ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, 'Subtotal'), h('span', null, money(subtotal()))) : null,
+      cents ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, `Discount${sale.discount.type === 'percent' ? ` ${sale.discount.value}%` : ''}`), h('span', null, signedMoney(-cents))) : null,
+      h('div', { class: 'row' }, h('span', { class: 'grow muted' }, 'Total'), h('span', { style: 'font:600 44px/1 var(--font-display)' }, money(total())))));
+    charge.textContent = !total() ? 'Charge' : method.value === 'cash' ? `Record ${money(total())} cash` : `Charge ${money(total())}`;
+    charge.disabled = !total() || !!clash;
+    drawChange(); drawBar();
+  }
+  function drawChange() {
+    const got = Math.round(Number(cashIn.value) * 100);
+    changeBox.textContent = !cashIn.value ? '' : got < total() ? `${money(total() - got)} short` : `Change: ${money(got - total())}`;
+    changeBox.className = got < total() && cashIn.value ? 'strong warn-text' : 'strong';
+  }
+  function drawMethods() {
+    const c = client(), loc = locs.data.find((l) => l.id === locSel.value);
+    const here = readers.data.filter((r) => r.location_id === loc?.id);
+    const keep = readerSel.value;
+    fill(readerSel, here.map((r) => h('option', { value: r.id, selected: r.id === keep }, r.label)));
+    const options = [
+      ['tap_to_pay', 'Tap to Pay on iPhone', loc?.card_ready ? 'Client taps their card or phone on your iPhone.' : `Add an address to ${loc?.name} in setup first.`, !loc?.card_ready],
+      ['reader', 'Front-desk reader', here.length ? (here.length === 1 ? `Sends the charge to ${here[0].label}.` : 'Sends the charge to the reader you choose.') : `No reader at ${loc?.name}. Register one in setup.`, !here.length],
+      ['card_on_file', 'Card on file', c?.has_card ? 'Charges their saved card now.' : c ? 'No saved card for this client.' : 'Choose a client with a saved card.', !c?.has_card],
+      ['cash', 'Cash', 'Record a cash payment.', false]
+    ];
+    if (options.find(([k]) => k === method.value)?.[3]) method.value = options.find((o) => !o[3])[0];
+    const addr = receipt.to ?? receiptAddress(c);
+    const receiptOn = receipt.on ?? !!receiptAddress(c);
+    receiptBox.checked = receiptOn;
+    if (receipt.to && receiptTo.value !== receipt.to) receiptTo.value = receipt.to;
+    fill(methodBox, h('div', { class: 'dp-label' }, 'Payment'), ...options.map(([k, label, hint, disabled]) => h('label', { class: 'row', style: `gap:10px;min-height:44px;${disabled ? 'opacity:.5' : 'cursor:pointer'}` },
+      h('input', { type: 'radio', name: 'method', value: k, checked: method.value === k, disabled, onChange: () => { method.value = k; remember.set('dp_method', k); drawSale(); } }),
+      h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, label), h('span', { class: 'small muted' }, hint)))),
+      method.value === 'reader' && here.length > 1 ? h('div', { style: 'padding-left:28px' }, readerSel) : null,
+      method.value === 'cash' ? h('div', { class: 'row wrap', style: 'gap:8px;padding-left:28px' }, h('span', { class: 'small muted' }, 'Cash received'), cashIn, changeBox) : null,
+      ['tap_to_pay', 'reader'].includes(method.value) && c ? h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, saveCard, h('span', null, `Save this card for ${firstName(c)}'s future payments (with their OK)`)) : null,
+      h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, receiptBox, h('span', { class: 'grow' }, receiptOn && addr && !editingReceipt ? `Email a receipt to ${addr}` : 'Email a receipt'),
+        receiptOn && addr && !editingReceipt ? btn('Change', (e) => { e.preventDefault(); editingReceipt = true; receiptTo.value = addr; drawSale(); setTimeout(() => receiptTo.focus(), 0); }, 'ghost') : null),
+      receiptOn && (!addr || editingReceipt) ? h('div', { style: 'padding-left:28px' }, receiptTo) : null);
+  }
+  function drawBar() {
+    const n = itemCount();
+    bar.hidden = !n;
+    fill(bar, h('span', { class: 'grow strong' }, `${n} ${n === 1 ? 'item' : 'items'} · ${money(total())}`),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#pos-sale', onClick: (e) => { e.preventDefault(); salePanel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, 'Go to sale'));
+  }
+  const bar = h('div', { class: 'pos-bar', role: 'region', 'aria-label': 'Sale total' });
+  function drawSale() { drawCart(); drawDiscount(); drawMethods(); drawTotals(); }
+  function changed() { storeSale(); err.textContent = ''; drawClash(); drawClient(); drawProducts(); drawPlans(); drawSale(); }
+
+  async function startSale() {
+    err.textContent = '';
+    const c = client(), d = sale.discount && discountCents() ? sale.discount : null;
+    if (d && !d.reason?.trim()) { err.textContent = 'Add a reason for the discount, or remove it.'; return; }
+    const receiptOn = receipt.on ?? !!receiptAddress(c);
+    const body = { location_id: locSel.value, method: method.value, client_id: sale.clientId || undefined, request_id: sale.requestId,
+      items: sale.cart.map(([key, quantity]) => { const [product_id, variant_id] = key.split(':'); return { product_id, variant_id, quantity }; }), custom: sale.custom || undefined,
+      discount: d ? { type: d.type, value: d.value, reason: d.reason.trim() } : undefined,
+      email_receipt: receiptOn, receipt_email: receiptOn && (editingReceipt || !receiptAddress(c)) ? (receipt.to || undefined) : undefined,
+      save_card: saveCard.checked && !!sale.clientId, reader_id: method.value === 'reader' ? readerSel.value : undefined };
+    await busy(charge, async () => {
+      try { follow(await post('/v1/sales', body), body); }
+      catch (e) {
+        if (e.code) sale.requestId = newRequestId();      // the server answered: nothing was charged, so the next press is a new sale
+        storeSale();
+        err.textContent = e.code ? e.message : 'The connection dropped. Press Charge again: it won\'t charge twice.';
+      }
+    });
+  }
+
+  let timer;
+  function follow(s, body) {
+    clearTimeout(timer);
+    if (s.status === 'succeeded' || s.status === 'refunded' || s.status === 'partially_refunded') {
+      const cashBack = s.method === 'cash' && cashIn.value ? Math.round(Number(cashIn.value) * 100) - s.amount_cents : null;
+      toast(`${money(s.amount_cents)} ${s.method === 'cash' ? 'cash recorded' : 'paid'}${s.card_last4 ? ` with card ending ${s.card_last4}` : ''}.${cashBack > 0 ? ` Give ${money(cashBack)} change.` : ''}`);
+      const keepClient = sale.clientId;
+      resetSale(keepClient); Object.assign(sale, saleDraft);
+      receipt.on = null; receipt.to = null; editingReceipt = false; receiptTo.value = ''; cashIn.value = '';
+      fill(progress); showLast(s, body); changed(); refreshRecent(); refreshStock(); drawTakings(); return;
+    }
+    if (s.status !== 'pending') {
+      sale.requestId = newRequestId(); storeSale();
+      fill(progress, h('div', { class: 'dp-panel', style: 'border-color:var(--amber)' }, h('p', { class: 'warn-text strong' }, s.status === 'canceled' ? 'Payment canceled.' : `Payment didn't go through. ${s.failure_reason ?? ''}`), h('p', { class: 'small muted' }, 'Nothing was charged. Fix the issue and charge again.')));
+      refreshRecent(); return;
+    }
+    const simulate = state.payments.can_simulate ? h('div', { class: 'row wrap' },
+      btn('Simulate approved tap', (e) => busy(e.currentTarget, async () => follow(await post(`/v1/sales/${s.id}/simulate`, { outcome: 'approved' }), body)), 'outline'),
+      btn('Simulate decline', (e) => busy(e.currentTarget, async () => follow(await post(`/v1/sales/${s.id}/simulate`, { outcome: 'declined' }), body)), 'ghost')) : null;
+    fill(progress, h('div', { class: 'dp-panel', style: 'border-color:var(--green-mid)' },
+      h('div', { class: 'week-title', style: 'color:var(--steel)' }, `Waiting for ${money(s.amount_cents)}`),
+      h('p', { class: 'muted' }, s.method === 'reader' ? `Ask the client to tap, insert or swipe on ${s.reader_label}.` : 'Open the Diamond Protocol coach app on your iPhone. The payment is waiting there for the client to tap.'),
+      simulate,
+      h('div', { class: 'row' }, btn('Cancel payment', (e) => busy(e.currentTarget, async () => follow(await post(`/v1/sales/${s.id}/cancel`), body)), 'secondary'))));
+    progress.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    timer = setTimeout(async () => { if (!document.body.contains(progress)) return; try { follow(await post(`/v1/sales/${s.id}/sync`), body); } catch { timer = setTimeout(() => follow(s, body), 4000); } }, 3000);
+  }
+
+  // The sale just taken: undo it (for 10 minutes, the server decides), email or print the receipt.
+  let lastTimer;
+  function showLast(s) {
+    clearTimeout(lastTimer);
+    const until = s.can_undo ? Date.now() + s.undo_seconds_left * 1000 : 0;
+    const draw = () => {
+      const secs = Math.max(0, Math.round((until - Date.now()) / 1000));
+      fill(lastBox, h('div', { class: 'dp-panel', style: 'gap:8px' },
+        h('div', { class: 'row wrap' }, h('span', { class: 'grow strong' }, `Last sale: ${s.client_name ?? 'Walk-in'} · ${money(s.amount_cents)}`), badge(s.status)),
+        h('p', { class: 'small muted', style: 'margin:0' }, s.receipt_sent_at ? `Receipt emailed to ${s.receipt_email}.` : 'No receipt emailed.'),
+        h('div', { class: 'row wrap' },
+          secs > 0 ? btn(`Undo sale (${Math.ceil(secs / 60)} min left)`, (e) => undo(s, e.currentTarget), 'outline') : null,
+          btn(s.receipt_sent_at ? 'Email receipt again' : 'Email receipt', () => saleDetails(s.id), 'ghost'),
+          s.receipt_url ? h('a', { class: 'dp-btn dp-btn--ghost', href: s.receipt_url, target: '_blank', rel: 'noopener' }, 'Print receipt') : null,
+          btn('Close', () => { clearTimeout(lastTimer); fill(lastBox); }, 'ghost'))));
+      if (secs > 0) lastTimer = setTimeout(() => { if (document.body.contains(lastBox)) draw(); }, Math.min(secs * 1000, 30000));
+    };
+    // The receipt goes out a moment after the sale; show the address once it has.
+    draw();
+    if (!s.receipt_sent_at) setTimeout(async () => { try { const fresh = await get(`/v1/sales/${s.id}`); if (fresh.receipt_sent_at && document.body.contains(lastBox) && lastBox.childElementCount) { Object.assign(s, { receipt_sent_at: fresh.receipt_sent_at, receipt_email: fresh.receipt_email }); draw(); } } catch { /* ignore */ } }, 1200);
+  }
+  async function undo(s, button) {
+    if (!confirm(`Undo this sale? ${money(s.amount_cents)} ${s.method === 'cash' ? 'is handed back in cash' : 'goes back to the card'}, and any sessions and stock go back.`)) return;
+    await busy(button, async () => {
+      await post(`/v1/sales/${s.id}/undo`);
+      toast(s.method === 'cash' ? `Sale undone. Hand back ${money(s.amount_cents)} in cash.` : `Sale undone. ${money(s.amount_cents)} goes back to the card.`);
+      clearTimeout(lastTimer); fill(lastBox); document.getElementById('dialog')?.open && document.getElementById('dialog').close();
+      refreshRecent(); refreshStock(); drawTakings(); clients.data = (await get('/v1/clients')).data; changed();
+    });
+  }
+
+  // A sale's details: items, discount, refunds, receipt; undo, email or print the receipt, and (owners) refund.
+  async function saleDetails(id) {
+    const d = document.getElementById('dialog');
+    let s;
+    try { s = await get(`/v1/sales/${id}`); } catch (e) { return toast(e.message, 'warn'); }
+    const when = new Date(s.completed_at ?? s.created_at).toLocaleString('en-US', { timeZone: tzName, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const row = (label, cents, cls = '') => h('div', { class: `row ${cls}` }, h('span', { class: 'grow' }, label), h('span', null, signedMoney(cents)));
+    const email = input({ type: 'email', value: s.receipt_email ?? receiptAddress(clients.data.find((c) => c.id === s.client_id)) ?? '', placeholder: 'Email address', 'aria-label': 'Email the receipt to' });
+    const paid = ['succeeded', 'partially_refunded', 'refunded'].includes(s.status);
+    const left = s.amount_cents - s.refunded_cents;
+    const refundAmt = input({ type: 'number', min: '0.01', max: (left / 100).toFixed(2), step: '0.01', inputmode: 'decimal', value: (left / 100).toFixed(2), 'aria-label': 'Refund amount in dollars', style: 'width:120px' });
+    const refundWhy = input({ placeholder: 'Reason (optional)', 'aria-label': 'Reason for the refund', maxlength: '120' });
+    fill(d, h('div', { class: 'stack' },
+      h('div', { class: 'row' }, h('h2', { class: 'week-title grow', style: 'color:var(--steel);margin:0' }, `${s.client_name ?? 'Walk-in'} · ${money(s.amount_cents)}`), badge(s.status)),
+      h('p', { class: 'small muted', style: 'margin:0' }, [when, s.location_name, `${s.method_label}${s.card_last4 ? ` ••${s.card_last4}` : ''}`, s.created_by_name ? `Taken by ${s.created_by_name}` : null].filter(Boolean).join(' · ')),
+      h('div', { class: 'stack-tight' },
+        s.items.map((i) => row(`${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}`, i.unit_price_cents * i.quantity)),
+        s.discount_cents ? [row('Subtotal', s.subtotal_cents, 'small muted'), row(`Discount (${s.discount_reason})`, -s.discount_cents, 'small muted')] : null,
+        h('div', { class: 'row strong', style: 'border-top:1px solid var(--line-subtle);padding-top:8px' }, h('span', { class: 'grow' }, 'Paid'), h('span', null, money(s.amount_cents))),
+        s.refunds.map((r) => row(`${r.kind === 'undo' ? 'Undone' : 'Refunded'} ${new Date(r.created_at).toLocaleDateString('en-US', { timeZone: tzName, month: 'short', day: 'numeric' })}${r.by_name ? ` by ${r.by_name}` : ''}${r.reason && r.kind !== 'undo' ? ` · ${r.reason}` : ''}`, -r.amount_cents, 'small muted'))),
+      s.status === 'failed' && s.failure_reason ? h('p', { class: 'warn-text', style: 'margin:0' }, s.failure_reason) : null,
+      paid ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Receipt'),
+        h('p', { class: 'small muted', style: 'margin:0' }, s.receipt_sent_at ? `Emailed to ${s.receipt_email} ${ago(s.receipt_sent_at).toLowerCase()}.` : 'Not emailed yet.'),
+        h('form', { class: 'row wrap', style: 'gap:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/sales/${s.id}/receipt`, { email: email.value.trim() || undefined }); toast(`Receipt sent to ${r.receipt_to}.`); d.close(); refreshRecent(); }); } },
+          h('div', { class: 'grow', style: 'min-width:200px' }, email), btn(s.receipt_sent_at ? 'Email again' : 'Email receipt', null, 'secondary', { type: 'submit' }),
+          s.receipt_url ? h('a', { class: 'dp-btn dp-btn--ghost', href: s.receipt_url, target: '_blank', rel: 'noopener' }, 'Print') : null)) : null,
+      s.can_undo ? h('div', { class: 'row wrap' }, btn('Undo sale', (e) => undo(s, e.currentTarget), 'outline'), h('span', { class: 'small muted' }, `For ${Math.ceil(s.undo_seconds_left / 60)} more min, because you took it.`)) : null,
+      isOwner() && ['succeeded', 'partially_refunded'].includes(s.status) ? h('form', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault();
+        const cents = Math.round(Number(refundAmt.value) * 100);
+        if (!(cents > 0) || cents > left) return toast(`Enter an amount from $0.01 to ${money(left)}.`, 'warn');
+        if (!confirm(`Refund ${money(cents)}${s.method === 'cash' ? ' in cash' : ' to the card'}?${cents === left ? ' Unused sessions from a pack come off, and gear goes back on the shelf.' : ''}`)) return;
+        busy(e.submitter, async () => { await post(`/v1/sales/${s.id}/refund`, { amount_cents: cents, reason: refundWhy.value.trim() || undefined }); toast(`${money(cents)} refunded.${s.method === 'cash' ? ' Hand back the cash.' : ''}`); d.close(); refreshRecent(); refreshStock(); drawTakings(); });
+      } }, h('div', { class: 'dp-label' }, 'Refund'),
+        h('div', { class: 'row wrap', style: 'gap:8px' }, refundAmt, h('div', { class: 'grow', style: 'min-width:180px' }, refundWhy), btn('Refund', null, 'secondary', { type: 'submit' })),
+        h('span', { class: 'small muted' }, `Up to ${money(left)}.`)) : null,
+      s.status === 'pending' ? h('div', { class: 'row' }, btn('Check payment', (e) => busy(e.currentTarget, async () => { const x = await post(`/v1/sales/${s.id}/sync`); d.close(); toast(`Status: ${x.status === 'pending' ? 'still waiting' : x.status}.`); refreshRecent(); }), 'secondary')) : null,
+      h('div', { class: 'row' }, btn('Close', () => d.close(), 'ghost'))));
+    d.addEventListener('close', () => fill(d), { once: true });
+    d.showModal();
+  }
+
+  // ----- Today's takings (owners and front desk) -----
+  const takingsBox = h('div');
+  const takingsScope = { value: remember.get('dp_takings_scope') || 'here' };
+  async function drawTakings() {
+    if (!seesTakings) return;
+    let t;
+    try { t = await get(`/v1/sales/takings${takingsScope.value === 'here' ? `?location_id=${encodeURIComponent(locSel.value)}` : ''}`); } catch (e) { return fill(takingsBox, panel('Today', {}, h('p', { class: 'warn-text' }, e.message))); }
+    const scopeBtn = (v, label) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': takingsScope.value === v ? 'true' : 'false', onClick: () => { takingsScope.value = v; remember.set('dp_takings_scope', v); drawTakings(); } }, label);
+    const tile = (label, cents, detail) => h('div', { class: 'pulse-tile' }, h('span', { class: 'pulse-label' }, label), h('span', { class: 'pulse-value' }, signedMoney(cents || 0)), detail ? h('span', { class: 'pulse-detail' }, detail) : null);
+    const cash = t.by_method.find((m) => m.method === 'cash');
+    fill(takingsBox, panel('Today', { subtitle: `${t.location_name ?? 'All locations'} · since midnight · refunds count on the day they're made`, action: h('div', { class: 'row', style: 'gap:6px' }, scopeBtn('here', 'This location'), scopeBtn('all', 'All locations')) },
+      h('div', { class: 'pulse' },
+        tile('Net', t.net_cents, `${t.sales} ${t.sales === 1 ? 'sale' : 'sales'}`),
+        tile('Cash to count', t.cash_cents, cash.refunds ? `${money(cash.taken_cents)} in, ${money(cash.refunded_cents)} handed back` : `${cash.sales} cash ${cash.sales === 1 ? 'sale' : 'sales'}`),
+        tile('Cards', t.card_cents),
+        tile('Refunds', -t.refunded_cents, `${t.refunds} ${t.refunds === 1 ? 'refund' : 'refunds'}`),
+        tile('Discounts', -t.discount_cents, `${t.discounted_sales} ${t.discounted_sales === 1 ? 'sale' : 'sales'}`),
+        t.online_cents ? tile('Online', t.online_cents, 'Pay links and the store') : null),
+      h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'By payment method'),
+        h('div', { class: 'stack-tight' }, t.by_method.map((m) => h('div', { class: 'row small' }, h('span', { class: 'grow' }, `${m.label} · ${m.sales} ${m.sales === 1 ? 'sale' : 'sales'}${m.refunds ? `, ${m.refunds} ${m.refunds === 1 ? 'refund' : 'refunds'}` : ''}`), h('span', { class: 'strong' }, signedMoney(m.net_cents))))))));
+  }
+
+  // ----- Recent sales -----
+  const recent = h('div', { class: 'stack-tight' });
+  const recentQ = { days: 1, q: '', location: '' };
+  const recentSearch = input({ type: 'search', placeholder: 'Client or item', 'aria-label': 'Search sales', style: 'max-width:240px' });
+  let searchTimer;
+  recentSearch.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { recentQ.q = recentSearch.value.trim(); refreshRecent(); }, 250); });
+  const recentLoc = select([['', 'All locations'], ...locs.data.map((l) => [l.id, l.name])], { 'aria-label': 'Location of sales' });
+  recentLoc.addEventListener('change', () => { recentQ.location = recentLoc.value; refreshRecent(); });
+  const dayChips = h('div', { class: 'row tm-views' });
+  const drawChips = () => fill(dayChips, [[1, 'Today'], [7, '7 days'], [30, '30 days']].map(([n, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': recentQ.days === n ? 'true' : 'false', onClick: () => { recentQ.days = n; drawChips(); refreshRecent(); } }, label)));
+  async function refreshRecent() {
+    try {
+      const qs = new URLSearchParams({ days: String(recentQ.days), ...(recentQ.q ? { q: recentQ.q } : {}), ...(recentQ.location ? { location_id: recentQ.location } : {}) });
+      drawRecent((await get(`/v1/sales?${qs}`)).data);
+    } catch (e) { fill(recent, h('p', { class: 'warn-text' }, e.message), btn('Try again', () => refreshRecent(), 'ghost')); }
+  }
+  function drawRecent(data) {
+    const span = recentQ.days === 1 ? 'today' : `in the last ${recentQ.days} days`;
+    fill(recent, data.length ? data.map((x) => h('div', { class: 'list-item pos-sale-row' },
+      h('button', { type: 'button', class: 'grow stack-tight pos-sale-open', onClick: () => saleDetails(x.id) },
+        h('span', { class: 'strong' }, `${x.client_name ?? 'Walk-in'} · ${money(x.amount_cents)}`),
+        h('span', { class: 'small muted' }, `${x.description ?? ''}${x.discount_cents ? ` · ${money(x.discount_cents)} off` : ''} · ${x.location_name} · ${x.method_label}${x.card_last4 ? ` ••${x.card_last4}` : ''} · ${ago(x.created_at)}${role !== 'coach' && x.created_by_name ? ` · ${x.created_by_name}` : ''}`),
+        x.status === 'failed' && x.failure_reason ? h('span', { class: 'small warn-text' }, x.failure_reason) : null,
+        x.refunded_cents && x.status === 'partially_refunded' ? h('span', { class: 'small muted' }, `${money(x.refunded_cents)} refunded`) : null),
+      badge(x.status),
+      x.can_undo ? btn('Undo', (e) => undo(x, e.currentTarget), 'ghost') : null))
+      : h('p', { class: 'muted' }, recentQ.q ? `No sales ${span} match "${recentQ.q}".` : `No sales ${span}${role === 'coach' ? ' that you took' : ''}.`));
+  }
+
+  fill(main,
     header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', h('div', { class: 'row wrap' }, prods.data.some((p) => p.track_stock) ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Inventory') : null, setupLink())),
+    clashBox,
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
-        panel(null, {}, h('div', { class: 'form-grid' }, field('Where', locSel), field('Who', cliSel))),
-        panel('Products', {}, productGrid, sizeBox, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
-        planGrid ? panel('Monthly memberships', { subtitle: 'Choose who it\'s for above, then tap a membership. It renews on their saved card.' }, planGrid) : null,
+        panel(null, {}, h('div', { class: 'form-grid' }, field('Where', locSel), h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Who'), clientBox))),
+        panel('Products', { action: prods.data.length > 8 ? prodSearch : null }, productGrid, sizeBox, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
+        planList.length ? panel('Monthly memberships', { subtitle: 'Choose who it\'s for above, then tap a membership. It renews on their saved card.' }, planGrid) : null,
         memberBox),
-      h('div', { class: 'stack', style: 'gap:24px' },
-        progress,
-        panel('Sale', {}, cartBox, h('div', { class: 'row', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' }, h('span', { class: 'grow muted' }, 'Total'), totalBox), methodBox, err, charge))),
-    panel('Recent sales', { subtitle: 'Last 7 days' }, recent));
-  draw(); drawRecent(sales.data);
+      h('div', { class: 'stack pos-side', style: 'gap:24px' }, progress, lastBox, salePanel)),
+    seesTakings ? takingsBox : null,
+    panel('Recent sales', { subtitle: role === 'coach' ? 'Sales you took. Tap one for details and the receipt.' : 'Tap a sale for details, the receipt and refunds.', action: h('div', { class: 'row wrap', style: 'gap:8px' }, dayChips, recentSearch, recentLoc) }, recent),
+    bar);
+  drawChips(); changed(); refreshRecent(); drawTakings();
 }
 
 // ---------- Inventory ----------
@@ -1265,71 +1833,117 @@ async function viewInventory(main) {
     startPanel);
 }
 
+// Setup forms open in the shared dialog. onSave returns a toast message; errors stay in the dialog to fix.
+function setupDialog(title, fields, saveLabel, onSave, note) {
+  const d = document.getElementById('dialog');
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  fill(d, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+    try { const msg = await onSave(); d.close(); if (msg) toast(msg); render(); } catch (x) { err.textContent = x.message; }
+  }); } },
+    h('h2', { class: 'week-title', style: 'color:var(--steel);margin:0' }, title), note ? h('p', { class: 'small muted', style: 'margin:0' }, note) : null,
+    ...fields, err,
+    h('div', { class: 'row wrap' }, btn(saveLabel, null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  setTimeout(() => d.querySelector('input,select')?.focus(), 0);
+}
+const dollarsIn = (cents, attrs = {}) => input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal', value: cents == null ? '' : (cents / 100).toFixed(2), ...attrs });
+const toCents = (el) => (el.value.trim() === '' ? NaN : Math.round(Number(el.value) * 100));
+const LOCATION_KIND = { facility: 'Facility', mobile: 'Mobile (clients\' homes)', park: 'Park', client_home: 'Client home', other: 'Other' };
+const PRODUCT_KIND = [['session', 'Single session'], ['pack', 'Session pack'], ['gear', 'Gear'], ['other', 'Other']];
+
+function locationForm(l) {
+  const f = { name: input({ value: l?.name ?? '', maxlength: '80' }), kind: select(Object.entries(LOCATION_KIND), { value: l?.kind ?? 'facility' }), line1: input({ autocomplete: 'address-line1', value: l?.address_line1 ?? '' }), city: input({ autocomplete: 'address-level2', value: l?.city ?? '' }), state: input({ autocomplete: 'address-level1', maxlength: '2', placeholder: 'TX', value: l?.state ?? '' }), zip: input({ autocomplete: 'postal-code', inputmode: 'numeric', value: l?.postal_code ?? '' }) };
+  setupDialog(l ? `Edit ${l.name}` : 'Add a location', [
+    h('div', { class: 'form-grid' }, field('Location name', f.name), field('Type', f.kind)),
+    field('Street address', f.line1),
+    h('div', { class: 'form-grid cols-3' }, field('City', f.city), field('State', f.state), field('ZIP', f.zip))
+  ], l ? 'Save location' : 'Add location', async () => {
+    const body = { name: f.name.value, kind: f.kind.value, address_line1: f.line1.value.trim() || undefined, city: f.city.value.trim() || undefined, state: f.state.value.trim() || undefined, postal_code: f.zip.value.trim() || undefined };
+    const x = l ? await patch(`/v1/locations/${l.id}`, body) : await post('/v1/locations', body);
+    return x.card_ready ? `${x.name} ${l ? 'saved' : 'added'} and ready for card payments.` : `${x.name} ${l ? 'saved' : 'added'}. Add its full address to take cards there.`;
+  }, 'Card payments need a street address, city, state and ZIP. For client homes, use one "Mobile" location with your business address.');
+}
+function productForm(p) {
+  const f = { name: input({ value: p?.name ?? '', maxlength: '80' }), kind: select([['', 'Choose a type'], ...PRODUCT_KIND], { value: p?.kind ?? '' }), price: dollarsIn(p?.price_cents), sessions: input({ type: 'number', min: '2', max: '500', value: String(p?.kind === 'pack' ? p.sessions : 10) }), type: select([['private', 'Private sessions'], ['group', 'Group classes']], { value: p?.credit_type ?? 'private' }), stock: h('input', { type: 'checkbox', checked: p ? !!p.track_stock : true }) };
+  const sessionsField = field('Sessions in pack', f.sessions), typeField = field('Counts as', f.type);
+  const stockField = h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, f.stock, h('span', null, 'Count stock (sizes and deliveries in Inventory)'));
+  const sync = () => { sessionsField.style.display = f.kind.value === 'pack' ? '' : 'none'; typeField.style.display = ['pack', 'session'].includes(f.kind.value) ? '' : 'none'; stockField.style.display = f.kind.value === 'gear' && !p ? '' : 'none'; };
+  f.kind.addEventListener('change', sync); sync();
+  setupDialog(p ? `Edit ${p.name}` : 'Add a product', [
+    h('div', { class: 'form-grid' }, field('Product name', f.name), field('Type', f.kind)),
+    h('div', { class: 'form-grid cols-3' }, field('Price ($)', f.price), sessionsField, typeField), stockField
+  ], p ? 'Save product' : 'Add product', async () => {
+    if (!f.kind.value) throw new Error('Choose the type of product: a single session, a session pack, gear or other.');
+    const cents = toCents(f.price);
+    if (!Number.isInteger(cents) || cents < 0) throw new Error('Enter a price like 25.00 (0 for free).');
+    const gearStock = !p && f.kind.value === 'gear' && f.stock.checked;
+    const body = { name: f.name.value, kind: f.kind.value, price_cents: cents, sessions: f.kind.value === 'pack' ? Number(f.sessions.value) : undefined, credit_type: f.type.value, ...(!p ? { track_stock: gearStock, low_stock_at: gearStock ? 2 : undefined } : {}) };
+    if (p) await patch(`/v1/products/${p.id}`, body); else await post('/v1/products', body);
+    return p ? `${f.name.value.trim()} saved. New sales use the new details; past sales keep theirs.` : gearStock ? 'Product added. Add sizes and what\'s on the shelf in Inventory.' : 'Product added.';
+  }, p ? 'Changing a price or pack size only affects new sales.' : null);
+}
+function planForm() {
+  const f = { name: input({ placeholder: 'Like Unlimited group training', maxlength: '80' }), price: dollarsIn(null, { min: '1' }), trial: input({ type: 'number', min: '0', max: '90', value: '0' }) };
+  setupDialog('Add a monthly membership', [h('div', { class: 'form-grid cols-3' }, field('Membership name', f.name), field('Monthly price ($)', f.price), field('Free trial (days)', f.trial, '0 charges the first month right away.'))], 'Add membership', async () => {
+    const cents = toCents(f.price);
+    if (!f.name.value.trim() || !(cents > 0)) throw new Error('Enter a name and a monthly price.');
+    await post('/v1/plans', { name: f.name.value.trim(), price_cents: cents, trial_days: Number(f.trial.value) || 0 });
+    return 'Membership added.';
+  }, 'Billed to the saved card every month. It shows on the sale screen and in the parent portal. Change prices in Billing.');
+}
+function readerForm(locs) {
+  const f = { code: input({ placeholder: 'three-words-code', autocapitalize: 'none' }), label: input({ placeholder: 'Front desk', maxlength: '60' }), loc: select(locs.filter((l) => l.active).map((l) => [l.id, l.name])) };
+  setupDialog('Register a reader', [h('div', { class: 'form-grid cols-3' }, field('Registration code', f.code, state.payments.can_simulate ? 'Test mode: use simulated-wpe' : null), field('Label', f.label), field('Location', f.loc))], 'Register reader', async () => {
+    await post('/v1/readers', { registration_code: f.code.value, label: f.label.value, location_id: f.loc.value });
+    return 'Reader registered. It takes payments at its location only.';
+  }, 'For a Stripe smart reader (like the S710). Turn it on, connect it to Wi-Fi, and enter the code it shows.');
+}
+
 async function viewSetup(main) {
-  const [locs, prods, readers] = await Promise.all([get('/v1/locations?include_inactive=true'), get('/v1/products?include_inactive=true'), get('/v1/readers')]);
-  const KIND = { facility: 'Facility', mobile: 'Mobile (clients\' homes)', park: 'Park', client_home: 'Client home', other: 'Other' };
+  const owner = isOwner(), manage = state.user.role !== 'front_desk';       // front desk sells from what's set up here, and can't change it
+  const [locs, prods, readers, plans, settings] = await Promise.all([get('/v1/locations?include_inactive=true'), get('/v1/products?include_inactive=true'), get('/v1/readers'), owner ? get('/v1/plans?include_inactive=true') : null, owner ? get('/v1/settings') : null]);
+  const shown = (list, active) => list.filter((x) => !!x.active === active);
+  const retired = (label, rows) => (rows.length ? h('details', { style: 'border-top:1px solid var(--line-subtle);padding-top:8px' }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `${label} (${rows.length})`), ...rows) : null);
 
-  const f = { name: input(), kind: select(Object.entries(KIND), { value: 'facility' }), line1: input({ autocomplete: 'address-line1' }), city: input({ autocomplete: 'address-level2' }), state: input({ autocomplete: 'address-level1', maxlength: '2', placeholder: 'TX' }), zip: input({ autocomplete: 'postal-code', inputmode: 'numeric' }) };
-  const locPanel = panel('Locations', { subtitle: 'Card payments need a street address for each place. For client homes, use one "Mobile" location with your business address.' },
-    ...locs.data.map((l) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.name, l.active ? null : h('span', { class: 'small muted' }, ' (archived)')), h('span', { class: 'small muted' }, `${KIND[l.kind]}${l.address_line1 ? ` · ${l.address_line1}, ${l.city}` : ' · No address yet'}`)),
-      l.card_ready ? h('span', { class: 'dp-badge dp-badge--good' }, 'Cards ready') : h('span', { class: 'dp-badge dp-badge--warn' }, 'Needs address'),
-      btn(l.active ? 'Archive' : 'Restore', (e) => busy(e.currentTarget, async () => { await patch(`/v1/locations/${l.id}`, { active: !l.active }); render(); }), 'ghost'))),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const l = await post('/v1/locations', { name: f.name.value, kind: f.kind.value, address_line1: f.line1.value || undefined, city: f.city.value || undefined, state: f.state.value || undefined, postal_code: f.zip.value || undefined });
-      toast(l.card_ready ? `${l.name} added and ready for card payments.` : `${l.name} added. Add its address to take cards there.`); render();
-    }); } },
-      h('div', { class: 'form-grid' }, field('Location name', f.name), field('Type', f.kind)),
-      field('Street address', f.line1),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('City', f.city), field('State', f.state), field('ZIP', f.zip)),
-      h('div', null, btn('Add location', null, 'primary', { type: 'submit' }))));
+  const locRow = (l) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'flex:1 1 200px' }, h('span', { class: 'strong' }, l.name), h('span', { class: 'small muted' }, `${LOCATION_KIND[l.kind] ?? l.kind}${l.address_line1 ? ` · ${l.address_line1}, ${l.city}` : ' · No address yet'}`)),
+    l.active ? (l.card_ready ? h('span', { class: 'dp-badge dp-badge--good' }, 'Cards ready') : h('span', { class: 'dp-badge dp-badge--warn' }, 'Needs address')) : null,
+    l.active && manage ? btn('Edit', () => locationForm(l), 'ghost') : null,
+    !manage ? null : btn(l.active ? 'Archive' : 'Restore', (e) => { if (!l.active || confirm(`Archive ${l.name}? It stops showing on the sale screen. Past sales keep it.`)) busy(e.currentTarget, async () => { await patch(`/v1/locations/${l.id}`, { active: !l.active }); toast(l.active ? `${l.name} archived.` : `${l.name} is back.`); render(); }); }, 'ghost'));
+  const places = locs.data.filter((l) => !(l.name === 'Online' && l.kind === 'other' && !l.active));      // the store's own "Online" location isn't a place to manage
+  const locPanel = panel('Locations', { subtitle: 'Where you train and take payments.', action: manage ? btn('Add location', () => locationForm(null), 'secondary') : null },
+    ...(shown(places, true).length ? shown(places, true).map(locRow) : [h('p', { class: 'muted' }, 'No locations yet. Add the places you train.')]),
+    retired('Archived locations', shown(places, false).map(locRow)));
 
-  const pf = { name: input(), kind: select([['session', 'Single session'], ['pack', 'Session pack'], ['gear', 'Gear'], ['other', 'Other']]), price: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), sessions: input({ type: 'number', min: '2', value: '10' }), type: select([['private', 'Private sessions'], ['group', 'Group classes']]), stock: h('input', { type: 'checkbox', checked: true }) };
-  const sessionsField = field('Sessions in pack', pf.sessions), typeField = field('Counts as', pf.type);
-  const stockField = h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, pf.stock, h('span', null, 'Count stock (sizes and deliveries in Inventory)'));
-  const syncKind = () => { sessionsField.style.display = pf.kind.value === 'pack' ? '' : 'none'; typeField.style.display = ['pack', 'session'].includes(pf.kind.value) ? '' : 'none'; stockField.style.display = pf.kind.value === 'gear' ? '' : 'none'; };
-  pf.kind.addEventListener('change', syncKind); syncKind();
-  const prodPanel = panel('Products', { subtitle: 'Sessions and packs add session credits to the client. Members check in on their membership.' },
-    ...prods.data.map((p) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (not sold)')), h('span', { class: 'small muted' }, `${money(p.price_cents)}${p.kind === 'pack' ? ` · ${p.sessions} ${p.credit_type} sessions` : p.kind === 'session' ? ` · 1 ${p.credit_type} session` : ''}${p.track_stock ? ` · ${p.on_hand} on hand` : ''}`)),
-      p.track_stock ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Stock') : null,
-      btn('Price', (e) => { const a = prompt(`New price for ${p.name}?`, (p.price_cents / 100).toFixed(2)); if (a === null) return; busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { price_cents: Math.round(Number(a) * 100) }); toast('Price updated.'); render(); }); }, 'ghost'),
-      btn(p.active ? 'Stop selling' : 'Sell again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { active: !p.active }); render(); }), 'ghost'))),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/products', { name: pf.name.value, kind: pf.kind.value, price_cents: Math.round(Number(pf.price.value) * 100), sessions: pf.kind.value === 'pack' ? Number(pf.sessions.value) : undefined, credit_type: pf.type.value, track_stock: pf.kind.value === 'gear' && pf.stock.checked, low_stock_at: pf.kind.value === 'gear' && pf.stock.checked ? 2 : undefined });
-      toast(pf.kind.value === 'gear' && pf.stock.checked ? 'Product added. Add sizes and what\'s on the shelf in Inventory.' : 'Product added.'); render();
-    }); } },
-      h('div', { class: 'form-grid' }, field('Product name', pf.name), field('Type', pf.kind)),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Price ($)', pf.price), sessionsField, typeField),
-      stockField,
-      h('div', null, btn('Add product', null, 'primary', { type: 'submit' }))));
+  const prodRow = (p) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'flex:1 1 200px' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, `${money(p.price_cents)}${p.kind === 'pack' ? ` · ${p.sessions} ${p.credit_type} sessions` : p.kind === 'session' ? ` · 1 ${p.credit_type} session` : p.kind === 'gear' ? ' · Gear' : ''}${p.track_stock ? ` · ${p.on_hand} on hand` : ''}`)),
+    p.active && p.track_stock ? h('a', { class: 'dp-btn dp-btn--ghost', href: '#/sell/inventory' }, 'Stock') : null,
+    p.active && manage ? btn('Edit', () => productForm(p), 'ghost') : null,
+    !manage ? null : btn(p.active ? 'Stop selling' : 'Sell again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/products/${p.id}`, { active: !p.active }); toast(p.active ? `${p.name} is off the sale screen. Past sales keep it.` : `${p.name} is back on the sale screen.`); render(); }), 'ghost'));
+  const prodPanel = panel('Products', { subtitle: 'Sessions and packs add session credits to the client. Members check in on their membership.', action: manage ? btn('Add product', () => productForm(null), 'secondary') : null },
+    ...(shown(prods.data, true).length ? shown(prods.data, true).map(prodRow) : [h('p', { class: 'muted' }, 'Nothing for sale yet. Add sessions, packs or gear.')]),
+    retired('No longer sold', shown(prods.data, false).map(prodRow)));
 
-  const rf = { code: input({ placeholder: 'three-words-code', autocapitalize: 'none' }), label: input({ placeholder: 'Front desk' }), loc: select(locs.data.filter((l) => l.active).map((l) => [l.id, l.name])) };
-  const readerPanel = panel('Front-desk readers', { subtitle: 'For a Stripe smart reader (like the S710). Turn it on, connect it to Wi-Fi, and enter the code it shows.' },
-    ...readers.data.map((r) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.label), h('span', { class: 'small muted' }, `${r.location_name} · ${r.device_type ?? 'reader'}`)),
-      btn('Remove', (e) => { if (confirm(`Remove ${r.label}?`)) busy(e.currentTarget, async () => { await del(`/v1/readers/${r.id}`); render(); }); }, 'ghost'))),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/readers', { registration_code: rf.code.value, label: rf.label.value, location_id: rf.loc.value }); toast('Reader registered.'); render();
-    }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:1fr 1fr 1fr' }, field('Registration code', rf.code, state.payments.can_simulate ? 'Test mode: use simulated-wpe' : null), field('Label', rf.label), field('Location', rf.loc)),
-      h('div', null, btn('Register reader', null, 'secondary', { type: 'submit' }))));
+  const readerPanel = panel('Front-desk readers', { subtitle: 'Each reader takes payments at its own location.', action: manage ? btn('Register reader', () => readerForm(locs.data), 'secondary') : null },
+    ...(readers.data.length ? readers.data.map((r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.label), h('span', { class: 'small muted' }, `${r.location_name} · ${r.device_type ?? 'reader'}`)),
+      !manage ? null : btn('Remove', (e) => { if (confirm(`Remove ${r.label}?`)) busy(e.currentTarget, async () => { await del(`/v1/readers/${r.id}`); render(); }); }, 'ghost')))
+      : [h('p', { class: 'muted' }, 'No readers. Tap to Pay on iPhone, card on file and cash work without one.')]));
 
-  let planPanel = null;
-  if (isOwner()) {
-    const plans = await get('/v1/plans');
-    const pf = { name: input({ placeholder: 'e.g. Unlimited group training' }), price: input({ type: 'number', min: '1', step: '0.01', inputmode: 'decimal' }), trial: input({ type: 'number', min: '0', max: '90', value: '0' }) };
-    planPanel = panel('Monthly memberships', { subtitle: 'Billed to the saved card every month. They show on the sale screen and in the parent portal. Change prices or retire them in Billing.' },
-      ...plans.data.filter((p) => p.active !== false).map((p) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, `${money(p.price_cents)} a month${p.trial_days ? ` · ${p.trial_days}-day free trial` : ''}`)))),
-      h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-        const cents = Math.round(Number(pf.price.value) * 100);
-        if (!pf.name.value.trim() || !cents) return toast('Enter a name and a monthly price.', 'warn');
-        try { await post('/v1/plans', { name: pf.name.value.trim(), price_cents: cents, trial_days: Number(pf.trial.value) || 0 }); toast('Membership added.'); render(); } catch (err) { toast(err.message, 'warn'); }
-      }); } },
-        h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('Membership name', pf.name), field('Monthly price ($)', pf.price), field('Free trial (days)', pf.trial, '0 charges the first month right away.')),
-        h('div', null, btn('Add membership', null, 'secondary', { type: 'submit' }))));
+  let planPanel = null, discountPanel = null;
+  if (owner) {
+    const planRow = (p) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, `${money(p.price_cents)} a month${p.trial_days ? ` · ${p.trial_days}-day free trial` : ''}`)),
+      p.active === false ? btn('Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: true }); toast(`${p.name} is offered again.`); render(); }), 'ghost') : null);
+    planPanel = panel('Monthly memberships', { subtitle: 'Billed to the saved card every month. Change prices or retire them in Billing.', action: btn('Add membership', () => planForm(), 'secondary') },
+      ...(plans.data.filter((p) => p.active !== false).map(planRow)), retired('Retired memberships', plans.data.filter((p) => p.active === false).map(planRow)));
+    const pct = input({ type: 'number', min: '0', max: '100', step: '1', inputmode: 'numeric', value: settings.staff_discount_max_pct ?? '20', style: 'width:100px', 'aria-label': 'Largest discount for staff, in percent' });
+    discountPanel = panel('Discounts', { subtitle: 'You can give any discount. Every discount needs a reason, shows on the receipt, and is in the activity log.' },
+      h('form', { class: 'row wrap', style: 'gap:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const s = await patch('/v1/settings', { staff_discount_max_pct: Number(pct.value) }); toast(Number(s.staff_discount_max_pct) ? `Coaches and front desk can give up to ${s.staff_discount_max_pct}% off.` : 'Only you can give discounts now.'); }); } },
+        h('span', null, 'Coaches and front desk can give up to'), pct, h('span', null, '% off a sale'), btn('Save', null, 'secondary', { type: 'submit' })),
+      h('p', { class: 'small muted', style: 'margin:0' }, '0 means only you can give discounts.'));
   }
-  fill(main, header('Point of sale setup', 'Where you train, what you sell and your card readers.', h('a', { class: 'dp-btn dp-btn--primary', href: '#/sell' }, 'Back to sales')),
-    h('div', { class: 'grid grid-2' }, locPanel, h('div', { class: 'stack', style: 'gap:24px' }, prodPanel, planPanel, readerPanel)));
+  fill(main, header('Point of sale setup', manage ? 'Where you train, what you sell and your card readers.' : 'Where you train, what you sell and your card readers. Ask the owner to change them.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'Back to sales')),
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, locPanel, readerPanel, discountPanel), h('div', { class: 'stack', style: 'gap:24px' }, prodPanel, planPanel)));
 }
 
 // ---------- Schedule ----------
@@ -1661,133 +2275,420 @@ async function viewScheduleSetup(main) {
 const INV_BADGE = { open: ['Open', 'neutral'], overdue: ['Overdue', 'warn'], paid: ['Paid', 'good'], void: ['Void', 'muted'] };
 const invBadge = (st) => h('span', { class: `dp-badge dp-badge--${INV_BADGE[st]?.[1] ?? 'muted'}` }, INV_BADGE[st]?.[0] ?? st);
 const ymd = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—');
-
-function invoiceRow(i, { showTeam = false } = {}) {
-  const pay = btn('Record payment', (e) => {
-    const how = prompt(`Record payment of ${money(i.amount_cents)} for ${i.number}. How was it paid? check, ach, card, cash or other`, 'check');
-    if (!how) return;
-    const method = how.trim().toLowerCase();
-    const ref = method === 'check' ? prompt('Check number (optional):', '') : '';
-    busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/payments`, { method, reference: ref || undefined }); toast(`${i.number} marked paid.`); render(); });
-  }, 'outline');
-  const unpaid = ['open', 'overdue'].includes(i.status);
-  return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-    h('div', { class: 'grow stack-tight', style: 'min-width:240px' },
-      h('span', { class: 'strong' }, `${i.number}${showTeam ? ` · ${i.org_name} ${i.team_name}` : ''}`),
-      h('span', { class: 'small muted' }, i.status === 'paid' ? `Paid ${ymd(i.paid_on)} by ${i.paid_method}${i.paid_reference ? ` ${i.paid_reference}` : ''}`
-        : `${i.period_start ? `${ymd(i.period_start)} – ${ymd(i.period_end)}` : i.lines[0]?.description ?? ''} · due ${ymd(i.due_on)}${unpaid ? (i.sent_at ? ` · emailed ${ago(i.sent_at)}` : ' · not emailed') : ''}`)),
-    h('span', { class: 'strong' }, money(i.amount_cents)), invBadge(i.status),
-    h('div', { class: 'row', style: 'gap:4px' }, h('a', { class: 'dp-btn dp-btn--ghost', href: i.link, target: '_blank', rel: 'noopener' }, 'View'),
-    unpaid ? pay : null,
-    unpaid ? btn('Email', (e) => busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/send`); toast(`${i.number} emailed.`); render(); }), 'ghost') : null,
-    unpaid ? btn('Void', (e) => { if (confirm(`Void ${i.number}? It won't be collected.`)) busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/void`); toast('Voided.'); render(); }); }, 'ghost') : null));
-}
+const nplural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const pctText = (r) => `${Math.round(r * 100)}%`;
+const TERMS = [['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['60', 'Net 60'], ['0', 'Due on receipt']];
+const termsName = (d) => (d === 0 ? 'Due on receipt' : `Net ${d}`);
+const termsOptions = (d) => (TERMS.some(([k]) => k === String(d)) ? TERMS : [...TERMS, [String(d), `Net ${d}`]]);
+const ORG_KIND = [['school', 'School'], ['club', 'Club'], ['other', 'Other']];
+const PAY_METHOD = [['check', 'Check'], ['ach', 'Bank transfer'], ['card', 'Card'], ['cash', 'Cash'], ['other', 'Other']];
+const METHOD_WORD = { check: 'check', ach: 'bank transfer', card: 'card', cash: 'cash', online: 'online payment', other: 'payment' };
+const ordinal = (n) => `${n}${[11, 12, 13].includes(n % 100) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th')}`;
+// "15:30" -> "3:30 PM"
+const hm12 = (t) => { const [hh, mm] = String(t ?? '').split(':').map(Number); return Number.isFinite(hh) ? `${((hh + 11) % 12) + 1}:${String(mm || 0).padStart(2, '0')} ${hh < 12 ? 'AM' : 'PM'}` : t; };
+// Same month arithmetic as the server: the billing day is the start day, clamped to the end of shorter months.
+const periodOf = (start, k) => { const [y, m, d] = start.split('-').map(Number); const f = new Date(Date.UTC(y, m - 1 + k, 1)); f.setUTCDate(Math.min(d, new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth() + 1, 0)).getUTCDate())); return f.toISOString().slice(0, 10); };
+const dollarsToCents = (s) => { const t = String(s ?? '').replace(/[$,\s]/g, ''); return t === '' ? NaN : Math.round(Number(t) * 100); };
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', style: 'min-height:72px', ...attrs }); t.value = value ?? ''; return t; };
 
+// A dialog with a title, a body and buttons. Each action's onClick returns false to keep the dialog open.
+function teamDialog(title, body, actions) {
+  const d = document.getElementById('dialog');
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  fill(d, h('div', { class: 'stack' }, h('h2', { class: 'week-title', style: 'color:var(--steel)' }, title), body, err,
+    h('div', { class: 'row wrap' }, actions.map((a) => btn(a.label, async (e) => {
+      if (!a.onClick) return d.close();
+      err.textContent = '';
+      const b = e.currentTarget; b.disabled = true;
+      try { if ((await a.onClick(d)) !== false) d.close(); } catch (x) { err.textContent = x.message; } finally { b.disabled = false; }
+    }, a.variant ?? 'secondary')))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  return d;
+}
+// A toast with an Undo button for a few seconds.
+function undoToast(msg, onUndo) {
+  const t = h('div', { class: 'dp-toast', role: 'status' }, msg, ' ', h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', style: 'min-height:32px;padding:0 8px;color:inherit;text-decoration:underline', onClick: () => { t.remove(); onUndo(); } }, 'Undo'));
+  document.getElementById('toasts').append(t);
+  setTimeout(() => t.remove(), 8000);
+}
+// Point at the field a server error names (error.details.field), and show the message.
+function fieldErr(fields, err, box) {
+  for (const el of Object.values(fields)) el?.removeAttribute?.('aria-invalid');
+  const el = fields[err.details?.field];
+  if (el) { el.setAttribute('aria-invalid', 'true'); el.focus(); }
+  if (box) box.textContent = err.message; else toast(err.message, 'warn');
+}
+// Cells a spreadsheet would run as a formula get a leading apostrophe.
+const csvCell = (x) => { let s = String(x ?? ''); if (/^[=@\t\r+-]/.test(s) && !/^-?\d+(\.\d+)?%?$/.test(s)) s = `'${s}`; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+function downloadCsv(name, rows) {
+  const a = h('a', { href: URL.createObjectURL(new Blob([rows.map((r) => r.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv' })), download: name });
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// How they paid / Check number / Received, shared by one invoice and several.
+function payFields() {
+  const method = select(PAY_METHOD, { value: 'check' }), ref = input({ autocomplete: 'off', maxlength: '120', inputmode: 'numeric' }), on = input({ type: 'date', value: bizDate(), max: bizDate() });
+  const refField = field('Check number (optional)', ref);
+  method.addEventListener('change', () => { refField.querySelector('label').textContent = method.value === 'check' ? 'Check number (optional)' : 'Reference (optional)'; ref.inputMode = method.value === 'check' ? 'numeric' : 'text'; });
+  return { el: h('div', { class: 'form-grid cols-3' }, field('How they paid', method), refField, field('Received', on)), values: () => ({ method: method.value, reference: ref.value.trim() || undefined, paid_on: on.value || undefined }), fields: { method, reference: ref, paid_on: on } };
+}
+function recordPaymentDialog(i) {
+  const pf = payFields();
+  teamDialog('Record payment', h('div', { class: 'stack' }, h('p', { class: 'muted', style: 'margin:0' }, `${i.number} · ${money(i.amount_cents)}${i.org_name ? ` · ${i.org_name}` : ''}`), pf.el),
+    [{ label: 'Record payment', variant: 'primary', onClick: async () => { await post(`/v1/team-invoices/${i.id}/payments`, pf.values()); toast(`${i.number} marked paid.`); render(); } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+function payManyDialog(c) {
+  const open = c.invoices.filter((i) => ['open', 'overdue'].includes(i.status)).slice().reverse();
+  const total = h('span', { class: 'strong' });
+  const boxes = open.map((i) => h('input', { type: 'checkbox', value: i.id, checked: true, 'data-amt': String(i.amount_cents) }));
+  const sum = () => boxes.filter((b) => b.checked).reduce((t, b) => t + Number(b.dataset.amt), 0);
+  const redraw = () => { total.textContent = money(sum()); };
+  const pf = payFields();
+  const list = h('div', { class: 'stack-tight', role: 'group', 'aria-label': 'Invoices this payment covers', style: 'max-height:40vh;overflow:auto' }, open.map((i, n) => h('label', { class: 'list-item', style: 'cursor:pointer;min-height:44px' }, boxes[n],
+    h('span', { class: 'grow stack-tight' }, h('span', null, i.number), h('span', { class: 'small muted' }, `${i.period_start ? `${ymd(i.period_start)} – ${ymd(i.period_end)}` : i.lines[0]?.description ?? ''}${i.days_past_due ? ` · ${nplural(i.days_past_due, 'day')} past due` : ` · due ${ymd(i.due_on)}`}`)),
+    h('span', { class: 'strong' }, money(i.amount_cents)))));
+  list.addEventListener('change', redraw); redraw();
+  teamDialog('Record one payment', h('div', { class: 'stack' }, h('p', { class: 'muted', style: 'margin:0' }, 'Tick the invoices this payment covers, like one check for several months.'), list, h('p', { style: 'margin:0' }, 'Total ', total), pf.el),
+    [{ label: 'Record payment', variant: 'primary', onClick: async () => {
+      const ids = boxes.filter((b) => b.checked).map((b) => b.value);
+      if (!ids.length) throw new Error('Tick at least one invoice.');
+      const r = await post(`/v1/team-contracts/${c.id}/payments`, { invoice_ids: ids, total_cents: sum(), ...pf.values() });
+      toast(`${nplural(r.count, 'invoice')} marked paid, ${money(r.total_cents)} in all.`); render();
+    } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+
+function invoiceRow(i, { showTeam = false } = {}) {
+  const unpaid = ['open', 'overdue'].includes(i.status);
+  const title = showTeam ? h('a', { class: 'strong', href: `#/teams/${i.contract_id}`, style: 'color:inherit' }, `${i.org_name} · ${i.team_name}`) : h('span', { class: 'strong' }, i.number);
+  const sub = i.status === 'paid' ? `Paid ${ymd(i.paid_on)} by ${METHOD_WORD[i.paid_method] ?? i.paid_method}${i.paid_reference ? ` ${i.paid_reference}` : ''}`
+    : i.status === 'void' ? `Voided · ${i.lines[0]?.description ?? ''}`
+      : [i.period_start ? `${ymd(i.period_start)} – ${ymd(i.period_end)}` : i.lines[0]?.description ?? '', i.days_past_due ? `${nplural(i.days_past_due, 'day')} past due` : `due ${ymd(i.due_on)}`, i.sent_at ? `emailed ${ago(i.sent_at).toLowerCase()}` : 'not emailed'].filter(Boolean).join(' · ');
+  return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, title, h('span', { class: `small ${i.days_past_due ? 'warn-text' : 'muted'}` }, `${showTeam ? `${i.number} · ` : ''}${sub}`)),
+    h('span', { class: 'strong' }, money(i.amount_cents)), invBadge(i.status),
+    h('div', { class: 'row wrap', style: 'gap:4px' }, h('a', { class: 'dp-btn dp-btn--ghost', href: i.link, target: '_blank', rel: 'noopener', 'aria-label': `View ${i.number} as the school sees it` }, 'View'),
+      unpaid ? btn('Record payment', () => recordPaymentDialog(i), 'outline') : null,
+      unpaid ? btn('Email', (e) => busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/send`); toast(`${i.number} emailed.`); render(); }), 'ghost', { 'aria-label': `Email ${i.number} again` }) : null,
+      unpaid ? btn('Void', (e) => { if (confirm(`Void ${i.number}? The school can no longer pay it and it stops counting as unpaid. To bill a corrected amount, use Bill something extra.`)) busy(e.currentTarget, async () => { await post(`/v1/team-invoices/${i.id}/void`); toast(`${i.number} voided.`); render(); }); }, 'ghost', { 'aria-label': `Void ${i.number}` }) : null));
+}
+
+const teamsUi = { view: null, q: '' };
 async function viewTeams(main) {
-  const [contracts, unpaid] = await Promise.all([get('/v1/team-contracts'), get('/v1/team-invoices?status=unpaid')]);
-  const active = contracts.data.filter((c) => c.status === 'active');
-  const monthly = active.reduce((t, c) => t + c.monthly_cents, 0);
-  const open = unpaid.data.reduce((t, i) => t + i.amount_cents, 0), overdue = unpaid.data.filter((i) => i.status === 'overdue');
+  const [contracts, unpaid, sum] = await Promise.all([get('/v1/team-contracts'), get('/v1/team-invoices?status=unpaid'), get('/v1/team-billing/summary')]);
+  const all = contracts.data;
+  const count = (v) => all.filter((c) => v === 'all' || c.status === v).length;
+  if (!teamsUi.view) teamsUi.view = count('active') || !all.length ? 'active' : 'all';
+  const overdue = unpaid.data.filter((i) => i.status === 'overdue');
+  const box = h('div', { 'aria-live': 'polite' });
+  const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show' });
+  const drawList = () => {
+    const q = teamsUi.q.trim().toLowerCase();
+    const shown = all.filter((c) => (teamsUi.view === 'all' || c.status === teamsUi.view) && (!q || `${c.org_name} ${c.name} ${c.po_number ?? ''}`.toLowerCase().includes(q)));
+    fill(views, [['active', 'Active'], ['ended', 'Ended'], ['all', 'All']].map(([v, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(teamsUi.view === v), onClick: () => { teamsUi.view = v; drawList(); } }, label, h('span', { class: 'muted' }, String(count(v))))));
+    fill(box, !all.length ? h('div', { class: 'empty' }, 'No team contracts yet. Schools and clubs pay a flat monthly fee, and invoices go out on their own.')
+      : !shown.length ? h('p', { class: 'muted' }, q ? `No ${teamsUi.view === 'all' ? '' : `${teamsUi.view} `}contracts match "${teamsUi.q.trim()}".` : `No ${teamsUi.view} contracts.`)
+        : shown.map((c) => h('a', { class: 'list-item', href: `#/teams/${c.id}`, style: 'text-decoration:none;color:inherit;flex-wrap:wrap' },
+          h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, `${c.org_name} · ${c.name}`),
+            h('span', { class: 'small muted' }, [`${money(c.monthly_cents)}/month`, termsName(c.terms_days), nplural(c.roster_count, 'athlete'), c.attendance_rate != null ? `${pctText(c.attendance_rate)} attendance` : null,
+              c.status === 'ended' ? `ended ${ymd(c.end_date)}` : c.next_invoice_on ? `next invoice ${ymd(c.next_invoice_on)}` : 'no more invoices'].filter(Boolean).join(' · '),
+            c.contact_email ? null : h('span', { class: 'warn-text' }, ' · add a billing email'))),
+          c.overdue_cents ? h('span', { class: 'dp-badge dp-badge--warn' }, `${money(c.overdue_cents)} overdue`) : c.balance_cents ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${money(c.balance_cents)} open`) : null,
+          c.status === 'ended' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Ended') : null)));
+  };
+  const search = all.length > 4 ? input({ type: 'search', placeholder: 'School, team or PO number', 'aria-label': 'Search contracts', value: teamsUi.q, autocomplete: 'off' }) : null;
+  search?.addEventListener('input', () => { teamsUi.q = search.value; drawList(); });
+  drawList();
+  const remind = overdue.length ? btn(`Email overdue reminders (${overdue.length})`, (e) => {
+    if (!confirm(`Email a reminder for each overdue invoice now? ${nplural(overdue.length, 'invoice is', 'invoices are')} overdue. The weekly reminder then waits another week.`)) return;
+    busy(e.currentTarget, async () => { const r = await post('/v1/team-billing/remind-overdue'); toast(`${nplural(r.sent, 'reminder')} emailed.${r.skipped ? ` ${r.skipped} had no billing email: ${r.schools_without_email.join(', ')}.` : ''}`, r.skipped ? 'warn' : 'good'); render(); });
+  }, 'secondary') : null;
   fill(main,
     header('Teams', 'School and club contracts, billed a flat monthly fee.', h('a', { class: 'dp-btn dp-btn--primary', href: '#/teams/new' }, 'New team contract')),
     h('div', { class: 'metrics' },
-      metric('Monthly contract revenue', money(monthly), `${active.length} active ${active.length === 1 ? 'team' : 'teams'}`),
-      metric('Waiting on payment', money(open), `${unpaid.data.length} open ${unpaid.data.length === 1 ? 'invoice' : 'invoices'}`),
+      metric('Monthly contract revenue', money(sum.monthly_cents), nplural(sum.active_contracts, 'active team')),
+      metric('Waiting on payment', money(sum.open_cents), nplural(sum.open_count, 'open invoice')),
       metric('Overdue', money(overdue.reduce((t, i) => t + i.amount_cents, 0)), `${overdue.length} past due`, overdue.length ? 'warn' : null),
-      metric('Athletes on rosters', active.reduce((t, c) => t + c.roster_count, 0), 'Across active teams')),
-    panel('Contracts', {}, contracts.data.length ? contracts.data.map((c) => h('a', { class: 'list-item', href: `#/teams/${c.id}`, style: 'text-decoration:none;color:inherit' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${c.org_name} · ${c.name}`),
-        h('span', { class: 'small muted' }, c.status === 'ended' ? `Ended ${ymd(c.end_date)}` : `${money(c.monthly_cents)}/month · Net ${c.terms_days} · ${c.roster_count} athletes${c.next_invoice_on ? ` · next invoice ${ymd(c.next_invoice_on)}` : ''}${c.contact_email ? '' : ' · add a billing email'}`)),
-      c.overdue_cents ? h('span', { class: 'dp-badge dp-badge--warn' }, `${money(c.overdue_cents)} overdue`) : c.balance_cents ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${money(c.balance_cents)} open`) : null,
-      c.status === 'ended' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Ended') : null)) : h('div', { class: 'empty' }, 'No team contracts yet.')),
-    unpaid.data.length ? panel('Unpaid invoices', { subtitle: 'Invoices email the school\'s billing contact with a link to view, print or pay online. Overdue ones get a reminder each week.' }, unpaid.data.map((i) => invoiceRow(i, { showTeam: true }))) : null);
+      metric('Collected', money(sum.collected_30_cents), 'Last 30 days')),
+    panel('Contracts', { subtitle: `${nplural(sum.athletes, 'athlete')} on active rosters.`, action: all.length > 1 ? views : null }, search, box),
+    panel('Unpaid invoices', { subtitle: 'Invoices email the school\'s billing contact with a link to view, print or pay online. Overdue ones get a reminder each week.', action: remind },
+      unpaid.data.length ? unpaid.data.map((i) => invoiceRow(i, { showTeam: true })) : h('p', { class: 'muted' }, 'Nothing unpaid. Every school invoice is settled.')));
 }
 
 async function viewNewTeam(main) {
-  const orgs = await get('/v1/organizations');
+  const [orgs, settings] = await Promise.all([get('/v1/organizations'), get('/v1/settings')]);
+  tzName = settings.timezone;
   const orgSel = select([['', 'A new school or club…'], ...orgs.data.map((o) => [o.id, o.name])], { value: '' });
-  const o = { name: input(), kind: select([['school', 'School'], ['club', 'Club'], ['other', 'Other']]), contact: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), address: textarea() };
-  const t = { name: input({ placeholder: 'Varsity Football' }), fee: input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
-    terms: select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']]), po: input() };
+  const o = { name: input({ maxlength: '120', autocomplete: 'off' }), kind: select(ORG_KIND), contact: input({ autocomplete: 'off' }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }), address: textarea() };
+  const t = { name: input({ placeholder: 'Varsity Football', maxlength: '120' }), fee: input({ inputmode: 'decimal', placeholder: '1,200' }), start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }),
+    terms: select(TERMS, { value: '30' }), po: input({ maxlength: '60' }), past: select([]), notes: textarea('', { maxlength: '2000', placeholder: 'Only staff see this, like Invoices need the AD\'s signature' }) };
+  const pastField = field('Months that have already started', t.past);
+  const summary = h('div', { class: 'tm-summary', 'aria-live': 'polite' });
   const orgBox = h('div', { class: 'stack' },
     h('div', { class: 'form-grid' }, field('School or club name', o.name), field('Type', o.kind)),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Billing contact', o.contact, 'Athletic director or treasurer'), field('Billing email', o.email, 'Invoices go here.'), field('Phone', o.phone)),
+    h('div', { class: 'form-grid cols-3' }, field('Billing contact', o.contact, 'Athletic director or treasurer'), field('Billing email', o.email, 'Invoices go here.'), field('Phone', o.phone)),
     field('Billing address', o.address));
   orgSel.addEventListener('change', () => { orgBox.style.display = orgSel.value ? 'none' : ''; });
+  // What happens when you save: how many invoices go out now, and when the rest follow.
+  const drawSummary = () => {
+    const start = t.start.value, end = t.end.value, fee = dollarsToCents(t.fee.value), T = bizDate();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) { summary.textContent = 'Choose a start date.'; pastField.hidden = true; return; }
+    if (end && end < start) { summary.textContent = 'The end date is before the start date.'; pastField.hidden = true; return; }
+    const started = [];
+    for (let k = 0; k < 240; k++) { const p = periodOf(start, k); if (p > T || (end && p > end)) break; started.push(p); }
+    pastField.hidden = !started.length || start >= T;
+    if (!pastField.hidden) {
+      const keep = t.past.value || 'all';
+      fill(t.past, [['all', started.length > 1 ? `Invoice all ${started.length} now` : 'Invoice it now'], ...(started.length > 1 ? [['current', `Invoice only the current month (from ${ymd(started[started.length - 1])})`]] : []), ['none', 'Don\'t invoice them, they were billed another way']]
+        .map(([v, label]) => h('option', { value: v, selected: v === keep }, label)));
+    }
+    const mode = pastField.hidden ? 'all' : t.past.value;
+    const now = mode === 'all' ? started.length : mode === 'current' ? Math.min(1, started.length) : 0;
+    let next = null;
+    for (let k = 0; k < 240; k++) { const p = periodOf(start, k); if (end && p > end) break; if (p > T) { next = p; break; } }
+    const feeTxt = fee > 0 ? money(fee) : 'the monthly fee', day = ordinal(Number(start.slice(8, 10)));
+    const parts = [];
+    if (now) parts.push(now === 1 ? `One invoice for ${feeTxt} goes out as soon as you save.` : `${now} invoices of ${feeTxt}${fee > 0 ? ` (${money(fee * now)} in all)` : ''} go out as soon as you save.`);
+    else if (start > T) parts.push(`The first invoice for ${feeTxt} goes out ${ymd(start)}.`);
+    if (next && start <= T) parts.push(`Then one on the ${day} of each month, next ${ymd(next)}${end ? `, until ${ymd(end)}` : ''}.`);
+    else if (start > T) parts.push(`Then one on the ${day} of each month${end ? ` until ${ymd(end)}` : ''}.`);
+    summary.textContent = parts.join(' ') || 'No invoices go out for this contract.';
+  };
+  for (const el of [t.start, t.end, t.fee, t.past]) { el.addEventListener('input', drawSummary); el.addEventListener('change', drawSummary); }
+  drawSummary();
   const err = h('div', { class: 'dp-error', role: 'alert' });
+  const fields = { org_name: o.name, contact_email: o.email, contact_phone: o.phone, name: t.name, monthly_cents: t.fee, start_date: t.start, end_date: t.end, terms_days: t.terms, past: t.past };
   fill(main,
     header('New team contract', 'A flat monthly fee, invoiced to the school or club at the start of each month of the contract.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'Cancel')),
-    h('form', { class: 'dp-panel stack', style: 'max-width:820px', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+    h('form', { class: 'dp-panel stack', style: 'max-width:820px', novalidate: true, onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
       try {
+        const fee = dollarsToCents(t.fee.value);
+        if (!(fee > 0)) throw Object.assign(new Error('Enter the monthly fee, like 1200.'), { details: { field: 'monthly_cents' } });
         const c = await post('/v1/team-contracts', { org_id: orgSel.value || undefined, organization: orgSel.value ? undefined : { name: o.name.value, kind: o.kind.value, contact_name: o.contact.value || undefined, contact_email: o.email.value || undefined, contact_phone: o.phone.value || undefined, billing_address: o.address.value || undefined },
-          name: t.name.value, monthly_cents: Math.round(Number(t.fee.value) * 100), start_date: t.start.value, end_date: t.end.value || undefined, terms_days: Number(t.terms.value), po_number: t.po.value || undefined });
-        toast(c.invoices.length ? `Contract created. ${c.invoices.length === 1 ? 'The first invoice' : `${c.invoices.length} invoices`} ${c.org.contact_email ? `emailed to ${c.org.contact_email}` : 'created (add a billing email to send)'}.` : `Contract created. First invoice goes out ${ymd(c.next_invoice_on)}.`);
+          name: t.name.value, monthly_cents: fee, start_date: t.start.value, end_date: t.end.value || undefined, terms_days: Number(t.terms.value), po_number: t.po.value || undefined, notes: t.notes.value || undefined, past: pastField.hidden ? undefined : t.past.value });
+        const sent = c.invoices.filter((i) => i.sent_at).length;
+        toast(c.invoices.length ? `Contract created. ${nplural(c.invoices.length, 'invoice')} ${sent ? `emailed to ${c.org.contact_email}` : 'created (add a billing email to send them)'}.` : `Contract created. The first invoice goes out ${ymd(c.next_invoice_on)}.`);
         location.hash = `#/teams/${c.id}`;
-      } catch (x) { err.textContent = x.message; }
+      } catch (x) { fieldErr(fields, x, err); }
     }); } },
       field('School or club', orgSel), orgBox,
       h('div', { class: 'form-grid' }, field('Team', t.name), field('Monthly fee ($)', t.fee)),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Start', t.start, 'Billing day each month'), field('End (optional)', t.end), field('Payment terms', t.terms), field('PO number', t.po)),
-      h('p', { class: 'small muted' }, 'If the start date is today or earlier, the first month is invoiced as soon as you save. Months already past are invoiced too.'),
+      h('div', { class: 'form-grid cols-4' }, field('Start', t.start, 'Billing day each month'), field('End (optional)', t.end), field('Payment terms', t.terms), field('PO number', t.po)),
+      pastField, summary, field('Notes (staff only)', t.notes),
       err, h('div', null, btn('Create contract', null, 'primary', { type: 'submit' }))));
   o.name.focus();
 }
 
+// Unsaved edits to the contract form survive a redraw after recording a payment, adding a session and so on.
+const teamUi = { id: null, draft: null, allInvoices: false, q: '', sort: 'name', pasteOpen: false };
 async function viewTeam(main, id) {
-  const [c, locs, settings, engPanel] = await Promise.all([get(`/v1/team-contracts/${id}`), get('/v1/locations'), get('/v1/settings'), teamPanel(id)]);
+  if (teamUi.id !== id) Object.assign(teamUi, { id, draft: null, allInvoices: false, q: '', sort: 'name', pasteOpen: false });
+  let c;
+  try { c = await get(`/v1/team-contracts/${id}`); } catch (e) {
+    if (!/not found/i.test(e.message)) throw e;
+    return fill(main, header('Contract not found', 'It may have been removed.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')), h('div', { class: 'empty' }, 'That team contract wasn\'t found. Open it from the Teams list.'));
+  }
+  const [locs, settings, coachList, engPanel] = await Promise.all([get('/v1/locations'), get('/v1/settings'), get('/v1/coaches'), teamPanel(id)]);
   tzName = settings.timezone;
   const ended = c.status === 'ended';
-  const fee = input({ type: 'number', step: '0.01', value: (c.monthly_cents / 100).toFixed(2) }), end = input({ type: 'date', value: c.end_date ?? '' }), po = input({ value: c.po_number ?? '' });
-  const terms = select([['30', 'Net 30'], ['15', 'Net 15'], ['45', 'Net 45'], ['0', 'Due on receipt']], { value: String(c.terms_days) });
-  const ce = { name: input({ value: c.org.contact_name ?? '' }), email: input({ type: 'email', value: c.org.contact_email ?? '' }), phone: input({ value: c.org.contact_phone ?? '' }), addr: textarea(c.org.billing_address) };
-  const contractPanel = panel('Contract', { subtitle: ended ? `Ended ${ymd(c.end_date)}` : `${money(c.monthly_cents)}/month since ${ymd(c.start_date)}${c.next_invoice_on ? ` · next invoice ${ymd(c.next_invoice_on)}` : ''}` },
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Monthly fee ($)', fee, 'Applies from the next invoice.'), field('End date', end), field('Terms', terms), field('PO number', po)),
+  const openInv = c.invoices.filter((i) => ['open', 'overdue'].includes(i.status));
+
+  // Invoices
+  const shown = teamUi.allInvoices ? c.invoices : c.invoices.slice(0, 6);
+  const extraDesc = input({ placeholder: 'Testing day, Oct 3', maxlength: '200' }), extraAmt = input({ inputmode: 'decimal', placeholder: '0.00' });
+  const invoicesPanel = h('div', { id: 'tm-inv' }, panel('Invoices', { subtitle: [c.balance_cents ? `${money(c.balance_cents)} unpaid` : 'Nothing unpaid', c.paid_cents ? `${money(c.paid_cents)} paid to date` : null, c.next_invoice_on ? `next invoice ${ymd(c.next_invoice_on)}` : null].filter(Boolean).join(' · '),
+    action: openInv.length ? h('div', { class: 'row wrap', style: 'gap:8px' }, openInv.length > 1 ? btn('Record one payment', () => payManyDialog(c), 'secondary') : null,
+      btn('Email statement', (e) => {
+        if (!c.org.contact_email) return toast(`Add a billing email for ${c.org.name} first.`, 'warn');
+        if (confirm(`Email ${c.org.contact_email} one statement listing ${nplural(openInv.length, 'open invoice')} (${money(c.balance_cents)}), each with its link to view or pay?`)) busy(e.currentTarget, async () => { const r = await post(`/v1/team-contracts/${id}/statement`); toast(`Statement emailed to ${r.to}.`); });
+      }, 'secondary')) : null },
+    c.invoices.length ? shown.map((i) => invoiceRow(i)) : h('p', { class: 'muted' }, `No invoices yet. The first goes out ${ymd(c.next_invoice_on ?? c.start_date)}.`),
+    c.invoices.length > 6 ? btn(teamUi.allInvoices ? 'Show the latest 6' : `Show all ${c.invoices.length} invoices`, () => { teamUi.allInvoices = !teamUi.allInvoices; render(); }, 'ghost') : null,
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Bill something extra'),
+      h('form', { class: 'row wrap', style: 'margin-top:8px', novalidate: true, onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        const amount = dollarsToCents(extraAmt.value);
+        if (!extraDesc.value.trim()) throw new Error('Say what the invoice is for.');
+        if (!(amount > 0)) throw new Error('Enter an amount above zero.');
+        const i = await post(`/v1/team-contracts/${id}/invoices`, { description: extraDesc.value, amount_cents: amount });
+        toast(`${i.number} ${i.sent_at ? `emailed to ${c.org.contact_email}` : 'created. Add a billing email to send it'}.`); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('What for', extraDesc)), h('div', { style: 'width:140px' }, field('Amount ($)', extraAmt)), h('div', { style: 'align-self:flex-end' }, btn('Create invoice', null, 'secondary', { type: 'submit' }))),
+      h('p', { class: 'small muted' }, `It goes on its own invoice with the contract's terms (${termsName(c.terms_days).toLowerCase()})${c.org.contact_email ? `, emailed to ${c.org.contact_email}` : ''}.`))));
+
+  // Contract terms
+  const f = { name: input({ value: c.name, maxlength: '120' }), kind: select(ORG_KIND, { value: c.org.kind }), fee: input({ inputmode: 'decimal', value: (c.monthly_cents / 100).toFixed(2) }), end: input({ type: 'date', value: c.end_date ?? '', min: c.start_date }),
+    terms: select(termsOptions(c.terms_days), { value: String(c.terms_days) }), po: input({ value: c.po_number ?? '', maxlength: '60' }),
+    contact: input({ value: c.org.contact_name ?? '', autocomplete: 'off' }), email: input({ type: 'email', value: c.org.contact_email ?? '', autocomplete: 'off' }), phone: input({ type: 'tel', value: c.org.contact_phone ?? '', autocomplete: 'off' }),
+    addr: textarea(c.org.billing_address), notes: textarea(c.notes, { maxlength: '2000', placeholder: 'Only staff see this, like Invoices need the AD\'s signature' }) };
+  const dirty = h('span', { class: 'small warn-text', 'aria-live': 'polite' });
+  const snapshot = () => Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
+  if (teamUi.draft) { for (const [k, val] of Object.entries(teamUi.draft)) if (f[k]) f[k].value = val; dirty.textContent = 'Unsaved changes'; }
+  const cErr = h('div', { class: 'dp-error', role: 'alert' });
+  const cFields = { name: f.name, monthly_cents: f.fee, end_date: f.end, terms_days: f.terms, contact_email: f.email, contact_phone: f.phone, notes: f.notes };
+  const form = h('form', { class: 'stack', novalidate: true, onInput: () => { teamUi.draft = snapshot(); dirty.textContent = 'Unsaved changes'; }, onChange: () => { teamUi.draft = snapshot(); dirty.textContent = 'Unsaved changes'; }, onSubmit: (e) => { e.preventDefault(); cErr.textContent = ''; busy(e.submitter, async () => {
+    try {
+      const fee = dollarsToCents(f.fee.value);
+      if (!(fee > 0)) throw Object.assign(new Error('Enter the monthly fee.'), { details: { field: 'monthly_cents' } });
+      await patch(`/v1/organizations/${c.org.id}`, { kind: f.kind.value, contact_name: f.contact.value || null, contact_email: f.email.value || null, contact_phone: f.phone.value || null, billing_address: f.addr.value || null });
+      const r = await patch(`/v1/team-contracts/${id}`, { name: f.name.value, monthly_cents: fee, end_date: f.end.value || null, terms_days: Number(f.terms.value), po_number: f.po.value || null, notes: f.notes.value || null });
+      teamUi.draft = null;
+      const bits = [r.restarted ? `Contract restarted. The next invoice goes out ${ymd(r.next_invoice_on)}.` : 'Contract saved.',
+        r.sessions_removed ? `${nplural(r.sessions_removed, 'team session')} after the end date came off the schedule.` : null, r.sessions_added ? `${nplural(r.sessions_added, 'team session')} added up to the new end date.` : null];
+      toast(bits.filter(Boolean).join(' ')); render();
+    } catch (x) { fieldErr(cFields, x, cErr); }
+  }); } },
+    h('div', { class: 'form-grid' }, field('Team', f.name), field('Type', f.kind)),
+    h('div', { class: 'form-grid' }, field('Monthly fee ($)', f.fee), field('End date', f.end), field('Terms', f.terms), field('PO number', f.po)),
+    h('p', { class: 'small muted', style: 'margin:0' }, `A new fee applies from the next invoice. Team sessions follow the end date.${ended ? ' To restart, clear the end date or move it to today or later and save. Billing picks up on the next billing day; months it was ended aren\'t billed.' : ''}`),
     h('div', { class: 'dp-label' }, `Billing contact at ${c.org.name}`),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Name', ce.name), field('Email', ce.email), field('Phone', ce.phone)), field('Billing address', ce.addr),
-    h('div', { class: 'row wrap' }, btn('Save', (e) => busy(e.currentTarget, async () => {
-      await patch(`/v1/organizations/${c.org.id}`, { contact_name: ce.name.value || null, contact_email: ce.email.value || null, contact_phone: ce.phone.value || null, billing_address: ce.addr.value || null });
-      await patch(`/v1/team-contracts/${id}`, { monthly_cents: Math.round(Number(fee.value) * 100), end_date: end.value || null, terms_days: Number(terms.value), po_number: po.value || null });
-      toast('Saved.'); render();
-    })), h('span', { class: 'grow' }),
-      ended ? btn('Reactivate', (e) => busy(e.currentTarget, async () => { await patch(`/v1/team-contracts/${id}`, { status: 'active', end_date: null }); render(); }), 'ghost')
-        : btn('End contract', (e) => { if (confirm(`End ${c.org.name} ${c.name}? Invoicing stops and future team sessions are canceled. Unpaid invoices stay open.`)) busy(e.currentTarget, async () => { await patch(`/v1/team-contracts/${id}`, { status: 'ended' }); toast('Contract ended.'); render(); }); }, 'ghost')));
+    h('div', { class: 'form-grid' }, field('Name', f.contact), field('Email', f.email, 'Invoices, statements and reminders go here.'),
+      h('div', { class: 'stack-tight' }, field('Phone', f.phone), c.org.contact_phone ? h('a', { class: 'small', href: `tel:${c.org.contact_phone.replace(/[^\d+]/g, '')}` }, `Call ${c.org.contact_phone}`) : null)),
+    field('Billing address', f.addr), field('Notes (staff only)', f.notes), cErr,
+    h('div', { class: 'row wrap' }, btn('Save contract', null, 'primary', { type: 'submit' }), dirty, h('span', { class: 'grow' }),
+      ended ? null : btn('End contract', (e) => {
+        if (confirm(`End ${c.org.name} ${c.name}? No more invoices go out and future team sessions come off the schedule. Unpaid invoices stay open and the roster is kept.`)) busy(e.currentTarget, async () => {
+          const r = await patch(`/v1/team-contracts/${id}`, { status: 'ended' }); teamUi.draft = null;
+          toast(`Contract ended.${r.sessions_removed ? ` ${nplural(r.sessions_removed, 'future team session')} came off the schedule.` : ''}`); render();
+        });
+      }, 'ghost')));
+  const contractPanel = h('div', { id: 'tm-contract' }, panel('Contract', { subtitle: ended ? `Ended ${ymd(c.end_date)}` : `${money(c.monthly_cents)}/month since ${ymd(c.start_date)}, billed on the ${ordinal(Number(c.start_date.slice(8, 10)))}${c.next_invoice_on ? ` · next invoice ${ymd(c.next_invoice_on)}` : ''}` }, form));
 
-  const extraDesc = input({ placeholder: 'Saturday combine prep' }), extraAmt = input({ type: 'number', step: '0.01', placeholder: '0.00' });
-  const invoicesPanel = panel('Invoices', { subtitle: c.balance_cents ? `${money(c.balance_cents)} unpaid` : 'All paid up.' },
-    c.invoices.length ? c.invoices.map((i) => invoiceRow(i)) : h('p', { class: 'muted' }, `No invoices yet. The first goes out ${ymd(c.next_invoice_on)}.`),
-    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'Bill something extra'),
-      h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-        const i = await post(`/v1/team-contracts/${id}/invoices`, { description: extraDesc.value, amount_cents: Math.round(Number(extraAmt.value) * 100) });
-        toast(`${i.number} ${i.sent_at ? 'emailed' : 'created'}.`); render();
-      }); } }, h('div', { class: 'grow' }, field('What for', extraDesc)), field('Amount ($)', extraAmt), h('div', { style: 'align-self:flex-end' }, btn('Create invoice', null, 'secondary', { type: 'submit' })))));
-
-  const names = h('textarea', { class: 'dp-input', placeholder: 'One athlete per line: Name, position, grad year\nJalen Brooks, QB, 2027\nMarcus Hill, WR, 2028' });
-  const rosterPanel = panel(`Roster · ${c.roster.length}`, { subtitle: c.sessions_held ? `Attendance across ${c.sessions_held} ${c.sessions_held === 1 ? 'session' : 'sessions'} so far` : 'Check athletes in from each team session.' },
-    c.roster.length ? c.roster.map((r) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, [r.athlete_id, r.position, r.grad_year ? `Class of ${r.grad_year}` : null].filter(Boolean).join(' · '))),
-      r.sessions_held ? h('span', { class: 'small muted' }, `${r.sessions_attended}/${r.sessions_held} · ${Math.round((r.sessions_attended / r.sessions_held) * 100)}%`) : null,
-      btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/team-contracts/${id}/roster/${r.id}`); render(); }), 'ghost'))) : h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below.'),
-    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await post(`/v1/team-contracts/${id}/roster`, { names: names.value }); toast(`Roster now has ${r.data.length} athletes.`); render(); }); } },
-      names, h('div', null, btn('Add to roster', null, 'secondary', { type: 'submit' }))));
-
-  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10' }), start: input({ type: 'date', value: bizDate() }) };
-  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
-  const schedPanel = panel('Team sessions', { subtitle: c.series.filter((x) => x.active).map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${x.start_time}`).join(' · ') || 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
-    ended || !locs.data.length ? null : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+  // Team sessions
+  const activeSeries = c.series.filter((x) => x.active);
+  const sd = { loc: select(locs.data.map((l) => [l.id, l.name])), time: input({ type: 'time', value: '15:30' }), dur: input({ type: 'number', value: '90', min: '10', max: '600', inputmode: 'numeric' }),
+    start: input({ type: 'date', value: bizDate() > c.start_date ? bizDate() : c.start_date, max: c.end_date ?? undefined }), coach: coachPicker(coachList.data, null) };
+  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i) }), d));
+  const schedPanel = h('div', { id: 'tm-sessions' }, panel('Team sessions', { subtitle: activeSeries.length ? activeSeries.map((x) => `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${hm12(x.start_time)}`).join('; ') : 'Not on the schedule yet.', action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule') },
+    activeSeries.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${hm12(x.start_time)} · ${x.duration_min} min`),
+      h('span', { class: 'small muted' }, [x.location_name, x.coach_name ?? 'no coach set', x.next_starts_at ? `next ${tzFmt(x.next_starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}` : 'no more sessions scheduled', x.end_date ? `until ${ymd(x.end_date)}` : null].filter(Boolean).join(' · '))),
+      btn('Remove', (e) => { if (confirm('Take these team sessions off the schedule? Future sessions are canceled. Past attendance is kept.')) busy(e.currentTarget, async () => { const r = await del(`/v1/team-contracts/${id}/sessions/${x.id}`); toast(`${nplural(r.sessions_removed, 'future session')} came off the schedule.`); render(); }); }, 'ghost', { 'aria-label': `Remove ${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} at ${hm12(x.start_time)}` }))),
+    ended ? h('p', { class: 'muted small' }, 'This contract has ended. Restart it to schedule team sessions.') : !locs.data.length ? h('p', { class: 'muted small' }, 'Add a location first (Point of sale, Locations).') : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
-      const x = await post(`/v1/team-contracts/${id}/sessions`, { location_id: sd.loc.value, weekdays, start_time: sd.time.value, duration_min: Number(sd.dur.value), start_date: sd.start.value });
-      toast(`${x.upcoming_sessions} team sessions added to your schedule.`); render();
+      if (!weekdays.length) throw new Error('Choose at least one day.');
+      const x = await post(`/v1/team-contracts/${id}/sessions`, { location_id: sd.loc.value, weekdays, start_time: sd.time.value, duration_min: Number(sd.dur.value), start_date: sd.start.value, coach_id: sd.coach.value || null });
+      toast(`${nplural(x.upcoming_sessions, 'team session')} added to your schedule${c.end_date ? `, until ${ymd(c.end_date)}` : ' for the next 8 weeks (more are added as time goes on)'}.`); render();
     }); } },
-      h('div', { class: 'row wrap', style: 'gap:12px' }, days),
-      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Where', sd.loc), field('Starts', sd.time), field('Minutes', sd.dur), field('First day', sd.start)),
-      h('div', null, btn('Add team sessions', null, 'secondary', { type: 'submit' }))));
+      h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:4px 14px' }, days)),
+      h('div', { class: 'form-grid cols-3' }, field('Where', sd.loc), field('Starts', sd.time), field('Minutes', sd.dur)),
+      h('div', { class: 'form-grid' }, field('First day', sd.start), field('Coach', sd.coach)),
+      h('div', null, btn('Add team sessions', null, 'secondary', { type: 'submit' })))));
 
+  // Roster
+  const last = c.recent_sessions[0];
+  const listBox = h('div', { 'aria-live': 'polite' });
+  const drawRoster = () => {
+    const q = teamUi.q.trim().toLowerCase();
+    let rows = c.roster.filter((a) => !q || `${a.name} ${a.athlete_id ?? ''} ${a.position ?? ''}`.toLowerCase().includes(q));
+    if (teamUi.sort === 'attendance') rows = [...rows].sort((x, y) => (x.attendance_rate ?? 2) - (y.attendance_rate ?? 2));
+    if (teamUi.sort === 'grad') rows = [...rows].sort((x, y) => (x.grad_year ?? 9999) - (y.grad_year ?? 9999) || x.name.localeCompare(y.name));
+    fill(listBox, !c.roster.length ? h('p', { class: 'muted' }, 'No athletes yet. Paste the team list below, or add a client you already have.')
+      : !rows.length ? h('p', { class: 'muted' }, `Nobody on the roster matches "${teamUi.q.trim()}".`)
+        : rows.map((a) => {
+          const low = a.attendance_rate != null && a.attendance_rate < 0.6;
+          return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+            h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, a.client_id ? h('a', { class: 'strong', href: `#/clients/${a.client_id}`, style: 'color:inherit' }, a.name) : h('span', { class: 'strong' }, a.name),
+              h('span', { class: 'small muted' }, [a.athlete_id, a.position, a.grad_year ? `Class of ${a.grad_year}` : null].filter(Boolean).join(' · '), ' · ',
+                h('span', { class: low ? 'warn-text' : '' }, a.sessions_held ? `attendance ${pctText(a.attendance_rate)} (${a.sessions_attended} of ${a.sessions_held})` : 'no sessions yet'),
+                a.last_seen ? ` · last here ${tzFmt(a.last_seen, { month: 'short', day: 'numeric' })}` : '')),
+            btn('Remove', (e) => { if (confirm(`Take ${a.name} off this roster? Their profile and results are kept.`)) busy(e.currentTarget, async () => {
+              await del(`/v1/team-contracts/${id}/roster/${a.id}`); render();
+              undoToast(`${a.name} removed from the roster.`, () => busy(null, async () => { await post(`/v1/team-contracts/${id}/roster/${a.id}/restore`); toast(`${a.name} is back on the roster.`); render(); }));
+            }); }, 'ghost', { 'aria-label': `Remove ${a.name} from the roster` }));
+        }));
+  };
+  drawRoster();
+  const find = c.roster.length > 5 ? input({ type: 'search', placeholder: 'Find a player', 'aria-label': 'Find on the roster', value: teamUi.q, autocomplete: 'off' }) : null;
+  find?.addEventListener('input', () => { teamUi.q = find.value; drawRoster(); });
+  const sort = c.roster.length > 5 ? select([['name', 'Name, A to Z'], ['attendance', 'Lowest attendance first'], ['grad', 'Grad year']], { value: teamUi.sort, 'aria-label': 'Sort roster' }) : null;
+  sort?.addEventListener('change', () => { teamUi.sort = sort.value; drawRoster(); });
+  const bars = c.recent_sessions.length > 1 && c.roster.length ? h('div', { class: 'tm-bars', role: 'img', 'aria-label': `Check-ins at the last ${c.recent_sessions.length} team sessions, oldest first: ${c.recent_sessions.slice().reverse().map((s) => `${s.here} of ${Math.max(s.here, s.roster)}`).join(', ')}` },
+    c.recent_sessions.slice().reverse().map((s) => { const r = s.here / Math.max(1, s.here, s.roster); return h('span', { class: r < 0.6 ? 'low' : '', style: `height:${Math.max(2, Math.round(28 * r))}px`, title: `${tzFmt(s.starts_at, { month: 'short', day: 'numeric' })}: ${s.here} of ${Math.max(s.here, s.roster)} here` }); })) : null;
+  const names = textarea('', { rows: '4', placeholder: 'One athlete per line: Name, position, grad year\nJalen Brooks, QB, 2027\nMarcus Hill, WR, 2028', 'aria-label': 'Team list' });
+  const paste = h('details', { open: !c.roster.length || teamUi.pasteOpen, onToggle: (e) => { teamUi.pasteOpen = e.currentTarget.open; } },
+    h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Paste a team list'),
+    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, () => pasteRoster(c, names)); } },
+      names, h('div', null, btn('Check the list', null, 'secondary', { type: 'submit' })),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing is saved until the whole list checks out. Each new player gets a client profile and an Athlete ID (a team-only client: no membership). An Athlete ID on a line puts that client on the team. Names already on the roster are skipped, and names that match a client you already have can be linked instead. Rows copied from a spreadsheet work too.')));
+  const rosterPanel = h('div', { id: 'tm-roster' }, panel(`Roster · ${c.roster.length}`, { subtitle: [c.team_rate != null ? `Team attendance ${pctText(c.team_rate)}` : 'Check athletes in from each team session. Attendance counts from the day each athlete joins.', last ? `last session ${tzFmt(last.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}: ${last.here} of ${Math.max(last.here, last.roster)} here` : null].filter(Boolean).join(' · '), action: bars },
+    h('div', { class: 'row wrap', style: 'gap:8px' }, find ? h('div', { class: 'grow', style: 'min-width:160px' }, find) : null, sort ? h('div', { style: 'min-width:180px' }, sort) : null,
+      btn('Add existing client', () => addExistingDialog(c), 'secondary'),
+      c.roster.length ? btn('Export CSV', () => {
+        downloadCsv(`${`${c.org.name} ${c.name}`.replace(/[^\w]+/g, '-').toLowerCase()}-roster-${bizDate()}.csv`, [['Name', 'Athlete ID', 'Position', 'Grad year', 'Attendance', 'Sessions attended', 'Team sessions', 'Last here'],
+          ...c.roster.map((a) => [a.name, a.athlete_id ?? '', a.position ?? '', a.grad_year ?? '', a.attendance_rate == null ? '' : pctText(a.attendance_rate), a.sessions_attended, a.sessions_held, a.last_seen ? tzFmt(a.last_seen, { year: 'numeric', month: '2-digit', day: '2-digit' }) : ''])]);
+        toast(`Exported ${nplural(c.roster.length, 'athlete')}.`);
+      }, 'ghost') : null),
+    listBox, paste));
+
+  const jumps = [['tm-inv', 'Invoices'], ['tm-roster', 'Roster'], ['tm-sessions', 'Team sessions'], ['tm-contract', 'Contract'], ['tm-eng', 'Goals & messages']];
   fill(main,
-    header(`${c.org.name}`, `${c.name} · ${money(c.monthly_cents)}/month${ended ? ' · ended' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')),
-    c.org.contact_email ? null : h('div', { class: 'test-banner', role: 'note' }, `Add a billing email for ${c.org.name} so invoices and reminders can be emailed.`),
+    header(c.org.name, `${c.name} · ${money(c.monthly_cents)}/month${c.org.kind === 'club' ? ' · club' : ''}${ended ? ` · ended ${ymd(c.end_date)}` : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/teams' }, 'All teams')),
+    h('nav', { class: 'tm-jump', 'aria-label': 'Sections' }, jumps.map(([t, label]) => h('button', { type: 'button', onClick: () => document.getElementById(t)?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
+    c.org.contact_email ? null : h('div', { class: 'test-banner', role: 'note' }, `Add a billing email for ${c.org.name} so invoices, statements and reminders can be emailed.`),
+    ended ? h('div', { class: 'test-banner', role: 'note' }, `This contract ended ${ymd(c.end_date)}. No invoices go out. To restart it, clear the end date or move it later and save.`) : null,
     invoicesPanel,
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, contractPanel, schedPanel), h('div', { class: 'stack', style: 'gap:24px' }, engPanel, rosterPanel)));
+    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px;min-width:0' }, rosterPanel, h('div', { id: 'tm-eng' }, engPanel)), h('div', { class: 'stack', style: 'gap:24px;min-width:0' }, schedPanel, contractPanel)));
+}
+
+// Paste: check the whole list first. Problem lines are listed and nothing is saved; names that match a client you
+// already have need a choice (link them, or add a new athlete) before anything is added.
+async function pasteRoster(c, names) {
+  const text = names.value;
+  if (!text.trim()) { names.focus(); throw new Error('Paste at least one name, one per line.'); }
+  const plan = await post(`/v1/team-contracts/${c.id}/roster/check`, { names: text });
+  const save = async (links = {}) => {
+    const r = await post(`/v1/team-contracts/${c.id}/roster`, { names: text, links });
+    const bits = [r.added ? `${nplural(r.added, 'new athlete')} added` : null, r.linked ? `${r.linked} existing ${r.linked === 1 ? 'client' : 'clients'} linked` : null, r.skipped ? `${r.skipped} already on the roster` : null].filter(Boolean);
+    teamUi.pasteOpen = false;
+    toast(bits.length ? `${bits.join(', ')}.` : 'Nothing new to add.'); render();
+  };
+  const errors = plan.rows.filter((r) => r.status === 'error'), matches = plan.rows.filter((r) => r.status === 'match');
+  if (errors.length) {
+    teamDialog(`Fix ${nplural(errors.length, 'line')} first`, h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, 'Nothing was added. Each line needs a first and last name; the position and grad year are optional.'),
+      h('ul', { style: 'margin:0;padding-left:18px' }, errors.map((r) => h('li', null, r.error)))), [{ label: 'Edit the list', variant: 'primary', onClick: () => { setTimeout(() => names.focus(), 0); } }]);
+    return;
+  }
+  if (!matches.length) return save();
+  const picks = matches.map((m) => select([['', 'Choose…'], ...m.matches.map((x) => [x.id, `Link to ${x.name} (${[x.athlete_id, x.birth_date ? `born ${ymd(x.birth_date)}` : null, x.teams ? `on ${x.teams}` : null].filter(Boolean).join(', ')})`]), ['new', 'Add as a new athlete']], { value: '', 'aria-label': `What to do with ${m.name}` }));
+  teamDialog('Link clients you already have?', h('div', { class: 'stack' },
+    h('p', { style: 'margin:0' }, `${matches.length === 1 ? 'One name matches' : `${matches.length} names match`} a client you already have. Link to put that client on this team (their app gets team goals and messages), or add a new athlete if it's someone else with the same name.`),
+    matches.map((m, n) => h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, `Line ${m.line}: ${m.name}`, m.position ? h('span', { class: 'muted small' }, ` · ${m.position}`) : null, m.grad_year ? h('span', { class: 'muted small' }, ` · ${m.grad_year}`) : null), picks[n])),
+    h('p', { class: 'small muted', style: 'margin:0' }, `${nplural(plan.counts.new, 'other new name')}${plan.counts.skip ? `, ${plan.counts.skip} already on the roster` : ''}.`)),
+  [{ label: 'Add to roster', variant: 'primary', onClick: async () => {
+    const undecided = matches.filter((m, n) => !picks[n].value);
+    if (undecided.length) throw new Error(`Choose what to do with ${undecided.map((m) => m.name).join(', ')}.`);
+    await save(Object.fromEntries(matches.map((m, n) => [m.line, picks[n].value]).filter(([, val]) => val && val !== 'new')));
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+
+// Search every client and put one on this roster. Someone on another team is asked about first.
+function addExistingDialog(c) {
+  const q = input({ type: 'search', autocomplete: 'off', placeholder: 'Like Ava Lopez or AVALOP2026' });
+  const out = h('div', { 'aria-live': 'polite' }, h('p', { class: 'small muted', style: 'margin:0' }, 'Type at least two letters.'));
+  let timer;
+  const add = async (b, x, extra = {}) => {
+    b.disabled = true;
+    try {
+      const r = await post(`/v1/team-contracts/${c.id}/roster/existing`, { client_id: x.id, ...extra });
+      document.getElementById('dialog').close();
+      toast(`${x.name} added to the roster${r.moved_from.length ? ` and taken off ${r.moved_from.join(', ')}` : ''}.`); render();
+    } catch (e) {
+      b.disabled = false;
+      if (e.code !== 'confirm_required') return toast(e.message, 'warn');
+      fill(out, h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, e.message), h('div', { class: 'row wrap' },
+        btn('Move them here', (ev) => add(ev.currentTarget, x, { move: true }), 'secondary'), btn('Keep them on both', (ev) => add(ev.currentTarget, x, { keep: true }), 'secondary'), btn('Back', () => search(), 'ghost'))));
+    }
+  };
+  const search = async () => {
+    const val = q.value.trim();
+    if (val.length < 2) return fill(out, h('p', { class: 'small muted', style: 'margin:0' }, 'Type at least two letters.'));
+    let rows;
+    try { rows = (await get(`/v1/team-contracts/${c.id}/client-search?q=${encodeURIComponent(val)}`)).data; } catch (e) { return fill(out, h('p', { class: 'dp-error' }, e.message)); }
+    fill(out, rows.length ? rows.map((x) => h('div', { class: 'list-item', style: 'min-height:52px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, [x.athlete_id, x.teams ? `on ${x.teams}` : null].filter(Boolean).join(' · '))),
+      x.on_roster ? h('span', { class: 'small muted' }, 'On this roster') : btn(x.teams ? 'Add or move' : 'Add', (e) => add(e.currentTarget, x), 'secondary', { 'aria-label': `Add ${x.name}` })))
+      : h('p', { class: 'small muted', style: 'margin:0' }, 'No clients match. Paste their name into the team list instead to add them as a new athlete.'));
+  };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 200); });
+  teamDialog('Add an existing client', h('div', { class: 'stack' }, field('Name or Athlete ID', q), out), [{ label: 'Done', variant: 'ghost' }]);
+  q.focus();
 }
 
 // ---------- Athlete ID ----------
@@ -1803,143 +2704,406 @@ function fmtResult(v, unit, decimals = 2, { delta = false } = {}) {
   const n = Number(v).toFixed(decimals ?? 2);
   return `${n}${UNIT_LABEL[unit] === '' ? '' : ` ${UNIT_LABEL[unit] ?? unit}`}`;
 }
-const PRESETS = [
-  ['Combine', ['height', 'weight', 'dash_40yd', 'pro_agility', 'three_cone', 'vertical_standing', 'broad_jump']],
-  ['Force plate', ['cmj', 'squat_jump', 'drop_jump', 'imtp']],
-  ['Baseball showcase', ['height', 'weight', 'dash_60yd', 'dash_30yd', 'pitch_velocity', 'exit_velocity', 'infield_velocity', 'outfield_velocity', 'pop_time']],
-  ['Basketball', ['height', 'wingspan', 'standing_reach', 'vertical_standing', 'vertical_max', 'lane_agility', 'nba_shuttle', 'three_quarter_court']],
-  ['Hockey', ['grip', 'broad_jump', 'cmj', 'pro_agility', 'bench_reps_load', 'pull_ups', 'y_balance', 'wingate']],
-  ['Soccer', ['sprint_10m', 'sprint_30m', 'cmj', 'five_oh_five', 'ift_30_15', 'yoyo_ir1']],
-  ['Youth', ['height', 'seated_height', 'weight', 'sprint_5m', 'sprint_10m', 'vertical_standing', 'broad_jump', 'five_oh_five', 'plank', 'beep_test']]
-];
+// Values as typed on a testing day: 4.71, "4,71", 8'5" for feet and inches, 1:32 for minutes and seconds.
+function parseTyped(raw, unit) {
+  const t = String(raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!t) return null;
+  const fi = t.match(/^(\d+)\s*(?:'|′|ft)\s*(\d+(?:\.\d+)?)?\s*(?:"|″|in)?$/);
+  if (fi && unit === 'in') return Number(fi[1]) * 12 + Number(fi[2] ?? 0);
+  const ms = t.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/);
+  if (ms && unit === 's') return Number(ms[1]) * 60 + Number(ms[2]);
+  const n = /^-?\d+,\d+$/.test(t) ? Number(t.replace(',', '.')) : Number(t);
+  return Number.isFinite(n) ? n : NaN;
+}
+// A metric's possible range is [lowest, highest] (the coach's own from the Test library, or the built-in one); a built-in
+// range can be one-sided (null for the open end), like the server's.
+const outOfRange = (v, r) => !!r && ((r[0] != null && v < r[0]) || (r[1] != null && v > r[1]));
+const rangeWords = (r, unit) => { const u = UNIT_LABEL[unit] ? ` ${UNIT_LABEL[unit]}` : ''; return r[0] != null && r[1] != null ? `${r[0]}–${r[1]}${u}` : r[0] != null ? `at least ${r[0]}${u}` : `at most ${r[1]}${u}`; };
+const typedHint = (metric) => (metric.unit === 'in' && (metric.range?.[1] ?? 0) >= 60 ? 'Feet and inches work: 8\'5"' : metric.unit === 's' && (metric.range?.[1] ?? 0) >= 90 ? 'Minutes work: 1:32' : null);
+const better = (metric, a, b) => (metric.better === 'lower' ? a < b : a > b);
+const shortTest = (t) => t.name.replace(/ \(.*\)$/, '');
+// Answers a 409 confirmation_required by asking, then sends the same request again with the confirmation.
+async function withConfirm(send, ask) {
+  try { return await send(false); }
+  catch (e) { if (e.code !== 'confirmation_required') throw e; if (!confirm(ask(e))) return null; return send(true); }
+}
 
+// Front desk enters results and adds walk-ups; planning days, uploads, devices and linking are for owners and coaches.
+const deskStop = (main, title) => (state.user?.role === 'front_desk' ? (fill(main, header(title, null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')), h('div', { class: 'empty' }, 'Owners and coaches do this. You can enter results and add walk-ups on a testing day.')), true) : false);
+let testingFilter = { status: 'all', q: '' };
 async function viewTesting(main) {
-  const desk = state.user?.role === 'front_desk';          // front desk can't open devices or the results queue
-  const [days, integrations, waiting] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations'), desk ? { n: 0 } : get('/v1/queue')]);
+  const desk = state.user?.role === 'front_desk';          // front desk can't open devices, uploads or the results queue
+  const [days, integrations] = await Promise.all([get('/v1/testing-sessions'), desk ? { data: [] } : get('/v1/integrations')]);
   const connected = integrations.data.filter((i) => i.connected);
+  const list = h('div', { class: 'stack-tight' });
+  const toggles = [['all', 'All'], ['open', 'Open'], ['shared', 'Shared']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(testingFilter.status === k), onClick: () => { testingFilter.status = k; toggles.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.k === k))); draw(); }, 'data-k': k }, label));
+  const find = input({ type: 'search', placeholder: 'Find a day by name or team', value: testingFilter.q, 'aria-label': 'Find a testing day', style: 'max-width:320px' });
+  find.addEventListener('input', () => { testingFilter.q = find.value; draw(); });
+  function draw() {
+    const q = testingFilter.q.trim().toLowerCase();
+    const shown = days.data.filter((d) => (testingFilter.status === 'all' || d.status === testingFilter.status) && (!q || `${d.name} ${d.team_name ?? ''}`.toLowerCase().includes(q)));
+    fill(list, shown.length ? shown.map((d) => {
+      const pct = d.progress.planned ? Math.round((d.progress.done / d.progress.planned) * 100) : 0;
+      return h('a', { class: 'list-item', href: `#/testing/${d.id}`, style: 'text-decoration:none;color:inherit;flex-wrap:wrap' },
+        h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, d.name),
+          h('span', { class: 'small muted' }, [ymd(d.date), d.team_name, `${d.athletes_count} ${d.athletes_count === 1 ? 'athlete' : 'athletes'}`, `${d.tests.length} ${d.tests.length === 1 ? 'test' : 'tests'}`].filter(Boolean).join(' · '))),
+        d.status === 'shared' ? h('span', { class: 'dp-badge dp-badge--good' }, 'Shared')
+          : h('span', { class: `dp-badge dp-badge--${d.progress.done ? 'neutral' : 'muted'}`, title: 'Athlete-and-test pairs with a result' }, d.progress.planned ? `${d.progress.done}/${d.progress.planned} done (${pct}%)` : 'No tests'));
+    }) : h('div', { class: 'empty' }, days.data.length ? 'No testing days match. Clear the search or pick All.' : desk ? 'No testing days yet. An owner or coach starts one.' : 'No testing days yet. Start one, or upload results from a device.'));
+  }
+  draw();
   fill(main,
-    waiting.n ? h('div', { class: 'test-banner row', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waiting.n} ${waiting.n === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
-    header('Testing', 'Combines, evaluations and team testing. Enter results by hand or stopwatch, import files, or connect your devices.', h('div', { class: 'row' },
-      h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'Test library'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/connections' }, 'Devices'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'), h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/new' }, 'New testing day'))),
+    days.waiting ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${days.waiting} ${days.waiting === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.${desk ? ' An owner or coach links them.' : ''}`), desk ? null : h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
+    header('Testing', 'Combines, evaluations and team testing. Enter results by hand or stopwatch, upload sheets, or connect your devices.', h('div', { class: 'row wrap' },
+      h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'Test library'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/connections' }, 'Devices'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/new' }, 'New testing day'))),
     connected.length ? h('p', { class: 'small muted' }, `Connected: ${connected.map((i) => i.name.split(' (')[0]).join(', ')}.`) : null,
-    panel('Testing days', {}, days.data.length ? days.data.map((d) => h('a', { class: 'list-item', href: `#/testing/${d.id}`, style: 'text-decoration:none;color:inherit' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, d.name), h('span', { class: 'small muted' }, `${ymd(d.date)} · ${d.athletes_count} athletes · ${d.tests.length} tests`)),
-      h('span', { class: `dp-badge dp-badge--${d.results_count ? 'good' : 'muted'}` }, `${d.results_count} results`))) : h('div', { class: 'empty' }, 'No testing days yet. Start one, or import results from a device.')));
+    panel('Testing days', { action: h('div', { class: 'row wrap tm-views' }, toggles) }, h('div', null, find), list));
 }
 
 async function viewNewTesting(main) {
-  const [lib, clientsList, contracts] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/team-contracts')]);
-  const name = input({ value: 'Testing day' }), date = input({ type: 'date', value: bizDate() });
-  const team = select([['', 'Individual athletes'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
+  if (deskStop(main, 'New testing day')) return;
+  const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
+  const [lib, clientsList, teamList, days, presetList] = await Promise.all([get('/v1/tests'), get('/v1/clients'), get('/v1/teams'), get('/v1/testing-sessions'), get('/v1/test-presets')]);
+  const name = input({ value: 'Testing day', 'aria-label': 'Name' }), date = input({ type: 'date', value: bizDate() });
+  let nameTouched = false;
+  name.addEventListener('input', () => { nameTouched = true; });
+  const setName = (text) => { if (!nameTouched) name.value = text; };
+  const teams = teamList.data;                              // active teams, names only (coaches can't see contracts)
+  const team = select([['', 'Individual athletes'], ...teams.map((c) => [c.id, `${c.org_name} ${c.name} (${c.roster_count})`])], { value: '' });
+  const retest = select([['', 'No, pick athletes and tests'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)}, ${d.athletes_count} athletes, ${d.tests.length} tests)`])], { value: qs.get('retest') ?? '' });
+
+  // Athletes: find, tick all shown, clear.
   const picked = new Set();
+  const athletes = clientsList.data.map((c) => ({ ...c, cb: h('input', { type: 'checkbox', 'aria-label': c.name, onChange: (e) => { e.target.checked ? picked.add(c.id) : picked.delete(c.id); countA(); } }) }));
+  const athleteRows = athletes.map((a) => { const row = h('label', { class: 'row small ts-pick' }, a.cb, h('span', null, a.name), h('span', { class: 'muted', style: 'font-family:var(--font-mono);font-size:12px' }, a.athlete_id)); a.row = row; return row; });
+  const findA = input({ type: 'search', placeholder: 'Find an athlete by name or ID', 'aria-label': 'Find an athlete' });
+  const aCount = h('span', { class: 'small muted' });
+  const countA = () => { aCount.textContent = `${picked.size} picked`; };
+  const shownA = () => athletes.filter((a) => a.row.style.display !== 'none');
+  findA.addEventListener('input', () => { const q = findA.value.trim().toLowerCase(); athletes.forEach((a) => { a.row.style.display = !q || `${a.name} ${a.athlete_id}`.toLowerCase().includes(q) ? '' : 'none'; }); });
+  const athleteBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Athletes (walk-ups can be added on the day)'),
+    h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:220px' }, findA),
+      btn('Tick all shown', () => { shownA().forEach((a) => { a.cb.checked = true; picked.add(a.id); }); countA(); }, 'secondary'),
+      btn('Clear', () => { athletes.forEach((a) => { a.cb.checked = false; }); picked.clear(); countA(); }, 'ghost'), aCount),
+    h('div', { class: 'ts-picklist' }, athleteRows.length ? athleteRows : h('p', { class: 'muted small' }, 'No clients yet. Add clients first, or pick a team.')));
+  countA();
+
+  // Tests: find, presets, and the running order with remove buttons.
+  const order = [];
   const testBoxes = new Map();
+  const orderList = h('ol', { class: 'ts-order' });
+  const drawOrder = () => fill(orderList, order.length ? order.map((k, i) => { const t = lib.data.find((x) => x.key === k);
+    return h('li', { class: 'row', style: 'gap:8px' }, h('span', { class: 'muted small', style: 'min-width:20px' }, `${i + 1}.`), h('span', { class: 'grow' }, t.name), btn('×', () => toggleTest(k, false), 'ghost', { 'aria-label': `Remove ${t.name}`, class: 'dp-btn dp-btn--ghost ts-x' })); })
+    : h('li', { class: 'muted small', style: 'list-style:none' }, 'No tests yet. Tick tests below or start from a preset.'));
+  const toggleTest = (k, on) => { const cb = testBoxes.get(k); if (cb) cb.checked = on; const i = order.indexOf(k); if (on && i < 0) order.push(k); if (!on && i >= 0) order.splice(i, 1); drawOrder(); };
   const byCat = lib.categories.map((cat) => [cat, lib.data.filter((t) => t.category === cat.key)]).filter(([, ts]) => ts.length);
-  const testPicker = h('div', { class: 'stack' }, byCat.map(([cat, ts]) => h('details', null, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:36px' }, cat.name),
-    h('div', { class: 'row wrap', style: 'gap:4px 16px;margin:8px 0' }, ts.map((t) => { const cb = h('input', { type: 'checkbox', value: t.key }); testBoxes.set(t.key, cb); return h('label', { class: 'row small', style: 'gap:6px;min-height:32px' }, cb, t.name); })))));
-  const presets = h('div', { class: 'row wrap' }, PRESETS.map(([label, keys]) => btn(label, () => { keys.forEach((k) => { const cb = testBoxes.get(k); if (cb) { cb.checked = true; cb.closest('details').open = true; } }); }, 'secondary')));
-  const athleteList = h('div', { class: 'row wrap', style: 'gap:4px 16px' }, clientsList.data.filter((c) => c.status !== 'canceled').map((c) => {
-    const cb = h('input', { type: 'checkbox', onChange: (e) => (e.target.checked ? picked.add(c.id) : picked.delete(c.id)) });
-    return h('label', { class: 'row small', style: 'gap:6px;min-height:32px' }, cb, c.name);
-  }));
-  const athleteBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Athletes (you can add walk-ups on the day)'), athleteList);
-  team.addEventListener('change', () => { athleteBox.style.display = team.value ? 'none' : ''; });
-  fill(main, header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or pulled from devices.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Cancel')),
+  const catBlocks = byCat.map(([cat, ts]) => {
+    const labels = ts.map((t) => { const cb = h('input', { type: 'checkbox', value: t.key, onChange: (e) => toggleTest(t.key, e.target.checked) }); testBoxes.set(t.key, cb); const l = h('label', { class: 'row small ts-pick' }, cb, t.name); l.dataset.search = `${t.name} ${t.key} ${(t.aliases ?? []).join(' ')}`.toLowerCase(); return l; });
+    const d = h('details', null, h('summary', { class: 'strong ts-summary' }, cat.name), h('div', { class: 'row wrap', style: 'gap:0 16px;margin:4px 0 8px' }, labels));
+    return { d, labels };
+  });
+  const findT = input({ type: 'search', placeholder: 'Find a test', 'aria-label': 'Find a test' });
+  findT.addEventListener('input', () => { const q = findT.value.trim().toLowerCase(); catBlocks.forEach(({ d, labels }) => { let any = false; labels.forEach((l) => { const hit = !q || l.dataset.search.includes(q); l.style.display = hit ? '' : 'none'; any ||= hit; }); d.style.display = any ? '' : 'none'; d.open = !!q && any; }); });
+  // Presets are kept in the Test library; a preset adds its tests in its own order.
+  const usePreset = (p) => { p.tests.forEach((t) => { if (testBoxes.has(t.key)) toggleTest(t.key, true); }); setName(team.value ? name.value : p.name); };
+  const usable = presetList.data.filter((p) => p.tests.length);
+  const presets = usable.length ? h('div', { class: 'row wrap' }, usable.map((p) => btn(p.name, () => usePreset(p), 'secondary', { title: p.tests.map((t) => t.name).join(', ') })))
+    : h('p', { class: 'small muted', style: 'margin:0' }, 'No presets yet. ', h('a', { href: '#/testing/library?tab=presets' }, 'Make one in the Test library'), ' to start faster next time.');
+  const testsBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Tests, in running order'), orderList,
+    h('div', { class: 'small muted' }, 'Start from a preset, then adjust.'), presets, h('div', { style: 'max-width:320px' }, findT), catBlocks.map((c) => c.d));
+  drawOrder();
+
+  const retestNote = h('p', { class: 'small muted' });
+  const sync = () => {
+    const past = days.data.find((d) => d.id === retest.value);
+    athleteBox.style.display = past || team.value ? 'none' : '';
+    testsBox.style.display = past ? 'none' : '';
+    team.disabled = !!past;
+    retestNote.textContent = past ? `Same ${past.athletes_count} athletes and ${past.tests.length} tests as ${past.name}. Archived athletes are left out.` : '';
+    if (past) setName(`${past.name} retest`);
+    else if (team.value) { const c = teams.find((x) => x.id === team.value); setName(`${c.org_name} ${c.name} testing`); }
+  };
+  team.addEventListener('change', sync); retest.addEventListener('change', sync);
+  sync();
+  fill(main, header('New testing day', 'Pick the athletes and tests. Results can be entered by hand, by stopwatch, or uploaded from a sheet or device.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Cancel')),
     h('form', { class: 'dp-panel stack', style: 'max-width:900px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const tests = [...testBoxes.entries()].filter(([, cb]) => cb.checked).map(([k]) => k);
-      if (!tests.length) throw new Error('Choose at least one test.');
-      const d = await post('/v1/testing-sessions', { name: name.value, date: date.value, tests, contract_id: team.value || undefined, athletes: team.value ? undefined : [...picked].map((client_id) => ({ client_id })) });
+      if (!date.value) throw new Error('Pick the date.');
+      let d;
+      if (retest.value) d = await post('/v1/testing-sessions', { retest_of: retest.value, name: name.value, date: date.value });
+      else {
+        if (!order.length) throw new Error('Choose at least one test.');
+        if (!team.value && !picked.size) throw new Error('Pick at least one athlete, or a team. Walk-ups can be added on the day.');
+        d = await post('/v1/testing-sessions', { name: name.value, date: date.value, tests: order, contract_id: team.value || undefined, athletes: team.value ? undefined : [...picked].map((client_id) => ({ client_id })) });
+      }
+      toast(`${d.name} is ready: ${d.athletes.length} ${d.athletes.length === 1 ? 'athlete' : 'athletes'}${d.left_out ? `, ${d.left_out} archived ${d.left_out === 1 ? 'athlete' : 'athletes'} left out` : ''}.`);
       location.hash = `#/testing/${d.id}`;
     }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 2fr' }, field('Name', name), field('Date', date), field('Team', team)),
-      athleteBox, h('div', { class: 'dp-label' }, 'Tests'), h('div', { class: 'small muted' }, 'Start from a preset, then adjust.'), presets, testPicker,
+      h('div', { class: 'form-grid cols-3' }, field('Name', name), field('Date', date), field('Team', team)),
+      field('Retest a past day?', retest), retestNote,
+      athleteBox, testsBox,
       h('div', null, btn('Start testing day', null, 'primary', { type: 'submit' }))));
+  const start = usable.find((p) => p.id === qs.get('preset'));
+  if (start) usePreset(start);        // "Plan a day" from a preset in the Test library
 }
 
-// Entry screen: one test at a time, every athlete's attempts, and a stopwatch for hand timing.
-let testingState = { testKey: null, athleteIdx: 0 };
+// Entry screen: one test at a time, every athlete's attempts, a stopwatch for hand timing, and live rankings.
+let testingState = { dayId: null, testKey: null, athleteIdx: 0, view: 'entry', find: '', extra: {}, focus: null };
 let stopwatchRunning = false;
+// Stopwatch memory across redraws: a time that couldn't be saved (pending) and the last saved time (for Undo).
+let swState = { pending: null, last: null };
+let swEscape = null;
 async function viewTestingDay(main, id) {
-  const [day, clientsList, notes] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients'), get(`/v1/testing-sessions/${id}/notes`).catch(() => null)]);
-  if (!day.tests.length) return fill(main, header(day.name, ymd(day.date)), h('div', { class: 'empty' }, 'No tests on this day.'));
-  if (!day.tests.some((t) => t.key === testingState.testKey)) testingState = { testKey: day.tests[0].key, athleteIdx: 0 };
-  const test = day.tests.find((t) => t.key === testingState.testKey);
-  const metric = test.metrics[0];
-  const units = metric.units;
-  const unitSel = select(units.map((u) => [u, UNIT_LABEL[u] || u]), { value: metric.unit, 'aria-label': 'Unit' });
-  const sides = test.sides === 'lr' ? ['L', 'R'] : [null];
-  const hand = h('input', { type: 'checkbox', checked: !!test.timed });
+  const manage = state.user?.role !== 'front_desk';
+  const [day, clientsList, notes, lib] = await Promise.all([get(`/v1/testing-sessions/${id}`), get('/v1/clients'), get(`/v1/testing-sessions/${id}/notes`).catch(() => null), manage ? get('/v1/tests') : { data: [] }]);
+  if (testingState.dayId !== id) { testingState = { dayId: id, testKey: null, athleteIdx: 0, view: 'entry', find: '', extra: {}, focus: null }; swState = { pending: null, last: null }; }
+  stopwatchRunning = false;                                // a fresh screen has no clock running
+  // Redraw keeping the scroll position; while the clock runs, stopping it redraws instead (so the run isn't lost).
+  const redraw = () => { if (stopwatchRunning) return; const y = window.scrollY; render(); setTimeout(() => window.scrollTo(0, y), 250); };
   const athletes = day.athletes;
   const who = (a) => (a.client_id ? { client_id: a.client_id } : { roster_id: a.roster_id });
-  const results = (a, side) => a.results.filter((r) => r.test_id === test.id && r.metric === metric.key && (r.side ?? null) === side);
-  const bestOf = (rs) => (rs.length ? (metric.better === 'lower' ? Math.min(...rs.map((r) => r.value)) : Math.max(...rs.map((r) => r.value))) : null);
+  const akey = (a) => a.client_id ?? a.roster_id;
 
-  async function save(a, side, value, attempt, timing) {
-    const r = await post('/v1/results', { session_id: id, results: [{ ...who(a), test: test.key, metric: metric.key, value, unit: unitSel.value, side, attempt, timing, recorded_at: `${day.date}T${new Date().toISOString().slice(11)}` }] });
+  // Share: preview who it reaches first.
+  async function share() {
+    const pv = await get(`/v1/testing-sessions/${id}/share-preview`);
+    if (!pv.with_results) return toast('Enter some results before sharing this day.', 'warn');
+    const note = textarea(day.parent_note ?? '', { rows: '3', 'aria-label': 'Note for families', placeholder: 'Optional. It appears on their report and in the email.' });
+    const list = (label, names) => (names.length ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'muted' }, `${label} (${names.length}): `), names.join(', ')) : null);
+    teamDialog('Share with parents', h('div', { class: 'stack' },
+      h('p', { style: 'margin:0' }, `${pv.with_results} of ${pv.athletes} ${pv.athletes === 1 ? 'athlete' : 'athletes'} ${pv.with_results === 1 ? 'has' : 'have'} results. They appear in the parent portal, and ${pv.families ? `${pv.families} ${pv.families === 1 ? 'family is' : 'families are'} emailed` : 'no family is emailed'}.`),
+      list('No results yet, not shared', pv.without_results), list('No parent email, not emailed', pv.no_email),
+      field('A note for families', note)),
+      [{ label: pv.families ? `Share and email ${pv.families} ${pv.families === 1 ? 'family' : 'families'}` : 'Share without emails', variant: 'primary', onClick: async () => {
+        const r = await post(`/v1/testing-sessions/${id}/share`, { parent_note: note.value });
+        toast(r.families_notified ? `Shared. ${r.families_notified} ${r.families_notified === 1 ? 'family' : 'families'} emailed.` : 'Shared. No emails were sent.'); redraw(); } },
+      { label: 'Cancel', variant: 'ghost' }]);
+  }
+  // After sharing: late results can be sent to just the families who have something new.
+  let banner = null;
+  if (manage && day.shared_at && day.new_since_share) {
+    const pv = await get(`/v1/testing-sessions/${id}/share-preview`);
+    banner = h('div', { class: 'test-banner row wrap', style: 'gap:12px' },
+      h('span', { class: 'grow' }, `${pv.new_since_share.length} ${pv.new_since_share.length === 1 ? 'athlete has' : 'athletes have'} results added since families were emailed (${pv.new_since_share.slice(0, 4).join(', ')}${pv.new_since_share.length > 4 ? '…' : ''}).${pv.new_families ? '' : ' None of them has a parent email.'}`),
+      pv.new_families ? btn(`Email ${pv.new_families} ${pv.new_families === 1 ? 'family' : 'families'}`, (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/testing-sessions/${id}/share`, { only_new: true }); toast(`${r.families_notified} ${r.families_notified === 1 ? 'family' : 'families'} emailed.`); redraw(); }), 'outline')
+        : btn('Save and mark as shared', (e) => busy(e.currentTarget, async () => { await post(`/v1/testing-sessions/${id}/share`, { only_new: true, notify: false }); toast('Marked as shared. No emails were sent.'); redraw(); }), 'outline'));
+  }
+
+  // Edit day: rename, re-date, remove tests, retest these athletes, delete.
+  function editDay() {
+    const nm = input({ value: day.name, 'aria-label': 'Name' }), dt = input({ type: 'date', value: day.date, 'aria-label': 'Date' });
+    const testsList = h('div', { class: 'stack-tight' }, day.tests.map((t) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, t.name),
+      day.tests.length > 1 ? btn('Remove', async (e) => {
+        const b = e.currentTarget; b.disabled = true;
+        try {
+          const r = await withConfirm((ok) => patch(`/v1/testing-sessions/${id}`, { tests: day.tests.filter((x) => x.key !== t.key).map((x) => x.key), ...(ok ? { confirm: true } : {}) }),
+            (err) => `${t.name} has ${err.details.results} ${err.details.results === 1 ? 'result' : 'results'} on this day. Removing the test deletes ${err.details.results === 1 ? 'it' : 'them'} from every profile. Remove it?`);
+          if (r) { document.getElementById('dialog').close(); toast(`${t.name} removed${r.deleted_results ? ` with ${r.deleted_results} ${r.deleted_results === 1 ? 'result' : 'results'}` : ''}.`); redraw(); }
+        } catch (x) { toast(x.message, 'warn'); } finally { b.disabled = false; }
+      }, 'ghost') : null)));
+    const canDelete = !day.shared_at || isOwner();
+    teamDialog('Edit testing day', h('div', { class: 'stack' },
+      h('div', { class: 'form-grid' }, field('Name', nm), field('Date', dt)),
+      h('div', { class: 'dp-label' }, 'Tests'), testsList,
+      h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/new?retest=${id}`, onClick: () => document.getElementById('dialog').close() }, 'Retest these athletes'),
+        canDelete ? btn('Delete this day', async (e) => {
+          const b = e.currentTarget; b.disabled = true;
+          try {
+            const r = await withConfirm((ok) => del(`/v1/testing-sessions/${id}${ok ? '?confirm=true' : ''}`), (err) => `${day.name} has ${err.details.results} ${err.details.results === 1 ? 'result' : 'results'}. Deleting the day deletes ${err.details.results === 1 ? 'it' : 'them'} from every profile. This can't be undone. Delete it?`);
+            if (r) { document.getElementById('dialog').close(); toast(`${day.name} deleted.`); location.hash = '#/testing'; }
+          } catch (x) { toast(x.message, 'warn'); } finally { b.disabled = false; }
+        }, 'ghost', { style: 'color:var(--amber)' }) : h('span', { class: 'small muted' }, 'Families have these results. Only the owner can delete a shared day.'))),
+      [{ label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/testing-sessions/${id}`, { name: nm.value, date: dt.value }); toast('Saved.'); redraw(); } }, { label: 'Cancel', variant: 'ghost' }]);
+  }
+
+  const addTest = manage ? select([['', 'Add a test…'], ...lib.data.filter((t) => !day.tests.some((x) => x.key === t.key)).map((t) => [t.key, t.name])], { 'aria-label': 'Add a test to this day', style: 'max-width:240px' }) : null;
+  addTest?.addEventListener('change', () => busy(addTest, async () => { if (!addTest.value) return; await patch(`/v1/testing-sessions/${id}`, { tests: [...day.tests.map((t) => t.key), addTest.value] }); testingState.testKey = addTest.value; toast('Test added.'); redraw(); }));
+  const walkUp = select([['', 'Add a walk-up athlete…'], ...clientsList.data.filter((c) => !athletes.some((a) => a.client_id === c.id)).map((c) => [c.id, `${c.name} (${c.athlete_id})`])], { 'aria-label': 'Add a walk-up athlete' });
+  walkUp.addEventListener('change', () => busy(walkUp, async () => { if (!walkUp.value) return; await post(`/v1/testing-sessions/${id}/athletes`, { client_id: walkUp.value }); toast('Added.'); redraw(); }));
+  const headerActions = h('div', { class: 'row wrap' },
+    manage ? (day.shared_at ? btn('Shared with parents ✓', (e) => { if (confirm('Hide these results from families again?')) busy(e.currentTarget, async () => { await del(`/v1/testing-sessions/${id}/share`); toast('Hidden from families.'); redraw(); }); }, 'outline')
+      : btn('Share with parents', (e) => busy(e.currentTarget, share), day.tests.some((t) => t.timed) ? 'secondary' : 'primary')) : null,
+    manage ? btn('Edit day', editDay, 'secondary') : null,
+    btn('Download sheet', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?session_id=${id}`)), 'secondary'),
+    manage ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/upload?session=${id}` }, 'Upload results') : null,
+    h('a', { class: 'dp-btn dp-btn--ghost', href: '#/testing' }, 'All testing days'));
+  const subtitle = `${ymd(day.date)} · ${athletes.length} ${athletes.length === 1 ? 'athlete' : 'athletes'} · ${day.shared_at ? 'Shared with families' : 'Not shared yet'}`;
+  if (!day.tests.length) return fill(main, header(day.name, subtitle, headerActions), h('div', { class: 'empty' }, 'No tests on this day.', manage ? h('div', { style: 'margin-top:12px;display:flex;justify-content:center' }, addTest) : null));
+  if (!day.tests.some((t) => t.key === testingState.testKey)) { testingState.testKey = day.tests[0].key; testingState.athleteIdx = 0; }
+  const test = day.tests.find((t) => t.key === testingState.testKey);
+  const metric = test.metrics[0];
+  const unitSel = select(metric.units.map((u) => [u, UNIT_LABEL[u] || u]), { value: metric.unit, 'aria-label': 'Unit' });
+  const sides = test.sides === 'lr' ? ['L', 'R'] : [null];
+  const hand = h('input', { type: 'checkbox', checked: !!test.timed });
+  const resultsOf = (a, side, t = test, m = metric) => a.results.filter((r) => r.test_id === t.id && r.metric === m.key && (r.side ?? null) === side).sort((x, y) => (x.attempt ?? 99) - (y.attempt ?? 99));
+  const bestOf = (rs, m = metric) => (rs.length && m.better !== 'none' ? (m.better === 'lower' ? Math.min(...rs.map((r) => r.value)) : Math.max(...rs.map((r) => r.value))) : rs.length ? rs[rs.length - 1].value : null);
+  const prevOf = (a, side, t = test, m = metric) => a.previous_best?.[`${t.key}|${m.key}|${side ?? ''}`] ?? null;
+  const doneFor = (t) => athletes.filter((a) => (t.sides === 'lr' ? ['L', 'R'] : [null]).every((sd) => resultsOf(a, sd, t, t.metrics[0]).length)).length;
+
+  async function save(a, side, value, attempt, timing, source) {
+    const r = await post('/v1/results', { session_id: id, results: [{ ...who(a), test: test.key, metric: metric.key, value, unit: unitSel.value, side, attempt, timing, source, recorded_at: `${day.date}T${new Date().toISOString().slice(11)}` }] });
     if (r.errors.length) throw new Error(r.errors[0].message);
     if (r.prs.length) toast(`New PR for ${a.name.split(' ')[0]}: ${fmtResult(r.prs[0].value, metric.unit, metric.decimals)}`);
     return r;
   }
-  const rows = athletes.map((a, idx) => sides.map((side) => {
-    const rs = results(a, side);
+  const checkValue = (v) => {
+    if (!Number.isFinite(v)) return 'Type a number.';
+    if (unitSel.value === metric.unit && outOfRange(v, metric.range)) return `${+v.toFixed(3)} ${UNIT_LABEL[metric.unit] ?? metric.unit} isn't possible for ${shortTest(test)} (${rangeWords(metric.range, metric.unit)}).`;
+    return null;
+  };
+
+  // Rows: one per athlete (and side). Typed entry: Enter or the arrow keys move down the column.
+  const q = testingState.find.trim().toLowerCase();
+  const visible = athletes.map((a, idx) => ({ a, idx })).filter(({ a }) => !q || `${a.name} ${a.athlete_id ?? ''}`.toLowerCase().includes(q));
+  const hint = typedHint(metric);
+  const focusCell = (athleteIdx, side, attempt) => main.querySelector(`input[data-cell="${athleteIdx}|${side ?? ''}|${attempt}"]`)?.focus();
+  const move = (pos, dir, attempt) => { const i = pos + dir; const next = rowsOrder[i]; if (next) focusCell(next.idx, next.side, attempt); };
+  const rowsOrder = visible.flatMap(({ idx }) => sides.map((side) => ({ idx, side })));
+  const rows = visible.map(({ a, idx }) => sides.map((side) => {
+    const rs = resultsOf(a, side);
+    const extraKey = `${test.key}|${akey(a)}|${side ?? ''}`;
+    const slots = Math.min(20, Math.max(test.attempts, (rs.at(-1)?.attempt ?? rs.length)) + (testingState.extra[extraKey] ?? 0));
+    const pos = rowsOrder.findIndex((x) => x.idx === idx && x.side === side);
     const inputs = [];
-    for (let n = 1; n <= Math.max(test.attempts, rs.length + (rs.length >= test.attempts ? 0 : 0)); n++) {
-      const existing = rs[n - 1];
-      const inp = input({ type: 'number', step: 'any', inputmode: 'decimal', value: existing ? String(+existing.value.toFixed(metric.decimals + 1)) : '', disabled: !!existing, style: 'width:92px', 'aria-label': `${a.name}${side ? ` ${side}` : ''} attempt ${n}` });
-      if (!existing) inp.addEventListener('change', () => busy(inp, async () => { if (inp.value === '') return; await save(a, side, Number(inp.value), n, test.timed && hand.checked ? 'hand' : test.timed ? 'electronic' : undefined); render(); }));
-      if (existing) inputs.push(h('span', { class: 'row', style: 'gap:2px' }, inp, btn('×', (e) => { if (confirm('Delete this attempt?')) busy(e.currentTarget, async () => { await del(`/v1/results/${existing.id}`); render(); }); }, 'ghost', { 'aria-label': 'Delete attempt', style: 'min-width:28px;padding:0 6px' })));
-      else inputs.push(inp);
+    for (let n = 1; n <= slots; n++) {
+      const existing = rs.find((r) => (r.attempt ?? rs.indexOf(r) + 1) === n);
+      const inp = input({ type: 'text', inputmode: 'decimal', autocomplete: 'off', value: existing ? String(+existing.value.toFixed(metric.decimals + 1)) : '', disabled: !!existing, class: 'dp-input ts-cell',
+        'data-cell': `${idx}|${side ?? ''}|${n}`, 'aria-label': `${a.name}${side ? ` ${side === 'L' ? 'left' : 'right'}` : ''} attempt ${n}` });
+      if (!existing) {
+        // Enter and leaving the box both save; the first one wins, so a value is never saved twice.
+        const commit = () => { if (inp.dataset.saving || inp.value.trim() === '') return; inp.dataset.saving = '1'; return busy(inp, async () => {
+          const v = parseTyped(inp.value, unitSel.value), problem = checkValue(v);
+          if (problem) { inp.classList.add('ts-bad'); throw new Error(problem); }
+          await save(a, side, v, n, test.timed && hand.checked ? 'hand' : test.timed ? 'electronic' : undefined, 'manual');
+          const next = rowsOrder[pos + 1];
+          testingState.focus = next ? `${next.idx}|${next.side ?? ''}|${n}` : null;
+          redraw();
+        }).finally(() => { delete inp.dataset.saving; }); };
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); if (inp.value.trim()) commit(); else move(pos, 1, n); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); move(pos, 1, n); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); move(pos, -1, n); }
+        });
+        inp.addEventListener('change', commit);
+        inp.addEventListener('input', () => inp.classList.remove('ts-bad'));
+        inputs.push(inp);
+      } else if (!manage) inputs.push(inp);                // front desk can't delete results; an owner or coach fixes mistakes
+      else inputs.push(h('span', { class: 'row', style: 'gap:0' }, inp, btn('×', (e) => { if (confirm(`Delete ${a.name.split(' ')[0]}'s attempt ${n} (${fmtResult(existing.value, metric.unit, metric.decimals)})?`)) busy(e.currentTarget, async () => { await del(`/v1/results/${existing.id}`); redraw(); }); }, 'ghost', { 'aria-label': `Delete attempt ${n}`, class: 'dp-btn dp-btn--ghost ts-x' })));
     }
-    const best = bestOf(rs);
+    if (slots < 20) inputs.push(btn('+', () => { testingState.extra[extraKey] = (testingState.extra[extraKey] ?? 0) + 1; redraw(); }, 'ghost', { 'aria-label': `Add another attempt for ${a.name}`, title: 'Another attempt', class: 'dp-btn dp-btn--ghost ts-x' }));
+    const best = bestOf(rs), prev = prevOf(a, side);
+    const pr = best != null && prev != null && metric.better !== 'none' && better(metric, best, prev);
     const up = test.timed && testingState.athleteIdx === idx;
-    return h('div', { class: 'list-item', style: `flex-wrap:wrap;${up ? 'outline:2px solid var(--green-mid);outline-offset:-2px;border-radius:6px' : ''}` },
-      test.timed && side === sides[0] ? btn(up ? 'Up' : 'Time', () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.athleteIdx = idx; render(); }, up ? 'primary' : 'ghost', { 'aria-label': `Time ${a.name} next`, style: 'min-width:64px' }) : test.timed ? h('span', { style: 'min-width:64px' }) : null,
-      h('div', { class: 'grow stack-tight', style: 'min-width:160px' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, [a.athlete_id, side ? (side === 'L' ? 'Left' : 'Right') : null].filter(Boolean).join(' · '))),
+    return h('div', { class: `list-item ts-row${up ? ' ts-up' : ''}` },
+      test.timed && side === sides[0] ? btn(up ? 'Up' : 'Time', () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.athleteIdx = idx; redraw(); }, up ? 'outline' : 'ghost', { 'aria-label': `Time ${a.name} next`, style: 'min-width:64px' }) : test.timed ? h('span', { style: 'min-width:64px' }) : null,
+      h('div', { class: 'grow stack-tight', style: 'min-width:150px' }, h('span', { class: 'strong' }, a.name, a.archived ? h('span', { class: 'dp-badge dp-badge--muted', style: 'margin-left:6px' }, 'Archived') : null),
+        h('span', { class: 'small muted' }, [a.athlete_id, side ? (side === 'L' ? 'Left' : 'Right') : null, prev != null ? `Best before ${fmtResult(prev, metric.unit, metric.decimals)}` : metric.better !== 'none' ? 'First time' : null].filter(Boolean).join(' · '))),
       h('div', { class: 'row wrap', style: 'gap:6px' }, inputs),
-      h('span', { class: 'strong', style: 'min-width:90px;text-align:right' }, best == null ? '' : fmtResult(best, metric.unit, metric.decimals)));
+      h('span', { class: 'strong', style: 'min-width:92px;text-align:right' }, best == null ? '' : fmtResult(best, metric.unit, metric.decimals), pr ? h('span', { class: 'dp-badge dp-badge--good', style: 'margin-left:6px' }, 'PR') : null),
+      manage && side === sides[0] ? btn('Remove', async (e) => {
+        const b = e.currentTarget; b.disabled = true;
+        try {
+          const r = await withConfirm((ok) => del(`/v1/testing-sessions/${id}/athletes/${akey(a)}${ok ? '?confirm=true' : ''}`), (err) => `${a.name} has ${err.details.results} ${err.details.results === 1 ? 'result' : 'results'} on this day. Removing ${a.name.split(' ')[0]} deletes ${err.details.results === 1 ? 'it' : 'them'}. Remove?`);
+          if (r) { toast(`${a.name} removed.`); redraw(); }
+        } catch (x) { toast(x.message, 'warn'); } finally { b.disabled = false; }
+      }, 'ghost', { 'aria-label': `Remove ${a.name} from this day`, class: 'dp-btn dp-btn--ghost ts-remove' }) : null);
   }));
 
-  // Stopwatch: Start, then Stop records the time into the selected athlete's next open attempt and moves to the next athlete.
+  // Stopwatch: Start, then Stop saves the time to the athlete who's up and moves on. Cancel run (or Esc) for a false start.
   let stopwatch = null;
-  if (test.timed) {
-    const display = h('div', { style: 'font:700 44px/1 var(--font-mono);color:var(--steel);min-width:180px' }, '0.00');
+  if (test.timed && testingState.view === 'entry') {
+    const display = h('div', { class: 'ts-clock', 'aria-live': 'off' }, '0.00');
     let t0 = null, raf = null;
     const cur = athletes[testingState.athleteIdx];
-    const tick = () => { display.textContent = ((performance.now() - t0) / 1000).toFixed(2); raf = requestAnimationFrame(tick); };
+    // Leaving the screen with the clock running stops it (nothing is saved).
+    const tick = () => { if (!display.isConnected) { t0 = null; stopwatchRunning = false; return; } display.textContent = ((performance.now() - t0) / 1000).toFixed(2); raf = requestAnimationFrame(tick); };
+    const cancelBtn = btn('Cancel run', () => cancel(), 'ghost', { style: 'display:none' });
+    const cancel = () => { if (t0 == null) return; cancelAnimationFrame(raf); t0 = null; stopwatchRunning = false; go.textContent = 'Start'; display.textContent = '0.00'; cancelBtn.style.display = 'none'; toast('Run cancelled. Nothing was saved.'); };
+    // Esc cancels a run only on this screen, and never while a dialog is open (Esc closes the dialog).
+    swEscape = (e) => { if (e.key === 'Escape' && stopwatchRunning && display.isConnected && !document.querySelector('dialog[open]')) { e.preventDefault(); cancel(); } };
+    const saveTime = async (p) => {
+      const a = athletes.find((x) => akey(x) === p.key);
+      const problem = checkValue(p.secs);
+      if (problem) throw new Error(problem);
+      const r = await save(a, p.side, p.secs, p.attempt, 'hand', 'stopwatch');
+      // A retry of a time that did save is a repeat (nothing new to undo).
+      swState = { pending: null, last: r.results[0] ? { id: r.results[0].id, idx: athletes.indexOf(a), label: `${a.name.split(' ')[0]} ${p.secs.toFixed(2)} s` } : swState.last };
+      const done = sides.every((sd) => resultsOf(a, sd).length + (sd === p.side ? 1 : 0) >= test.attempts);
+      if (done && athletes.indexOf(a) === testingState.athleteIdx) testingState.athleteIdx = Math.min(athletes.length - 1, testingState.athleteIdx + 1);
+    };
     const go = btn('Start', async () => {
       if (!cur) return toast('Add an athlete first.', 'warn');
-      if (t0 == null) { t0 = performance.now(); stopwatchRunning = true; go.textContent = 'Stop'; tick(); return; }
-      cancelAnimationFrame(raf); stopwatchRunning = false;
+      if (swState.pending) return toast('Save or discard the last time first.', 'warn');
+      if (t0 == null) { t0 = performance.now(); stopwatchRunning = true; go.textContent = 'Stop'; cancelBtn.style.display = ''; tick(); return; }
+      cancelAnimationFrame(raf); stopwatchRunning = false; cancelBtn.style.display = 'none';
       const secs = Number(((performance.now() - t0) / 1000).toFixed(2));
       t0 = null; go.textContent = 'Start'; display.textContent = secs.toFixed(2);
-      const side = sides.find((sd) => results(cur, sd).length < test.attempts) ?? sides[0];
-      await save(cur, side, secs, results(cur, side).length + 1, 'hand');
-      const done = sides.every((sd) => results(cur, sd).length + (sd === side ? 1 : 0) >= test.attempts);
-      if (done) testingState.athleteIdx = Math.min(athletes.length - 1, testingState.athleteIdx + 1);
-      render();
+      const side = sides.find((sd) => resultsOf(cur, sd).length < test.attempts) ?? sides[0];
+      const p = { key: akey(cur), name: cur.name, side, attempt: (resultsOf(cur, side).at(-1)?.attempt ?? resultsOf(cur, side).length) + 1, secs };
+      if (p.attempt > 20) { display.textContent = '0.00'; return toast(`${cur.name.split(' ')[0]} has 20 attempts, the most a day holds. Delete one to time another.`, 'warn'); }
+      try { await saveTime(p); redraw(); }
+      catch (e) { swState = { ...swState, pending: { ...p, error: e.message } }; redraw(); }
     }, 'primary', { style: 'min-width:140px;min-height:64px;font-size:22px' });
-    stopwatch = panel('Stopwatch', { subtitle: cur ? `Up: ${cur.name}. Tap Time next to anyone to switch. Stopping the clock saves the time and moves to the next athlete.` : null },
-      h('div', { class: 'row wrap', style: 'gap:16px;align-items:center' }, display, go, h('span', { class: 'small muted' }, 'Hand times usually read faster than electronic gates, so the app keeps them labeled.')));
-  }
-  const add = select([['', 'Add a walk-up athlete…'], ...clientsList.data.filter((c) => !athletes.some((a) => a.client_id === c.id)).map((c) => [c.id, c.name])], { 'aria-label': 'Add athlete' });
-  add.addEventListener('change', () => busy(add, async () => {
-    await patch(`/v1/testing-sessions/${id}`, { athletes: [...athletes.map(who), { client_id: add.value }] }); render();
-  }));
-  fill(main,
-    header(day.name, `${ymd(day.date)} · ${athletes.length} athletes`, h('div', { class: 'row' },
-      day.shared_at ? btn('Shared with parents ✓', (e) => { if (confirm('Hide these results from families again?')) busy(e.currentTarget, async () => { await del(`/v1/testing-sessions/${id}/share`); toast('Hidden from families.'); render(); }); }, 'outline')
-        : btn('Share with parents', (e) => { const note = prompt('A note for families (optional). It appears on their report and in the email.', day.parent_note ?? ''); if (note === null) return; busy(e.currentTarget, async () => { const r = await post(`/v1/testing-sessions/${id}/share`, { parent_note: note }); toast(`Shared. ${r.families_notified} ${r.families_notified === 1 ? 'family' : 'families'} emailed.`); render(); }); }, 'primary'),
-      btn('Download sheet', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?session_id=${id}`)), 'secondary'),
-      h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/upload?session=${id}` }, 'Upload results'),
-      h('a', { class: 'dp-btn dp-btn--ghost', href: '#/testing' }, 'All testing days'))),
-    h('div', { class: 'p-chips', style: 'display:flex;gap:8px;overflow-x:auto' }, day.tests.map((t) => btn(t.name.replace(/ \(.*\)$/, ''), () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState = { testKey: t.key, athleteIdx: 0 }; render(); }, t.key === test.key ? 'primary' : 'secondary', { style: 'white-space:nowrap;flex-shrink:0' }))),
-    stopwatch,
-    panel(test.name, { subtitle: `${metric.name}${metric.better !== 'none' ? ` · ${metric.better} is better` : ''} · ${test.attempts} ${test.attempts === 1 ? 'attempt' : 'attempts'}${test.sides === 'lr' ? ' per side' : ''}. Values save as you type.`,
-      action: h('div', { class: 'row' }, test.timed ? h('label', { class: 'row small', style: 'gap:6px' }, hand, 'Hand-timed') : null, h('div', { style: 'width:110px' }, unitSel)) },
-      test.description ? h('p', { class: 'small muted' }, test.description) : null,
-      athletes.length ? rows : h('p', { class: 'muted' }, 'No athletes yet.'),
-      h('div', { style: 'max-width:360px;margin-top:8px' }, add)),
+    const pending = swState.pending;
+    const pendingBox = pending ? h('div', { class: 'ts-pending row wrap', role: 'alert' },
+      h('span', { class: 'grow' }, `${pending.name}: ${pending.secs.toFixed(2)} s wasn't saved. ${pending.error}`),
+      btn('Save again', (e) => busy(e.currentTarget, async () => { await saveTime(pending); redraw(); }), 'secondary'),
+      btn('Discard', () => { swState = { ...swState, pending: null }; redraw(); }, 'ghost')) : null;
+    const last = swState.last;
+    const undoBtn = last && !pending && manage ? btn(`Undo ${last.label}`, (e) => busy(e.currentTarget, async () => { await del(`/v1/results/${last.id}`); testingState.athleteIdx = last.idx; swState = { pending: null, last: null }; toast('Time removed.'); redraw(); }), 'ghost') : null;
+    stopwatch = h('section', { class: 'dp-panel stack ts-sticky' },
+      h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, display, go, cancelBtn, undoBtn,
+        h('span', { class: 'small muted grow', style: 'min-width:200px' }, cur ? `Up: ${cur.name}. Stopping the clock saves the time and moves on. Esc cancels a false start.` : 'Add an athlete to start timing.')),
+      pendingBox);
+  } else swEscape = null;
+
+  // Rankings: today's best per athlete, best first, with the change from their previous best.
+  const rankings = () => sides.map((side) => {
+    const ranked = athletes.map((a) => ({ a, best: bestOf(resultsOf(a, side)), prev: prevOf(a, side) })).filter((x) => x.best != null)
+      .sort((x, y) => (metric.better === 'lower' ? x.best - y.best : y.best - x.best));
+    const missing = athletes.filter((a) => !resultsOf(a, side).length);
+    return h('div', { class: 'stack-tight' }, side ? h('div', { class: 'dp-label' }, side === 'L' ? 'Left' : 'Right') : null,
+      ranked.length ? ranked.map((x, i) => {
+        const change = x.prev != null ? x.best - x.prev : null;
+        const improved = change != null && better(metric, x.best, x.prev);
+        return h('div', { class: 'list-item' }, h('span', { class: 'strong', style: 'min-width:32px' }, metric.better === 'none' ? '' : `${i + 1}.`),
+          h('span', { class: 'grow' }, x.a.name), h('span', { class: 'strong' }, fmtResult(x.best, metric.unit, metric.decimals)),
+          h('span', { class: `small ${improved ? 'good-text' : 'muted'}`, style: 'min-width:120px;text-align:right' }, change == null ? 'First time' : change === 0 ? 'Same as best' : `${change > 0 ? '+' : '−'}${fmtResult(Math.abs(change), metric.unit, metric.decimals, { delta: true })} vs best`),
+          improved ? h('span', { class: 'dp-badge dp-badge--good' }, 'PR') : null);
+      }) : h('p', { class: 'muted small' }, 'No results yet.'),
+      missing.length && ranked.length ? h('p', { class: 'small muted' }, `Not tested yet: ${missing.map((a) => a.name).join(', ')}.`) : null);
+  });
+
+  // Test tabs with progress; arrow keys move between them.
+  const tabs = h('div', { class: 'ts-tabs', role: 'tablist', 'aria-label': 'Tests on this day' }, day.tests.map((t, i) => {
+    const done = doneFor(t), all = athletes.length && done === athletes.length;
+    return h('button', { type: 'button', role: 'tab', class: 'ts-tab', 'aria-selected': String(t.key === test.key), tabindex: t.key === test.key ? '0' : '-1',
+      onClick: () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.testKey = t.key; testingState.athleteIdx = 0; swState = { pending: null, last: null }; redraw(); },
+      onKeydown: (e) => { if (!['ArrowRight', 'ArrowLeft'].includes(e.key)) return; e.preventDefault(); const next = day.tests[(i + (e.key === 'ArrowRight' ? 1 : -1) + day.tests.length) % day.tests.length]; if (stopwatchRunning) return; testingState.testKey = next.key; testingState.athleteIdx = 0; testingState.focus = `tab|${next.key}`; redraw(); },
+      'data-tab': t.key }, shortTest(t), h('span', { class: `ts-tab-count${all ? ' ts-done' : ''}` }, all ? '✓' : `${done}/${athletes.length}`));
+  }), addTest);
+  const views = h('div', { class: 'row wrap tm-views' }, [['entry', 'Enter results'], ['rankings', 'Rankings']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(testingState.view === k), onClick: () => { if (stopwatchRunning) return toast('Stop the clock first.', 'warn'); testingState.view = k; redraw(); } }, label)));
+  const find = athletes.length > 8 ? input({ type: 'search', placeholder: 'Find an athlete', value: testingState.find, 'aria-label': 'Find an athlete', style: 'max-width:260px' }) : null;
+  find?.addEventListener('input', () => { testingState.find = find.value; testingState.focus = 'find'; render(); });
+
+  fill(main, banner, header(day.name, subtitle, headerActions), tabs, stopwatch,
+    panel(test.name, { subtitle: testingState.view === 'rankings' ? `Today's best per athlete, ${metric.better === 'lower' ? 'fastest' : metric.better === 'higher' ? 'best' : 'latest'} first, with the change from each athlete's previous best.`
+      : `${metric.name}${metric.better !== 'none' ? ` · ${metric.better} is better` : ''} · ${test.attempts} ${test.attempts === 1 ? 'attempt' : 'attempts'}${test.sides === 'lr' ? ' per side' : ''}${metric.range ? ` · possible: ${rangeWords(metric.range, metric.unit)}` : ''}. Values save as you type; Enter moves down.${hint ? ` ${hint}.` : ''}`,
+    action: h('div', { class: 'row wrap' }, views, testingState.view === 'entry' && test.timed ? h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, hand, 'Hand-timed') : null, testingState.view === 'entry' ? h('div', { style: 'width:110px' }, unitSel) : null) },
+      test.description && testingState.view === 'entry' ? h('p', { class: 'small muted' }, test.description) : null,
+      find,
+      testingState.view === 'rankings' ? rankings() : athletes.length ? (rows.flat().length ? rows : h('p', { class: 'muted small' }, 'No athletes match. Clear the search.')) : h('p', { class: 'muted' }, 'No athletes yet. Add a walk-up below.'),
+      h('div', { style: 'max-width:360px;margin-top:8px' }, walkUp)),
     notes?.data.length ? notesPanel(id, notes) : null);
+  // Put the cursor back where the coach was typing.
+  const f = testingState.focus; testingState.focus = null;
+  if (f === 'find') { find?.focus(); find?.setSelectionRange(find.value.length, find.value.length); }
+  else if (f?.startsWith('tab|')) main.querySelector(`[data-tab="${f.slice(4)}"]`)?.focus();
+  else if (f) main.querySelector(`input[data-cell="${f}"]`)?.focus();
 }
+document.addEventListener('keydown', (e) => { if (location.hash.startsWith('#/testing/')) swEscape?.(e); });
 
 // A short note per athlete for parents: drafted from the results, read and approved by a coach.
 function notesPanel(id, notes) {
@@ -1968,98 +3132,229 @@ function notesPanel(id, notes) {
         !x.note.approved ? btn('Approve', (e) => busy(e.currentTarget, async () => { await patch(`/v1/progress-notes/${x.note.id}`, { approved: true }); redraw(); }), 'secondary') : null) : null)));
 }
 
+// ---------- Test library: search and filter every test, one test's details and record board, and presets ----------
+const canEditLibrary = () => state.user.role !== 'front_desk';
+const metricText = (m) => `${m.name} (${UNIT_LABEL[m.unit] || m.unit || 'score'}${m.better === 'none' ? ', a measurement' : m.better === 'lower' ? ', lower is better' : ', higher is better'})`;
+const usageText = (u) => (u.results ? `${u.results} ${u.results === 1 ? 'result' : 'results'} · ${u.athletes} ${u.athletes === 1 ? 'athlete' : 'athletes'} · last used ${ymd(u.last_used)}` : 'Not used yet');
+const libTabs = (tab) => h('div', { class: 'row', role: 'tablist', 'aria-label': 'Test library', style: 'gap:8px' },
+  [['tests', 'Tests', '#/testing/library'], ['presets', 'Presets', '#/testing/library?tab=presets']].map(([k, label, href]) =>
+    h('a', { class: `dp-btn dp-btn--${tab === k ? 'secondary' : 'ghost'}`, href, role: 'tab', 'aria-selected': tab === k ? 'true' : 'false', 'aria-current': tab === k ? 'page' : null, style: 'min-height:44px' }, label)));
+
 async function viewLibrary(main) {
-  const lib = await get('/v1/tests?include_inactive=true');
-  const n = input(), u = input({ placeholder: 's, in, lb, mph…' }), better = select([['lower', 'Lower is better'], ['higher', 'Higher is better']]), cat = select(lib.categories.map((c) => [c.key, c.name]));
-  fill(main, header('Test library', `${lib.data.filter((t) => t.active).length} tests ready. Hide the ones you don't use, or add your own.`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    ...lib.categories.map((c) => { const ts = lib.data.filter((t) => t.category === c.key); return ts.length ? panel(c.name, {}, ts.map((t) => h('div', { class: 'list-item', style: t.active ? '' : 'opacity:.55' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.name, t.builtin ? null : h('span', { class: 'small muted' }, ' (yours)')),
-        h('span', { class: 'small muted' }, t.metrics.map((m) => `${m.name} (${UNIT_LABEL[m.unit] || m.unit || 'score'}${m.better === 'none' ? '' : m.better === 'lower' ? ', lower better' : ', higher better'})`).join(' · ')),
-        t.description ? h('span', { class: 'small muted' }, t.description) : null),
-      btn(t.active ? 'Hide' : 'Show', (e) => busy(e.currentTarget, async () => { await patch(`/v1/tests/${t.key}`, { active: !t.active }); render(); }), 'ghost')))) : null; }),
-    panel('Add your own test', {}, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const t = await post('/v1/tests', { name: n.value, unit: u.value, better: better.value, category: cat.value }); toast(`${t.name} added.`); render(); }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr 1fr' }, field('Name', n), field('Unit', u), field('Scoring', better), field('Category', cat)),
-      h('div', null, btn('Add test', null, 'primary', { type: 'submit' })))));
+  const q = hashQuery();
+  if (q.get('test')) return viewTestDetails(main, q.get('test'));
+  if (q.get('tab') === 'presets') return viewPresets(main);
+  const lib = await get('/v1/tests?usage=true');
+  const cats = new Map(lib.categories.map((c) => [c.key, c.name]));
+  const edit = canEditLibrary();
+  const search = input({ type: 'search', placeholder: 'Name, unit or protocol', value: q.get('q') ?? '', 'aria-label': 'Find a test' });
+  const cat = select([['', 'All categories'], ...lib.categories.map((c) => [c.key, c.name])], { value: cats.has(q.get('cat')) ? q.get('cat') : '', 'aria-label': 'Category' });
+  const SHOW = [['all', 'All tests'], ['active', 'In menus'], ['hidden', 'Hidden'], ['custom', 'Your own']];
+  const show = select(SHOW, { value: SHOW.some(([k]) => k === q.get('show')) ? q.get('show') : 'all', 'aria-label': 'Show' });
+  const SORT = [['category', 'By category'], ['used', 'Most used'], ['name', 'A to Z']];
+  const sort = select(SORT, { value: SORT.some(([k]) => k === q.get('sort')) ? q.get('sort') : 'category', 'aria-label': 'Sort' });
+  const box = h('div', { class: 'stack' });
+  const words = (t) => [t.name, t.key, t.description, t.protocol, cats.get(t.category), ...t.metrics.flatMap((m) => [m.name, m.unit, UNIT_LABEL[m.unit]])].filter(Boolean).join(' ').toLowerCase();
+  // Hide or show in place: the row updates, keyboard focus stays on its button.
+  const toggle = async (t, b, row) => {
+    await patch(`/v1/tests/${encodeURIComponent(t.key)}`, { active: !t.active });
+    t.active = !t.active;
+    b.textContent = t.active ? 'Hide' : 'Show';
+    b.setAttribute('aria-label', `${t.active ? 'Hide' : 'Show'} ${t.name}`);
+    row.style.opacity = t.active ? '' : '.6';
+    row.querySelector('.lib-hidden').hidden = t.active;
+    toast(t.active ? `${t.name} is back in your menus.` : `${t.name} is hidden from your menus. Its results stay.`);
+    if (show.value === 'active' || show.value === 'hidden') renderList();
+  };
+  const row = (t) => {
+    const hideBtn = edit ? btn(t.active ? 'Hide' : 'Show', null, 'ghost', { 'aria-label': `${t.active ? 'Hide' : 'Show'} ${t.name}`, style: 'min-height:44px' }) : null;
+    const el = h('div', { class: 'list-item', style: `align-items:flex-start;${t.active ? '' : 'opacity:.6'}` },
+      h('div', { class: 'grow stack-tight', style: 'min-width:0' },
+        h('div', { class: 'row wrap', style: 'gap:8px' }, h('a', { class: 'strong', href: `#/testing/library?test=${encodeURIComponent(t.key)}`, style: 'min-height:44px;display:inline-flex;align-items:center' }, t.name),
+          t.builtin ? null : h('span', { class: 'dp-badge dp-badge--neutral' }, 'Yours'), h('span', { class: 'dp-badge dp-badge--muted lib-hidden', hidden: t.active }, 'Hidden')),
+        h('span', { class: 'small muted' }, `${cats.get(t.category) ?? t.category} · ${t.metrics.map(metricText).join(' · ')}`),
+        h('span', { class: 'small muted' }, usageText(t.usage), t.presets.length ? ` · In ${t.presets.map((p) => p.name).join(', ')}` : '')),
+      hideBtn);
+    if (hideBtn) hideBtn.addEventListener('click', () => busy(hideBtn, () => toggle(t, hideBtn, el)).then(() => { if (hideBtn.isConnected) hideBtn.focus(); }));
+    return el;
+  };
+  function renderList() {
+    const s = search.value.trim().toLowerCase();
+    const next = new URLSearchParams({ ...(s ? { q: search.value.trim() } : {}), ...(cat.value ? { cat: cat.value } : {}), ...(show.value !== 'all' ? { show: show.value } : {}), ...(sort.value !== 'category' ? { sort: sort.value } : {}) }).toString();
+    history.replaceState(null, '', `#/testing/library${next ? `?${next}` : ''}`);
+    const list = lib.data.filter((t) => (!s || s.split(/\s+/).every((w) => words(t).includes(w))) && (!cat.value || t.category === cat.value)
+      && (show.value === 'all' || (show.value === 'active' && t.active) || (show.value === 'hidden' && !t.active) || (show.value === 'custom' && !t.builtin)));
+    const byName = (a, b) => a.name.localeCompare(b.name);
+    if (!list.length) {
+      return fill(box, h('div', { class: 'empty stack', style: 'align-items:center' }, h('span', null, s ? `No tests match "${search.value.trim()}".` : 'No tests here.'),
+        h('div', { class: 'row wrap', style: 'justify-content:center' },
+          s || cat.value || show.value !== 'all' ? btn('Clear the search', () => { search.value = ''; cat.value = ''; show.value = 'all'; renderList(); search.focus(); }, 'secondary') : null,
+          edit && s ? btn(`Add "${search.value.trim()}" as a new test`, () => testDialog(null, lib.categories, search.value.trim()), 'ghost') : null)));
+    }
+    if (sort.value === 'category') {
+      return fill(box, lib.categories.map((c) => { const ts = list.filter((t) => t.category === c.key); return ts.length ? panel(c.name, { subtitle: `${ts.length} ${ts.length === 1 ? 'test' : 'tests'}` }, ts.map(row)) : null; }));
+    }
+    const sorted = [...list].sort(sort.value === 'used' ? (a, b) => b.usage.results - a.usage.results || byName(a, b) : byName);
+    fill(box, panel(null, {}, sorted.map(row)));
+  }
+  search.addEventListener('input', renderList);
+  for (const el of [cat, show, sort]) el.addEventListener('change', renderList);
+  const ready = lib.data.filter((t) => t.active).length;
+  fill(main, header('Test library', `${ready} tests in your menus, ${lib.data.length - ready} hidden. Every built-in test says how to run it.`,
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing'), edit ? btn('Add test', () => testDialog(null, lib.categories), 'primary') : null)),
+    libTabs('tests'),
+    h('div', { class: 'lib-toolbar' }, field('Find a test', search), field('Category', cat), field('Show', show), field('Sort', sort)),
+    box);
+  renderList();
 }
 
-async function viewConnections(main) {
-  const [integ, imports, lib, clientsList] = await Promise.all([get('/v1/integrations'), get('/v1/imports'), get('/v1/tests'), get('/v1/clients')]);
-  const hawkin = integ.data.find((i) => i.provider === 'hawkin');
-  const token = input({ type: 'password', autocomplete: 'off', placeholder: 'Integration token from Hawkin' }), region = select([['americas', 'Americas'], ['europe', 'Europe'], ['apac', 'Asia-Pacific']], { value: hawkin.region ?? 'americas' });
-  const hawkinPanel = panel('Hawkin Dynamics force plates', { subtitle: hawkin.connected ? `Connected (${hawkin.token_hint}). ${hawkin.last_sync_at ? `Last sync ${ago(hawkin.last_sync_at)}.` : ''} New tests sync every 15 minutes.` : hawkin.note },
-    hawkin.last_error ? h('p', { class: 'small warn-text' }, hawkin.last_error) : null,
-    hawkin.connected ? h('div', { class: 'row' },
-      btn('Sync now', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/integrations/hawkin/sync'); toast(`${r.results} new results${r.waiting_for_match ? `, ${r.waiting_for_match} waiting for an athlete match` : ''}.`); render(); }), 'primary'),
-      btn('Disconnect', (e) => { if (confirm('Disconnect Hawkin?')) busy(e.currentTarget, async () => { await del('/v1/integrations/hawkin'); render(); }); }, 'ghost'))
-      : h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await api('PUT', '/v1/integrations/hawkin', { refresh_token: token.value, region: region.value }); toast(`Connected. ${r.sync.results} results pulled from the last 90 days.`); render(); }); } },
-        h('div', { class: 'grow' }, field('Integration token', token)), field('Region', region), h('div', { style: 'align-self:flex-end' }, btn('Connect', null, 'primary', { type: 'submit' }))));
+// Add or edit a test in a dialog. Built-in tests keep their numbers, units and scoring; your own can change them until they have results.
+function testDialog(t, categories, prefillName = '') {
+  const d = document.getElementById('dialog');
+  const isNew = !t, locked = t && (t.builtin || t.has_results);
+  const name = input({ value: t?.name ?? prefillName, required: true, maxlength: '80' });
+  const cat = select(categories.map((c) => [c.key, c.name]), { value: t?.category ?? 'sport' });
+  const attempts = input({ type: 'number', min: '1', max: '10', step: '1', value: String(t?.attempts ?? 2), inputmode: 'numeric' });
+  const protocol = textarea(t ? t.protocol : '', { rows: '5', maxlength: '2000' });
+  const description = textarea(t?.description ?? '', { rows: '2', maxlength: '1000' });
+  const sides = h('input', { type: 'checkbox', checked: t ? t.sides === 'lr' : false, disabled: !!locked });
+  const timed = h('input', { type: 'checkbox', checked: !!t?.timed });
+  const metrics = (t?.metrics ?? [{ key: 'value', name: 'Result', unit: '', better: 'higher', range: null, range_custom: false }]).map((m) => ({
+    m, name: input({ value: m.name, disabled: !!locked, maxlength: '60' }), unit: input({ value: m.unit, disabled: !!locked, placeholder: 's, in, lb, mph…', maxlength: '20' }),
+    better: select([['lower', 'Lower is better'], ['higher', 'Higher is better'], ['none', 'A measurement']], { value: m.better, disabled: !!locked }),
+    min: input({ type: 'number', step: 'any', value: m.range?.[0] != null ? String(m.range[0]) : '', 'aria-label': `${m.name}: lowest possible` }),
+    max: input({ type: 'number', step: 'any', value: m.range?.[1] != null ? String(m.range[1]) : '', 'aria-label': `${m.name}: highest possible` })
+  }));
+  for (const x of metrics) { x.min0 = x.min.value; x.max0 = x.max.value; }
+  const metricRows = metrics.map((x) => h('div', { class: 'lib-metric' },
+    h('div', { class: 'form-grid lib-grid-metric' }, field(metrics.length > 1 ? `Number ${metrics.indexOf(x) + 1}` : 'What you record', x.name), field('Unit', x.unit), field('Scoring', x.better)),
+    h('div', { class: 'form-grid lib-grid-2' }, field('Lowest possible', x.min), field('Highest possible', x.max))));
+  const save = (e) => { e.preventDefault(); busy(e.submitter, async () => {
+    // The range is sent only when it was changed, so saving doesn't turn the built-in range into your own.
+    const ms = metrics.map((x) => ({ key: x.m.key, ...(locked ? {} : { name: x.name.value, unit: x.unit.value, better: x.better.value }),
+      ...(x.min.value !== x.min0 || x.max.value !== x.max0 ? { min_value: x.min.value, max_value: x.max.value } : {}) }));
+    if (isNew) {
+      const out = await post('/v1/tests', { name: name.value, category: cat.value, attempts: attempts.value, protocol: protocol.value, description: description.value, sides: sides.checked ? 'lr' : 'none', timed: timed.checked, metrics: ms.map(({ key, ...m }) => ({ ...m, key: 'value' })) });
+      d.close(); toast(`${out.name} added.`); location.hash = `#/testing/library?test=${encodeURIComponent(out.key)}`; return;
+    }
+    const out = await patch(`/v1/tests/${encodeURIComponent(t.key)}`, { name: name.value, category: cat.value, attempts: attempts.value, protocol: protocol.value, description: description.value, ...(locked ? {} : { sides: sides.checked ? 'lr' : 'none' }), timed: timed.checked, metrics: ms });
+    d.close(); toast(out.changes.length ? 'Saved.' : 'Nothing changed.'); render();
+  }); };
+  fill(d, h('form', { class: 'stack', onSubmit: save, style: 'max-width:640px' },
+    h('h2', { class: 'dp-panel-title' }, isNew ? 'Add your own test' : `Edit ${t.name}`),
+    t?.builtin ? h('p', { class: 'small muted', style: 'margin:0' }, 'Built-in tests keep their numbers, units and scoring, because device imports and past results rely on them. Add your own test if you need a different one.')
+      : t?.has_results ? h('p', { class: 'small muted', style: 'margin:0' }, 'This test has results, so its numbers, units, scoring and sides are fixed. Add a new test for a different unit.') : null,
+    h('div', { class: 'form-grid lib-grid-name' }, field('Name', name), field('Category', cat), field('Attempts', attempts)),
+    metricRows,
+    h('div', { class: 'row wrap', style: 'gap:8px 20px' }, h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, sides, 'Test left and right'), h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, timed, 'Can be hand-timed with the stopwatch (seconds only)')),
+    field('How to run it', protocol, t?.builtin ? 'Leave it as it is, or write your own. Empty the box to go back to the built-in text.' : 'So every coach runs it the same way and retests compare.'),
+    field('What it measures (optional)', description),
+    h('p', { class: 'dp-hint', style: 'margin:0' }, 'The possible range catches numbers typed into the wrong column on uploads. Leave both empty to use the built-in range.'),
+    h('div', { class: 'row wrap' }, btn(isNew ? 'Add test' : 'Save', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  name.focus();
+}
 
-  // File import: pick system + file, preview how columns match, fix anything, import.
-  const provider = select(integ.data.filter((i) => i.how === 'file').map((i) => [i.provider, i.name]), { value: 'ovr' });
-  const oneTest = select([['', 'Detect from the file'], ...lib.data.map((t) => [t.key, t.name])], { value: '' });
-  const file = h('input', { type: 'file', accept: '.csv,text/csv,.txt', class: 'dp-input' });
-  const note = h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note);
-  provider.addEventListener('change', () => { note.textContent = integ.data.find((i) => i.provider === provider.value).note ?? 'Export a CSV from the system and upload it.'; });
-  const preview = h('div', { class: 'stack' });
-  let csvText = '', fileName = '';
-  const testOpts = [['', 'Ignore'], ...lib.data.flatMap((t) => t.metrics.map((m) => [`${t.key}|${m.key}`, `${t.name} – ${m.name}`]))];
-  async function runPreview() {
-    if (!file.files[0]) throw new Error('Choose a file.');
-    csvText = await file.files[0].text(); fileName = file.files[0].name;
-    const dry = await post('/v1/imports', { provider: provider.value, csv: csvText, test: oneTest.value || undefined, dry_run: true, filename: fileName });
-    const colSelects = {};
-    const colRows = Object.entries(dry.mapping.columns).map(([hdr, col]) => {
-      const current = col ? (col.metric_name ? '__row__' : `${col.test ?? dry.mapping.test}|${col.metric}`) : '';
-      const sel = select(col?.metric_name ? [['__row__', 'Metric for each row\'s test'], ['', 'Ignore']] : testOpts, { value: current, 'aria-label': hdr });
-      colSelects[hdr] = { sel, col };
-      return h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, hdr), h('div', { style: 'width:340px' }, sel), col?.side ? h('span', { class: 'muted' }, col.side === 'L' ? 'Left' : 'Right') : null);
-    });
-    const testSelects = Object.entries(dry.mapping.tests ?? {}).map(([name, key]) => { const sel = select([['', 'Skip these rows'], ...lib.data.map((t) => [t.key, t.name])], { value: key ?? '' }); return [name, sel]; });
-    fill(preview,
-      h('p', null, `${dry.rows} rows, ${dry.results_found} results found. `, dry.saved_mapping ? h('span', { class: 'good-text' }, 'Using your saved column matches for this layout.') : null),
-      dry.problems.length ? h('p', { class: 'small warn-text' }, dry.problems.slice(0, 3).map((p) => `Row ${p.row}: ${p.message}`).join(' ')) : null,
-      h('div', { class: 'dp-label' }, `Columns → tests (athlete: ${dry.mapping.roles.athlete_name ?? [dry.mapping.roles.first_name, dry.mapping.roles.last_name].filter(Boolean).join(' + ') ?? 'not found'}, date: ${dry.mapping.roles.date ?? 'none, uses today'})`),
-      colRows,
-      testSelects.length ? [h('div', { class: 'dp-label' }, 'Test names in the file'), ...testSelects.map(([name, sel]) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, name), h('div', { style: 'width:340px' }, sel)))] : null,
-      dry.unmatched_athletes.length ? h('p', { class: 'small' }, `${dry.unmatched_athletes.length} ${dry.unmatched_athletes.length === 1 ? 'athlete isn\'t' : 'athletes aren\'t'} matched yet (${dry.unmatched_athletes.slice(0, 5).map((a) => a.name ?? a.external_id).join(', ')}${dry.unmatched_athletes.length > 5 ? '…' : ''}). Their results wait below until you match them.`) : null,
-      btn(`Import ${dry.results_found} results`, (e) => busy(e.currentTarget, async () => {
-        const mapping = { ...dry.mapping, columns: Object.fromEntries(Object.entries(colSelects).map(([hdr, { sel, col }]) => {
-          if (!sel.value) return [hdr, null];
-          if (sel.value === '__row__') return [hdr, col];
-          const [test, metric] = sel.value.split('|');
-          return [hdr, { test, metric, unit: col?.unit, side: col?.side }];
-        })), tests: Object.fromEntries(testSelects.map(([name, sel]) => [name, sel.value || null])) };
-        const r = await post('/v1/imports', { provider: provider.value, csv: csvText, mapping, filename: fileName });
-        toast(`${r.imported} results imported${r.duplicates ? `, ${r.duplicates} already here` : ''}${r.pending_results ? `, ${r.pending_results} waiting for athlete matches` : ''}.`);
-        render();
-      }), 'primary'));
-  }
-  const importPanel = panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns or any spreadsheet. Column matches are remembered for next time.' },
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('System', provider), field('File', file), field('If the file is one test', oneTest)), note,
-    h('div', null, btn('Preview', (e) => busy(e.currentTarget, runPreview), 'secondary')), preview);
+async function viewTestDetails(main, key) {
+  const q = hashQuery();
+  const params = new URLSearchParams(Object.fromEntries(['metric', 'side', 'sex', 'age'].map((k) => [k, q.get(k) ?? '']).filter(([, val]) => val))).toString();
+  const [t, lib] = await Promise.all([get(`/v1/tests/${encodeURIComponent(key)}/details${params ? `?${params}` : ''}`), get('/v1/tests')]);
+  const edit = canEditLibrary();
+  const rec = t.records;
+  const go = (changes) => { const next = new URLSearchParams({ test: key, ...Object.fromEntries(['metric', 'side', 'sex', 'age'].map((k) => [k, q.get(k) ?? ''])), ...changes }); for (const [k, val] of [...next]) if (!val) next.delete(k); location.hash = `#/testing/library?${next}`; };
+  const scored = t.metrics.filter((m) => m.better !== 'none');
+  const filters = h('div', { class: 'lib-toolbar' },
+    scored.length > 1 ? field('Number', select(scored.map((m) => [m.key, m.name]), { value: rec.metric, onChange: (e) => go({ metric: e.target.value }) })) : null,
+    t.sides === 'lr' ? field('Side', select([['', 'Either side'], ['L', 'Left'], ['R', 'Right']], { value: q.get('side') ?? '', onChange: (e) => go({ side: e.target.value }) })) : null,
+    field('Sex', select([['', 'Everyone'], ['F', 'Girls and women'], ['M', 'Boys and men']], { value: q.get('sex') ?? '', onChange: (e) => go({ sex: e.target.value }) })),
+    field('Age when set', select([['', 'All ages'], ...t.age_groups.map((a) => [a.key, a.label])], { value: q.get('age') ?? '', onChange: (e) => go({ age: e.target.value }) })));
+  const board = rec.board.length ? h('ol', { class: 'lib-board' }, rec.board.map((r) => h('li', { class: 'list-item' },
+    h('span', { class: 'lib-rank', 'aria-hidden': 'true' }, String(r.rank)),
+    h('div', { class: 'grow stack-tight' },
+      r.client_id ? h('a', { class: 'strong', href: `#/clients/${r.client_id}`, style: 'min-height:44px;display:inline-flex;align-items:center' }, r.name) : h('span', { class: 'strong', style: 'min-height:44px;display:inline-flex;align-items:center' }, r.name),
+      h('span', { class: 'small muted' }, [r.athlete_id, r.side ? (r.side === 'L' ? 'Left' : 'Right') : null].filter(Boolean).join(' · ')),
+      h('span', { class: 'small muted' }, ymd(r.date))),
+    h('span', { class: 'strong', style: 'text-align:right' }, fmtResult(r.value, rec.unit, rec.decimals), r.hand_timed ? h('div', { class: 'small muted' }, 'hand-timed') : null))))
+    : h('div', { class: 'empty' }, rec.note ?? (params ? 'No results match these filters.' : 'No results yet. The best result for each athlete shows here.'));
+  const remove = () => { if (confirm(`Delete ${t.name}? This can't be undone.`)) busy(null, async () => { await api('DELETE', `/v1/tests/${encodeURIComponent(t.key)}`); toast(`${t.name} deleted.`); location.hash = '#/testing/library'; }); };
+  fill(main, header(t.name, `${lib.categories.find((c) => c.key === t.category)?.name ?? t.category} · ${t.builtin ? 'Built-in test' : 'Your own test'}${t.active ? '' : ' · Hidden from your menus'}`,
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'All tests'),
+      edit ? btn('Edit test', () => testDialog(t, lib.categories), 'primary') : null)),
+    panel('How to run it', { subtitle: t.protocol_custom ? 'Written by your team.' : t.builtin ? 'The standard protocol. Edit the test to write your own.' : null },
+      t.protocol ? h('p', { style: 'margin:0;white-space:pre-wrap' }, t.protocol) : h('p', { class: 'muted', style: 'margin:0' }, edit ? 'No protocol yet. Edit the test to write how to run it.' : 'No protocol yet.'),
+      t.description ? h('p', { class: 'small muted' }, t.description) : null),
+    panel('Details', {},
+      h('div', { class: 'stack-tight small' },
+        t.metrics.map((m) => h('div', null, h('span', { class: 'strong' }, metricText(m)), m.range ? h('span', { class: 'muted' }, ` · possible ${rangeWords(m.range, m.unit)}${m.range_custom ? ' (your range)' : ''}`) : null)),
+        h('div', null, `${t.attempts} ${t.attempts === 1 ? 'attempt' : 'attempts'}${t.sides === 'lr' ? ' per side' : ''}${t.timed ? ' · can be hand-timed' : ''}`),
+        h('div', null, usageText(t.usage), t.usage.days ? ` · ${t.usage.days} testing ${t.usage.days === 1 ? 'day' : 'days'}` : ''),
+        h('div', null, t.presets.length ? ['In presets: ', t.presets.map((p, i) => [i ? ', ' : '', h('a', { href: '#/testing/library?tab=presets' }, p.name)])] : 'Not in any preset.'))),
+    panel('Record board', { subtitle: rec.better === 'none' ? null : `Each athlete's best ${rec.metric_name.toLowerCase()}, top 10. ${rec.better === 'lower' ? 'Lower' : 'Higher'} is better.` }, filters, board),
+    edit ? panel(null, {}, h('div', { class: 'row wrap' },
+      btn(t.active ? 'Hide from menus' : 'Show in menus', (e) => busy(e.currentTarget, async () => { await patch(`/v1/tests/${encodeURIComponent(t.key)}`, { active: !t.active }); toast(t.active ? `${t.name} is hidden. Its results stay.` : `${t.name} is back in your menus.`); render(); }), 'secondary'),
+      t.deletable ? btn('Delete test', remove, 'ghost') : h('span', { class: 'small muted' }, t.not_deletable_because))) : null);
+}
 
-  const [waitingQ, links] = await Promise.all([get('/v1/queue'), get('/v1/athlete-links')]);
-  const waitingPanel = waitingQ.n ? panel('Waiting to be linked', { subtitle: `${waitingQ.n} results from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.` },
-    h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/queue' }, 'Link them')) : null;
-  const linksPanel = panel('Linked device IDs', { subtitle: 'Results from these device IDs and names go straight to the athlete. Everything else needs an Athlete ID or waits for you.' },
-    links.data.length ? links.data.map((l) => h('div', { class: 'list-item small' },
-      h('span', { class: 'grow' }, `${integ.data.find((i) => i.provider === l.provider)?.name.split(' (')[0] ?? l.provider}: ${l.external_id.startsWith('name:') ? `name "${l.external_name ?? l.external_id.slice(5)}"` : `ID ${l.external_id}`}${l.external_name && !l.external_id.startsWith('name:') ? ` (${l.external_name})` : ''}`),
-      h('span', null, '→ ', l.athlete_name), idChip(l.athlete_id),
-      btn('Unlink', (e) => { if (confirm(`Stop sending results from ${l.external_id.replace(/^name:/, '')} to ${l.athlete_name}? Future results from it will wait in the queue.`)) busy(e.currentTarget, async () => { await del(`/v1/athlete-links/${l.provider}/${encodeURIComponent(l.external_id)}`); render(); }); }, 'ghost')))
-      : h('p', { class: 'muted small' }, 'None yet. Links are created when you link waiting results and choose to remember them.'));
-  const example = `curl -X POST ${location.origin}/v1/results \\
-  -H "Authorization: Bearer dp_live_..." -H "Content-Type: application/json" \\
-  -d '{"provider":"gates","results":[{"athlete":{"external_id":"A-17","name":"Jordan Ellis"},
-       "test":"dash_40yd","value":4.71,"timing":"electronic","external_id":"run-8812"}]}'`;
-  const apiPanel = panel('Send results from any system', { subtitle: 'Any timing system, app or script can post results to the open API with an API key. Values in other units are converted, athletes are matched by ID or name, and resending the same result is ignored.' },
-    h('pre', { class: 'small', style: 'white-space:pre-wrap;overflow-x:auto;background:var(--ground);padding:12px;border-radius:6px' }, example),
-    h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/integrations' }, 'API keys'), h('a', { class: 'dp-btn dp-btn--ghost', href: '/v1/openapi.json', target: '_blank' }, 'Full API reference')));
+// Presets: named sets of tests in running order, to start a testing day in one tap.
+async function viewPresets(main) {
+  const [list, lib] = await Promise.all([get('/v1/test-presets'), get('/v1/tests')]);
+  const edit = canEditLibrary(), plan = state.user.role !== 'front_desk';
+  const redraw = () => render();
+  fill(main, header('Test library', 'Presets are the tests you run together, in order. Start a testing day from one in a tap.',
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing'), edit ? btn('New preset', () => presetDialog(null, lib, redraw), 'primary') : null)),
+    libTabs('presets'),
+    panel(null, {}, list.data.length ? list.data.map((p) => h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, p.name),
+        h('span', { class: 'small muted' }, p.tests.length ? `${p.tests.length} ${p.tests.length === 1 ? 'test' : 'tests'}: ${p.tests.map((t) => t.name).join(', ')}` : 'No tests. Edit it to add some.'),
+        p.hidden ? h('span', { class: 'small', style: 'color:var(--amber)' }, `${p.hidden} of these ${p.hidden === 1 ? 'is' : 'are'} hidden from your menus.`) : null),
+      h('div', { class: 'row wrap' },
+        plan && p.tests.length ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/new?preset=${encodeURIComponent(p.id)}`, style: 'min-height:44px' }, 'Plan a day') : null,
+        edit ? btn('Edit', () => presetDialog(p, lib, redraw), 'ghost', { 'aria-label': `Edit ${p.name}`, style: 'min-height:44px' }) : null,
+        edit ? btn('Copy', (e) => busy(e.currentTarget, async () => { const c = await post(`/v1/test-presets/${p.id}/copy`); toast(`Copied as ${c.name}.`); redraw(); }), 'ghost', { 'aria-label': `Copy ${p.name}`, style: 'min-height:44px' }) : null,
+        edit ? btn('Delete', (e) => { if (confirm(`Delete the ${p.name} preset? Testing days made from it keep their tests.`)) busy(e.currentTarget, async () => { await del(`/v1/test-presets/${p.id}`); toast(`${p.name} deleted.`); redraw(); }); }, 'ghost', { 'aria-label': `Delete ${p.name}`, style: 'min-height:44px' }) : null)))
+      : h('div', { class: 'empty' }, edit ? 'No presets yet. Add one for the tests you run together, like a combine or a preseason battery.' : 'No presets yet.')));
+}
 
-  fill(main, header('Devices & imports', 'Get results in from anywhere: live connections, file imports, the open API, or by hand.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    waitingPanel, hawkinPanel,
-    panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/upload' }, 'Upload results'))),
-    apiPanel, linksPanel,
-    imports.data.length ? panel('Recent imports', {}, imports.data.slice(0, 10).map((b) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${b.provider_name} · ${b.filename ?? 'sync'}`), h('span', null, `${b.imported} imported${b.duplicates ? ` · ${b.duplicates} duplicates` : ''}${b.pending_results ? ` · ${b.pending_results} waiting to link` : ''}`), h('span', { class: 'muted' }, ago(b.created_at))))) : null);
+function presetDialog(p, lib, done) {
+  const d = document.getElementById('dialog');
+  const name = input({ value: p?.name ?? '', required: true, maxlength: '40' });
+  const chosen = (p?.tests ?? []).map((t) => t.key);
+  const byKey = new Map(lib.data.map((t) => [t.key, t]));
+  for (const t of p?.tests ?? []) if (!byKey.has(t.key)) byKey.set(t.key, t);          // a hidden test already in the preset
+  const listBox = h('ol', { class: 'stack-tight', style: 'padding:0;margin:0;list-style:none' });
+  const find = input({ type: 'search', placeholder: 'Find a test to add', 'aria-label': 'Find a test to add' });
+  const pick = select([], { 'aria-label': 'Test to add' });
+  const fillPick = () => {
+    const s = find.value.trim().toLowerCase();
+    const opts = lib.data.filter((t) => !chosen.includes(t.key) && (!s || t.name.toLowerCase().includes(s)));
+    fill(pick, opts.length ? opts.map((t) => h('option', { value: t.key }, t.name)) : h('option', { value: '' }, s ? 'No tests match' : 'Every test is in the preset'));
+  };
+  const draw = () => {
+    fill(listBox, chosen.length ? chosen.map((k, i) => h('li', { class: 'list-item', style: 'padding:6px 0' },
+      h('span', { class: 'small muted', style: 'min-width:24px' }, `${i + 1}.`), h('span', { class: 'grow' }, byKey.get(k)?.name ?? k),
+      btn('↑', () => { [chosen[i - 1], chosen[i]] = [chosen[i], chosen[i - 1]]; draw(); listBox.querySelectorAll('li')[i - 1]?.querySelector('button')?.focus(); }, 'ghost', { 'aria-label': `Move ${byKey.get(k)?.name} up`, disabled: i === 0, style: 'min-width:44px;min-height:44px' }),
+      btn('↓', () => { [chosen[i + 1], chosen[i]] = [chosen[i], chosen[i + 1]]; draw(); listBox.querySelectorAll('li')[i + 1]?.querySelectorAll('button')[1]?.focus(); }, 'ghost', { 'aria-label': `Move ${byKey.get(k)?.name} down`, disabled: i === chosen.length - 1, style: 'min-width:44px;min-height:44px' }),
+      btn('Remove', () => { chosen.splice(i, 1); draw(); fillPick(); find.focus(); }, 'ghost', { 'aria-label': `Remove ${byKey.get(k)?.name}`, style: 'min-height:44px' })))
+      : h('li', { class: 'small muted' }, 'No tests yet. Add them below in the order you run them.'));
+  };
+  const add = () => { if (!pick.value) return; chosen.push(pick.value); draw(); fillPick(); find.focus(); };
+  find.addEventListener('input', fillPick);
+  find.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  draw(); fillPick();
+  const save = (e) => { e.preventDefault(); busy(e.submitter, async () => {
+    const out = p ? await patch(`/v1/test-presets/${p.id}`, { name: name.value, tests: chosen }) : await post('/v1/test-presets', { name: name.value, tests: chosen });
+    d.close(); toast(`${out.name} saved with ${out.tests.length} ${out.tests.length === 1 ? 'test' : 'tests'}.`); done();
+  }); };
+  fill(d, h('form', { class: 'stack', onSubmit: save, style: 'max-width:560px' },
+    h('h2', { class: 'dp-panel-title' }, p ? `Edit ${p.name}` : 'New preset'),
+    field('Name', name, 'Like Combine, Preseason or U12 battery.'),
+    h('div', { class: 'dp-label' }, 'Tests, in running order'), listBox,
+    h('div', { class: 'form-grid lib-grid-add' }, field('Find', find), field('Test', pick), btn('Add', add, 'secondary', { style: 'min-height:44px' })),
+    h('div', { class: 'row wrap' }, btn('Save preset', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  name.focus();
 }
 
 // ---------- Import clients from a spreadsheet ----------
@@ -2220,67 +3515,203 @@ async function viewStaff(main) {
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.
+// Everyone results can be linked to: clients (not archived) and active team roster players.
+const linkableAthletes = async () => (await get('/v1/athletes')).data;
+// Pick an athlete by typing a name or Athlete ID: arrow keys move through matches, Enter picks. Editing the text
+// after a pick clears the pick, so a result never goes to someone who wasn't chosen on purpose.
+function athletePicker(everyone, { label, onChange }) {
+  let chosen = null, active = -1, matches = [];
+  const box = input({ type: 'text', role: 'combobox', 'aria-expanded': 'false', 'aria-autocomplete': 'list', autocomplete: 'off', placeholder: 'Type a name or Athlete ID', 'aria-label': label });
+  const list = h('ul', { class: 'ts-combo-list', role: 'listbox', style: 'display:none' });
+  const status = h('span', { class: 'small' });
+  const set = (a) => { chosen = a; status.textContent = a ? `✓ ${a.name} (${a.athlete_id})${a.team ? `, ${a.team}` : ''}` : box.value.trim() ? 'Pick an athlete from the list.' : ''; status.className = a ? 'small good-text' : 'small warn-text'; onChange?.(a); };
+  const close = () => { list.style.display = 'none'; box.setAttribute('aria-expanded', 'false'); active = -1; };
+  const draw = () => {
+    const q = box.value.trim().toLowerCase();
+    matches = q ? everyone.filter((a) => `${a.name} ${a.athlete_id}`.toLowerCase().includes(q)).slice(0, 8) : [];
+    fill(list, matches.map((a, i) => h('li', { role: 'option', class: 'ts-combo-opt', 'aria-selected': String(i === active), onMousedown: (e) => { e.preventDefault(); pick(a); } },
+      h('span', null, a.name), h('span', { class: 'muted small', style: 'font-family:var(--font-mono)' }, a.athlete_id), a.team ? h('span', { class: 'muted small' }, a.team) : null)));
+    list.style.display = matches.length ? '' : 'none'; box.setAttribute('aria-expanded', String(!!matches.length));
+  };
+  const pick = (a) => { box.value = `${a.name} · ${a.athlete_id}`; close(); set(a); };
+  box.addEventListener('input', () => { active = -1; draw(); set(null); });
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' && matches.length) { e.preventDefault(); active = (active + 1) % matches.length; draw(); }
+    else if (e.key === 'ArrowUp' && matches.length) { e.preventDefault(); active = (active - 1 + matches.length) % matches.length; draw(); }
+    else if (e.key === 'Enter' && matches.length && list.style.display !== 'none') { e.preventDefault(); pick(matches[Math.max(active, 0)]); }
+    else if (e.key === 'Escape') close();
+  });
+  box.addEventListener('blur', () => setTimeout(close, 150));
+  return { el: h('div', { class: 'stack-tight' }, h('div', { class: 'ts-combo' }, box, list), status), get: () => chosen, pick, focus: () => box.focus() };
+}
+
+let queueFilter = { source: '', q: '' };
 async function viewQueue(main) {
-  const [q, clientsList, contracts] = await Promise.all([get('/v1/queue'), get('/v1/clients'), get('/v1/team-contracts')]);
-  const everyone = clientsList.data.map((c) => ({ client_id: c.id, name: c.name, athlete_id: c.athlete_id }));
-  for (const c of contracts.data.filter((x) => x.status === 'active')) everyone.push(...(await get(`/v1/team-contracts/${c.id}`)).roster.map((r) => ({ roster_id: r.id, name: r.name, athlete_id: r.athlete_id, team: `${c.org_name} ${c.name}` })));
-  everyone.sort((a, b) => a.name.localeCompare(b.name));
-  const listId = 'athlete-options';
-  const datalist = h('datalist', { id: listId }, everyone.map((a) => h('option', { value: `${a.name} · ${a.athlete_id}${a.team ? ` · ${a.team}` : ''}` })));
-  // The picker only accepts a real athlete: the Athlete ID must be in the text.
-  const pickFrom = (text) => { const id = String(text).match(/[A-Za-z]{6}\d{4}(-\d{1,3})?/)?.[0]?.toUpperCase(); return id ? everyone.find((a) => a.athlete_id === id) ?? null : null; };
+  if (deskStop(main, 'Waiting to be linked')) return;
+  const [q, everyone] = await Promise.all([get('/v1/queue'), linkableAthletes()]);
   const fmtDay = (iso) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—');
+  const intro = h('p', { class: 'small muted' });
+  const totalLeft = () => q.data.reduce((n, g) => n + g.items.length, 0);
+  const syncIntro = () => { const n = totalLeft(); intro.textContent = n ? `${n} ${n === 1 ? 'result' : 'results'} from ${q.data.filter((g) => g.items.length).length} unrecognized ${q.data.filter((g) => g.items.length).length === 1 ? 'athlete' : 'athletes'}. Pick who each set belongs to and link it. Linking is all or nothing, and nothing is ever matched by name on its own. Tip: enter Athlete IDs as names on your devices and results skip this step.` : 'Nothing is waiting. Every result has been linked to a profile.'; };
 
   const cards = q.data.map((g) => {
-    const who = input({ list: listId, placeholder: 'Type a name or Athlete ID, then pick from the list', autocomplete: 'off', 'aria-label': `Athlete for ${g.label}` });
-    const chosen = h('span', { class: 'small' });
+    const picker = athletePicker(everyone, { label: `Athlete for ${g.label}`, onChange: () => sync() });
     const remember = h('input', { type: 'checkbox', checked: true });
-    const checks = g.items.map((it) => { const cb = h('input', { type: 'checkbox', checked: true, 'aria-label': `Include ${it.test_name} ${it.value}` }); return [it, cb]; });
-    const linkBtn = btn(`Link ${g.count} results`, null, 'primary');
+    const rows = g.items.map((it) => {
+      const cb = h('input', { type: 'checkbox', checked: true, 'aria-label': `Include ${it.test_name} ${fmtResult(it.value, it.unit, it.decimals)}` });
+      const row = h('label', { class: 'list-item small ts-qrow' }, cb,
+        h('span', { class: 'grow stack-tight', style: 'min-width:140px' }, h('span', null, `${it.test_name}${it.metric_name && it.metric !== 'time' && it.metric !== 'value' ? ` – ${it.metric_name}` : ''}${it.side ? ` (${it.side === 'L' ? 'left' : 'right'})` : ''}`),
+          h('span', { class: 'muted' }, [fmtDay(it.recorded_at), it.device].filter(Boolean).join(' · '))),
+        h('span', { class: 'strong' }, fmtResult(it.value, it.unit, it.decimals)));
+      cb.addEventListener('change', () => sync());
+      return { it, cb, row };
+    });
+    const tickAll = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Tick all' });
+    tickAll.addEventListener('change', () => { live().forEach((r) => { r.cb.checked = tickAll.checked; }); sync(); });
+    const linkBtn = btn('Link', null, 'primary');
+    const live = () => rows.filter((r) => !r.gone);
     const sync = () => {
-      const a = pickFrom(who.value);
-      chosen.textContent = a ? `✓ ${a.name} (${a.athlete_id})` : who.value ? 'Pick an athlete from the list.' : '';
-      chosen.className = a ? 'small good-text' : 'small warn-text';
-      const n = checks.filter(([, cb]) => cb.checked).length, all = n === g.items.length;
+      const left = live(), n = left.filter((r) => r.cb.checked).length, all = n === left.length;
       remember.disabled = !all; if (!all) remember.checked = false;
+      tickAll.checked = all && n > 0;
       linkBtn.textContent = `Link ${n} ${n === 1 ? 'result' : 'results'}`;
-      linkBtn.disabled = !a || n === 0;
+      linkBtn.disabled = !picker.get() || n === 0;
+      countEl.textContent = `${left.length} ${left.length === 1 ? 'result' : 'results'}`;
     };
-    who.addEventListener('input', sync);
-    checks.forEach(([, cb]) => cb.addEventListener('change', sync));
+    const countEl = h('span');
+    // After linking or discarding, the rows (or the whole card) clear in place.
+    const clear = (done) => { done.forEach((r) => { r.gone = true; r.row.remove(); }); g.items = live().map((r) => r.it); if (!g.items.length) { card.dataset.gone = '1'; card.remove(); } else sync(); syncIntro(); if (!totalLeft()) render(); };
     linkBtn.addEventListener('click', () => busy(linkBtn, async () => {
-      const a = pickFrom(who.value);
+      const a = picker.get();
       if (!a) throw new Error('Pick the athlete from the list.');
-      const sel = checks.filter(([, cb]) => cb.checked).map(([it]) => it);
-      const all = sel.length === g.items.length;
+      const left = live(), sel = left.filter((r) => r.cb.checked), all = sel.length === left.length && left.length === g.count;
       if (!confirm(`Link ${sel.length} ${sel.length === 1 ? 'result' : 'results'} from "${g.label}" (${g.source_name}) to ${a.name} (${a.athlete_id})?${all && remember.checked ? `\n\nFuture results from ${g.device_id ? `device ID ${g.device_id}` : `"${g.label}"`} will go straight to ${a.name}.` : ''}`)) return;
-      const body = { athlete_id: a.athlete_id, ...(all ? { provider: g.provider, identity: g.identity, expect_count: g.count, remember: remember.checked } : { ids: sel.map((it) => it.id) }) };
+      const body = { athlete_id: a.athlete_id, ...(all ? { provider: g.provider, identity: g.identity, expect_count: g.count, remember: remember.checked } : { ids: sel.map((r) => r.it.id) }) };
       const r = await post('/v1/queue/link', body);
       toast(`${r.saved} ${r.saved === 1 ? 'result' : 'results'} added to ${r.athlete.name}${r.prs ? `, ${r.prs} new PR${r.prs === 1 ? '' : 's'}` : ''}${r.remembered ? '. Future results will go straight there.' : '.'}`);
-      render();
+      g.count -= sel.length; clear(sel);
     }));
     const discardBtn = btn('Discard selected', (e) => {
-      const sel = checks.filter(([, cb]) => cb.checked).map(([it]) => it.id);
-      if (!sel.length) return toast('Select results to discard.', 'warn');
-      if (confirm(`Discard ${sel.length} ${sel.length === 1 ? 'result' : 'results'} from "${g.label}"? They won't be added to any profile.`)) busy(e.currentTarget, async () => { await post('/v1/queue/discard', { ids: sel }); toast('Discarded.'); render(); });
+      const sel = live().filter((r) => r.cb.checked);
+      if (!sel.length) return toast('Tick the results to discard.', 'warn');
+      if (confirm(`Discard ${sel.length} ${sel.length === 1 ? 'result' : 'results'} from "${g.label}"? They won't be added to any profile.`)) busy(e.currentTarget, async () => { const r = await post('/v1/queue/discard', { ids: sel.map((x) => x.it.id) }); toast(`${r.discarded} discarded.`); g.count -= sel.length; clear(sel); });
     }, 'ghost');
-    const card = panel(g.label, { subtitle: `${g.source_name}${g.device_id && g.device_id !== g.label ? ` · device ID ${g.device_id}` : ''} · ${g.count} ${g.count === 1 ? 'result' : 'results'} · received ${ago(g.first_received)}${ago(g.last_received) !== ago(g.first_received) ? ` to ${ago(g.last_received)}` : ''}` },
-      g.suggestions.length ? h('div', { class: 'row wrap small', style: 'gap:8px' }, h('span', { class: 'muted' }, 'Could be:'), g.suggestions.map((sug) => btn(`${sug.name} (${sug.athlete_id})`, () => { who.value = `${sug.name} · ${sug.athlete_id}`; sync(); }, 'secondary'))) : null,
-      h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('div', { class: 'grow', style: 'min-width:280px' }, who), chosen),
-      h('div', { style: 'overflow-x:auto' }, h('table', { class: 'table' },
-        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Test'), h('th', null, 'Result'), h('th', null, 'Tested'), h('th', null, 'Device'))),
-        h('tbody', null, checks.map(([it, cb]) => h('tr', null, h('td', null, cb),
-          h('td', null, `${it.test_name}${it.metric_name && it.metric !== 'time' && it.metric !== 'value' ? ` – ${it.metric_name}` : ''}${it.side ? ` (${it.side === 'L' ? 'left' : 'right'})` : ''}`),
-          h('td', { class: 'strong' }, fmtResult(it.value, it.unit, it.decimals)), h('td', null, fmtDay(it.recorded_at)), h('td', { class: 'muted' }, it.device ?? '')))))),
-      h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, remember, h('span', null, `Remember: send future results from ${g.device_id ? `device ID ${g.device_id}` : `"${g.label}"`} (${g.source_name}) straight to this athlete`)),
+    const card = panel(g.label, { subtitle: h('span', null, `${g.source_name}${g.device_id && g.device_id !== g.label ? ` · device ID ${g.device_id}` : ''} · `, countEl, ` · received ${ago(g.first_received).toLowerCase()}`) },
+      g.suggestions.length ? h('div', { class: 'row wrap small', style: 'gap:8px' }, h('span', { class: 'muted' }, 'Could be:'), g.suggestions.map((sug) => btn(`${sug.name} (${sug.athlete_id})`, () => picker.pick(everyone.find((a) => a.athlete_id === sug.athlete_id) ?? sug), 'secondary'))) : null,
+      h('div', { style: 'max-width:480px' }, picker.el),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, tickAll, h('span', null, 'Tick all')),
+      h('div', { class: 'stack-tight' }, rows.map((r) => r.row)),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, remember, h('span', null, `Remember: send future results from ${g.device_id ? `device ID ${g.device_id}` : `"${g.label}"`} (${g.source_name}) straight to this athlete`)),
       h('div', { class: 'row wrap' }, linkBtn, discardBtn));
+    card.dataset.source = g.source_name;
+    card.dataset.search = `${g.label} ${g.device_id ?? ''} ${g.items.map((it) => it.test_name).join(' ')}`.toLowerCase();
     sync();
     return card;
   });
+  const sources = [...new Set(q.data.map((g) => g.source_name))].sort();
+  const sourceSel = select([['', 'All sources'], ...sources.map((x) => [x, x])], { value: queueFilter.source, 'aria-label': 'Source' });
+  const find = input({ type: 'search', placeholder: 'Find a name, device ID or test', value: queueFilter.q, 'aria-label': 'Find waiting results' });
+  const none = h('p', { class: 'muted small', style: 'display:none' }, 'Nothing matches. Clear the search or pick All sources.');
+  const apply = () => { queueFilter = { source: sourceSel.value, q: find.value }; const s = find.value.trim().toLowerCase(); let n = 0; cards.forEach((c) => { const ok = (!sourceSel.value || c.dataset.source === sourceSel.value) && (!s || c.dataset.search.includes(s)); c.style.display = ok ? '' : 'none'; n += ok && !c.dataset.gone; }); none.style.display = n || !cards.length ? 'none' : ''; };
+  sourceSel.addEventListener('change', apply); find.addEventListener('input', apply);
+  syncIntro();
   fill(main, header('Waiting to be linked', 'These results arrived without an Athlete ID or a device you\'ve linked. None of them are in a profile yet.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    datalist,
-    q.data.length ? h('p', { class: 'small muted' }, 'Pick who each set belongs to and link it. Linking is all or nothing, and nothing is ever matched by name on its own. Tip: enter Athlete IDs as names on your devices and results skip this step.') : null,
-    ...(q.data.length ? cards : [h('div', { class: 'empty' }, 'Nothing is waiting. Every result has been linked to a profile.')]));
+    intro,
+    q.data.length > 1 ? h('div', { class: 'row wrap' }, sources.length > 1 ? h('div', { style: 'width:220px' }, sourceSel) : null, h('div', { class: 'grow', style: 'min-width:220px;max-width:360px' }, find)) : null,
+    none, ...(q.data.length ? cards : [h('div', { class: 'empty' }, 'Nothing is waiting. Every result has been linked to a profile.')]));
+  apply();
+}
+
+async function viewConnections(main) {
+  if (deskStop(main, 'Devices & imports')) return;
+  const owner = isOwner();
+  const [integ, links, everyone, waitingQ] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue')]);
+  const sysName = (p) => (p === 'api' ? 'Open API' : integ.data.find((i) => i.provider === p)?.name.split(' (')[0] ?? p);
+
+  // Hawkin: a failed sync shows Needs attention, and the owner can paste a new token right there.
+  const hawkin = integ.data.find((i) => i.provider === 'hawkin');
+  const token = input({ type: 'password', autocomplete: 'off', placeholder: 'Integration token from Hawkin' }), region = select([['americas', 'Americas'], ['europe', 'Europe'], ['apac', 'Asia-Pacific']], { value: hawkin.region ?? 'americas' });
+  const tokenForm = h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const r = await api('PUT', '/v1/integrations/hawkin', { refresh_token: token.value, region: region.value }); toast(`Connected. ${r.sync.results} results pulled from the last 90 days.`); render(); }); } },
+    h('div', { class: 'grow', style: 'min-width:220px' }, field(hawkin.last_error ? 'Paste a new token' : 'Integration token', token)), field('Region', region), h('div', { style: 'align-self:flex-end' }, btn('Connect', null, 'secondary', { type: 'submit' })));
+  const needsAttention = hawkin.connected && hawkin.last_error;
+  const hawkinPanel = panel('Hawkin Dynamics force plates', { subtitle: hawkin.connected ? `Connected (${hawkin.token_hint}). ${hawkin.last_sync_at ? `Last sync ${ago(hawkin.last_sync_at).toLowerCase()}.` : ''} New tests sync every 15 minutes.` : hawkin.note,
+    action: needsAttention ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Needs attention') : hawkin.connected ? h('span', { class: 'dp-badge dp-badge--good' }, 'Connected') : null },
+    needsAttention ? h('p', { class: 'small warn-text' }, `The last sync failed: ${hawkin.last_error} ${owner ? 'If Hawkin gave you a new integration token, paste it below.' : 'Ask the owner to paste a new token from Hawkin.'}`) : null,
+    owner && hawkin.connected ? h('div', { class: 'row wrap' },
+      btn('Sync now', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/integrations/hawkin/sync'); toast(`${r.results} new results${r.waiting_for_match ? `, ${r.waiting_for_match} waiting for an athlete match` : ''}.`); render(); }), 'secondary'),
+      btn('Disconnect', (e) => { if (confirm('Disconnect Hawkin? Results already saved stay.')) busy(e.currentTarget, async () => { await del('/v1/integrations/hawkin'); render(); }); }, 'ghost')) : null,
+    owner && (!hawkin.connected || needsAttention) ? tokenForm : null,
+    !owner && !hawkin.connected ? h('p', { class: 'small muted' }, 'The owner connects Hawkin.') : null);
+
+  // Link a device ahead of time.
+  const providers = [...new Set(['api', ...integ.data.map((i) => i.provider).filter((p) => p !== 'generic'), ...waitingQ.data.map((g) => g.provider)])];
+  const sys = select(providers.map((p) => [p, sysName(p)]), { value: 'freelap', 'aria-label': 'System' });
+  const kind = select([['id', 'A device ID'], ['name', 'A name the device uses']], { value: 'id', 'aria-label': 'What you\'re typing' });
+  const ext = input({ placeholder: 'Like 1047 or A-17', 'aria-label': 'Device ID or name' });
+  kind.addEventListener('change', () => { ext.placeholder = kind.value === 'name' ? 'Like Tyler G, as the device spells it' : 'Like 1047 or A-17'; });
+  const picker = athletePicker(everyone, { label: 'Athlete this device belongs to' });
+  const linkPanel = panel('Link a device', { subtitle: 'Results from this device ID (or the name it uses) go straight to the athlete from now on. Anything already waiting from it is linked too.' },
+    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const a = picker.get();
+      if (!ext.value.trim()) throw new Error('Enter the device ID or the name the device uses.');
+      if (!a) throw new Error('Pick the athlete from the list.');
+      const idText = kind.value === 'name' ? `name:${ext.value.trim().toLowerCase()}` : ext.value.trim();
+      const had = links.data.find((l) => l.provider === sys.value && l.external_id.toLowerCase() === idText.toLowerCase());
+      if (had && had.athlete_id !== a.athlete_id && !confirm(`${ext.value.trim()} is linked to ${had.athlete_name} now. Linking it again moves it to ${a.name}. Continue?`)) return;
+      const r = await post('/v1/athlete-links', { provider: sys.value, external_id: ext.value.trim(), kind: kind.value, athlete_id: a.athlete_id });
+      toast(`${r.moved_from ? `Moved from ${r.moved_from.name} to ${a.name}` : r.already_linked ? `Already linked to ${a.name}` : `Linked to ${a.name}`}${r.linked ? `. ${r.linked} waiting ${r.linked === 1 ? 'result' : 'results'} added` : ''}.`);
+      render();
+    }); } },
+      h('div', { class: 'form-grid cols-3' }, field('System', sys), field('What you\'re typing', kind), field('Device ID or name', ext)),
+      h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Athlete'), picker.el),
+      h('div', null, btn('Link device', null, 'primary', { type: 'submit' }))));
+
+  // Linked devices: find, change the athlete, unlink with Undo.
+  const listBox = h('div', { class: 'stack-tight' });
+  const findL = input({ type: 'search', placeholder: 'Find a device or athlete', 'aria-label': 'Find a linked device', style: 'max-width:320px' });
+  const linkLabel = (l) => (l.external_id.startsWith('name:') ? `name "${l.external_name ?? l.external_id.slice(5)}"` : `ID ${l.external_id}${l.external_name && l.external_name !== l.external_id ? ` (${l.external_name})` : ''}`);
+  const rowFor = (l) => {
+    const row = h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+      h('span', { class: 'grow', style: 'min-width:200px' }, `${sysName(l.provider)}: ${linkLabel(l)}`),
+      h('span', null, '→ ', l.athlete_name ?? 'Removed athlete'), idChip(l.athlete_id), l.athlete_archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null,
+      btn('Change', () => {
+        const p = athletePicker(everyone, { label: `New athlete for ${linkLabel(l)}` });
+        const save = btn('Move link', (e) => busy(e.currentTarget, async () => {
+          const a = p.get(); if (!a) throw new Error('Pick the athlete from the list.');
+          const r = await post('/v1/athlete-links', { provider: l.provider, external_id: l.external_id, athlete_id: a.athlete_id });
+          toast(`Moved to ${a.name}${r.linked ? `. ${r.linked} waiting ${r.linked === 1 ? 'result' : 'results'} added` : ''}.`); render();
+        }), 'primary');
+        fill(row, h('div', { class: 'stack', style: 'width:100%' }, h('span', null, `${sysName(l.provider)}: ${linkLabel(l)} → who instead?`), p.el, h('div', { class: 'row wrap' }, save, btn('Cancel', () => render(), 'ghost'))));
+        p.focus();
+      }, 'ghost'),
+      btn('Unlink', (e) => busy(e.currentTarget, async () => {
+        const r = await del(`/v1/athlete-links/${l.provider}/${encodeURIComponent(l.external_id)}`);
+        row.remove(); links.data = links.data.filter((x) => x !== l);
+        undoToast(`Unlinked ${linkLabel(l)}. Its results will wait to be linked.`, () => busy(null, async () => { await post('/v1/athlete-links', r.link); toast('Link put back.'); render(); }));
+      }), 'ghost'));
+    row.dataset.search = `${sysName(l.provider)} ${l.external_id} ${l.external_name ?? ''} ${l.athlete_name ?? ''} ${l.athlete_id ?? ''}`.toLowerCase();
+    return row;
+  };
+  const linkRows = links.data.map(rowFor);
+  findL.addEventListener('input', () => { const s = findL.value.trim().toLowerCase(); linkRows.forEach((r) => { r.style.display = !s || r.dataset.search.includes(s) ? '' : 'none'; }); });
+  fill(listBox, linkRows.length ? linkRows : h('p', { class: 'muted small' }, 'None yet. Link a device above, or link waiting results and choose to remember them.'));
+  const linksPanel = panel('Linked devices', { subtitle: 'Results from these device IDs and names go straight to the athlete. Everything else needs an Athlete ID or waits for you.' },
+    links.data.length > 6 ? findL : null, listBox);
+
+  const example = `curl -X POST ${location.origin}/v1/results \\
+  -H "Authorization: Bearer dp_live_..." -H "Content-Type: application/json" \\
+  -d '{"provider":"gates","results":[{"athlete":{"athlete_id":"AVALOP2026"},
+       "test":"dash_40yd","value":4.71,"timing":"electronic","external_id":"run-8812"}]}'`;
+  const apiPanel = panel('Send results from any system', { subtitle: 'Any timing system, app or script can post results to the open API with an API key. Values in other units are converted, results with an Athlete ID (or from a linked device) land right away, and resending the same result is ignored.' },
+    h('div', { class: 'row', style: 'justify-content:flex-end' }, btn('Copy', async () => { await navigator.clipboard?.writeText(example).catch(() => {}); toast('Example copied.'); }, 'ghost', { 'aria-label': 'Copy the API example' })),
+    h('pre', { class: 'small', style: 'white-space:pre-wrap;overflow-x:auto;background:var(--ground);padding:12px;border-radius:6px;margin:0' }, example),
+    h('div', { class: 'row wrap' }, owner ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/integrations' }, 'API keys') : null, h('a', { class: 'dp-btn dp-btn--ghost', href: '/v1/openapi.json', target: '_blank' }, 'Full API reference')));
+
+  fill(main, header('Devices & imports', 'Get results in from anywhere: live connections, file imports, the open API, or by hand.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
+    waitingQ.n ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waitingQ.n} ${waitingQ.n === 1 ? 'result is' : 'results are'} waiting from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
+    linkPanel, linksPanel, hawkinPanel,
+    panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
+    apiPanel);
 }
 
 // Download a file from the API with the coach's session.
@@ -2295,90 +3726,185 @@ async function download(path) {
 const toBase64 = (buf) => { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000)); return btoa(s); };
 
 // Upload results: 1 get a sheet with everyone's athlete ID, 2 upload it (or any export), 3 review sorted by athlete, then save.
+// The form's choices are kept while a sheet is fixed and checked again.
 let uploadState = null;
+let uploadForm = { session: null, date: null, test: '', source: '', paste: '', fileName: null };
+const UPLOAD_SOURCES = ['Our sheet', 'Freelap', 'Swift', 'Brower', 'Dashr', 'OVR', 'VALD', 'Jump mat', 'Rapsodo', 'Radar gun', 'Paper sheet', 'Other'];
+const MAX_UPLOAD_MB = 10;
 async function viewUpload(main) {
+  if (deskStop(main, 'Upload results')) return;
   const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const [days, lib, contracts, clientsList] = await Promise.all([get('/v1/testing-sessions'), get('/v1/tests'), get('/v1/team-contracts'), get('/v1/clients')]);
+  if (qs.get('session')) uploadForm.session = qs.get('session');
+  const [days, lib, teamList, clientsList, recent, presetList] = await Promise.all([get('/v1/testing-sessions'), get('/v1/tests'), get('/v1/teams'), get('/v1/clients'), get('/v1/uploads'), get('/v1/test-presets')]);
+  const presets = presetList.data.filter((p) => p.tests.length);
 
   // Step 1: template
-  const daySel = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const teamSel = select([['', 'Choose athletes later'], ...contracts.data.filter((c) => c.status === 'active').map((c) => [c.id, `${c.org_name} ${c.name}`])]);
-  const presetSel = select(PRESETS.map(([label], i) => [String(i), label]));
-  const tplOpts = h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(2,minmax(0,1fr))' }, field('Team', teamSel), field('Tests', presetSel));
-  const sync = () => { tplOpts.style.display = daySel.value ? 'none' : ''; };
-  daySel.addEventListener('change', sync); sync();
-  const tplQuery = () => (daySel.value ? `session_id=${daySel.value}` : `tests=${PRESETS[Number(presetSel.value)][1].join(',')}${teamSel.value ? `&contract_id=${teamSel.value}` : `&client_ids=${clientsList.data.filter((c) => c.status !== 'canceled').map((c) => c.id).join(',')}`}`);
+  const daySel = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: uploadForm.session ?? '' });
+  const teamSel = select([['', 'Choose athletes later'], ...teamList.data.map((c) => [c.id, c.label])]);
+  const presetSel = select(presets.length ? presets.map((p) => [p.id, p.name]) : [['', 'No presets yet']], { disabled: !presets.length });
+  const tplOpts = h('div', { class: 'form-grid' }, field('Team', teamSel), field('Tests', presetSel, presets.length ? 'From your presets in the Test library.' : 'Add a preset in the Test library, or pick a testing day.'));
+  const syncTpl = () => { tplOpts.style.display = daySel.value ? 'none' : ''; };
+  daySel.addEventListener('change', syncTpl); syncTpl();
+  const tplQuery = () => {
+    if (daySel.value) return `session_id=${daySel.value}`;
+    const preset = presets.find((p) => p.id === presetSel.value);
+    if (!preset) throw new Error('There are no presets yet. Add one in the Test library, or pick a testing day.');
+    return `tests=${preset.tests.map((t) => t.key).join(',')}${teamSel.value ? `&contract_id=${teamSel.value}` : `&client_ids=${clientsList.data.filter((c) => c.status !== 'canceled').map((c) => c.id).join(',')}`}`;
+  };
   const step1 = panel('1. Get the sheet', { subtitle: 'Every athlete\'s ID is filled in, with a column for each test and attempt. Fill it in on paper, a laptop, or a phone.' },
     field('Testing day', daySel), tplOpts,
-    h('div', { class: 'row wrap' }, btn('Download Excel', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}`)), 'primary'), btn('Download CSV (Google Sheets)', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}&format=csv`)), 'ghost')));
+    h('div', { class: 'row wrap' }, btn('Download Excel', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}`)), 'secondary'), btn('Download CSV (Google Sheets)', (e) => busy(e.currentTarget, () => download(`/v1/uploads/template?${tplQuery()}&format=csv`)), 'ghost')));
 
-  // Step 2: upload
-  const file = h('input', { type: 'file', accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input' });
-  const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px' });
-  const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])]);
-  const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: qs.get('session') ?? '' });
-  const upDate = input({ type: 'date', value: bizDate(), max: bizDate() });
-  async function doPreview() {
-    const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDate.value || undefined };
-    if (file.files[0]) {
-      body.filename = file.files[0].name;
-      if (/\.xlsx$/i.test(file.files[0].name)) body.xlsx_base64 = toBase64(await file.files[0].arrayBuffer());
-      else if (/\.xls$/i.test(file.files[0].name)) throw new Error('That\'s an old .xls file. In Excel, choose File → Save As → Excel Workbook (.xlsx), then upload it.');
-      else body.csv = await file.files[0].text();
-    } else if (paste.value.trim()) { body.csv = paste.value; body.filename = 'Pasted rows'; }
+  // Step 2: upload (drag and drop, or choose, or paste)
+  const file = h('input', { type: 'file', accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'Choose a file' });
+  const fileNote = h('span', { class: 'small muted' }, 'Excel (.xlsx) or CSV, up to 10 MB.');
+  const pickFile = (f) => {
+    if (!f) return;
+    if (f.size > MAX_UPLOAD_MB * 1024 * 1024) { file.value = ''; fileNote.textContent = `${f.name} is over ${MAX_UPLOAD_MB} MB. Split it into smaller sheets.`; fileNote.className = 'small warn-text'; return; }
+    fileNote.textContent = `${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB) is ready to check.`; fileNote.className = 'small good-text';
+  };
+  file.addEventListener('change', () => pickFile(file.files[0]));
+  const drop = h('div', { class: 'ts-drop', onDragover: (e) => { e.preventDefault(); drop.classList.add('over'); }, onDragleave: () => drop.classList.remove('over'),
+    onDrop: (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) { file.files = e.dataTransfer.files; pickFile(file.files[0]); } } },
+    h('span', { class: 'strong' }, 'Drop the file here, or choose it'), file, fileNote);
+  const paste = h('textarea', { class: 'dp-input', placeholder: 'Or paste rows straight from Excel or Google Sheets, header row included.', style: 'min-height:90px', 'aria-label': 'Pasted rows' });
+  paste.value = uploadForm.paste;
+  const source = select([['', 'Where it\'s from…'], ...UPLOAD_SOURCES.map((x) => [x, x])], { value: uploadForm.source, 'aria-label': 'Where it\'s from' });
+  const oneTest = select([['', 'It\'s our sheet or has test columns'], ...lib.data.map((t) => [t.key, t.name])], { value: uploadForm.test });
+  const upDay = select([['', 'No testing day'], ...days.data.map((d) => [d.id, `${d.name} (${ymd(d.date)})`])], { value: uploadForm.session ?? '' });
+  const upDate = input({ type: 'date', value: uploadForm.date ?? bizDate(), max: bizDate() });
+  const dateNote = h('span', { class: 'small muted' });
+  const syncDate = () => { const d = days.data.find((x) => x.id === upDay.value); upDate.disabled = !!d; if (d) upDate.value = d.date; dateNote.textContent = d ? 'The testing day sets the date.' : ''; };
+  upDay.addEventListener('change', syncDate); syncDate();
+  const remember = () => { uploadForm = { session: upDay.value || null, date: upDate.disabled ? uploadForm.date : upDate.value, test: oneTest.value, source: source.value, paste: paste.value, fileName: file.files[0]?.name ?? null }; };
+  async function doPreview(fromFile = file, fromPaste = paste) {
+    remember();
+    const body = { session_id: upDay.value || undefined, test: oneTest.value || undefined, date: upDay.value ? undefined : upDate.value || undefined, source: source.value || undefined };
+    const f = fromFile?.files?.[0];
+    if (f) {
+      if (f.size > MAX_UPLOAD_MB * 1024 * 1024) throw new Error(`${f.name} is over ${MAX_UPLOAD_MB} MB. Split it into smaller sheets and upload them one at a time.`);
+      body.filename = f.name;
+      if (/\.xlsx$/i.test(f.name)) body.xlsx_base64 = toBase64(await f.arrayBuffer());
+      else if (/\.xls$/i.test(f.name)) throw new Error('That\'s an old .xls file. In Excel, choose File → Save As → Excel Workbook (.xlsx), then upload it.');
+      else body.csv = await f.text();
+    } else if (fromPaste?.value.trim()) { body.csv = fromPaste.value; body.filename = 'Pasted rows'; uploadForm.paste = fromPaste.value; }
     else throw new Error('Choose a file or paste your rows.');
-    uploadState = { ...(await post('/v1/uploads/preview', body)), filename: body.filename, confirmed: new Set(), saved: null };
+    uploadState = { ...(await post('/v1/uploads/preview', body)), filename: body.filename, pasted: !f, confirmed: new Set(), saved: null, filter: 'all', q: '' };
     render();
   }
   const step2 = panel('2. Upload it', { subtitle: 'Every row needs a real Athlete ID and every value has to fit its test. If anything is off, nothing is saved and you\'ll see exactly what to fix.' },
-    field('File (Excel or CSV)', file), paste,
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Add to testing day', upDay), field('Date for rows without one', upDate), field('Device export with one test?', oneTest)),
+    drop, paste,
+    h('div', { class: 'form-grid' }, field('Add to testing day', upDay), h('div', { class: 'stack-tight' }, field('Date for rows without one', upDate), dateNote), field('Where it\'s from', source), field('Device export with one test?', oneTest)),
     h('div', null, btn('Check the sheet', (e) => busy(e.currentTarget, () => doPreview()), 'primary')));
+
+  // Recent uploads, each with Undo.
+  let undoing = false;
+  const undoUpload = async (b, button) => {
+    if (undoing) return;
+    const what = [b.created && `${b.created} new ${b.created === 1 ? 'result comes' : 'results come'} out`, b.replaced && `${b.replaced} replaced ${b.replaced === 1 ? 'value goes' : 'values go'} back`, b.waiting && `${b.waiting} waiting ${b.waiting === 1 ? 'result is' : 'results are'} dropped`].filter(Boolean);
+    if (!confirm(`Undo ${b.filename ?? 'this upload'}? ${what.length ? `${what.join(', ')}.` : ''} Anything changed or linked since is left alone.`)) return;
+    undoing = true; button.disabled = true;
+    try { const r = await post(`/v1/uploads/${b.id}/undo`); toast(`Undone: ${r.summary}.`); if (uploadState?.saved?.batch_id === b.id) uploadState = null; render(); }
+    catch (e) { toast(e.message, 'warn'); button.disabled = false; }
+    finally { undoing = false; }
+  };
+  const recentPanel = recent.data.length ? panel('Recent uploads', { subtitle: 'Undo takes an upload back out: new results are removed, replaced values go back, and results sent to waiting are dropped.' },
+    recent.data.map((b) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, b.filename ?? 'Upload'),
+        h('span', { class: 'muted' }, [b.source, b.session_name, b.by_name && `by ${b.by_name}`, ago(b.created_at)].filter(Boolean).join(' · '))),
+      h('span', null, [`${b.saved} saved`, b.replaced && `${b.replaced} replaced`, b.unchanged && `${b.unchanged} already saved`, b.waiting && `${b.waiting} to link`, b.prs && `${b.prs} PR${b.prs === 1 ? '' : 's'}`].filter(Boolean).join(' · ')),
+      b.undone_at ? h('span', { class: 'dp-badge dp-badge--muted', title: b.undo_summary ?? '' }, `Undone ${ago(b.undone_at).toLowerCase()}`) : btn('Undo', (e) => undoUpload(b, e.currentTarget), 'ghost')))) : null;
 
   // Step 3: results of the check
   let step3 = null;
   const st = uploadState;
-  const problemTable = (list) => h('div', { style: 'overflow-x:auto' }, h('table', { class: 'table' },
-    h('thead', null, h('tr', null, h('th', null, 'Row'), h('th', null, 'Column'), h('th', null, 'Athlete'), h('th', null, 'What to fix'))),
-    h('tbody', null, list.map((e) => h('tr', null, h('td', null, e.row ?? '—'), h('td', null, e.column ?? '—'), h('td', { style: 'font-family:var(--font-mono)' }, e.athlete_id ?? ''), h('td', null, e.message))))));
-  const again = h('div', { class: 'row' }, btn('Upload the fixed sheet', () => { uploadState = null; render(); }, 'primary'));
+  const problemsCsv = (list) => { const cell = (x) => (/[",\n]/.test(String(x ?? '')) ? `"${String(x).replace(/"/g, '""')}"` : x ?? ''); return ['Row,Column,Athlete ID,What to fix', ...list.map((e) => [e.row, e.column, e.athlete_id, e.message].map(cell).join(','))].join('\r\n'); };
+  const saveCsv = (text, name) => { const url = URL.createObjectURL(new Blob(['﻿' + text], { type: 'text/csv' })); const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); };
+  const problemList = (list) => h('div', null,
+    h('div', { class: 'ts-problems-table', style: 'overflow-x:auto' }, h('table', { class: 'table' },
+      h('thead', null, h('tr', null, h('th', null, 'Row'), h('th', null, 'Column'), h('th', null, 'Athlete'), h('th', null, 'What to fix'))),
+      h('tbody', null, list.map((e) => h('tr', null, h('td', null, e.row ?? '—'), h('td', null, e.column ?? '—'), h('td', { style: 'font-family:var(--font-mono)' }, e.athlete_id ?? ''), h('td', null, e.message)))))),
+    h('div', { class: 'ts-problems-cards stack-tight' }, list.map((e) => h('div', { class: 'list-item small', style: 'flex-direction:column;align-items:flex-start' },
+      h('span', { class: 'muted' }, [e.row ? `Row ${e.row}` : null, e.column, e.athlete_id].filter(Boolean).join(' · ') || 'Whole sheet'), h('span', null, e.message)))));
   if (st?.saved) {
-    step3 = panel('Saved', { subtitle: `${st.saved.saved} results added to ${st.saved.athletes.length} ${st.saved.athletes.length === 1 ? 'athlete' : 'athletes'}${st.saved.prs ? `, ${st.saved.prs} new PRs` : ''}${st.saved.already_saved ? `. ${st.saved.already_saved} were already saved from an earlier upload.` : '.'}` },
-      st.saved.athletes.map((a) => h('a', { class: 'list-item', href: a.client_id ? `#/clients/${a.client_id}` : `#/teams/${a.contract_id}`, style: 'text-decoration:none;color:inherit' },
+    const s = st.saved;
+    step3 = panel('Saved', { subtitle: `${s.saved} ${s.saved === 1 ? 'result' : 'results'} saved for ${s.athletes.length} ${s.athletes.length === 1 ? 'athlete' : 'athletes'}${s.replaced ? ` (${s.replaced} replaced an earlier value)` : ''}${s.prs ? `, ${s.prs} new PR${s.prs === 1 ? '' : 's'}` : ''}.${s.already_saved ? ` ${s.already_saved} ${s.already_saved === 1 ? 'was' : 'were'} already saved and left as ${s.already_saved === 1 ? 'it was' : 'they were'}.` : ''}` },
+      s.athletes.map((a) => h('a', { class: 'list-item', href: a.client_id ? `#/clients/${a.client_id}` : `#/teams/${a.contract_id}`, style: 'text-decoration:none;color:inherit' },
         h('span', { class: 'grow strong' }, a.name), idChip(a.athlete_id), h('span', { class: 'small muted' }, `${a.results} ${a.results === 1 ? 'result' : 'results'}`), a.prs ? h('span', { class: 'dp-badge dp-badge--good' }, `${a.prs} PR${a.prs === 1 ? '' : 's'}`) : null)),
-      h('div', { class: 'row' }, btn('Upload another', () => { uploadState = null; render(); }, 'secondary')));
+      h('div', { class: 'row wrap' }, btn('Upload another', () => { uploadState = null; uploadForm.paste = ''; render(); }, 'primary'),
+        recent.data.some((b) => b.id === s.batch_id && !b.undone_at) ? btn('Undo this upload', (e) => undoUpload(recent.data.find((b) => b.id === s.batch_id), e.currentTarget), 'ghost') : null,
+        st.session?.id ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/${st.session.id}` }, 'Back to the testing day') : null));
   } else if (st && !st.ok) {
+    // Fix in place: pasted rows edit right here; a file is chosen again. The options above are kept.
+    const fixPaste = st.pasted ? h('textarea', { class: 'dp-input', wrap: 'off', style: 'min-height:160px;font-family:var(--font-mono);font-size:13px;white-space:pre', 'aria-label': 'Your rows, to fix' }) : null;
+    if (fixPaste) fixPaste.value = uploadForm.paste;
+    const fixFile = st.pasted ? null : h('input', { type: 'file', accept: '.xlsx,.csv,.txt,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'Choose the fixed file' });
     step3 = h('section', { class: 'dp-panel stack', style: 'border-color:var(--amber)' },
       h('h2', { class: 'dp-panel-title', style: 'color:var(--amber)' }, 'This sheet can\'t be saved'),
-      h('p', null, `Nothing was saved. ${st.error_count} ${st.error_count === 1 ? 'problem needs' : 'problems need'} fixing in ${st.filename ?? 'the sheet'}. Fix ${st.error_count === 1 ? 'it' : 'them'}, save, and upload the sheet again.`),
-      problemTable(st.errors), st.error_count > st.errors.length ? h('p', { class: 'small muted' }, `Showing the first ${st.errors.length}.`) : null, again);
+      h('p', null, `Nothing was saved. ${st.error_count} ${st.error_count === 1 ? 'problem needs' : 'problems need'} fixing in ${st.filename ?? 'the sheet'}.`),
+      problemList(st.errors), st.error_count > st.errors.length ? h('p', { class: 'small muted' }, `Showing the first ${st.errors.length}.`) : null,
+      h('div', { class: 'row wrap' }, btn('Download the problems (CSV)', () => saveCsv(problemsCsv(st.errors), 'problems-to-fix.csv'), 'ghost')),
+      h('div', { class: 'dp-label' }, st.pasted ? 'Fix the rows here' : `Fix ${st.filename ?? 'the file'}, save it, and choose it again`),
+      fixPaste ?? fixFile,
+      h('div', { class: 'row wrap' }, btn('Check again', (e) => busy(e.currentTarget, () => (st.pasted ? doPreview(null, fixPaste) : doPreview(fixFile, null))), 'primary'),
+        btn('Start over', () => { uploadState = null; render(); }, 'ghost')));
   } else if (st) {
     const s = st.summary;
     const saveBtn = btn(`Save ${s.results} results`, (e) => busy(e.currentTarget, async () => {
-      try { const saved = await post('/v1/uploads/commit', { preview_id: st.preview_id, confirm: [...st.confirmed] }); uploadState = { ...st, saved }; toast(`${saved.saved} results saved.`); render(); }
+      try { const saved = await post('/v1/uploads/commit', { preview_id: st.preview_id, confirm: [...st.confirmed] }); uploadState = { ...st, saved }; uploadForm.paste = ''; toast(`${saved.saved} ${saved.saved === 1 ? 'result' : 'results'} saved.`); render(); }
       catch (err) { if (!err.details) throw err; uploadState = { ...st, ok: err.code !== 'upload_rejected', errors: err.details, error_count: err.details.length }; if (err.code === 'upload_rejected') render(); else throw err; }
     }), 'primary');
-    const syncSave = () => { const left = st.warnings.length - st.confirmed.size; saveBtn.disabled = left > 0; saveBtn.textContent = left ? `Confirm ${left} more to save` : `Save ${s.results} results to ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}`; };
+    const write = s.new + s.replaced;
+    const syncSave = () => { const left = st.warnings.length - st.confirmed.size; saveBtn.disabled = left > 0 || !write; saveBtn.textContent = left ? `Confirm ${left} more to save` : write ? `Save ${write} ${write === 1 ? 'result' : 'results'} for ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}` : 'Nothing new to save'; };
     const confirmPanel = st.warnings.length ? h('div', { class: 'stack', style: 'border:1px solid var(--amber);border-radius:8px;padding:12px' },
       h('strong', { style: 'color:var(--amber)' }, `Confirm ${st.warnings.length === 1 ? 'this value' : `these ${st.warnings.length} values`}`),
       h('p', { class: 'small muted', style: 'margin:0' }, 'They\'re possible but unusual. Tick each one that\'s right. If one is a mistake, fix the sheet and upload it again.'),
       st.warnings.map((w) => { const cb = h('input', { type: 'checkbox', checked: st.confirmed.has(w.key) }); cb.addEventListener('change', () => { cb.checked ? st.confirmed.add(w.key) : st.confirmed.delete(w.key); syncSave(); });
-        return h('label', { class: 'row small', style: 'gap:10px;min-height:40px' }, cb, h('span', null, h('span', { class: 'muted' }, `Row ${w.row}, ${w.column}: `), w.message)); })) : null;
-    const cards = st.athletes.map((g) => h('details', { class: 'dp-panel', open: g.results.some((r) => r.warning) },
-      h('summary', { class: 'row', style: 'cursor:pointer;gap:12px;min-height:36px;list-style:none' }, h('span', { class: 'strong grow' }, g.name), idChip(g.athlete_id), h('span', { class: 'small muted' }, `${g.results.length} ${g.results.length === 1 ? 'result' : 'results'}`), g.results.some((r) => r.warning) ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Confirm') : null),
-      g.results.map((r) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
-        h('span', { class: 'grow' }, `${r.test_name}${r.side ? ` – ${r.side === 'L' ? 'Left' : 'Right'}` : ''}${r.attempt ? ` #${r.attempt}` : ''}`),
-        h('span', { class: 'muted' }, ymd(r.date)),
-        h('span', { class: 'strong' }, fmtResult(r.value, r.unit, r.decimals)),
-        r.entered_unit !== r.unit ? h('span', { class: 'muted' }, `from ${r.entered} ${r.entered_unit}`) : null,
-        r.warning ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Unusual') : null))));
-    step3 = panel('3. Every row checks out', { subtitle: `${s.results} results for ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}, each matched by Athlete ID. Saving adds all of them at once.` },
-      confirmPanel, cards, h('div', { class: 'row wrap' }, saveBtn, btn('Start over', () => { uploadState = null; render(); }, 'ghost')));
-    syncSave();
+        return h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, cb, h('span', null, h('span', { class: 'muted' }, `Row ${w.row}, ${w.column}: `), w.message)); })) : null;
+    const statusBadge = (r) => (r.status === 'unchanged' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Already saved')
+      : r.status === 'replace' ? h('span', { class: 'dp-badge dp-badge--neutral' }, `Was ${r.was.map((x) => fmtResult(x, r.unit, r.decimals)).join(', ')}`) : h('span', { class: 'dp-badge dp-badge--good' }, 'New'));
+    const cards = st.athletes.map((g) => {
+      const card = h('details', { class: 'dp-panel', open: g.results.some((r) => r.warning) || st.athletes.length <= 3 },
+        h('summary', { class: 'row wrap', style: 'cursor:pointer;gap:12px;min-height:44px;list-style:none' }, h('span', { class: 'strong grow' }, g.name), idChip(g.athlete_id), h('span', { class: 'small muted' }, `${g.results.length} ${g.results.length === 1 ? 'result' : 'results'}`),
+          g.results.some((r) => r.pr) ? h('span', { class: 'dp-badge dp-badge--good' }, 'PR') : null, g.results.some((r) => r.warning) ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Confirm') : null),
+        g.results.map((r) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' },
+          h('span', { class: 'grow', style: 'min-width:160px' }, `${r.test_name}${r.side ? ` – ${r.side === 'L' ? 'Left' : 'Right'}` : ''}${r.attempt ? ` #${r.attempt}` : ''}`),
+          h('span', { class: 'muted' }, ymd(r.date)),
+          h('span', { class: 'strong' }, fmtResult(r.value, r.unit, r.decimals)),
+          r.entered_unit !== r.unit ? h('span', { class: 'muted' }, `from ${r.entered} ${r.entered_unit}`) : null,
+          statusBadge(r),
+          r.previous_best != null ? h('span', { class: 'muted' }, `Best before ${fmtResult(r.previous_best, r.unit, r.decimals)}`) : null,
+          r.pr ? h('span', { class: 'dp-badge dp-badge--good' }, 'PR') : null,
+          r.warning ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Unusual') : null)));
+      card.dataset.search = `${g.name} ${g.athlete_id}`.toLowerCase();
+      card.dataset.look = String(g.results.some((r) => r.warning || r.status === 'replace'));
+      card.dataset.pr = String(g.results.some((r) => r.pr));
+      return card;
+    });
+    // Big sheets: filter to what needs a look, or the PRs, and find an athlete.
+    const applyFilter = () => { const q = st.q.trim().toLowerCase(); let shown = 0; cards.forEach((c) => { const ok = (st.filter === 'all' || (st.filter === 'look' && c.dataset.look === 'true') || (st.filter === 'prs' && c.dataset.pr === 'true')) && (!q || c.dataset.search.includes(q)); c.style.display = ok ? '' : 'none'; shown += ok; }); none.style.display = shown ? 'none' : ''; };
+    const none = h('p', { class: 'muted small', style: 'display:none' }, 'No athletes match.');
+    const filterBtns = [['all', 'All'], ['look', 'Needs a look'], ['prs', 'PRs']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(st.filter === k), onClick: () => { st.filter = k; filterBtns.forEach((b, i) => b.setAttribute('aria-pressed', String(['all', 'look', 'prs'][i] === k))); applyFilter(); } }, label));
+    const findA = input({ type: 'search', placeholder: 'Find an athlete', 'aria-label': 'Find an athlete in this sheet', style: 'max-width:260px' });
+    findA.addEventListener('input', () => { st.q = findA.value; applyFilter(); });
+    const r = st.read;
+    const how = r ? h('details', { class: 'small' }, h('summary', { style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'How the file was read'),
+      h('ul', { class: 'stack-tight', style: 'margin:0;padding-left:18px' },
+        h('li', null, `${st.pasted ? 'Pasted rows' : st.format === 'xlsx' ? `Excel file ${st.filename ?? ''}` : `CSV file ${st.filename ?? ''}`}, ${st.rows} ${st.rows === 1 ? 'row' : 'rows'}${st.source ? `, from ${st.source}` : ''}.`),
+        h('li', null, `Athletes found by the "${r.id_column ?? r.name_column}" column${r.id_column && r.name_column ? `, checked against "${r.name_column}"` : ''}.`),
+        h('li', null, r.date_column ? `Dates from "${r.date_column}"${st.session ? `; rows without one use the testing day (${ymd(st.session.date)})` : ''}.` : st.session ? `Every result is dated ${ymd(st.session.date)}, the testing day.` : 'No date column: every result uses the date you chose.'),
+        h('li', null, `Test columns: ${r.columns.map((c) => c.header).join(', ')}.`),
+        r.ignored.length ? h('li', null, `Left out (empty or not a test): ${r.ignored.join(', ')}.`) : null)) : null;
+    const summaryLine = [`${s.results} ${s.results === 1 ? 'result' : 'results'} for ${s.athletes} ${s.athletes === 1 ? 'athlete' : 'athletes'}`, s.new && `${s.new} new`, s.replaced && `${s.replaced} replace an earlier value`, s.unchanged && `${s.unchanged} already saved (left as ${s.unchanged === 1 ? 'it is' : 'they are'})`, s.prs && `${s.prs} PR${s.prs === 1 ? '' : 's'}`].filter(Boolean).join(', ');
+    step3 = panel('3. Every row checks out', { subtitle: `${summaryLine}. Each result is matched by Athlete ID, and saving adds them all at once.${st.session ? ` Added to ${st.session.name}.` : ''}` },
+      how, confirmPanel,
+      st.athletes.length > 6 ? h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { class: 'row wrap tm-views' }, filterBtns), findA) : null,
+      cards, none, h('div', { class: 'row wrap' }, saveBtn, btn('Start over', () => { uploadState = null; render(); }, 'ghost')));
+    syncSave(); applyFilter();
   }
 
   fill(main, header('Upload results', 'All or nothing: a sheet is saved only when every row matches a real Athlete ID and every value fits its test.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
-    step3 ?? h('div', { class: 'grid grid-2' }, step1, step2));
+    step3 ?? h('div', { class: 'grid grid-2' }, step1, step2), recentPanel);
 }
 
 boot();

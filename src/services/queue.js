@@ -1,5 +1,5 @@
 import { v, badRequest, notFound, conflict, HttpError } from '../util.js';
-import { recordResults, linkAthlete, resolveAthlete, getTest } from './performance.js';
+import { recordResults, linkAthlete, resolveAthlete, getTest, identityOf } from './performance.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { emit } from './events.js';
 
@@ -18,7 +18,7 @@ export function listQueue(ctx, { status = 'pending' } = {}) {
     const g = groups.get(k);
     if (!tests.has(item.test)) tests.set(item.test, getTest(ctx, item.test));
     const t = tests.get(item.test), m = t.metrics.find((x) => x.key === item.metric);
-    g.items.push({ id: r.id, test: item.test, test_name: t.name, metric: item.metric, metric_name: m.name, value: item.value, unit: item.unit, decimals: m.decimals, side: item.side, attempt: item.attempt, recorded_at: item.recorded_at, device: item.device, received_at: r.received_at });
+    g.items.push({ id: r.id, source: r.source, test: item.test, test_name: t.name, metric: item.metric, metric_name: m.name, value: item.value, unit: item.unit, decimals: m.decimals, side: item.side, attempt: item.attempt, recorded_at: item.recorded_at, device: item.device, received_at: r.received_at });
     g.last_received = r.received_at;
   }
   return [...groups.values()].map((g) => ({ ...g, count: g.items.length, suggestions: suggestionsFor(ctx, g.athlete) }))
@@ -28,7 +28,7 @@ export const queueCount = (ctx) => ctx.db.get(`SELECT COUNT(*) AS n, COUNT(DISTI
 
 // Similar names and near-miss IDs, to make picking the right profile quick. Never applied automatically.
 function suggestionsFor(ctx, ref) {
-  const all = [...ctx.db.all('SELECT id AS client_id, NULL AS roster_id, name, athlete_id FROM clients'), ...ctx.db.all('SELECT NULL AS client_id, id AS roster_id, name, athlete_id FROM team_roster WHERE active = 1')];
+  const all = ctx.db.all('SELECT id AS client_id, name, athlete_id FROM clients WHERE archived_at IS NULL AND athlete_id IS NOT NULL');   // team roster athletes are clients too
   const words = String(ref.name ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z ]/g, '').split(/\s+/).filter(Boolean);
   const idGuess = String(ref.athlete_id ?? ref.external_id ?? ref.name ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const score = (a) => {
@@ -43,10 +43,12 @@ function suggestionsFor(ctx, ref) {
 }
 
 function targetFrom(ctx, body) {
-  const t = body.athlete_id ? findByAthleteId(ctx, body.athlete_id) : body.client_id ? { client_id: body.client_id } : body.roster_id ? { roster_id: body.roster_id } : null;
-  if (!t || !resolveAthlete(ctx, t)) throw badRequest(body.athlete_id ? `No athlete has the ID ${String(body.athlete_id).toUpperCase()}.` : 'Choose the athlete these results belong to.');
-  const p = t.client_id ? ctx.db.get('SELECT name, athlete_id FROM clients WHERE id = ?', t.client_id) : ctx.db.get('SELECT name, athlete_id FROM team_roster WHERE id = ?', t.roster_id);
-  return { ...t, ...p };
+  // One profile per athlete: a roster_id means that roster athlete's client.
+  const t = body.athlete_id ? findByAthleteId(ctx, body.athlete_id) : body.client_id || body.roster_id ? resolveAthlete(ctx, { client_id: body.client_id, roster_id: body.client_id ? undefined : body.roster_id }) : null;
+  if (!t) throw badRequest(body.athlete_id ? `No athlete has the ID ${String(body.athlete_id).toUpperCase()}.` : 'Choose the athlete these results belong to.');
+  const p = ctx.db.get('SELECT name, athlete_id, archived_at FROM clients WHERE id = ?', t.client_id);
+  if (p.archived_at) throw badRequest(`${p.name} is archived. Restore their profile first, or pick someone else.`);
+  return { client_id: t.client_id, name: p.name, athlete_id: p.athlete_id };
 }
 
 // Link waiting results to a profile. Either everything from one sender identity (provider + identity),
@@ -67,7 +69,7 @@ export function linkQueue(ctx, body) {
   if (body.remember && new Set(rows.map((r) => `${r.provider}|${r.identity}`)).size > 1) throw badRequest('Remember a link one sender at a time.');
   if (body.expect_count != null && Number(body.expect_count) !== rows.length) throw conflict(`${rows.length} results are waiting now, not ${body.expect_count}. Refresh and check again.`);
   return ctx.db.tx(() => {
-    const items = rows.map((r) => ({ ...JSON.parse(r.item), client_id: target.client_id, roster_id: target.roster_id, session_id: r.session_id ?? undefined, source: r.source }));
+    const items = rows.map((r) => ({ ...JSON.parse(r.item), client_id: target.client_id, session_id: r.session_id ?? undefined, source: r.source }));
     const out = recordResults(ctx, items, { source: rows[0].source, queue: false });
     if (out.errors.length || out.unmatched.length) {
       const e = new HttpError(409, 'link_failed', 'Nothing was linked. Some results could not be saved.');
@@ -79,10 +81,10 @@ export function linkQueue(ctx, body) {
     let remembered = null;
     if (body.remember) {
       const r = rows[0];
-      remembered = linkAthlete(ctx, { provider: r.provider, external_id: r.identity.replace(/^id:/, ''), external_name: JSON.parse(r.athlete_ref).name ?? null, client_id: target.client_id, roster_id: target.roster_id });
+      remembered = linkAthlete(ctx, { provider: r.provider, external_id: r.identity.replace(/^id:/, ''), external_name: JSON.parse(r.athlete_ref).name ?? null, client_id: target.client_id });
     }
     emit(ctx, 'queue.linked', { count: rows.length, athlete_id: target.athlete_id, athlete_name: target.name, remembered: !!remembered });
-    return { linked: rows.length, saved: out.created, already_saved: out.duplicates, prs: out.prs.length, athlete: { client_id: target.client_id ?? null, roster_id: target.roster_id ?? null, name: target.name, athlete_id: target.athlete_id }, remembered };
+    return { linked: rows.length, saved: out.created, already_saved: out.duplicates, prs: out.prs.length, athlete: { client_id: target.client_id, name: target.name, athlete_id: target.athlete_id }, remembered };
   });
 }
 
@@ -93,4 +95,28 @@ export function discardQueue(ctx, body) {
   let n = 0;
   ctx.db.tx(() => { for (const id of ids) n += ctx.db.run(`UPDATE results_queue SET status = 'discarded', resolved_at = ? WHERE id = ? AND status = 'pending'`, ctx.now(), id).changes; });
   return { discarded: n };
+}
+
+// Link a device ahead of time: results from this device ID (or the name the device uses) go straight to the athlete.
+// Anything already waiting from it is linked now, all or nothing. Linking a device that's already linked moves it;
+// moved_from says who had it.
+export function linkDevice(ctx, body) {
+  const provider = v.str(String(body.provider ?? '').trim().toLowerCase(), 'provider', { max: 40 });
+  const raw = v.str(String(body.external_id ?? '').trim(), 'external_id', { max: 200 });
+  const byName = body.kind === 'name' || raw.startsWith('name:');
+  const externalId = byName ? identityOf({ name: raw.replace(/^name:/, '') }) : raw;
+  if (byName && externalId === 'name:') throw badRequest('Enter the name the device uses for this athlete.');
+  const identity = byName ? externalId : `id:${externalId}`;
+  const target = targetFrom(ctx, body);
+  const before = ctx.db.get(`SELECT l.client_id, l.external_name, c.name, c.athlete_id FROM athlete_links l
+    LEFT JOIN clients c ON c.id = l.client_id WHERE l.provider = ? AND l.external_id = ?`, provider, externalId);
+  const waiting = ctx.db.all(`SELECT id, athlete_ref FROM results_queue WHERE provider = ? AND identity = ? AND status = 'pending' ORDER BY received_at`, provider, identity);
+  // Keep the name the device uses (from what's waiting, or the existing link) rather than labelling it with the bare ID.
+  const deviceName = String(body.external_name ?? '').trim().slice(0, 120) || before?.external_name || waiting.map((w) => JSON.parse(w.athlete_ref).name).find(Boolean) || (byName ? raw.replace(/^name:/, '') : null);
+  return ctx.db.tx(() => {
+    const link = linkAthlete(ctx, { provider, external_id: externalId, external_name: deviceName, client_id: target.client_id });
+    const moved = !!before && before.client_id !== target.client_id;
+    const linked = waiting.length ? linkQueue(ctx, { client_id: target.client_id, ids: waiting.map((w) => w.id) }) : { linked: 0, prs: 0 };
+    return { ...link, external_name: deviceName, athlete_id: target.athlete_id, moved_from: moved ? { name: before.name, athlete_id: before.athlete_id } : null, already_linked: !!before && !moved, linked: linked.linked, prs: linked.prs };
+  });
 }

@@ -38,17 +38,54 @@ export async function welcomeClient(ctx, clientId) {
     `Hi ${first(c.name)},\n\nYour account is ready. Your workouts are here (this link is just for you, so keep it private):\n${base(ctx)}/app?token=${c.access_token}\n\nSee you soon,\n${biz(ctx)}`);
 }
 
+// Sent by hand from the client profile, so the "welcome" switch doesn't stop them.
+// The private workout-app link, to the athlete's own email and the family's parents. Returns who it went to.
+export async function sendAppLink(ctx, clientId) {
+  const c = ctx.db.get('SELECT name, email, access_token, family_id FROM clients WHERE id = ?', clientId);
+  const to = [...new Map([...(c.email ? [{ name: c.name, email: c.email }] : []), ...(c.family_id ? familyEmails(ctx, c.family_id) : [])].map((x) => [x.email.toLowerCase(), x])).values()];
+  const link = `${base(ctx)}/app?token=${c.access_token}`;
+  for (const x of to) {
+    const self = x.email.toLowerCase() === (c.email ?? '').toLowerCase();
+    await send(ctx, x.email, `${self ? 'Your' : `${first(c.name)}'s`} workout app link`,
+      `Hi ${first(x.name)},\n\n${self ? 'Your' : `${first(c.name)}'s`} workouts, check-ins and progress are here:\n${link}\n\nThis link is private: anyone who has it can open ${self ? 'your' : `${first(c.name)}'s`} app, so don't share it. Add it to the home screen for one-tap access.\n\n${biz(ctx)}`);
+  }
+  return to.map((x) => x.email);
+}
+// Re-send a parent the portal sign-in details (lost the welcome email, or staff just fixed a typo in the address).
+export async function portalInvite(ctx, guardianId) {
+  const g = ctx.db.get('SELECT name, email, family_id FROM guardians WHERE id = ?', guardianId);
+  const kids = ctx.db.all('SELECT name FROM clients WHERE family_id = ? AND archived_at IS NULL ORDER BY name', g.family_id).map((k) => first(k.name));
+  await send(ctx, g.email, `Sign in to ${biz(ctx)}`,
+    `Hi ${first(g.name)},\n\nHere's how to sign in to the parent portal${kids.length ? ` for ${kids.join(' and ')}` : ''}: go to ${base(ctx)}/parent and enter this email address (${g.email}). We'll email you a code each time, so there's no password to remember.\n\nIn the portal you can sign the waiver, save a card, book sessions and see progress.\n\n${biz(ctx)}`);
+  return g.email;
+}
+
 // ---------- Receipts ----------
-export async function saleReceipt(ctx, saleId) {
-  if (!on(ctx, 'receipts')) return;
+const signed = (c) => (c < 0 ? `-${money(-c)}` : money(c));      // a discount reads "-$2.50", not "$-2.50"
+// Sent when a sale is paid, unless the counter unticked "Email a receipt" (receipt_opt 0) or automatic receipts are off
+// and the counter didn't tick it (receipt_opt 1). force (re-send by hand) always sends. Goes to `to`, else the address the
+// counter typed, else the payer (the family's primary parent, or the client). Returns the address, or null.
+export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   const s = ctx.db.get(`SELECT s.*, l.name AS location_name FROM sales s JOIN locations l ON l.id = s.location_id WHERE s.id = ?`, saleId);
-  if (!s?.client_id || s.status !== 'succeeded') return;
-  const payer = payerFor(ctx, s.client_id);
-  const athlete = ctx.db.get('SELECT name FROM clients WHERE id = ?', s.client_id);
+  if (!s) return null;
+  if (!force && (s.status !== 'succeeded' || s.receipt_opt === 0 || (s.receipt_opt !== 1 && !on(ctx, 'receipts')))) return null;
+  const payer = s.client_id ? payerFor(ctx, s.client_id) : null;
+  const address = to ?? (s.receipt_opt === 1 ? s.receipt_email : null) ?? payer?.email;
+  if (!address) return null;
+  const athlete = s.client_id ? ctx.db.get('SELECT name FROM clients WHERE id = ?', s.client_id) : null;
   const items = ctx.db.all('SELECT name, quantity, unit_price_cents FROM sale_items WHERE sale_id = ?', saleId);
-  const how = { card_on_file: `card ending ${s.card_last4 ?? payer.card_last4 ?? ''}`, tap_to_pay: `card ending ${s.card_last4 ?? ''}`, reader: `card ending ${s.card_last4 ?? ''}`, cash: 'cash', online: 'card online' }[s.method];
-  await send(ctx, payer.email, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
-    `Thanks! Here's your receipt.\n\n${items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`).join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how.trim()} on ${day(ctx, s.completed_at ?? s.created_at)}\nFor ${athlete?.name ?? ''} at ${s.location_name}\nReceipt ${s.id}\n\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
+  const card = s.card_last4 ?? (s.method === 'card_on_file' ? payer?.card_last4 : null);
+  const how = s.method === 'cash' ? 'cash' : s.method === 'online' ? 'card online' : card ? `card ending ${card}` : 'card';
+  const lines = [
+    ...items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`),
+    ...(s.discount_cents ? [`Subtotal  ${money(s.amount_cents + s.discount_cents)}`, `Discount${s.discount_reason ? ` (${s.discount_reason})` : ''}  ${signed(-s.discount_cents)}`] : [])
+  ];
+  await send(ctx, address, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
+    `Thanks! Here's your receipt.\n\n${lines.join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how} on ${day(ctx, s.completed_at ?? s.created_at)}\n` +
+    `${s.refunded_cents ? `Refunded: ${money(s.refunded_cents)}\n` : ''}${athlete ? `For ${athlete.name} at ${s.location_name}` : `At ${s.location_name}`}\nReceipt ${s.id}\n` +
+    `${s.receipt_token ? `\nView or print it: ${base(ctx)}/receipt/${s.receipt_token}\n` : ''}\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
+  ctx.db.run('UPDATE sales SET receipt_sent_at = ?, receipt_email = ? WHERE id = ?', ctx.now(), address, saleId);
+  return address;
 }
 export async function membershipReceipt(ctx, invoiceId, { how } = {}) {
   if (!on(ctx, 'receipts')) return;

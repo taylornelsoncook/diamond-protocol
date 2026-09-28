@@ -7,6 +7,8 @@ import * as schedule from './services/schedule.js';
 import * as teams from './services/teams.js';
 import * as perf from './services/performance.js';
 import * as reports from './services/reports.js';
+import * as uploads from './services/uploads.js';
+import * as queue from './services/queue.js';
 import { updateSettings } from './services/families.js';
 import { localDate, addDaysToDate } from './util.js';
 const weekStart = (d) => addDaysToDate(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
@@ -116,6 +118,7 @@ async function sell(body, outcome = 'approved') {
 await sell({ location_id: park.id, method: 'tap_to_pay', client_id: walkIn.id, items: [{ product_id: five.id }], save_card: true });
 await sell({ location_id: mobile.id, method: 'tap_to_pay', client_id: made['Priya Nair'].id, items: [{ product_id: single.id }] });
 await sell({ location_id: facility.id, method: 'cash', items: [{ product_id: shirt.id, variant_id: inventory.activeVariants(ctx, shirt.id).find((x) => x.name === 'M').id }] });
+await sell({ location_id: facility.id, method: 'cash', client_id: walkIn.id, items: [{ product_id: shirt.id, variant_id: inventory.activeVariants(ctx, shirt.id).find((x) => x.name === 'L').id }], discount: { type: 'amount', value: 500, reason: 'Returning client' }, email_receipt: true });
 commerce.checkIn(ctx, walkIn.id, { location_id: park.id, credit_type: 'private' });
 commerce.checkIn(ctx, made['Maya Okafor'].id, { location_id: facility.id });
 
@@ -208,6 +211,13 @@ perf.recordResults(ctx, [
   { athlete: { external_id: 'MAT-0412', name: 'Athlete 12' }, test: 'vertical_standing', value: 17.5, recorded_at: at(fall), device: 'Jump mat', external_id: 'mat-demo-1' },
   { athlete: { external_id: 'MAT-0412', name: 'Athlete 12' }, test: 'vertical_standing', value: 18, recorded_at: at(fall), device: 'Jump mat', external_id: 'mat-demo-2' }
 ], { source: 'api:just_jump', provider: 'just_jump' });
+// A Freelap chip linked to Cole, and last week's jump-mat sheet as a recent upload (so Undo has something to show).
+queue.linkDevice(ctx, { provider: 'freelap', external_id: 'FL-2207', external_name: 'Chip 2207', client_id: cole.id });
+const idOf = (c) => ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', c.id).athlete_id;
+const matDay = addDaysToDate(today, -7);
+const matSheet = uploads.previewUpload(ctx, { filename: 'jump-mat-week.csv', source: 'Jump mat', date: matDay,
+  csv: `Athlete ID,Name,Vertical jump (in)\n${idOf(lopez)},Ava Lopez,17.5\n${idOf(cole)},Cole Park,26\n${idOf(nguyen)},${ctx.db.get('SELECT name FROM clients WHERE id = ?', nguyen.id).name},22.5` });
+uploads.commitUpload(ctx, { preview_id: matSheet.preview_id, confirm: matSheet.warnings.map((w) => w.key) }, ctx.db.get(`SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1`));
 
 // Accountability, performance targets and education (sample). Ava is on the Hill Country FC roster and Cole on Westlake's,
 // so team goals, messages and reading reach them in the app and the parent portal.
@@ -218,7 +228,8 @@ const hillCountry = ctx.db.get(`SELECT id FROM team_contracts WHERE name = '14U 
 teams.addRoster(ctx, hillCountry, { name: 'Ava Lopez', position: 'Winger', grad_year: 2031, client_id: lopez.id });
 teams.addRoster(ctx, hillCountry, { names: 'Sofia Ramirez, Midfield, 2031\nEmma Clarke, Defender, 2031\nHannah Brooks, Forward, 2030\nZoe Patel, Goalkeeper, 2031' });
 teams.addRoster(ctx, westlake.id, { name: 'Cole Park', position: 'WR', grad_year: 2029, client_id: cole.id });
-const roster = (contractId) => ctx.db.all('SELECT id, name FROM team_roster WHERE contract_id = ? AND client_id IS NULL AND active = 1 ORDER BY name', contractId);
+// Team-only athletes: on the roster with a profile of their own, no family (Ava and Cole train privately too).
+const roster = (contractId) => ctx.db.all('SELECT r.id, r.name FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND c.family_id IS NULL AND r.active = 1 ORDER BY r.name', contractId);
 const preseason = addDaysToDate(today, -9);
 const hcDay = perf.createSession(ctx, { name: 'Hill Country preseason testing', date: preseason, contract_id: hillCountry, tests: ['dash_40yd', 'vertical_standing', 'broad_jump'] });
 const hcVals = [[6.05, 16, 74], [5.88, 17.5, 79], [6.21, 15, 70], [5.97, 16.5, 76]];

@@ -213,15 +213,27 @@ test('a declined renewal keeps its PaymentIntent, so a later approval marks it p
   app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
 });
 
-test('refunds made in the Stripe dashboard show on the sale', async () => {
+test('refunds made in the Stripe dashboard show on the sale, in its refund log and in the day\'s takings', async () => {
   const s = app.ctx.db.get(`SELECT * FROM sales WHERE method = 'tap_to_pay' AND status = 'partially_refunded'`);
   assert.equal(s.refunded_cents, 5000);
+  const logged = () => app.ctx.db.all('SELECT amount_cents, reason FROM sale_refunds WHERE sale_id = ? ORDER BY created_at, rowid', s.id);
+  const refundedToday = async () => (await call('GET', '/v1/sales/takings')).body.refunded_cents;
+  assert.equal(logged().length, 1, 'the refund made in the app');
+  const before = await refundedToday();
+  // Stripe echoes the refund made in the app: nothing new to log.
+  await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 5000 } } });
+  assert.equal(logged().length, 1);
   await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 7000 } } });
   assert.equal((await call('GET', `/v1/sales/${s.id}`)).body.refunded_cents, 7000);
+  assert.deepEqual(logged()[1], { amount_cents: 2000, reason: 'Refunded in the Stripe dashboard' });
+  assert.equal(await refundedToday(), before + 2000, 'the dashboard refund counts in today\'s takings');
   await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 7000 } } });
   assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'sale.refunded' AND data LIKE '%stripe_dashboard%'`).n, 1);
+  assert.equal(logged().length, 2, 'a repeated webhook logs nothing');
   await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 70000 } } });
-  assert.equal((await call('GET', `/v1/sales/${s.id}`)).body.status, 'refunded');
+  const after = (await call('GET', `/v1/sales/${s.id}`)).body;
+  assert.equal(after.status, 'refunded');
+  assert.equal(logged().reduce((n, r) => n + r.amount_cents, 0), after.refunded_cents, 'the refund log adds up to the sale\'s refunded total');
 });
 
 test('reissued cards and disputes', async () => {

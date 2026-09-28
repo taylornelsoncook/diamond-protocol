@@ -14,7 +14,10 @@ export function baseAthleteId(fullName, year) {
   return `${pad(first)}${pad(last)}${year}`;
 }
 export const ID_PATTERN = /^[A-Z]{6}\d{4}(-\d{1,3})?$/;
-const taken = (ctx, id) => !!(ctx.db.get('SELECT 1 FROM clients WHERE athlete_id = ?', id) || ctx.db.get('SELECT 1 FROM team_roster WHERE athlete_id = ?', id));
+// One profile per athlete: an ID is taken when a client has it, or when it still finds a client as an old roster ID
+// (athlete_id_aliases). Roster lines carry a copy of their client's ID, so they're checked too (for databases mid-upgrade).
+const aliasOf = (ctx, id) => ctx.db.get('SELECT client_id FROM athlete_id_aliases WHERE athlete_id = ?', id);
+const taken = (ctx, id) => !!(ctx.db.get('SELECT 1 FROM clients WHERE athlete_id = ?', id) || aliasOf(ctx, id) || ctx.db.get('SELECT 1 FROM team_roster WHERE athlete_id = ?', id));
 
 export function newAthleteId(ctx, fullName, createdAt = ctx.now()) {
   const year = localDate(createdAt, getSetting(ctx, 'timezone')).slice(0, 4);
@@ -23,29 +26,34 @@ export function newAthleteId(ctx, fullName, createdAt = ctx.now()) {
   for (let n = 2; n < 1000; n++) if (!taken(ctx, `${base}-${n}`)) return `${base}-${n}`;
   throw conflict('Could not create a unique athlete ID.');
 }
-// Coaches can correct an ID (for example to match a device), but IDs stay unique.
-export function validateAthleteId(ctx, raw, { exceptClient, exceptRoster } = {}) {
+// Coaches can correct an ID (for example to match a device), but IDs stay unique. An old roster ID that still finds
+// this same athlete may become their ID again.
+export function validateAthleteId(ctx, raw, { exceptClient } = {}) {
   const id = String(raw ?? '').trim().toUpperCase();
   if (!ID_PATTERN.test(id)) throw badRequest('Athlete IDs look like AVALOP2026 (3 + 3 letters and a year), optionally with -2.');
-  const c = ctx.db.get('SELECT id FROM clients WHERE athlete_id = ?', id), r = ctx.db.get('SELECT id FROM team_roster WHERE athlete_id = ?', id);
-  if ((c && c.id !== exceptClient) || (r && r.id !== exceptRoster)) throw conflict(`${id} already belongs to another athlete.`);
+  const c = ctx.db.get('SELECT id FROM clients WHERE athlete_id = ?', id), alias = aliasOf(ctx, id);
+  const r = ctx.db.get('SELECT client_id FROM team_roster WHERE athlete_id = ? AND (client_id IS NULL OR client_id != ?) LIMIT 1', id, exceptClient ?? '');
+  if ((c && c.id !== exceptClient) || (alias && alias.client_id !== exceptClient) || r) throw conflict(`${id} already belongs to another athlete.`);
   return id;
 }
-// Gives an ID to anyone who doesn't have one yet (athletes created before IDs existed), oldest first.
+// Gives an ID to anyone who doesn't have one yet (athletes created before IDs existed), oldest first. Roster lines
+// then copy their client's ID.
 export function assignMissingIds(ctx) {
-  const rows = [
-    ...ctx.db.all('SELECT id, name, created_at, \'clients\' AS t FROM clients WHERE athlete_id IS NULL'),
-    ...ctx.db.all('SELECT id, name, created_at, \'team_roster\' AS t FROM team_roster WHERE athlete_id IS NULL')
-  ].sort((a, b) => a.created_at.localeCompare(b.created_at));
-  for (const r of rows) ctx.db.run(`UPDATE ${r.t} SET athlete_id = ? WHERE id = ?`, newAthleteId(ctx, r.name, r.created_at), r.id);
+  const rows = ctx.db.all('SELECT id, name, created_at FROM clients WHERE athlete_id IS NULL ORDER BY created_at');
+  for (const r of rows) ctx.db.run('UPDATE clients SET athlete_id = ? WHERE id = ?', newAthleteId(ctx, r.name, r.created_at), r.id);
+  ctx.db.run(`UPDATE team_roster SET athlete_id = (SELECT c.athlete_id FROM clients c WHERE c.id = team_roster.client_id)
+    WHERE client_id IS NOT NULL AND athlete_id IS NOT (SELECT c.athlete_id FROM clients c WHERE c.id = team_roster.client_id)`);
   return rows.length;
 }
-// Finds an athlete by ID, any capitalization.
+// Finds an athlete's profile by ID, any capitalization: their Athlete ID, or an old team roster ID from before
+// version 37 that now belongs to their profile. Always { client_id } (or null).
 export function findByAthleteId(ctx, raw) {
   const id = String(raw ?? '').trim().toUpperCase();
   if (!ID_PATTERN.test(id)) return null;
   const c = ctx.db.get('SELECT id FROM clients WHERE athlete_id = ?', id);
   if (c) return { client_id: c.id };
-  const r = ctx.db.get('SELECT id FROM team_roster WHERE athlete_id = ?', id);
-  return r ? { roster_id: r.id } : null;
+  const a = aliasOf(ctx, id);
+  return a ? { client_id: a.client_id } : null;
 }
+// The profile a team roster line belongs to (every line has one since version 37).
+export const clientOfRoster = (ctx, rosterId) => (rosterId ? ctx.db.get('SELECT client_id FROM team_roster WHERE id = ?', String(rosterId))?.client_id ?? null : null);

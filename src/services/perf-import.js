@@ -166,7 +166,7 @@ export function rowsToItems(ctx, rows, mapping, provider) {
 }
 
 // Import a file. Rows whose athlete we can't identify wait in the batch until the coach matches them.
-export function importFile(ctx, body) {
+export function importFile(ctx, body, user = null) {
   const provider = v.oneOf(body.provider ?? 'generic', 'provider', Object.keys(PROVIDERS));
   const { headers, rows } = parseCsv(v.str(body.csv, 'csv', { max: 20_000_000 }));
   if (rows.length > 20000) throw badRequest('Import up to 20,000 rows at a time.');
@@ -184,21 +184,28 @@ export function importFile(ctx, body) {
     return { headers, mapping, rows: rows.length, results_found: items.length, preview, unmatched_athletes: [...unmatched.values()].slice(0, 200), problems: problems.slice(0, 50), saved_mapping: !!saved };
   }
   if (body.remember !== false) saveMapping(ctx, provider, headers, mapping);
-  const out = items.length ? chunked(ctx, items, { provider, sessionId: body.session_id }) : { created: 0, duplicates: 0, unmatched: [], errors: [], prs: [] };
+  const out = items.length ? chunked(ctx, items, { provider, sessionId: body.session_id }) : { created: 0, duplicates: 0, unmatched: [], errors: [], prs: [], results: [], newQueued: [] };
   const pending = out.unmatched.map((u) => u.queue_id).filter(Boolean);
   const id = newId('imp');
-  ctx.db.run('INSERT INTO import_batches (id, provider, filename, total_rows, imported, duplicates, pending, errors, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, provider, body.filename ? String(body.filename).slice(0, 200) : null, rows.length, out.created, out.duplicates, JSON.stringify(pending),
-    JSON.stringify([...problems, ...out.errors.map((e) => ({ row: items[e.index]?._row, message: e.message }))].slice(0, 500)), ctx.now());
+  // Recorded result by result (and waiting result by waiting result) so the import can be undone.
+  ctx.db.tx(() => {
+    ctx.db.run(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, duplicates, pending, errors, created_at, kind, result_source, session_id, prs, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, ?, ?, ?)`,
+      id, provider, body.filename ? String(body.filename).slice(0, 200) : null, rows.length, out.created, out.duplicates, JSON.stringify(pending),
+      JSON.stringify([...problems, ...out.errors.map((e) => ({ row: items[e.index]?._row, message: e.message }))].slice(0, 500)), ctx.now(), sourceFor(provider), body.session_id ?? null, out.prs.length, user?.id ?? null);
+    for (const r of out.results) ctx.db.run('INSERT INTO import_batch_items (batch_id, result_id, value) VALUES (?, ?, ?)', id, r.id, r.value);
+    for (const q of new Set(out.newQueued)) ctx.db.run('INSERT INTO import_batch_items (batch_id, queue_id) VALUES (?, ?)', id, q);
+  });
   return getBatch(ctx, id, { prs: out.prs.length });
 }
 function previewResolve(ctx, athlete, provider) { return !!resolveAthlete(ctx, athlete, provider); }
-function chunked(ctx, items, { provider, sessionId, source = provider === 'hawkin' ? 'hawkin' : `csv:${provider}` }) {
-  const total = { created: 0, duplicates: 0, unmatched: [], errors: [], prs: [] };
+const sourceFor = (provider) => (provider === 'hawkin' ? 'hawkin' : `csv:${provider}`);
+function chunked(ctx, items, { provider, sessionId, source = sourceFor(provider) }) {
+  const total = { created: 0, duplicates: 0, unmatched: [], errors: [], prs: [], results: [], newQueued: [] };
   for (let i = 0; i < items.length; i += 1000) {
     const part = items.slice(i, i + 1000).map(({ _row, ...it }) => it);
     const r = recordResults(ctx, part, { source, provider, sessionId });
-    total.created += r.created; total.duplicates += r.duplicates; total.prs.push(...r.prs);
+    total.created += r.created; total.duplicates += r.duplicates; total.prs.push(...r.prs); total.results.push(...r.results); total.newQueued.push(...r.new_queue_ids);
     total.unmatched.push(...r.unmatched.map((u) => ({ ...u, index: u.index + i })));
     total.errors.push(...r.errors.map((e) => ({ ...e, index: e.index + i })));
   }

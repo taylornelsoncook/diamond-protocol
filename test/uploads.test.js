@@ -96,7 +96,7 @@ test('a correct sheet passes every check and saves all at once, after unusual va
   const before = await count();
   const p = await upload(rows, { session_id: session.id });
   assert.equal(p.ok, true, JSON.stringify(p.errors));
-  assert.deepEqual(p.summary, { results: 8, athletes: 3, to_confirm: 1 });
+  assert.deepEqual(p.summary, { results: 8, athletes: 3, to_confirm: 1, new: 8, replaced: 0, unchanged: 0, prs: 2 });
   assert.match(p.warnings[0].message, /Cole Park's attempts don't agree: 4\.9 s then 3\.9 s/);
   assert.equal(p.athletes.find((a) => a.name === 'Ava Lopez').results.find((r) => r.test === 'broad_jump').value, 77, '6\'5" read as 77 inches');
   const noConfirm = await req('POST', '/v1/uploads/commit', { preview_id: p.preview_id });
@@ -105,6 +105,7 @@ test('a correct sheet passes every check and saves all at once, after unusual va
   assert.equal(await count(), before, 'nothing saved until the unusual value is confirmed');
   const done = (await req('POST', '/v1/uploads/commit', { preview_id: p.preview_id, confirm: p.warnings.map((w) => w.key) })).body;
   assert.equal(done.saved, 8);
+  assert.equal(done.prs, p.summary.prs, 'the review counts PRs the way saving does');
   assert.deepEqual(done.athletes.map((a) => [a.name, a.results]), [['Ava Lopez', 4], ['Cole Park', 3], ['Jalen Brooks', 1]]);
   assert.equal(await count(), before + 8);
   const saved = (await req('GET', `/v1/results?client_id=${ava.id}&session_id=${session.id}`)).body.data;

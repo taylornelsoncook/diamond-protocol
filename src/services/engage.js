@@ -1,7 +1,7 @@
 // Athlete engagement: accountability (daily check-ins, streaks, weekly goals, coach messages),
 // performance (test targets and opt-in rankings, on top of the testing results) and education
 // (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
-// team goals, messages and reading reach the roster athletes who are also clients.
+// team goals, messages and reading reach its roster athletes (every one has a client profile).
 import { newId, token, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
@@ -44,7 +44,7 @@ function training(ctx, clientId, from, to) {
     ...ctx.db.all('SELECT completed_at AS at FROM workout_logs WHERE client_id = ? AND completed_at >= ? AND completed_at < ?', clientId, lo, hi).map((r) => ({ kind: 'workouts', at: r.at })),
     ...ctx.db.all(`SELECT s.starts_at AS at FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
     ...ctx.db.all('SELECT created_at AS at FROM check_ins WHERE client_id = ? AND created_at >= ? AND created_at < ?', clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
-    ...ctx.db.all(`SELECT s.starts_at AS at FROM team_attendance a JOIN team_roster r ON r.id = a.roster_id JOIN class_sessions s ON s.id = a.session_id WHERE r.client_id = ? AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at }))
+    ...ctx.db.all(`SELECT s.starts_at AS at FROM team_attendance a JOIN class_sessions s ON s.id = a.session_id WHERE a.client_id = ? AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at }))
   ];
   return rows.map((r) => ({ kind: r.kind, date: localDate(r.at, tz) }));
 }
@@ -324,8 +324,7 @@ const AGE_BANDS = [[0, 9, '9 and under'], [10, 11, '10–11'], [12, 13, '12–13
 // fewer than 4 athletes tested aren't ranked. Ties count half.
 function rankings(ctx, c, tests, parentView) {
   if (!rankingsOn(ctx)) return null;
-  const link = new Map(ctx.db.all('SELECT id, client_id FROM team_roster WHERE client_id IS NOT NULL').map((r) => [r.id, r.client_id]));
-  const keyOf = (r) => (r.client_id ? `c:${r.client_id}` : link.has(r.roster_id) ? `c:${link.get(r.roster_id)}` : `r:${r.roster_id}`);
+  const keyOf = (r) => `c:${r.client_id}`;   // one profile per athlete: every result is on a client
   const groups = [];
   const age = ageOn(c.birth_date, ctx.now());
   if (age != null && c.sex) {
@@ -335,14 +334,14 @@ function rankings(ctx, c, tests, parentView) {
   }
   for (const contractId of teamsOf(ctx, c.id)) {
     const t = teamRow(ctx, contractId);
-    groups.push({ label: teamLabel(t), keys: new Set(ctx.db.all('SELECT id, client_id FROM team_roster WHERE contract_id = ? AND active = 1', contractId).map((r) => (r.client_id ? `c:${r.client_id}` : `r:${r.id}`))) });
+    groups.push({ label: teamLabel(t), keys: new Set(ctx.db.all('SELECT client_id FROM team_roster WHERE contract_id = ? AND active = 1 AND client_id IS NOT NULL', contractId).map((r) => `c:${r.client_id}`)) });
   }
   groups.push({ label: `Everyone at ${getSetting(ctx, 'business_name')}`, keys: null });
   const me = `c:${c.id}`, out = [];
   for (const t of tests.filter((x) => x.category !== 'body')) {
     const lower = t.better === 'lower';
-    const rows = ctx.db.all(`SELECT r.client_id, r.roster_id, ${lower ? 'MIN' : 'MAX'}(r.value) AS best FROM perf_results r JOIN perf_tests pt ON pt.id = r.test_id
-      WHERE pt.key = ? AND r.metric = ? AND r.voided = 0 ${parentView ? parentFilter(ctx) : ''} GROUP BY r.client_id, r.roster_id`, t.test, t.metric);
+    const rows = ctx.db.all(`SELECT r.client_id, ${lower ? 'MIN' : 'MAX'}(r.value) AS best FROM perf_results r JOIN perf_tests pt ON pt.id = r.test_id
+      WHERE pt.key = ? AND r.metric = ? AND r.voided = 0 AND r.client_id IS NOT NULL ${parentView ? parentFilter(ctx) : ''} GROUP BY r.client_id`, t.test, t.metric);
     const bests = new Map();
     for (const r of rows) { const k = keyOf(r), cur = bests.get(k); if (cur == null || (lower ? r.best < cur : r.best > cur)) bests.set(k, r.best); }
     if (!bests.has(me)) continue;
@@ -862,15 +861,16 @@ export function teamEngagement(ctx, contractId) {
   return {
     team: { id: t.id, name: teamLabel(t) },
     athletes: rosterClients(ctx, contractId).map((c) => ({ id: c.id, name: c.name })),
-    unlinked: ctx.db.get('SELECT COUNT(*) AS n FROM team_roster WHERE contract_id = ? AND active = 1 AND client_id IS NULL', contractId).n,
     goals: ctx.db.all('SELECT id, title, kind, target, created_at FROM goals WHERE contract_id = ? AND active = 1 ORDER BY created_at', contractId).map((g) => ({ ...g, kind_label: GOAL_KINDS[g.kind] })),
     messages: ctx.db.all('SELECT id, body, staff_name AS coach, created_at FROM coach_messages WHERE contract_id = ? ORDER BY created_at DESC LIMIT 20', contractId),
     assignments: educationReport(ctx).assignments.filter((x) => x.contract_id === contractId)
   };
 }
 // Team names for pickers (no money).
-export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org_name, (SELECT COUNT(*) FROM team_roster r WHERE r.contract_id = t.id AND r.active = 1) AS roster_count,
-    (SELECT COUNT(*) FROM team_roster r WHERE r.contract_id = t.id AND r.active = 1 AND r.client_id IS NOT NULL) AS app_athletes
+// Every roster athlete has a profile and the app (version 37); archived athletes aren't reached, so they aren't counted.
+export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org_name,
+    (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS roster_count,
+    (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS app_athletes
   FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.status = 'active' ORDER BY o.name, t.name`).map((t) => ({ ...t, label: `${t.org_name} ${t.name}` }));
 
 export function setRankings(ctx, body = {}) {

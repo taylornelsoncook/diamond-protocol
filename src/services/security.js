@@ -6,16 +6,16 @@ import { getSetting } from './families.js';
 // ---------- Roles ----------
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
-  coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds, trial-price offers, API keys or staff.',
+  coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
   front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
 };
 const OWNER_ONLY = [
-  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/,
+  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
   /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
@@ -23,15 +23,21 @@ const FRONT_DESK = [
   ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
   ['POST', /^\/v1\/clients\/:id\/subscription$/],   // start a membership at the counter (not change, pause or cancel)
   ['POST', /^\/v1\/families(\/:id\/(guardians|athletes))?$/],
-  ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate))?$/], ['POST', /^\/v1\/terminal\//],
+  ['PATCH', /^\/v1\/families\/:id\/guardians\/:gid$/], ['POST', /^\/v1\/families\/:id\/(waiver|guardians\/:gid\/welcome)$/],   // fix a parent's details, re-send sign-in, paper waiver
+  ['POST', /^\/v1\/clients\/:id\/app-link\/email$/],
+  ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate|undo|receipt))?$/], ['POST', /^\/v1\/terminal\//],   // the day's takings (GET /v1/sales/takings) too
   ['POST', /^\/v1\/sessions\/:id\/(bookings|team-attendance)$/], ['POST', /^\/v1\/bookings\/:id\/(cancel|attendance|pay)$/],
   ['POST', /^\/v1\/class-series\/:id\/(enroll|register)$/], ['POST', /^\/v1\/slots\/book$/],
   ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/],
+  ['POST', /^\/v1\/testing-sessions\/:id\/athletes$/],   // walk-ups on a testing day (not removing athletes, editing or deleting days)
   ['GET', /^\/v1\/kiosks$/], ['POST', /^\/v1\/kiosks$/],   // set up the check-in tablet at the desk
   ['GET', /^\/v1\/inventory$/], ['POST', /^\/v1\/products\/:id\/stock$/],   // receive deliveries and count the shelf
   ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/]   // inquiries at the counter and on the phone
 ];
-const COACH_DENY = [['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
+// Front desk may look at clients, but sharing a progress report outside the business is for owners and coaches.
+const FRONT_DESK_DENY = [/^\/v1\/clients\/:id\/(report-links|report\/email)(\/|$)/];
+// Coaches take payments but never see the business's takings.
+const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;
@@ -39,7 +45,7 @@ export function can(role, method, path) {
   if (method === 'GET' && /^\/v1\/plans$/.test(path)) return true;     // everyone needs plan names on client pages
   if (OWNER_ONLY.some((re) => re.test(path))) return false;
   if (role === 'coach') return !COACH_DENY.some(([m, re]) => m === method && re.test(path));
-  if (role === 'front_desk') return FRONT_DESK.some(([m, re]) => m === method && re.test(path));
+  if (role === 'front_desk') return !FRONT_DESK_DENY.some((re) => re.test(path)) && FRONT_DESK.some(([m, re]) => m === method && re.test(path));
   return false;
 }
 // Coaches and front desk never see money. They take payments at the counter, so what the counter sells from (products,

@@ -30,6 +30,7 @@ const DEFAULTS = {
   public_schedule: 'on',                  // the public Book now page (/book) and website widget
   review_url: '',                         // Google review link; review requests stay off until it's set
   review_requests: 'on',                  // ask happy families for a review after a 10th session or a personal best
+  staff_discount_max_pct: '20',           // the biggest discount coaches and front desk may give at the counter, as a percent of the sale (0 = owners only)
   open_spot_offers: 'suggest'             // light classes: 'suggest' shows them on Today to send offers by hand, 'auto' sends them, 'off' hides them
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
@@ -65,6 +66,7 @@ export function updateSettings(ctx, body) {
   if (body.review_requests !== undefined) next.review_requests = body.review_requests === true || body.review_requests === 'on' ? 'on' : 'off';
   if (body.public_schedule !== undefined) next.public_schedule = body.public_schedule === true || body.public_schedule === 'on' ? 'on' : 'off';
   if (body.open_spot_offers !== undefined) next.open_spot_offers = v.oneOf(body.open_spot_offers, 'open_spot_offers', ['off', 'suggest', 'auto']);
+  if (body.staff_discount_max_pct !== undefined) next.staff_discount_max_pct = String(v.int(body.staff_discount_max_pct, 'staff_discount_max_pct', { min: 0, max: 100 }));
   if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';
@@ -134,17 +136,68 @@ export function removeGuardian(ctx, familyId, guardianId) {
   const f = getFamily(ctx, familyId);
   if (!f.guardians.some((g) => g.id === guardianId)) throw notFound('Parent');
   if (f.guardians.length === 1) throw conflict('A family needs at least one parent.');
-  ctx.db.run('DELETE FROM guardians WHERE id = ?', guardianId);
-  if (f.guardians.find((g) => g.id === guardianId).is_primary) ctx.db.run('UPDATE guardians SET is_primary = 1 WHERE id = (SELECT id FROM guardians WHERE family_id = ? ORDER BY created_at LIMIT 1)', familyId);
+  // Their portal sign-in ends at once (sessions and codes go with them).
+  ctx.db.tx(() => {
+    ctx.db.run('DELETE FROM portal_sessions WHERE guardian_id = ?', guardianId);
+    ctx.db.run('DELETE FROM login_codes WHERE guardian_id = ?', guardianId);
+    ctx.db.run('DELETE FROM guardians WHERE id = ?', guardianId);
+    if (f.guardians.find((g) => g.id === guardianId).is_primary) ctx.db.run('UPDATE guardians SET is_primary = 1 WHERE id = (SELECT id FROM guardians WHERE family_id = ? ORDER BY created_at LIMIT 1)', familyId);
+  });
+  return getFamily(ctx, familyId);
+}
+// Fix a parent's name, email, phone or relationship (a typo in the email is the usual reason a parent can't sign in).
+// An athlete in the family who used the same email (an adult who trains and pays) keeps it in step. A new phone
+// number hasn't agreed to texts, so texts turn off until the parent turns them on again in the portal.
+const last10 = (p) => String(p ?? '').replace(/\D/g, '').slice(-10);
+export function updateGuardian(ctx, familyId, guardianId, body) {
+  getFamily(ctx, familyId);
+  const g = ctx.db.get('SELECT * FROM guardians WHERE id = ? AND family_id = ?', guardianId, familyId);
+  if (!g) throw notFound('Parent');
+  if (!['name', 'email', 'phone', 'relationship'].some((k) => body[k] !== undefined)) throw badRequest('Send name, email, phone or relationship.');
+  const name = body.name !== undefined ? v.str(body.name, 'parent name', { max: 120 }) : g.name;
+  const email = body.email !== undefined ? v.email(body.email, 'parent email') : g.email;
+  const phone = body.phone !== undefined ? v.str(body.phone, 'parent phone', { max: 40, optional: true }) : g.phone;
+  const relationship = body.relationship !== undefined ? v.str(body.relationship, 'relationship', { max: 40, optional: true }) : g.relationship;
+  const emailChanged = email.toLowerCase() !== g.email.toLowerCase();
+  if (emailChanged && ctx.db.get('SELECT id FROM guardians WHERE email = ? AND id != ?', email, guardianId)) throw conflict(`${email} already belongs to another parent account.`);
+  const sameEmailKids = emailChanged ? ctx.db.all('SELECT id FROM clients WHERE family_id = ? AND email = ?', familyId, g.email).map((c) => c.id) : [];
+  if (sameEmailKids.length && ctx.db.get(`SELECT id FROM clients WHERE email = ? AND id NOT IN (${sameEmailKids.map(() => '?').join(',')})`, email, ...sameEmailKids)) throw conflict(`${email} already belongs to a client.`);
+  const phoneChanged = last10(phone) !== last10(g.phone);
+  ctx.db.tx(() => {
+    ctx.db.run(`UPDATE guardians SET name = ?, email = ?, phone = ?, relationship = ?, sms_opt_in_at = CASE WHEN ? THEN NULL ELSE sms_opt_in_at END WHERE id = ?`, name, email, phone, relationship, phoneChanged ? 1 : 0, guardianId);
+    for (const id of sameEmailKids) ctx.db.run('UPDATE clients SET email = ? WHERE id = ?', email, id);
+    // A new sign-in address: whoever signed in or got a code through the old one (often a typo, someone else's inbox) is signed out.
+    if (emailChanged) { ctx.db.run('DELETE FROM portal_sessions WHERE guardian_id = ?', guardianId); ctx.db.run('DELETE FROM login_codes WHERE guardian_id = ?', guardianId); }
+  });
+  return { ...getFamily(ctx, familyId), texts_turned_off: phoneChanged && !!g.sms_opt_in_at && !g.sms_opt_out_at };
+}
+// The family signed the waiver on paper at the desk: record who signed it, against the current version.
+export function recordPaperWaiver(ctx, familyId, body, actor) {
+  const f = getFamily(ctx, familyId);
+  if (f.waiver.signed) throw conflict('The current waiver is already signed.');
+  const signer = v.str(body.signed_by, 'signed_by', { max: 120 });
+  const version = Number(getSetting(ctx, 'waiver_version'));
+  ctx.db.run('UPDATE families SET waiver_version = ?, waiver_signed_by = ?, waiver_signed_at = ? WHERE id = ?', version, `${signer} (on paper, recorded by ${actor?.name ?? 'staff'})`, ctx.now(), familyId);
+  emit(ctx, 'family.waiver_signed', { family_id: familyId, guardian_name: `${signer} (on paper)`, version, paper: true });
   return getFamily(ctx, familyId);
 }
 
+// A birthday has to be a real date (no February 30th), not in the future and not before 1900.
+function birthDate(x) {
+  const d = v.str(x, 'birth_date', { max: 10, optional: true });
+  if (!d) return null;
+  const ok = /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(`${d}T12:00:00Z`)) && new Date(`${d}T12:00:00Z`).toISOString().slice(0, 10) === d;
+  if (!ok) throw badRequest(`"${d}" isn't a real date. Enter the birthday like 2012-04-30.`);
+  if (d > new Date(Date.now() + 14 * 3600000).toISOString().slice(0, 10)) throw badRequest('That birthday is in the future. Check the year.');
+  if (d < '1900-01-01') throw badRequest('That birthday is too long ago. Check the year.');
+  return d;
+}
 // Athlete profile fields, shared by the coach dashboard and the parent portal.
 export function athleteFields(body, cur = {}) {
   const pick = (k, fn) => (body[k] !== undefined ? fn(body[k]) : cur[k] ?? null);
   return {
     sex: pick('sex', (x) => (x === null || x === '' ? null : v.oneOf(String(x).toUpperCase()[0], 'sex', ['M', 'F']))),
-    birth_date: pick('birth_date', (x) => { const d = v.str(x, 'birth_date', { max: 10, optional: true }); if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw badRequest('birth_date must look like 2012-04-30.'); return d; }),
+    birth_date: pick('birth_date', birthDate),
     sport: pick('sport', (x) => v.str(x, 'sport', { max: 60, optional: true })),
     position: pick('position', (x) => v.str(x, 'position', { max: 60, optional: true })),
     school: pick('school', (x) => v.str(x, 'school', { max: 120, optional: true })),

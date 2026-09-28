@@ -1,6 +1,7 @@
 import * as billing from './services/billing.js';
 import * as refunds from './services/refunds.js';
 import * as dataimport from './services/dataimport.js';
+import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
 import * as programs from './services/programs.js';
 import * as events from './services/events.js';
@@ -212,6 +213,9 @@ export const routes = [
   ['DELETE', '/v1/exercises/:id', 'any', 'Training', 'Delete an exercise no workout uses. Sets athletes logged keep its name.', (ctx, r) => programs.deleteExercise(ctx, r.params.id)],
   ['GET', '/v1/programs', 'any', 'Training', 'List programs with workout and client counts, days per week and workouts logged in the last 7 days.', (ctx) => list(programs.listPrograms(ctx))],
   ['POST', '/v1/programs', 'any', 'Training', 'Create a program: name, weeks, level, description. copy_from (a program id) starts it as a copy of that program\'s workouts.', (ctx, r) => programs.createProgram(ctx, r.body), 201],
+  ['GET', '/v1/programs/import/status', 'session', 'Training', 'Whether a program can be read from a PDF (ready: the Anthropic key is set), with the exercise categories, levels and tested maxes a draft can use.', (ctx) => workoutimport.importStatus(ctx)],
+  ['POST', '/v1/programs/import/draft', 'session', 'Training', 'Read a program from a file: file { name, data_base64 } (a PDF up to 20 MB, or a PNG, JPG or WebP photo up to 5 MB). Claude reads it and returns a draft (program, workouts by week and day, each exercise with its sets and reps, a percent of a tested max, a note, and the library exercise it matches: how = exact, suggested or none), plus notes on anything unclear. Nothing is saved. 20 an hour per person.', (ctx, r) => workoutimport.draftFromFile(ctx, r.body, r.user)],
+  ['POST', '/v1/programs/import', 'session', 'Training', 'Save a checked draft: program { name, description, level } for a new program, or program_id to add the weeks to one; workouts [{ week, day, title, exercises: [{ exercise_id } or { new_exercise: { name, category } }, prescription, load_test, load_pct] }]. All or nothing: every problem is listed (details.problems) and nothing is saved until they are fixed.', (ctx, r) => workoutimport.saveImport(ctx, r.body), 201],
   ['GET', '/v1/programs/activity', 'any', 'Training', 'The Programs page: workouts logged in the last 7 days, clients on a program, who needs a check-in (no workout for 7 days), who finished, and recent workouts with effort, sets and new bests. ?program_id= for one program, ?days= (1-60, default 14) for the feed. Archived clients are left out.', (ctx, r) => programs.programsActivity(ctx, { programId: r.query.program_id || undefined, days: v.int(r.query.days ?? 14, 'days', { min: 1, max: 60 }) })],
   ['GET', '/v1/programs/:id', 'any', 'Training', 'A program with every workout and exercise, how often each workout was logged, and each client\'s progress (done, next, last workout, needs a check-in).', (ctx, r) => programs.programDetail(ctx, r.params.id)],
   ['PATCH', '/v1/programs/:id', 'any', 'Training', 'Update a program. Weeks can\'t go below the last week that has workouts.', (ctx, r) => programs.updateProgram(ctx, r.params.id, r.body)],

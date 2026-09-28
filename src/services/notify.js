@@ -61,16 +61,31 @@ export async function portalInvite(ctx, guardianId) {
 }
 
 // ---------- Receipts ----------
-export async function saleReceipt(ctx, saleId) {
-  if (!on(ctx, 'receipts')) return;
+const signed = (c) => (c < 0 ? `-${money(-c)}` : money(c));      // a discount reads "-$2.50", not "$-2.50"
+// Sent when a sale is paid, unless the counter unticked "Email a receipt" (receipt_opt 0) or automatic receipts are off
+// and the counter didn't tick it (receipt_opt 1). force (re-send by hand) always sends. Goes to `to`, else the address the
+// counter typed, else the payer (the family's primary parent, or the client). Returns the address, or null.
+export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   const s = ctx.db.get(`SELECT s.*, l.name AS location_name FROM sales s JOIN locations l ON l.id = s.location_id WHERE s.id = ?`, saleId);
-  if (!s?.client_id || s.status !== 'succeeded') return;
-  const payer = payerFor(ctx, s.client_id);
-  const athlete = ctx.db.get('SELECT name FROM clients WHERE id = ?', s.client_id);
+  if (!s) return null;
+  if (!force && (s.status !== 'succeeded' || s.receipt_opt === 0 || (s.receipt_opt !== 1 && !on(ctx, 'receipts')))) return null;
+  const payer = s.client_id ? payerFor(ctx, s.client_id) : null;
+  const address = to ?? (s.receipt_opt === 1 ? s.receipt_email : null) ?? payer?.email;
+  if (!address) return null;
+  const athlete = s.client_id ? ctx.db.get('SELECT name FROM clients WHERE id = ?', s.client_id) : null;
   const items = ctx.db.all('SELECT name, quantity, unit_price_cents FROM sale_items WHERE sale_id = ?', saleId);
-  const how = { card_on_file: `card ending ${s.card_last4 ?? payer.card_last4 ?? ''}`, tap_to_pay: `card ending ${s.card_last4 ?? ''}`, reader: `card ending ${s.card_last4 ?? ''}`, cash: 'cash', online: 'card online' }[s.method];
-  await send(ctx, payer.email, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
-    `Thanks! Here's your receipt.\n\n${items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`).join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how.trim()} on ${day(ctx, s.completed_at ?? s.created_at)}\nFor ${athlete?.name ?? ''} at ${s.location_name}\nReceipt ${s.id}\n\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
+  const card = s.card_last4 ?? (s.method === 'card_on_file' ? payer?.card_last4 : null);
+  const how = s.method === 'cash' ? 'cash' : s.method === 'online' ? 'card online' : card ? `card ending ${card}` : 'card';
+  const lines = [
+    ...items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`),
+    ...(s.discount_cents ? [`Subtotal  ${money(s.amount_cents + s.discount_cents)}`, `Discount${s.discount_reason ? ` (${s.discount_reason})` : ''}  ${signed(-s.discount_cents)}`] : [])
+  ];
+  await send(ctx, address, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
+    `Thanks! Here's your receipt.\n\n${lines.join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how} on ${day(ctx, s.completed_at ?? s.created_at)}\n` +
+    `${s.refunded_cents ? `Refunded: ${money(s.refunded_cents)}\n` : ''}${athlete ? `For ${athlete.name} at ${s.location_name}` : `At ${s.location_name}`}\nReceipt ${s.id}\n` +
+    `${s.receipt_token ? `\nView or print it: ${base(ctx)}/receipt/${s.receipt_token}\n` : ''}\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
+  ctx.db.run('UPDATE sales SET receipt_sent_at = ?, receipt_email = ? WHERE id = ?', ctx.now(), address, saleId);
+  return address;
 }
 export async function membershipReceipt(ctx, invoiceId, { how } = {}) {
   if (!on(ctx, 'receipts')) return;

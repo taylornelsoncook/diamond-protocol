@@ -6,7 +6,7 @@ import { getSetting } from './families.js';
 // ---------- Roles ----------
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
-  coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds, trial-price offers, API keys or staff.',
+  coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
   front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
 };
 const OWNER_ONLY = [
@@ -25,7 +25,7 @@ const FRONT_DESK = [
   ['POST', /^\/v1\/families(\/:id\/(guardians|athletes))?$/],
   ['PATCH', /^\/v1\/families\/:id\/guardians\/:gid$/], ['POST', /^\/v1\/families\/:id\/(waiver|guardians\/:gid\/welcome)$/],   // fix a parent's details, re-send sign-in, paper waiver
   ['POST', /^\/v1\/clients\/:id\/app-link\/email$/],
-  ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate))?$/], ['POST', /^\/v1\/terminal\//],
+  ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate|undo|receipt))?$/], ['POST', /^\/v1\/terminal\//],   // the day's takings (GET /v1/sales/takings) too
   ['POST', /^\/v1\/sessions\/:id\/(bookings|team-attendance)$/], ['POST', /^\/v1\/bookings\/:id\/(cancel|attendance|pay)$/],
   ['POST', /^\/v1\/class-series\/:id\/(enroll|register)$/], ['POST', /^\/v1\/slots\/book$/],
   ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/],
@@ -36,7 +36,8 @@ const FRONT_DESK = [
 ];
 // Front desk may look at clients, but sharing a progress report outside the business is for owners and coaches.
 const FRONT_DESK_DENY = [/^\/v1\/clients\/:id\/(report-links|report\/email)(\/|$)/];
-const COACH_DENY = [['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
+// Coaches take payments but never see the business's takings.
+const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;

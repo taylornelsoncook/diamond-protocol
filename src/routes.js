@@ -36,6 +36,12 @@ import { portalRoutes } from './portal-routes.js';
 import { portalInvite } from './services/notify.js';
 import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocalDay } from './util.js';
 
+// Coaches work only with the sales they rang up; anyone else's reads as not found.
+function ownSale(ctx, r) {
+  if (r.user?.role !== 'coach') return;
+  if (ctx.db.get('SELECT created_by FROM sales WHERE id = ?', r.params.id)?.created_by !== r.user.id) throw notFound('Sale');
+}
+
 // auth: 'public' | 'any' (coach session or API key) | 'session' (coach login only; for managing keys and webhooks)
 // Each entry: [method, path, auth, tag, summary, handler(ctx, req)] where req = { params, query, body, user, apiKey }
 const list = (data) => ({ data });
@@ -115,6 +121,7 @@ export const routes = [
   ['POST', '/v1/pay-links/:id/send', 'any', 'Billing', 'Email and text the link to the family again.', (ctx, r) => paylinks.sendPayLink(ctx, r.params.id)],
   ['POST', '/v1/pay-links/:id/cancel', 'any', 'Billing', 'Stop a link from being paid.', (ctx, r) => paylinks.cancelPayLink(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/owed', 'any', 'Billing', 'What a client owes now (failed membership payments, unpaid sessions) and their open pay links.', (ctx, r) => { clients.getClient(ctx, r.params.id); return paylinks.owedBy(ctx, r.params.id); }],
+  ['GET', '/receipt-api/:token', 'public', 'Point of sale', 'The printable receipt page for a sale (the link in the receipt email).', (ctx, r) => commerce.publicReceipt(ctx, r.params.token)],
   ['GET', '/pay-api/:token', 'public', 'Billing', 'The parent\'s pay page (the link in the email or text).', (ctx, r) => paylinks.publicPayLink(ctx, r.params.token)],
   ['POST', '/pay-api/:token/checkout', 'public', 'Billing', 'Start paying by card on Stripe\'s secure page.', (ctx, r) => paylinks.checkoutPayLink(ctx, r.params.token)],
   ['POST', '/pay-api/:token/confirm', 'public', 'Billing', 'Back from Stripe: record the payment if it went through.', (ctx, r) => paylinks.confirmPayLink(ctx, r.params.token)],
@@ -197,17 +204,20 @@ export const routes = [
   ['POST', '/v1/products/:id/stock', 'any', 'Point of sale', 'Change stock: reason received (quantity arrived), count (quantity on the shelf) or adjust (+/-), with variant_id for a size and an optional note.', (ctx, r) => inventory.recordStock(ctx, r.params.id, r.body, r.user?.name ?? 'API'), 201],
   ['GET', '/v1/products/:id/stock', 'any', 'Point of sale', 'Stock history for a product, newest first.', (ctx, r) => list(inventory.stockHistory(ctx, r.params.id))],
   // Coaches see only the sales they rang up themselves, never the business's takings.
-  ['GET', '/v1/sales', 'any', 'Point of sale', 'In-person sales, newest first. Filter with ?location_id=, ?client_id=, ?status=, ?since=. Coaches see only their own sales.', (ctx, r) => list(commerce.listSales(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined, locationId: r.query.location_id, clientId: r.query.client_id, status: r.query.status, createdBy: r.user?.role === 'coach' ? r.user.id : undefined }))],
-  ['POST', '/v1/sales', 'any', 'Point of sale', 'Start a sale: location_id, method (tap_to_pay, reader, card_on_file, cash), items [{product_id, quantity}] and/or custom {description, amount_cents}, optional client_id, save_card, reader_id. For tap_to_pay the response includes tap_to_pay.client_secret and tap_to_pay.location_ref for the iPhone app.', (ctx, r) => commerce.createSale(ctx, r.body, r.user?.id ?? r.apiKey?.id), 201],
-  ['GET', '/v1/sales/:id', 'any', 'Point of sale', 'A sale with its items.', (ctx, r) => {
-    const sale = commerce.getSale(ctx, r.params.id, { withSecret: true });
-    if (r.user?.role === 'coach' && sale.created_by !== r.user.id) throw notFound('Sale');
+  ['GET', '/v1/sales', 'any', 'Point of sale', 'In-person sales, newest first. Filter with ?days= (1 = today since midnight in the business\'s time zone, 7 = today and the 6 days before), ?since=, ?q= (client or item name), ?location_id=, ?client_id=, ?status=, ?limit= (up to 200). can_undo and undo_seconds_left say whether you can still undo a sale you took. Coaches see only their own sales.', (ctx, r) => list(commerce.listSales(ctx, { since: r.query.since ? v.date(r.query.since, 'since') : undefined, days: r.query.days, q: r.query.q, locationId: r.query.location_id, clientId: r.query.client_id, status: r.query.status, limit: r.query.limit, createdBy: r.user?.role === 'coach' ? r.user.id : undefined, userId: r.user?.id }))],
+  ['GET', '/v1/sales/takings', 'any', 'Point of sale', 'The day\'s takings for closing out (owners and front desk): sales paid and refunds made between midnight and midnight in the business\'s time zone, discounts, net, cash to count (cash_cents), cards and a line per payment method. ?date=YYYY-MM-DD (default today), ?location_id= (default all locations).', (ctx, r) => commerce.takings(ctx, { date: r.query.date, locationId: r.query.location_id })],
+  ['POST', '/v1/sales', 'any', 'Point of sale', 'Start a sale: location_id, method (tap_to_pay, reader, card_on_file, cash), items [{product_id, quantity}] and/or custom {description, amount_cents}, optional client_id, save_card, reader_id (a reader at that location). Optional discount {type: percent or amount, value (a percent from 1 to 100, or cents), reason}: owners give any discount that leaves something to pay, coaches and front desk up to the owner\'s limit (setting staff_discount_max_pct). Optional email_receipt (true sends a receipt to receipt_email or the family\'s billing email; false sends none; left out follows the automatic-receipt setting) and request_id (the same request_id again returns the first sale instead of charging twice). For tap_to_pay the response includes tap_to_pay.client_secret and tap_to_pay.location_ref for the iPhone app.', async (ctx, r) => {
+    const sale = await commerce.createSale(ctx, r.body, r.user?.id ?? r.apiKey?.id, { counter: true, role: r.user?.role, userId: r.user?.id });
+    if (sale.discount_cents && !sale.repeated) security.audit(ctx, { actor_type: r.user ? 'staff' : 'api_key', actor_id: r.user?.id ?? r.apiKey?.id, actor_name: r.user?.name ?? r.apiKey?.label, role: r.user?.role, action: 'discount', target: sale.id, status: 201, ip: r.ip });
     return sale;
-  }],
-  ['POST', '/v1/sales/:id/sync', 'any', 'Point of sale', 'Check with the payment service and record the result. The iPhone app calls this after a tap.', (ctx, r) => commerce.syncSale(ctx, r.params.id)],
-  ['POST', '/v1/sales/:id/cancel', 'any', 'Point of sale', 'Cancel a payment that is still waiting for a card.', (ctx, r) => commerce.cancelSale(ctx, r.params.id)],
-  ['POST', '/v1/sales/:id/refund', 'any', 'Point of sale', 'Refund a sale. Optional amount_cents for a partial refund. A full refund removes unused sessions from the pack.', (ctx, r) => commerce.refundSale(ctx, r.params.id, r.body)],
-  ['POST', '/v1/sales/:id/simulate', 'any', 'Point of sale', 'Test mode only: act as the client tapping their card. outcome is approved or declined.', (ctx, r) => commerce.simulateTap(ctx, r.params.id, r.body.outcome)],
+  }, 201],
+  ['GET', '/v1/sales/:id', 'any', 'Point of sale', 'A sale with its items, discount, refunds, receipt (receipt_url is the printable page) and whether you can still undo it.', (ctx, r) => { ownSale(ctx, r); return commerce.getSale(ctx, r.params.id, { withSecret: true, userId: r.user?.id }); }],
+  ['POST', '/v1/sales/:id/sync', 'any', 'Point of sale', 'Check with the payment service and record the result. The iPhone app calls this after a tap.', (ctx, r) => { ownSale(ctx, r); return commerce.syncSale(ctx, r.params.id); }],
+  ['POST', '/v1/sales/:id/cancel', 'any', 'Point of sale', 'Cancel a payment that is still waiting for a card.', (ctx, r) => { ownSale(ctx, r); return commerce.cancelSale(ctx, r.params.id); }],
+  ['POST', '/v1/sales/:id/refund', 'any', 'Point of sale', 'Refund a sale. Optional amount_cents for a partial refund and a reason. A full refund removes unused sessions from the pack.', (ctx, r) => commerce.refundSale(ctx, r.params.id, r.body, { actor: r.user?.id ?? r.apiKey?.id })],
+  ['POST', '/v1/sales/:id/undo', 'session', 'Point of sale', 'Undo a sale you just took by mistake: a full refund (back to the card, or cash to hand back), sessions and stock back. Only the person who took it, within 10 minutes of it being paid, and only while nothing has been refunded.', (ctx, r) => { ownSale(ctx, r); return commerce.undoSale(ctx, r.params.id, r.user); }],
+  ['POST', '/v1/sales/:id/receipt', 'any', 'Point of sale', 'Email (or re-send) the receipt: optional email, otherwise the family\'s billing email or the address typed at the counter. Sent even when automatic receipts are off. Up to 5 times an hour per sale.', (ctx, r) => { ownSale(ctx, r); security.rateLimit(`receipt-send:${r.params.id}`, 5, 60 * 60000); return commerce.emailReceipt(ctx, r.params.id, r.body); }],
+  ['POST', '/v1/sales/:id/simulate', 'any', 'Point of sale', 'Test mode only: act as the client tapping their card. outcome is approved or declined.', (ctx, r) => { ownSale(ctx, r); return commerce.simulateTap(ctx, r.params.id, r.body.outcome); }],
   ['POST', '/v1/terminal/connection-token', 'any', 'Point of sale', 'Connection token for the Stripe Terminal SDK in the iPhone app. Optional location_id.', (ctx, r) => commerce.connectionToken(ctx, r.body.location_id)],
   ['GET', '/v1/reports/revenue', 'any', 'Point of sale', 'Revenue by location plus membership payments since ?since= (default: start of this month).', (ctx, r) => {
     const zone = families.getSetting(ctx, 'timezone'), start = startOfLocalDay(zonedToUtc(`${localDate(ctx.now(), zone).slice(0, 8)}01`, '12:00', zone), zone);
@@ -485,7 +495,7 @@ export const routes = [
 export function openApiSpec(baseUrl) {
   const paths = {};
   for (const r of routes) {
-    if (r.path.startsWith('/app/') || r.path.startsWith('/auth/') || r.path.startsWith('/portal/') || r.path.startsWith('/invoice-api/')) continue;
+    if (r.path.startsWith('/app/') || r.path.startsWith('/auth/') || r.path.startsWith('/portal/') || r.path.startsWith('/invoice-api/') || r.path.startsWith('/receipt-api/')) continue;
     const p = r.path.replace(/:(\w+)/g, '{$1}');
     paths[p] ??= {};
     paths[p][r.method.toLowerCase()] = {
@@ -506,7 +516,7 @@ export function openApiSpec(baseUrl) {
 }
 
 // Plain-English labels for the activity log, from each endpoint's own description.
-const SPECIAL = { 'sign-in': 'Signed in', 'POST /portal/api/login': 'Parent asked for a sign-in code', 'POST /portal/api/verify': 'Parent signed in', 'POST /auth/logout': 'Signed out', 'POST /portal/api/logout': 'Parent signed out' };
+const SPECIAL = { 'sign-in': 'Signed in', discount: 'Gave a discount on a sale', 'POST /portal/api/login': 'Parent asked for a sign-in code', 'POST /portal/api/verify': 'Parent signed in', 'POST /auth/logout': 'Signed out', 'POST /portal/api/logout': 'Parent signed out' };
 function describeAction(action) {
   if (SPECIAL[action]) return SPECIAL[action];
   const [method, path] = action.split(' ');

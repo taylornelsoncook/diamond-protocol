@@ -1,6 +1,6 @@
-import { newId, v, notFound, badRequest, conflict, HttpError, withLock } from '../util.js';
+import { newId, token, v, notFound, badRequest, conflict, HttpError, withLock, isDate, localDate, zonedToUtc, addDaysToDate, startOfLocalDay } from '../util.js';
 import { emit } from './events.js';
-import { payerFor } from './families.js';
+import { payerFor, getSetting } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
@@ -25,8 +25,14 @@ function addressFrom(body, current = {}) {
   const pick = (k, max) => (body[k] !== undefined ? v.str(body[k], k, { max, optional: true }) : current[k] ?? null);
   return { address_line1: pick('address_line1', 200), city: pick('city', 100), state: pick('state', 50), postal_code: pick('postal_code', 20), country: (body.country ?? current.country ?? 'US').toUpperCase() };
 }
+// Two places or two products with the same name would be confused at the counter and in reports.
+function uniqueName(ctx, table, name, id, what) {
+  const other = ctx.db.get(`SELECT id, active FROM ${table} WHERE lower(name) = lower(?) AND id != ?`, name, id ?? '');
+  if (other) throw conflict(`There's already a ${what} called ${name}${other.active ? '' : ` (${table === 'products' ? 'no longer sold: press Sell again to bring it back' : 'archived: press Restore to bring it back'})`}. Use a different name.`);
+  return name;
+}
 export async function createLocation(ctx, body) {
-  const loc = { id: newId('loc'), name: v.str(body.name, 'name', { max: 80 }), kind: v.oneOf(body.kind ?? 'other', 'kind', KINDS), ...addressFrom(body) };
+  const loc = { id: newId('loc'), name: uniqueName(ctx, 'locations', v.str(body.name, 'name', { max: 80 }), null, 'location'), kind: v.oneOf(body.kind ?? 'other', 'kind', KINDS), ...addressFrom(body) };
   ctx.db.run(`INSERT INTO locations (id, name, kind, address_line1, city, state, postal_code, country, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     loc.id, loc.name, loc.kind, loc.address_line1, loc.city, loc.state, loc.postal_code, loc.country, ctx.now());
   if (hasAddress(loc)) await syncLocation(ctx, loc.id).catch(() => {});
@@ -37,7 +43,7 @@ export async function updateLocation(ctx, id, body) {
   const addr = addressFrom(body, cur);
   const addressChanged = ['address_line1', 'city', 'state', 'postal_code', 'country'].some((k) => addr[k] !== cur[k]);
   ctx.db.run(`UPDATE locations SET name = ?, kind = ?, address_line1 = ?, city = ?, state = ?, postal_code = ?, country = ?, active = ?, stripe_location_id = ? WHERE id = ?`,
-    body.name !== undefined ? v.str(body.name, 'name', { max: 80 }) : cur.name,
+    body.name !== undefined ? uniqueName(ctx, 'locations', v.str(body.name, 'name', { max: 80 }), id, 'location') : cur.name,
     body.kind !== undefined ? v.oneOf(body.kind, 'kind', KINDS) : cur.kind,
     addr.address_line1, addr.city, addr.state, addr.postal_code, addr.country,
     body.active !== undefined ? !!body.active : cur.active,
@@ -97,11 +103,12 @@ function productSessions(kind, sessions) {
 }
 const CREDIT_TYPES = ['private', 'group'];
 export function createProduct(ctx, body) {
-  const kind = v.oneOf(body.kind, 'kind', PRODUCT_KINDS);
+  if (!PRODUCT_KINDS.includes(body.kind)) throw badRequest('Choose the type of product: a single session, a session pack, gear or other.');
+  const kind = body.kind;
   const id = newId('prod');
   const stock = stockSettings(ctx, ['session', 'pack'].includes(kind) ? {} : body);
   ctx.db.run('INSERT INTO products (id, name, kind, price_cents, sessions, credit_type, active, created_at, track_stock, low_stock_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)',
-    id, v.str(body.name, 'name', { max: 80 }), kind, v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }), productSessions(kind, body.sessions),
+    id, uniqueName(ctx, 'products', v.str(body.name, 'name', { max: 80 }), null, 'product'), kind, v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }), productSessions(kind, body.sessions),
     v.oneOf(body.credit_type ?? 'private', 'credit_type', CREDIT_TYPES), ctx.now(), stock.track_stock, stock.low_stock_at);
   return getProduct(ctx, id);
 }
@@ -110,7 +117,7 @@ export function updateProduct(ctx, id, body) {
   const kind = body.kind !== undefined ? v.oneOf(body.kind, 'kind', PRODUCT_KINDS) : p.kind;
   const stock = stockSettings(ctx, ['session', 'pack'].includes(kind) ? { track_stock: false } : body, p);
   ctx.db.run('UPDATE products SET name = ?, kind = ?, price_cents = ?, sessions = ?, credit_type = ?, active = ?, track_stock = ?, low_stock_at = ? WHERE id = ?',
-    body.name !== undefined ? v.str(body.name, 'name', { max: 80 }) : p.name, kind,
+    body.name !== undefined ? uniqueName(ctx, 'products', v.str(body.name, 'name', { max: 80 }), id, 'product') : p.name, kind,
     body.price_cents !== undefined ? v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }) : p.price_cents,
     productSessions(kind, body.sessions ?? p.sessions),
     body.credit_type !== undefined ? v.oneOf(body.credit_type, 'credit_type', CREDIT_TYPES) : p.credit_type,
@@ -193,6 +200,7 @@ export function adjustCredits(ctx, clientId, body) {
 // Walk-in check-in (no booking). Members train group sessions on their membership; otherwise a credit of that type is used.
 export function checkIn(ctx, clientId, body) {
   const c = clientRow(ctx, clientId);
+  if (c.archived_at) throw conflict(`${c.name} is archived. Restore them on their client page before checking them in.`);
   const loc = getLocation(ctx, v.str(body.location_id, 'location_id'));
   const type = v.oneOf(body.credit_type ?? 'group', 'credit_type', CREDIT_TYPES);
   const sub = ctx.db.get(`SELECT status FROM subscriptions WHERE client_id = ? AND status IN ('active','trialing','past_due') LIMIT 1`, clientId);
@@ -217,43 +225,104 @@ export function listCheckIns(ctx, { clientId, limit = 50 } = {}) {
 
 // ---------- Sales ----------
 const METHODS = ['tap_to_pay', 'reader', 'card_on_file', 'cash'];
+export const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Online' };
+export const UNDO_MINUTES = 10;            // the person who rang up a sale can undo it this long after it was paid
+const money = (c) => `${c < 0 ? '-' : ''}$${(Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: Math.abs(c) % 100 ? 2 : 0 })}`;
 
-export function getSale(ctx, id, { withSecret = false } = {}) {
+// Undo is for "I rang that up wrong": only the person who took the sale, only while nothing has been refunded,
+// and only for UNDO_MINUTES after it was paid. The screen gets the seconds left so it can hide the button in time.
+function undoInfo(ctx, s, userId) {
+  if (!userId || s.created_by !== userId || s.status !== 'succeeded' || s.refunded_cents || !s.completed_at) return { can_undo: false };
+  const left = Math.floor((Date.parse(s.completed_at) + UNDO_MINUTES * 60000 - Date.parse(ctx.now())) / 1000);
+  return left > 0 ? { can_undo: true, undo_seconds_left: left } : { can_undo: false };
+}
+
+export function getSale(ctx, id, { withSecret = false, userId } = {}) {
   const s = ctx.db.get(
-    `SELECT s.*, c.name AS client_name, l.name AS location_name, l.stripe_location_id, r.label AS reader_label
-     FROM sales s LEFT JOIN clients c ON c.id = s.client_id JOIN locations l ON l.id = s.location_id LEFT JOIN readers r ON r.id = s.reader_id WHERE s.id = ?`, id);
+    `SELECT s.*, c.name AS client_name, l.name AS location_name, l.stripe_location_id, r.label AS reader_label, u.name AS created_by_name
+     FROM sales s LEFT JOIN clients c ON c.id = s.client_id JOIN locations l ON l.id = s.location_id LEFT JOIN readers r ON r.id = s.reader_id LEFT JOIN users u ON u.id = s.created_by WHERE s.id = ?`, id);
   if (!s) throw notFound('Sale');
   s.items = ctx.db.all('SELECT id, product_id, variant_id, name, unit_price_cents, quantity, sessions FROM sale_items WHERE sale_id = ?', id);
   s.save_card = !!s.save_card;
+  s.subtotal_cents = s.amount_cents + s.discount_cents;
+  s.method_label = METHOD_LABEL[s.method] ?? s.method;
+  s.refunds = ctx.db.all('SELECT r.amount_cents, r.kind, r.reason, r.created_at, u.name AS by_name FROM sale_refunds r LEFT JOIN users u ON u.id = r.created_by WHERE r.sale_id = ? ORDER BY r.created_at', id);
+  // The printable receipt: a private link, only once the sale is paid.
+  s.receipt_url = s.receipt_token && ['succeeded', 'partially_refunded', 'refunded'].includes(s.status) ? `${ctx.publicUrl ?? ''}/receipt/${s.receipt_token}` : null;
+  Object.assign(s, undoInfo(ctx, s, userId));
   const secret = s.client_secret;
-  delete s.client_secret;
+  delete s.client_secret; delete s.receipt_token; delete s.receipt_opt; delete s.request_id;
   // The iPhone app needs these two values to collect a Tap to Pay payment.
   if (withSecret && s.status === 'pending' && s.method === 'tap_to_pay') s.tap_to_pay = { client_secret: secret, location_ref: s.stripe_location_id };
   delete s.stripe_location_id;
   return s;
 }
-export function listSales(ctx, { since, locationId, clientId, status, createdBy, limit = 100 } = {}) {
+// days=1 is today since midnight in the business's time zone, days=7 today and the 6 days before, and so on.
+export function salesSince(ctx, days) {
+  const zone = getSetting(ctx, 'timezone'), today = localDate(ctx.now(), zone);
+  return startOfLocalDay(zonedToUtc(addDaysToDate(today, -(days - 1)), '12:00', zone), zone);
+}
+const likeText = (q) => `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+export function listSales(ctx, { since, days, q, locationId, clientId, status, createdBy, userId, limit = 100 } = {}) {
   const where = [], p = [];
+  if (days !== undefined) since = salesSince(ctx, v.int(days, 'days', { min: 1, max: 366 }));
   if (createdBy) { where.push('s.created_by = ?'); p.push(createdBy); }
   if (since) { where.push('s.created_at >= ?'); p.push(since); }
   if (locationId) { where.push('s.location_id = ?'); p.push(locationId); }
   if (clientId) { where.push('s.client_id = ?'); p.push(clientId); }
   if (status) { where.push('s.status = ?'); p.push(status); }
+  if (q && String(q).trim()) {
+    const like = likeText(String(q).trim().slice(0, 80));
+    where.push(`(c.name LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM sale_items i WHERE i.sale_id = s.id AND i.name LIKE ? ESCAPE '\\'))`); p.push(like, like);
+  }
   return ctx.db.all(
-    `SELECT s.id, s.client_id, c.name AS client_name, s.location_id, l.name AS location_name, s.method, s.status, s.amount_cents, s.refunded_cents,
-       s.card_brand, s.card_last4, s.failure_reason, s.created_at, s.completed_at,
+    `SELECT s.id, s.client_id, c.name AS client_name, s.location_id, l.name AS location_name, s.method, s.status, s.amount_cents, s.refunded_cents, s.discount_cents, s.discount_reason,
+       s.card_brand, s.card_last4, s.failure_reason, s.created_at, s.completed_at, s.created_by, u.name AS created_by_name, s.receipt_sent_at,
        (SELECT GROUP_CONCAT(CASE WHEN quantity > 1 THEN quantity || ' × ' || name ELSE name END, ', ') FROM sale_items i WHERE i.sale_id = s.id) AS description
-     FROM sales s LEFT JOIN clients c ON c.id = s.client_id JOIN locations l ON l.id = s.location_id
-     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.created_at DESC, s.rowid DESC LIMIT ?`, ...p, limit);
+     FROM sales s LEFT JOIN clients c ON c.id = s.client_id JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.created_by
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.created_at DESC, s.rowid DESC LIMIT ?`, ...p, Math.min(Math.max(Number(limit) || 100, 1), 200))
+    .map((s) => ({ ...s, method_label: METHOD_LABEL[s.method] ?? s.method, ...undoInfo(ctx, s, userId) }));
+}
+
+// A discount on the whole sale: a percent (1 to 100) or an amount off, always with a reason, and never the whole sale.
+// Owners give any discount; coaches and front desk up to the owner's limit (staff_discount_max_pct; 0 = owners only).
+function parseDiscount(ctx, d, subtotal, role) {
+  if (d === undefined || d === null) return { cents: 0, reason: null };
+  if (typeof d !== 'object' || Array.isArray(d)) throw badRequest('discount must be { type: "percent" or "amount", value, reason }.');
+  const type = v.oneOf(d.type, 'discount.type', ['percent', 'amount']);
+  const pct = type === 'percent' ? v.int(d.value, 'discount.value', { min: 1, max: 100 }) : null;
+  const cents = pct ? Math.round(subtotal * pct / 100) : v.int(d.value, 'discount.value', { min: 1, max: 10000000 });
+  if (typeof d.reason !== 'string' || !d.reason.trim()) throw badRequest('Say why you\'re giving the discount, like "Sibling discount" or "Damaged box".');
+  const reason = v.str(d.reason, 'discount.reason', { max: 80 });
+  if (cents < 1) throw badRequest('That discount comes to less than a cent. Enter a bigger one or remove it.');
+  if (cents >= subtotal) throw badRequest(`A discount has to leave something to pay. The sale is ${money(subtotal)} before the discount.`);
+  if (role && role !== 'owner') {
+    const max = Number(getSetting(ctx, 'staff_discount_max_pct'));
+    if (!(max > 0)) throw new HttpError(403, 'forbidden', 'Only the owner can give discounts. Ask the owner, who can allow them in Point of sale setup.');
+    if (pct ? pct > max : cents * 100 > subtotal * max) throw new HttpError(403, 'forbidden', `You can give up to ${max}% off (${money(Math.floor(subtotal * max / 100))} on this sale). Ask the owner for a bigger discount.`);
+  }
+  return { cents, reason };
 }
 
 export { payerById };
 
-export async function createSale(ctx, body, actor, { online = false } = {}) {
+// request_id (from the sale screen): a second press of Charge, or a retry after a dropped connection, gets the first
+// sale back instead of charging again. The screen makes a new one for each new sale.
+export async function createSale(ctx, body, actor, opts = {}) {
+  const key = v.str(body.request_id, 'request_id', { max: 64, optional: true });
+  if (!key) return createSaleNow(ctx, body, actor, opts, null);
+  return withLock(`sale-request:${key}`, async () => {
+    const prev = ctx.db.get('SELECT id FROM sales WHERE request_id = ? AND COALESCE(created_by, \'\') = ?', key, actor ?? '');
+    if (prev) return { ...getSale(ctx, prev.id, { withSecret: true, userId: opts.userId }), repeated: true };
+    return createSaleNow(ctx, body, actor, opts, key);
+  });
+}
+async function createSaleNow(ctx, body, actor, { online = false, counter = false, role, userId } = {}, requestId) {
   const method = v.oneOf(body.method, 'method', METHODS);
   const loc = getLocation(ctx, v.str(body.location_id, 'location_id'));
   if (!loc.active && !online) throw conflict(`${loc.name} is archived. Choose another location.`);
   const client = body.client_id ? clientRow(ctx, v.str(body.client_id, 'client_id')) : null;
+  if (counter && client?.archived_at) throw conflict(`${client.name} is archived. Restore them on their client page, or sell to a walk-in.`);
 
   const lines = [];
   for (const it of Array.isArray(body.items) ? body.items : []) {
@@ -265,8 +334,10 @@ export async function createSale(ctx, body, actor, { online = false } = {}) {
   if (body.custom) lines.push({ product_id: null, name: v.str(body.custom.description, 'custom.description', { max: 80 }), unit: v.int(body.custom.amount_cents, 'custom.amount_cents', { min: 1, max: 10000000 }), qty: 1, sessions: 0 });
   if (!lines.length) throw badRequest('Add at least one item to the sale.');
   if (!client && lines.some((l) => l.sessions > 0)) throw badRequest('Choose a client. Sessions and packs are added to their account.');
-  const amount = lines.reduce((t, l) => t + l.unit * l.qty, 0);
-  if (amount <= 0) throw badRequest('The sale total must be more than $0.');
+  const subtotal = lines.reduce((t, l) => t + l.unit * l.qty, 0);
+  if (subtotal <= 0) throw badRequest('The sale total must be more than $0.');
+  const discount = parseDiscount(ctx, body.discount, subtotal, role);
+  const amount = subtotal - discount.cents;
 
   const wantsSave = !!body.save_card && ['tap_to_pay', 'reader'].includes(method);
   if (wantsSave && !client) throw badRequest('Choose a client to save their card.');
@@ -274,19 +345,26 @@ export async function createSale(ctx, body, actor, { online = false } = {}) {
   if (method === 'reader') {
     reader = ctx.db.get('SELECT * FROM readers WHERE id = ?', v.str(body.reader_id, 'reader_id'));
     if (!reader) throw notFound('Reader');
+    if (reader.location_id !== loc.id) throw conflict(`${reader.label} is at ${getLocation(ctx, reader.location_id).name}, not ${loc.name}. Choose the reader where you are, or another way to pay.`);
     if (ctx.db.get(`SELECT id FROM sales WHERE reader_id = ? AND status = 'pending'`, reader.id)) throw conflict(`${reader.label} is busy with another payment. Finish or cancel it first.`);
   }
   const payer = client ? payerFor(ctx, client.id) : null;
   if (method === 'card_on_file' && !payer?.card_payment_method) throw conflict(client ? `${client.name.split(' ')[0]} has no card on file${payer.table === 'families' ? ' for the family' : ''}.` : 'Choose a client with a card on file.');
+  // Receipt: email_receipt true sends one (to receipt_email, or the family's billing email), false sends none,
+  // left out follows the automatic-receipt setting.
+  const receiptOpt = body.email_receipt === undefined || body.email_receipt === null ? null : body.email_receipt ? 1 : 0;
+  const receiptEmail = receiptOpt === 1 && body.receipt_email ? v.email(body.receipt_email, 'receipt_email') : null;
+  if (receiptOpt === 1 && !receiptEmail && !payer?.email) throw badRequest(client ? `There's no email on file for ${client.name.split(' ')[0]}${payer.table === 'families' ? '\'s family' : ''}. Type one in for the receipt, or untick Email a receipt.` : 'Type an email address for the receipt, or untick Email a receipt.');
 
   const id = newId('sale');
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
-      id, client?.id, loc.id, method, amount, wantsSave, reader?.id, v.str(body.note, 'note', { max: 200, optional: true }), actor ?? null, ctx.now());
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, client?.id, loc.id, method, amount, wantsSave, reader?.id, v.str(body.note, 'note', { max: 200, optional: true }), actor ?? null, ctx.now(),
+      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18));
     for (const l of lines) ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('si'), id, l.product_id, l.variant_id ?? null, l.name, l.unit, l.qty, l.sessions);
   });
-  const description = lines.map((l) => l.name).join(', ').slice(0, 200);
+  const description = `${lines.map((l) => l.name).join(', ')}${discount.cents ? ` less ${money(discount.cents)} discount` : ''}`.slice(0, 200);
   const metadata = { sale_id: id, location: loc.name, ...(client ? { client_id: client.id } : {}) };
 
   if (method === 'cash') {
@@ -312,7 +390,7 @@ export async function createSale(ctx, body, actor, { online = false } = {}) {
       throw paymentError(e);
     }
   }
-  return getSale(ctx, id, { withSecret: true });
+  return getSale(ctx, id, { withSecret: true, userId });
 }
 
 function failSale(ctx, id, reason) {
@@ -365,7 +443,7 @@ function completeSale(ctx, id, { card, savedCard }) {
     stockForSale(ctx, id, -1, 'sale');
     emit(ctx, 'sale.completed', {
       sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', location_id: s.location_id, location_name: s.location_name,
-      amount_cents: s.amount_cents, method: s.method, items: s.items.map((i) => ({ name: i.name, quantity: i.quantity })), sessions_added: sessions
+      amount_cents: s.amount_cents, discount_cents: s.discount_cents, method: s.method, items: s.items.map((i) => ({ name: i.name, quantity: i.quantity })), sessions_added: sessions
     });
   });
   if (completed) saleReceipt(ctx, id).catch((e) => console.error('receipt', e.message));
@@ -426,13 +504,14 @@ export async function cancelSale(ctx, id) {
   return getSale(ctx, id);
 }
 
-// One refund per sale at a time, so two presses can't put stock back or take credits away twice.
-export function refundSale(ctx, id, body = {}) { return withLock(`sale:${id}`, () => refundNow(ctx, id, body)); }
-async function refundNow(ctx, id, body) {
+// One refund (or undo) per sale at a time, so two presses can't put stock back, take credits away or pay back twice.
+export function refundSale(ctx, id, body = {}, { actor } = {}) { return withLock(`sale:${id}`, () => refundNow(ctx, id, body, { actor })); }
+async function refundNow(ctx, id, body, { actor, kind = 'refund' } = {}) {
   const s = getSale(ctx, id);
-  if (!['succeeded', 'partially_refunded'].includes(s.status)) throw conflict('Only a completed sale can be refunded.');
+  if (!['succeeded', 'partially_refunded'].includes(s.status)) throw conflict(s.status === 'refunded' ? 'This sale has already been refunded in full.' : 'Only a completed sale can be refunded.');
   const remaining = s.amount_cents - s.refunded_cents;
   const amount = body.amount_cents !== undefined ? v.int(body.amount_cents, 'amount_cents', { min: 1, max: remaining }) : remaining;
+  const reason = v.str(body.reason, 'reason', { max: 120, optional: true });
   if (s.method !== 'cash') {
     const r = await ctx.payments.refund({ paymentRef: s.payment_ref, amountCents: amount, idempotencyKey: `refund-${id}-${s.refunded_cents + amount}` });
     if (!r.ok) throw new HttpError(502, 'refund_failed', `The refund didn't go through: ${r.error}`);
@@ -441,6 +520,14 @@ async function refundNow(ctx, id, body) {
   const full = total >= s.amount_cents;
   ctx.db.tx(() => {
     ctx.db.run('UPDATE sales SET refunded_cents = ?, status = ? WHERE id = ?', total, full ? 'refunded' : 'partially_refunded', id);
+    ctx.db.run('INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', newId('ref'), id, amount, kind, reason, actor ?? null, ctx.now());
+    // An undone sale never happened: a session or camp it paid for at the counter is unpaid again.
+    if (kind === 'undo') {
+      // A camp registration charged when it was made: its days carry the enrollment, not the sale.
+      ctx.db.run(`UPDATE bookings SET coverage = 'unpaid', updated_at = ? WHERE coverage = 'registration' AND status != 'canceled' AND enrollment_id IN (SELECT id FROM enrollments WHERE sale_id = ?)`, ctx.now(), id);
+      ctx.db.run(`UPDATE enrollments SET sale_id = NULL WHERE sale_id = ?`, id);
+      ctx.db.run(`UPDATE bookings SET coverage = 'unpaid', sale_id = NULL, updated_at = ? WHERE sale_id = ? AND coverage IN ('paid','registration') AND status != 'canceled'`, ctx.now(), id);
+    }
     let removed = 0;
     if (full && s.client_id) {
       const bought = creditsInSale(ctx, s);
@@ -456,9 +543,79 @@ async function refundNow(ctx, id, body) {
       ctx.db.run(`UPDATE purchases SET status = 'refunded', refunded_at = ? WHERE id = ?`, ctx.now(), b.id);
       if (b.item_kind === 'program') ctx.db.run('UPDATE assignments SET active = 0 WHERE client_id = ? AND program_id = ? AND active = 1', b.client_id, b.item_id);
     }
-    emit(ctx, 'sale.refunded', { sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', amount_cents: amount, total_refunded_cents: total, full, sessions_removed: removed, items_restocked: restocked, method: s.method });
+    emit(ctx, 'sale.refunded', { sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', amount_cents: amount, total_refunded_cents: total, full, sessions_removed: removed, items_restocked: restocked, method: s.method, undo: kind === 'undo', reason });
   });
-  return getSale(ctx, id);
+  return getSale(ctx, id, { userId: actor });
+}
+
+// "I rang that up wrong": a full refund by the person who took the sale, within UNDO_MINUTES of it being paid.
+// It takes the same lock as a refund, so an undo and a refund of the same sale can't both pay money back.
+export function undoSale(ctx, id, user) {
+  return withLock(`sale:${id}`, async () => {
+    const s = ctx.db.get('SELECT * FROM sales WHERE id = ?', id);
+    if (!s) throw notFound('Sale');
+    const refundInstead = user?.role === 'owner' ? 'Refund it instead.' : 'Ask the owner for a refund.';
+    if (!user || s.created_by !== user.id) throw conflict(`Only the person who took this sale can undo it. ${refundInstead}`);
+    if (s.status === 'pending') throw conflict('This payment is still waiting for the card. Cancel it instead.');
+    if (s.status !== 'succeeded' || s.refunded_cents) throw conflict(s.status === 'refunded' || s.refunded_cents ? `This sale has already been refunded${s.status === 'refunded' ? '' : ' in part'}. ${refundInstead}` : 'Only a completed sale can be undone.');
+    if (!undoInfo(ctx, s, user.id).can_undo) throw conflict(`Sales can be undone for ${UNDO_MINUTES} minutes after they're paid. ${refundInstead}`);
+    return refundNow(ctx, id, { reason: 'Undone at the counter' }, { actor: user.id, kind: 'undo' });
+  });
+}
+
+// ---------- Receipts ----------
+// Email (or re-send) a sale's receipt, by hand from the sale screen: to the address typed, or the family's billing email,
+// or the address the counter typed when the sale was taken. Sent even when automatic receipts are turned off.
+export async function emailReceipt(ctx, id, body = {}) {
+  const s = ctx.db.get('SELECT * FROM sales WHERE id = ?', id);
+  if (!s) throw notFound('Sale');
+  if (!['succeeded', 'partially_refunded', 'refunded'].includes(s.status)) throw conflict(s.status === 'pending' ? 'This payment is still waiting for the card. The receipt goes out once it\'s paid.' : 'That payment didn\'t go through, so there\'s no receipt.');
+  const typed = body.email ? v.email(body.email, 'email') : null;
+  const to = typed ?? (s.client_id ? payerFor(ctx, s.client_id).email : null) ?? s.receipt_email;
+  if (!to) throw badRequest(s.client_id ? 'There\'s no email on file for this client. Type one in for the receipt.' : 'Type an email address for the receipt.');
+  await saleReceipt(ctx, id, { to, force: true });
+  return { ...getSale(ctx, id), receipt_to: to };
+}
+// The printable receipt behind the link in the email (no sign-in; the link is the key). No contact details or card numbers beyond the last 4.
+export function publicReceipt(ctx, receiptToken) {
+  const s = ctx.db.get('SELECT id FROM sales WHERE receipt_token = ?', String(receiptToken ?? ''));
+  const sale = s && getSale(ctx, s.id);
+  if (!sale || !['succeeded', 'partially_refunded', 'refunded'].includes(sale.status)) throw notFound('Receipt');
+  return {
+    id: sale.id, business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address') || null, timezone: getSetting(ctx, 'timezone'),
+    paid_at: sale.completed_at ?? sale.created_at, location_name: sale.location_name, client_name: sale.client_name ?? null, method_label: sale.method_label, card_last4: sale.card_last4 ?? null,
+    items: sale.items.map((i) => ({ name: i.name, quantity: i.quantity, unit_price_cents: i.unit_price_cents })),
+    subtotal_cents: sale.subtotal_cents, discount_cents: sale.discount_cents, discount_reason: sale.discount_reason, amount_cents: sale.amount_cents, refunded_cents: sale.refunded_cents, status: sale.status
+  };
+}
+
+// ---------- The day's takings (closing the drawer) ----------
+// Sales paid between midnight and midnight in the business's time zone, and refunds made that day (a refund counts on
+// the day the money went back, whichever day the sale was). Cash to count = cash taken minus cash handed back.
+export function takings(ctx, { date, locationId } = {}) {
+  const zone = getSetting(ctx, 'timezone');
+  const day = date === undefined || date === '' ? localDate(ctx.now(), zone) : String(date);
+  if (!isDate(day)) throw badRequest('Choose a real date, like 2026-09-27.');
+  let loc = null;
+  if (locationId !== undefined && locationId !== '') {
+    loc = ctx.db.get('SELECT id, name FROM locations WHERE id = ?', String(locationId));
+    if (!loc) throw badRequest('That location doesn\'t exist. Choose one from the list, or leave it blank for all locations.');
+  }
+  const from = startOfLocalDay(zonedToUtc(day, '12:00', zone), zone), to = startOfLocalDay(zonedToUtc(addDaysToDate(day, 1), '12:00', zone), zone);
+  const at = loc ? 'AND s.location_id = ?' : '', p = loc ? [loc.id] : [];
+  const sales = ctx.db.all(`SELECT s.method, s.amount_cents, s.discount_cents FROM sales s WHERE s.status IN ('succeeded','partially_refunded','refunded') AND s.completed_at >= ? AND s.completed_at < ? ${at}`, from, to, ...p);
+  const refunds = ctx.db.all(`SELECT s.method, r.amount_cents FROM sale_refunds r JOIN sales s ON s.id = r.sale_id WHERE r.created_at >= ? AND r.created_at < ? ${at}`, from, to, ...p);
+  const by = Object.fromEntries(Object.keys(METHOD_LABEL).map((m) => [m, { method: m, label: METHOD_LABEL[m], sales: 0, taken_cents: 0, refunds: 0, refunded_cents: 0, net_cents: 0 }]));
+  const out = { date: day, timezone: zone, from, to, location_id: loc?.id ?? null, location_name: loc?.name ?? null, sales: 0, taken_cents: 0, discount_cents: 0, discounted_sales: 0, refunds: 0, refunded_cents: 0, net_cents: 0 };
+  for (const s of sales) { const m = by[s.method]; m.sales++; m.taken_cents += s.amount_cents; out.sales++; out.taken_cents += s.amount_cents; out.discount_cents += s.discount_cents; if (s.discount_cents) out.discounted_sales++; }
+  for (const r of refunds) { const m = by[r.method]; m.refunds++; m.refunded_cents += r.amount_cents; out.refunds++; out.refunded_cents += r.amount_cents; }
+  for (const m of Object.values(by)) m.net_cents = m.taken_cents - m.refunded_cents;
+  out.net_cents = out.taken_cents - out.refunded_cents;
+  out.cash_cents = by.cash.net_cents;
+  out.card_cents = by.tap_to_pay.net_cents + by.reader.net_cents + by.card_on_file.net_cents;
+  out.online_cents = by.online.net_cents;
+  out.by_method = Object.values(by).filter((m) => m.sales || m.refunds || m.method !== 'online');
+  return out;
 }
 
 // Test mode only: stand in for the client tapping their card.

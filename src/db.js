@@ -66,6 +66,8 @@ const ADDED_TABLES = {
   33: ['test_presets', 'report_links'],
   // ---- Version 34: testing days, undo an upload (B9) ----
   34: ['import_batch_items'],
+  // ---- version 35 (batch B5, point of sale): refunds with their own date, for the day's takings
+  35: ['sale_refunds'],
   // ---- Version 36: one profile per athlete (team roster athletes are clients) ----
   36: ['athlete_id_aliases']
 };
@@ -94,7 +96,9 @@ const ADDED_COLUMNS = {
   // ---- Version 34: testing days (families emailed), undo an upload (B9) ----
   perf_sessions: ['shared_at TEXT', 'parent_note TEXT', 'notified_at TEXT'],                  // shared: version 10; notified_at: version 34
   import_batches: ['kind TEXT', 'source_label TEXT', 'result_source TEXT', 'session_id TEXT', 'replaced INTEGER NOT NULL DEFAULT 0', 'unchanged INTEGER NOT NULL DEFAULT 0',
-    'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT']
+    'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT'],
+  // ---- version 35 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
+  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT']
 };
 
 function migrate(raw, schema) {
@@ -115,6 +119,14 @@ function migrate(raw, schema) {
   // Version 34: device names are matched in lower case, so results that waited under "Swift" join "swift".
   if (version < 34 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {
     raw.exec('UPDATE results_queue SET provider = lower(trim(provider)) WHERE provider != lower(trim(provider))');
+  }
+  // Version 35: refunds made before refunds had their own rows get one (dated when the sale was paid, the best we know),
+  // so a sale's details and the day's takings add up; paid sales get a receipt link.
+  if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
+    raw.exec(`INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_at)
+      SELECT 'ref_' || lower(hex(randomblob(8))), id, refunded_cents, 'refund', 'Refunded before refunds were logged', COALESCE(completed_at, created_at) FROM sales
+      WHERE refunded_cents > 0 AND id NOT IN (SELECT sale_id FROM sale_refunds)`);
+    raw.exec(`UPDATE sales SET receipt_token = lower(hex(randomblob(18))) WHERE receipt_token IS NULL AND (client_id IS NULL OR client_id NOT IN (SELECT id FROM clients WHERE name = 'Deleted athlete'))`);
   }
   // ---- Version 36: one profile per athlete ----
   if (version < 36) oneProfilePerAthlete(raw, schema);

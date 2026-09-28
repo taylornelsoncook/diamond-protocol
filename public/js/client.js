@@ -245,7 +245,7 @@ function renderLogger(w) {
   const pct = home.progress?.total ? Math.round((home.progress.completed / home.progress.total) * 100) : 0;
   const cards = new Map();
   const count = h('div', { class: 'small muted' });
-  const drawCount = () => { count.textContent = `${w.exercises.filter(exDone).length} of ${w.exercises.length} exercises done · ${Object.values(draft.sets).flat().filter((r) => r.done).length} sets logged`; };
+  const drawCount = () => { count.textContent = `${w.exercises.filter(exDone).length} of ${w.exercises.length} exercises done · ${((n) => `${n} ${n === 1 ? 'set' : 'sets'}`)(Object.values(draft.sets).flat().filter((r) => r.done).length)} logged`; };
 
   function headOf(x) {
     const isOpen = x.id === state.open;

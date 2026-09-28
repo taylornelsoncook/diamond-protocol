@@ -205,6 +205,14 @@ test('paused and archived athletes can\'t log', async () => {
   const arch = (await athlete(cole)('GET', '/app/api/home')).body;
   assert.deepEqual([arch.locked, arch.message], [true, 'Your profile is on hold. Message your coach to get back in.']);
   assert.equal((await athlete(cole)('POST', `/app/api/workouts/${w1.id}/complete`, {})).status, 409);
+  // A resend of a Finish saved before the pause returns that save instead of "couldn't be saved".
+  const ben2 = athlete(ben);
+  const saved = app.ctx.db.get('SELECT request_id FROM workout_logs WHERE client_id = ? AND request_id IS NOT NULL LIMIT 1', ben.id);
+  app.ctx.db.run(`UPDATE subscriptions SET status = 'paused' WHERE client_id = ?`, ben.id);
+  const again = await ben2('POST', `/app/api/workouts/${w1.id}/complete`, { request_id: saved.request_id });
+  assert.deepEqual([again.status, again.body.repeat], [201, true]);
+  assert.equal((await ben2('POST', `/app/api/workouts/${w5.id}/complete`, { request_id: 'ben-new-while-paused' })).status, 409, 'a new one is still refused');
+  app.ctx.db.run(`UPDATE subscriptions SET status = 'active' WHERE client_id = ?`, ben.id);
 });
 
 test('the weight-room screen and the app log the same workout once', async () => {

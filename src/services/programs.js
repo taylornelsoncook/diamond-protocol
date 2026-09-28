@@ -188,8 +188,10 @@ export function updateWorkout(ctx, workoutId, body) {
   ctx.db.run('UPDATE workouts SET title = ? WHERE id = ?', v.str(body.title, 'title', { max: 120 }), workoutId);
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
-export function deleteWorkout(ctx, workoutId) {
-  workoutRow(ctx, workoutId);
+// Like clearing a week, removing a workout athletes logged needs confirm: true (their logs go with it).
+export function deleteWorkout(ctx, workoutId, body = {}) {
+  const w = workoutRow(ctx, workoutId);
+  guardLogged(ctx, [workoutId], body?.confirm, w.title);
   ctx.db.run('DELETE FROM workouts WHERE id = ?', workoutId);
   return { id: workoutId, deleted: true };
 }
@@ -582,13 +584,14 @@ function announce(ctx, client, logId) {
 // the phone for each Finish) makes a resend (a second tap, or a workout saved offline and sent again) return the first
 // save instead of logging twice. If the athlete already logged it on the weight-room screen, the sets join that log.
 export function completeWorkout(ctx, client, workoutId, body = {}) {
-  const access = appAccess(ctx, client);
-  if (!access.open) throw conflict(access.message);
+  // A resend of a Finish the server already has returns that save, even if access changed in between (nothing is written).
   const requestId = v.str(body.request_id, 'request_id', { max: 80, optional: true });
   if (requestId) {
     const first = ctx.db.get('SELECT id FROM workout_logs WHERE client_id = ? AND request_id = ?', client.id, requestId);
     if (first) return { id: first.id, repeat: true, finished: finishedSummary(ctx, first.id), next: clientHome(ctx, client) };
   }
+  const access = appAccess(ctx, client);
+  if (!access.open) throw conflict(access.message);
   const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', client.id);
   if (!a) throw conflict('You aren\'t on a program right now, so this workout couldn\'t be saved. Tell your coach what you did.');
   const w = ctx.db.get('SELECT * FROM workouts WHERE id = ? AND program_id = ?', workoutId, a.program_id);

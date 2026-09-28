@@ -32,8 +32,10 @@ function dialog(title, body, actions) {
   d.showModal();
   return d;
 }
+// Only the latest removal can be undone: undoing older ones first would put exercises back in the wrong order.
 function undoToast(msg, onUndo) {
-  const t = h('div', { class: 'dp-toast', role: 'status' }, msg, ' ', h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', style: 'min-height:32px;padding:0 8px;color:inherit;text-decoration:underline', onClick: () => { t.remove(); onUndo(); } }, 'Undo'));
+  document.querySelectorAll('#toasts .dp-toast--undo').forEach((x) => x.remove());
+  const t = h('div', { class: 'dp-toast dp-toast--undo', role: 'status' }, msg, ' ', h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', style: 'min-height:32px;padding:0 8px;color:inherit;text-decoration:underline', onClick: () => { t.remove(); onUndo(); } }, 'Undo'));
   document.getElementById('toasts').append(t);
   setTimeout(() => t.remove(), 10000);
 }
@@ -372,7 +374,7 @@ function workoutCard(p, w, exs, edit, reload) {
       btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'secondary'),
       h('span', { class: 'grow' }),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost', { 'aria-label': `Copy ${w.title}` }),
-      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs go too.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
+      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs go too.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
 }
 function renameDialog(w, reload) {
   const title = input({ value: w.title });

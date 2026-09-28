@@ -214,6 +214,11 @@ test('deleting a week athletes logged needs confirm, and says how many logs go',
   assert.match(r.body.error.message, /Week 1 has 2 logged workouts\. Removing it takes those logs out of the athletes' history\./);
   const copy = await coach('POST', `/v1/programs/${p.id}/weeks/1/copy`, { to: 1, through: 1 });
   assert.equal(copy.status, 400);
+  // One workout on its own: the same question.
+  const logged = (await coach('GET', `/v1/programs/${p.id}`)).body.workouts.find((w) => w.logs > 0);
+  const one = await coach('DELETE', `/v1/workouts/${logged.id}`, {});
+  assert.deepEqual([one.status, one.body.error.code, one.body.error.details?.logs ?? logged.logs], [409, 'confirm_needed', logged.logs]);
+  assert.ok(app.ctx.db.get('SELECT id FROM workouts WHERE id = ?', logged.id), 'nothing deleted');
 });
 
 test('a program with only archived clients on it can be deleted; current clients block it', async () => {

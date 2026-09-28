@@ -623,6 +623,7 @@ async function viewClient(main, id) {
   const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${plural(c.workouts_completed, 'workout')} logged.` : 'No program assigned yet.' },
     role === 'front_desk' ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
       if (!progSel.value) throw new Error('Choose a program first.');
+      if (c.program && c.program.id !== progSel.value && !confirm(`Move ${first} off ${c.program.name} and onto ${progSel.selectedOptions[0].textContent}? Their logged workouts stay.`)) return;
       await post(`/v1/programs/${progSel.value}/assign`, { client_id: id }); toast(`Program assigned to ${first}.`); render();
     }), 'secondary')),
     h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),

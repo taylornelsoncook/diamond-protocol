@@ -183,13 +183,19 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
 }
 
 // One charge or payment per invoice at a time: a retry waiting on Stripe and a pay link paid meanwhile can't both land.
-// A retry the owner asks for (manual) never cancels the membership when it declines, leaves the next automatic retry where
-// it was, and doesn't count toward the limit: only automatic charges (the first charge and the scheduled retries, counted
-// in auto_attempts) count down to canceling after MAX_ATTEMPTS. attempts counts every try (Stripe's idempotency key).
+// A retry the owner or a parent asks for (manual) never cancels the membership when it declines, leaves the next automatic
+// retry where it was, and doesn't count toward the limit: only automatic charges (the first charge, the scheduled retries and
+// the charge when a family saves a new card, counted in auto_attempts) count down to canceling after MAX_ATTEMPTS. attempts counts every try (Stripe's idempotency key).
 // Every try is written to invoice_charges before Stripe is asked, with its id in the charge's metadata, so a late answer
 // from the bank always finds its invoice (reconcile below).
 export function attemptCharge(ctx, invoiceId, asOf = ctx.now(), opts = {}) { return withLock(`invoice:${invoiceId}`, () => chargeInvoice(ctx, invoiceId, asOf, opts)); }
-async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFailed = false } = {}) {
+// source: 'automatic' (the first charge and the scheduled retries), 'new_card' (a family saved a new card: counts like an
+// automatic try, as the owner decided), 'owner' (Retry or Retry all) or 'parent' (the portal's Try again). The owner's and
+// a parent's are manual tries. manual: true alone means the owner's.
+const SOURCES = ['automatic', 'new_card', 'owner', 'parent'];
+async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, source: sourceOpt = null, onlyIfFailed = false } = {}) {
+  const source = SOURCES.includes(sourceOpt) ? sourceOpt : manualOpt ? 'owner' : 'automatic';
+  const manual = source === 'owner' || source === 'parent';
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status === 'paid') return inv;
   // A retry picked from a list: the invoice may have been voided or paid by hand since it was listed. Nothing to do.
@@ -205,8 +211,8 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFaile
     // reuses that row (Stripe needs the same metadata with the same key, and returns the first charge if it went through).
     const errored = ctx.db.get(`SELECT id FROM invoice_charges WHERE invoice_id = ? AND attempt = ? AND status = 'error' ORDER BY created_at DESC LIMIT 1`, inv.id, attempts);
     attemptId = errored?.id ?? newId('ich');
-    if (errored) ctx.db.run(`UPDATE invoice_charges SET status = 'pending', manual = ?, error = NULL, settled_at = NULL WHERE id = ?`, manual ? 1 : 0, attemptId);
-    else ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, amount_cents, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`, attemptId, inv.id, attempts, manual ? 1 : 0, inv.amount_cents, ctx.now());
+    if (errored) ctx.db.run(`UPDATE invoice_charges SET status = 'pending', manual = ?, source = ?, error = NULL, settled_at = NULL WHERE id = ?`, manual ? 1 : 0, source, attemptId);
+    else ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`, attemptId, inv.id, attempts, manual ? 1 : 0, source, inv.amount_cents, ctx.now());
     try {
       result = await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: 'Diamond Protocol membership', idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id, charge_attempt_id: attemptId } });
     } catch (e) {
@@ -225,7 +231,7 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFaile
       const nextRetry = giveUp ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
       ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, auto_attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
         attempts, autoAttempts, result.error, nextRetry, result.ref ?? null, inv.id);
-      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, automatic_attempts: autoAttempts, manual, error: result.error, final: giveUp });
+      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, automatic_attempts: autoAttempts, manual, source, error: result.error, final: giveUp });
       if (giveUp) {
         ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id);
         setStatus(ctx, s.id, 'canceled', { canceled_at: ctx.now() });
@@ -261,7 +267,7 @@ export async function retryWithNewCard(ctx, { familyId, clientId }) {
   const rows = ctx.db.all(`SELECT i.id FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN clients c ON c.id = i.client_id
     WHERE i.status = 'failed' AND i.next_retry_at IS NOT NULL AND s.status = 'past_due' AND ${familyId ? 'c.family_id = ?' : 'c.id = ?'}`, familyId ?? clientId);
   const out = [];
-  for (const r of rows) out.push(await attemptCharge(ctx, r.id, ctx.now(), { onlyIfFailed: true }));
+  for (const r of rows) out.push(await attemptCharge(ctx, r.id, ctx.now(), { source: 'new_card', onlyIfFailed: true }));
   return out;
 }
 
@@ -284,7 +290,7 @@ async function reconcile(ctx, invoiceId, { ref, succeeded, error, attemptId }) {
   if (!a && inv.payment_ref === ref) {
     // A charge from before every try was written down: add it now so it's matched (and refunded) only once.
     const id = newId('ich');
-    ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, amount_cents, ref, status, created_at, settled_at) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+    ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, ref, status, created_at, settled_at) VALUES (?, ?, ?, 0, 'automatic', ?, ?, ?, ?, ?)`,
       id, inv.id, inv.attempts, inv.amount_cents, ref, inv.status === 'paid' && !inv.paid_method ? 'succeeded' : 'declined', inv.created_at, ctx.now());
     a = ctx.db.get('SELECT * FROM invoice_charges WHERE id = ?', id);
   }
@@ -357,13 +363,14 @@ export function lateChargeAlerts(ctx) {
 
 // Manual retry from the dashboard or API. A family with no card is refused before anything is tried (a try with no card
 // would only use up a retry). membership_reactivated says whether this brought a past-due membership back.
-export async function retryInvoice(ctx, invoiceId) {
+// by: 'owner' (dashboard or API) or 'parent' (the portal): both are manual tries.
+export async function retryInvoice(ctx, invoiceId, { by = 'owner' } = {}) {
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status !== 'failed') throw conflict(inv.status === 'paid' ? 'This invoice is already paid.' : 'Only a failed invoice can be retried.');
   const payer = payerFor(ctx, inv.client_id);
   if (!payer.card_payment_method) throw conflict(`There's no card on file for ${payer.table === 'families' ? 'this family' : inv.client_name.split(' ')[0]}. Send a card reminder or a pay link, or record a cash or check payment.`);
   const before = getSubscription(ctx, inv.subscription_id).status;
-  const out = await attemptCharge(ctx, invoiceId, ctx.now(), { manual: true });
+  const out = await attemptCharge(ctx, invoiceId, ctx.now(), { source: by === 'parent' ? 'parent' : 'owner' });
   return { ...out, membership_reactivated: before === 'past_due' && getSubscription(ctx, inv.subscription_id).status === 'active' };
 }
 
@@ -548,9 +555,10 @@ export function invoiceDetail(ctx, id) {
   const r = withFlags(ctx.db.get(`${sql} SELECT * FROM rows WHERE kind = 'membership' AND id = ?`, ...params, id));
   const payer = payerFor(ctx, r.client_id);
   const refunds = ctx.db.all(`SELECT x.id, x.amount_cents, x.reason, x.source, x.created_at, u.name AS by_name FROM invoice_refunds x LEFT JOIN users u ON u.id = x.created_by WHERE x.invoice_id = ? ORDER BY x.created_at, x.rowid`, id);
-  // Every card charge tried (manual = a retry the owner started, which doesn't count toward canceling), with any late
+  // Every card charge tried (manual = a retry the owner or a parent started, which doesn't count toward canceling; source
+  // says which), with any late
   // approval that was refunded automatically.
-  const charges = ctx.db.all(`SELECT id, attempt, manual, amount_cents, ref, status, error, created_at, settled_at, late_outcome, late_reason, late_at, refund_error, handled_at
+  const charges = ctx.db.all(`SELECT id, attempt, manual, source, amount_cents, ref, status, error, created_at, settled_at, late_outcome, late_reason, late_at, refund_error, handled_at
     FROM invoice_charges WHERE invoice_id = ? ORDER BY created_at, rowid`, id).map((c) => ({ ...c, manual: !!c.manual }));
   const links = ctx.db.all(`SELECT id, status, amount_cents, sent_to, sent_at, paid_at, expires_at, created_at FROM pay_links WHERE invoice_id = ? ORDER BY created_at DESC`, id)
     .map((l) => ({ ...l, status: l.status === 'open' && l.expires_at <= ctx.now() ? 'expired' : l.status }));
@@ -677,7 +685,7 @@ export async function retryDeclined(ctx) {
     const inv = getInvoice(ctx, r.id);
     if (inv.status !== 'failed') continue;                  // paid by link or card update while we worked down the list
     const before = getSubscription(ctx, inv.subscription_id).status;
-    const after = await attemptCharge(ctx, r.id, ctx.now(), { manual: true, onlyIfFailed: true });
+    const after = await attemptCharge(ctx, r.id, ctx.now(), { source: 'owner', onlyIfFailed: true });
     if (after.attempts === inv.attempts) continue;         // voided or paid another way while it waited its turn: not charged here
     out.tried++;
     if (after.status === 'paid') {

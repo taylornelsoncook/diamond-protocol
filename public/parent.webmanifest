@@ -1,2 +1,7 @@
 { "name": "Diamond Protocol", "short_name": "Diamond Protocol", "start_url": "/parent", "display": "standalone", "background_color": "#000000", "theme_color": "#000000",
-  "icons": [{ "src": "/brand/mark.png", "sizes": "any", "type": "image/png" }] }
+  "icons": [{ "src": "/brand/mark.png", "sizes": "any", "type": "image/png" }],
+  "shortcuts": [
+    { "name": "Book a session", "short_name": "Book", "url": "/parent?tab=book" },
+    { "name": "Progress", "url": "/parent?tab=progress" },
+    { "name": "Family and card", "short_name": "Family", "url": "/parent?tab=family" }
+  ] }

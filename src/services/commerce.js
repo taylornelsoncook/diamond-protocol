@@ -4,6 +4,7 @@ import { payerFor, getSetting } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
+import { notifyFamily } from './mail.js';
 import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
 
@@ -140,8 +141,10 @@ async function ensureCustomer(ctx, payer) {
   payer.stripe_customer_id = id;
   return id;
 }
-function saveCard(ctx, payer, { paymentMethod, brand, last4 }) {
-  ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, payer.id);
+// The card's expiry as YYYY-MM (Stripe gives the month and the 4-digit year), or null when it isn't known.
+export const cardExp = (month, year) => (Number.isInteger(Number(month)) && Number(month) >= 1 && Number(month) <= 12 && /^\d{4}$/.test(String(year ?? '')) ? `${year}-${String(Number(month)).padStart(2, '0')}` : null);
+function saveCard(ctx, payer, { paymentMethod, brand, last4, expMonth, expYear }) {
+  ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ?, card_exp = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, paymentMethod ? cardExp(expMonth, expYear) : null, payer.id);
   emit(ctx, 'client.card_updated', { [payer.metadataKey]: payer.id, client_name: payer.name, card_brand: paymentMethod ? brand ?? null : null, card_last4: paymentMethod ? last4 ?? null : null });
 }
 const payerById = (ctx, table, id) => {
@@ -171,13 +174,15 @@ export async function addTestCard(ctx, clientId) {
 }
 // A new card pays any membership payment that failed on the old one.
 const retryFailed = (ctx, payer) => retryWithNewCard(ctx, payer.table === 'families' ? { familyId: payer.id } : { clientId: payer.id }).catch((e) => console.error('retry', e.message));
+// Take a payer's card off file (the family card, or a client paying for themselves).
+export function clearCard(ctx, payer) { saveCard(ctx, payer, {}); }
 export function removeCard(ctx, clientId) {
   saveCard(ctx, payerFor(ctx, clientId), {});
   return cardSummary(ctx, clientId);
 }
 export function cardSummary(ctx, clientId) {
   const p = payerFor(ctx, clientId);
-  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
+  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
 }
 
 // ---------- Session credits and check-ins ----------
@@ -684,14 +689,19 @@ export async function handleStripeEvent(ctx, event) {
     // The bank reissued the card (new number or expiry): keep the label on file right. Renewals keep working either way.
     for (const table of ['families', 'clients']) {
       const row = ctx.db.get(`SELECT id FROM ${table} WHERE card_payment_method = ?`, obj.id);
-      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4 }); }
+      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4, expMonth: obj.card?.exp_month, expYear: obj.card?.exp_year }); }
     }
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
     const info = await ctx.payments.getSetupSession(obj.id);
     const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
-    if (payer && info.paymentMethod) { saveCard(ctx, payer, info); await retryFailed(ctx, payer); }
+    if (payer && info.paymentMethod) {
+      saveCard(ctx, payer, info);
+      // Every parent hears about a new family card (the one who saved it too: the card page doesn't say who it was).
+      if (payer.table === 'families') notifyFamily(ctx, payer.id, 'A card was saved to your family account', `A card ending ${info.last4 ?? ''} was saved to your family account. It pays for memberships, packs, camps and drop-ins.\n\nNot you? Reply to this email.\n\n${getSetting(ctx, 'business_name')}`);
+      await retryFailed(ctx, payer);
+    }
   }
   return { received: true };
 }

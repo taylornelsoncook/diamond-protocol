@@ -211,7 +211,7 @@ test('roster check-in, collecting at the session, and canceling a class', async 
 test('parents only see their own family', async () => {
   assert.equal((await parent('PATCH', `/portal/api/athletes/${kid2.id}`, { sport: 'Hacked' })).status, 404);
   assert.equal((await parent('POST', '/portal/api/bookings', { session_id: sessions[3].id, athlete_id: kid2.id })).status, 404);
-  const upd = (await parent('PATCH', `/portal/api/athletes/${ava.id}`, { emergency_name: 'Grandma Lopez', emergency_phone: '555-0199', medical_notes: 'Mild asthma, inhaler in bag' })).body;
+  const upd = (await parent('PATCH', `/portal/api/athletes/${ava.id}`, { emergency_name: 'Grandma Lopez', emergency_phone: '512-555-0199', medical_notes: 'Mild asthma, inhaler in bag' })).body;
   assert.equal(upd.emergency_name, 'Grandma Lopez');
   const other = (await req('GET', '/portal/api/me', null, { cookie: parentCookie, origin: 'https://evil.example' })).status;
   assert.equal(other, 200, 'reads are fine');

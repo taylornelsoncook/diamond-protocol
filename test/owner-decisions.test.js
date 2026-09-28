@@ -90,6 +90,67 @@ test('declined retries the owner starts (one or all) never count toward cancelin
   assert.equal(invoice(m.inv.id).status, 'void');
 });
 
+// One retry model for every path (the parent portal and the owner's decisions together): the first charge, the scheduled
+// retries and the charge when a new card is saved are automatic and count in auto_attempts; the owner's Retry and Retry
+// all and a parent's Try again are manual: written to invoice_charges with who started them, never cancel, never move the
+// next automatic retry and don't count. A parent can try while the payment has had fewer than 8 tries in all. A pay link
+// pays the invoice without touching the counters.
+async function parentOf(email) {
+  const r = await fetch(base + '/portal/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email }) });
+  const code = (await r.json()).dev_code;
+  const v = await fetch(base + '/portal/api/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, code }) });
+  return as(v.headers.get('set-cookie').split(';')[0]);
+}
+test('every retry path follows one model: manual tries (owner, parent) never count, automatic ones (job, new card) do', async () => {
+  const m = await member({ declining: true });
+  const parent = await parentOf(m.email);
+  const next = invoice(m.inv.id).next_retry_at;
+  assert.equal((await owner('POST', `/v1/invoices/${m.inv.id}/retry`)).status, 200);
+  let r = await parent('POST', `/portal/api/payments/${m.inv.id}/retry`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.status, 'failed');
+  let inv = invoice(m.inv.id);
+  assert.deepEqual([inv.attempts, inv.auto_attempts, inv.next_retry_at], [3, 1, next], 'the owner\'s and the parent\'s tries: not counted, the next automatic retry stays');
+  assert.equal(subOf(m.id).status, 'past_due');
+  // The parent keeps trying: allowed while the payment has had fewer than 8 tries in all, then refused.
+  for (let i = 0; i < 5; i++) assert.equal((await parent('POST', `/portal/api/payments/${m.inv.id}/retry`)).status, 200);
+  assert.equal(invoice(m.inv.id).attempts, 8);
+  assert.equal((await parent('GET', '/portal/api/payments')).body.declined[0].can_retry, false);
+  assert.equal((await parent('POST', `/portal/api/payments/${m.inv.id}/retry`)).status, 409, 'at most 8 tries from the portal');
+  assert.equal(invoice(m.inv.id).auto_attempts, 1);
+  assert.equal(subOf(m.id).status, 'past_due', 'seven declined manual tries: still past due');
+  // A new card (still declining here) is charged at once and counts like an automatic try.
+  await owner('POST', `/v1/clients/${m.id}/card/test`, {});
+  inv = invoice(m.inv.id);
+  assert.deepEqual([inv.attempts, inv.auto_attempts], [9, 2]);
+  const detail = (await owner('GET', `/v1/invoices/${m.inv.id}`)).body;
+  assert.deepEqual(detail.charges.map((c) => c.source), ['automatic', 'owner', 'parent', 'parent', 'parent', 'parent', 'parent', 'parent', 'new_card']);
+  assert.deepEqual(detail.charges.map((c) => c.manual), [false, true, true, true, true, true, true, true, false]);
+  assert.equal(detail.retries_left, MAX_ATTEMPTS - 2);
+  // The scheduled retries: canceled after the 4th automatic try, whatever the manual ones.
+  for (let auto = 3; auto <= MAX_ATTEMPTS; auto++) {
+    await runBilling(app.ctx, addDays(invoice(m.inv.id).next_retry_at, 0.01));
+    assert.equal(invoice(m.inv.id).auto_attempts, auto);
+    assert.equal(subOf(m.id).status, auto < MAX_ATTEMPTS ? 'past_due' : 'canceled', `after automatic try ${auto}`);
+  }
+  assert.equal(db().get(`SELECT source FROM invoice_charges WHERE invoice_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`, m.inv.id).source, 'automatic');
+
+  // A parent with no card on file is told to add one (nothing is tried); a pay link pays without touching the counters.
+  const n = await member({ declining: true });
+  const p2 = await parentOf(n.email);
+  assert.equal((await p2('POST', `/portal/api/payments/${n.inv.id}/retry`)).status, 200);
+  db().run(`UPDATE families SET card_payment_method = NULL WHERE id = ?`, n.family_id);
+  r = await p2('POST', `/portal/api/payments/${n.inv.id}/retry`);
+  assert.equal(r.status, 409);
+  assert.match(r.body.error.message, /Add a card on the Family tab/);
+  assert.equal(invoice(n.inv.id).attempts, 2, 'nothing tried without a card');
+  const link = (await owner('POST', '/v1/pay-links', { kind: 'invoice', invoice_id: n.inv.id })).body;
+  await completePayLink(app.ctx, link.id, 'pi_paylink_model');
+  inv = invoice(n.inv.id);
+  assert.deepEqual([inv.status, inv.attempts, inv.auto_attempts], ['paid', 2, 1]);
+  assert.equal(subOf(n.id).status, 'active');
+});
+
 // ---------------------------------------------------------------- 2. late approvals
 const webhook = (type, obj) => handleStripeEvent(app.ctx, { type, data: { object: obj } });
 

@@ -20,6 +20,8 @@ import * as engage from './services/engage.js';
 import * as inventory from './services/inventory.js';
 import * as shop from './services/shop.js';
 import * as leads from './services/leads.js';
+import * as profiles from './services/profiles.js';
+import * as portal from './services/portal.js';
 import { addDays, newId } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -347,10 +349,42 @@ for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], 
   ctx.db.run('UPDATE leads SET coach_id = ? WHERE id = ?', riley.id, given.id);
   await leads.addLead(quiet, { parent_name: 'Omar Haddad', phone: '(512) 555-0142', athlete_name: 'Sami Haddad', athlete_age: 11, sport: 'Soccer', source: 'phone', follow_up: false }, { name: 'Sample data' });
 }
+// Parent portal (batches B12 and B13). The Jensen family: two kids, card (expiring next month) and waiver on file, booked
+// into classes, with a pack bought. Luke Jensen was already on the Westlake roster (team only, no birthday on file), so the
+// parent's Athlete ID can't be checked: the owner is asked to merge the two profiles. The Silva family has no card or
+// waiver yet. Mia Nguyen's family card declines, so her membership is past due. A Winter retest is planned.
+teams.addRoster(ctx, westlake.id, { names: 'Luke Jensen, P, 2030' });
+const lukeTeam = ctx.db.get(`SELECT id, athlete_id FROM clients WHERE name = 'Luke Jensen'`);
+const jensen = await clients.createClient(ctx, { name: 'Luke Jensen', birth_date: '2012-08-14', sex: 'M', sport: 'Baseball', emergency_name: 'Anna Jensen', emergency_phone: '(512) 555-0161', parent: { name: 'Kurt Jensen', email: 'kurt.jensen@example.com', phone: '(512) 555-0160' }, send_welcome: false });
+const lily = await clients.createClient(ctx, { name: 'Lily Jensen', birth_date: '2014-11-02', sex: 'F', sport: 'Soccer', family_id: jensen.family.id, send_welcome: false });
+{
+  const kurt = ctx.db.get('SELECT * FROM guardians WHERE family_id = ?', jensen.family.id);
+  const tried = profiles.tryClaim(ctx, { code: lukeTeam.athlete_id, name: 'Luke Jensen', birthDate: '2012-08-14', familyId: jensen.family.id, guardian: kurt });
+  profiles.fileClaim(ctx, { code: lukeTeam.athlete_id, familyId: jensen.family.id, guardian: kurt, claim: tried, newClientId: jensen.id });
+}
+await commerce.addTestCard(ctx, jensen.id);
+{
+  const d = new Date(); d.setUTCMonth(d.getUTCMonth() + 1);
+  ctx.db.run(`UPDATE families SET waiver_version = 1, waiver_signed_by = 'Kurt Jensen <kurt.jensen@example.com>', waiver_signed_at = ?, card_exp = ? WHERE id = ?`, ctx.now(), d.toISOString().slice(0, 7), jensen.family.id);
+}
+await sell({ location_id: facility.id, method: 'card_on_file', client_id: jensen.id, items: [{ product_id: groupPack.id }] });
+{
+  const soon = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now() + 14 * 86400000).toISOString(), kind: 'group' });
+  const speedNext = soon.find((x) => x.series_id === speed.id), youth = soon.find((x) => x.name === 'Youth Foundations');
+  if (speedNext) await schedule.book(ctx, { sessionId: speedNext.id, clientId: jensen.id, actor: 'seed' });
+  if (youth) await schedule.book(ctx, { sessionId: youth.id, clientId: lily.id, isCoach: true });
+}
+const silva = await clients.createClient(ctx, { name: 'Rafa Silva', birth_date: '2013-05-20', sport: 'Soccer', parent: { name: 'Paulo Silva', email: 'paulo.silva@example.com', phone: '(512) 555-0170' }, send_welcome: false });
+void silva;
+ctx.db.run(`UPDATE families SET card_status = 'declining' WHERE id = ?`, nguyen.family.id);
+await billing.subscribe(ctx, nguyen.id, groupPlan.id);
+perf.createSession(ctx, { name: 'Winter retest', date: addDaysToDate(today, 21), tests: ['height', 'weight', 'dash_40yd', 'vertical_standing', 'broad_jump'], athletes: [{ client_id: lopez.id }, { client_id: jensen.id }, { client_id: lily.id }] });
+// Maria asked to pause Ava's membership over the holidays (it shows on Ava's client page for the owner).
+portal.requestMembershipChange(ctx, ctx.db.get(`SELECT * FROM guardians WHERE email = 'maria.lopez@example.com'`), lopez.id, { kind: 'pause', note: 'We travel for three weeks in December.' });
 
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);
-console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com; in test mode the code is shown on screen)`);
+console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com, kurt.jensen@example.com (two kids), linh.nguyen@example.com (card declining) or paulo.silva@example.com (no card or waiver yet); in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
 console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);
 ctx.db.close();

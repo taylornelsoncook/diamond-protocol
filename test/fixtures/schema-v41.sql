@@ -119,10 +119,8 @@ CREATE TABLE IF NOT EXISTS invoices (
   void_reason TEXT,
   paid_method TEXT,
   paid_reference TEXT,
-  -- version 43: automatic charges tried (the first charge and the scheduled retries). Only these count toward canceling
-  -- after MAX_ATTEMPTS; a retry the owner or a parent starts
-  -- adds to attempts but not here.
-  auto_attempts INTEGER NOT NULL DEFAULT 0
+  -- version 41: tries pressed by the owner or a parent (counted in attempts too); only automatic tries count toward canceling
+  manual_attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS invoices_client ON invoices(client_id);
 -- Version 38: each refund of a membership payment, dated when the money went back. source 'stripe' is a refund made in
@@ -186,24 +184,15 @@ CREATE INDEX IF NOT EXISTS assignments_client ON assignments(client_id, active);
 CREATE TABLE IF NOT EXISTS workout_logs (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  -- Version 43: deleting a program or workout keeps the athlete's log (the assignment and workout become empty, and the
-  -- snapshot below says what it was).
-  assignment_id TEXT REFERENCES assignments(id) ON DELETE SET NULL,   -- empty when logged on the weight-room screen by an athlete not on that program
-  workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,
+  assignment_id TEXT REFERENCES assignments(id) ON DELETE CASCADE,   -- empty when logged on the weight-room screen by an athlete not on that program
+  workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   notes TEXT,
   completed_at TEXT NOT NULL,
   session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,   -- logged on the weight-room screen during this session (version 23)
   rpe INTEGER,                                   -- version 40: how hard it felt, 1 to 10
   started_at TEXT,                               -- version 40: first set logged in the app (for time taken)
   request_id TEXT,                               -- version 40: the phone's id for this Finish, so a resend saves nothing twice
-  edited_at TEXT,                                -- version 40: reopened and saved again by the athlete
-  -- version 43: what the workout was, written when its program or workout is deleted, so the history still reads right
-  program_id TEXT,
-  program_name TEXT,
-  workout_title TEXT,
-  workout_week INTEGER,
-  workout_day INTEGER,
-  exercises_snapshot TEXT                        -- JSON [{id, exercise_id, name, prescription, done}]
+  edited_at TEXT                                 -- version 40: reopened and saved again by the athlete
 );
 CREATE INDEX IF NOT EXISTS workout_logs_client ON workout_logs(client_id, completed_at);
 CREATE TABLE IF NOT EXISTS exercise_logs (
@@ -585,8 +574,7 @@ CREATE TABLE IF NOT EXISTS leads (
   converted_at TEXT,
   created_by TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL   -- version 43: the coach the owner gave this lead to (coaches see only theirs)
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS leads_status ON leads(status, next_follow_up_at);
 CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
@@ -1291,36 +1279,3 @@ CREATE TABLE IF NOT EXISTS profile_claims (
   resolved_by TEXT
 );
 CREATE INDEX IF NOT EXISTS profile_claims_status ON profile_claims(status, created_at);
-
--- ---------- Version 43: owner decisions (charge attempts, late approvals) ----------
--- Every membership charge tried, with Stripe's PaymentIntent id, so a bank approval that arrives late can always be
--- matched to its invoice, even after a pay link or a hand payment replaced the invoice's payment_ref, or after the
--- charge call errored before an id came back (the attempt's id travels in the charge's metadata). source says who
--- started the try: automatic (the first charge, the scheduled retries), new_card (a family saved a new card; counts as
--- automatic), owner (Retry or Retry all) or parent (the portal's Try again); manual = owner or parent, which don't count
--- toward canceling. A late approval of an invoice already paid another way (or voided) is refunded automatically, once:
--- late_outcome says how that went, and the owner's Today alert stays until handled_at.
-CREATE TABLE IF NOT EXISTS invoice_charges (
-  id TEXT PRIMARY KEY,
-  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-  attempt INTEGER NOT NULL,
-  manual INTEGER NOT NULL DEFAULT 0,
-  source TEXT NOT NULL DEFAULT 'automatic' CHECK (source IN ('automatic','new_card','owner','parent')),
-  amount_cents INTEGER NOT NULL,
-  ref TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','succeeded','declined','error')),
-  error TEXT,
-  created_at TEXT NOT NULL,
-  settled_at TEXT,
-  late_outcome TEXT CHECK (late_outcome IN ('refunded','refund_failed')),
-  late_reason TEXT,
-  late_at TEXT,
-  refund_ref TEXT,
-  refund_error TEXT,
-  handled_at TEXT,
-  handled_by TEXT
-);
-CREATE INDEX IF NOT EXISTS invoice_charges_invoice ON invoice_charges(invoice_id);
-CREATE INDEX IF NOT EXISTS invoice_charges_ref ON invoice_charges(ref);
-CREATE INDEX IF NOT EXISTS invoice_charges_late ON invoice_charges(late_outcome, handled_at);
-CREATE INDEX IF NOT EXISTS leads_coach ON leads(coach_id);

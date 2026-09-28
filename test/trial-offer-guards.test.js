@@ -23,8 +23,9 @@ async function req(method, path, body, headers = {}) {
 }
 const db = () => app.ctx.db;
 const born = (age) => `${new Date().getFullYear() - age}-01-15`;
+let slot = 0;   // each session two hours after the last: families can't book an athlete into overlapping sessions
 function session(name, { capacity = 6, dropIn = 2500 } = {}) {
-  const id = newId('cls'), at = inHours(24 * 3 + Math.random());
+  const id = newId('cls'), at = inHours(24 * 3 + 2 * slot++);
   db().run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, status, created_at) VALUES (?, ?, 'group', ?, ?, ?, ?, ?, 'scheduled', ?)`,
     id, name, facility.id, at, new Date(Date.parse(at) + HOUR).toISOString(), capacity, dropIn, app.ctx.now());
   return id;

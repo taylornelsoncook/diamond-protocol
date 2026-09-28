@@ -11,7 +11,9 @@ const mode = share ? 'link' : q.get('athlete') ? 'parent' : 'staff';
 const familyPreview = mode === 'staff' && q.get('parent_view') === 'true';
 const id = encodeURIComponent(q.get('athlete') ?? q.get('client') ?? '');
 const base = mode === 'parent' ? `/portal/api/athletes/${id}` : `/v1/clients/${id}`;
-const period = { from: '', to: '', key: 'all' };
+// The parent portal's Progress tab opens the printable report on the period it was showing (?from=YYYY-MM-DD).
+const startFrom = /^\d{4}-\d{2}-\d{2}$/.test(q.get('from') ?? '') ? q.get('from') : '';
+const period = { from: startFrom, to: '', key: startFrom ? `day:${startFrom}` : 'all' };
 let since = 'first';
 try { since = localStorage.getItem('dp-report-since') === 'last' ? 'last' : 'first'; } catch { /* private window: keep the default */ }
 let opened = false;
@@ -127,7 +129,7 @@ function render(r) {
   const canShare = r.can_share && mode !== 'link' && !familyPreview;
   fill(root,
     mode === 'link' ? null : h('div', { class: 'rp-actions' }, btn('Print or save as PDF', () => window.print(), 'primary'),
-      mode === 'parent' ? h('a', { class: 'dp-btn dp-btn--ghost', href: '/parent' }, 'Back to the portal')
+      mode === 'parent' ? h('a', { class: 'dp-btn dp-btn--ghost', href: '/parent?tab=progress' }, 'Back to Progress')
         : [h('a', { class: 'dp-btn dp-btn--secondary', href: familyPreview ? `/report.html?client=${id}` : `/report.html?client=${id}&parent_view=true` }, familyPreview ? 'Coach view' : 'Family view'),
           h('a', { class: 'dp-btn dp-btn--ghost', href: `/#/clients/${a.id}` }, 'Back to the athlete')]),
     mode === 'link' ? h('div', { class: 'rp-actions' }, btn('Print or save as PDF', () => window.print(), 'primary')) : null,

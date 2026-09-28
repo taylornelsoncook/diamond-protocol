@@ -77,15 +77,17 @@ const ADDED_TABLES = {
   39: ['today_snoozes'],
   // ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
   40: ['workout_sets'],
+  // ---- Version 41: parent portal (batches B12 and B13): membership requests, claiming a profile by Athlete ID ----
+  41: ['membership_requests', 'profile_claims'],
   // ---- Version 43: owner decisions (every membership charge attempt, for late approvals) ----
   43: ['invoice_charges']
 };
 const ADDED_COLUMNS = {
-  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
+  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41
   team_roster: ['athlete_id TEXT'],
   subscriptions: ['trial_reminded_at TEXT'],                              // version 11
-  guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT'],               // version 13
-  bookings: ['reminded_at TEXT'],                                         // version 13
+  guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT', 'calendar_token_hash TEXT', 'calendar_created_at TEXT'],   // texts: version 13; calendar feed: version 41
+  bookings: ['reminded_at TEXT', 'note TEXT'],                            // reminders: version 13; note for the coach: version 41
   locations: ['checkin_code TEXT'],                                       // version 16
   products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
   sale_items: ['variant_id TEXT'],                                        // version 17
@@ -113,11 +115,14 @@ const ADDED_COLUMNS = {
     'booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL'],        // booking_id: version 38
   // ---- Version 38: billing (batch B6): refunds, card reminders, voids and payments recorded by hand ----
   invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT',
-    'auto_attempts INTEGER NOT NULL DEFAULT 0'],                          // version 43: automatic charges only (owner's retries don't count)
+    'auto_attempts INTEGER NOT NULL DEFAULT 0'],                          // version 43: automatic charges only (retries the owner or a parent starts don't count)
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
   exercises: ['category TEXT'],
+  // ---- Version 41 (batches B12 and B13): the card's expiry, signed-in devices (card_exp on clients, calendar feed on guardians and the note on bookings: see above)
+  families: ['card_exp TEXT'],
+  portal_sessions: ['created_at TEXT', 'user_agent TEXT', 'last_seen_at TEXT'],
   // ---- Version 43: owner decisions: leads given to a coach (invoices.auto_attempts and the workout_logs snapshot are in
   // those tables' lists above; workout_logs is also rebuilt so a log outlives its program)
   leads: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL']
@@ -164,7 +169,13 @@ function migrate(raw, schema) {
   if (version < 43) {
     const has = (t) => !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
     // Which earlier tries were the owner's isn't known, so every try so far counts as automatic (as it did before).
-    if (has('invoices')) raw.exec('UPDATE invoices SET auto_attempts = attempts WHERE auto_attempts < attempts');
+    // A database made by the unreleased parent portal branch counted parents' and the owner's retries in
+    // invoices.manual_attempts: those stay uncounted, and the column goes (auto_attempts is the one counter now).
+    if (has('invoices')) {
+      const manualCol = raw.prepare('PRAGMA table_info(invoices)').all().some((c) => c.name === 'manual_attempts');
+      raw.exec(`UPDATE invoices SET auto_attempts = max(0, attempts${manualCol ? ' - manual_attempts' : ''}) WHERE auto_attempts < attempts${manualCol ? ' - manual_attempts' : ''}`);
+      if (manualCol) raw.exec('ALTER TABLE invoices DROP COLUMN manual_attempts');
+    }
     // Only the owner gives discounts now: a limit set for staff before goes back to 0 (the owner can raise it again).
     if (has('settings')) raw.exec(`UPDATE settings SET value = '0' WHERE key = 'staff_discount_max_pct'`);
   }

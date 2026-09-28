@@ -25,4 +25,42 @@
 .toast-host{left:16px;right:16px;bottom:calc(76px + env(safe-area-inset-bottom,0px));max-width:none}
 details.dp-panel{display:block}
 details.dp-panel > summary{list-style-position:inside}
-@media print{.no-print{display:none!important}.poster{color:#000}.poster .p-title{color:#000}body{background:#fff}}
+
+/* ---- Parent portal: Home, Book, Progress, Programs, Family (batches B12 and B13) ---- */
+.p-offline{position:fixed;top:0;left:0;right:0;z-index:40;background:var(--amber-deep);color:var(--amber);border-bottom:1px solid #6B4E1E;text-align:center;font-size:13px;padding:calc(6px + env(safe-area-inset-top,0px)) 16px 6px}
+.p-wrap .dp-btn{min-height:44px}
+.p-row--tap{width:100%;background:none;border-left:0;border-right:0;border-bottom:0;color:inherit;font:inherit;text-align:left;cursor:pointer}
+button.p-row--tap:first-child{border-top:0}
+.p-row--tap:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.p-wrap-text{overflow-wrap:anywhere}
+.p-clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}
+.p-chev{color:var(--steel-muted);font-size:22px;line-height:1}
+.p-needs{display:flex;flex-wrap:wrap;gap:8px}
+.p-need{border:1px solid var(--control-border);background:var(--ground);color:var(--steel);border-radius:var(--radius-pill);min-height:44px;padding:0 14px;font:500 13px/1.2 var(--font-sans);cursor:pointer}
+.p-need--warn{border-color:#6B4E1E;background:var(--amber-deep);color:var(--amber)}
+.p-id{background:none;border:1px dashed var(--control-border);border-radius:var(--radius-sm);color:var(--steel);font:500 13px/1 var(--font-mono);padding:6px 8px;min-height:32px;cursor:pointer}
+.p-link{background:var(--ground);border:1px solid var(--line-subtle);border-radius:var(--radius-sm);padding:10px;overflow-wrap:anywhere;font-size:13px}
+.p-slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.p-slot{flex-direction:column;align-items:flex-start;height:auto;min-height:56px;padding:8px 12px;gap:2px;text-align:left}
+.p-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.p-tile{display:flex;flex-direction:column;gap:4px;text-align:left;background:var(--ground);border:1px solid var(--line-subtle);border-radius:var(--radius-sm);padding:12px;color:var(--steel);font:inherit;cursor:pointer;min-height:44px}
+.p-tile b{font:600 22px/1 var(--font-display)}
+.p-bar{width:72px;height:8px;border-radius:4px;background:var(--surface-raised);overflow:hidden;flex-shrink:0}
+.p-bar span{display:block;height:100%;background:var(--green-bright)}
+.p-stat b.p-stat-word,.p-stat b{overflow-wrap:anywhere}
+.p-stat b.p-stat-word{font-size:17px;line-height:1.15}
+.p-stat span{display:block;overflow-wrap:normal;word-break:normal;hyphens:none}
+.p-banner--info{border-color:var(--green-mid);background:var(--green-deep);color:var(--green-soft)}
+.p-athlete-sum{list-style:none;display:flex;align-items:center;gap:12px;cursor:pointer;min-height:44px}
+.p-athlete-sum::-webkit-details-marker{display:none}
+details.p-athlete > summary.p-athlete-sum{list-style:none}
+.p-dialog-title{font:700 20px/1.2 var(--font-display);letter-spacing:.03em;text-transform:uppercase;color:var(--steel);margin:0;padding-right:8px}
+.p-dialog-actions{justify-content:flex-end;margin-top:4px}
+#dialog{max-height:88vh;overflow:auto;width:min(560px,94vw);padding:20px}
+@media (max-width:420px){.p-stats{gap:6px}.p-stat{padding:8px}.p-stat b{font-size:20px}.p-stat b.p-stat-word{font-size:15px}.p-time{width:56px;font-size:16px}#dialog{padding:16px}}
+@media (max-width:340px){.p-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media print{.no-print{display:none!important}.poster{color:#000}.poster .p-title{color:#000}body{background:#fff}
+  body:has(#dialog[open]) #root,body:has(#dialog[open]) .p-tabs,body:has(#dialog[open]) .p-offline{display:none}
+  #dialog[open]{position:static;border:0;background:#fff;color:#000;max-height:none;width:auto}#dialog .p-dialog-actions{display:none}#dialog .muted{color:#333}}
+.p-time--day{width:78px;display:flex;flex-direction:column;gap:2px}
+.p-time-day{font:600 15px/1.1 var(--font-display);color:var(--steel);overflow-wrap:anywhere}

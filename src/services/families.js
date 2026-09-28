@@ -97,6 +97,13 @@ export function createFamilyWithGuardian(ctx, guardian, familyName) {
   ctx.db.run('INSERT INTO guardians (id, family_id, name, email, phone, relationship, is_primary, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', newId('gdn'), familyId, g.name, g.email, g.phone, g.relationship, ctx.now());
   return familyId;
 }
+// A card expiring: expired once its month is over, expiring in its last month and the month before (a card is good
+// through the last day of its month). Months are compared in UTC; a day either way doesn't matter for a reminder.
+export function cardExpiry(exp, now = new Date().toISOString()) {
+  if (!/^\d{4}-\d{2}$/.test(exp ?? '')) return { expired: false, expiring: false };
+  const cur = now.slice(0, 7), [y, m] = cur.split('-').map(Number), next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  return { expired: exp < cur, expiring: exp >= cur && exp <= next };
+}
 export function listFamilies(ctx) {
   return ctx.db.all(`SELECT f.id, f.name, f.card_last4, f.card_brand, f.waiver_version, f.waiver_signed_at,
       (SELECT GROUP_CONCAT(name, ', ') FROM guardians g WHERE g.family_id = f.id) AS guardians,
@@ -108,7 +115,7 @@ export function getFamily(ctx, id) {
   if (!f) throw notFound('Family');
   return {
     id: f.id, name: f.name, created_at: f.created_at,
-    card: f.card_payment_method ? { on_file: true, brand: f.card_brand, last4: f.card_last4 } : { on_file: false },
+    card: f.card_payment_method ? { on_file: true, brand: f.card_brand, last4: f.card_last4, exp: f.card_exp ?? null, ...cardExpiry(f.card_exp) } : { on_file: false },
     waiver: { signed: Number(f.waiver_version) === Number(getSetting(ctx, 'waiver_version')), signed_by: f.waiver_signed_by, signed_at: f.waiver_signed_at, version_signed: f.waiver_version },
     guardians: ctx.db.all('SELECT id, name, email, phone, relationship, is_primary, sms_opt_in_at, sms_opt_out_at FROM guardians WHERE family_id = ? ORDER BY is_primary DESC, created_at', id)
       .map(({ sms_opt_in_at, sms_opt_out_at, ...g }) => ({ ...g, is_primary: !!g.is_primary, texts: !sms_opt_in_at ? 'off' : sms_opt_out_at ? 'stopped' : 'on' })),
@@ -215,9 +222,9 @@ export function payerFor(ctx, clientId) {
   if (c.family_id) {
     const f = ctx.db.get('SELECT * FROM families WHERE id = ?', c.family_id);
     const g = ctx.db.get('SELECT name, email FROM guardians WHERE family_id = ? ORDER BY is_primary DESC, created_at LIMIT 1', f.id);
-    return { table: 'families', id: f.id, name: g?.name ?? f.name, email: g?.email ?? null, metadataKey: 'family_id', stripe_customer_id: f.stripe_customer_id, card_payment_method: f.card_payment_method, card_brand: f.card_brand, card_last4: f.card_last4, card_status: f.card_status };
+    return { table: 'families', id: f.id, name: g?.name ?? f.name, email: g?.email ?? null, metadataKey: 'family_id', stripe_customer_id: f.stripe_customer_id, card_payment_method: f.card_payment_method, card_brand: f.card_brand, card_last4: f.card_last4, card_exp: f.card_exp, card_status: f.card_status };
   }
-  return { table: 'clients', id: c.id, name: c.name, email: c.email, metadataKey: 'client_id', stripe_customer_id: c.stripe_customer_id, card_payment_method: c.card_payment_method, card_brand: c.card_brand, card_last4: c.card_last4, card_status: c.card_status };
+  return { table: 'clients', id: c.id, name: c.name, email: c.email, metadataKey: 'client_id', stripe_customer_id: c.stripe_customer_id, card_payment_method: c.card_payment_method, card_brand: c.card_brand, card_last4: c.card_last4, card_exp: c.card_exp, card_status: c.card_status };
 }
 
 // ---------- Waiver ----------
@@ -248,22 +255,49 @@ export async function requestCode(ctx, body) {
   if (ctx.testMode && !willDeliver(ctx, g.email)) out.dev_code = code; // test mode and the email won't really arrive: show the code so you can sign in
   return out;
 }
-export function verifyCode(ctx, body) {
+// 15 wrong codes in an hour for one email lock that email's sign-in for the rest of the hour. Counted by the address
+// typed, whether or not it has an account, so a wrong code, "too many tries" and the lock answer the same for every email
+// (the form can't be used to find out who has an account). Kept in memory, like the other rate limits.
+export const LOCK_WRONG_CODES = 15;
+const wrongCodes = new Map();
+const lockKey = (email) => sha256(`portal-lock:${String(email).toLowerCase()}`);
+function signInLocked(email) {
+  const k = lockKey(email), now = Date.now(), list = (wrongCodes.get(k) ?? []).filter((t) => t > now - 3600000);
+  wrongCodes.set(k, list);
+  if (wrongCodes.size > 50000) for (const [key, l] of wrongCodes) if (!l.some((t) => t > now - 3600000)) wrongCodes.delete(key);
+  return list.length >= LOCK_WRONG_CODES ? Math.max(1, Math.ceil((list[0] + 3600000 - now) / 60000)) : 0;
+}
+const countWrongCode = (email) => { const k = lockKey(email); wrongCodes.set(k, [...(wrongCodes.get(k) ?? []), Date.now()]); };
+export const resetSignInLocks = () => wrongCodes.clear();
+export function startPortalSession(ctx, guardianId, { userAgent } = {}) {
+  const raw = `dp_fam_${token(32)}`;
+  ctx.db.run('INSERT INTO portal_sessions (token_hash, guardian_id, expires_at, created_at, user_agent, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)',
+    sha256(raw), guardianId, addDays(ctx.now(), SESSION_DAYS), ctx.now(), userAgent ? String(userAgent).slice(0, 300) : null, ctx.now());
+  return raw;
+}
+export function verifyCode(ctx, body, { userAgent } = {}) {
   const email = v.email(body.email);
   const code = v.str(body.code, 'code', { max: 12 }).replace(/\s/g, '');
+  const locked = signInLocked(email);
+  if (locked) throw new HttpError(429, 'signin_locked', `Too many wrong codes. For your safety, sign-in with this email is paused. Try again in ${locked} minute${locked === 1 ? '' : 's'}.`);
   const g = ctx.db.get('SELECT * FROM guardians WHERE email = ?', email);
   const wrong = new HttpError(401, 'invalid_code', 'That code is wrong or has expired. Request a new one.');
-  if (!g) throw wrong;
+  if (!g) { countWrongCode(email); throw wrong; }
   const lc = ctx.db.get('SELECT * FROM login_codes WHERE guardian_id = ? AND used_at IS NULL AND expires_at > ? ORDER BY expires_at DESC LIMIT 1', g.id, new Date().toISOString());
-  if (!lc || lc.attempts >= MAX_ATTEMPTS) throw wrong;
-  if (!safeEqual(lc.code_hash, sha256(`${g.id}:${code}`))) { ctx.db.run('UPDATE login_codes SET attempts = attempts + 1 WHERE id = ?', lc.id); throw wrong; }
+  if (!lc || lc.attempts >= MAX_ATTEMPTS) { countWrongCode(email); throw wrong; }
+  if (!safeEqual(lc.code_hash, sha256(`${g.id}:${code}`))) { ctx.db.run('UPDATE login_codes SET attempts = attempts + 1 WHERE id = ?', lc.id); countWrongCode(email); throw wrong; }
   ctx.db.run('UPDATE login_codes SET used_at = ? WHERE id = ?', ctx.now(), lc.id);
-  const raw = `dp_fam_${token(32)}`;
-  ctx.db.run('INSERT INTO portal_sessions (token_hash, guardian_id, expires_at) VALUES (?, ?, ?)', sha256(raw), g.id, addDays(ctx.now(), SESSION_DAYS));
+  const raw = startPortalSession(ctx, g.id, { userAgent });
   return { token: raw, maxAge: SESSION_DAYS * 86400, guardian: { id: g.id, name: g.name, email: g.email } };
 }
 export function guardianForToken(ctx, raw) {
   if (!raw) return null;
-  return ctx.db.get('SELECT g.* FROM portal_sessions s JOIN guardians g ON g.id = s.guardian_id WHERE s.token_hash = ? AND s.expires_at > ?', sha256(raw), ctx.now()) ?? null;
+  const hash = sha256(raw);
+  const g = ctx.db.get('SELECT g.*, s.last_seen_at AS session_seen_at FROM portal_sessions s JOIN guardians g ON g.id = s.guardian_id WHERE s.token_hash = ? AND s.expires_at > ?', hash, ctx.now());
+  if (!g) return null;
+  // "Last used" on the Family tab's device list, written at most every 5 minutes.
+  if (!g.session_seen_at || Date.parse(ctx.now()) - Date.parse(g.session_seen_at) > 300000) ctx.db.run('UPDATE portal_sessions SET last_seen_at = ? WHERE token_hash = ?', ctx.now(), hash);
+  const { session_seen_at, ...guardian } = g;
+  return guardian;
 }
 export function portalLogout(ctx, raw) { if (raw) ctx.db.run('DELETE FROM portal_sessions WHERE token_hash = ?', sha256(raw)); }

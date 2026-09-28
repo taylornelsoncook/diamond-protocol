@@ -29,7 +29,7 @@ const fake = http.createServer((req, res) => {
     if (/^\/v1\/terminal\/readers\/.+\/process_payment_intent$/.test(p)) return send(200, { id: 'tmr', action: { status: 'in_progress' } });
     if (p === '/v1/refunds') return send(200, { id: nid('re') });
     if (p === '/v1/checkout/sessions' && req.method === 'POST') return send(200, { id: 'cs_1', url: 'https://checkout.stripe.com/c/pay/cs_1' });
-    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444' } } } });
+    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444', exp_month: 4, exp_year: 2029 } } } });
     if (p === '/v1/payment_intents' && req.method === 'POST') {
       if (body.off_session === 'true') {
         if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.', payment_intent: { id: nid('pi'), status: 'requires_payment_method' } } });
@@ -143,7 +143,7 @@ test('clients add cards on Stripe\'s hosted page', async () => {
   assert.equal(link.url, 'https://checkout.stripe.com/c/pay/cs_1');
   globalThis.setupClient = client.id;
   await webhook({ type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'setup' } } });
-  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', owner: 'client' });
+  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', owner: 'client' });
 });
 
 test('schools pay team invoices online by card or bank account', async () => {
@@ -237,8 +237,9 @@ test('refunds made in the Stripe dashboard show on the sale, in its refund log a
 });
 
 test('reissued cards and disputes', async () => {
-  await webhook({ type: 'payment_method.automatically_updated', data: { object: { id: 'pm_web', card: { brand: 'mastercard', last4: '9999' } } } });
+  await webhook({ type: 'payment_method.automatically_updated', data: { object: { id: 'pm_web', card: { brand: 'mastercard', last4: '9999', exp_month: 7, exp_year: 2031 } } } });
   assert.equal((await call('GET', `/v1/clients/${client.id}/card`)).body.last4, '9999');
+  assert.equal((await call('GET', `/v1/clients/${client.id}/card`)).body.exp, '2031-07', 'the new expiry is kept for the "expires soon" reminder');
   await webhook({ type: 'charge.dispute.created', data: { object: { id: 'dp_1', payment_intent: invoiceOf(inv.id).payment_ref, amount: 15000, reason: 'fraudulent' } } });
   const ev = app.ctx.db.get(`SELECT data FROM events WHERE type = 'payment.disputed'`);
   assert.equal(JSON.parse(ev.data).invoice_id, inv.id);

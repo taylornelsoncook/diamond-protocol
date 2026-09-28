@@ -520,19 +520,37 @@ async function undoCover(ctx, clientId, r) {
 }
 const commerceMoney = (c) => `$${(c / 100).toFixed(c % 100 ? 2 : 0)}`;
 
-async function releaseBooking(ctx, b, status) {
-  if (b.coverage === 'credit' && status === 'canceled' && ['booked'].includes(b.status)) {
-    ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, 1, 'cancel', 'Booking canceled', ?)`, newId('cr'), b.client_id, b.credit_type, ctx.now());
-  }
+// The card refund goes first (if it fails, nothing changes and the booking can be canceled again); then the credit, the
+// booking's new status and anything the caller adds (then) are saved in one transaction. Callers hold the session's
+// booking lock, so a double tap can't return a credit or refund twice.
+async function releaseBooking(ctx, b, status, then) {
   if (b.coverage === 'paid' && b.sale_id && status === 'canceled') {
     const sale = ctx.db.get('SELECT status FROM sales WHERE id = ?', b.sale_id);
     if (['succeeded', 'partially_refunded'].includes(sale?.status)) await commerce.refundSale(ctx, b.sale_id, {});
   }
-  ctx.db.run('UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?', status, ctx.now(), b.id);
+  ctx.db.tx(() => {
+    if (b.coverage === 'credit' && status === 'canceled' && ['booked'].includes(b.status)) {
+      ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, 1, 'cancel', 'Booking canceled', ?)`, newId('cr'), b.client_id, b.credit_type, ctx.now());
+    }
+    ctx.db.run('UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?', status, ctx.now(), b.id);
+    then?.();
+  });
 }
 
 // Bookings for one session go one at a time, so a double tap can't charge twice and two families can't both take the last spot.
-export function book(ctx, args) { return withLock(`book:${args.sessionId}`, () => bookNow(ctx, args)); }
+// A parent booking also holds the athlete's lock, so two bookings of one athlete into overlapping sessions can't both pass
+// the clash check at once.
+export function book(ctx, args) {
+  const run = () => withLock(`book:${args.sessionId}`, () => bookNow(ctx, args));
+  return args.isCoach ? run() : withLock(`athlete-book:${args.clientId}`, run);
+}
+// Families can't book an athlete into two sessions at the same time (a waitlist spot counts: it could move up). Staff can,
+// with a warning (clashFor). Returns the reason, or null.
+export function clashText(ctx, clientId, sessionId, name) {
+  const x = clashFor(ctx, clientId, sessionId);
+  if (!x) return null;
+  return `${first(name)} is already ${x.status === 'waitlisted' ? 'on the waitlist for' : 'booked for'} ${x.name} at ${when(ctx, x.starts_at)}, which overlaps. Cancel that first to book this one.`;
+}
 async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, overrideAge = false, offerPriceCents }) {
   const s = getSession(ctx, sessionId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
@@ -546,6 +564,7 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
   if (ageProblem && !(isCoach && overrideAge)) throw conflict(ageProblem);
   const existing = ctx.db.get('SELECT * FROM bookings WHERE session_id = ? AND client_id = ?', sessionId, clientId);
   if (existing && ['booked', 'attended', 'waitlisted'].includes(existing.status)) throw conflict(`${first(c.name)} is already ${existing.status === 'waitlisted' ? 'on the waitlist' : 'booked'} for this session.`);
+  if (!isCoach) { const clash = clashText(ctx, clientId, sessionId, c.name); if (clash) throw conflict(clash); }
 
   const full = s.booked_count >= s.capacity;
   // A trial offer is for a spot, not the waitlist: the waitlist later books at the usual price.
@@ -589,13 +608,20 @@ async function cancelBookingNow(ctx, id, { isCoach = false, waive = false } = {}
   const hours = Number(getSetting(ctx, 'late_cancel_hours'));
   const late = b.status === 'booked' && Date.parse(b.starts_at) - Date.now() < hours * 3600000 && !(isCoach && waive);
   if (!isCoach && b.starts_at <= ctx.now()) throw conflict('This session has already started. Message your coach.');
-  await releaseBooking(ctx, b, late ? 'late_canceled' : 'canceled');
-  // A private or evaluation booked from open hours exists only for this athlete: take it off the schedule so the time opens again.
-  if (['private', 'evaluation'].includes(b.kind) && !ctx.db.get('SELECT series_id FROM class_sessions WHERE id = ?', b.session_id).series_id
-    && !ctx.db.get(`SELECT 1 FROM bookings WHERE session_id = ? AND status IN ('booked','attended','waitlisted')`, b.session_id)) {
-    ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ? AND status = 'scheduled'`, b.session_id);
-  }
+  const oneOff = ['private', 'evaluation'].includes(b.kind) && !ctx.db.get('SELECT series_id FROM class_sessions WHERE id = ?', b.session_id).series_id;
+  // A private or evaluation booked from open hours exists only for this athlete: take it off the schedule (in the same
+  // transaction as the cancel) so the time opens again.
+  await releaseBooking(ctx, b, late ? 'late_canceled' : 'canceled', () => {
+    if (oneOff && !ctx.db.get(`SELECT 1 FROM bookings WHERE session_id = ? AND status IN ('booked','attended','waitlisted')`, b.session_id)) {
+      ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ? AND status = 'scheduled'`, b.session_id);
+    }
+  });
   emit(ctx, 'booking.canceled', { booking_id: id, session_id: b.session_id, session_name: b.session_name, client_id: b.client_id, client_name: b.client_name, late });
+  // The coach hears when a family cancels a private or evaluation (after it's saved).
+  if (!isCoach && ['private', 'evaluation'].includes(b.kind)) {
+    const coach = ctx.db.get('SELECT u.name, u.email FROM class_sessions s JOIN users u ON u.id = s.coach_id WHERE s.id = ? AND u.active = 1', b.session_id);
+    if (coach?.email) sendEmail(ctx, { to: coach.email, subject: `Canceled: ${b.session_name}, ${when(ctx, b.starts_at)}`, text: `Hi ${first(coach.name)},\n\n${b.client_name}'s family canceled ${b.kind === 'private' ? 'the private session' : 'the evaluation'} on ${when(ctx, b.starts_at)} at ${b.location_name}.${late ? ` It was less than ${hours} hours before, so it still counts as used.` : oneOff ? ' The time is open for booking again.' : ''}\n\n${getSetting(ctx, 'business_name')}` }).catch(() => {});
+  }
   if (b.status === 'booked') await promoteNow(ctx, b.session_id);
   return { ...bookingDetail(ctx, id), late, message: late ? `Canceled less than ${hours} hours before the session, so the session is still used.` : 'Canceled.' };
 }
@@ -717,6 +743,7 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
   if (sessions.some((x) => x.booked_count >= x.capacity)) throw conflict(`${s.name} is full.`);
   const ageProblem = ageCheck(c, sessions[0]);
   if (ageProblem && !isCoach) throw conflict(ageProblem);
+  if (!isCoach) for (const x of sessions) { const clash = clashText(ctx, clientId, x.id, c.name); if (clash) throw conflict(clash); }
   let saleId = null;
   if (pay === 'card_on_file' && s.registration_cents > 0) {
     const sale = await commerce.createSale(ctx, { location_id: s.location_id, method: 'card_on_file', client_id: clientId, custom: { description: `${s.name} registration`, amount_cents: s.registration_cents } }, actor);
@@ -846,7 +873,8 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   }
   return out.sort((x, y) => x.starts_at.localeCompare(y.starts_at));
 }
-export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId, clientId, pay, actor, isCoach = false }) {
+export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId, clientId, pay, actor, isCoach = false, note }) {
+  const noteText = note == null || note === '' ? null : v.str(note, 'note', { max: 500 });
   const slot = openSlots(ctx, { kind, days: 60 }).find((x) => x.starts_at === startsAt && x.availability_id === availabilityId);
   if (!slot) throw conflict('That time was just taken or is no longer available. Pick another.');
   const c = ctx.db.get('SELECT name, archived_at FROM clients WHERE id = ?', clientId);
@@ -856,8 +884,17 @@ export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId
   const id = newId('cls');
   ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, coach_id, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, 1, ?, ?, 'scheduled', ?)`,
     id, `${kind === 'private' ? 'Private' : 'Evaluation'}: ${c.name}`, kind, slot.location_id, slot.starts_at, slot.ends_at, slot.price_cents, slot.coach_id, ctx.now());
-  try { return await book(ctx, { sessionId: id, clientId, pay, actor, isCoach }); }
+  let out;
+  try { out = await book(ctx, { sessionId: id, clientId, pay, actor, isCoach }); }
   catch (e) { ctx.db.run('DELETE FROM class_sessions WHERE id = ?', id); throw e; }        // release the slot if payment fails
+  // The coach gets the family's note (and hears about the booking) by email.
+  const coach = slot.coach_id ? ctx.db.get('SELECT name, email FROM users WHERE id = ? AND active = 1', slot.coach_id) : null;
+  if (noteText) ctx.db.run('UPDATE bookings SET note = ? WHERE id = ?', noteText, out.id);
+  if (coach?.email && !isCoach) {
+    sendEmail(ctx, { to: coach.email, subject: `Booked: ${kind === 'private' ? 'private session' : 'evaluation'} with ${c.name}, ${when(ctx, slot.starts_at)}`,
+      text: `Hi ${first(coach.name)},\n\n${c.name} is booked for ${kind === 'private' ? 'a private session' : 'an evaluation'} with you on ${when(ctx, slot.starts_at)} at ${slot.location_name}.${noteText ? `\n\nNote from the family:\n${noteText}` : ''}\n\n${getSetting(ctx, 'business_name')}` }).catch(() => {});
+  }
+  return bookingDetail(ctx, out.id);
 }
 
 // ---------- Coach views ----------

@@ -29,6 +29,7 @@ import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { followCampaignLink } from './services/campaigns.js';
+import { calendarFeed } from './services/portal.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -83,6 +84,14 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         return page(out.page);
       }
       if (url.pathname === '/sms/inbound' && req.method === 'POST') return smsInbound(ctx, req, res, `${baseUrl}/sms/inbound`);
+      // A parent's private calendar feed (the secret is the key; only its hash is stored). Calendar apps poll it.
+      const cal = url.pathname.match(/^\/cal\/([\w-]{20,64})\.ics$/);
+      if (cal && (req.method === 'GET' || req.method === 'HEAD')) {
+        rateLimit(`cal:${clientIp(req)}`, 120, 15 * 60000);
+        const body = calendarFeed(ctx, cal[1], url.host);
+        res.writeHead(200, { 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+        return res.end(req.method === 'HEAD' ? undefined : body);
+      }
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
       if (!route) {
         if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(res, url.pathname);
@@ -95,6 +104,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
       r.kioskKey = req.headers['x-kiosk-key'];
+      r.userAgent = req.headers['user-agent'] ?? null;
       r.reportLink = req.headers['x-report-link'];         // a report share link's secret: in a header, so it stays out of addresses and logs
       // Rate limits: sign-in attempts per address, and an overall ceiling per address.
       if (route.path === '/auth/login' || route.path === '/auth/token') rateLimit(`login:${ip}`, 20, 15 * 60000);

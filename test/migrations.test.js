@@ -1,4 +1,4 @@
-// Databases from earlier versions (schema 30 to 39) open with this version: new columns and tables are
+// Databases from earlier versions (schema 30 to 40) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

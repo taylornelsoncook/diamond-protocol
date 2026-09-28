@@ -339,6 +339,32 @@ for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], 
   });
 }
 
+// ---- API & integrations and Staff & security (batch B14) ----
+{
+  // A coach who left: turned off but still holding a block of private hours, so Staff & security flags "Hand over".
+  const sam = createUser(ctx, { email: 'sam@diamondprotocol.local', name: 'Sam Ortiz', password, role: 'coach' });
+  const place = ctx.db.get('SELECT id FROM locations WHERE active = 1 ORDER BY created_at LIMIT 1');
+  if (place) ctx.db.run(`INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, coach_id, created_at) VALUES (?, 'private', ?, 6, '09:00', '11:00', 60, ?, ?)`, newId('av'), place.id, sam.id, ctx.now());
+  ctx.db.run('UPDATE users SET active = 0, last_login_at = ? WHERE id = ?', addDays(ctx.now(), -40), sam.id);
+  // Two API keys with a month of requests: timing gates that send results, and a read-only website widget.
+  const key = (label, scope) => { const id = newId('key'); ctx.db.run('INSERT INTO api_keys (id, label, prefix, key_hash, created_at, scope, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, label, `dp_live_${id.slice(-4)}`, `demo-${id}`, addDays(ctx.now(), -30), scope, addDays(ctx.now(), -0.1)); return id; };
+  const gates = key('Timing gates (Freelap)', 'results'), site = key('Website schedule widget', 'read');
+  const reqs = [[gates, 'POST', '/v1/results', 201], [gates, 'GET', '/v1/tests', 200], [site, 'GET', '/v1/schedule', 200], [site, 'GET', '/v1/slots', 200]];
+  for (let i = 0; i < 40; i++) {
+    const [k, m, p, s] = reqs[i % reqs.length];
+    ctx.db.run('INSERT INTO api_requests (id, key_id, at, method, path, status, duration_ms, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('req'), k, addDays(ctx.now(), -i * 0.6), m, p, s, 20 + (i * 7) % 60, '203.0.113.24');
+  }
+  ctx.db.run('INSERT INTO api_requests (id, key_id, at, method, path, status, duration_ms, ip, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', newId('req'), site, addDays(ctx.now(), -2), 'POST', '/v1/slots/book', 403, 4, '203.0.113.24',
+    'This API key is read only. Ask the owner for a key that can send data.');
+  // A paused webhook with a delivered and a failed send (paused, so the demo never sends anything out).
+  const hook = newId('whe');
+  ctx.db.run(`INSERT INTO webhook_endpoints (id, url, secret, events, active, created_at, label, failures) VALUES (?, 'https://hooks.zapier.com/hooks/catch/000000/demo/', ?, '["client.created","booking.created","sale.completed"]', 0, ?, 'Zapier (CRM)', 1)`,
+    hook, `whsec_demo${newId('x').slice(-8)}`, addDays(ctx.now(), -20));
+  const evs = ctx.db.all(`SELECT id, type, created_at FROM events WHERE type IN ('client.created','booking.created') ORDER BY created_at DESC LIMIT 2`);
+  evs.forEach((e, i) => ctx.db.run(`INSERT INTO webhook_deliveries (id, endpoint_id, event_id, event_type, status, attempts, response_code, last_error, created_at, last_attempt_at, duration_ms, response_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    newId('whd'), hook, e.id, e.type, i ? 'failed' : 'succeeded', i ? 6 : 1, i ? 500 : 200, i ? 'The receiver answered 500.' : null, e.created_at, e.created_at, i ? 812 : 143, i ? 'Internal Server Error' : '{"status":"success"}'));
+}
+
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);
 console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com; in test mode the code is shown on screen)`);

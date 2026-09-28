@@ -9,6 +9,7 @@ import { createUser } from '../src/services/access.js';
 import { handleStripeEvent } from '../src/services/commerce.js';
 import { runBilling, attemptCharge, MAX_ATTEMPTS } from '../src/services/billing.js';
 import { completePayLink } from '../src/services/paylinks.js';
+import { deleteFamilyData } from '../src/services/legal.js';
 import { resetRateLimits } from '../src/services/security.js';
 import { addDays, addDaysToDate, localDate, zonedToUtc, newId } from '../src/util.js';
 
@@ -402,6 +403,24 @@ test('coach-only staff notes are left out of the parent\'s data download and the
     assert.ok(text.includes('Prefers texts to calls.'), 'other staff notes are still there');
     assert.ok(!text.includes('coach_only'));
   }
+});
+
+// The parent portal's own data (membership requests, notes to the coach, the card's expiry, profile claims) is in the
+// family export, still without coach-only notes, and goes when the family is deleted.
+test('the family export includes the parent portal\'s data, and deleting the family removes it', async () => {
+  const m = await member();
+  const parent = await parentOf(m.email);
+  assert.equal((await parent('POST', `/portal/api/athletes/${m.id}/membership-request`, { kind: 'pause', note: 'Away for the summer at grandma\'s.' })).status, 201);
+  await coach('POST', `/v1/clients/${m.id}/notes`, { body: 'Dad was upset at pickup.', coach_only: true });
+  db().run(`UPDATE families SET card_exp = '2029-03' WHERE id = ?`, m.family_id);
+  const exp = (await parent('GET', '/portal/api/export')).text;
+  assert.ok(exp.includes('Away for the summer') && exp.includes('expires 2029-03'));
+  assert.ok(!exp.includes('upset at pickup'), 'still no coach-only note');
+  const fam = db().get('SELECT name FROM families WHERE id = ?', m.family_id).name;
+  await deleteFamilyData(app.ctx, m.family_id, { confirm: fam });
+  assert.equal(db().get('SELECT COUNT(*) AS n FROM membership_requests WHERE client_id = ?', m.id).n, 0);
+  assert.equal(db().get('SELECT card_exp FROM families WHERE id = ?', m.family_id).card_exp, null);
+  assert.equal(db().get('SELECT COUNT(*) AS n FROM client_notes WHERE client_id = ?', m.id).n, 0);
 });
 
 // ---------------------------------------------------------------- 9. leads

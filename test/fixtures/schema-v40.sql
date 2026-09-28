@@ -37,8 +37,7 @@ CREATE TABLE IF NOT EXISTS families (
   waiver_version INTEGER,
   waiver_signed_by TEXT,
   waiver_signed_at TEXT,
-  created_at TEXT NOT NULL,
-  card_exp TEXT                          -- version 41: the saved card's expiry as YYYY-MM (for "expires soon" reminders)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS guardians (
   id TEXT PRIMARY KEY,
@@ -50,9 +49,7 @@ CREATE TABLE IF NOT EXISTS guardians (
   is_primary INTEGER NOT NULL DEFAULT 0,
   sms_opt_in_at TEXT,                    -- the parent turned texts on in the portal (phone is then stored as +15125550100)
   sms_opt_out_at TEXT,                   -- the parent replied STOP; no texts until they reply START or turn texts on again
-  created_at TEXT NOT NULL,
-  calendar_token_hash TEXT,              -- version 41: hash of the secret in the parent's private calendar feed link (/cal/<secret>.ics)
-  calendar_created_at TEXT
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
@@ -79,8 +76,7 @@ CREATE TABLE IF NOT EXISTS clients (
   card_last4 TEXT,
   archived_at TEXT,                      -- no longer training: hidden from lists, pickers and automatic messages (version 31)
   archived_by TEXT,                      -- who archived them (staff name)
-  created_at TEXT NOT NULL,
-  card_exp TEXT                          -- version 41: the saved card's expiry as YYYY-MM
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -482,7 +478,6 @@ CREATE TABLE IF NOT EXISTS bookings (
   reminded_at TEXT,                      -- reminder text handled (sent, or skipped because nobody in the family gets texts)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  note TEXT,                             -- version 41: the parent's note for the coach on a private or evaluation
   UNIQUE (session_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS bookings_client ON bookings(client_id);
@@ -521,10 +516,7 @@ CREATE TABLE IF NOT EXISTS login_codes (
 CREATE TABLE IF NOT EXISTS portal_sessions (
   token_hash TEXT PRIMARY KEY,
   guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL,
-  created_at TEXT,                       -- version 41: signed-in devices (Family tab): when, the browser, last used
-  user_agent TEXT,
-  last_seen_at TEXT
+  expires_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS outbox (
   id TEXT PRIMARY KEY,
@@ -1238,42 +1230,3 @@ CREATE TABLE IF NOT EXISTS workout_sets (
 CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);
 CREATE UNIQUE INDEX IF NOT EXISTS workout_logs_request ON workout_logs(client_id, request_id) WHERE request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS workout_logs_workout ON workout_logs(workout_id);
-
--- ---------- Version 41: parent portal (batches B12 and B13) ----------
--- A parent asks to switch plans, pause or cancel a membership. Nothing about billing changes: the owner is emailed, sees
--- it on the client page and makes the change (or says no) by hand. One open request per athlete.
-CREATE TABLE IF NOT EXISTS membership_requests (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  subscription_id TEXT REFERENCES subscriptions(id) ON DELETE SET NULL,
-  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
-  guardian_name TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('switch','pause','cancel')),
-  plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,   -- switch: the plan they'd like
-  note TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','declined','withdrawn')),
-  created_at TEXT NOT NULL,
-  resolved_at TEXT,
-  resolved_by TEXT,
-  resolution_note TEXT
-);
-CREATE INDEX IF NOT EXISTS membership_requests_client ON membership_requests(client_id, created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS membership_requests_open ON membership_requests(client_id) WHERE status = 'open';
--- A parent signing up (or adding a child) said their child already has a profile, with its Athlete ID. When the name
--- and birth year match a profile with no family, it joins the family at once ('attached'). Otherwise the new athlete is
--- made as usual and, if the ID belongs to a profile with no family, the owner is asked to check and merge ('open').
-CREATE TABLE IF NOT EXISTS profile_claims (
-  id TEXT PRIMARY KEY,
-  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
-  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
-  guardian_name TEXT,
-  athlete_id TEXT NOT NULL,                     -- the ID as the parent typed it (upper case)
-  claimed_client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,   -- the existing profile
-  new_client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,      -- the athlete the parent's form made (open claims)
-  status TEXT NOT NULL CHECK (status IN ('attached','open','merged','dismissed')),
-  reason TEXT,                                  -- open: why it wasn't attached at once (name, birth year, no birthday on file)
-  created_at TEXT NOT NULL,
-  resolved_at TEXT,
-  resolved_by TEXT
-);
-CREATE INDEX IF NOT EXISTS profile_claims_status ON profile_claims(status, created_at);

@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 40;
+const SCHEMA_VERSION = 41;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -76,14 +76,16 @@ const ADDED_TABLES = {
   // ---- Version 39: Schedule and Today (batches B2 and B3): follow-ups hidden from Today for a while ----
   39: ['today_snoozes'],
   // ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
-  40: ['workout_sets']
+  40: ['workout_sets'],
+  // ---- Version 41: parent portal (batches B12 and B13): membership requests, claiming a profile by Athlete ID ----
+  41: ['membership_requests', 'profile_claims']
 };
 const ADDED_COLUMNS = {
-  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
+  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41
   team_roster: ['athlete_id TEXT'],
   subscriptions: ['trial_reminded_at TEXT'],                              // version 11
-  guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT'],               // version 13
-  bookings: ['reminded_at TEXT'],                                         // version 13
+  guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT', 'calendar_token_hash TEXT', 'calendar_created_at TEXT'],   // texts: version 13; calendar feed: version 41
+  bookings: ['reminded_at TEXT', 'note TEXT'],                            // reminders: version 13; note for the coach: version 41
   locations: ['checkin_code TEXT'],                                       // version 16
   products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
   sale_items: ['variant_id TEXT'],                                        // version 17
@@ -113,7 +115,10 @@ const ADDED_COLUMNS = {
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
-  exercises: ['category TEXT']
+  exercises: ['category TEXT'],
+  // ---- Version 41 (batches B12 and B13): the card's expiry, signed-in devices (card_exp on clients, calendar feed on guardians and the note on bookings: see above)
+  families: ['card_exp TEXT'],
+  portal_sessions: ['created_at TEXT', 'user_agent TEXT', 'last_seen_at TEXT']
 };
 
 function migrate(raw, schema) {

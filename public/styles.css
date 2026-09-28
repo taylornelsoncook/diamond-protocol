@@ -245,3 +245,5 @@ td .dp-badge{white-space:nowrap}
 .ck{display:inline-flex;align-items:center;gap:8px}
 .ck-bar{display:inline-block;width:88px;height:6px;border-radius:3px;background:var(--control-border);overflow:hidden}
 .ck-fill{display:block;height:100%;background:var(--green-bright)}
+/* Staff & security, API & integrations (batch B14): buttons in panel headers and the menu footer stay on one line */
+.dp-panel-head .dp-btn,.dp-nav .dp-btn{white-space:nowrap}

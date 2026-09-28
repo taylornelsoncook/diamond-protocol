@@ -175,3 +175,25 @@ a.pulse-tile:hover,a.pulse-tile:focus-visible{background:var(--surface-raised)}
 @media (pointer: coarse){ button.dp-badge{min-height:44px;padding:0 12px} .dp-panel label.row{min-height:44px} }
 td .dp-badge{white-space:nowrap}
 @media (max-width: 560px){ .cl-program{display:none} }
+
+/* Point of sale */
+.pos-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.pos-tile{position:relative;text-align:left;cursor:pointer;padding:14px;gap:4px;min-height:44px;color:inherit;font:inherit}
+.pos-tile:hover:not(:disabled){background:var(--surface-raised)}
+.pos-tile:disabled{opacity:.45;cursor:not-allowed}
+.pos-price{font:600 22px/1 var(--font-display);color:var(--green-bright)}
+.pos-count{position:absolute;top:8px;right:8px;min-width:24px;height:24px;border-radius:12px;background:var(--green-mid);color:#fff;font:600 13px/24px var(--font-sans);text-align:center;padding:0 6px}
+.pos-hits{display:flex;flex-direction:column;gap:4px}
+.pos-hit{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:44px;padding:8px 12px;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel);cursor:pointer;font:inherit}
+.pos-hit[aria-selected="true"],.pos-hit:hover{border-color:var(--green-mid);background:var(--surface-raised)}
+.pos-client{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--line);border-left:3px solid var(--green-mid);border-radius:var(--radius-sm);background:var(--surface-raised)}
+.pos-client>.grow{flex:1 1 160px;min-width:0}
+.pos-line{min-height:44px;gap:6px}
+.pos-qty{min-width:44px;min-height:44px;padding:0;justify-content:center}
+.pos-sale-row{flex-wrap:wrap}
+.pos-sale-open{background:none;border:0;color:inherit;text-align:left;cursor:pointer;padding:4px 0;font:inherit;min-height:44px;flex:1 1 220px}
+.pos-bar{display:none}
+@media (max-width: 1100px){
+  .pos-bar:not([hidden]){display:flex;position:fixed;left:0;right:0;bottom:0;z-index:30;gap:12px;align-items:center;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));background:var(--black);border-top:1px solid var(--line)}
+  .main:has(.pos-bar:not([hidden])){padding-bottom:96px}
+}

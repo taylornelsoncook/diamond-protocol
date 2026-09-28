@@ -115,8 +115,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   name TEXT NOT NULL,
   video_url TEXT,
   instructions TEXT,
-  created_at TEXT NOT NULL,
-  category TEXT                                  -- version 40: Speed, Power, Lower body... (programs.js CATEGORIES)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS programs (
   id TEXT PRIMARY KEY,
@@ -161,11 +160,7 @@ CREATE TABLE IF NOT EXISTS workout_logs (
   workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   notes TEXT,
   completed_at TEXT NOT NULL,
-  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,   -- logged on the weight-room screen during this session (version 23)
-  rpe INTEGER,                                   -- version 40: how hard it felt, 1 to 10
-  started_at TEXT,                               -- version 40: first set logged in the app (for time taken)
-  request_id TEXT,                               -- version 40: the phone's id for this Finish, so a resend saves nothing twice
-  edited_at TEXT                                 -- version 40: reopened and saved again by the athlete
+  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL    -- logged on the weight-room screen during this session (version 23)
 );
 CREATE INDEX IF NOT EXISTS workout_logs_client ON workout_logs(client_id, completed_at);
 CREATE TABLE IF NOT EXISTS exercise_logs (
@@ -1166,23 +1161,3 @@ CREATE TABLE IF NOT EXISTS athlete_id_aliases (
 );
 CREATE INDEX IF NOT EXISTS team_attendance_client ON team_attendance(client_id);
 CREATE INDEX IF NOT EXISTS athlete_id_aliases_client ON athlete_id_aliases(client_id);
-
--- ---------- Version 40: programs builder and set-by-set workout logging ----------
--- Each set an athlete logs: weight (lb) and reps. workout_exercise_id has no foreign key, so the coach can change the
--- program later and the athlete's history stays; exercise_id and exercise_name keep "last time" and bests following the
--- exercise across programs.
-CREATE TABLE IF NOT EXISTS workout_sets (
-  id TEXT PRIMARY KEY,
-  workout_log_id TEXT NOT NULL REFERENCES workout_logs(id) ON DELETE CASCADE,
-  workout_exercise_id TEXT NOT NULL,
-  exercise_id TEXT,
-  exercise_name TEXT NOT NULL,
-  set_no INTEGER NOT NULL CHECK (set_no BETWEEN 1 AND 12),
-  weight REAL,
-  reps INTEGER,
-  created_at TEXT NOT NULL,
-  UNIQUE (workout_log_id, workout_exercise_id, set_no)
-);
-CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);
-CREATE UNIQUE INDEX IF NOT EXISTS workout_logs_request ON workout_logs(client_id, request_id) WHERE request_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS workout_logs_workout ON workout_logs(workout_id);

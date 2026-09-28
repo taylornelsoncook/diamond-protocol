@@ -7,7 +7,7 @@ import { getSetting } from './families.js';
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
   coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
-  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
+  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) programs, goals, messages and lessons, and email an athlete their workout app link.'
 };
 const OWNER_ONLY = [
   /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,

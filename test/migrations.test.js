@@ -1,4 +1,4 @@
-// Databases from earlier versions (schema 30, 31, 32, 33, 34, 35 and 36) open with this version: new columns and tables are
+// Databases from earlier versions (schema 30, 31, 32, 33, 34, 35, 36 and 37) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -73,7 +73,7 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
       assert.ok(cols('job_runs').includes('error') && cols('job_state').includes('lease_until'));   // background jobs, version 33
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       checkSaleAndRoster(db, round);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
@@ -114,7 +114,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       checkSaleAndRoster(db, round);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
@@ -149,7 +149,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
       assert.ok(cols('perf_metrics').includes('min_value') && cols('perf_metrics').includes('max_value'));
       assert.ok(cols('test_presets').includes('test_keys'));
       assert.ok(cols('report_links').includes('token_hash'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       checkSaleAndRoster(db, round);
       const ctx = { db, now: () => new Date().toISOString() };
       syncLibrary(ctx);
@@ -190,7 +190,7 @@ test('a version 32 database upgrades to undoable uploads and emailed-families tr
       assert.ok(cols('perf_sessions').includes('notified_at'), `round ${round}`);
       for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
       assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
       assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
@@ -226,7 +226,7 @@ test('a version 34 database upgrades to undoable uploads and emailed-families tr
       assert.equal(db.get(`SELECT provider FROM results_queue WHERE id = 'q_1'`).provider, 'swift', 'results that waited under "Swift" join the lower-case device links');
       for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
       assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       checkSaleAndRoster(db, round);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
@@ -293,7 +293,7 @@ for (const v of [33, 34, 35]) {
       for (const round of [1, 2]) {
         const db = openDb(file);
         const ctx = { db, now: () => new Date().toISOString() };
-        assert.equal(db.get('PRAGMA user_version').user_version, 37, `round ${round}`);
+        assert.equal(db.get('PRAGMA user_version').user_version, 40, `round ${round}`);
         checkSaleAndRoster(db, round, { roster: false });
         assert.equal(db.get('SELECT COUNT(*) AS n FROM team_roster WHERE client_id IS NULL').n, 0, 'every roster line has a profile');
         assert.equal(db.get('SELECT COUNT(*) AS n FROM clients').n, 5, 'Ava and Maya, plus Jalen, the second Jalen and the roster Maya');
@@ -381,7 +381,7 @@ test('a version 33 database from main (job tables) gains the test library, testi
     for (const round of [1, 2]) {
       const db = openDb(file);
       const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
-      assert.equal(db.get('PRAGMA user_version').user_version, 37, `round ${round}`);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40, `round ${round}`);
       // Main's version 33: kept as it was.
       assert.deepEqual({ ...db.get(`SELECT job, status, result FROM job_runs WHERE id = 'run_1'`) }, { job: 'billing', status: 'ok', result: '{"charged":0}' });
       assert.equal(db.get(`SELECT holder FROM job_state WHERE job = 'billing'`).holder, 'staging:1');
@@ -470,7 +470,7 @@ test('an older database gains the point-of-sale columns and refund log, and old 
       assert.ok(db.all('PRAGMA table_info(sale_refunds)').map((c) => c.name).includes('kind'));
       const s = db.get(`SELECT amount_cents, refunded_cents, discount_cents FROM sales WHERE id = 'sale_1'`);
       assert.deepEqual([s.amount_cents, s.refunded_cents, s.discount_cents], [3000, 500, 0]);
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       assert.deepEqual(db.all('SELECT sale_id, amount_cents, kind, created_at FROM sale_refunds'), [{ sale_id: 'sale_1', amount_cents: 500, kind: 'refund', created_at: now }], 'the old refund is logged once');
       db.close();
     }
@@ -501,7 +501,7 @@ test('a version 35 database upgrades to the point-of-sale changes, and opening i
       const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
       for (const c of ['discount_cents', 'discount_reason', 'request_id', 'receipt_opt', 'receipt_email', 'receipt_sent_at', 'receipt_token']) assert.ok(cols('sales').includes(c), `${c}, round ${round}`);
       assert.ok(cols('sale_refunds').includes('kind'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 37);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40);
       const s = db.get(`SELECT amount_cents, discount_cents, receipt_token FROM sales WHERE id = 'sale_1'`);
       assert.deepEqual([s.amount_cents, s.discount_cents], [4500, 0]);
       assert.match(s.receipt_token, /^[0-9a-f]{36}$/, 'sales paid before version 36 get a receipt link');
@@ -545,7 +545,7 @@ test('a version 36 database with sales and refunds moves roster athletes onto on
     for (const round of [1, 2]) {
       const db = openDb(file);
       const ctx = { db, now: () => new Date().toISOString() };
-      assert.equal(db.get('PRAGMA user_version').user_version, 37, `round ${round}`);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40, `round ${round}`);
       // Point of sale: unchanged.
       assert.deepEqual({ ...db.get(`SELECT client_id, amount_cents, refunded_cents, discount_cents, discount_reason, request_id, receipt_token FROM sales WHERE id = 'sale_1'`) },
         { client_id: 'cli_ava', amount_cents: 4000, refunded_cents: 1500, discount_cents: 500, discount_reason: 'Sibling discount', request_id: 'req-1', receipt_token: 'abc123receipt' });
@@ -566,6 +566,47 @@ test('a version 36 database with sales and refunds moves roster athletes onto on
       } else {
         assert.equal(db.get(`SELECT COUNT(*) AS n FROM sale_refunds`).n, 3, 'the second open keeps data written after the upgrade');
       }
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
+// Version 37 to 40: exercises gain a category, workout logs gain effort, start time, a request id and an edit time, and
+// sets get their own table. Workouts logged before keep counting (streaks, programs, the coach's feed) with no sets.
+test('a version 37 database upgrades to set-by-set logging, keeps its workouts, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v37.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 37');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO clients (id, name, athlete_id, access_token, created_at) VALUES ('cli_1', 'Ava Lopez', 'AVALOP2026', 'tok1', '${now}')`);
+    old.exec(`INSERT INTO exercises (id, name, created_at) VALUES ('ex_1', 'Back squat', '${now}')`);
+    old.exec(`INSERT INTO programs (id, name, weeks, created_at) VALUES ('prog_1', 'Strength', 4, '${now}')`);
+    old.exec(`INSERT INTO workouts (id, program_id, week, day, title) VALUES ('wo_1', 'prog_1', 1, 1, 'Lower body')`);
+    old.exec(`INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription) VALUES ('wex_1', 'wo_1', 'ex_1', 1, '5 × 5')`);
+    old.exec(`INSERT INTO assignments (id, client_id, program_id, start_date, active, created_at) VALUES ('asg_1', 'cli_1', 'prog_1', '${now}', 1, '${now}')`);
+    old.exec(`INSERT INTO workout_logs (id, client_id, assignment_id, workout_id, notes, completed_at) VALUES ('log_1', 'cli_1', 'asg_1', 'wo_1', 'Felt good', '${now}')`);
+    old.exec(`INSERT INTO exercise_logs (workout_log_id, workout_exercise_id) VALUES ('log_1', 'wex_1')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.equal(db.get('PRAGMA user_version').user_version, 40, `round ${round}`);
+      assert.ok(cols('exercises').includes('category'));
+      for (const c of ['rpe', 'started_at', 'request_id', 'edited_at', 'session_id']) assert.ok(cols('workout_logs').includes(c), `workout_logs.${c}, round ${round}`);
+      for (const c of ['workout_log_id', 'workout_exercise_id', 'exercise_id', 'exercise_name', 'set_no', 'weight', 'reps']) assert.ok(cols('workout_sets').includes(c), `workout_sets.${c}`);
+      assert.deepEqual({ ...db.get(`SELECT notes, rpe, request_id FROM workout_logs WHERE id = 'log_1'`) }, { notes: 'Felt good', rpe: null, request_id: null }, 'the old log is kept as it was');
+      assert.equal(db.get(`SELECT COUNT(*) AS n FROM exercise_logs WHERE workout_log_id = 'log_1'`).n, 1);
+      // A second Finish with the same request id can't be saved twice.
+      if (round === 1) {
+        db.run(`INSERT INTO workout_logs (id, client_id, workout_id, completed_at, request_id) VALUES ('log_2', 'cli_1', 'wo_1', ?, 'req-1')`, now);
+        assert.throws(() => db.run(`INSERT INTO workout_logs (id, client_id, workout_id, completed_at, request_id) VALUES ('log_3', 'cli_1', 'wo_1', ?, 'req-1')`, now), /UNIQUE/);
+        db.run(`INSERT INTO workout_sets (id, workout_log_id, workout_exercise_id, exercise_id, exercise_name, set_no, weight, reps, created_at) VALUES ('set_1', 'log_2', 'wex_1', 'ex_1', 'Back squat', 1, 135, 5, ?)`, now);
+      }
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM workout_sets').n, 1, `round ${round}`);
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

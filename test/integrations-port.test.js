@@ -103,11 +103,24 @@ test('every route that changes something refuses read-only keys, and every one b
   // The sweep reaches the routes the parent portal and the owner's decisions added (owner tools, charge alerts, portal).
   for (const r of ['POST /v1/clients/:id/merge', 'POST /v1/membership-requests/:id/resolve', 'POST /v1/profile-claims/:id/dismiss',
     'POST /v1/invoices/:id/charges/:cid/handled', 'POST /v1/invoices/:id/retry', 'POST /v1/billing/retry-declined', 'PATCH /v1/leads/:id',
-    'POST /portal/api/payments/:id/retry', 'POST /portal/api/calendar']) assert.ok(swept.has(r), `${r} is swept`);
+    'POST /portal/api/payments/:id/retry', 'POST /portal/api/calendar',
+    // ...and the Education batch (assigning to several, changing and reminding assignments, duplicates, missed goal days).
+    'POST /v1/lesson-assignments', 'PATCH /v1/lesson-assignments/:id', 'POST /v1/lesson-assignments/remind-overdue', 'POST /v1/lesson-assignments/:id/remind',
+    'POST /v1/lessons/:id/duplicate', 'POST /app/api/goals/:id/check', 'POST /portal/api/athletes/:id/goals/:goal/check']) assert.ok(swept.has(r), `${r} is swept`);
   // Reading a client with a read-only key leaves out the athlete's app link (it lets whoever has it log workouts).
   const c = (await owner('POST', '/v1/clients', { name: 'Gia Moss', email: 'gia@example.com' })).body;
   assert.equal((await req('GET', `/v1/clients/${c.id}`, null, { key: read.secret })).body.app_link, undefined);
   assert.equal((await req('GET', `/v1/clients/${c.id}`, null, { key: results.secret })).body.app_link, undefined);
+  // Education reads stay open to read-only keys (the picker, the assignments, a lesson's progress), and never hand out app links.
+  const lesson = (await owner('POST', '/v1/lessons', { title: 'Sweep lesson', body: 'Read me.', published: true })).body;
+  assert.equal((await owner('POST', '/v1/lesson-assignments', { lesson_id: lesson.id, client_id: c.id })).status, 201);
+  for (const p of ['/v1/education', '/v1/education/athletes', `/v1/lessons/${lesson.id}/progress`]) {
+    const res = await req('GET', p, null, { key: read.secret });
+    assert.equal(res.status, 200, p);
+    const text = JSON.stringify(res.body);
+    assert.ok(text.includes('Gia Moss'), `${p} lists the athlete`);
+    assert.ok(!/token=|access_token|client_token/.test(text), `${p} has no app link`);
+  }
   const full = (await owner('POST', '/v1/api-keys', { label: 'Sweep full', scope: 'full' })).body;
   assert.match((await req('GET', `/v1/clients/${c.id}`, null, { key: full.secret })).body.app_link, /^\/app\?token=/);
   assert.match((await owner('GET', `/v1/clients/${c.id}`)).body.app_link, /^\/app\?token=/);

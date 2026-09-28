@@ -688,7 +688,7 @@ function connectionPanel() {
 // ---- Activity log ----
 const resultWord = (s) => (s < 300 ? 'OK' : s === 403 ? 'Refused' : s === 401 ? 'Denied' : s === 429 ? 'Blocked' : String(s));
 const actionText = (a) => (a.action === 'sign-in' ? (a.status === 200 ? 'Signed in' : a.status === 429 ? 'Sign-in blocked (locked or too many tries)' : 'Failed sign-in') : a.description ?? a.action);
-const WHO = [['', 'Everyone'], ['staff', 'Staff'], ['api_key', 'API keys'], ['parent', 'Parents'], ['public', 'Sign-in page and public'], ['system', 'System']];
+const WHO = [['', 'Everyone'], ['staff', 'Staff'], ['api_key', 'API keys'], ['parent', 'Parents'], ['athlete', 'Athletes (app link)'], ['public', 'Sign-in page and public'], ['system', 'System']];
 const KIND = [['', 'Everything'], ['sign_ins', 'Sign-ins and resets'], ['refused', 'Refused'], ['failures', 'Anything that failed']];
 let logFilter = { who: '', staff_id: '', kind: '', since: '', until: '', q: '' };
 let filterLogTo = () => {};
@@ -713,7 +713,7 @@ async function activityPanel(staff) {
       h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'Who'), h('th', null, 'What'), h('th', null, 'Record'), h('th', null, 'From'), h('th', null, 'Result'))),
       h('tbody', null, r.data.map((a) => h('tr', null,
         h('td', { class: 'small muted', style: 'white-space:nowrap', title: new Date(a.at).toLocaleString() }, when(a.at)),
-        h('td', { class: 'small' }, `${a.actor_name ?? '—'}${a.role ? ` (${ROLE[a.role] ?? a.role})` : a.actor_type !== 'staff' ? ` (${{ api_key: 'API key', public: a.action === 'sign-in' || a.action.startsWith('POST /auth/') ? 'typed' : 'public', parent: 'parent', system: 'system' }[a.actor_type] ?? a.actor_type})` : ''}`),
+        h('td', { class: 'small' }, `${a.actor_name ?? '—'}${a.role ? ` (${ROLE[a.role] ?? a.role})` : a.actor_type !== 'staff' ? ` (${{ api_key: 'API key', public: a.action === 'sign-in' || a.action.startsWith('POST /auth/') ? 'typed' : 'public', parent: 'parent', athlete: 'athlete', system: 'system' }[a.actor_type] ?? a.actor_type})` : ''}`),
         h('td', { class: 'small' }, actionText(a)),
         h('td', { class: 'small muted', style: 'font-family:var(--font-mono);word-break:break-all' }, a.target ?? ''),
         h('td', { class: 'small muted', style: 'font-family:var(--font-mono)' }, a.ip ?? ''),

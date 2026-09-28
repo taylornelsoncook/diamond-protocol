@@ -236,7 +236,7 @@ function notifyAthlete(ctx, c, subject, text, { tab = null } = {}) {
   const base = ctx.publicUrl ?? '';
   const biz = getSetting(ctx, 'business_name');
   if (c.family_id) notifyFamily(ctx, c.family_id, subject, `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}`);
-  if (c.email) sendEmail(ctx, { to: c.email, subject, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}${tab ? `#${tab}` : ''}\n\n${biz}` }).catch(() => {});
+  if (c.email) sendEmail(ctx, { to: c.email, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}${tab ? `#${tab}` : ''}\n\n${biz}` }).catch(() => {});
 }
 const staffName = (actor) => actor?.name ?? actor?.label ?? 'Your coach';
 export function sendMessage(ctx, { clientId = null, contractId = null }, body = {}, actor) {
@@ -1001,7 +1001,7 @@ function remindAthletes(ctx, items, actor) {
     const lines = list.map(({ assignment: x, person: p }) => `- "${x.title}"${x.type === 'course' && p.of ? ` (${p.done} of ${p.of} lessons done)` : ''}${x.due_date ? `, ${x.due_date < t ? 'was due' : 'due'} ${fmtDay(x.due_date)}` : ''}`).join('\n');
     const subject = list.length === 1 ? `Reminder: ${firstName(c)} has "${list[0].assignment.title}" to finish` : `Reminder: ${firstName(c)} has ${list.length} lessons to finish`;
     const text = `${coach} sent a reminder. ${firstName(c)} still has this to finish:\n\n${lines}`;
-    if (to.athlete) sendEmail(ctx, { to: to.athlete, subject, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}#education\n\n${biz}` }).catch(() => {});
+    if (to.athlete) sendEmail(ctx, { to: to.athlete, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}#education\n\n${biz}` }).catch(() => {});
     for (const email of to.parents) sendEmail(ctx, { to: email, subject, text: `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}` }).catch(() => {});
     for (const { assignment: x } of list) ctx.db.run('INSERT INTO lesson_reminders (id, assignment_id, client_id, sent_by, sent_at) VALUES (?, ?, ?, ?, ?)', newId('lrem'), x.id, c.id, actor?.id ?? null, ctx.now());
     reminded.push({ id: c.id, name: c.name });
@@ -1091,7 +1091,8 @@ function dayDetails(ctx, clientId, from, to) {
   const tz = zone(ctx), lo = zonedToUtc(from, '00:00', tz), hi = zonedToUtc(addDaysToDate(to, 1), '00:00', tz);
   const out = new Map(), on = (iso) => { const d = localDate(iso, tz); if (!out.has(d)) out.set(d, { workouts: [], sessions: [] }); return out.get(d); };
   const time = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
-  for (const r of ctx.db.all('SELECT w.title, l.completed_at, l.rpe FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? AND l.completed_at >= ? AND l.completed_at < ? ORDER BY l.completed_at', clientId, lo, hi))
+  // A log outlives a deleted program or workout (version 43): it shows the title it had then.
+  for (const r of ctx.db.all('SELECT COALESCE(w.title, l.workout_title, \'Workout\') AS title, l.completed_at, l.rpe FROM workout_logs l LEFT JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? AND l.completed_at >= ? AND l.completed_at < ? ORDER BY l.completed_at', clientId, lo, hi))
     on(r.completed_at).workouts.push({ title: r.title, time: time(r.completed_at), effort: r.rpe ?? null });
   for (const r of ctx.db.all(`SELECT s.name, s.starts_at FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?
       UNION ALL SELECT s.name, s.starts_at FROM team_attendance a JOIN class_sessions s ON s.id = a.session_id WHERE a.client_id = ? AND s.starts_at >= ? AND s.starts_at < ? ORDER BY 2`, clientId, lo, hi, clientId, lo, hi))

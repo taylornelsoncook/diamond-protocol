@@ -227,7 +227,7 @@ export function audit(ctx, e) {
 //   typed with their email), actor_id, target, kind (sign_ins, refused, failures), failures=true, since and until
 //   (YYYY-MM-DD, whole days in the business time zone) and q (name, record, address, or the plain-English description:
 //   actions lists the log actions whose description matches, worked out by routes.js).
-const AUDIT_WHO = ['staff', 'api_key', 'parent', 'public', 'system'];
+const AUDIT_WHO = ['staff', 'api_key', 'parent', 'athlete', 'public', 'system'];
 const SIGN_IN_ACTIONS = ['sign-in', 'POST /auth/forgot', 'POST /auth/reset'];
 function auditWhere(ctx, q) {
   const where = [], p = [];

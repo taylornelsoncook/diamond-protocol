@@ -327,6 +327,15 @@ test('accountability: best run, yesterday\'s answers, the last 7 days, and what 
     assert.deepEqual(oct6.checkin.flags, ['Soreness 5 of 5']);
     assert.deepEqual(acc.calendar.find((d) => d.date === t).workouts, []);
   });
+  // Deleting the program keeps the log (version 43): the day still shows the workout, under the title it had.
+  assert.equal((await owner('DELETE', '/v1/programs/prog_b11')).status, 200);
+  assert.equal(db.get(`SELECT workout_id FROM workout_logs WHERE id = 'log_b11'`).workout_id, null);
+  await at(dayAt(t), async () => {
+    const acc = (await me('GET', 'engage')).body.accountability;
+    const oct6 = acc.calendar.find((d) => d.date === '2026-10-06');
+    assert.deepEqual(oct6.workouts, [{ title: 'Lower body', time: '9:30 PM', effort: 7 }], 'a log of a deleted workout keeps its day details');
+    assert.ok(oct6.trained);
+  });
 });
 
 test('targets say how far there is to go and when they are past their date', async () => {
@@ -370,4 +379,10 @@ test('what an athlete does on their app link is logged under their name', async 
   await athlete(ava)('POST', 'messages', { body: 'Got it, coach' });
   const row = app.ctx.db.get(`SELECT actor_type, actor_name FROM audit_log WHERE action = 'POST /app/api/messages' ORDER BY at DESC LIMIT 1`);
   assert.deepEqual({ ...row }, { actor_type: 'athlete', actor_name: 'Ava Lopez' });
+  // The activity log can be filtered to what athletes did on their app links.
+  const log = await owner('GET', '/v1/audit?who=athlete');
+  assert.equal(log.status, 200);
+  const list = log.body.data ?? log.body;
+  assert.ok(list.length && list.every((a) => a.actor_type === 'athlete'), 'only athletes');
+  assert.ok(list.some((a) => a.actor_name === 'Ava Lopez'));
 });

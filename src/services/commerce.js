@@ -285,7 +285,8 @@ export function listSales(ctx, { since, days, q, locationId, clientId, status, c
 }
 
 // A discount on the whole sale: a percent (1 to 100) or an amount off, always with a reason, and never the whole sale.
-// Owners give any discount; coaches and front desk up to the owner's limit (staff_discount_max_pct; 0 = owners only).
+// Owners give any discount. Owner decision: coaches and front desk give none (staff_discount_max_pct is 0 unless the
+// owner raises it in Point of sale setup; then up to that percent).
 function parseDiscount(ctx, d, subtotal, role) {
   if (d === undefined || d === null) return { cents: 0, reason: null };
   if (typeof d !== 'object' || Array.isArray(d)) throw badRequest('discount must be { type: "percent" or "amount", value, reason }.');
@@ -298,7 +299,7 @@ function parseDiscount(ctx, d, subtotal, role) {
   if (cents >= subtotal) throw badRequest(`A discount has to leave something to pay. The sale is ${money(subtotal)} before the discount.`);
   if (role && role !== 'owner') {
     const max = Number(getSetting(ctx, 'staff_discount_max_pct'));
-    if (!(max > 0)) throw new HttpError(403, 'forbidden', 'Only the owner can give discounts. Ask the owner, who can allow them in Point of sale setup.');
+    if (!(max > 0)) throw new HttpError(403, 'forbidden', 'Only the owner can give discounts. Ask the owner.');
     if (pct ? pct > max : cents * 100 > subtotal * max) throw new HttpError(403, 'forbidden', `You can give up to ${max}% off (${money(Math.floor(subtotal * max / 100))} on this sale). Ask the owner for a bigger discount.`);
   }
   return { cents, reason };

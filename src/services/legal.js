@@ -73,7 +73,9 @@ export function exportFamily(ctx, familyId) {
       progress_notes: per(`SELECT s.name AS testing_day, s.date, n.body AS note, n.approved_at FROM progress_notes n JOIN perf_sessions s ON s.id = n.perf_session_id WHERE n.client_id = ? AND n.approved_at IS NOT NULL ORDER BY s.date`, k.id),
       bought_online: per(`SELECT item_kind AS kind, title, amount_cents, status, created_at, refunded_at FROM purchases WHERE client_id = ? ORDER BY created_at`, k.id),
       skill_badges: per(`SELECT b.name AS badge, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id WHERE a.client_id = ? ORDER BY a.awarded_at`, k.id),
-      staff_notes: per(`SELECT author_name AS written_by, body AS note, pinned, coach_only, created_at, updated_at FROM client_notes WHERE client_id = ? ORDER BY created_at`, k.id),
+      // Owner decision: coach-only notes never go to a family (this export is what parents download, and what the owner
+      // hands over for a data request); there is no separate staff export.
+      staff_notes: per(`SELECT author_name AS written_by, body AS note, pinned, created_at, updated_at FROM client_notes WHERE client_id = ? AND coach_only = 0 ORDER BY created_at`, k.id),
       messages: per(`SELECT CASE from_kind WHEN 'coach' THEN staff_name ELSE author_name END AS written_by, from_kind AS sender, body, created_at FROM coach_messages WHERE client_id = ? ORDER BY created_at`, k.id)
     }))
   };

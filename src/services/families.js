@@ -30,7 +30,7 @@ const DEFAULTS = {
   public_schedule: 'on',                  // the public Book now page (/book) and website widget
   review_url: '',                         // Google review link; review requests stay off until it's set
   review_requests: 'on',                  // ask happy families for a review after a 10th session or a personal best
-  staff_discount_max_pct: '20',           // the biggest discount coaches and front desk may give at the counter, as a percent of the sale (0 = owners only)
+  staff_discount_max_pct: '0',            // the biggest discount coaches and front desk may give at the counter, as a percent of the sale. Owner decision: 0 (only the owner gives discounts)
   open_spot_offers: 'suggest'             // light classes: 'suggest' shows them on Today to send offers by hand, 'auto' sends them, 'off' hides them
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }

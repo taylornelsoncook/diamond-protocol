@@ -1844,7 +1844,9 @@ async function viewSell(main) {
     }, 'ghost')) : null);
   }
   function drawDiscount() {
-    if (!itemCount() || !(discountMax > 0)) return fill(discountBox);
+    if (!itemCount()) return fill(discountBox);
+    // Only the owner gives discounts (unless the owner set a limit for staff).
+    if (!(discountMax > 0)) return fill(discountBox, h('div', { class: 'row small muted', style: 'gap:8px' }, h('span', { class: 'grow' }, 'Discount'), h('span', null, 'Not available. Ask the owner.')));
     const d = sale.discount;
     if (!d) return fill(discountBox, h('div', { class: 'row' }, btn('Add discount', () => { sale.discount = { type: 'percent', value: 0, reason: '' }; changed(); setTimeout(() => discountBox.querySelector('input')?.focus(), 0); }, 'ghost')));
     const typeBtn = (t, label) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': d.type === t ? 'true' : 'false', onClick: () => { if (d.type !== t) { d.type = t; d.value = 0; changed(); } } }, label);
@@ -2259,11 +2261,11 @@ async function viewSetup(main) {
       p.active === false ? btn('Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: true }); toast(`${p.name} is offered again.`); render(); }), 'ghost') : null);
     planPanel = panel('Monthly memberships', { subtitle: 'Billed to the saved card every month. Change prices or retire them in Billing.', action: btn('Add membership', () => planForm(), 'secondary') },
       ...(plans.data.filter((p) => p.active !== false).map(planRow)), retired('Retired memberships', plans.data.filter((p) => p.active === false).map(planRow)));
-    const pct = input({ type: 'number', min: '0', max: '100', step: '1', inputmode: 'numeric', value: settings.staff_discount_max_pct ?? '20', style: 'width:100px', 'aria-label': 'Largest discount for staff, in percent' });
+    const pct = input({ type: 'number', min: '0', max: '100', step: '1', inputmode: 'numeric', value: settings.staff_discount_max_pct ?? '0', style: 'width:100px', 'aria-label': 'Largest discount for staff, in percent' });
     discountPanel = panel('Discounts', { subtitle: 'You can give any discount. Every discount needs a reason, shows on the receipt, and is in the activity log.' },
       h('form', { class: 'row wrap', style: 'gap:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const s = await patch('/v1/settings', { staff_discount_max_pct: Number(pct.value) }); toast(Number(s.staff_discount_max_pct) ? `Coaches and front desk can give up to ${s.staff_discount_max_pct}% off.` : 'Only you can give discounts now.'); }); } },
         h('span', null, 'Coaches and front desk can give up to'), pct, h('span', null, '% off a sale'), btn('Save', null, 'secondary', { type: 'submit' })),
-      h('p', { class: 'small muted', style: 'margin:0' }, '0 means only you can give discounts.'));
+      h('p', { class: 'small muted', style: 'margin:0' }, '0 (the default) means only you can give discounts. Staff see "Ask the owner" instead.'));
   }
   fill(main, header('Point of sale setup', manage ? 'Where you train, what you sell and your card readers.' : 'Where you train, what you sell and your card readers. Ask the owner to change them.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'Back to sales')),
     h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, locPanel, readerPanel, discountPanel), h('div', { class: 'stack', style: 'gap:24px' }, prodPanel, planPanel)));

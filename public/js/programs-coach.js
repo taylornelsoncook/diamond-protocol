@@ -1,4 +1,5 @@
-// Coach side of Programs: the Programs page (what athletes logged, who needs a check-in, the exercise library) and the
+// Coach side of Programs: the Programs page (what athletes logged, who needs a check-in), the exercise library (shown in
+// Settings) and the
 // program builder (one week at a time). Owners and coaches build and assign; front desk sees everything read-only and
 // can email an athlete their workout app link. The server enforces the same rules.
 import { h, fill, toast, busy, btn, field, input, select, panel, ago, money, videoEmbed, playIcon } from './ui.js';
@@ -58,6 +59,7 @@ const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '' };
 
 export async function viewPrograms(main) {
   const [progs, exs, act, shop] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null]);
+  const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
   // Programs: search and level filter.
@@ -101,7 +103,8 @@ export async function viewPrograms(main) {
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, search), h('div', { style: 'width:180px' }, levelSel)),
         cards, checkOn, feed, shop ? storePanel(shop) : null),
-      libraryPanel(exs, edit)));
+      panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
+        h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
 
 // One logged workout in a feed.
@@ -144,7 +147,8 @@ function storePanel(shop) {
       h('a', { class: 'dp-btn dp-btn--ghost', href: '/shop', target: '_blank', rel: 'noopener' }, 'View')));
 }
 
-// ---------- Exercise library ----------
+// ---------- Exercise library (the first tab of Settings) ----------
+export async function exerciseLibrary() { return libraryPanel(await get('/v1/exercises'), canEdit()); }
 function libraryPanel(exs, edit) {
   const cats = exs.categories ?? [];
   const q = input({ type: 'search', placeholder: 'Search exercises', 'aria-label': 'Search exercises', value: pageState.exQ });

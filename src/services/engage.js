@@ -507,7 +507,12 @@ export function badgesFor(ctx, clientId) {
 
 // ---------- Education ----------
 const doneSet = (ctx, clientId) => new Set(ctx.db.all('SELECT lesson_id FROM lesson_progress WHERE client_id = ?', clientId).map((r) => r.lesson_id));
-const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, done: done.has(l.id) });
+const lessonItem = (l, done) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, category: l.category ?? 'athlete', done: done.has(l.id) });
+// The Education tabs (version 46). Who reads each: athlete (athletes, and their parents with them), parent (parents in the
+// portal), coach (staff, and anyone on the public /learn page), blog and research (athletes and parents). A lesson in a
+// course is for the course's readers, so it takes the course's audience.
+export const EDU_CATEGORIES = { athlete: 'Athlete education', parent: 'Parent education', coach: 'Coach\'s education', blog: 'Blogs', research: 'Research' };
+const courseCategory = (audience) => (audience === 'parents' ? 'parent' : 'athlete');
 
 // ---------- Quizzes ----------
 // Coaches write a quiz as plain text: a question on one line, then its choices on the lines below, each starting with
@@ -546,7 +551,8 @@ function assignmentRows(ctx, clientId) {
   return ctx.db.all(`SELECT * FROM lesson_assignments WHERE client_id = ? OR contract_id IN (${inList(teams)}) ORDER BY COALESCE(due_date, '9999-12-31'), created_at`, clientId, ...teams);
 }
 // Lessons in parent courses never show to athletes.
-const ATHLETE_LESSON = `(course_id IS NULL OR course_id NOT IN (SELECT id FROM courses WHERE audience = 'parents'))`;
+// Athletes read athlete education, blogs and research; never parent or coach's education.
+const ATHLETE_LESSON = `(category IN ('athlete','blog','research') AND (course_id IS NULL OR course_id NOT IN (SELECT id FROM courses WHERE audience = 'parents')))`;
 // A course sold online is locked for an athlete until it's bought, a coach assigns it (to them or their team), or they
 // had already started it before it went on sale.
 function lockedCourses(ctx, clientId) {
@@ -671,10 +677,17 @@ function lessonFields(ctx, body, cur = {}) {
     minutes: has('minutes') ? v.int(body.minutes, 'minutes', { min: 1, max: 240, optional: true }) : cur.minutes ?? null,
     course_id: has('course_id') ? (blank(body.course_id) ? null : String(body.course_id)) : cur.course_id ?? null,
     published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1,
-    quiz: has('quiz_text') ? (blank(body.quiz_text) ? null : JSON.stringify(parseQuiz(v.str(body.quiz_text, 'quiz_text', { max: 20000 })))) : cur.quiz ?? null
+    quiz: has('quiz_text') ? (blank(body.quiz_text) ? null : JSON.stringify(parseQuiz(v.str(body.quiz_text, 'quiz_text', { max: 20000 })))) : cur.quiz ?? null,
+    category: has('category') ? v.oneOf(body.category, 'category', Object.keys(EDU_CATEGORIES)) : cur.category ?? 'athlete'
   };
   if (!out.title) throw badRequest('Give the lesson a title.');
-  if (out.course_id && !ctx.db.get('SELECT id FROM courses WHERE id = ?', out.course_id)) throw notFound('Course');
+  if (out.course_id) {
+    const course = ctx.db.get('SELECT id, title, audience FROM courses WHERE id = ?', out.course_id);
+    if (!course) throw notFound('Course');
+    const fits = courseCategory(course.audience);
+    if (has('category') && out.category !== fits) throw badRequest(`"${course.title}" is ${EDU_CATEGORIES[fits].toLowerCase()}, so its lessons are too. Make it a stand-alone lesson to put it under ${EDU_CATEGORIES[out.category]}.`);
+    out.category = fits;
+  }
   return out;
 }
 export function getLesson(ctx, id) {
@@ -687,16 +700,16 @@ export function createLesson(ctx, body = {}) {
   const f = lessonFields(ctx, body);
   const position = f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : 0;
   const id = newId('les');
-  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, quiz, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, ctx.now(), ctx.now());
+  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, quiz, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, ctx.now(), ctx.now());
   return getLesson(ctx, id);
 }
 export function updateLesson(ctx, id, body = {}) {
   const cur = getLesson(ctx, id);
   const f = lessonFields(ctx, body, { ...cur, published: cur.published ? 1 : 0, quiz: cur.quiz ? JSON.stringify(cur.quiz) : null });
   const position = f.course_id !== cur.course_id && f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : cur.position;
-  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, updated_at = ? WHERE id = ?',
-    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, ctx.now(), id);
+  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, category = ?, updated_at = ? WHERE id = ?',
+    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, ctx.now(), id);
   return getLesson(ctx, id);
 }
 export function deleteLesson(ctx, id) {
@@ -725,8 +738,11 @@ export function getCourse(ctx, id) {
 export function updateCourse(ctx, id, body = {}) {
   const c = getCourse(ctx, id);
   const a = courseAudience(body, c);
-  ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ?, audience = ?, age_min = ?, age_max = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
-    body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), a.audience, a.age_min, a.age_max, id);
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ?, audience = ?, age_min = ?, age_max = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
+      body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), a.audience, a.age_min, a.age_max, id);
+    ctx.db.run('UPDATE lessons SET category = ? WHERE course_id = ?', courseCategory(a.audience), id);   // a course's lessons follow its audience
+  });
   return getCourse(ctx, id);
 }
 // Deleting a course keeps its lessons in the library.
@@ -760,7 +776,8 @@ function assignableItem(ctx, body) {
   const item = kind === 'lesson' ? getLesson(ctx, String(body.lesson_id)) : getCourse(ctx, String(body.course_id));
   if (!item.published) throw conflict(`Publish "${item.title}" before assigning it. Athletes only see published ${kind}s.`);
   const forParents = kind === 'course' ? item.audience === 'parents' : !!item.course_id && ctx.db.get(`SELECT 1 FROM courses WHERE id = ? AND audience = 'parents'`, item.course_id);
-  if (forParents) throw conflict(`"${item.title}" is for parents. It shows in the parent portal on its own, so there's nothing to assign.`);
+  if (forParents || (kind === 'lesson' && item.category === 'parent')) throw conflict(`"${item.title}" is for parents. It shows in the parent portal on its own, so there's nothing to assign.`);
+  if (kind === 'lesson' && item.category === 'coach') throw conflict(`"${item.title}" is coach's education, for staff and the public page. Athletes don't see it, so it can't be assigned.`);
   if (kind === 'course' && !item.lessons.some((l) => l.published)) throw conflict(`"${item.title}" has no published lessons yet. Add or publish a lesson before assigning it.`);
   return { item, kind };
 }
@@ -869,7 +886,7 @@ function recordView(ctx, clientId, lessonId) {
 // A copy of a lesson, saved as a draft at the end of the same course.
 export function duplicateLesson(ctx, id) {
   const l = getLesson(ctx, id);
-  return createLesson(ctx, { title: `${l.title} (copy)`.slice(0, 160), summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course_id: l.course_id, published: false,
+  return createLesson(ctx, { title: `${l.title} (copy)`.slice(0, 160), summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course_id: l.course_id, published: false, category: l.course_id ? undefined : l.category,
     quiz_text: l.quiz_text || undefined });
 }
 
@@ -941,7 +958,7 @@ export function educationReport(ctx) {
       (SELECT COUNT(*) FROM lesson_views w JOIN clients c ON c.id = w.client_id WHERE w.lesson_id = l.id AND ${LIVE} AND NOT EXISTS (SELECT 1 FROM lesson_progress p WHERE p.lesson_id = w.lesson_id AND p.client_id = w.client_id)) AS opened,
       (SELECT COUNT(*) FROM lesson_assignments x WHERE x.lesson_id = l.id) AS assigned
     FROM lessons l ORDER BY l.position, l.created_at`)
-    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published,
+    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, category: l.category, position: l.position, published: !!l.published,
       completions: l.completions, opened: l.opened, assigned: l.assigned, updated_at: l.updated_at }));
   const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
     certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, for_sale: !!c.for_sale && c.price_cents > 0, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
@@ -957,9 +974,10 @@ export function educationReport(ctx) {
     overdue: assignments.filter((x) => x.status === 'overdue').length,
     finished_7d: ctx.db.get(`SELECT COUNT(*) AS n FROM lesson_progress p JOIN clients c ON c.id = p.client_id WHERE p.completed_at >= ? AND ${LIVE}`, since).n,
     readers_7d: ctx.db.get(`SELECT COUNT(DISTINCT p.client_id) AS n FROM lesson_progress p JOIN clients c ON c.id = p.client_id WHERE p.completed_at >= ? AND ${LIVE}`, since).n,
-    published: lessons.filter((l) => l.published && !parentCourse.has(l.course_id)).length, drafts: lessons.filter((l) => !l.published).length
+    published: lessons.filter((l) => l.published && !parentCourse.has(l.course_id) && ['athlete', 'blog', 'research'].includes(l.category)).length, drafts: lessons.filter((l) => !l.published).length,
+    by_category: Object.fromEntries(Object.keys(EDU_CATEGORIES).map((k) => [k, lessons.filter((l) => l.category === k).length]))
   };
-  return { today: today(ctx), stats, courses, lessons: lessons.filter((l) => !l.course_id), assignments, recent };
+  return { today: today(ctx), stats, categories: EDU_CATEGORIES, courses, lessons: lessons.filter((l) => !l.course_id), assignments, recent };
 }
 // One lesson: who finished it and when, who opened it but hasn't finished, and where it's assigned (on its own or with its course).
 export function lessonProgress(ctx, lessonId) {
@@ -971,7 +989,7 @@ export function lessonProgress(ctx, lessonId) {
   const ix = progressIndex(ctx), t = today(ctx);
   const assignments = ctx.db.all(`${ASSIGNMENT_SQL} WHERE x.lesson_id = ? OR (x.course_id IS NOT NULL AND x.course_id = ?) ORDER BY x.created_at DESC`, l.id, l.course_id ?? '')
     .map((x) => assignmentView(ctx, ix, x, t)).map(({ people, not_finished, ...x }) => x);
-  return { id: l.id, title: l.title, published: l.published, course: course ? { id: course.id, title: course.title, published: !!course.published, audience: course.audience } : null,
+  return { id: l.id, title: l.title, published: l.published, category: l.category, course: course ? { id: course.id, title: course.title, published: !!course.published, audience: course.audience } : null,
     finished, opened, assignments };
 }
 
@@ -1042,9 +1060,20 @@ export function parentCourses(ctx, guardian) {
     return { id: c.id, title: c.title, description: c.description, age_min: c.age_min, age_max: c.age_max, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
   }).filter((c) => c.total > 0);
 }
+// Stand-alone reading for parents (version 46): parent education, blogs and research, newest first, with what this parent read.
+const PARENT_ARTICLE = `published = 1 AND course_id IS NULL AND category IN ('parent','blog','research')`;
+export function parentArticles(ctx, guardian) {
+  const done = new Set(ctx.db.all('SELECT lesson_id FROM guardian_lesson_progress WHERE guardian_id = ?', guardian.id).map((r) => r.lesson_id));
+  return ctx.db.all(`SELECT * FROM lessons WHERE ${PARENT_ARTICLE} ORDER BY created_at DESC LIMIT 100`).map((l) => ({ ...lessonItem(l, done), created_at: l.created_at }));
+}
 export function parentLesson(ctx, guardian, lessonId) {
   const course = parentCourses(ctx, guardian).find((c) => c.lessons.some((l) => l.id === lessonId));
-  if (!course) throw notFound('Lesson');
+  if (!course) {
+    const a = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND ${PARENT_ARTICLE}`, lessonId);
+    if (!a) throw notFound('Lesson');
+    return { id: a.id, title: a.title, summary: a.summary, body: a.body, video_url: a.video_url, minutes: a.minutes, category: a.category, course: null, quiz: null,
+      done: !!ctx.db.get('SELECT 1 FROM guardian_lesson_progress WHERE lesson_id = ? AND guardian_id = ?', a.id, guardian.id), next: null, position: null };
+  }
   const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', lessonId), i = course.lessons.findIndex((x) => x.id === lessonId);
   return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: { id: course.id, title: course.title }, quiz: null,
     done: course.lessons[i].done, next: course.lessons[i + 1] ? { id: course.lessons[i + 1].id, title: course.lessons[i + 1].title } : null, position: { n: i + 1, of: course.lessons.length } };
@@ -1054,6 +1083,20 @@ export function completeParentLesson(ctx, guardian, lessonId, done = true) {
   if (done) ctx.db.run('INSERT OR IGNORE INTO guardian_lesson_progress (lesson_id, guardian_id, completed_at) VALUES (?, ?, ?)', lessonId, guardian.id, ctx.now());
   else ctx.db.run('DELETE FROM guardian_lesson_progress WHERE lesson_id = ? AND guardian_id = ?', lessonId, guardian.id);
   return parentLesson(ctx, guardian, lessonId);
+}
+
+// ---------- Coach's education on the public page (/learn) ----------
+// Published stand-alone coach's education, for anyone: title, summary, text, video and minutes. Nothing about who read it.
+const PUBLIC_LESSON = `published = 1 AND course_id IS NULL AND category = 'coach'`;
+export function publicLearn(ctx) {
+  return { business_name: getSetting(ctx, 'business_name'),
+    data: ctx.db.all(`SELECT id, title, summary, minutes, video_url, created_at FROM lessons WHERE ${PUBLIC_LESSON} ORDER BY created_at DESC LIMIT 200`)
+      .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, created_at: l.created_at })) };
+}
+export function publicLearnLesson(ctx, id) {
+  const l = ctx.db.get(`SELECT id, title, summary, body, video_url, minutes, created_at FROM lessons WHERE id = ? AND ${PUBLIC_LESSON}`, String(id));
+  if (!l) throw notFound('Lesson');
+  return { ...l, business_name: getSetting(ctx, 'business_name') };
 }
 
 // Starter parent courses, saved as drafts for the owner to read, edit and publish. General guidance only.

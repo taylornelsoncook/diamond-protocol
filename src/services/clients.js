@@ -6,9 +6,10 @@ import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSettin
 import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
+import { clientLock } from './lockout.js';
 
 const LIST_SQL = `
-  SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
+  SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.training_type, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
     c.school, c.grad_year, TRIM(COALESCE(c.medical_notes, '')) != '' AS medical, f.waiver_version,
     (SELECT GROUP_CONCAT(x, char(30)) FROM (SELECT g.name || char(31) || g.email || char(31) || COALESCE(g.phone, '') AS x FROM guardians g WHERE g.family_id = c.family_id ORDER BY g.is_primary DESC, g.created_at)) AS parent_list,
     (SELECT MAX(k.created_at) FROM check_ins k WHERE k.client_id = c.id) AS last_check_in_at,
@@ -18,7 +19,7 @@ const LIST_SQL = `
       WHERE t.client_id = c.id AND t.active = 1 AND tc.status = 'active') AS team_list,
     (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1) AS pinned_all,
     (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1 AND n.coach_only = 0) AS pinned_shared,
-    s.id AS subscription_id, s.status AS subscription_status, s.current_period_end, s.trial_ends_at,
+    s.id AS subscription_id, s.status AS subscription_status, s.current_period_end, s.trial_ends_at, s.pending_plan_id, (SELECT pp.name FROM plans pp WHERE pp.id = s.pending_plan_id) AS pending_plan_name,
     p.id AS plan_id, p.name AS plan_name, p.price_cents,
     a.program_id, pr.name AS program_name,
     (SELECT MAX(completed_at) FROM workout_logs l WHERE l.client_id = c.id) AS last_workout_at,
@@ -36,10 +37,12 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
   id: r.id, athlete_id: r.athlete_id, name: r.name, email: r.email ?? null, phone: r.phone ?? null, created_at: r.created_at,
   family: r.family_id ? { id: r.family_id, name: r.family_name } : null,
   birth_date: r.birth_date ?? null, sport: r.sport ?? null,
+  training_type: r.training_type ?? null,
   status: r.subscription_status ?? 'none',
   subscription: r.subscription_id ? {
     id: r.subscription_id, status: r.subscription_status, plan_id: r.plan_id, plan_name: r.plan_name,
-    price_cents: r.price_cents, current_period_end: r.current_period_end, trial_ends_at: r.trial_ends_at
+    price_cents: r.price_cents, current_period_end: r.current_period_end, trial_ends_at: r.trial_ends_at,
+    pending_plan_id: r.pending_plan_id ?? null, pending_plan_name: r.pending_plan_name ?? null   // a change waiting for the renewal
   } : null,
   program: r.program_id ? { id: r.program_id, name: r.program_name } : null,
   last_workout_at: r.last_workout_at ?? null,
@@ -87,6 +90,10 @@ export function inView(c, view) {
   if (view === 'no_waiver') return c.flags.no_waiver;
   return c.status === view;
 }
+// How a client trains, picked by staff and shown under the name: hybrid (at the facility and on their own with the app),
+// in the facility, or remote (the app only). Empty until someone picks it.
+export const TRAINING_TYPES = { hybrid: 'Hybrid athlete', in_facility: 'In-facility', remote: 'Remote client' };
+const trainingType = (x) => (x === null || x === '' ? null : v.oneOf(x, 'training_type', Object.keys(TRAINING_TYPES)));
 export const CLIENT_SORTS = ['name', 'last_seen', 'newest'];
 const sorters = {
   name: null,
@@ -97,13 +104,15 @@ const sorters = {
 // Archived clients are left out unless asked for: archived=true lists only them, archived=all everyone.
 // status=current is the active clients above; team and no_waiver are the views above; any other status is the membership
 // status (none = no membership). sort: name (default), last_seen (longest since seen first) or newest.
-export function listClients(ctx, { q, status, archived, sort, role } = {}) {
+export function listClients(ctx, { q, status, archived, sort, role, training } = {}) {
   if (sort && !CLIENT_SORTS.includes(sort)) throw badRequest(`sort must be one of ${CLIENT_SORTS.join(', ')}.`);
+  if (training && training !== 'unset' && !TRAINING_TYPES[training]) throw badRequest(`training must be one of ${[...Object.keys(TRAINING_TYPES), 'unset'].join(', ')}.`);
   let rows = shapeAll(ctx, ctx.db.all(`${LIST_SQL} ORDER BY c.name COLLATE NOCASE`), role);
   if (q) rows = rows.filter((c) => matches(c, q));
   if (archived === 'true') rows = rows.filter((c) => c.archived_at);
   else if (archived !== 'all') rows = rows.filter((c) => !c.archived_at);
   if (status) rows = rows.filter((c) => !c.archived_at && inView(c, status));
+  if (training) rows = rows.filter((c) => (training === 'unset' ? !c.training_type : c.training_type === training));
   if (sorters[sort]) rows.sort(sorters[sort]);
   return rows;
 }
@@ -132,9 +141,9 @@ export function exportClients(ctx, query = {}) {
   const rows = listClients(ctx, query);
   const zone = getSetting(ctx, 'timezone');
   const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: zone }) : '');
-  const head = ['Athlete ID', 'Name', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Email', 'Phone', 'Birthday', 'Grad year', 'Sport', 'School', 'Status', 'Plan', 'Program', 'Teams', 'Waiver signed', 'Card on file', 'Medical notes on file', 'Last seen', 'Client since', 'Archived'];
+  const head = ['Athlete ID', 'Name', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Email', 'Phone', 'Birthday', 'Grad year', 'Sport', 'School', 'Status', 'Plan', 'Program', 'Teams', 'Trains', 'Waiver signed', 'Card on file', 'Medical notes on file', 'Last seen', 'Client since', 'Archived'];
   const lines = rows.map((c) => [c.athlete_id, c.name, c.family?.name, c.parents[0]?.name, c.parents[0]?.email, phoneText(c.parents[0]?.phone), c.email, phoneText(c.phone), c.birth_date, c.grad_year, c.sport, c.school,
-    STATUS_LABEL[c.status] ?? c.status, c.subscription?.plan_name, c.program?.name, c.teams.map((t) => t.name).join('; '), c.family ? (c.flags.no_waiver ? 'No' : 'Yes') : '', c.has_card ? 'Yes' : 'No', c.flags.medical ? 'Yes' : 'No',
+    STATUS_LABEL[c.status] ?? c.status, c.subscription?.plan_name, c.program?.name, c.teams.map((t) => t.name).join('; '), TRAINING_TYPES[c.training_type] ?? '', c.family ? (c.flags.no_waiver ? 'No' : 'Yes') : '', c.has_card ? 'Yes' : 'No', c.flags.medical ? 'Yes' : 'No',
     day(c.last_seen_at), day(c.created_at), day(c.archived_at)]);
   const body = [head, ...lines].map((r) => r.map(csvCell).join(',')).join('\r\n');
   return { filename: `clients-${day(ctx.now())}.csv`, type: 'text/csv; charset=utf-8', body: Buffer.from(`\uFEFF${body}\r\n`), count: rows.length };
@@ -156,6 +165,10 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
       siblings: ctx.db.all('SELECT id, name FROM clients WHERE family_id = ? AND id != ? ORDER BY name', fam.id, id) };
   }
   c.workouts_completed = ctx.db.get('SELECT COUNT(*) AS n FROM workout_logs WHERE client_id = ?', id).n;
+  // Locked out of the parent portal, the app and self check-in over a declined membership payment (lockout.js). Staff
+  // still book and check them in; amounts are the owner's (hideMoney).
+  const lock = clientLock(ctx, id);
+  c.payment_locked = lock ? { athletes: lock.athletes, amount_cents: lock.amount_cents } : null;
   if (withSecrets) c.app_link = `/app?token=${extra.access_token}`;
   return c;
 }
@@ -314,6 +327,7 @@ export async function createClient(ctx, body, { staff, inTx } = {}) {
   const email = hasParent ? (body.email ? v.email(body.email) : null) : v.email(body.email);
   const phone = v.str(body.phone, 'phone', { max: 40, optional: true });
   const notes = v.str(body.notes, 'notes', { max: 2000, optional: true });
+  const training = body.training_type === undefined ? null : trainingType(body.training_type);
   const profile = athleteFields(body);
   if (body.plan_id) billing.getPlan(ctx, body.plan_id);
   if (body.program_id) programs.getProgram(ctx, body.program_id);
@@ -327,9 +341,9 @@ export async function createClient(ctx, body, { staff, inTx } = {}) {
   let newFamily = null;
   ctx.db.tx(() => {
     const familyId = body.family_id ?? (body.parent ? (newFamily = createFamilyWithGuardian(ctx, body.parent, body.family_name)) : null);
-    ctx.db.run(`INSERT INTO clients (id, athlete_id, name, email, phone, notes, access_token, family_id, birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, newAthleteId(ctx, name), name, email, phone, notes, token(24), familyId, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, ctx.now());
+    ctx.db.run(`INSERT INTO clients (id, athlete_id, name, email, phone, notes, access_token, family_id, birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, created_at, training_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, newAthleteId(ctx, name), name, email, phone, notes, token(24), familyId, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, ctx.now(), training);
     emit(ctx, 'client.created', { client_id: id, athlete_id: ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', id).athlete_id, client_name: name, email, family_id: familyId });
     if (body.program_id) programs.assign(ctx, body.program_id, id);
     if (inTx) inTx(id, familyId);
@@ -349,6 +363,7 @@ export function updateClient(ctx, id, body) {
   const email = body.email !== undefined ? (body.email === null || body.email === '' ? (c.family ? null : v.email(body.email)) : v.email(body.email)) : c.email;
   const phone = body.phone !== undefined ? v.str(body.phone, 'phone', { max: 40, optional: true }) : c.phone;
   const notes = body.notes !== undefined ? v.str(body.notes, 'notes', { max: 2000, optional: true }) : c.notes;
+  const training = body.training_type !== undefined ? trainingType(body.training_type) : c.training_type;
   const profile = athleteFields(body, c);
   if (body.card_status !== undefined) {
     if (!ctx.testMode) throw conflict('card_status can only be changed in test mode.');
@@ -362,8 +377,8 @@ export function updateClient(ctx, id, body) {
       ctx.db.run('UPDATE clients SET athlete_id = ? WHERE id = ?', newAid, id);
       ctx.db.run('DELETE FROM athlete_id_aliases WHERE athlete_id = ? AND client_id = ?', newAid, id);   // an old roster ID that is their ID again
     }
-    ctx.db.run(`UPDATE clients SET name = ?, email = ?, phone = ?, notes = ?, birth_date = ?, sex = ?, sport = ?, position = ?, school = ?, grad_year = ?, medical_notes = ?, emergency_name = ?, emergency_phone = ? WHERE id = ?`,
-      name, email, phone, notes, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, id);
+    ctx.db.run(`UPDATE clients SET name = ?, email = ?, phone = ?, notes = ?, training_type = ?, birth_date = ?, sex = ?, sport = ?, position = ?, school = ?, grad_year = ?, medical_notes = ?, emergency_name = ?, emergency_phone = ? WHERE id = ?`,
+      name, email, phone, notes, training, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, id);
     // Team roster lines keep a copy of the profile's name and Athlete ID (older integrations read them).
     ctx.db.run('UPDATE team_roster SET name = ?, athlete_id = (SELECT athlete_id FROM clients WHERE id = ?) WHERE client_id = ?', name, id, id);
   });

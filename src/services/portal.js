@@ -135,13 +135,14 @@ const REQUEST_KINDS = ['switch', 'pause', 'cancel'];
 const requestCols = `r.id, r.kind, r.status, r.note, r.created_at, r.resolved_at, r.resolved_by, r.resolution_note, r.guardian_name, r.plan_id, p.name AS plan_name`;
 const openRequest = (ctx, clientId) => ctx.db.get(`SELECT ${requestCols} FROM membership_requests r LEFT JOIN plans p ON p.id = r.plan_id WHERE r.client_id = ? AND r.status = 'open'`, clientId) ?? null;
 export function membershipPanel(ctx, clientId) {
-  const s = ctx.db.get(`SELECT s.*, p.name AS plan_name, p.price_cents FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.client_id = ? AND s.status != 'canceled' ORDER BY s.created_at DESC LIMIT 1`, clientId);
+  const s = ctx.db.get(`SELECT s.*, p.name AS plan_name, p.price_cents, pp.name AS pending_plan_name, pp.price_cents AS pending_price_cents FROM subscriptions s JOIN plans p ON p.id = s.plan_id LEFT JOIN plans pp ON pp.id = s.pending_plan_id WHERE s.client_id = ? AND s.status != 'canceled' ORDER BY s.created_at DESC LIMIT 1`, clientId);
   const lastDone = ctx.db.get(`SELECT ${requestCols} FROM membership_requests r LEFT JOIN plans p ON p.id = r.plan_id WHERE r.client_id = ? AND r.status IN ('done','declined') AND r.resolved_at > ? ORDER BY r.resolved_at DESC LIMIT 1`,
     clientId, new Date(Date.parse(ctx.now()) - 30 * 86400000).toISOString()) ?? null;
   const pastDue = s ? ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS n FROM invoices WHERE subscription_id = ? AND status = 'failed'`, s.id).n : 0;
   return {
     membership: s ? { status: s.status, plan_id: s.plan_id, plan_name: s.plan_name, price_cents: s.price_cents, trial_ends_at: s.status === 'trialing' ? s.trial_ends_at : null,
       next_charge_at: ['active', 'trialing', 'past_due'].includes(s.status) ? s.current_period_end : null, renews: s.current_period_end, past_due_cents: pastDue,
+      pending_plan_name: s.pending_plan_name ?? null, pending_price_cents: s.pending_price_cents ?? null,   // the owner set a change for the renewal
       can_ask: s.status === 'paused' ? ['switch', 'cancel'] : REQUEST_KINDS } : null,
     request: openRequest(ctx, clientId), last_answer: lastDone
   };

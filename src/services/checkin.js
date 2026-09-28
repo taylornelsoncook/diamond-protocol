@@ -1,6 +1,7 @@
 import { newId, token, sha256, v, notFound, conflict, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { setAttendance } from './schedule.js';
+import { clientLock } from './lockout.js';
 
 // Self check-in. Two ways, both marking a booked athlete "attended" on the roster, exactly like the coach's tap:
 // - A check-in tablet at the front desk: a browser opened with a secret link (/kiosk#<key>) that shows the classes
@@ -84,8 +85,10 @@ export function kioskBoard(ctx, key, asOf = ctx.now()) {
 export function kioskCheckIn(ctx, key, body, asOf = ctx.now()) {
   const k = kioskFor(ctx, key);
   const bookingId = v.str(body.booking_id, 'booking_id');
-  const b = ctx.db.get(`SELECT b.id, b.status, s.id AS session_id, s.name AS session_name, c.name FROM bookings b JOIN class_sessions s ON s.id = b.session_id JOIN clients c ON c.id = b.client_id WHERE b.id = ?`, bookingId);
+  const b = ctx.db.get(`SELECT b.id, b.status, b.client_id, s.id AS session_id, s.name AS session_name, c.name FROM bookings b JOIN class_sessions s ON s.id = b.session_id JOIN clients c ON c.id = b.client_id WHERE b.id = ?`, bookingId);
   if (!b || !openSessions(ctx, k.location_id, asOf).some((s) => s.id === b.session_id) || !['booked', 'attended'].includes(b.status)) throw conflict('Check-in for that session isn\'t open here. See a coach.');
+  // A family locked out over a declined payment checks in at the desk, where it can be paid (lockout.js).
+  if (b.status !== 'attended' && clientLock(ctx, b.client_id)) throw new HttpError(402, 'payment_locked', `${b.name.split(' ')[0]}, please check in at the front desk.`);
   return { name: b.name.split(' ')[0], session: b.session_name, ...checkInBooking(ctx, b.id) };
 }
 

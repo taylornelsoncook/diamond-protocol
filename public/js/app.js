@@ -1,7 +1,7 @@
 import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, workoutRow } from './programs-coach.js';
-import { initAdmin, viewIntegrations, viewStaff, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
+import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
 
 // ---------- API ----------
@@ -18,9 +18,9 @@ const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch
 const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
 const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
-const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
+const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['settings', 'Settings']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'] };   // front desk: programs read-only
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education', 'settings'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education', 'settings'] };   // front desk: programs read-only; staff see only the exercise library in Settings
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
@@ -64,6 +64,11 @@ function render() {
   if (resetToken) { const t = resetToken; resetToken = null; return renderReset(root, t, async () => { state.user = null; await boot(); }); }
   if (!state.user) { profileDrafts.clear(); forgetSale(); return renderLogin(); }   // signed out: the next person never sees these edits or the open sale
   if (state.user.must_change_password) return renderPasswordChange(true);
+  if (/^#\/staff(?=[/?]|$)/.test(location.hash)) {           // Staff & security is now Settings: old links and bookmarks still land
+    const q = new URLSearchParams(location.hash.split('?')[1] ?? '');
+    if (!q.has('tab')) q.set('tab', q.has('log') ? 'activity' : 'staff');
+    history.replaceState(null, '', `#/settings?${q}`);
+  }
   const [section, id] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const current = section === 'account' ? 'account' : NAV.some(([k]) => k === section) ? section : 'today';
   const main = h('main', { class: 'main', id: 'main' });
@@ -81,7 +86,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -273,7 +278,7 @@ async function viewToday(main) {
         btn('Mark handled', (e) => busy(e.currentTarget, async () => { await post(`/v1/invoices/${a.invoice_id}/charges/${a.charge_id}/handled`); toast('Marked handled.'); refresh(); }), 'outline')));
     if (a.kind === 'deletion_request') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.family_name} asked for their data to be deleted`), h('span', { class: 'small muted' }, `Requested by ${a.requested_by.split(' <')[0]} ${ago(a.created_at)}.`)),
-      h('a', { class: 'dp-btn dp-btn--outline', href: '#/staff' }, 'Review'));
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/settings?tab=requests' }, 'Review'));
     if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
@@ -635,7 +640,11 @@ const clientMatches = (c, q) => {
   return /^[\d\s().+-]+$/.test(s) && d.length >= 4 && [c.phone, ...(c.parents ?? []).map((p) => p.phone)].some((p) => digitsOf(p).includes(d));
 };
 const CLIENT_SORTS = [['name', 'Name'], ['last_seen', 'Longest since seen'], ['newest', 'Newest']];
-const clientsUi = { q: '', view: null, sort: 'name', shown: 100 };
+// How a client trains, picked by staff (clients.js TRAINING_TYPES), shown under the name.
+const TRAINING = [['hybrid', 'Hybrid athlete'], ['in_facility', 'In-facility'], ['remote', 'Remote client']];
+const trainingLabel = (k) => TRAINING.find(([x]) => x === k)?.[1] ?? null;
+const trainingTag = (c) => (c.training_type ? h('span', { class: 'dp-badge dp-badge--neutral' }, trainingLabel(c.training_type)) : null);
+const clientsUi = { q: '', view: null, sort: 'name', shown: 100, training: '' };
 const clientFlags = (c) => [
   c.flags?.medical ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Medical') : null,
   c.flags?.no_waiver ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'No waiver') : null,
@@ -655,12 +664,14 @@ async function viewClients(main) {
   const count = (k) => data.filter((c) => inClientView(c, k)).length;
   const q = input({ type: 'search', placeholder: 'Name, athlete ID, email, family or phone', id: 'client-search', 'aria-label': 'Search clients', value: clientsUi.q, autocomplete: 'off' });
   const sort = select(CLIENT_SORTS, { 'aria-label': 'Sort clients', style: 'width:auto;min-width:170px', value: clientsUi.sort });
+  const trains = select([['', 'Any training'], ...TRAINING, ['unset', 'Not set']], { 'aria-label': 'How they train', style: 'width:auto;min-width:150px', value: clientsUi.training });
   const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Which clients' });
   const body = h('tbody');
   const hint = h('p', { class: 'small muted', style: 'margin:0' });
   const more = h('div', { class: 'row' });
   const shownRows = () => {
-    const rows = data.filter((c) => clientMatches(c, clientsUi.q) && inClientView(c, clientsUi.view));
+    const rows = data.filter((c) => clientMatches(c, clientsUi.q) && inClientView(c, clientsUi.view)
+      && (!clientsUi.training || (clientsUi.training === 'unset' ? !c.training_type : c.training_type === clientsUi.training)));
     if (clientsUi.sort === 'last_seen') rows.sort((a, b) => (a.last_seen_at ?? '').localeCompare(b.last_seen_at ?? '') || a.name.localeCompare(b.name));
     else if (clientsUi.sort === 'newest') rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     return rows;
@@ -676,7 +687,8 @@ async function viewClients(main) {
     fill(body, ...(rows.length ? rows.slice(0, clientsUi.shown).map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => open(c), onKeydown: (e) => { if (e.key === 'Enter') open(c); } },
       h('td', null, h('div', { class: 'stack-tight' },
         h('span', { class: 'row wrap', style: 'gap:6px' }, h('span', { class: 'strong' }, c.name), ...clientFlags(c)),
-        h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), [c.family ? c.family.name : c.email, c.grad_year ? `Class of ${c.grad_year}` : null, c.teams?.length ? c.teams.map((t) => t.name).join(', ') : null].filter(Boolean).map((x) => ` · ${x}`).join('')))),
+        h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), [c.family ? c.family.name : c.email, c.grad_year ? `Class of ${c.grad_year}` : null, c.teams?.length ? c.teams.map((t) => t.name).join(', ') : null].filter(Boolean).map((x) => ` · ${x}`).join('')),
+        c.training_type ? h('span', null, trainingTag(c)) : null)),
       h('td', null, h('div', { class: 'stack-tight', style: 'align-items:flex-start' }, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status), c.subscription?.plan_name ? h('span', { class: 'small muted' }, c.subscription.plan_name) : null)),
       h('td', { class: 'cl-program' }, c.program?.name ?? h('span', { class: 'muted' }, 'None')),
       h('td', { class: 'muted' }, ago(c.last_seen_at))))
@@ -690,17 +702,19 @@ async function viewClients(main) {
     if (e.key === 'Enter') { const rows = shownRows(); if (rows.length === 1) open(rows[0]); else if (rows.length) toast(`${rows.length} clients match. Keep typing, or pick one.`, 'warn'); }
   });
   sort.addEventListener('change', () => { clientsUi.sort = sort.value; draw(); });
+  trains.addEventListener('change', () => { clientsUi.training = trains.value; clientsUi.shown = 100; draw(); });
   draw();
   const current = count('current'), archived = count('archived');
   const csv = isOwner() ? btn('Download CSV', (e) => busy(e.currentTarget, async () => {
     const p = new URLSearchParams({ sort: clientsUi.sort });
     if (clientsUi.q.trim()) p.set('q', clientsUi.q.trim());
     if (clientsUi.view === 'archived') p.set('archived', 'true'); else if (clientsUi.view) p.set('status', clientsUi.view);
+    if (clientsUi.training) p.set('training', clientsUi.training);
     await download(`/v1/client-export?${p}`);
   }), 'secondary', { title: 'The clients in this view, with contact details. No amounts.' }) : null;
   fill(main,
     header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row wrap' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import') : null, csv, addClientBtn())),
-    panel(null, {}, views, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), sort), hint,
+    panel(null, {}, views, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), trains, sort), hint,
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
         h('thead', null, h('tr', null, ['Client', 'Membership', 'Program', 'Last seen'].map((t) => h('th', { class: t === 'Program' ? 'cl-program' : null }, t)))), body)), more));
   if (clientsUi.q) q.focus();
@@ -733,11 +747,12 @@ async function viewClient(main, id) {
   const membership = panel('Membership', { subtitle: sub ? null : 'No active plan.' },
     sub ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Status'), h('dd', null, badge(sub.status))),
-      h('div', null, h('dt', null, 'Plan'), h('dd', null, sub.plan_name)),
+      h('div', null, h('dt', null, 'Plan'), h('dd', null, sub.plan_name, sub.pending_plan_name ? h('div', { class: 'small muted' }, `Moves to ${sub.pending_plan_name} on ${date(sub.current_period_end)}`) : null)),
       sub.price_cents == null ? null : h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents))),
       h('div', null, h('dt', null, sub.status === 'trialing' ? 'Trial ends' : 'Next charge'), h('dd', null, ['canceled', 'paused'].includes(sub.status) ? '—' : date(sub.current_period_end)))) : null,
     sub && sub.status !== 'canceled' ? h('div', { class: 'stack' },
-      h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Change plan', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/plan`, { plan_id: planSel.value }); toast('Plan changed. New price applies from the next charge.'); render(); }), 'secondary')),
+      isOwner() ? h('div', { class: 'row wrap' }, btn('Change plan', () => changePlanDialog({ client_id: id, client_name: c.name, ...sub }, plans.data), 'secondary'),
+        sub.pending_plan_name ? btn('Cancel change', cancelPlanChange({ client_id: id, client_name: c.name, ...sub }), 'ghost') : null) : null,
       h('div', { class: 'row wrap' },
         sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.'), 'secondary') : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
         btn('Cancel subscription', (e) => { if (confirm(`Cancel ${first}'s subscription now? Open invoices will be voided.`)) act('cancel', 'Subscription canceled.')(e); }, 'ghost')))
@@ -772,11 +787,11 @@ async function viewClient(main, id) {
   // leaving the page asks first.
   const draft = profileDrafts.get(id) ?? {};
   const orig = { name: c.name, email: c.email ?? '', phone: c.phone ?? '', sex: c.sex ?? '', athlete_id: c.athlete_id ?? '', birth_date: c.birth_date ?? '', sport: c.sport ?? '', position: c.position ?? '', school: c.school ?? '', grad_year: c.grad_year == null ? '' : String(c.grad_year),
-    emergency_name: c.emergency_name ?? '', emergency_phone: c.emergency_phone ?? '', medical_notes: c.medical_notes ?? '', notes: c.notes ?? '' };
+    emergency_name: c.emergency_name ?? '', emergency_phone: c.emergency_phone ?? '', medical_notes: c.medical_notes ?? '', notes: c.notes ?? '', training_type: c.training_type ?? '' };
   const val = (k) => draft[k] ?? orig[k];
   const f = {
     name: input({ value: val('name'), autocomplete: 'off' }), email: input({ type: 'email', value: val('email'), autocomplete: 'off' }), phone: input({ type: 'tel', value: val('phone'), autocomplete: 'off' }),
-    sex: select([['', 'Not set'], ['M', 'Male'], ['F', 'Female']], { value: val('sex') }), athlete_id: input({ value: val('athlete_id'), style: 'font-family:var(--font-mono);text-transform:uppercase', autocomplete: 'off' }),
+    sex: select([['', 'Not set'], ['M', 'Male'], ['F', 'Female']], { value: val('sex') }), training_type: select([['', 'Not set'], ...TRAINING], { value: val('training_type') }), athlete_id: input({ value: val('athlete_id'), style: 'font-family:var(--font-mono);text-transform:uppercase', autocomplete: 'off' }),
     birth_date: input({ type: 'date', value: val('birth_date'), max: bizDate() }), sport: input({ value: val('sport') }), position: input({ value: val('position') }), school: input({ value: val('school') }),
     grad_year: input({ type: 'number', inputmode: 'numeric', min: '2000', max: '2060', value: val('grad_year') }),
     emergency_name: input({ value: val('emergency_name') }), emergency_phone: input({ type: 'tel', value: val('emergency_phone') }),
@@ -811,7 +826,7 @@ async function viewClient(main, id) {
   }));
   const account = panel('Profile', {},
     h('div', { class: 'form-grid' }, field('Full name', f.name), field(fam ? 'Athlete email (optional)' : 'Email', f.email), field(fam ? 'Athlete phone (optional)' : 'Phone', f.phone), field('Birthday', f.birth_date)),
-    h('div', { class: 'form-grid' }, field('Athlete ID', f.athlete_id, 'Connects every result, file and device to this athlete.'), field('Sex', f.sex, 'Only used for growth-spurt estimates.')),
+    h('div', { class: 'form-grid' }, field('Athlete ID', f.athlete_id, 'Connects every result, file and device to this athlete.'), field('Sex', f.sex, 'Only used for growth-spurt estimates.'), field('Trains', f.training_type, 'Hybrid: at the facility and on their own with the app. Shown under their name.')),
     h('div', { class: 'form-grid' }, field('Sport', f.sport), field('Position', f.position), field('School', f.school), field('Grad year', f.grad_year)),
     field('Medical notes', f.medical_notes, 'Allergies, injuries, conditions. Parents can update these in the portal.'),
     h('div', { class: 'form-grid' }, field('Emergency contact', f.emergency_name), field('Emergency phone', f.emergency_phone)),
@@ -1043,9 +1058,10 @@ async function viewClient(main, id) {
   const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(contactHistoryPanel(id, c), 'contact'), 'Contact history'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
-    header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
+    header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), trainingTag(c), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
       h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
     c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
+    c.payment_locked ? h('div', { class: 'dp-panel', role: 'note', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'warn-text' }, `Locked out over a declined membership payment${c.payment_locked.amount_cents != null ? ` (${money(c.payment_locked.amount_cents)})` : ''}${c.payment_locked.athletes.length && !c.payment_locked.athletes.includes(c.name) ? ` for ${c.payment_locked.athletes.join(', ')}` : ''}. The family can only update the card and pay in the parent portal; the app, booking online and self check-in are paused. You can still book and check them in here.`)) : null,
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}`, c.emergency_name || c.emergency_phone ? [' · Emergency: ', c.emergency_name ?? '', ' ', c.emergency_phone ? h('a', { href: telHref(c.emergency_phone), style: 'color:inherit;text-decoration:underline' }, c.emergency_phone) : null] : null) : null,
     pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
     contactRow || teamsLine ? h('div', { class: 'stack-tight' }, contactRow, teamsLine) : null,
@@ -1106,6 +1122,7 @@ async function viewNewClient(main) {
   };
   const plan = select([['', 'No subscription yet'], ...plans.data.map((p) => [p.id, `${p.name}${p.price_cents == null ? '' : `, ${money(p.price_cents)}/mo`}${p.trial_days ? `, ${p.trial_days}-day trial` : ''}`])], { value: '' });
   const prog = select([['', 'Assign later'], ...progs.data.map((p) => [p.id, p.name])], { value: '' });
+  const trains = select([['', 'Not set yet'], ...TRAINING], { value: '' });
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const dupBox = h('div', { 'aria-live': 'polite' });
   const submit = btn('Create account', null, 'primary', { type: 'submit' });
@@ -1123,7 +1140,7 @@ async function viewNewClient(main) {
   const val = (el) => el.value.trim() || undefined;
   // Only the fields on screen are sent: switching between athlete and adult never leaks the hidden ones.
   const athleteBody = () => ({ name: f.name.value, birth_date: val(f.birth_date), sport: val(f.sport), position: val(f.position), school: val(f.school), grad_year: f.grad_year.value ? Number(f.grad_year.value) : undefined, phone: val(f.athlete_phone) });
-  const common = () => ({ plan_id: plan.value || undefined, program_id: canProgram ? prog.value || undefined : undefined, medical_notes: val(f.medical_notes), emergency_name: val(f.emergency_name), emergency_phone: val(f.emergency_phone) });
+  const common = () => ({ training_type: trains.value || undefined, plan_id: plan.value || undefined, program_id: canProgram ? prog.value || undefined : undefined, medical_notes: val(f.medical_notes), emergency_name: val(f.emergency_name), emergency_phone: val(f.emergency_phone) });
   const body = () => (isAthlete.checked ? { ...athleteBody(), ...common(), parent: { name: f.pName.value, email: f.pEmail.value, phone: val(f.pPhone) } } : { name: f.name.value, email: f.email.value, phone: val(f.phone), ...common() });
   const done = (c) => {
     toast(c.family && isAthlete.checked ? `${c.name.split(' ')[0]} added. ${f.pName.value.split(' ')[0] || 'The parent'} can sign in at ${location.origin}/parent with ${f.pEmail.value.trim()}.` : `Account created for ${c.name.split(' ')[0]}.`);
@@ -1156,7 +1173,7 @@ async function viewNewClient(main) {
       h('label', { class: 'row', style: 'gap:10px;min-height:44px' }, isAthlete, h('span', null, 'Athlete with a parent who pays')),
       h('div', { class: 'form-grid' }, field('Full name', f.name), emailField, phoneField),
       athleteBox, parentBox, health,
-      h('div', { class: 'form-grid' }, field('Subscription plan', plan, 'With a trial, the first charge happens when it ends.'), canProgram ? field('Starting program', prog) : null),
+      h('div', { class: 'form-grid' }, field('Subscription plan', plan, 'With a trial, the first charge happens when it ends.'), canProgram ? field('Starting program', prog) : null, field('Trains', trains, 'Hybrid, in the facility or remote. Change it any time.')),
       h('p', { class: 'small muted' }, 'Adding a sibling? Open the brother or sister and use "Add sibling" instead, so the family shares one login and card.'),
       dupBox, err, h('div', { class: 'row' }, submit)));
   sync(); f.name.focus();
@@ -1223,6 +1240,44 @@ function moneyChecksPanel(checks, render) {
 // The money summary, failed payments to chase, every invoice (details, refunds, write-offs, export), memberships, plans,
 // pay links, money checks and the test-mode billing clock. Filters survive a refresh of the screen after an action.
 const billingUi = { view: 'all', kind: '', period: '', q: '', limit: 50, mview: 'live', mplan: '', mq: '' };
+// Billing → Refunds: every refund with the athlete and how to reach the family (refunds.js). Starts on this month.
+const refundsUi = { from: null, to: '', kind: '', q: '', limit: 100 };
+const REFUND_KIND = { membership: 'Membership', sale: 'Sale', paid_twice: 'Paid twice' };
+function refundsPanel() {
+  if (refundsUi.from == null) refundsUi.from = `${bizDate().slice(0, 8)}01`;
+  const from = input({ type: 'date', value: refundsUi.from, 'aria-label': 'Refunded from', style: 'width:auto' }), to = input({ type: 'date', value: refundsUi.to, 'aria-label': 'Refunded to', style: 'width:auto' });
+  const kind = select([['', 'Every kind'], ['membership', 'Memberships'], ['sale', 'Sales'], ['paid_twice', 'Paid twice (automatic)']], { value: refundsUi.kind, 'aria-label': 'Kind of refund', style: 'width:auto' });
+  const q = input({ type: 'search', placeholder: 'Athlete, email, phone or item', value: refundsUi.q, 'aria-label': 'Search refunds', style: 'flex:1 1 200px' });
+  const out = h('div', null, h('p', { class: 'muted small' }, 'Loading…')), sub = h('span');
+  const params = () => new URLSearchParams(Object.entries({ from: refundsUi.from, to: refundsUi.to, kind: refundsUi.kind, q: refundsUi.q.trim() }).filter(([, x]) => x));
+  const csv = h('a', { class: 'dp-btn dp-btn--ghost', href: `/v1/billing/refunds/export?${params()}`, download: '' }, 'Export CSV');
+  async function draw() {
+    csv.href = `/v1/billing/refunds/export?${params()}`;
+    let r;
+    try { r = await get(`/v1/billing/refunds?${params()}&limit=${refundsUi.limit}`); } catch (e) { return fill(out, h('p', { class: 'dp-error' }, e.message)); }
+    sub.textContent = r.count ? `${plural(r.count, 'refund')} · ${money(r.total_cents)} back to families.` : 'No refunds in these dates.';
+    fill(out, r.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' },
+      h('thead', null, h('tr', null, ['Refunded', 'Athlete', 'Email', 'Phone', 'For', 'Amount', 'Reason', 'By'].map((x) => h('th', null, x)))),
+      h('tbody', null, r.data.map((x) => h('tr', null,
+        h('td', { class: 'small', style: 'white-space:nowrap' }, date(x.refunded_at)),
+        h('td', null, h('div', { class: 'stack-tight' }, x.client_id ? h('a', { class: 'strong', href: `#/clients/${x.client_id}` }, x.athlete_name) : h('span', { class: 'muted' }, 'No client'),
+          x.athlete_id ? h('span', { class: 'small muted', style: 'font-family:var(--font-mono)' }, x.athlete_id) : null)),
+        h('td', { class: 'small', style: 'word-break:break-all' }, x.email ? h('a', { href: `mailto:${x.email}` }, x.email) : '—', x.parent_name ? h('div', { class: 'muted' }, `${x.parent_name} (parent)`) : null),
+        h('td', { class: 'small', style: 'white-space:nowrap' }, x.phone ? h('a', { href: telHref(x.phone) }, phoneText(x.phone)) : '—'),
+        h('td', { class: 'small' }, h('div', null, x.what), h('span', { class: 'muted' }, REFUND_KIND[x.kind])),
+        h('td', { class: 'strong', style: 'white-space:nowrap' }, money(x.amount_cents)),
+        h('td', { class: 'small muted' }, x.reason ?? ''),
+        h('td', { class: 'small muted' }, x.by ?? '')))))) : h('p', { class: 'muted', style: 'margin:0' }, refundsUi.q ? 'No refunds match. Clear the search.' : 'No refunds in these dates.'),
+      r.count > r.data.length ? h('div', { style: 'margin-top:8px' }, btn(`Show more (${r.count - r.data.length} older)`, (e) => busy(e.currentTarget, async () => { refundsUi.limit += 100; await draw(); }), 'ghost')) : null);
+  }
+  const apply = () => { if (from.value && to.value && from.value > to.value) return toast('The start date is after the end date. Swap them.', 'warn'); Object.assign(refundsUi, { from: from.value, to: to.value, kind: kind.value, limit: 100 }); draw(); };
+  for (const el of [from, to, kind]) el.addEventListener('change', apply);
+  let t = null;
+  q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { refundsUi.q = q.value; refundsUi.limit = 100; draw(); }, 350); });
+  draw();
+  return h('div', { id: 'bl-refunds' }, panel('Refunds', { subtitle: sub, action: csv },
+    h('div', { class: 'row wrap', style: 'gap:8px' }, h('label', { class: 'row small', style: 'gap:6px' }, 'From', from), h('label', { class: 'row small', style: 'gap:6px' }, 'To', to), kind, q), out));
+}
 const BL_STATE = { failed: ['Failed', 'warn'], open: ['Open', 'neutral'], overdue: ['Overdue', 'warn'], paid: ['Paid', 'good'], partially_refunded: ['Part refunded', 'neutral'], refunded: ['Refunded', 'muted'], void: ['Void', 'muted'] };
 const blBadge = (st) => h('span', { class: `dp-badge dp-badge--${BL_STATE[st]?.[1] ?? 'muted'}` }, BL_STATE[st]?.[0] ?? st);
 const BL_VIEWS = [['all', 'All'], ['failed', 'Failed'], ['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['paid', 'Paid'], ['refunds', 'Refunds'], ['void', 'Void']];
@@ -1396,10 +1451,14 @@ async function viewBilling(main) {
     h('span', { class: 'strong' }, money(i.amount_cents)), blBadge('overdue'),
     h('div', { class: 'row wrap', style: 'gap:4px' }, btn('Record payment', () => recordPaymentDialog(i), 'outline', { 'aria-label': `Record payment for ${i.number}` }),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `#/teams/${i.contract_id}` }, 'Team')));
+  const lockSel = select([['0', 'Never lock families out'], ['1', 'Lock out after the first decline'], ['2', 'Lock out after the first retry also declines'], ['3', 'Lock out after the second retry also declines']], { value: String(settings.payment_lock_tries ?? '2'), 'aria-label': 'When a declined payment locks the family out', style: 'width:auto' });
+  lockSel.addEventListener('change', () => busy(lockSel, async () => { await patch('/v1/settings', { payment_lock_tries: Number(lockSel.value) }); toast(lockSel.value === '0' ? 'Families are never locked out.' : 'Saved. Locked families can only update the card and pay until it goes through.'); render(); }));
+  const lockRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Declined payments:'), lockSel,
+    h('span', { class: 'muted' }, 'A locked family can only update the card and pay in the parent portal; the app, online booking and self check-in wait until it\'s paid.'));
   const attPanel = h('div', { id: 'bl-att' }, panel('Needs attention', {
     subtitle: attN ? [att.failed.length ? `${plural(att.failed.length, 'declined charge')} (${money(att.failed_cents)})` : null, att.overdue.length ? `${plural(att.overdue.length, 'overdue school invoice')} (${money(att.overdue_cents)})` : null].filter(Boolean).join(' and ') + `. Declined charges retry on their own every ${att.retry_every_days} days, up to ${att.max_attempts} tries; a failed-payment email with a pay link goes out each time.` : null,
     action: attTools },
-  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.')));
+  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.'), lockRow));
 
   // ---- invoices ----
   const search = input({ type: 'search', placeholder: 'Name, plan, school or invoice number', 'aria-label': 'Search invoices', value: billingUi.q });
@@ -1441,11 +1500,10 @@ async function viewBilling(main) {
   const livePlans = plans.data.filter((p) => p.active);
   const memAction = (m) => {
     const act = (path, msg, ask) => (e) => { if (ask && !confirm(ask)) return; busy(e.currentTarget, async () => { await post(`/v1/clients/${m.client_id}/subscription/${path}`); toast(msg); render(); }); };
-    const change = select([['', 'Change plan…'], ...livePlans.filter((p) => p.id !== m.plan_id).map((p) => [p.id, `${p.name} (${money(p.price_cents)}/mo)`])], { 'aria-label': `Change ${m.client_name}'s plan`, style: 'width:150px' });
-    change.addEventListener('change', () => { const p = livePlans.find((x) => x.id === change.value); if (!p) return; if (!confirm(`Move ${m.client_name} to ${p.name}? The new price (${money(p.price_cents)}) applies from the next renewal.`)) { change.value = ''; return; } busy(change, async () => { await post(`/v1/clients/${m.client_id}/subscription/plan`, { plan_id: p.id }); toast(`${m.client_name.split(' ')[0]} is on ${p.name} now.`); render(); }); });
     if (m.status === 'canceled') return null;
     return h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap' },
-      livePlans.length > 1 ? change : null,
+      livePlans.some((p) => p.id !== m.plan_id) ? btn('Change plan', () => changePlanDialog(m, livePlans), 'outline', { 'aria-label': `Change ${m.client_name}'s plan` }) : null,
+      m.pending_plan_name ? btn('Cancel change', cancelPlanChange(m), 'ghost', { 'aria-label': `Cancel ${m.client_name}'s move to ${m.pending_plan_name}` }) : null,
       ['active', 'trialing'].includes(m.status) ? btn('Pause', act('pause', 'Paused. Nothing is charged until you resume.'), 'ghost', { 'aria-label': `Pause ${m.client_name}'s membership` }) : null,
       m.status === 'paused' ? btn('Resume', act('resume', 'Resumed. A new month started today.', `Resume ${m.client_name}'s membership? A new month starts today and ${money(m.price_cents)} is charged now.`), 'ghost') : null,
       btn('Cancel', act('cancel', 'Membership canceled.', `Cancel ${m.client_name}'s membership now? Anything unpaid on it is voided.`), 'ghost', { 'aria-label': `Cancel ${m.client_name}'s membership` }));
@@ -1456,7 +1514,7 @@ async function viewBilling(main) {
     mem.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Athlete'), h('th', { class: 'bl-wide' }, 'Plan'), h('th', null, 'Next'), h('th', { class: 'bl-wide' }, 'Card'), h('th', null, ''))),
       h('tbody', null, mem.data.map((m) => h('tr', null,
         h('td', null, h('div', { class: 'stack-tight' }, h('a', { class: 'strong', href: `#/clients/${m.client_id}`, style: 'color:var(--steel)' }, m.client_name), h('span', { class: 'small muted bl-narrow' }, `${m.plan_name} · ${money(m.price_cents)}/mo`), h('span', null, badge(m.status)))),
-        h('td', { class: 'bl-wide' }, m.plan_name, m.plan_active ? null : h('span', { class: 'small muted' }, ' (retired)'), h('div', { class: 'small muted' }, `${money(m.price_cents)}/mo`)),
+        h('td', { class: 'bl-wide' }, m.plan_name, m.plan_active ? null : h('span', { class: 'small muted' }, ' (retired)'), h('div', { class: 'small muted' }, `${money(m.price_cents)}/mo`), m.pending_plan_name ? h('div', { class: 'small' }, `Moves to ${m.pending_plan_name} at renewal`) : null),
         h('td', { class: m.status === 'past_due' ? 'warn-text' : null }, nextText(m)),
         h('td', { class: `bl-wide ${m.card_last4 ? '' : 'warn-text'}` }, cardText(m)),
         h('td', { class: 'bl-acts' }, memAction(m)))))))
@@ -1507,13 +1565,13 @@ async function viewBilling(main) {
       }), 'secondary'))))) : null;
   const checksPanel = h('div', { id: 'bl-checks' }, moneyChecksPanel(checks, render));
 
-  const jumps = [['bl-att', 'Needs attention', attN], ['bl-inv', 'Invoices'], ['bl-mem', 'Memberships'], ['bl-plans', 'Plans'], ['bl-links', 'Pay links'], ['bl-checks', 'Money checks'], state.testMode ? ['bl-clock', 'Billing clock'] : null].filter(Boolean);
+  const jumps = [['bl-att', 'Needs attention', attN], ['bl-inv', 'Invoices'], ['bl-mem', 'Memberships'], ['bl-refunds', 'Refunds'], ['bl-plans', 'Plans'], ['bl-links', 'Pay links'], ['bl-checks', 'Money checks'], state.testMode ? ['bl-clock', 'Billing clock'] : null].filter(Boolean);
   fill(main,
     header('Billing', 'Money in, money owed, and who is on which plan.'),
     numbers, monthNote,
     h('nav', { class: 'tm-jump', 'aria-label': 'Billing sections' }, jumps.map(([id, label, n]) => h('button', { type: 'button', onClick: () => jumpTo(id) }, label, n ? h('span', { class: 'warn-text', style: 'margin-left:6px' }, String(n)) : null))),
     checks.needs_look ? checksPanel : null,
-    attPanel, invPanel, memPanel, planPanel, linksPanel,
+    attPanel, invPanel, memPanel, refundsPanel(), planPanel, linksPanel,
     checks.needs_look ? null : checksPanel,
     testPanel);
 }
@@ -2056,6 +2114,36 @@ function setupDialog(title, fields, saveLabel, onSave, note) {
   d.showModal();
   setTimeout(() => d.querySelector('input,select')?.focus(), 0);
 }
+// Change a membership's plan (owner): start now, at the end of this membership, or now with the price difference charged
+// (billing.js changePlan). m: { client_id, client_name, plan_id, status, current_period_end, pending_plan_id, pending_plan_name }.
+function changePlanDialog(m, plans) {
+  const first = m.client_name.split(' ')[0];
+  const choices = plans.filter((p) => p.active && p.id !== m.plan_id);
+  if (!choices.length) return toast('There is no other plan to move to. Add one under Billing → Plans.', 'warn');
+  const plan = select(choices.map((p) => [p.id, `${p.name} (${money(p.price_cents)}/mo)`]), { value: m.pending_plan_id && choices.some((p) => p.id === m.pending_plan_id) ? m.pending_plan_id : choices[0].id });
+  const ends = m.status === 'trialing' ? 'when the free trial ends' : `at the renewal on ${date(m.current_period_end)}`;
+  const when = select([['now', 'Start now'], ['renewal', `Wait until the end of this membership (${ends})`], ...(m.status === 'active' ? [['difference', 'Start now and charge the difference now']] : [])], { value: 'now' });
+  const cur = plans.find((p) => p.id === m.plan_id);
+  const note = h('p', { class: 'small muted', style: 'margin:0' });
+  const explain = () => {
+    const p = choices.find((x) => x.id === plan.value), diff = p && cur ? p.price_cents - cur.price_cents : 0;
+    note.textContent = when.value === 'now' ? `${first} moves to ${p.name} today. Nothing is charged now; the next renewal charges ${money(p.price_cents)}.`
+      : when.value === 'renewal' ? `${first} stays on ${cur?.name ?? 'the current plan'} until ${m.status === 'trialing' ? 'the trial ends' : date(m.current_period_end)}, then moves to ${p.name} and is charged ${money(p.price_cents)}.`
+      : diff > 0 ? `${first} moves to ${p.name} today, and the card on file is charged the ${money(diff)} a month difference for the days left in this paid month. The renewal on ${date(m.current_period_end)} charges ${money(p.price_cents)}.`
+      : `${p.name} costs the same or less, so nothing is charged now. ${first} moves today; the renewal charges ${money(p.price_cents)}.`;
+  };
+  plan.addEventListener('change', explain); when.addEventListener('change', explain); explain();
+  setupDialog(`Change ${first}'s plan`, [field('New plan', plan), field('When', when), note,
+    m.pending_plan_name ? h('p', { class: 'small', style: 'margin:0' }, `Waiting now: moves to ${m.pending_plan_name} at the renewal. Any change here replaces it.`) : null], 'Change plan', async () => {
+    const out = await post(`/v1/clients/${m.client_id}/subscription/plan`, { plan_id: plan.value, when: when.value });
+    const name = choices.find((p) => p.id === plan.value)?.name;
+    const c = out.change?.charged;
+    if (when.value === 'renewal') return `${first} moves to ${name} at the renewal.`;
+    if (c && c.status !== 'paid') { toast(`${first} is on ${name} now, but the ${money(c.amount_cents)} difference was declined${c.error ? ` (${c.error})` : ''}. It retries like any declined payment.`, 'warn'); return null; }
+    return c ? `${first} is on ${name} now. Charged ${money(c.amount_cents)} for the rest of this month.` : `${first} is on ${name} now.`;
+  });
+}
+const cancelPlanChange = (m) => (e) => { if (confirm(`Cancel ${m.client_name.split(' ')[0]}'s move to ${m.pending_plan_name}? They stay on their current plan.`)) busy(e.currentTarget, async () => { await del(`/v1/clients/${m.client_id}/subscription/pending-plan`); toast('Plan change canceled.'); render(); }); };
 const dollarsIn = (cents, attrs = {}) => input({ type: 'number', min: '0', step: '0.01', inputmode: 'decimal', value: cents == null ? '' : (cents / 100).toFixed(2), ...attrs });
 const toCents = (el) => (el.value.trim() === '' ? NaN : Math.round(Number(el.value) * 100));
 const LOCATION_KIND = { facility: 'Facility', mobile: 'Mobile (clients\' homes)', park: 'Park', client_home: 'Client home', other: 'Other' };

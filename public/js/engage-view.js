@@ -317,7 +317,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
     return h('button', { type: 'button', class: 'eg-lesson', 'data-lesson': l.id, onClick: () => openLesson(l.id) },
       h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
       h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title),
-        h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null, l.done ? 'Done' : null].filter(Boolean).join(' · ') || 'Lesson'),
+        h('span', { class: 'small muted' }, [{ blog: 'Blog', research: 'Research' }[l.category] ?? null, l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null, l.done ? 'Done' : null].filter(Boolean).join(' · ') || 'Lesson'),
         l.summary ? h('span', { class: 'small muted' }, l.summary) : null));
   }
   // Open work first; finished work folds away behind Show finished. Buttons say what happens: Read lesson, Start course,

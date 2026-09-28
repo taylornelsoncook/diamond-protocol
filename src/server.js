@@ -9,6 +9,7 @@ import { userForSession, keyForSecret, logApiRequest } from './services/access.j
 import { clientByToken } from './services/clients.js';
 import { deliverPending } from './services/events.js';
 import { guardianForToken } from './services/families.js';
+import { familyLock, lockMessage, OPEN_WHILE_LOCKED } from './services/lockout.js';
 import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
 import { syncLibrary } from './services/performance.js';
@@ -38,7 +39,7 @@ const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
@@ -128,6 +129,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
       if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/shop') rateLimit(`shop:${ip}`, 120, 15 * 60000);
+      if (route.path.startsWith('/portal/api/public/learn')) rateLimit(`learn:${ip}`, 120, 15 * 60000);
       if (route.path.startsWith('/portal/api/public/spot/')) rateLimit(`spot:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/report') rateLimit(`report:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
@@ -236,6 +238,9 @@ function authenticate(ctx, req, route, r, url) {
     r.guardian = guardianForToken(ctx, r.familyToken);
     if (!r.guardian) throw new HttpError(401, 'unauthenticated', 'Sign in with your email to continue.');
     if (!bearerFam && req.method !== 'GET' && req.headers.origin && req.headers.origin !== `${url.protocol}//${url.host}`) throw new HttpError(403, 'bad_origin', 'Requests from other sites are not allowed.');
+    // A family whose membership payment keeps declining can only fix it (lockout.js).
+    const lock = OPEN_WHILE_LOCKED.has(`${route.method} ${route.path}`) ? null : familyLock(ctx, r.guardian.family_id);
+    if (lock) { const e = new HttpError(402, 'payment_locked', lockMessage(lock)); e.details = { amount_cents: lock.amount_cents, invoice_ids: lock.invoices.map((i) => i.id) }; throw e; }
     return;
   }
   if (route.auth === 'client') {

@@ -18,6 +18,7 @@ import * as spots from './services/spots.js';
 import * as portal from './services/portal.js';
 import * as profiles from './services/profiles.js';
 import { rateLimit } from './services/security.js';
+import { familyLock, lockMessage } from './services/lockout.js';
 
 const list = (data) => ({ data });
 // One of the signed-in parent's athletes (archived athletes are hidden from the family). Everything below goes through this.
@@ -52,6 +53,8 @@ export const portalRoutes = [
   ['GET', '/portal/api/public/shop', 'public', 'The online store page: programs and courses for sale with prices and what\'s inside. No names.', (ctx) => shop.publicShop(ctx)],
   ['GET', '/portal/api/public/schedule', 'public', 'The Book now page: classes, clinics and camp days in the next 2 weeks with open spots, and the next evaluation times. No names.', (ctx) => booknow.publicSchedule(ctx)],
   ['GET', '/portal/api/public/report', 'public', 'A progress report from a share link: send the link\'s secret in the X-Report-Link header. The family view without the date of birth. ?from= and ?to= limit the period; ?open=1 counts an open. Wrong, expired and turned-off links all get 410.', (ctx, r) => reports.openReportLink(ctx, r.reportLink, { count: r.query.open === '1', ...reports.reportPeriod(r.query) })],
+  ['GET', '/portal/api/public/learn', 'public', 'Coach\'s education for the public page (/learn): published stand-alone lessons under Coach\'s education, newest first. No sign-in.', (ctx) => engage.publicLearn(ctx)],
+  ['GET', '/portal/api/public/learn/:id', 'public', 'One published coach\'s education lesson: title, summary, text, video and minutes.', (ctx, r) => engage.publicLearnLesson(ctx, r.params.id)],
   ['GET', '/portal/api/public/legal', 'public', 'The current terms of service and privacy policy.', (ctx) => legal.legalDocs(ctx)],
   ['POST', '/portal/api/signup', 'public', 'New family: parent {name, email, phone}, athletes [{name, birth_date, sex, sport, school, medical_notes, emergency_name, emergency_phone}], accept_terms=true. Emails a code.', (ctx, r) => signup.startSignup(ctx, r.body, r.ip)],
   ['POST', '/portal/api/signup/verify', 'public', 'Finish sign-up with signup_id and the emailed code. Creates the family and signs the parent in.', (ctx, r) => signup.finishSignup(ctx, r.body, r.ip, { userAgent: r.userAgent })],
@@ -64,11 +67,14 @@ export const portalRoutes = [
   ['POST', '/portal/api/check-in', 'guardian', 'Check in at the door: code, and booking_id (or none to check in everyone booked there now).', (ctx, r) => checkin.familyCheckIn(ctx, r.guardian.family_id, r.body)],
   ['POST', '/portal/api/logout', 'guardian', 'Sign out.', (ctx, r) => { families.portalLogout(ctx, r.familyToken); return { ok: true }; }],
 
-  ['GET', '/portal/api/me', 'guardian', 'Family, athletes, card, waiver.', (ctx, r) => {
+  ['GET', '/portal/api/me', 'guardian', 'Family, athletes, card, waiver, and payment_lock when a declined membership payment has locked the family out (every route but the card, payments, your details, agreements, the waiver, devices, export and deletion then answers 402 payment_locked).', (ctx, r) => {
     const fam = families.getFamily(ctx, r.guardian.family_id);
     const settings = families.getSettings(ctx);
     const agreements = legal.consentStatus(ctx, r.guardian.id);
+    const lock = familyLock(ctx, r.guardian.family_id);
     return {
+      // Locked out over a declined membership payment: only the card and payments work until it's paid (lockout.js).
+      payment_lock: lock ? { amount_cents: lock.amount_cents, athletes: lock.athletes, invoice_ids: lock.invoices.map((i) => i.id), message: lockMessage(lock) } : null,
       guardian: { id: r.guardian.id, name: r.guardian.name, email: r.guardian.email, phone: r.guardian.phone, texts: sms.textStatus(r.guardian) },
       agreements, open_deletion_request: !!ctx.db.get(`SELECT 1 FROM data_requests WHERE family_id = ? AND kind = 'delete' AND status = 'open'`, r.guardian.family_id),
       family: fam, athletes: portal.familyAthletes(ctx, r.guardian.family_id).map((c) => athleteSummary(ctx, c.id, r.guardian.id)),
@@ -177,6 +183,7 @@ export const portalRoutes = [
   ['POST', '/portal/api/athletes/:id/messages/read', 'guardian', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, athleteOf(ctx, r, r.params.id).id, { guardianId: r.guardian.id })],
   ['GET', '/portal/api/athletes/:id/lessons/:lesson', 'guardian', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson)],
   ['GET', '/portal/api/parent-courses', 'guardian', 'Courses for parents that fit your athletes\' ages, with what you have read.', (ctx, r) => list(engage.parentCourses(ctx, r.guardian))],
+  ['GET', '/portal/api/parent-articles', 'guardian', 'Stand-alone reading for parents: parent education, blogs and research, newest first, with what you have read. Open one with /portal/api/parent-lessons/:id.', (ctx, r) => list(engage.parentArticles(ctx, r.guardian))],
   ['GET', '/portal/api/parent-lessons/:id', 'guardian', 'Read a lesson for parents.', (ctx, r) => engage.parentLesson(ctx, r.guardian, r.params.id)],
   ['POST', '/portal/api/parent-lessons/:id/complete', 'guardian', 'Mark a lesson for parents read (done=false to undo).', (ctx, r) => engage.completeParentLesson(ctx, r.guardian, r.params.id, r.body.done !== false)],
   ['POST', '/portal/api/athletes/:id/lessons/:lesson/quiz', 'guardian', 'Take the lesson quiz with your athlete: answers (choice numbers from 0). 80% or more finishes the lesson.', (ctx, r) => engage.takeQuiz(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body)],

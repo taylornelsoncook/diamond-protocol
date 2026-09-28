@@ -441,9 +441,23 @@ portal.requestMembershipChange(ctx, ctx.db.get(`SELECT * FROM guardians WHERE em
     newId('whd'), hook, e.id, e.type, i ? 'failed' : 'succeeded', i ? 6 : 1, i ? 500 : 200, i ? 'The receiver answered 500.' : null, e.created_at, e.created_at, i ? 812 : 143, i ? 'Internal Server Error' : '{"status":"success"}'));
 }
 
+// ---- The owner's improvements (version 46): how each client trains, and posts under Coach's education, Blogs and Research.
+for (const [name, kind] of [['Daniel Reyes', 'hybrid'], ['Aisha Rahman', 'hybrid'], ['Maya Okafor', 'remote'], ['Priya Nair', 'remote'], ['Grace Kim', 'remote'], ['Tom Becker', 'in_facility']]) {
+  if (made[name]) ctx.db.run('UPDATE clients SET training_type = ? WHERE id = ?', kind, made[name].id);
+}
+ctx.db.run(`UPDATE clients SET training_type = 'in_facility' WHERE id = ?`, lopez.id);
+// The Nguyen family's declined payment also declined on its first retry, so their portal shows the payment lockout.
+ctx.db.run(`UPDATE invoices SET attempts = max(attempts, 2), auto_attempts = 2 WHERE status = 'failed' AND client_id IN (SELECT c.id FROM clients c JOIN guardians g ON g.family_id = c.family_id WHERE g.email = 'linh.nguyen@example.com')`);
+engage.createLesson(ctx, { category: 'coach', title: 'Coaching the hip hinge', summary: 'Three cues that fix most deadlift patterns.', minutes: 5,
+  body: 'Start with the hips, not the chest: "push the wall behind you with your hips."\n\nKeep the shins nearly still. If the knees drift forward, it has become a squat.\n\nFilm from the side. Most athletes feel straight when they are not.' });
+engage.createLesson(ctx, { category: 'blog', title: 'Summer speed camp recap', summary: 'What 40 athletes worked on this July, and what comes next.', minutes: 3,
+  body: 'Forty athletes spent four weeks on acceleration mechanics, landing and change of direction.\n\nAverage 10-yard times dropped by a tenth of a second. Fall group classes pick up where camp left off.' });
+engage.createLesson(ctx, { category: 'research', title: 'Sleep and injury risk in teen athletes', summary: 'What the research says about getting 8 hours or more.', minutes: 4,
+  body: 'Several studies of high school athletes found that those sleeping fewer than 8 hours a night were injured more often than those who slept more.\n\nThe simplest change most families can make: a consistent bedtime and phones out of the bedroom.' });
+
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);
-console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com, kurt.jensen@example.com (two kids), linh.nguyen@example.com (card declining) or paulo.silva@example.com (no card or waiver yet); in test mode the code is shown on screen)`);
+console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com, kurt.jensen@example.com (two kids), linh.nguyen@example.com (card declining, locked out until it's paid) or paulo.silva@example.com (no card or waiver yet); in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
 console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);
 ctx.db.close();

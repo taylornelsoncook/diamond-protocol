@@ -77,6 +77,14 @@ function render({ keepScroll = false } = {}) {
   const views = { home: viewHome, book: viewBook, progress: viewProgress, programs: viewPrograms, family: viewFamily };
   const main = h('main', { class: 'p-wrap' });
   fill(root, main, tabBar());
+  // Locked out over a declined membership payment: only the Family tab (card and payments) works until it's paid.
+  if (state.me.payment_lock && state.tab !== 'family') {
+    fill(main, top('Payment needed'), h('section', { class: 'dp-panel stack', role: 'alert' },
+      h('p', { class: 'warn-text', style: 'margin:0' }, state.me.payment_lock.message),
+      h('div', { class: 'row wrap' }, btn('Update card or pay', () => go('family', { focus: 'card' }), 'primary'))));
+    if (!keepScroll) window.scrollTo(0, 0);
+    return;
+  }
   views[state.tab](main).then(() => { if (keepScroll) window.scrollTo(0, y); }).catch((e) => fill(main, h('p', { class: 'warn-text' }, e.message)));
   if (!keepScroll) window.scrollTo(0, 0);
 }
@@ -237,9 +245,15 @@ async function viewParentEd(main) {
   fill(main, top('For parents'), subtabs, where);
   drawSubtabs();
   if (parentReader) return renderParentReader(where);
-  const { data } = await get('parent-courses');
+  const [{ data }, articles] = await Promise.all([get('parent-courses'), get('parent-articles').then((r) => r.data).catch(() => [])]);
   if (data.length === 1) openCourse.add(data[0].id);
-  fill(where, data.length ? [h('p', { class: 'small muted', style: 'margin:0' }, 'Short reads from our coaches for parents, picked for your athletes\' ages.'), data.map((c) => {
+  // Stand-alone reading: parent education, blogs and research, newest first.
+  const KIND = { parent: 'For parents', blog: 'Blog', research: 'Research' };
+  const reading = articles.length ? h('div', { class: 'dp-panel stack-tight' }, h('span', { class: 'strong' }, 'Latest reading'),
+    articles.map((l) => h('button', { type: 'button', class: 'eg-lesson', onClick: () => openParentLesson(l.id) },
+      h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
+      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [KIND[l.category], l.minutes ? `${l.minutes} min` : null, l.done ? 'Read' : null].filter(Boolean).join(' · ')))))) : null;
+  fill(where, data.length || articles.length ? [reading, h('p', { class: 'small muted', style: 'margin:0' }, 'Short reads from our coaches for parents, picked for your athletes\' ages.'), data.map((c) => {
     const open = openCourse.has(c.id);
     const list = h('div', { class: 'eg-list', hidden: !open }, c.description ? h('p', { class: 'small muted' }, c.description) : null, c.lessons.map((l) => h('button', { type: 'button', class: 'eg-lesson', onClick: () => openParentLesson(l.id) },
       h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
@@ -258,7 +272,7 @@ function renderParentReader(where) {
   const l = parentReader;
   fill(where, h('article', { class: 'eg-reader' },
     h('div', null, btn('‹ Back to For parents', () => { parentReader = null; render(); }, 'ghost')),
-    h('p', { class: 'small muted' }, `${l.course.title} · Lesson ${l.position.n} of ${l.position.of}`),
+    h('p', { class: 'small muted' }, l.course ? `${l.course.title} · Lesson ${l.position.n} of ${l.position.of}` : ({ blog: 'Blog', research: 'Research' }[l.category] ?? 'For parents')),
     h('h2', { class: 'eg-reader-t' }, l.title),
     l.video_url ? videoEmbed(l.video_url, l.title) : null,
     h('div', { class: 'eg-body' }, String(l.body ?? l.summary ?? '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => h('p', null, p))),
@@ -719,6 +733,7 @@ async function viewPrograms(main) {
       h('div', null, h('dt', null, 'Status'), h('dd', { class: m.status === 'past_due' ? 'warn-text' : null }, STATUS[m.status] ?? m.status, m.past_due_cents ? ` · ${money(m.past_due_cents)} didn't go through` : '')),
       m.trial_ends_at ? h('div', null, h('dt', null, 'Trial ends'), h('dd', null, fmt(m.trial_ends_at, { month: 'long', day: 'numeric' }))) : null,
       m.next_charge_at && !m.trial_ends_at ? h('div', null, h('dt', null, 'Next charge'), h('dd', null, fmt(m.next_charge_at, { month: 'long', day: 'numeric' }))) : null,
+      m.pending_plan_name ? h('div', null, h('dt', null, 'Changing to'), h('dd', null, `${m.pending_plan_name} on ${fmt(m.renews, { month: 'long', day: 'numeric' })}`)) : null,
       h('div', null, h('dt', null, 'Left in packs'), h('dd', null, `${a.credits.group} group, ${a.credits.private} private`))) : h('p', { class: 'muted small' }, `${a.first_name} has no membership. A membership covers every group class and holds a standing spot; see the plans below.`),
     req ? h('div', { class: 'p-banner p-banner--info' }, h('span', { class: 'grow' }, `You asked to ${KINDS[req.kind]}${req.kind === 'switch' && req.plan_name ? ` to ${req.plan_name}` : ''} on ${fmt(req.created_at, { month: 'short', day: 'numeric' })}. We'll be in touch.`),
       btn('Withdraw', (e) => busy(e.currentTarget, async () => { await post(`athletes/${a.id}/membership-request/withdraw`); toast('Request withdrawn.'); await reload(); }), 'ghost')) : null,
@@ -826,6 +841,7 @@ async function viewFamily(main) {
   const f = state.me.family, me = state.me.guardian;
   const payments = await get('payments').catch(() => null);
   const focus = state.focus; state.focus = null;
+  const lockNote = state.me.payment_lock ? h('div', { class: 'p-banner', role: 'alert' }, h('span', { class: 'grow warn-text' }, `${state.me.payment_lock.message} Booking, the athlete app and self check-in are paused until then.`)) : null;
   const back = state.returnTo ? h('div', { class: 'p-banner p-banner--info' }, h('span', { class: 'grow' }, 'When your card is saved, go back to where you were.'),
     btn(`Back to ${state.returnTo === 'book' ? 'Book' : 'Programs'}`, () => { const t = state.returnTo; state.returnTo = null; go(t); }, 'outline')) : null;
 
@@ -916,7 +932,7 @@ async function viewFamily(main) {
         }, 'ghost')),
     h('p', { class: 'small muted' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
 
-  fill(main, top('Family'), back, finish, agreementsPanel, cardPanel, payPanel, waiverPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, add,
+  fill(main, top('Family'), lockNote, back, finish, agreementsPanel, cardPanel, payPanel, waiverPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, add,
     parentsPanel(), textsPanel, devicesPanel(), dataPanel,
     btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.me = null; render(); }), 'ghost'));
   if (focus) setTimeout(() => scrollTo(focus === 'card' ? 'fam-card' : focus === 'waiver' ? 'fam-waiver' : focus), 50);

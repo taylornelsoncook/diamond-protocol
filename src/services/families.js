@@ -31,6 +31,7 @@ const DEFAULTS = {
   review_url: '',                         // Google review link; review requests stay off until it's set
   review_requests: 'on',                  // ask happy families for a review after a 10th session or a personal best
   staff_discount_max_pct: '0',            // the biggest discount coaches and front desk may give at the counter, as a percent of the sale. Owner decision: 0 (only the owner gives discounts)
+  payment_lock_tries: '2',                // lock a family out (but for fixing the card) once a membership payment declined on this many automatic tries; 0 = never (lockout.js)
   open_spot_offers: 'suggest'             // light classes: 'suggest' shows them on Today to send offers by hand, 'auto' sends them, 'off' hides them
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
@@ -66,6 +67,7 @@ export function updateSettings(ctx, body) {
   if (body.review_requests !== undefined) next.review_requests = body.review_requests === true || body.review_requests === 'on' ? 'on' : 'off';
   if (body.public_schedule !== undefined) next.public_schedule = body.public_schedule === true || body.public_schedule === 'on' ? 'on' : 'off';
   if (body.open_spot_offers !== undefined) next.open_spot_offers = v.oneOf(body.open_spot_offers, 'open_spot_offers', ['off', 'suggest', 'auto']);
+  if (body.payment_lock_tries !== undefined) next.payment_lock_tries = String(v.int(body.payment_lock_tries, 'payment_lock_tries', { min: 0, max: 3 }));
   if (body.staff_discount_max_pct !== undefined) next.staff_discount_max_pct = String(v.int(body.staff_discount_max_pct, 'staff_discount_max_pct', { min: 0, max: 100 }));
   if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';

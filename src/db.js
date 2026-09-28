@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 45;   // 44 Education, 45 the CRM
+const SCHEMA_VERSION = 46;   // 44 Education, 45 the CRM, 46 the owner's improvements
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -89,9 +89,10 @@ const ADDED_TABLES = {
   45: ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates']
 };
 const ADDED_COLUMNS = {
-  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41
+  clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',
+    "training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote'))"],   // version 46   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41
   team_roster: ['athlete_id TEXT'],
-  subscriptions: ['trial_reminded_at TEXT'],                              // version 11
+  subscriptions: ['trial_reminded_at TEXT', 'pending_plan_id TEXT REFERENCES plans(id)', 'pending_set_at TEXT'],   // version 11; a plan change at renewal: version 46
   guardians: ['sms_opt_in_at TEXT', 'sms_opt_out_at TEXT', 'calendar_token_hash TEXT', 'calendar_created_at TEXT'],   // texts: version 13; calendar feed: version 41
   bookings: ['reminded_at TEXT', 'note TEXT'],                            // reminders: version 13; note for the coach: version 41
   locations: ['checkin_code TEXT'],                                       // version 16
@@ -105,7 +106,7 @@ const ADDED_COLUMNS = {
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL',         // version 23 (then rebuilt so assignment_id can be empty)
     'rpe INTEGER', 'started_at TEXT', 'request_id TEXT', 'edited_at TEXT',                  // version 40 (batch B8): effort, time taken, one save per Finish
     'program_id TEXT', 'program_name TEXT', 'workout_title TEXT', 'workout_week INTEGER', 'workout_day INTEGER', 'exercises_snapshot TEXT'],   // version 43: what a deleted workout was
-  lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
+  lessons: ['quiz TEXT', "category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))"],   // version 24: lesson quizzes; 46: Education tabs
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
   spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
@@ -121,7 +122,8 @@ const ADDED_COLUMNS = {
     'booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL'],        // booking_id: version 38
   // ---- Version 38: billing (batch B6): refunds, card reminders, voids and payments recorded by hand ----
   invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT',
-    'auto_attempts INTEGER NOT NULL DEFAULT 0'],                          // version 43: automatic charges only (retries the owner or a parent starts don't count)
+    'auto_attempts INTEGER NOT NULL DEFAULT 0',
+    'note TEXT'],                                                         // version 46: a plan change's price difference                          // version 43: automatic charges only (retries the owner or a parent starts don't count)
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
@@ -205,6 +207,10 @@ function migrate(raw, schema) {
   }
   // ---- Version 45 (batch B15, CRM) ----
   if (version < 45) crmUpgrade(raw, schema);
+  // ---- Version 46: the owner's improvements. Lessons in parent courses are parent education; everything else stays athlete education.
+  if (version < 46 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'lessons'`).get()) {
+    raw.exec(`UPDATE lessons SET category = 'parent' WHERE course_id IN (SELECT id FROM courses WHERE audience = 'parents')`);
+  }
 }
 
 // ---------- Version 45: CRM ----------

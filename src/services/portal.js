@@ -251,7 +251,7 @@ export async function retryDeclined(ctx, familyId, invoiceId) {
   if (i.status !== 'failed') throw conflict(i.status === 'paid' ? 'This payment already went through.' : 'This payment can\'t be tried again. Message us if you have a question.');
   if (i.attempts >= PORTAL_RETRY_LIMIT) throw conflict('This payment has been tried many times. Message us and we\'ll sort it out together.');
   const out = await billing.retryInvoice(ctx, i.id);
-  return { status: out.status, message: out.status === 'paid' ? 'Paid. Thanks!' : `The card was declined again: ${out.last_error ?? 'no reason given'}. Nothing was charged. Replace the card and it's tried again right away.` };
+  return { status: out.status, message: out.status === 'paid' ? 'Paid. Thanks!' : `The card was declined again: ${String(out.last_error ?? 'no reason given').replace(/\.$/, '')}. Nothing was charged. Replace the card and it's tried again right away.` };
 }
 
 // ---------- Card ----------

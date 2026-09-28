@@ -144,7 +144,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/verify' || route.path === '/portal/api/signup/verify') {
         const out = await route.handler(ctx, r);
         res.setHeader('set-cookie', cookie('dp_family', out.token, out.maxAge, url.protocol === 'https:'));
-        return json(res, 200, { guardian: out.guardian });
+        return json(res, 200, { guardian: out.guardian, ...(out.athletes ? { athletes: out.athletes.map(({ id, name, claim, message }) => ({ id, name, claim: claim ?? null, message: message ?? null })) } : {}) });
       }
       if (route.path === '/portal/api/logout') res.setHeader('set-cookie', cookie('dp_family', '', 0, url.protocol === 'https:'));
       const out = await route.handler(ctx, r);

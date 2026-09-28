@@ -337,9 +337,12 @@ async function viewToday(main) {
     rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
       : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
   const dateLine = tzFmt(board.now, { weekday: 'long', month: 'long', day: 'numeric' });
+  const parentSlot = h('div');
+  if (isOwner()) parentRequestsPanel().then((p) => fill(parentSlot, p)).catch(() => {});
   fill(main,
     header('Today', `${dateLine}. ${isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${first(state.user.name)}. Today's sessions and anything that needs you.`}`, addClientBtn()),
     pulseBlock(d.pulse),
+    parentSlot,
     agendaPanel,
     checkinPanelEl,
     h('div', { class: 'grid grid-2' },
@@ -740,6 +743,8 @@ async function viewClient(main, id) {
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
   const [en, testLib, owed, products, badgeLib, notesList, att, famList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
+  const [reqList, claimList] = isOwner() ? await Promise.all([get(`/v1/membership-requests?client_id=${id}&status=all`).catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]) : [{ data: [] }, { data: [] }];
+  const [requestsPanel, mergePanel] = isOwner() ? profilePanels(c, reqList.data, claimList.data) : [null, null];
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
@@ -1058,7 +1063,7 @@ async function viewClient(main, id) {
     contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
     c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
-  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks]];
+  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(requestsPanel, 'requests'), 'Requests'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks], [mergePanel]];
   const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
@@ -4461,3 +4466,64 @@ async function viewUpload(main) {
 }
 
 boot();
+
+// ---------- Parent requests and one profile per athlete (owner) ----------
+// Membership requests from the parent portal: the owner makes the change on the client page, then marks it done (or
+// declines), and the parent is emailed. Nothing about billing changes by itself.
+const REQUEST_WORDS = { switch: 'Switch plans', pause: 'Pause', cancel: 'Cancel' };
+function requestLine(r) {
+  return `${REQUEST_WORDS[r.kind] ?? r.kind}${r.kind === 'switch' && r.plan_name ? ` to ${r.plan_name}` : ''} · asked by ${r.guardian_name ?? 'a parent'} ${date(r.created_at)}`;
+}
+function resolveRequest(r, done) {
+  const note = prompt(done ? 'Mark done. A note for the parent (optional):' : 'Decline. A note for the parent (optional):', '');
+  if (note === null) return;
+  return post(`/v1/membership-requests/${r.id}/resolve`, { status: done ? 'done' : 'declined', note: note || undefined }).then(() => { toast(done ? 'Marked done. The parent was emailed.' : 'Declined. The parent was emailed.'); render(); }).catch((e) => toast(e.message, 'warn'));
+}
+// Merge `fromId` into `keepId` after showing what happens.
+async function mergeDialog(keepId, fromId) {
+  const p = await get(`/v1/clients/${keepId}/merge-preview?from=${encodeURIComponent(fromId)}`);
+  const d = document.getElementById('dialog');
+  const side = (x, label) => h('div', { class: 'dp-panel stack-tight' }, h('span', { class: 'dp-label', style: 'margin:0' }, label), h('strong', null, x.name), h('span', { class: 'small muted' }, [x.athlete_id, x.birth_date ? `born ${x.birth_date}` : 'no birthday', x.family_name ?? 'no family', x.membership ?? 'no membership'].join(' · ')),
+    h('span', { class: 'small muted' }, `${x.results} results · ${x.bookings} bookings · ${x.teams} teams · ${x.notes} notes`));
+  fill(d, h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, 'Merge two profiles'),
+    h('div', { class: 'grid grid-2' }, side(p.keep, 'Keep this profile'), side(p.from, 'Move everything from this one')),
+    p.problems.length ? h('div', { class: 'test-banner' }, p.problems.join(' ')) : h('p', { class: 'small' }, `Results, bookings, attendance, payments, notes, teams and device links move to ${p.keep.name} (${p.keep.athlete_id}). ${p.from.athlete_id} keeps finding them. The other profile is removed. This can't be undone and is written to the activity log.`),
+    h('div', { class: 'row wrap', style: 'justify-content:flex-end' },
+      p.problems.length ? null : btn('Merge', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${keepId}/merge`, { from: fromId, confirm: true }); d.close(); toast('Merged into one profile.'); location.hash = `#/clients/${keepId}`; render(); }), 'primary'),
+      btn('Close', () => d.close(), 'ghost'))));
+  d.showModal();
+}
+function profilePanels(c, reqs, claims) {
+  const open = reqs.filter((r) => r.status === 'open'), past = reqs.filter((r) => r.status !== 'open').slice(0, 3);
+  const reqPanel = reqs.length ? panel('Requests from parents', { subtitle: 'Make the change above, then mark it done. The parent is emailed either way.' },
+    open.map((r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, requestLine(r)), r.note ? h('span', { class: 'small muted', style: 'white-space:pre-wrap' }, `"${r.note}"`) : null),
+      btn('Mark done', () => resolveRequest(r, true), 'outline'), btn('Decline', () => resolveRequest(r, false), 'ghost'))),
+    past.map((r) => h('div', { class: 'list-item' }, h('span', { class: 'grow small muted' }, `${requestLine(r)} · ${r.status}${r.resolved_by ? ` by ${r.resolved_by}` : ''}${r.resolution_note ? `: ${r.resolution_note}` : ''}`)))) : null;
+  const mine = claims.filter((k) => k.claimed_client_id === c.id || k.new_client_id === c.id);
+  const search = h('input', { class: 'dp-input', placeholder: 'Name or Athlete ID of the other profile', 'aria-label': 'Find the other profile' });
+  const results = h('div');
+  search.addEventListener('input', debounce(async () => {
+    const q = search.value.trim();
+    if (q.length < 2) return fill(results);
+    const { data } = await get(`/v1/clients?q=${encodeURIComponent(q)}&archived=all`);
+    fill(results, data.filter((x) => x.id !== c.id).slice(0, 6).map((x) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, `${x.name} · ${x.athlete_id}${x.family?.name ? ` · ${x.family.name}` : ''}`), btn('Check', () => mergeDialog(c.id, x.id).catch((e) => toast(e.message, 'warn')), 'outline'))));
+  }, 250));
+  const mergePanel = panel('Same athlete, two profiles?', { subtitle: `Merge the other profile into ${c.name.split(' ')[0]}'s. Everything moves here, and the other Athlete ID keeps working.` },
+    mine.map((k) => {
+      const other = k.claimed_client_id === c.id ? { id: k.new_client_id, name: k.new_name, athlete_id: k.new_athlete_id } : { id: k.claimed_client_id, name: k.claimed_name, athlete_id: k.claimed_athlete_id };
+      return h('div', { class: 'test-banner stack-tight' }, h('span', null, `${k.guardian_name ?? 'A parent'} gave ${k.athlete_id} when adding ${k.new_name ?? 'an athlete'} (${{ name: 'different name', no_birthday: 'no birthday on file to check', birth_year: 'different birth year', in_family: 'profile already in a family', archived: 'profile archived' }[k.reason] ?? 'no match'}).`),
+        h('div', { class: 'row wrap' }, other.id ? btn(`Check merging ${other.name}`, () => mergeDialog(k.claimed_client_id, k.new_client_id).catch((e) => toast(e.message, 'warn')), 'outline') : null,
+          btn('Not the same athlete', () => post(`/v1/profile-claims/${k.id}/dismiss`).then(() => { toast('Dismissed.'); render(); }), 'ghost')));
+    }), search, results);
+  return [reqPanel, mergePanel];
+}
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+// Today (owner): open parent requests and profile checks, each linking to the client page.
+async function parentRequestsPanel() {
+  const [reqs, claims] = await Promise.all([get('/v1/membership-requests').catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]);
+  if (!reqs.data.length && !claims.data.length) return null;
+  return panel(`From parents (${reqs.data.length + claims.data.length})`, { subtitle: 'Membership requests to answer, and athletes who may have two profiles.' },
+    reqs.data.map((r) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.client_name), h('span', { class: 'small muted' }, requestLine(r))))),
+    claims.data.map((k) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${k.claimed_client_id}`, class: 'strong', style: 'color:var(--steel)' }, `${k.claimed_name} (${k.claimed_athlete_id})`),
+      h('span', { class: 'small muted' }, `${k.guardian_name ?? 'A parent'} gave this Athlete ID when adding ${k.new_name ?? 'an athlete'}. Check and merge.`)))));
+}

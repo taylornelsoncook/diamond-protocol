@@ -3,7 +3,7 @@ import { h, fill, busy, btn, field, input, select } from './ui.js';
 // Public sign-up for new families: parent, athletes, agreement, then an emailed code.
 const root = document.getElementById('root');
 const state = { athletes: [blankAthlete()] };
-function blankAthlete() { return { name: '', birth_date: '', sex: '', sport: '', school: '', medical_notes: '', emergency_name: '', emergency_phone: '' }; }
+function blankAthlete() { return { name: '', birth_date: '', sex: '', sport: '', school: '', medical_notes: '', emergency_name: '', emergency_phone: '', athlete_code: '' }; }
 
 async function boot() {
   const info = await (await fetch('/portal/api/public/info')).json();
@@ -52,7 +52,10 @@ function athleteCard(a, i) {
     h('div', { class: 'form-grid' }, field('Birthday', f('birth_date', { type: 'date', required: true, max: new Date().toISOString().slice(0, 10) }), 'Used for age groups.'), field('Sport', f('sport'))),
     h('div', { class: 'form-grid' }, field('School', f('school')), field('Sex', sex, 'Only used for growth estimates.')),
     field('Medical notes (optional)', med),
-    h('div', { class: 'form-grid' }, field('Emergency contact', f('emergency_name')), field('Their phone', f('emergency_phone', { type: 'tel' }))));
+    h('div', { class: 'form-grid' }, field('Emergency contact', f('emergency_name')), field('Their phone', f('emergency_phone', { type: 'tel' }))),
+    // Already on a team we train (their school or club): the Athlete ID links this sign-up to their existing profile.
+    h('details', { open: !!a.athlete_code }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Already training with us on a team?'),
+      field('Athlete ID (optional)', f('athlete_code', { autocomplete: 'off', autocapitalize: 'characters', placeholder: 'AVALOP2026', maxlength: '14' }), 'On their team roster or progress report. With the same name and birth year, their team results stay on one profile.')));
 }
 
 async function start(trap, agreed, errEl) {
@@ -74,7 +77,8 @@ function renderCode(started) {
     const data = await res.json();
     if (!res.ok) { err.textContent = data.error?.message ?? 'That didn\'t work. Try again.'; return; }
     const buy = new URLSearchParams(location.search).get('buy');     // from the store page: land on what they came to buy
-    location.href = `/parent?welcome=1${buy && /^(program|course):[\w-]+$/.test(buy) ? `&buy=${encodeURIComponent(buy)}` : ''}`;
+    const pending = (data.athletes ?? []).some((a) => a.claim === 'pending');   // an Athlete ID we'll check with the coach
+    location.href = `/parent?welcome=1${pending ? '&claim=1' : ''}${buy && /^(program|course):[\w-]+$/.test(buy) ? `&buy=${encodeURIComponent(buy)}` : ''}`;
   }); } },
     h('h1', { class: 'p-title' }, 'Check your email'),
     h('p', { class: 'muted' }, `We sent a 6-digit code to ${state.parent.email}. It expires in 30 minutes. If you already have an account, we emailed you a sign-in link instead.`),

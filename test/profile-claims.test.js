@@ -99,7 +99,8 @@ test('a wrong birth year, an unknown ID and a profile in another family all get 
   const f1 = await req('POST', '/portal/api/signup/verify', { signup_id: s1.body.signup_id, code: s1.body.dev_code });
   const s2 = await req('POST', '/portal/api/signup', { accept_terms: true, parent: { name: 'C D', email: 'cd1@example.com' }, athletes: [{ name: 'Jalen Brooks', birth_date: '2011-02-11', athlete_code: 'ZZZZZZ2020' }] });
   const f2 = await req('POST', '/portal/api/signup/verify', { signup_id: s2.body.signup_id, code: s2.body.dev_code });
-  assert.equal(f1.body.athletes?.[0]?.message ?? null, f2.body.athletes?.[0]?.message ?? null);
+  assert.equal(f1.body.athletes[0].claim, 'pending');
+  assert.deepEqual([f1.body.athletes[0].claim, f1.body.athletes[0].message], [f2.body.athletes[0].claim, f2.body.athletes[0].message], 'the same answer whether or not the ID exists');
   assert.equal(s1.body.message, s2.body.message);
   assert.equal((await req('POST', '/portal/api/signup', { accept_terms: true, parent: { name: 'E F', email: 'ef@example.com' }, athletes: [{ name: 'X Y', birth_date: '2011-02-11', athlete_code: 'not-an-id' }] })).status, 400, 'a badly shaped ID is refused (that says nothing about which exist)');
 });

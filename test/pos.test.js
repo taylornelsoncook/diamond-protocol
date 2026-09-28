@@ -354,6 +354,12 @@ test('deleting a family keeps its sales but drops where receipts went and the re
   assert.equal(row.receipt_token, null);
 });
 
+test('a receipt can be re-sent by hand at most 5 times an hour, so the counter can\'t be used to flood an inbox', async () => {
+  const s = await cash({ items: [{ product_id: shirt.id }], email_receipt: false });
+  for (let i = 0; i < 5; i++) assert.equal((await call('POST', `/v1/sales/${s.body.id}/receipt`, { email: 'someone@example.com' }, 'desk')).status, 200);
+  assert.equal((await call('POST', `/v1/sales/${s.body.id}/receipt`, { email: 'someone@example.com' }, 'desk')).status, 429);
+});
+
 test('setup: duplicate product and location names are refused, and a product needs a type', async () => {
   const dup = await call('POST', '/v1/products', { name: 'dp t-shirt', kind: 'gear', price_cents: 100 });
   assert.equal(dup.status, 409);

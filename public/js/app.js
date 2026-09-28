@@ -1375,7 +1375,7 @@ async function viewSell(main) {
     else if (e.key === 'Enter' && hits[active]) { e.preventDefault(); pickClient(hits[active]); }
     else if (e.key === 'Escape') { search.value = ''; drawHits(); }
   });
-  function pickClient(c) { sale.clientId = c?.id ?? ''; search.value = ''; hits = []; receipt.to = null; receipt.on = null; changed(); }
+  function pickClient(c) { sale.clientId = c?.id ?? ''; search.value = ''; hits = []; receipt.to = null; receipt.on = null; editingReceipt = false; receiptTo.value = ''; changed(); }   // a typed receipt address never carries over to someone else
   function drawClient() {
     const c = client();
     if (!c) return fill(clientBox, search, hitsBox, h('span', { class: 'small muted' }, 'Walk-in unless you choose someone. Packs and memberships need a client.'));

@@ -321,6 +321,7 @@ async function updateSessionNow(ctx, id, body) {
     const starts = zonedToUtc(date, time, zone);
     if (starts !== s.starts_at) {
       if (date < localDate(ctx.now(), zone)) throw badRequest('Pick today or a later date.');
+      if (starts <= ctx.now()) throw badRequest('That time has already passed today. Pick a later time.');
       if (s.series_id && ctx.db.get('SELECT 1 FROM class_sessions WHERE series_id = ? AND starts_at = ? AND id != ?', s.series_id, starts, id)) throw conflict('This class already has a session at that time. Move or cancel that one first.');
       next.starts_at = starts;
       if (s.series_id && !s.slot_date) next.slot_date = localDate(s.starts_at, zone);

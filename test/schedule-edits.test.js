@@ -138,6 +138,8 @@ test('one-off sessions carry a staff note; editing one session keeps only real c
   assert.equal((await coach('PATCH', `/v1/sessions/${s.id}`, { name: 'Makeup speed', capacity: 1 })).body.error.message, 'Nothing to change.');
   assert.equal((await desk('PATCH', `/v1/sessions/${s.id}`, { capacity: 3 })).status, 403);
   assert.equal((await coach('PATCH', `/v1/sessions/${s.id}`, { date: day(-1) })).status, 400);
+  const past = await coach('PATCH', `/v1/sessions/${s.id}`, { date: day(0), start_time: '00:00' });
+  assert.equal(past.status, 400, 'never moved into the past');
   // More spots: Mia moves up (her credit covers it) and her family hears once.
   const more = (await coach('PATCH', `/v1/sessions/${s.id}`, { capacity: 3 })).body;
   assert.equal(more.promoted, 1);

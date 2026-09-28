@@ -73,7 +73,24 @@ export async function sendText(ctx, { to, body, kind = 'manual', familyId = null
     id, phone, familyId, kind, text, status, error, providerId, ctx.now());
   return { id, status, error };
 }
-export const listTexts = (ctx, limit = 50) => ctx.db.all('SELECT * FROM texts ORDER BY created_at DESC, rowid DESC LIMIT ?', limit);
+// Texts, newest first: status (sent, failed, held, logged = not sent, received = replies), q (number or text).
+const TEXT_STATUSES = ['sent', 'failed', 'held', 'logged', 'received'];
+export function listTexts(ctx, q = {}) {
+  if (typeof q === 'number') q = { limit: q };
+  const where = [], p = [];
+  if (q.status) {
+    if (!TEXT_STATUSES.includes(q.status)) throw badRequest(`status must be one of: ${TEXT_STATUSES.join(', ')}.`);
+    where.push('status = ?'); p.push(q.status);
+  }
+  const text = String(q.q ?? '').trim().slice(0, 100);
+  if (text) {
+    const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`, digits = text.replace(/\D/g, '');
+    where.push(`(phone LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'${digits.length >= 3 ? ' OR phone LIKE ?' : ''})`); p.push(like, like, ...(digits.length >= 3 ? [`%${digits}%`] : []));
+  }
+  const limit = Math.min(Math.max(Number(q.limit) || 50, 1), 200), offset = Math.max(Math.floor(Number(q.offset)) || 0, 0);
+  return ctx.db.all(`SELECT * FROM texts ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?`, ...p, limit, offset);
+}
+export const textCounts = (ctx) => Object.fromEntries(TEXT_STATUSES.map((s) => [s, ctx.db.get('SELECT COUNT(*) AS n FROM texts WHERE status = ?', s).n]));
 
 // ---------- Automatic texts to families ----------
 const textsOn = (ctx, kind) => !getSetting(ctx, 'texts_off').split(',').includes(kind);

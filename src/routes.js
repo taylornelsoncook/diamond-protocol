@@ -12,6 +12,8 @@ import * as perfImport from './services/perf-import.js';
 import * as uploads from './services/uploads.js';
 import * as queue from './services/queue.js';
 import * as security from './services/security.js';
+import * as staff from './services/staff.js';
+import * as integrations from './services/integrations.js';
 import * as backups from './services/backups.js';
 import * as offsite from './services/offsite.js';
 import * as reports from './services/reports.js';
@@ -19,7 +21,7 @@ import * as library from './services/library.js';
 import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
 import * as engage from './services/engage.js';
-import { listOutbox, sendEmail, mailMode } from './services/mail.js';
+import { listOutbox, outboxCounts, resendEmail, sendEmail, mailMode } from './services/mail.js';
 import * as sms from './services/sms.js';
 import * as insights from './services/insights.js';
 import * as leads from './services/leads.js';
@@ -67,11 +69,19 @@ const subOf = (ctx, clientId) => {
 
 export const routes = [
   // Coach login
-  ['POST', '/auth/login', 'public', 'Auth', 'Sign in as a coach. Sets a session cookie.', (ctx, r) => access.login(ctx, r.body)],
+  ['POST', '/auth/login', 'public', 'Auth', 'Sign in as a coach. Sets a session cookie.', (ctx, r) => access.login(ctx, r.body, { ip: r.ip, userAgent: r.userAgent })],
   ['POST', '/auth/logout', 'session', 'Auth', 'Sign out.', (ctx, r) => { access.logout(ctx, r.sessionToken); return { ok: true }; }],
-  ['POST', '/auth/token', 'public', 'Auth', 'Sign in from the iPhone coach app. Returns a 90-day bearer token (dp_app_...).', (ctx, r) => access.appLogin(ctx, r.body)],
-  ['POST', '/auth/password', 'session', 'Auth', 'Change your password: current_password, new_password (10+ characters).', (ctx, r) => security.changePassword(ctx, r.user, r.body)],
-  ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { ...r.user, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate } })],
+  ['POST', '/auth/token', 'public', 'Auth', 'Sign in from the iPhone coach app. Returns a 90-day bearer token (dp_app_...).', (ctx, r) => access.appLogin(ctx, r.body, { ip: r.ip, userAgent: r.userAgent })],
+  ['POST', '/auth/password', 'session', 'Auth', 'Change your password: current_password, new_password (10+ characters). Signs out your other devices and emails you.', (ctx, r) => security.changePassword(ctx, r.user, r.body)],
+  ['POST', '/auth/forgot', 'public', 'Auth', 'Forgot password: email. Emails a staff account a link that works once, for 30 minutes. The answer is the same for any email.', (ctx, r) => staff.requestPasswordReset(ctx, r.body, { ip: r.ip, baseUrl: r.baseUrl })],
+  ['POST', '/auth/reset/check', 'public', 'Auth', 'Check a reset link before choosing a password: token.', (ctx, r) => staff.checkReset(ctx, r.body)],
+  ['POST', '/auth/reset', 'public', 'Auth', 'Choose a new password with an emailed reset link: token, password (10+ characters). Signs out every device.', (ctx, r) => staff.resetPassword(ctx, r.body)],
+  ['GET', '/auth/account', 'session', 'Auth', 'Your account: the devices you are signed in on and your recent sign-ins.', (ctx, r) => ({
+    user: { id: r.user.id, name: r.user.name, email: r.user.email, role: r.user.role }, devices: access.listDevices(ctx, r.user.id, r.user.session_id),
+    sign_ins: security.listAudit(ctx, { staff_id: r.user.id, kind: 'sign_ins', limit: 10 }).map((a) => ({ at: a.at, action: a.action, status: a.status, ip: a.ip })) })],
+  ['POST', '/auth/devices/:id/sign-out', 'session', 'Auth', 'Sign out one of your other devices.', (ctx, r) => access.endSession(ctx, r.user.id, r.params.id, r.user.session_id)],
+  ['POST', '/auth/sign-out-others', 'session', 'Auth', 'Sign out every device but this one.', (ctx, r) => ({ ok: true, signed_out: access.endSessions(ctx, r.user.id, { exceptId: r.user.session_id }) })],
+  ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { id: r.user.id, email: r.user.email, name: r.user.name, role: r.user.role, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate } })],
 
   // Dashboard
   ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner', userId: r.user?.id ?? null })],
@@ -97,7 +107,7 @@ export const routes = [
     return { __file: file };
   }],
   ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program (not front desk). Refused with 409 duplicate_email when the email belongs to a client, parent_exists when the parent\'s email already signs in for a family (add the athlete to that family instead), and possible_duplicate when a client has the same name and birthday (archived clients too) or the same phone number; details.duplicates lists them (possible_duplicate only with check_duplicates: true, which the dashboard sends; resend without it to create the account anyway).', (ctx, r) => clients.createClient(ctx, r.body, { staff: { role: r.user?.role ?? 'owner' } }), 201],
-  ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role })],
+  ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: !r.apiKey || r.apiKey.scope === 'full', role: r.user?.role })],   // the app link lets anyone who has it log workouts: not for read-only keys
   ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone, notes and profile fields (birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, athlete_id).', (ctx, r) => { clients.updateClient(ctx, r.params.id, r.body); return clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role }); }],
   ['GET', '/v1/clients/:id/attendance', 'any', 'Clients', 'Attendance: visits (roster and walk-in check-ins), no-shows and late cancels in the last 30 days, visits in 90 days, the last visit, and the 12 most recent outcomes (attended, walk_in, no_show, late_cancel, in_progress). A booking in a session that is still running isn\'t a no-show yet.', (ctx, r) => clients.attendance(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/merge-preview', 'any', 'Clients', 'Owner: what merging another profile (?from=) into this one would do: both profiles side by side, and anything that stops it (both have a membership, different families, both booked for one session).', (ctx, r) => profiles.mergePreview(ctx, r.params.id, r.query.from)],
@@ -297,8 +307,9 @@ export const routes = [
   ['GET', '/v1/families/:id/agreements', 'any', 'Families', 'Terms and privacy acceptances for a family.', (ctx, r) => list(legal.familyConsents(ctx, r.params.id))],
   ['GET', '/v1/settings', 'any', 'Families', 'Business settings: time zone, late-cancel window, waiver text.', (ctx) => families.getSettings(ctx)],
   ['PATCH', '/v1/settings', 'session', 'Families', 'Update settings. Changing the waiver text asks every family to sign again.', (ctx, r) => families.updateSettings(ctx, r.body)],
-  ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, and how email is set up (mode: test, restricted or live).', (ctx) => ({ ...list(listOutbox(ctx)), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
-  ['GET', '/v1/texts', 'session', 'Families', 'Text messages sent to parents and their replies, and how texting is set up (mode: test, restricted or live).', (ctx) => ({ ...list(sms.listTexts(ctx)), mode: sms.smsMode(ctx), only_to: ctx.sms?.onlyTo || null, kinds: sms.TEXT_KINDS })],
+  ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, newest first, and how email is set up (mode: test, restricted or live). Filter with ?status= (sent, failed, held, not_sent) and ?q= (address, subject or text); ?limit, ?offset. counts has the number in each status.', (ctx, r) => ({ ...list(listOutbox(ctx, r.query)), counts: outboxCounts(ctx), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
+  ['POST', '/v1/outbox/:id/resend', 'session', 'Families', 'Send an email again as a new message: to the same address, or to (another address) for emails that hold no sign-in code, password or private link.', (ctx, r) => resendEmail(ctx, r.params.id, r.body)],
+  ['GET', '/v1/texts', 'session', 'Families', 'Text messages sent to parents and their replies, newest first, and how texting is set up (mode: test, restricted or live). Filter with ?status= (sent, failed, held, logged, received) and ?q= (number or text).', (ctx, r) => ({ ...list(sms.listTexts(ctx, r.query)), counts: sms.textCounts(ctx), mode: sms.smsMode(ctx), only_to: ctx.sms?.onlyTo || null, kinds: sms.TEXT_KINDS })],
   ['POST', '/v1/texts/test', 'session', 'Families', 'Send a test text to a phone number (to) and wait for the text service to answer.', async (ctx, r) => {
     if (sms.smsMode(ctx) === 'test') throw badRequest('No text service is connected. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM on the server.');
     const out = await sms.sendText(ctx, { to: v.str(r.body?.to, 'to', { max: 40 }), kind: 'test', body: `Test text from ${families.getSetting(ctx, 'business_name')}. Texting is working.` });
@@ -469,12 +480,25 @@ export const routes = [
   ['DELETE', '/v1/integrations/:provider', 'session', 'Performance', 'Disconnect a system.', (ctx, r) => perfImport.disconnect(ctx, r.params.provider)],
 
   // Staff, security and backups (owner only)
-  ['GET', '/v1/staff', 'session', 'Admin', 'Staff accounts and their roles.', (ctx) => ({ data: security.listStaff(ctx), roles: security.ROLES })],
-  ['POST', '/v1/staff', 'session', 'Admin', 'Add a staff member: name, email, role (owner, coach, front_desk). Returns a one-time password, also emailed.', (ctx, r) => security.addStaff(ctx, r.body, r.baseUrl), 201],
-  ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change role, rename, turn an account off (active=false) or unlock it (unlock=true).', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
-  ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
+  ['GET', '/v1/staff', 'session', 'Admin', 'Staff accounts and their roles, each with devices signed in, what they still lead (work: upcoming sessions, classes, hours) and still_leading (turned off or front desk but still leading).', (ctx) => ({ data: security.listStaff(ctx), roles: security.ROLES })],
+  ['GET', '/v1/staff/summary', 'session', 'Admin', 'Security summary: staff who can sign in, turned off, locked, not signed in yet, accounts still leading sessions, failed sign-ins in 24 hours, refused requests in 7 days, and backups (last, overdue, total size, off-site).', (ctx) => staff.securitySummary(ctx)],
   ['GET', '/v1/staff/connection', 'session', 'Admin', 'Connection check: the X-Forwarded-For header this request arrived with, the connection address, the address the app decided on and TRUST_PROXY, with what to change.', (ctx, r) => security.connectionCheck(r.connection)],
-  ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in: who, what, when, from where. ?actor_id, ?target, ?failures=true, ?limit.', (ctx, r) => list(security.listAudit(ctx, r.query).map((a) => ({ ...a, description: describeAction(a.action) })))],
+  ['POST', '/v1/staff', 'session', 'Admin', 'Add a staff member: name, email, role (owner, coach, front_desk). Returns a one-time password, also emailed. An email of a turned-off account says so (details.user_id).', (ctx, r) => security.addStaff(ctx, r.body, r.baseUrl), 201],
+  ['GET', '/v1/staff/:id', 'session', 'Admin', 'One staff member: devices they are signed in on, recent activity and what they still lead.', (ctx, r) => staff.staffDetail(ctx, r.params.id, r.user.session_id)],
+  ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change name, email or role, turn an account off (active=false) or on, or unlock it (unlock=true). A new role or turning off signs them out; a new email or turning off cancels emailed reset links.', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
+  ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password (for someone who never signed in: resend the invite). Signs them out and cancels emailed reset links.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
+  ['POST', '/v1/staff/:id/sign-out', 'session', 'Admin', 'Sign a staff member out of every device (your own: every device but this one) without changing their password.', (ctx, r) => ({ ok: true, signed_out: access.endSessions(ctx, staff.staffDetail(ctx, r.params.id).id, { exceptId: r.params.id === r.user.id ? r.user.session_id : null }) })],
+  ['POST', '/v1/staff/:id/devices/:device/sign-out', 'session', 'Admin', 'Sign a staff member out of one device.', (ctx, r) => access.endSession(ctx, staff.staffDetail(ctx, r.params.id).id, r.params.device, r.user.session_id)],
+  ['GET', '/v1/staff/:id/hand-over', 'session', 'Admin', 'Before handing over: what they lead (upcoming sessions, classes, hours, booked clients), the next sessions, and with ?to= (a coach or owner) any sessions that clash for that person (they already lead something then, any place, or are off that day), each with its warnings.', (ctx, r) => staff.handOverPreview(ctx, r.params.id, r.query.to === undefined ? undefined : r.query.to === 'none' ? null : r.query.to)],
+  ['POST', '/v1/staff/:id/hand-over', 'session', 'Admin', 'Hand everything they lead from now on to another active coach or owner: to (their id, or null for nobody: sessions and classes left without a coach, hours removed). Clashes are warnings, as for every coach change: the answer is 409 coach_conflict (details.warnings, details.conflicts) until the request comes with confirm=true (hand everything over anyway) or leave_conflicts=true (leave the clashing sessions with this person).', (ctx, r) => staff.handOver(ctx, r.params.id, r.body, r.user)],
+  ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in, newest first: who, what, when, from where. Filter with ?who= (staff, api_key, parent, public, system), ?staff_id, ?actor_id, ?target, ?kind= (sign_ins, refused, failures), ?failures=true, ?since and ?until (dates, business time zone), ?q (name, record, address or what happened); ?limit, ?offset. total is the number matching.', (ctx, r) => {
+    const q = auditQuery(r.query);
+    return { ...list(security.listAudit(ctx, q).map((a) => ({ ...a, description: describeAction(a.action) }))), total: security.countAudit(ctx, q) };
+  }],
+  ['GET', '/v1/audit/export', 'session', 'Admin', 'The activity log as a CSV file, with the same filters as GET /v1/audit (up to 20,000 rows). Cells that could run as spreadsheet formulas are made safe.', (ctx, r) => {
+    const { csv } = security.auditCsv(ctx, auditQuery(r.query), (a) => describeAction(a.action));
+    return { __file: { filename: `activity-${new Date().toISOString().slice(0, 10)}.csv`, type: 'text/csv; charset=utf-8', body: csv } };
+  }],
   ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept) and the off-site copy status.', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx), offsite: offsite.status(ctx) })],
   ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now, and send it off-site when that is set up.', async (ctx) => {
     const b = backups.createBackup(ctx);
@@ -484,16 +508,28 @@ export const routes = [
   ['GET', '/v1/jobs', 'session', 'Admin', 'Background jobs: health, last runs and errors (runs are kept 30 days).', (ctx) => ({ data: ctx.jobs.status() })],
   ['POST', '/v1/jobs/:name/run', 'session', 'Admin', 'Run a background job now.', (ctx, r) => ctx.jobs.runNow(r.params.name)],
 
-  // Integrations (coach login only)
-  ['GET', '/v1/api-keys', 'session', 'Integrations', 'List API keys.', (ctx) => list(access.listApiKeys(ctx))],
-  ['POST', '/v1/api-keys', 'session', 'Integrations', 'Create an API key. The full key is shown once.', (ctx, r) => access.createApiKey(ctx, r.body), 201],
+  // Integrations (owner, signed in to the dashboard: API keys can't manage keys or webhooks)
+  ['GET', '/v1/api-status', 'session', 'Integrations', 'API & integrations at a glance: API keys (requests and errors in 30 days), webhooks (failing, failed in 7 days, waiting), email and texts (mode, failures in 7 days, counts) and exercise video coverage.', (ctx) => integrations.apiStatus(ctx)],
+  ['GET', '/v1/api-keys', 'session', 'Integrations', 'List API keys, each with its access level (scope: read, results or full) and requests and errors in the last 30 days.', (ctx) => ({ ...list(access.listApiKeys(ctx)), scopes: access.KEY_SCOPES })],
+  ['POST', '/v1/api-keys', 'session', 'Integrations', 'Create an API key: label and scope (read = read only, the default; results = read and send test results and device files; full = everything an API key can do). The full key is shown once.', (ctx, r) => access.createApiKey(ctx, r.body), 201],
+  ['PATCH', '/v1/api-keys/:id', 'session', 'Integrations', 'Rename a key (label) or change its access level (scope) without replacing it.', (ctx, r) => access.updateApiKey(ctx, r.params.id, r.body)],
   ['POST', '/v1/api-keys/:id/revoke', 'session', 'Integrations', 'Revoke a key immediately.', (ctx, r) => access.revokeApiKey(ctx, r.params.id)],
-  ['GET', '/v1/webhooks', 'session', 'Integrations', 'List webhook endpoints.', (ctx) => list(events.listEndpoints(ctx))],
-  ['POST', '/v1/webhooks', 'session', 'Integrations', 'Add an endpoint: url and events (or ["*"]).', (ctx, r) => events.createEndpoint(ctx, r.body), 201],
-  ['PATCH', '/v1/webhooks/:id', 'session', 'Integrations', 'Change url, events or active.', (ctx, r) => events.updateEndpoint(ctx, r.params.id, r.body)],
+  ['GET', '/v1/api-keys/:id/requests', 'session', 'Integrations', 'Requests made with a key in the last 30 days, newest first: method, address, answer, time taken, from where and the error sent back (never what was sent). ?status=errors, ?limit.', (ctx, r) => access.apiRequests(ctx, r.params.id, r.query)],
+  ['GET', '/v1/webhooks', 'session', 'Integrations', 'List webhook endpoints, each with how it is doing: delivered and failed in 7 days, waiting, failures in a row (failing after 3). The signing secret is shown only as a hint.', (ctx) => list(events.listEndpoints(ctx))],
+  ['POST', '/v1/webhooks', 'session', 'Integrations', 'Add an endpoint: url (a public https address), events (or ["*"]), optional label. Returns the signing secret. A URL already used by another webhook is refused.', (ctx, r) => events.createEndpoint(ctx, r.body), 201],
+  ['PATCH', '/v1/webhooks/:id', 'session', 'Integrations', 'Change label, url, events or active.', (ctx, r) => events.updateEndpoint(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/webhooks/:id', 'session', 'Integrations', 'Delete an endpoint.', (ctx, r) => events.deleteEndpoint(ctx, r.params.id)],
-  ['GET', '/v1/webhooks/:id/deliveries', 'session', 'Integrations', 'Recent delivery attempts for an endpoint.', (ctx, r) => list(events.listDeliveries(ctx, r.params.id))],
-  ['GET', '/v1/event-types', 'any', 'Integrations', 'Every event type a webhook can subscribe to.', () => list(events.EVENT_TYPES)],
+  ['GET', '/v1/webhooks/:id/secret', 'session', 'Integrations', 'Show an endpoint\'s signing secret.', (ctx, r) => events.endpointSecret(ctx, r.params.id)],
+  ['POST', '/v1/webhooks/:id/rotate-secret', 'session', 'Integrations', 'Make a new signing secret, shown once. The old one also signs (a second v1= in DP-Signature) for keep_old_hours (0 to 72, default 24) so your receiver can switch over.', (ctx, r) => events.rotateSecret(ctx, r.params.id, r.body)],
+  ['POST', '/v1/webhooks/:id/test', 'session', 'Integrations', 'Send a test event now and wait for the answer: event (test.ping, the default, or a sample of any event type, marked "test": true). Tried once; never in the activity feed.', (ctx, r) => events.sendTest(ctx, r.params.id, r.body)],
+  ['POST', '/v1/webhooks/:id/resend-failed', 'session', 'Integrations', 'Send every delivery that failed in the last 7 days again (up to 50).', (ctx, r) => events.resendFailed(ctx, r.params.id)],
+  ['GET', '/v1/webhooks/:id/deliveries', 'session', 'Integrations', 'Delivery attempts for an endpoint, newest first. ?status= (failed, delivered, waiting), ?event=, ?limit, ?offset.', (ctx, r) => events.listDeliveries(ctx, r.params.id, r.query)],
+  ['GET', '/v1/webhook-deliveries', 'session', 'Integrations', 'Deliveries to every endpoint, newest first, with the same filters.', (ctx, r) => events.listDeliveries(ctx, null, r.query)],
+  ['GET', '/v1/webhook-deliveries/:id', 'session', 'Integrations', 'One delivery: what was sent, the answer (code, the start of the response, time taken), a plain reason for a failure and tries so far.', (ctx, r) => events.getDelivery(ctx, r.params.id)],
+  ['POST', '/v1/webhook-deliveries/:id/resend', 'session', 'Integrations', 'Send a delivery again now: the same body and DP-Delivery id, signed with the current secret.', (ctx, r) => events.resendDelivery(ctx, r.params.id)],
+  ['GET', '/v1/event-types', 'any', 'Integrations', 'Every event type a webhook can subscribe to. info has what each means and a sample of its data.', () => ({ ...list(events.EVENT_TYPES), info: events.EVENT_INFO })],
+  ['GET', '/v1/video-coverage', 'session', 'Integrations', 'Exercise demo videos: how many exercises have one that plays in the workout app, and those that need one (used in programs first; unplayable links flagged).', (ctx) => integrations.videoCoverage(ctx)],
+  ['GET', '/v1/athletes/:athlete_id/results', 'any', 'Performance', 'One athlete\'s test results by Athlete ID, newest first; best marks each test\'s best among those returned. ?test= (key), ?since= (a date, from midnight in the business time zone), ?limit.', (ctx, r) => integrations.athleteResults(ctx, r.params.athlete_id, r.query)],
 
   // Accountability, performance targets and education. Owners and coaches manage; front desk views.
   ['GET', '/v1/clients/:id/engagement', 'any', 'Engagement', 'Accountability for one athlete: streaks, this week, 30-day check-in averages and flags, goals, messages, test targets, rankings and assigned reading.', (ctx, r) => engage.staffOverview(ctx, clients.getClient(ctx, r.params.id).id)],
@@ -578,4 +614,12 @@ function describeAction(action) {
   const [method, path] = action.split(' ');
   const r = routes.find((x) => x.method === method && x.path === path);
   return r ? r.summary.split(/[:.(]/)[0].trim() : action;
+}
+// The activity log's text search also matches what happened in plain English: the log actions whose description has
+// the words, passed on to security.listAudit.
+function auditQuery(q) {
+  const text = String(q.q ?? '').trim().toLowerCase();
+  if (!text) return q;
+  const actions = [...new Set([...routes.map((r) => `${r.method} ${r.path}`), ...Object.keys(SPECIAL)])].filter((a) => describeAction(a).toLowerCase().includes(text));
+  return { ...q, actions };
 }

@@ -133,7 +133,7 @@ test('results, uploads, device links, walk-ups, queue linking and team attendanc
   const link = (await coach('POST', '/v1/athlete-links', { provider: 'swift', external_id: 'SW-9', roster_id: jalen.id })).body;
   assert.equal(link.client_id, jalen.client_id);
   assert.equal(app.ctx.db.get(`SELECT client_id, roster_id FROM athlete_links WHERE external_id = 'SW-9'`).roster_id, null);
-  const key = (await owner('POST', '/v1/api-keys', { label: 'Gates' })).body.secret;
+  const key = (await owner('POST', '/v1/api-keys', { label: 'Gates', scope: 'results' })).body.secret;
   const pushed = (await req('POST', '/v1/results', { provider: 'swift', results: [{ athlete: { external_id: 'SW-9' }, test: 'dash_40yd', value: 4.7, external_id: 'sw-1' }, { athlete: { name: 'Jalen B' }, test: 'dash_40yd', value: 4.75, external_id: 'sw-2' }] }, { authorization: `Bearer ${key}` })).body;
   assert.deepEqual([pushed.created, pushed.queued], [1, 1], 'a hand-linked device lands, a name alone waits');
   const g = (await coach('GET', '/v1/queue')).body.data.find((x) => x.label === 'Jalen B');

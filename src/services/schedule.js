@@ -106,6 +106,25 @@ function confirmCoach(ctx, coachId, warnings, body) {
   e.details = { coach: { id: coachId, name }, warnings: list, total: warnings.length };
   throw e;
 }
+// Handing a coach's sessions to someone else (staff.js handOver): which of them clash for the new coach, by the same rules
+// as every other coach change here (their other sessions at overlapping times, any place, and their days off or the
+// facility's). Each clashing session with its warnings; the hand-over answers 409 coach_conflict like confirmCoach.
+export function handOverClashes(ctx, coachId, sessions) {
+  const ids = sessions.map((x) => x.id), out = [];
+  for (const x of sessions) {
+    const w = coachWarnings(ctx, coachId, [{ starts_at: x.starts_at, ends_at: x.ends_at }], { excludeIds: ids });
+    if (!w.length) continue;
+    out.push({ id: x.id, name: x.name, starts_at: x.starts_at, ends_at: x.ends_at, clash_id: w[0].session_id ?? null,
+      clash_name: w[0].kind === 'session' ? w[0].name : w[0].facility ? 'the facility closed' : 'a day off', warnings: w,
+      message: `${x.name} ${when(ctx, x.starts_at)}: ${w.map((y) => y.message.replace(/\.$/, '')).join('; ')}.` });
+  }
+  return out;
+}
+export function handOverConflict(ctx, coach, clashes, fromName) {
+  const e = new HttpError(409, 'coach_conflict', `${coach.name} is busy for ${clashes.length === 1 ? clashes[0].name : `${clashes.length} of these sessions`}: ${clashes.slice(0, 3).map((c) => c.message.replace(/\.$/, '')).join('; ')}${clashes.length > 3 ? '; and more' : ''}. Hand over anyway with confirm: true, leave ${clashes.length === 1 ? 'it' : 'them'} with ${fromName} for now (leave_conflicts: true), or choose someone else.`);
+  e.details = { coach: { id: coach.id, name: coach.name }, warnings: clashes.slice(0, WARN_LIMIT).map((c) => ({ kind: 'hand_over', session_id: c.id, name: c.name, starts_at: c.starts_at, message: c.message })), total: clashes.length, conflicts: clashes };
+  return e;
+}
 // Where a class would put sessions from start to its end date or the scheduling horizon, on class days not already taken.
 function plannedDays(ctx, s, taken = new Set()) {
   const zone = tz(ctx), today = localDate(ctx.now(), zone), horizon = addDaysToDate(today, HORIZON_DAYS);
@@ -962,7 +981,7 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
   const blocks = ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name FROM availability a JOIN locations l ON l.id = a.location_id
-    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach')))`, kind);   // a coach moved to front desk no longer leads
+    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach'))) ORDER BY a.created_at, a.id`, kind);   // a coach moved to front desk no longer leads
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
   const busy = ctx.db.all(`SELECT s.location_id, s.coach_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
     AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)
@@ -971,7 +990,9 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const isOff = (a, d) => off.some((t) => t.start_date <= d && t.end_date >= d && (t.user_id == null || t.user_id === a.coach_id));
   const takes = (a, b) => (a.coach_id ? b.coach_id === a.coach_id || (b.coach_id == null && b.location_id === a.location_id) : b.location_id === a.location_id);
   const minStart = new Date(Date.now() + 2 * 3600000).toISOString();            // at least 2 hours' notice
-  const out = [];
+  // A coach with two blocks of hours covering the same time at the same place (say, after taking over another coach's
+  // hours) is offered that time once: the older block's.
+  const out = [], offered = new Set();
   for (let d = today, i = 0; i <= days; d = addDaysToDate(d, 1), i++) {
     for (const a of blocks.filter((b) => b.weekday === weekdayOf(d))) {
       if (isOff(a, d)) continue;
@@ -979,6 +1000,9 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
       for (let t = zonedToUtc(d, a.start_time, zone); Date.parse(t) + a.slot_minutes * 60000 <= Date.parse(blockEnd); t = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString()) {
         const tEnd = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString();
         if (t < minStart || busy.some((b) => takes(a, b) && b.starts_at < tEnd && b.ends_at > t)) continue;
+        const once = a.coach_id ? `${a.coach_id}|${a.location_id}|${t}|${tEnd}` : null;
+        if (once && offered.has(once)) continue;
+        if (once) offered.add(once);
         out.push({ kind, starts_at: t, ends_at: tEnd, location_id: a.location_id, location_name: a.location_name, price_cents: a.price_cents, availability_id: a.id, coach_id: a.coach_id ?? null, coach_name: a.coach_name ?? null });
       }
     }

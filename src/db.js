@@ -79,6 +79,8 @@ const ADDED_TABLES = {
   40: ['workout_sets'],
   // ---- Version 41: parent portal (batches B12 and B13): membership requests, claiming a profile by Athlete ID ----
   41: ['membership_requests', 'profile_claims'],
+  // ---- Version 42 (batch B14): API key request log, staff "forgot password" links ----
+  42: ['api_requests', 'password_resets'],
   // ---- Version 43: owner decisions (every membership charge attempt, for late approvals) ----
   43: ['invoice_charges']
 };
@@ -123,6 +125,12 @@ const ADDED_COLUMNS = {
   // ---- Version 41 (batches B12 and B13): the card's expiry, signed-in devices (card_exp on clients, calendar feed on guardians and the note on bookings: see above)
   families: ['card_exp TEXT'],
   portal_sessions: ['created_at TEXT', 'user_agent TEXT', 'last_seen_at TEXT'],
+  // ---- Version 42 (batch B14): API & integrations, Staff & security ----
+  sessions: ['id TEXT', 'kind TEXT', 'created_at TEXT', 'last_seen_at TEXT', 'ip TEXT', 'user_agent TEXT'],   // devices a staff member is signed in on
+  api_keys: ["scope TEXT NOT NULL DEFAULT 'full' CHECK (scope IN ('read','results','full'))"],                 // access levels (existing keys keep full access)
+  webhook_endpoints: ['label TEXT', 'previous_secret TEXT', 'previous_secret_until TEXT', 'secret_rotated_at TEXT', 'failures INTEGER NOT NULL DEFAULT 0'],
+  webhook_deliveries: ['event_type TEXT', 'payload TEXT', 'test INTEGER NOT NULL DEFAULT 0', 'last_attempt_at TEXT', 'duration_ms INTEGER', 'response_body TEXT'],   // then rebuilt, below
+  outbox: ['sensitive INTEGER NOT NULL DEFAULT 0'],
   // ---- Version 43: owner decisions: leads given to a coach (invoices.auto_attempts and the workout_logs snapshot are in
   // those tables' lists above; workout_logs is also rebuilt so a log outlives its program)
   leads: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL']
@@ -164,6 +172,14 @@ function migrate(raw, schema) {
   // booking when it's paid. The note is left as it was (it is only a note now).
   if (version < 38 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
     raw.exec(`UPDATE sales SET booking_id = substr(note, 9) WHERE booking_id IS NULL AND note LIKE 'booking:%' AND substr(note, 9) IN (SELECT b.id FROM bookings b WHERE b.client_id = sales.client_id)`);
+  }
+  // ---- Version 42 (batch B14): API & integrations, Staff & security ----
+  // Webhook deliveries: test events have no event row and a delivery can be 'sending', so the table is rebuilt (its rows
+  // are copied as they are). Devices signed in before this version get a device id; their sign-in time and address
+  // weren't recorded and stay empty.
+  if (version < 42) {
+    rebuild(raw, schema, ['webhook_deliveries']);
+    raw.exec(`UPDATE sessions SET id = 'ses_' || lower(hex(randomblob(8))) WHERE id IS NULL`);
   }
   // ---- Version 43: owner decisions ----
   if (version < 43) {

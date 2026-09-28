@@ -1,6 +1,7 @@
 import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, workoutRow } from './programs-coach.js';
+import { initAdmin, viewIntegrations, viewStaff, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -23,6 +24,7 @@ let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
 initPrograms({ api, render, header, role: () => state.user?.role, pulseTile: (...a) => pulseTile(...a) });
+initAdmin({ api, render, header, pulseTile: (...a) => pulseTile(...a), download: (p) => download(p), me: () => state.user, saveAnyway: (send) => saveAnyway(send) });
 
 // ---------- Shell ----------
 async function boot() {
@@ -34,6 +36,7 @@ async function boot() {
 let leaveGuard = null, lastHash = location.hash, returning = false;
 window.addEventListener('hashchange', () => {
   if (returning) { returning = false; return; }
+  if (takeResetToken()) { lastHash = ''; return render(); }     // a reset link opened in a tab that was already on this site
   const msg = leaveGuard?.check(location.hash);
   if (msg) {
     if (!confirm(msg)) { returning = true; location.hash = lastHash; return; }
@@ -44,13 +47,23 @@ window.addEventListener('hashchange', () => {
 });
 window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { e.preventDefault(); e.returnValue = ''; } });
 
+// An emailed "forgot password" link opens /#reset=<secret>. The secret is taken out of the address at once (it never
+// reaches the server's logs or another page's referrer) and the reset page opens, even on a signed-in device.
+let resetToken = null;
+function takeResetToken() {
+  if (!location.hash.startsWith('#reset=')) return false;
+  resetToken = location.hash.slice(7); history.replaceState(null, '', '/');
+  return true;
+}
+takeResetToken();
 function render() {
   clearInterval(todayTimer);                          // Today sets its one-minute refresh again when it's open
   leaveGuard = null;                                  // the view sets it again if it has unsaved changes
+  if (resetToken) { const t = resetToken; resetToken = null; return renderReset(root, t, async () => { state.user = null; await boot(); }); }
   if (!state.user) { profileDrafts.clear(); forgetSale(); return renderLogin(); }   // signed out: the next person never sees these edits or the open sale
   if (state.user.must_change_password) return renderPasswordChange(true);
   const [section, id] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
-  const current = NAV.some(([k]) => k === section) ? section : 'today';
+  const current = section === 'account' ? 'account' : NAV.some(([k]) => k === section) ? section : 'today';
   const main = h('main', { class: 'main', id: 'main' });
   const shell = h('div', { class: 'shell' },
     h('nav', { class: 'dp-nav', 'aria-label': 'Main' },
@@ -62,11 +75,11 @@ function render() {
       h('div', { style: 'margin-top:auto' }, state.payments.live ? null : h('div', { class: 'test-banner' }, state.payments.provider === 'stripe' ? 'Stripe test mode. No real money moves.' : 'Test mode. No real cards are charged.'),
         h('div', { class: 'small muted', style: 'margin-top:12px;padding:0 4px' }, `${state.user.name} · ${{ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[state.user.role] ?? ''}`),
         h('div', { class: 'row small muted', style: 'padding:0 4px' }, h('span', { class: 'grow' }),
-          btn('Password', () => renderPasswordChange(false), 'ghost'),
+          h('a', { class: 'dp-btn dp-btn--ghost', href: '#/account', 'aria-current': current === 'account' ? 'page' : null, onClick: () => shell.classList.remove('nav-open') }, 'Account'),
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -81,7 +94,7 @@ const addClientBtn = () => btn('Add client', () => { location.hash = '#/clients/
 
 function renderLogin() {
   const email = input({ type: 'email', autocomplete: 'username', required: true });
-  const pw = input({ type: 'password', autocomplete: 'current-password', required: true });
+  const pwf = passwordField('Password', { autocomplete: 'current-password', required: true }), pw = pwf.input;
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const submit = btn('Sign in', null, 'primary', { type: 'submit', class: 'dp-btn dp-btn--primary dp-btn--block' });
   const form = h('form', { class: 'dp-panel login-card', onSubmit: (e) => {
@@ -92,7 +105,8 @@ function renderLogin() {
     });
   } },
     h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.' }),
-    field('Email', email), field('Password', pw), err, submit);
+    field('Email', email), pwf.el, err, submit,
+    btn('Forgot your password?', () => forgotForm(root, email.value, () => renderLogin()), 'ghost'));
   fill(root, h('div', { class: 'login' }, form));
   email.focus();
 }
@@ -1568,83 +1582,6 @@ async function viewBilling(main) {
 // The Programs page and the program builder live in programs-coach.js.
 
 // ---------- Integrations ----------
-async function viewIntegrations(main) {
-  const [keys, hooks, types] = await Promise.all([get('/v1/api-keys'), get('/v1/webhooks'), get('/v1/event-types')]);
-  const label = input({ placeholder: 'e.g. Website booking form' });
-  const revealed = h('div');
-  const keysPanel = panel('API keys', { subtitle: 'Let your other systems read and update clients, billing and programs.' },
-    h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const k = await post('/v1/api-keys', { label: label.value });
-      fill(revealed, h('div', { class: 'stack', style: 'margin-top:4px' },
-        h('span', { class: 'strong' }, `Copy your key for ${k.label} now. You won't see it again.`),
-        h('div', { class: 'secret mono' }, k.secret),
-        h('div', null, btn('Copy key', async () => { await navigator.clipboard.writeText(k.secret); toast('Key copied.'); }, 'outline'))));
-      label.value = ''; await refreshKeys();
-    }); } }, h('div', { class: 'grow' }, field('Key label', label)), h('div', { style: 'align-self:flex-end' }, btn('Create key', null, 'primary', { type: 'submit' }))),
-    revealed);
-  const keyList = h('div');
-  async function refreshKeys() {
-    const { data } = await get('/v1/api-keys');
-    fill(keyList, ...(data.length ? data.map((k) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, k.label), h('span', { class: 'mono muted' }, `${k.prefix}…`), h('span', { class: 'small muted' }, k.revoked_at ? `Revoked ${date(k.revoked_at)}` : `Last used: ${ago(k.last_used_at)}`)),
-      k.revoked_at ? badge('revoked') : btn('Revoke', (e) => { if (confirm(`Revoke ${k.label}? Systems using it lose access immediately.`)) busy(e.currentTarget, async () => { await post(`/v1/api-keys/${k.id}/revoke`); toast('Key revoked.'); refreshKeys(); }); }, 'secondary')))
-      : [h('p', { class: 'muted' }, 'No keys yet. Create one to connect your first system.')]));
-  }
-  keysPanel.append(keyList); refreshKeys();
-
-  const url = input({ type: 'url', placeholder: 'https://your-system.example.com/hooks' });
-  const checks = types.data.map((t) => h('label', { class: 'row small', style: 'gap:8px;min-height:32px' }, h('input', { type: 'checkbox', value: t, checked: true }), h('span', { class: 'mono' }, t)));
-  const hooksPanel = panel('Webhooks', { subtitle: 'We send a signed event to your URL the moment something happens here.' },
-    ...hooks.data.map((w) => {
-      const log = h('div');
-      return h('div', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' },
-        h('div', { class: 'row wrap' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'mono' }, w.url), h('span', { class: 'small muted' }, w.events.includes('*') ? 'All events' : w.events.join(', '))),
-          h('button', { type: 'button', class: 'dp-toggle', 'aria-pressed': String(w.active), 'aria-label': `Webhook to ${w.url}`, onClick: (e) => busy(e.currentTarget, async () => { await patch(`/v1/webhooks/${w.id}`, { active: !w.active }); render(); }) }, w.active ? 'On' : 'Off'),
-          btn('Deliveries', async (e) => busy(e.currentTarget, async () => {
-            const { data } = await get(`/v1/webhooks/${w.id}/deliveries`);
-            fill(log, ...(data.length ? data.map((d) => h('div', { class: 'list-item small' }, h('span', { class: 'mono grow' }, d.event_type), h('span', { class: 'muted' }, d.last_error ?? (d.response_code ? `HTTP ${d.response_code}` : '')), badge(d.status === 'succeeded' ? 'delivered' : d.status === 'pending' ? 'retrying' : d.status), h('span', { class: 'muted' }, ago(d.created_at)))) : [h('p', { class: 'small muted' }, 'No deliveries yet.')]));
-          }), 'ghost'),
-          btn('Delete', (e) => { if (confirm('Delete this webhook?')) busy(e.currentTarget, async () => { await del(`/v1/webhooks/${w.id}`); toast('Webhook deleted.'); render(); }); }, 'ghost')),
-        h('div', { class: 'small muted' }, 'Signing secret: ', h('span', { class: 'mono' }, w.secret)), log);
-    }),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const events = checks.map((c) => c.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
-      await post('/v1/webhooks', { url: url.value, events: events.length === types.data.length ? ['*'] : events }); toast('Webhook added.'); render();
-    }); } }, field('Destination URL', url), h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Events to send'), h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0 16px' }, checks)),
-      h('div', null, btn('Add webhook', null, 'secondary', { type: 'submit' }))));
-
-  const docs = panel('API reference', { subtitle: 'Send your key as a header: Authorization: Bearer dp_live_…' },
-    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--outline', href: '/v1/openapi.json', target: '_blank', rel: 'noopener' }, 'Open API spec (OpenAPI 3.1)')),
-    h('pre', { class: 'secret mono', style: 'border-color:var(--line);white-space:pre-wrap;margin:0' },
-      `curl ${location.origin}/v1/clients \\\n  -H "Authorization: Bearer dp_live_…"\n\ncurl -X POST ${location.origin}/v1/clients \\\n  -H "Authorization: Bearer dp_live_…" \\\n  -H "Content-Type: application/json" \\\n  -d '{"name":"Jordan Lee","email":"jordan@example.com","plan_id":"plan_…"}'`));
-
-  const outbox = await get('/v1/outbox');
-  const modeText = { test: 'No email service is connected, so messages stay here and are not sent. Add RESEND_API_KEY on the server to start sending.',
-    restricted: `Sending through Resend, but only to ${outbox.only_to}. Everything else is held here.`, live: `Sending through Resend${outbox.from ? ` as ${outbox.from}` : ''}.` };
-  const statusText = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '' };
-  const testTo = input({ type: 'email', value: state.user?.email || '', 'aria-label': 'Send a test email to' });
-  const outPanel = panel('Email outbox', { subtitle: 'Every email the platform sends: sign-in codes, welcome emails, booking changes, invoices and receipts.' },
-    h('p', { class: 'small', style: `margin:0;color:${outbox.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, modeText[outbox.mode] || ''),
-    h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, testTo, btn('Send test email', async (e) => {
-      e.target.disabled = true;
-      try { await post('/v1/outbox/test', { to: testTo.value }); toast('Test email sent. Check the inbox.'); render(); }
-      catch (err) { toast(err.message, 'warn'); } finally { e.target.disabled = false; }
-    }, 'outline')),
-    outbox.data.length ? outbox.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.to_email} · ${m.subject}${statusText[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No emails yet.'));
-  const texts = await get('/v1/texts');
-  const textMode = { test: 'No text service is connected, so texts stay here and are not sent. Add your Twilio settings on the server to start sending.',
-    restricted: `Sending through Twilio, but only to ${texts.only_to}. Everything else is held here.`, live: 'Sending through Twilio.' };
-  const textStatus = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '', received: '' };
-  const testPhone = input({ type: 'tel', placeholder: '(512) 555-0100', 'aria-label': 'Send a test text to' });
-  const textPanel = panel('Texts', { subtitle: 'Every text sent to parents, and their replies. Parents turn texts on in the parent portal and can reply STOP at any time.' },
-    h('p', { class: 'small', style: `margin:0;color:${texts.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, textMode[texts.mode] || ''),
-    texts.mode === 'test' ? null : h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, testPhone, btn('Send test text', (e) => busy(e.currentTarget, async () => {
-      try { await post('/v1/texts/test', { to: testPhone.value }); toast('Test text sent.'); render(); } catch (err) { toast(err.message, 'warn'); }
-    }), 'outline')),
-    texts.data.length ? texts.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.direction === 'in' ? 'From' : 'To'} ${phoneText(m.phone)}${textStatus[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No texts yet.'));
-  fill(main, header('API & integrations', 'Connect Diamond Protocol to your other systems.'), h('div', { class: 'grid grid-2' }, keysPanel, hooksPanel), docs, outPanel, textPanel);
-}
-
 // ---------- Point of sale ----------
 const remember = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
 const setupLink = () => h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell/setup' }, 'Locations, products & readers');
@@ -4040,98 +3977,6 @@ function renderPasswordChange(forced) {
     field(forced ? 'One-time password' : 'Current password', cur), field('New password', next, 'At least 10 characters.'), field('New password again', again), err,
     h('div', { class: 'row' }, btn('Save password', null, 'primary', { type: 'submit' }), forced ? btn('Sign out', async () => { await post('/auth/logout'); state.user = null; render(); }, 'ghost') : btn('Cancel', () => render(), 'ghost')))));
   cur.focus();
-}
-
-async function viewStaff(main) {
-  if (!isOwner()) return fill(main, header('Staff & security', 'Only owners can manage staff.'));
-  const [staff, audit, bk, jobs] = await Promise.all([get('/v1/staff'), get('/v1/audit?limit=100'), get('/v1/backups'), get('/v1/jobs')]);
-  const ROLE = { owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' };
-  const n = input(), e = input({ type: 'email' }), role = select(Object.keys(staff.roles).map((k) => [k, ROLE[k]]), { value: 'coach' });
-  const roleHelp = h('p', { class: 'small muted' }, staff.roles.coach);
-  role.addEventListener('change', () => { roleHelp.textContent = staff.roles[role.value]; });
-  const showPw = (who, pw) => alert(`One-time password for ${who}:\n\n${pw}\n\nIt was also emailed to them. They'll choose their own when they sign in.`);
-  const staffPanel = panel('Staff', { subtitle: 'Each person gets their own sign-in. Roles decide what they can see and do.' },
-    staff.data.map((u) => h('div', { class: 'list-item', style: `flex-wrap:wrap;${u.active ? '' : 'opacity:.55'}` },
-      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, u.name, u.id === state.user.id ? h('span', { class: 'small muted' }, ' (you)') : null),
-        h('span', { class: 'small muted' }, `${u.email} · ${u.last_login_at ? `last signed in ${ago(u.last_login_at)}` : 'never signed in'}${u.must_change_password ? ' · needs to set a password' : ''}`)),
-      u.locked ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Locked') : null,
-      !u.active ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Off') : null,
-      (() => { const sel = select(Object.keys(staff.roles).map((k) => [k, ROLE[k]]), { value: u.role, 'aria-label': `Role for ${u.name}`, style: 'width:140px' });
-        sel.addEventListener('change', () => busy(sel, async () => { try { await patch(`/v1/staff/${u.id}`, { role: sel.value }); toast(`${u.name} is now ${ROLE[sel.value]}. They'll sign in again.`); } catch (x) { sel.value = u.role; throw x; } render(); })); return sel; })(),
-      u.locked ? btn('Unlock', (ev) => busy(ev.currentTarget, async () => { await patch(`/v1/staff/${u.id}`, { unlock: true }); render(); }), 'outline') : null,
-      btn('Reset password', (ev) => { if (confirm(`Give ${u.name} a new one-time password? They'll be signed out.`)) busy(ev.currentTarget, async () => { const r = await post(`/v1/staff/${u.id}/reset-password`); showPw(u.name, r.temporary_password); render(); }); }, 'ghost'),
-      u.id === state.user.id ? null : btn(u.active ? 'Turn off' : 'Turn on', (ev) => { if (!u.active || confirm(`Turn off ${u.name}'s account? They're signed out everywhere right away.`)) busy(ev.currentTarget, async () => { await patch(`/v1/staff/${u.id}`, { active: !u.active }); render(); }); }, 'ghost'))),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (ev) => { ev.preventDefault(); busy(ev.submitter, async () => { const u = await post('/v1/staff', { name: n.value, email: e.value, role: role.value }); showPw(u.name, u.temporary_password); render(); }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 2fr 1fr' }, field('Name', n), field('Email', e), field('Role', role)), roleHelp,
-      h('div', null, btn('Add staff member', null, 'primary', { type: 'submit' }))));
-  const ACT = (a) => (a.action === 'sign-in' ? (a.status === 200 ? 'Signed in' : a.status === 429 ? 'Sign-in blocked (locked or too many tries)' : 'Failed sign-in') : a.action.replace(/^(POST|PATCH|PUT|DELETE|GET) /, (m) => ({ 'POST ': 'Created/ran ', 'PATCH ': 'Changed ', 'PUT ': 'Set ', 'DELETE ': 'Removed ', 'GET ': 'Opened ' }[m])));
-  const auditPanel = panel('Activity log', { subtitle: 'Every change, refused attempt and sign-in by staff, API keys and parents. Request contents are never stored.' },
-    h('div', { style: 'overflow-x:auto' }, h('table', { class: 'table' },
-      h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'Who'), h('th', null, 'What'), h('th', null, 'Record'), h('th', null, 'Result'))),
-      h('tbody', null, audit.data.map((a) => h('tr', null, h('td', { class: 'small muted', style: 'white-space:nowrap' }, ago(a.at)),
-        h('td', { class: 'small' }, `${a.actor_name ?? '—'}${a.role ? ` (${ROLE[a.role] ?? a.role})` : a.actor_type !== 'staff' ? ` (${a.actor_type.replace('_', ' ')})` : ''}`),
-        h('td', { class: 'small' }, a.action === 'sign-in' ? ACT(a) : a.description ?? ACT(a)), h('td', { class: 'small muted', style: 'font-family:var(--font-mono)' }, a.target ?? ''),
-        h('td', null, h('span', { class: `dp-badge dp-badge--${a.status < 300 ? 'good' : a.status === 403 || a.status === 429 || a.status === 401 ? 'warn' : 'muted'}` }, a.status < 300 ? 'OK' : a.status === 403 ? 'Refused' : a.status === 401 ? 'Denied' : a.status === 429 ? 'Blocked' : String(a.status)))))))));
-  const kb = (b) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`);
-  const off = bk.offsite;
-  const offFailing = off.last_error && (!off.last_ok_at || off.last_error_at > off.last_ok_at);
-  const offLine = h('p', { class: 'small' + (offFailing ? '' : ' muted'), role: offFailing ? 'status' : null },
-    h('span', { class: `dp-badge dp-badge--${!off.configured || (!off.last_ok_at && !offFailing) ? 'muted' : offFailing ? 'warn' : 'good'}` },
-      !off.configured ? 'Off-site: not set up' : offFailing ? 'Off-site: failing' : off.last_ok_at ? 'Off-site: OK' : 'Off-site: waiting'), ' ',
-    !off.configured ? 'Copies stay on this server\'s disk only. Setup steps are in DEPLOY.md under Backups.'
-      : offFailing ? `${off.last_error} Last try: ${ago(off.last_error_at)}. It retries every hour.`
-      : off.last_ok_at ? `Newest encrypted copy sent and restore-checked. Last sent: ${ago(off.last_ok_at)}.` : 'The first encrypted copy goes out within the hour.');
-  const backupPanel = panel('Backups', { subtitle: `A full copy of everything is saved every day, and the last 30 are kept. ${off.configured ? 'Each day\'s copy is also encrypted, sent to off-site storage, and read back to check it restores.' : 'Download one now and then and keep it somewhere safe, off this server.'}` },
-    offLine,
-    bk.data.length ? bk.data.slice(0, 7).map((b) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, new Date(b.created_at).toLocaleString()), h('span', { class: 'muted' }, kb(b.bytes)),
-      btn('Download', (ev) => busy(ev.currentTarget, () => download(`/v1/backups/${b.name}`)), 'ghost'))) : h('p', { class: 'muted small' }, 'No backups yet.'),
-    h('div', null, btn('Back up now', (ev) => busy(ev.currentTarget, async () => {
-      const r = await post('/v1/backups');
-      if (r.offsite && !r.offsite.ok) toast(`Backup saved, but the off-site copy failed: ${r.offsite.error}`, 'warn');
-      else toast(r.offsite ? 'Backup saved and sent off-site.' : 'Backup saved.');
-      render();
-    }), 'secondary')),
-    h('p', { class: 'small muted' }, 'Backup files contain client, family and medical information. Store them like you would paper records.'));
-  const every = (sec) => (sec < 60 ? `every ${sec} seconds` : sec < 3600 ? `every ${sec / 60} min` : sec === 3600 ? 'hourly' : `every ${sec / 3600} hours`);
-  const jobBadge = (j) => (j.running ? ['muted', 'Running'] : j.health === 'failing' ? ['warn', j.fail_streak > 1 ? `Failed ${j.fail_streak}×` : 'Failed'] : j.health === 'waiting' ? ['muted', 'Not run yet'] : j.recent[0]?.status === 'skipped' && j.recent[0].started_at === j.last_run_at ? ['muted', 'Nothing to do'] : ['good', 'OK']);
-  const jobsPanel = panel('Background jobs', { subtitle: 'The work the server does on its own: billing, school invoices, the schedule, reminders, follow-ups, money checks, webhooks, device syncs and backups. Owners get an email when a job fails and when it recovers.' },
-    jobs.data.map((j) => { const [tone, label] = jobBadge(j); return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, j.name),
-        h('span', { class: 'small muted' }, `${every(j.every_seconds)}${j.last_run_at ? ` · last ran ${ago(j.last_run_at)}` : ''}${j.health === 'failing' ? (j.last_ok_at ? ` · last worked ${ago(j.last_ok_at)}` : ' · has not worked yet') : ''}`),
-        j.last_error ? h('span', { class: 'small', style: 'font-family:var(--font-mono);word-break:break-word' }, j.last_error) : null),
-      h('span', { class: `dp-badge dp-badge--${tone}` }, label),
-      btn('Run now', (ev) => busy(ev.currentTarget, async () => {
-        const r = await post(`/v1/jobs/${encodeURIComponent(j.name)}/run`);
-        toast(r.status === 'failed' ? `${j.name} failed. The error is shown below.` : r.status === 'skipped' ? `${j.name} had nothing to do.` : `${j.name} ran.`, r.status === 'failed' ? 'warn' : 'good');
-        render();
-      }), 'ghost', j.running ? { disabled: true } : {})); }));
-  const requests = await get('/v1/data-requests');
-  const openReqs = requests.data.filter((r) => r.status === 'open');
-  const reqPanel = panel('Data requests', { subtitle: openReqs.length ? 'Parents asking for their family\'s data to be deleted. Check with your accountant what payment records you must keep; the app keeps them without names.' : 'Parents can download their own data from the portal. Deletion requests appear here.' },
-    requests.data.length ? requests.data.slice(0, 20).map((r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-      h('div', { class: 'grow stack-tight', style: 'min-width:240px' }, h('span', { class: 'strong' }, `${r.family_name ?? 'Family'}: ${r.kind === 'delete' ? 'delete account' : 'copy of data'}`),
-        h('span', { class: 'small muted' }, `${r.requested_by.split(' <')[0]} · ${ago(r.created_at)}${r.note ? ` · "${r.note}"` : ''}${r.resolution ? ` · ${r.resolution}` : ''}`)),
-      h('span', { class: `dp-badge dp-badge--${r.status === 'open' ? 'warn' : r.status === 'done' ? 'good' : 'muted'}` }, { open: 'Open', done: 'Done', declined: 'Declined' }[r.status]),
-      r.status === 'open' && r.family_id ? btn('Download their data', (e) => busy(e.currentTarget, () => download(`/v1/families/${r.family_id}/export`)), 'ghost') : null,
-      r.status === 'open' && r.family_id ? btn('Delete', (e) => {
-        const typed = prompt(`Delete the ${r.family_name}'s personal information? Payment records stay without names. This can't be undone.\n\nType the family name to confirm: ${r.family_name}`);
-        if (!typed) return;
-        busy(e.currentTarget, async () => { await del(`/v1/families/${r.family_id}`, { confirm: typed, request_id: r.id }); toast('Deleted. The family has been emailed.'); render(); });
-      }, 'outline') : null,
-      r.status === 'open' ? btn('Decline', (e) => { const reason = prompt('Why? (kept with the request)'); if (reason) busy(e.currentTarget, async () => { await post(`/v1/data-requests/${r.id}/decline`, { reason }); render(); }); }, 'ghost') : null))
-      : h('p', { class: 'muted small' }, 'No requests yet.'));
-  // Connection check: what the hosting proxy sent and which address the app picked, to confirm TRUST_PROXY.
-  const connOut = h('div', { class: 'stack-tight' });
-  const connPanel = panel('Connection check', { subtitle: 'Sign-in limits and the activity log go by the visitor\'s internet address. This shows which one the app sees for you, so you can confirm the TRUST_PROXY setting on each server.' },
-    connOut, h('div', null, btn('Check my connection', (ev) => busy(ev.currentTarget, async () => {
-      const c = await get('/v1/staff/connection');
-      const row = (label, value) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' }, h('span', { class: 'grow muted', style: 'min-width:180px' }, label), h('code', { style: 'word-break:break-all' }, value ?? 'none'));
-      const KIND = { private: 'hosting network', cloudflare: 'Cloudflare proxy', public: 'public' };
-      fill(connOut, row('X-Forwarded-For header', c.forwarded_for), row('Connection address', c.connection_address), row('Address the app decided on', c.decided_address), row('TRUST_PROXY', c.trust_proxy ?? 'not set'),
-        h('p', { class: 'strong', style: 'margin:8px 0 0' }, c.guidance),
-        ...(c.previews ?? []).map((p) => h('div', { class: 'small', style: `padding:2px 0${p.trust_proxy === c.proxies_trusted ? ';font-weight:600' : ''}` }, `With TRUST_PROXY=${p.trust_proxy} the app would pick: `, h('code', null, p.address), h('span', { class: 'muted' }, ` (${KIND[p.kind] ?? p.kind})${p.trust_proxy === c.proxies_trusted ? ' · now' : ''}`))));
-    }), 'secondary')));
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, jobsPanel, auditPanel);
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.

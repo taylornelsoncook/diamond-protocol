@@ -92,6 +92,11 @@ ctx.db.run(`UPDATE subscriptions SET current_period_end = ?, trial_ends_at = ? W
 ctx.db.run(`UPDATE subscriptions SET trial_ends_at = ?, current_period_end = ? WHERE client_id = ?`, addDays(ctx.now(), 2), addDays(ctx.now(), 2), made['Tom Becker'].id);
 await billing.runBilling(ctx);
 billing.pause(ctx, billing.currentSubscription(ctx, made['Leo Marchetti'].id).id);
+// Billing samples: part of Grace's payment refunded, and Daniel's family already reminded to update the card.
+const graceInv = ctx.db.get(`SELECT id FROM invoices WHERE client_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT 1`, made['Grace Kim'].id);
+if (graceInv) await billing.refundInvoice(ctx, graceInv.id, { amount_cents: 2500, reason: 'Missed a week (travel)', email: false });
+const danielInv = ctx.db.get(`SELECT id FROM invoices WHERE client_id = ? AND status = 'failed' LIMIT 1`, made['Daniel Reyes'].id);
+if (danielInv) await billing.remindInvoice(ctx, danielInv.id);
 
 // A few completed workouts
 for (const name of ['Maya Okafor', 'Grace Kim', 'Aisha Rahman']) {

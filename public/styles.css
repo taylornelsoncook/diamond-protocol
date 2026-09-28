@@ -229,3 +229,14 @@ td .dp-badge{white-space:nowrap}
   .pos-bar:not([hidden]){display:flex;position:fixed;left:0;right:0;bottom:0;z-index:30;gap:12px;align-items:center;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));background:var(--black);border-top:1px solid var(--line)}
   .main:has(.pos-bar:not([hidden])){padding-bottom:96px}
 }
+
+/* Billing: the four numbers are buttons that jump to their list; narrow screens drop the less important columns. */
+.bl-metric{border:0;border-radius:0;background:transparent;text-align:left;font:inherit;color:inherit;cursor:pointer;min-width:0}
+.bl-metric:hover,.bl-metric:focus-visible{background:var(--surface-raised)}
+.bl-metrics .dp-metric-value{font-size:36px}
+.bl-tools{gap:8px} .bl-tools .dp-input{flex:1 1 220px;width:auto} .bl-tools .select{flex:0 1 180px}
+@media (max-width: 760px){ .bl-metrics{grid-template-columns:repeat(2,minmax(0,1fr))} .bl-metrics .dp-metric{padding:var(--space-4);border:0!important} .bl-metrics .dp-metric:nth-child(even){border-left:1px solid var(--line-subtle)!important} .bl-metrics .dp-metric:nth-child(n+3){border-top:1px solid var(--line-subtle)!important} .bl-metrics .dp-metric-value{font-size:26px} }
+@media (min-width: 601px){ .bl-narrow{display:none} }
+@media (max-width: 600px){ .bl-cards thead{display:none} .bl-cards tr{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:12px var(--space-6);border-top:1px solid var(--line-subtle)} .bl-cards td{border:0!important;padding:0!important} .bl-cards td.bl-acts{flex-basis:100%} .bl-cards td.bl-acts .row{justify-content:flex-start!important;flex-wrap:wrap!important} }
+@media (max-width: 600px){ .bl-wide{display:none} .bl-tools .dp-input,.bl-tools .select{flex:1 1 100%} }
+#dialog .dl dd{overflow-wrap:anywhere}

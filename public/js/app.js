@@ -1084,51 +1084,297 @@ function moneyChecksPanel(checks, render) {
     h('div', { class: 'row wrap', style: 'gap:8px;margin-top:12px' }, pick, btn('Check a day', (e) => run(pick.value)(e), 'ghost')));
 }
 
-async function viewBilling(main) {
-  const [plans, inv, links, checks] = await Promise.all([get('/v1/plans?include_inactive=true'), get('/v1/invoices'), get('/v1/pay-links'), get('/v1/money-checks')]);
-  const pname = input(), price = input({ type: 'number', min: '0', step: '1', inputmode: 'decimal' }), trial = input({ type: 'number', min: '0', max: '90', value: '7' });
-  const addPlan = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await post('/v1/plans', { name: pname.value, price_cents: Math.round(Number(price.value) * 100), trial_days: Number(trial.value) }); toast('Plan created.'); render();
-  }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('Plan name', pname), field('Monthly price ($)', price), field('Trial days', trial)), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' })));
+// ---------- Billing (owner only) ----------
+// The money summary, failed payments to chase, every invoice (details, refunds, write-offs, export), memberships, plans,
+// pay links, money checks and the test-mode billing clock. Filters survive a refresh of the screen after an action.
+const billingUi = { view: 'all', kind: '', period: '', q: '', limit: 50, mview: 'live', mplan: '', mq: '' };
+const BL_STATE = { failed: ['Failed', 'warn'], open: ['Open', 'neutral'], overdue: ['Overdue', 'warn'], paid: ['Paid', 'good'], partially_refunded: ['Part refunded', 'neutral'], refunded: ['Refunded', 'muted'], void: ['Void', 'muted'] };
+const blBadge = (st) => h('span', { class: `dp-badge dp-badge--${BL_STATE[st]?.[1] ?? 'muted'}` }, BL_STATE[st]?.[0] ?? st);
+const BL_VIEWS = [['all', 'All'], ['failed', 'Failed'], ['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['paid', 'Paid'], ['refunds', 'Refunds'], ['void', 'Void']];
+const BL_PERIODS = [['', 'Any time'], ['month', 'This month'], ['last', 'Last month'], ['90', 'Last 90 days'], ['year', 'This year']];
+const MEM_VIEWS = [['live', 'All members'], ['renewing', 'Renewing this week'], ['trialing', 'Free trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled lately']];
+const HAND_PAY = [['check', 'Check'], ['cash', 'Cash'], ['other', 'Other']];
+const cardText = (r) => (r.card_last4 ? `${r.card_brand ? r.card_brand[0].toUpperCase() + r.card_brand.slice(1) : 'Card'} ending ${r.card_last4}` : 'No card on file');
+function blPeriod(id) {
+  const today = bizDate(), [y, m] = today.split('-').map(Number), pad = (n) => String(n).padStart(2, '0');
+  if (id === 'month') return { from: `${y}-${pad(m)}-01`, to: today };
+  if (id === 'last') { const ly = m === 1 ? y - 1 : y, lm = m === 1 ? 12 : m - 1; return { from: `${ly}-${pad(lm)}-01`, to: new Date(Date.UTC(ly, lm, 0)).toISOString().slice(0, 10) }; }
+  if (id === '90') return { from: bizDate(-90), to: today };
+  if (id === 'year') return { from: `${y}-01-01`, to: today };
+  return {};
+}
+function blQuery(extra = {}) {
+  const p = new URLSearchParams(), r = blPeriod(billingUi.period);
+  if (billingUi.view !== 'all') p.set('view', billingUi.view);
+  if (billingUi.kind) p.set('kind', billingUi.kind);
+  if (r.from) { p.set('from', r.from); p.set('to', r.to); }
+  if (billingUi.q.trim()) p.set('q', billingUi.q.trim());
+  for (const [k, val] of Object.entries(extra)) p.set(k, val);
+  return p.toString();
+}
+// What a declined charge is waiting on: tries, card, the next automatic retry, the last reminder.
+function declineText(i) {
+  const last = i.retries_left <= 1;
+  return [`Declined ${plural(i.attempts, 'time')}`, cardText(i), i.next_retry_at ? `next automatic retry ${date(i.next_retry_at)}${last ? ' (the last one)' : ''}` : 'no more automatic retries',
+    i.reminded_at ? `card reminder sent ${i.reminded_today ? 'today' : ago(i.reminded_at).toLowerCase()}` : null].filter(Boolean).join(' · ');
+}
+function retryConfirm(i) {
+  return confirm(`Charge ${money(i.amount_cents)} to ${cardText(i).toLowerCase().replace(/^([a-z])/, (c) => c.toUpperCase())} for ${i.client_name} now?${i.retries_left <= 1 ? '\n\nIf it declines, the membership stays past due (a retry you start never cancels it).' : ''}`);
+}
+async function retryNow(i) {
+  if (!retryConfirm(i)) return;
+  const r = await post(`/v1/invoices/${i.id}/retry`);
+  if (r.status === 'paid') toast(`Charged ${money(r.amount_cents)}.${r.membership_reactivated ? ' The membership is active again.' : ''}`);
+  else toast(`The card declined again${r.last_error ? ` (${r.last_error})` : ''}. It retries on its own, or ask the family to update their card.`, 'warn');
+  render();
+}
+async function remindNow(i) {
+  const r = await post(`/v1/invoices/${i.id}/remind`);
+  toast(`Card reminder emailed to ${r.reminder_to.join(', ')}${r.invoices_in_reminder > 1 ? ` (${r.invoices_in_reminder} charges)` : ''}.`);
+  render();
+}
+function recordHandDialog(i) {
+  const method = select(HAND_PAY, { value: 'check' }), ref = input({ autocomplete: 'off', maxlength: '40', inputmode: 'numeric' });
+  const refField = field('Check number (optional)', ref);
+  method.addEventListener('change', () => { refField.querySelector('label').textContent = method.value === 'check' ? 'Check number (optional)' : 'Reference (optional)'; ref.inputMode = method.value === 'check' ? 'numeric' : 'text'; });
+  teamDialog('Record payment', h('div', { class: 'stack' }, h('p', { class: 'muted', style: 'margin:0' }, `${i.client_name} · ${i.description} · ${money(i.amount_cents)}. Mark it paid because it came in another way.`),
+    h('div', { class: 'form-grid' }, field('How they paid', method), refField)),
+  [{ label: 'Record payment', variant: 'primary', onClick: async () => {
+    const r = await post(`/v1/invoices/${i.id}/payments`, { method: method.value, reference: ref.value.trim() || undefined });
+    toast(`Marked paid by ${method.value}.${r.membership_reactivated ? ' The membership is active again.' : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+function refundDialog(d) {
+  const amount = dollarsIn(d.refundable_cents, { min: '0.01', max: (d.refundable_cents / 100).toFixed(2) }), reason = input({ maxlength: '120', placeholder: 'Like Moved away mid-month' });
+  const email = h('input', { type: 'checkbox', checked: !!d.email });
+  const byCard = !d.paid_method;
+  teamDialog('Refund', h('div', { class: 'stack' },
+    h('p', { class: 'muted', style: 'margin:0' }, `${d.client_name} · ${d.description} · paid ${money(d.amount_cents)}${d.refunded_cents ? `, ${money(d.refunded_cents)} already refunded` : ''}. ${byCard ? 'It goes back to the card they paid with.' : `They paid by ${d.paid_by.toLowerCase()}, so hand it back yourself; this records it.`} The membership carries on; cancel it separately if they're leaving.`),
+    h('div', { class: 'form-grid' }, field('Amount to refund ($)', amount, `Up to ${money(d.refundable_cents)}.`), field('Reason', reason, 'Goes on the receipt.')),
+    d.email ? h('label', { class: 'row', style: 'gap:8px' }, email, `Email a receipt to ${d.email}`) : h('p', { class: 'small muted', style: 'margin:0' }, 'There\'s no email on file, so no receipt goes out.')),
+  [{ label: 'Refund', variant: 'primary', onClick: async () => {
+    const cents = toCents(amount);
+    if (!(cents > 0)) throw new Error('Enter the amount to refund.');
+    if (cents > d.refundable_cents) throw new Error(`You can refund up to ${money(d.refundable_cents)}.`);
+    if (!reason.value.trim()) throw new Error('Say why you\'re refunding. It goes on the receipt.');
+    if (!confirm(`Refund ${money(cents)} to ${d.client_name}${byCard ? '\'s card' : ''}? This can't be undone.`)) return false;
+    const r = await post(`/v1/invoices/${d.id}/refund`, { amount_cents: cents, reason: reason.value.trim(), email: email.checked });
+    toast(`Refunded ${money(r.refunded_now_cents)}.${byCard ? ' It goes back to the card.' : ' Hand it back to the family.'}${r.emailed_to?.length ? ` Receipt emailed to ${r.emailed_to[0]}.` : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+function voidDialog(d) {
+  const reason = input({ maxlength: '120', placeholder: 'Like Comped the month' });
+  teamDialog(d.status === 'failed' ? 'Write off this charge' : 'Void this invoice', h('div', { class: 'stack' },
+    h('p', { class: 'muted', style: 'margin:0' }, `${d.client_name} · ${d.description} · ${money(d.amount_cents)}. Nothing more is charged or retried and its pay link stops working.${d.subscription_status === 'past_due' ? ' If this is the only declined charge, the membership is active again.' : ''}`),
+    field('Reason (optional)', reason)),
+  [{ label: d.status === 'failed' ? 'Write it off' : 'Void invoice', variant: 'primary', onClick: async () => {
+    const r = await post(`/v1/invoices/${d.id}/void`, { reason: reason.value.trim() || undefined });
+    toast(`${d.status === 'failed' ? 'Written off' : 'Voided'}.${r.membership_reactivated ? ' The membership is active again.' : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+// Open another dialog once this one has closed (and been emptied).
+const thenOpen = (fn) => () => { document.getElementById('dialog').addEventListener('close', () => setTimeout(fn), { once: true }); };
+// One membership payment: what happened and what can be done now.
+async function invoiceDialog(id) {
+  const d = await get(`/v1/invoices/${id}`);
+  const kv = (k, val) => (val ? [h('dt', null, k), h('dd', null, val)] : null);
+  const period = `${date(d.period_start)} – ${date(d.period_end)}`;
+  const acts = [
+    d.can.retry ? { label: 'Retry charge', variant: 'secondary', onClick: async () => { await retryNow(d); } } : null,
+    d.can.record_payment ? { label: 'Record payment', variant: 'ghost', onClick: thenOpen(() => recordHandDialog(d)) } : null,
+    d.can.remind ? { label: 'Card reminder', variant: 'ghost', onClick: async () => { await remindNow(d); } } : null,
+    d.can.pay_link ? { label: 'Send pay link', variant: 'ghost', onClick: async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: d.id, send: true }); toast(sentText(l)); render(); } } : null,
+    d.can.refund ? { label: 'Refund', variant: 'secondary', onClick: thenOpen(() => refundDialog(d)) } : null,
+    d.can.void ? { label: d.status === 'failed' ? 'Write off' : 'Void', variant: 'ghost', onClick: thenOpen(() => voidDialog(d)) } : null,
+    { label: 'Close', variant: 'ghost' }
+  ].filter(Boolean);
+  teamDialog(`${d.description} · ${d.client_name}`, h('div', { class: 'stack' },
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('span', { style: 'font:600 32px/1.1 var(--font-display)' }, money(d.amount_cents)), blBadge(d.state)),
+    h('dl', { class: 'dl' },
+      kv('Client', h('a', { href: `#/clients/${d.client_id}`, onClick: () => document.getElementById('dialog').close() }, d.client_name)), kv('Period', period), kv('Made', date(d.issued_at)),
+      kv('Card', d.card ? `${cardText({ card_brand: d.card.brand, card_last4: d.card.last4 })}${d.card.declining ? ' (declining)' : ''}` : 'No card on file'),
+      d.status === 'failed' ? kv('Declines', declineText({ ...d, reminded_today: d.reminded_today })) : null,
+      d.last_error && d.status === 'failed' ? kv('Bank said', d.last_error) : null,
+      d.paid_at ? kv('Paid', `${date(d.paid_at)} by ${(d.paid_by ?? 'card').toLowerCase()}${d.paid_reference ? ` (${d.paid_reference})` : ''}`) : null,
+      d.voided_at ? kv(d.attempts ? 'Written off' : 'Voided', `${date(d.voided_at)}${d.void_reason ? ` · ${d.void_reason}` : ''}`) : null,
+      d.refunded_cents ? kv('Refunded', `${money(d.refunded_cents)}${d.refundable_cents ? ` · ${money(d.refundable_cents)} left to refund` : ''}`) : null,
+      kv('Email', d.email)),
+    d.refunds.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Refunds'), d.refunds.map((r) => h('div', { class: 'small' },
+      `${money(r.amount_cents)} on ${date(r.created_at)}${r.source === 'stripe' ? ' in the Stripe dashboard' : r.by_name ? ` by ${r.by_name}` : ''}${r.reason ? ` · ${r.reason}` : ''}`))) : null,
+    d.pay_links.length ? h('p', { class: 'small muted', style: 'margin:0' }, `Pay link: ${{ open: 'open', paid: 'paid', settled: 'paid another way', canceled: 'canceled', expired: 'expired' }[d.pay_links[0].status] ?? d.pay_links[0].status}${d.pay_links[0].sent_at ? `, sent ${ago(d.pay_links[0].sent_at).toLowerCase()}` : ''}.`) : null), acts);
+}
 
-  const plansPanel = panel('Plans', { subtitle: 'Price changes apply from each client\'s next charge.' },
-    h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Plan', 'Price', 'Trial', 'Clients', 'Monthly revenue', ''].map((t) => h('th', null, t)))),
+async function viewBilling(main) {
+  const mp = new URLSearchParams();
+  if (billingUi.mview !== 'live') mp.set('view', billingUi.mview);
+  if (billingUi.mplan) mp.set('plan_id', billingUi.mplan);
+  if (billingUi.mq.trim()) mp.set('q', billingUi.mq.trim());
+  const [settings, s, att, inv, mem, plans, links, checks] = await Promise.all([get('/v1/settings'), get('/v1/billing/summary'), get('/v1/billing/attention'), get(`/v1/billing/invoices?${blQuery({ limit: billingUi.limit })}`),
+    get(`/v1/billing/memberships?${mp}`), get('/v1/plans?include_inactive=true'), get('/v1/pay-links'), get('/v1/money-checks')]);
+  if (settings.timezone) tzName = settings.timezone;
+  const jumpTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // ---- the four numbers ----
+  const tile = (label, value, note, tone, onClick) => h('button', { type: 'button', class: 'dp-metric bl-metric', onClick }, h('span', { class: 'dp-metric-label' }, label),
+    h('span', { class: `dp-metric-value${tone ? ` dp-metric-value--${tone}` : ''}` }, value), h('span', { class: 'dp-metric-note' }, note));
+  const showInvoices = (patchUi) => { Object.assign(billingUi, { view: 'all', kind: '', period: '', q: '', limit: 50 }, patchUi); render(); setTimeout(() => jumpTo('bl-inv'), 50); };
+  const numbers = h('section', { class: 'metrics bl-metrics', 'aria-label': 'Money summary' },
+    tile('Monthly recurring', money(s.mrr.total_cents), `${plural(s.mrr.paying_members, 'paying member')}${s.mrr.teams_cents ? ` · ${money(s.mrr.teams_cents)} teams` : ''}`, null, () => jumpTo('bl-mem')),
+    tile('Collected this month', money(s.month.collected_cents), `${plural(s.month.payments, 'payment')}${s.month.refunded_cents ? ` · ${money(s.month.refunded_cents)} refunded` : ''}`, 'good', () => showInvoices({ view: 'paid', period: 'month' })),
+    tile('Failed payments', String(s.failed.count), s.failed.count ? `${money(s.failed.cents)} at risk${s.failed.no_card ? ` · ${s.failed.no_card} with no card` : ''}` : 'Nothing at risk', s.failed.count ? 'warn' : null, () => jumpTo('bl-att')),
+    tile('School invoices open', money(s.school.open_cents), s.school.open_count ? `${plural(s.school.open_count, 'invoice')}${s.school.overdue_count ? ` · ${money(s.school.overdue_cents)} overdue` : ' · none overdue'}` : 'Nothing owed', s.school.overdue_count ? 'warn' : null, () => showInvoices({ view: 'unpaid', kind: 'school' })));
+  const monthNote = h('p', { class: 'small muted', style: 'margin:0' }, `Collected this month is the same number as on Today: ${money(s.month.sales_cents)} at the counter and online, ${money(s.month.members_cents)} memberships and ${money(s.month.teams_cents)} schools, after refunds (a refund counts on the day it was made). ${s.upcoming.renewals ? `In the next 7 days, ${plural(s.upcoming.renewals, 'renewal')} for ${money(s.upcoming.cents)}${s.upcoming.trials_ending ? ` (${plural(s.upcoming.trials_ending, 'trial')} ending)` : ''}.` : 'No renewals in the next 7 days.'}`);
+
+  // ---- needs attention ----
+  const attN = att.failed.length + att.overdue.length;
+  const withCard = att.failed.filter((i) => i.has_card).length;
+  const attTools = att.failed.length ? h('div', { class: 'row wrap', style: 'gap:8px' },
+    withCard ? btn(withCard === 1 ? 'Retry the declined charge' : `Retry all ${withCard}`, (e) => {
+      if (!confirm(`Charge ${withCard === 1 ? 'the declined charge' : `all ${withCard} declined charges`} with a card on file now? A decline here never cancels a membership.`)) return;
+      busy(e.currentTarget, async () => {
+        const r = await post('/v1/billing/retry-declined');
+        toast(r.tried === 1 ? (r.paid ? `Charged ${money(r.paid_cents)}.` : 'The charge declined again.') : r.paid ? `${r.paid} of ${r.tried} went through (${money(r.paid_cents)}).${r.declined ? ` ${r.declined} declined again.` : ''}` : `All ${r.tried} declined again.`, r.declined ? 'warn' : 'good');
+        render();
+      });
+    }, 'outline') : null,
+    btn('Email card reminders', (e) => busy(e.currentTarget, async () => {
+      const r = await post('/v1/billing/remind-declined');
+      toast(r.sent ? `Card reminders emailed to ${plural(r.sent, 'family', 'families')}.${r.skipped_today ? ` ${r.skipped_today} already had one today.` : ''}${r.no_email ? ` ${r.no_email} with no email.` : ''}` : r.skipped_today ? 'Every family already had a reminder today.' : 'No family has an email address to remind.', r.sent ? 'good' : 'warn');
+      render();
+    }), 'ghost')) : null;
+  const attRow = (i) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', null, h('a', { class: 'strong', href: `#/clients/${i.client_id}`, style: 'color:var(--steel)' }, i.client_name), h('span', { class: 'muted' }, ` · ${i.description}`)),
+      h('span', { class: `small ${i.has_card ? 'muted' : 'warn-text'}` }, declineText(i))),
+    h('span', { class: 'strong' }, money(i.amount_cents)), blBadge('failed'),
+    h('div', { class: 'row wrap', style: 'gap:4px' },
+      i.has_card ? btn('Retry', (e) => busy(e.currentTarget, () => retryNow(i)), 'outline', { 'aria-label': `Retry ${i.client_name}'s charge` }) : null,
+      i.reminded_today ? null : btn('Remind', (e) => busy(e.currentTarget, () => remindNow(i)), 'ghost', { 'aria-label': `Email ${i.client_name}'s family a card reminder` }),
+      btn('Details', (e) => busy(e.currentTarget, () => invoiceDialog(i.id)), 'ghost', { 'aria-label': `Details for ${i.client_name}'s charge` })));
+  const overdueRow = (i) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', null, h('a', { class: 'strong', href: `#/teams/${i.contract_id}`, style: 'color:var(--steel)' }, i.org_name), h('span', { class: 'muted' }, ` · ${i.description}`)),
+      h('span', { class: 'small warn-text' }, `${i.number} · ${plural(i.days_past_due, 'day')} past due (due ${ymd(i.due_on)})`)),
+    h('span', { class: 'strong' }, money(i.amount_cents)), blBadge('overdue'),
+    h('div', { class: 'row wrap', style: 'gap:4px' }, btn('Record payment', () => recordPaymentDialog(i), 'outline', { 'aria-label': `Record payment for ${i.number}` }),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: `#/teams/${i.contract_id}` }, 'Team')));
+  const attPanel = h('div', { id: 'bl-att' }, panel('Needs attention', {
+    subtitle: attN ? [att.failed.length ? `${plural(att.failed.length, 'declined charge')} (${money(att.failed_cents)})` : null, att.overdue.length ? `${plural(att.overdue.length, 'overdue school invoice')} (${money(att.overdue_cents)})` : null].filter(Boolean).join(' and ') + `. Declined charges retry on their own every ${att.retry_every_days} days, up to ${att.max_attempts} tries; a failed-payment email with a pay link goes out each time.` : null,
+    action: attTools },
+  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.')));
+
+  // ---- invoices ----
+  const search = input({ type: 'search', placeholder: 'Name, plan, school or invoice number', 'aria-label': 'Search invoices', value: billingUi.q });
+  let t = null;
+  search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { billingUi.q = search.value; billingUi.limit = 50; render(); }, 350); });
+  const kind = select([['', 'Every kind'], ['membership', 'Memberships'], ['school', 'School invoices']], { 'aria-label': 'Kind of invoice', value: billingUi.kind });
+  kind.addEventListener('change', () => { billingUi.kind = kind.value; billingUi.limit = 50; render(); });
+  const period = select(BL_PERIODS, { 'aria-label': 'When', value: billingUi.period });
+  period.addEventListener('change', () => { billingUi.period = period.value; billingUi.limit = 50; render(); });
+  const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show invoices' }, BL_VIEWS.map(([k, label]) =>
+    h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(billingUi.view === k), onClick: () => { billingUi.view = k; billingUi.limit = 50; render(); } }, label,
+      h('span', { class: ['failed', 'overdue'].includes(k) && inv.counts[k] ? 'warn-text' : 'muted' }, String(inv.counts[k] ?? 0)))));
+  const openRow = (i) => (i.kind === 'school' ? () => { location.hash = `#/teams/${i.contract_id}`; } : () => invoiceDialog(i.id).catch((e) => toast(e.message, 'warn')));
+  const rows = inv.data.map((i) => h('tr', { class: 'link', tabindex: '0', onClick: openRow(i), onKeydown: (e) => { if (e.key === 'Enter') openRow(i)(); } },
+    h('td', { class: 'bl-wide muted' }, i.kind === 'school' ? ymd(i.issued_at) : date(i.issued_at)),
+    h('td', null, h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, i.kind === 'school' ? i.org_name : i.client_name),
+      h('span', { class: 'small muted' }, i.kind === 'school' ? `${i.number} · ${i.description}` : i.description))),
+    h('td', { class: 'bl-wide muted' }, i.kind === 'school' ? 'School invoice' : 'Membership'),
+    h('td', { style: 'white-space:nowrap' }, money(i.amount_cents), i.refunded_cents ? h('div', { class: 'small muted' }, `${money(i.refunded_cents)} refunded`) : null),
+    h('td', null, blBadge(i.state))));
+  const exportHref = `/v1/billing/invoices/export?${blQuery()}`;
+  const invPanel = h('div', { id: 'bl-inv' }, panel('Invoices', { subtitle: 'Membership payments and school invoices, newest first. Counter sales are in Point of sale.', action: h('a', { class: 'dp-btn dp-btn--ghost', href: exportHref, download: '' }, 'Export CSV') },
+    views,
+    h('div', { class: 'row wrap bl-tools' }, search, kind, period),
+    h('p', { class: 'small muted', style: 'margin:0' }, inv.total ? `${plural(inv.total, 'invoice')} · ${money(inv.total_cents)}${inv.refunded_cents ? ` · ${money(inv.refunded_cents)} refunded` : ''}` : ''),
+    inv.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, h('th', { class: 'bl-wide' }, 'Date'), h('th', null, 'Who'), h('th', { class: 'bl-wide' }, 'Kind'), h('th', null, 'Amount'), h('th', null, 'Status'))), h('tbody', null, rows)))
+      : h('p', { class: 'muted' }, billingUi.q || billingUi.kind || billingUi.period || billingUi.view !== 'all' ? 'Nothing matches. Try another view or clear the search.' : 'No invoices yet. They appear when trials end, memberships renew and schools are billed.'),
+    inv.total > inv.data.length ? h('div', { class: 'row', style: 'justify-content:center' }, btn(`Show more (${inv.total - inv.data.length} more)`, () => { billingUi.limit = Math.min(500, billingUi.limit + 100); render(); }, 'ghost')) : null));
+
+  // ---- memberships ----
+  const mq = input({ type: 'search', placeholder: 'Athlete, family or Athlete ID', 'aria-label': 'Search memberships', value: billingUi.mq });
+  let mt = null;
+  mq.addEventListener('input', () => { clearTimeout(mt); mt = setTimeout(() => { billingUi.mq = mq.value; render(); }, 350); });
+  const mplan = select([['', 'Every plan'], ...plans.data.map((p) => [p.id, `${p.name}${p.active ? '' : ' (retired)'}`])], { 'aria-label': 'Plan', value: billingUi.mplan });
+  mplan.addEventListener('change', () => { billingUi.mplan = mplan.value; render(); });
+  const mviews = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show memberships' }, MEM_VIEWS.map(([k, label]) =>
+    h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(billingUi.mview === k), onClick: () => { billingUi.mview = k; render(); } }, label,
+      h('span', { class: k === 'past_due' && mem.counts[k] ? 'warn-text' : 'muted' }, String(mem.counts[k] ?? 0)))));
+  const livePlans = plans.data.filter((p) => p.active);
+  const memAction = (m) => {
+    const act = (path, msg, ask) => (e) => { if (ask && !confirm(ask)) return; busy(e.currentTarget, async () => { await post(`/v1/clients/${m.client_id}/subscription/${path}`); toast(msg); render(); }); };
+    const change = select([['', 'Change plan…'], ...livePlans.filter((p) => p.id !== m.plan_id).map((p) => [p.id, `${p.name} (${money(p.price_cents)}/mo)`])], { 'aria-label': `Change ${m.client_name}'s plan`, style: 'width:150px' });
+    change.addEventListener('change', () => { const p = livePlans.find((x) => x.id === change.value); if (!p) return; if (!confirm(`Move ${m.client_name} to ${p.name}? The new price (${money(p.price_cents)}) applies from the next renewal.`)) { change.value = ''; return; } busy(change, async () => { await post(`/v1/clients/${m.client_id}/subscription/plan`, { plan_id: p.id }); toast(`${m.client_name.split(' ')[0]} is on ${p.name} now.`); render(); }); });
+    if (m.status === 'canceled') return null;
+    return h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap' },
+      livePlans.length > 1 ? change : null,
+      ['active', 'trialing'].includes(m.status) ? btn('Pause', act('pause', 'Paused. Nothing is charged until you resume.'), 'ghost', { 'aria-label': `Pause ${m.client_name}'s membership` }) : null,
+      m.status === 'paused' ? btn('Resume', act('resume', 'Resumed. A new month started today.', `Resume ${m.client_name}'s membership? A new month starts today and ${money(m.price_cents)} is charged now.`), 'ghost') : null,
+      btn('Cancel', act('cancel', 'Membership canceled.', `Cancel ${m.client_name}'s membership now? Anything unpaid on it is voided.`), 'ghost', { 'aria-label': `Cancel ${m.client_name}'s membership` }));
+  };
+  const nextText = (m) => (m.status === 'trialing' ? `Trial ends ${date(m.trial_ends_at ?? m.next_charge_at)}` : m.status === 'active' ? `Next charge ${date(m.next_charge_at)}` : m.status === 'past_due' ? `${money(m.failed_cents)} declined` : m.status === 'paused' ? 'Paused' : `Canceled ${date(m.canceled_at)}`);
+  const memPanel = h('div', { id: 'bl-mem' }, panel('Memberships', { subtitle: mem.upcoming.count ? `${plural(mem.upcoming.count, 'renewal')} in the next 7 days: ${money(mem.upcoming.cents)}.` : 'No renewals in the next 7 days.' },
+    mviews, h('div', { class: 'row wrap bl-tools' }, mq, mplan),
+    mem.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Athlete'), h('th', { class: 'bl-wide' }, 'Plan'), h('th', null, 'Next'), h('th', { class: 'bl-wide' }, 'Card'), h('th', null, ''))),
+      h('tbody', null, mem.data.map((m) => h('tr', null,
+        h('td', null, h('div', { class: 'stack-tight' }, h('a', { class: 'strong', href: `#/clients/${m.client_id}`, style: 'color:var(--steel)' }, m.client_name), h('span', { class: 'small muted bl-narrow' }, `${m.plan_name} · ${money(m.price_cents)}/mo`), h('span', null, badge(m.status)))),
+        h('td', { class: 'bl-wide' }, m.plan_name, m.plan_active ? null : h('span', { class: 'small muted' }, ' (retired)'), h('div', { class: 'small muted' }, `${money(m.price_cents)}/mo`)),
+        h('td', { class: m.status === 'past_due' ? 'warn-text' : null }, nextText(m)),
+        h('td', { class: `bl-wide ${m.card_last4 ? '' : 'warn-text'}` }, cardText(m)),
+        h('td', { class: 'bl-acts' }, memAction(m)))))))
+      : h('p', { class: 'muted' }, billingUi.mq || billingUi.mplan ? 'Nobody matches. Clear the search or choose another plan.' : 'Nobody here.')));
+
+  // ---- plans ----
+  const pname = input({ maxlength: '80' }), price = dollarsIn(null, { min: '0' }), trial = input({ type: 'number', min: '0', max: '90', value: '7', inputmode: 'numeric' });
+  const addPlan = h('details', { class: 'bl-add' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add a plan'),
+    h('form', { class: 'stack', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const cents = toCents(price);
+      if (!pname.value.trim()) throw new Error('Name the plan.');
+      if (!(cents >= 0)) throw new Error('Enter a monthly price.');
+      await post('/v1/plans', { name: pname.value.trim(), price_cents: cents, trial_days: Number(trial.value) || 0 }); toast('Plan created.'); render();
+    }); } }, h('div', { class: 'form-grid cols-3' }, field('Plan name', pname), field('Monthly price ($)', price), field('Free trial (days)', trial, 'Up to 90. 0 charges the first month right away.')), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' }))));
+  const editPlan = (p) => {
+    const f = { name: input({ maxlength: '80', value: p.name }), price: dollarsIn(p.price_cents, { min: '0' }), trial: input({ type: 'number', min: '0', max: '90', value: String(p.trial_days), inputmode: 'numeric' }) };
+    setupDialog(`Change ${p.name}`, [h('div', { class: 'form-grid cols-3' }, field('Plan name', f.name), field('Monthly price ($)', f.price), field('Free trial (days)', f.trial))], 'Save', async () => {
+      const cents = toCents(f.price);
+      if (!f.name.value.trim() || !(cents >= 0)) throw new Error('Enter a name and a monthly price.');
+      await patch(`/v1/plans/${p.id}`, { name: f.name.value.trim(), price_cents: cents, trial_days: Number(f.trial.value) || 0 });
+      return cents !== p.price_cents ? `Saved. ${plural(p.subscribers, 'member')} pay the new price from their next charge.` : 'Saved.';
+    }, 'A new price applies from each member\'s next charge. Nobody is charged when you save.');
+  };
+  const planPanel = h('div', { id: 'bl-plans' }, panel('Plans', { subtitle: 'Price changes apply from each member\'s next charge. Nobody is charged when you save.' },
+    h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Plan'), h('th', null, 'Price'), h('th', { class: 'bl-wide' }, 'Trial'), h('th', null, 'Members'), h('th', { class: 'bl-wide' }, 'Monthly'), h('th', null, ''))),
       h('tbody', null, plans.data.map((p) => h('tr', null,
         h('td', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (retired)')),
-        h('td', null, `${money(p.price_cents)} / mo`), h('td', null, p.trial_days ? `${p.trial_days} days` : 'None'), h('td', null, p.subscribers),
-        h('td', { style: 'font:600 22px/1 var(--font-display)' }, money(p.subscribers * p.price_cents)),
-        h('td', null, btn(p.active ? 'Retire' : 'Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: !p.active }); toast(p.active ? 'Plan retired. Current clients keep it.' : 'Plan offered again.'); render(); }), 'ghost'))))))),
-    addPlan);
+        h('td', { style: 'white-space:nowrap' }, `${money(p.price_cents)}/mo`), h('td', { class: 'bl-wide' }, p.trial_days ? `${p.trial_days} days` : 'None'),
+        h('td', null, p.subscribers ? h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `Show the ${plural(p.subscribers, 'member')} on ${p.name}`, onClick: () => { Object.assign(billingUi, { mview: 'live', mplan: p.id, mq: '' }); render(); setTimeout(() => jumpTo('bl-mem'), 50); } }, String(p.subscribers)) : '0'),
+        h('td', { class: 'bl-wide', style: 'font:600 20px/1 var(--font-display)' }, money(p.subscribers * p.price_cents)),
+        h('td', { class: 'bl-acts' }, h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap;justify-content:flex-end' },
+          btn('Change', () => editPlan(p), 'ghost', { 'aria-label': `Change ${p.name}` }),
+          btn(p.active ? 'Retire' : 'Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: !p.active }); toast(p.active ? 'Plan retired. Current members keep it.' : 'Plan offered again.'); render(); }), 'ghost')))))))),
+    addPlan));
 
-  const filter = select([['', 'All invoices'], ['failed', 'Failed'], ['paid', 'Paid'], ['open', 'Open'], ['void', 'Void']], { 'aria-label': 'Filter invoices', style: 'width:160px' });
-  const tbody = h('tbody');
-  const draw = () => fill(tbody, ...inv.data.filter((i) => !filter.value || i.status === filter.value).map((i) => h('tr', null,
-    h('td', null, h('a', { href: `#/clients/${i.client_id}`, style: 'color:var(--steel)', class: 'strong' }, i.client_name)), h('td', null, i.plan_name), h('td', null, money(i.amount_cents)),
-    h('td', { class: 'muted' }, date(i.created_at)), h('td', null, badge(i.status)),
-    h('td', null, i.status === 'failed' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
-      btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Payment succeeded.') : toast('Declined again.', 'warn'); render(); }), 'outline'),
-      btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
-  filter.addEventListener('change', draw); draw();
-
-  const asOf = input({ type: 'date', value: bizDate(8) });
-  const testPanel = state.testMode ? panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
+  // ---- pay links, money checks, test clock ----
+  const linksPanel = h('div', { id: 'bl-links' }, panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },
+    links.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, ['For', 'Client', 'Amount', 'Sent', 'Status', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, links.data.slice(0, 25).map((l) => h('tr', null, h('td', null, l.description), h('td', null, l.client_id ? h('a', { href: `#/clients/${l.client_id}`, style: 'color:var(--steel)' }, l.client_name) : '—'),
+        h('td', null, money(l.amount_cents)), h('td', { class: 'muted small' }, l.sent_at ? ago(l.sent_at) : l.created_by === 'Automatic' ? 'With the failed-payment email' : 'Not sent'),
+        h('td', null, badge(l.paid_at ? 'paid' : l.status)), h('td', { class: 'bl-acts' }, l.status === 'open' ? payLinkActions(l, render) : null)))))) : h('p', { class: 'muted' }, 'No pay links yet.')));
+  const asOf = input({ type: 'date', value: bizDate(8), min: bizDate() });
+  const testPanel = state.testMode ? h('div', { id: 'bl-clock' }, panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
     h('div', { class: 'row wrap' }, h('div', { style: 'width:200px' }, field('Run as of', asOf)),
       h('div', { style: 'align-self:flex-end' }, btn('Run billing', (e) => busy(e.currentTarget, async () => {
         const r = await post('/v1/billing/run', { as_of: asOf.value });
         toast(`Billing run: ${r.renewed} renewed, ${r.paid} paid, ${r.failed} failed, ${r.retried} retried.`, r.failed ? 'warn' : 'good'); render();
-      }), 'secondary')))) : null;
+      }), 'secondary'))))) : null;
+  const checksPanel = h('div', { id: 'bl-checks' }, moneyChecksPanel(checks, render));
 
-  fill(main, 
-    header('Billing', 'Plans, invoices and failed payments.'),
-    checks.needs_look ? moneyChecksPanel(checks, render) : null,
-    plansPanel,
-    panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },
-      links.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['For', 'Client', 'Amount', 'Sent', 'Status', ''].map((t) => h('th', null, t)))),
-        h('tbody', null, links.data.slice(0, 25).map((l) => h('tr', null, h('td', null, l.description), h('td', null, l.client_id ? h('a', { href: `#/clients/${l.client_id}`, style: 'color:var(--steel)' }, l.client_name) : '—'),
-          h('td', null, money(l.amount_cents)), h('td', { class: 'muted small' }, l.sent_at ? ago(l.sent_at) : l.created_by === 'Automatic' ? 'With the failed-payment email' : 'Not sent'),
-          h('td', null, badge(l.paid_at ? 'paid' : l.status)), h('td', null, l.status === 'open' ? payLinkActions(l, render) : null)))))) : h('p', { class: 'muted' }, 'No pay links yet.')),
-    panel('Invoices', { action: filter }, inv.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Client', 'Plan', 'Amount', 'Date', 'Status', ''].map((t) => h('th', null, t)))), tbody)) : h('p', { class: 'muted' }, 'No invoices yet. They appear when trials end and memberships renew.')),
-    checks.needs_look ? null : moneyChecksPanel(checks, render),
+  const jumps = [['bl-att', 'Needs attention', attN], ['bl-inv', 'Invoices'], ['bl-mem', 'Memberships'], ['bl-plans', 'Plans'], ['bl-links', 'Pay links'], ['bl-checks', 'Money checks'], state.testMode ? ['bl-clock', 'Billing clock'] : null].filter(Boolean);
+  fill(main,
+    header('Billing', 'Money in, money owed, and who is on which plan.'),
+    numbers, monthNote,
+    h('nav', { class: 'tm-jump', 'aria-label': 'Billing sections' }, jumps.map(([id, label, n]) => h('button', { type: 'button', onClick: () => jumpTo(id) }, label, n ? h('span', { class: 'warn-text', style: 'margin-left:6px' }, String(n)) : null))),
+    checks.needs_look ? checksPanel : null,
+    attPanel, invPanel, memPanel, planPanel, linksPanel,
+    checks.needs_look ? null : checksPanel,
     testPanel);
 }
 

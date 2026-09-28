@@ -388,7 +388,7 @@ function invoiceRows(ctx, { from, to } = {}) {
     SELECT 'school', t.id, t.number, NULL, NULL, NULL, NULL, t.contract_id, o.name, tc.name, t.amount_cents, 0, t.status, t.issued_on, t.due_on,
       t.paid_on, t.paid_method, t.paid_reference, 0, NULL, NULL, t.reminded_at, NULL, NULL, t.period_start, t.period_end,
       NULL, NULL, NULL, NULL,
-      CASE WHEN t.status = 'open' AND t.due_on < ? THEN 'overdue' ELSE t.status END, t.created_at
+      CASE WHEN t.status = 'open' AND t.due_on < ? THEN 'overdue' ELSE t.status END, t.issued_on || 'T23:59:59.999Z'
     FROM team_invoices t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = t.org_id
     ${sDate.length ? `WHERE ${sDate.join(' AND ')}` : ''})`;
   return { sql, params: [...mArgs, bizToday(ctx), ...sArgs] };

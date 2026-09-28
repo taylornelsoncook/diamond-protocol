@@ -84,6 +84,7 @@ async function stripeMatch(ctx, from, to, local) {
   const known = new Map();
   for (const r of ctx.db.all(`SELECT payment_ref AS ref, amount_cents FROM sales WHERE payment_ref IS NOT NULL
       UNION ALL SELECT payment_ref, amount_cents FROM invoices WHERE payment_ref IS NOT NULL
+      UNION ALL SELECT ref, amount_cents FROM invoice_charges WHERE ref IS NOT NULL AND late_outcome = 'refunded'   -- a late approval already sent back
       UNION ALL SELECT payment_ref, amount_cents FROM pay_links WHERE payment_ref IS NOT NULL
       UNION ALL SELECT paid_reference, amount_cents FROM team_invoices WHERE paid_reference IS NOT NULL`)) known.set(r.ref, r.amount_cents);
   const found = [];

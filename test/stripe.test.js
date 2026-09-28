@@ -29,11 +29,11 @@ const fake = http.createServer((req, res) => {
     if (/^\/v1\/terminal\/readers\/.+\/process_payment_intent$/.test(p)) return send(200, { id: 'tmr', action: { status: 'in_progress' } });
     if (p === '/v1/refunds') return send(200, { id: nid('re') });
     if (p === '/v1/checkout/sessions' && req.method === 'POST') return send(200, { id: 'cs_1', url: 'https://checkout.stripe.com/c/pay/cs_1' });
-    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444' } } } });
+    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444', exp_month: 4, exp_year: 2029 } } } });
     if (p === '/v1/payment_intents' && req.method === 'POST') {
       if (body.off_session === 'true') {
         if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.', payment_intent: { id: nid('pi'), status: 'requires_payment_method' } } });
-        return send(200, { id: nid('pi'), status: 'succeeded' });
+        return send(200, { id: nid('pi'), status: body.payment_method === 'pm_processing' ? 'processing' : 'succeeded' });
       }
       const pi = { id: nid('pi'), client_secret: 'pi_secret_x', status: 'requires_payment_method', body };
       intents.set(pi.id, pi);
@@ -143,7 +143,7 @@ test('clients add cards on Stripe\'s hosted page', async () => {
   assert.equal(link.url, 'https://checkout.stripe.com/c/pay/cs_1');
   globalThis.setupClient = client.id;
   await webhook({ type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'setup' } } });
-  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', owner: 'client' });
+  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', owner: 'client' });
 });
 
 test('schools pay team invoices online by card or bank account', async () => {
@@ -172,7 +172,8 @@ const invoiceOf = (id) => app.ctx.db.get('SELECT * FROM invoices WHERE id = ?', 
 const subOf = (id) => app.ctx.db.get('SELECT * FROM subscriptions WHERE id = ?', id);
 let sub, inv;
 test('a renewal that fails after it was taken reopens the invoice; a late success closes it', async () => {
-  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
+  // Stripe answered "processing": counted as paid, waiting on the bank.
+  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_processing' WHERE id = ?`, client.id);
   const plan = (await call('POST', '/v1/plans', { name: 'Monthly', price_cents: 15000, trial_days: 0 })).body;
   sub = (await call('POST', `/v1/clients/${client.id}/subscription`, { plan_id: plan.id })).body;
   inv = app.ctx.db.get('SELECT * FROM invoices WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1', sub.id);
@@ -194,10 +195,15 @@ test('a renewal that fails after it was taken reopens the invoice; a late succes
   assert.equal(now.status, 'paid');
   assert.equal(now.next_retry_at, null);
   assert.equal(subOf(sub.id).status, 'active');
+  // Stripe doesn't promise the order of events: the failure delivered again after the success is stale (a PaymentIntent
+  // that succeeded never fails), so the invoice stays paid and isn't charged again.
+  await webhook({ type: 'payment_intent.payment_failed', data: { object: pi } });
+  assert.equal(invoiceOf(inv.id).status, 'paid', 'a stale failure after the success changes nothing');
+  assert.equal(app.ctx.db.get('SELECT status FROM invoice_charges WHERE ref = ?', inv.payment_ref).status, 'succeeded');
   assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'invoice.payment_failed' AND data LIKE ?`, `%${inv.id}%`).n, 1);
 });
 
-test('a declined renewal keeps its PaymentIntent, so a later approval marks it paid; stale ones are ignored', async () => {
+test('every charge try is matched: an older try approved late pays the invoice, and a second late approval is refunded once and the owner told', async () => {
   app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_declines' WHERE id = ?`, client.id);
   const retried = (await call('POST', `/v1/invoices/${inv.id}/retry`)).status;
   assert.equal(retried, 409, 'a paid invoice is not retried');
@@ -205,11 +211,29 @@ test('a declined renewal keeps its PaymentIntent, so a later approval marks it p
   await call('POST', `/v1/invoices/${inv.id}/retry`);
   const declined = invoiceOf(inv.id);
   assert.equal(declined.status, 'failed');
-  assert.notEqual(declined.payment_ref, inv.payment_ref, 'the declined attempt is the one webhooks match');
+  assert.notEqual(declined.payment_ref, inv.payment_ref, 'the declined attempt is the latest');
+  const tries = app.ctx.db.all('SELECT ref, manual, status FROM invoice_charges WHERE invoice_id = ? ORDER BY created_at, rowid', inv.id);
+  assert.ok(tries.some((t) => t.ref === declined.payment_ref && t.manual === 1 && t.status === 'declined'), 'the owner\'s retry is written down as manual');
+  // The try's id went to Stripe with the charge.
+  const sent = requests.filter((r) => r.path === '/v1/payment_intents' && r.body['metadata[invoice_id]'] === inv.id).at(-1);
+  assert.match(sent.body['metadata[charge_attempt_id]'], /^ich_/);
+  const refundsBefore = requests.filter((r) => r.path === '/v1/refunds').length;
   await webhook({ type: 'payment_intent.succeeded', data: { object: { id: inv.payment_ref, metadata: { invoice_id: inv.id } } } });
-  assert.equal(invoiceOf(inv.id).status, 'failed', 'an older attempt does not count');
+  assert.equal(invoiceOf(inv.id).status, 'paid', 'an older try the bank approves pays the invoice');
+  assert.equal(invoiceOf(inv.id).payment_ref, inv.payment_ref);
+  // Now the declined try is approved too: charged twice, so it goes back, once.
   await webhook({ type: 'payment_intent.succeeded', data: { object: { id: declined.payment_ref, metadata: { invoice_id: inv.id } } } });
+  await webhook({ type: 'payment_intent.succeeded', data: { object: { id: declined.payment_ref, metadata: { invoice_id: inv.id } } } });
+  const refunds = requests.filter((r) => r.path === '/v1/refunds').slice(refundsBefore);
+  assert.deepEqual(refunds.map((r) => r.body.payment_intent), [declined.payment_ref], 'refunded exactly once');
   assert.equal(invoiceOf(inv.id).status, 'paid');
+  const dash = (await call('GET', '/v1/dashboard')).body;
+  const alert = dash.attention.find((a) => a.kind === 'late_charge' && a.invoice_id === inv.id);
+  assert.ok(alert, 'the owner sees it on Today');
+  assert.equal(alert.late_outcome, 'refunded');
+  assert.ok(app.ctx.db.get(`SELECT 1 FROM outbox WHERE subject LIKE 'Refunded a late card charge%'`), 'and gets an email');
+  assert.equal((await call('POST', `/v1/invoices/${inv.id}/charges/${alert.charge_id}/handled`)).status, 200);
+  assert.ok(!(await call('GET', '/v1/dashboard')).body.attention.some((a) => a.kind === 'late_charge' && a.invoice_id === inv.id), 'handled: off Today');
   app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
 });
 
@@ -237,8 +261,9 @@ test('refunds made in the Stripe dashboard show on the sale, in its refund log a
 });
 
 test('reissued cards and disputes', async () => {
-  await webhook({ type: 'payment_method.automatically_updated', data: { object: { id: 'pm_web', card: { brand: 'mastercard', last4: '9999' } } } });
+  await webhook({ type: 'payment_method.automatically_updated', data: { object: { id: 'pm_web', card: { brand: 'mastercard', last4: '9999', exp_month: 7, exp_year: 2031 } } } });
   assert.equal((await call('GET', `/v1/clients/${client.id}/card`)).body.last4, '9999');
+  assert.equal((await call('GET', `/v1/clients/${client.id}/card`)).body.exp, '2031-07', 'the new expiry is kept for the "expires soon" reminder');
   await webhook({ type: 'charge.dispute.created', data: { object: { id: 'dp_1', payment_intent: invoiceOf(inv.id).payment_ref, amount: 15000, reason: 'fraudulent' } } });
   const ev = app.ctx.db.get(`SELECT data FROM events WHERE type = 'payment.disputed'`);
   assert.equal(JSON.parse(ev.data).invoice_id, inv.id);

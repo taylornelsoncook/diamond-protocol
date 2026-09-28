@@ -16,7 +16,7 @@ export function maturityOffset({ sex, age, heightCm, seatedCm, weightKg }) {
 function growth(ctx, profile, client) {
   const series = (key) => profile.find((p) => p.test === key)?.history ?? [];
   const heights = series('height'), seated = series('seated_height'), weights = series('weight');
-  const out = { heights: heights.map((h) => ({ date: h.date, value: h.value })), latest_height: heights.at(-1) ?? null, latest_weight: weights.at(-1) ?? null, estimate: null, missing: [] };
+  const out = { heights: heights.map((h) => ({ date: h.date, value: h.value })), weights: weights.map((w) => ({ date: w.date, value: w.value })), latest_height: heights.at(-1) ?? null, latest_weight: weights.at(-1) ?? null, estimate: null, missing: [] };
   if (heights.length > 1) {
     const a = heights[0], b = heights.at(-1), years = (Date.parse(b.date) - Date.parse(a.date)) / (365.25 * 864e5);
     if (years >= 0.25) out.growth_per_year = (b.value - a.value) / years;

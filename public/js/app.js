@@ -1,6 +1,7 @@
 import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, workoutRow } from './programs-coach.js';
+import { initAdmin, viewIntegrations, viewStaff, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -23,6 +24,7 @@ let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
 initPrograms({ api, render, header, role: () => state.user?.role, pulseTile: (...a) => pulseTile(...a) });
+initAdmin({ api, render, header, pulseTile: (...a) => pulseTile(...a), download: (p) => download(p), me: () => state.user, saveAnyway: (send) => saveAnyway(send) });
 
 // ---------- Shell ----------
 async function boot() {
@@ -34,6 +36,7 @@ async function boot() {
 let leaveGuard = null, lastHash = location.hash, returning = false;
 window.addEventListener('hashchange', () => {
   if (returning) { returning = false; return; }
+  if (takeResetToken()) { lastHash = ''; return render(); }     // a reset link opened in a tab that was already on this site
   const msg = leaveGuard?.check(location.hash);
   if (msg) {
     if (!confirm(msg)) { returning = true; location.hash = lastHash; return; }
@@ -44,13 +47,23 @@ window.addEventListener('hashchange', () => {
 });
 window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { e.preventDefault(); e.returnValue = ''; } });
 
+// An emailed "forgot password" link opens /#reset=<secret>. The secret is taken out of the address at once (it never
+// reaches the server's logs or another page's referrer) and the reset page opens, even on a signed-in device.
+let resetToken = null;
+function takeResetToken() {
+  if (!location.hash.startsWith('#reset=')) return false;
+  resetToken = location.hash.slice(7); history.replaceState(null, '', '/');
+  return true;
+}
+takeResetToken();
 function render() {
   clearInterval(todayTimer);                          // Today sets its one-minute refresh again when it's open
   leaveGuard = null;                                  // the view sets it again if it has unsaved changes
+  if (resetToken) { const t = resetToken; resetToken = null; return renderReset(root, t, async () => { state.user = null; await boot(); }); }
   if (!state.user) { profileDrafts.clear(); forgetSale(); return renderLogin(); }   // signed out: the next person never sees these edits or the open sale
   if (state.user.must_change_password) return renderPasswordChange(true);
   const [section, id] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
-  const current = NAV.some(([k]) => k === section) ? section : 'today';
+  const current = section === 'account' ? 'account' : NAV.some(([k]) => k === section) ? section : 'today';
   const main = h('main', { class: 'main', id: 'main' });
   const shell = h('div', { class: 'shell' },
     h('nav', { class: 'dp-nav', 'aria-label': 'Main' },
@@ -62,11 +75,11 @@ function render() {
       h('div', { style: 'margin-top:auto' }, state.payments.live ? null : h('div', { class: 'test-banner' }, state.payments.provider === 'stripe' ? 'Stripe test mode. No real money moves.' : 'Test mode. No real cards are charged.'),
         h('div', { class: 'small muted', style: 'margin-top:12px;padding:0 4px' }, `${state.user.name} · ${{ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[state.user.role] ?? ''}`),
         h('div', { class: 'row small muted', style: 'padding:0 4px' }, h('span', { class: 'grow' }),
-          btn('Password', () => renderPasswordChange(false), 'ghost'),
+          h('a', { class: 'dp-btn dp-btn--ghost', href: '#/account', 'aria-current': current === 'account' ? 'page' : null, onClick: () => shell.classList.remove('nav-open') }, 'Account'),
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -81,7 +94,7 @@ const addClientBtn = () => btn('Add client', () => { location.hash = '#/clients/
 
 function renderLogin() {
   const email = input({ type: 'email', autocomplete: 'username', required: true });
-  const pw = input({ type: 'password', autocomplete: 'current-password', required: true });
+  const pwf = passwordField('Password', { autocomplete: 'current-password', required: true }), pw = pwf.input;
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const submit = btn('Sign in', null, 'primary', { type: 'submit', class: 'dp-btn dp-btn--primary dp-btn--block' });
   const form = h('form', { class: 'dp-panel login-card', onSubmit: (e) => {
@@ -92,7 +105,8 @@ function renderLogin() {
     });
   } },
     h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.' }),
-    field('Email', email), field('Password', pw), err, submit);
+    field('Email', email), pwf.el, err, submit,
+    btn('Forgot your password?', () => forgotForm(root, email.value, () => renderLogin()), 'ghost'));
   fill(root, h('div', { class: 'login' }, form));
   email.focus();
 }
@@ -107,6 +121,7 @@ const EVENT_TEXT = {
   'subscription.updated': (d) => d.previous_plan_name ? `${d.client_name} moved to ${d.plan_name}` : `${d.client_name}'s membership is now ${d.status.replace('_', ' ')}`,
   'invoice.paid': (d) => `Payment of ${money(d.amount_cents)} received from ${d.client_name}`,
   'invoice.payment_failed': (d) => `Payment of ${money(d.amount_cents)} failed for ${d.client_name}${d.final ? '. Membership canceled.' : ''}`,
+  'invoice.paid_twice': (d) => `A late card approval for ${d.client_name} (${money(d.amount_cents)}) came after the invoice was ${d.reason === 'void' ? 'voided' : 'already paid'}: ${d.refunded ? 'refunded automatically' : 'refund it in Stripe'}`,
   'program.assigned': (d) => `${d.client_name} started ${d.program_name}`,
   'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises${d.sets ? `, ${d.sets} ${d.sets === 1 ? 'set' : 'sets'}` : ''}${d.effort ? `, effort ${d.effort}/10` : ''})${d.bests?.length ? `. New best: ${d.bests.map((b) => `${b.name} ${b.weight} lb`).join(', ')}` : ''}`,
   'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
@@ -243,6 +258,14 @@ async function viewToday(main) {
     if (a.kind === 'team_invoice_overdue') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('a', { href: `#/teams/${a.contract_id}`, class: 'strong', style: 'color:var(--steel)' }, `${a.name} · ${a.team_name}`), h('span', { class: 'small muted' }, `Invoice ${a.number} for ${money(a.amount_cents)} was due ${date(a.due_on)}. Reminders go out weekly.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/teams/${a.contract_id}` }, 'Open team'));
+    if (a.kind === 'late_charge') return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, link,
+        h('span', { class: `small ${a.late_outcome === 'refunded' ? 'muted' : 'warn-text'}` }, a.late_outcome === 'refunded'
+          ? `The bank approved a ${money(a.amount_cents)} membership charge after ${a.late_reason}. It was refunded to the card automatically.`
+          : `The bank approved a ${money(a.amount_cents)} membership charge after ${a.late_reason}, and the automatic refund didn't work${a.refund_error ? ` (${a.refund_error})` : ''}. Refund payment ${a.ref} in the Stripe dashboard.`)),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        btn('Open invoice', () => invoiceDialog(a.invoice_id), 'ghost'),
+        btn('Mark handled', (e) => busy(e.currentTarget, async () => { await post(`/v1/invoices/${a.invoice_id}/charges/${a.charge_id}/handled`); toast('Marked handled.'); refresh(); }), 'outline')));
     if (a.kind === 'deletion_request') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.family_name} asked for their data to be deleted`), h('span', { class: 'small muted' }, `Requested by ${a.requested_by.split(' <')[0]} ${ago(a.created_at)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/staff' }, 'Review'));
@@ -337,9 +360,12 @@ async function viewToday(main) {
     rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
       : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
   const dateLine = tzFmt(board.now, { weekday: 'long', month: 'long', day: 'numeric' });
+  const parentSlot = h('div');
+  if (isOwner()) parentRequestsPanel().then((p) => fill(parentSlot, p)).catch(() => {});
   fill(main,
     header('Today', `${dateLine}. ${isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${first(state.user.name)}. Today's sessions and anything that needs you.`}`, addClientBtn()),
     pulseBlock(d.pulse),
+    parentSlot,
     agendaPanel,
     checkinPanelEl,
     h('div', { class: 'grid grid-2' },
@@ -395,7 +421,7 @@ function pulseBlock(p) {
     pulseTile('Booked, next 7 days', p.bookings_next_7_days, 'Spots booked on the schedule', { href: '#/schedule' }),
     pulseTile('Workouts logged', p.workouts.last_7_days, `Last 7 days · ${p.workouts.athletes} ${p.workouts.athletes === 1 ? 'athlete' : 'athletes'}`, { tone: p.workouts.last_7_days ? 'good' : null, href: '#/programs' }),
     pulseTile('Most active members', p.most_active.length ? p.most_active[0].name.split(' ')[0] : '–', p.most_active.length ? `30 days · ${p.most_active.map((a) => `${a.name.split(' ')[0]} ${a.sessions + a.workouts}`).join(' · ')}` : 'No sessions or workouts in 30 days', { href: p.most_active.length ? `#/clients/${p.most_active[0].client_id}` : '#/clients' }),
-    pulseTile('Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
+    pulseTile(state.user.role === 'coach' ? 'Your leads this month' : 'Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
   return h('section', { class: 'pulse', 'aria-label': 'How the business is doing' }, ...tiles);
 }
 
@@ -517,7 +543,9 @@ const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['signed_up', '
 const LEAD_SOURCE = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event', referral: 'Referral' };
 async function viewLeads(main) {
   const filter = new URLSearchParams(location.hash.split('?')[1] ?? '').get('status') ?? '';
-  const [res, settings, reviews] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), get('/v1/review-requests')]);
+  // Owner decision: owners and front desk work every lead; a coach sees only the leads the owner gave them.
+  const coachView = state.user.role === 'coach';
+  const [res, settings, reviews, coachList] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), coachView ? null : get('/v1/review-requests'), isOwner() ? get('/v1/coaches') : null]);
   const chips = h('div', { class: 'row wrap', style: 'gap:8px' }, [['', 'All open'], ...LEAD_STAGES].map(([k, label]) => h('a', { class: `dp-btn dp-btn--${filter === k ? 'secondary' : 'ghost'}`, href: `#/leads${k ? `?status=${k}` : ''}` }, k ? `${label} (${res.counts[k] ?? 0})` : label)));
   const rows = (filter ? res.data : res.data.filter((l) => !['member', 'lost'].includes(l.status))).map((l) => {
     const stage = select(LEAD_STAGES, { value: l.status, 'aria-label': 'Stage' });
@@ -526,7 +554,7 @@ async function viewLeads(main) {
     return h('details', { class: 'list-item', style: 'display:block' },
       h('summary', { style: 'cursor:pointer;list-style:none' }, h('div', { class: 'row wrap', style: 'gap:12px' },
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.parent_name, l.athlete_name ? h('span', { class: 'muted' }, ` for ${l.athlete_name}${l.athlete_age ? `, ${l.athlete_age}` : ''}`) : null),
-          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null].filter(Boolean).join(' · '))),
+          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null, !coachView && l.coach_name ? `given to ${l.coach_name}` : null].filter(Boolean).join(' · '))),
         h('span', { class: `dp-badge dp-badge--${{ new: 'warn', contacted: 'neutral', signed_up: 'good', evaluation: 'good', member: 'good', lost: 'muted' }[l.status]}` }, LEAD_STAGES.find(([k]) => k === l.status)?.[1] ?? l.status))),
       h('div', { class: 'stack', style: 'margin-top:12px' },
         h('p', { class: 'small', style: 'margin:0' }, [l.email, phoneText(l.phone), l.texts_ok ? 'OK to text' : null].filter(Boolean).join(' · ')),
@@ -537,8 +565,19 @@ async function viewLeads(main) {
           btn('Save', save({ status: stage.value, notes: notes.value }, 'Saved.'), 'primary'),
           ['new', 'contacted'].includes(l.status) ? btn('I reached out', save({ contacted: true, notes: notes.value }, 'Marked as contacted.'), 'outline') : null,
           l.follow_up === 'on' ? btn('Stop automatic follow-up', save({ follow_up: false }, 'Automatic follow-up stopped.'), 'ghost') : null,
-          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null)));
+          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null),
+        isOwner() ? (() => {
+          const giveTo = select([['', 'Nobody (you and the front desk)'], ...coachList.data.filter((c) => c.role === 'coach').map((c) => [c.id, c.name]),
+            ...(l.coach_id && !coachList.data.some((c) => c.id === l.coach_id && c.role === 'coach') ? [[l.coach_id, l.coach_name ?? 'Former coach']] : [])], { value: l.coach_id ?? '', 'aria-label': `Give ${l.parent_name}'s lead to a coach`, style: 'width:auto;min-width:200px' });
+          giveTo.addEventListener('change', () => busy(giveTo, async () => { await patch(`/v1/leads/${l.id}`, { coach_id: giveTo.value || null }); toast(giveTo.value ? `${giveTo.selectedOptions[0].textContent} can see and work this lead now. They were emailed.` : 'Taken back: only you and the front desk see it.'); render(); }));
+          return h('div', { class: 'row wrap', style: 'gap:8px' }, h('span', { class: 'small muted' }, 'Give to a coach:'), giveTo);
+        })() : null));
   });
+  if (coachView) {
+    fill(main, header('Leads', 'Families the owner asked you to follow up with. Only you, the owner and the front desk see them.'),
+      chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No leads for you right now. When the owner gives you one, it shows here and you get an email.')));
+    return;
+  }
   const f = { parent_name: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), athlete_name: input(), athlete_age: input({ type: 'number', inputmode: 'numeric' }), sport: input(), message: h('textarea', { class: 'dp-input' }) };
   const source = select([['phone', 'Phone call'], ['walk_in', 'Walk-in'], ['event', 'Event'], ['referral', 'Referral'], ['manual', 'Other']]);
   const followUp = h('input', { type: 'checkbox', checked: true });
@@ -740,6 +779,8 @@ async function viewClient(main, id) {
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
   const [en, testLib, owed, products, badgeLib, notesList, att, famList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
+  const [reqList, claimList] = isOwner() ? await Promise.all([get(`/v1/membership-requests?client_id=${id}&status=all`).catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]) : [{ data: [] }, { data: [] }];
+  const [requestsPanel, mergePanel] = isOwner() ? profilePanels(c, reqList.data, claimList.data) : [null, null];
   tzName = settings.timezone;
   const fam = c.family;
   const sub = c.subscription;
@@ -1058,7 +1099,7 @@ async function viewClient(main, id) {
     contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
     c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
-  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks]];
+  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(requestsPanel, 'requests'), 'Requests'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks], [mergePanel]];
   const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
@@ -1328,6 +1369,8 @@ function voidDialog(d) {
 }
 // Open another dialog once this one has closed (and been emptied).
 const thenOpen = (fn) => () => { document.getElementById('dialog').addEventListener('close', () => setTimeout(fn), { once: true }); };
+// Who started a membership charge try (invoice details). The owner's and a parent's retries don't count toward canceling.
+const CHARGE_SOURCE = { automatic: 'automatic', new_card: 'automatic, when a new card was saved', owner: 'retry you started (doesn\'t count toward the limit)', parent: 'retry the parent started (doesn\'t count toward the limit)' };
 // One membership payment: what happened and what can be done now.
 async function invoiceDialog(id) {
   const d = await get(`/v1/invoices/${id}`);
@@ -1355,6 +1398,9 @@ async function invoiceDialog(id) {
       kv('Email', d.email)),
     d.refunds.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Refunds'), d.refunds.map((r) => h('div', { class: 'small' },
       `${money(r.amount_cents)} on ${date(r.created_at)}${r.source === 'stripe' ? ' in the Stripe dashboard' : r.by_name ? ` by ${r.by_name}` : ''}${r.reason ? ` · ${r.reason}` : ''}`))) : null,
+    d.charges?.length ? h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, `Card charges tried (${d.charges.length})`),
+      h('div', { class: 'stack-tight' }, d.charges.map((c) => h('div', { class: 'small' },
+        `${date(c.created_at)} · ${CHARGE_SOURCE[c.source] ?? (c.manual ? CHARGE_SOURCE.owner : CHARGE_SOURCE.automatic)} · ${{ succeeded: 'approved', declined: 'declined', pending: 'waiting on the bank', error: 'didn\'t reach the bank' }[c.status] ?? c.status}${c.error && c.status !== 'succeeded' ? ` (${c.error})` : ''}${c.late_outcome === 'refunded' ? ` · approved late after ${c.late_reason}, refunded automatically` : c.late_outcome === 'refund_failed' ? ` · approved late after ${c.late_reason}: refund it in Stripe (${c.ref})` : ''}`)))) : null,
     d.pay_links.length ? h('p', { class: 'small muted', style: 'margin:0' }, `Pay link: ${{ open: 'open', paid: 'paid', settled: 'paid another way', canceled: 'canceled', expired: 'expired' }[d.pay_links[0].status] ?? d.pay_links[0].status}${d.pay_links[0].sent_at ? `, sent ${ago(d.pay_links[0].sent_at).toLowerCase()}` : ''}.`) : null), acts);
 }
 
@@ -1536,83 +1582,6 @@ async function viewBilling(main) {
 // The Programs page and the program builder live in programs-coach.js.
 
 // ---------- Integrations ----------
-async function viewIntegrations(main) {
-  const [keys, hooks, types] = await Promise.all([get('/v1/api-keys'), get('/v1/webhooks'), get('/v1/event-types')]);
-  const label = input({ placeholder: 'e.g. Website booking form' });
-  const revealed = h('div');
-  const keysPanel = panel('API keys', { subtitle: 'Let your other systems read and update clients, billing and programs.' },
-    h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const k = await post('/v1/api-keys', { label: label.value });
-      fill(revealed, h('div', { class: 'stack', style: 'margin-top:4px' },
-        h('span', { class: 'strong' }, `Copy your key for ${k.label} now. You won't see it again.`),
-        h('div', { class: 'secret mono' }, k.secret),
-        h('div', null, btn('Copy key', async () => { await navigator.clipboard.writeText(k.secret); toast('Key copied.'); }, 'outline'))));
-      label.value = ''; await refreshKeys();
-    }); } }, h('div', { class: 'grow' }, field('Key label', label)), h('div', { style: 'align-self:flex-end' }, btn('Create key', null, 'primary', { type: 'submit' }))),
-    revealed);
-  const keyList = h('div');
-  async function refreshKeys() {
-    const { data } = await get('/v1/api-keys');
-    fill(keyList, ...(data.length ? data.map((k) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, k.label), h('span', { class: 'mono muted' }, `${k.prefix}…`), h('span', { class: 'small muted' }, k.revoked_at ? `Revoked ${date(k.revoked_at)}` : `Last used: ${ago(k.last_used_at)}`)),
-      k.revoked_at ? badge('revoked') : btn('Revoke', (e) => { if (confirm(`Revoke ${k.label}? Systems using it lose access immediately.`)) busy(e.currentTarget, async () => { await post(`/v1/api-keys/${k.id}/revoke`); toast('Key revoked.'); refreshKeys(); }); }, 'secondary')))
-      : [h('p', { class: 'muted' }, 'No keys yet. Create one to connect your first system.')]));
-  }
-  keysPanel.append(keyList); refreshKeys();
-
-  const url = input({ type: 'url', placeholder: 'https://your-system.example.com/hooks' });
-  const checks = types.data.map((t) => h('label', { class: 'row small', style: 'gap:8px;min-height:32px' }, h('input', { type: 'checkbox', value: t, checked: true }), h('span', { class: 'mono' }, t)));
-  const hooksPanel = panel('Webhooks', { subtitle: 'We send a signed event to your URL the moment something happens here.' },
-    ...hooks.data.map((w) => {
-      const log = h('div');
-      return h('div', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' },
-        h('div', { class: 'row wrap' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'mono' }, w.url), h('span', { class: 'small muted' }, w.events.includes('*') ? 'All events' : w.events.join(', '))),
-          h('button', { type: 'button', class: 'dp-toggle', 'aria-pressed': String(w.active), 'aria-label': `Webhook to ${w.url}`, onClick: (e) => busy(e.currentTarget, async () => { await patch(`/v1/webhooks/${w.id}`, { active: !w.active }); render(); }) }, w.active ? 'On' : 'Off'),
-          btn('Deliveries', async (e) => busy(e.currentTarget, async () => {
-            const { data } = await get(`/v1/webhooks/${w.id}/deliveries`);
-            fill(log, ...(data.length ? data.map((d) => h('div', { class: 'list-item small' }, h('span', { class: 'mono grow' }, d.event_type), h('span', { class: 'muted' }, d.last_error ?? (d.response_code ? `HTTP ${d.response_code}` : '')), badge(d.status === 'succeeded' ? 'delivered' : d.status === 'pending' ? 'retrying' : d.status), h('span', { class: 'muted' }, ago(d.created_at)))) : [h('p', { class: 'small muted' }, 'No deliveries yet.')]));
-          }), 'ghost'),
-          btn('Delete', (e) => { if (confirm('Delete this webhook?')) busy(e.currentTarget, async () => { await del(`/v1/webhooks/${w.id}`); toast('Webhook deleted.'); render(); }); }, 'ghost')),
-        h('div', { class: 'small muted' }, 'Signing secret: ', h('span', { class: 'mono' }, w.secret)), log);
-    }),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      const events = checks.map((c) => c.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
-      await post('/v1/webhooks', { url: url.value, events: events.length === types.data.length ? ['*'] : events }); toast('Webhook added.'); render();
-    }); } }, field('Destination URL', url), h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Events to send'), h('div', { class: 'grid', style: 'grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0 16px' }, checks)),
-      h('div', null, btn('Add webhook', null, 'secondary', { type: 'submit' }))));
-
-  const docs = panel('API reference', { subtitle: 'Send your key as a header: Authorization: Bearer dp_live_…' },
-    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--outline', href: '/v1/openapi.json', target: '_blank', rel: 'noopener' }, 'Open API spec (OpenAPI 3.1)')),
-    h('pre', { class: 'secret mono', style: 'border-color:var(--line);white-space:pre-wrap;margin:0' },
-      `curl ${location.origin}/v1/clients \\\n  -H "Authorization: Bearer dp_live_…"\n\ncurl -X POST ${location.origin}/v1/clients \\\n  -H "Authorization: Bearer dp_live_…" \\\n  -H "Content-Type: application/json" \\\n  -d '{"name":"Jordan Lee","email":"jordan@example.com","plan_id":"plan_…"}'`));
-
-  const outbox = await get('/v1/outbox');
-  const modeText = { test: 'No email service is connected, so messages stay here and are not sent. Add RESEND_API_KEY on the server to start sending.',
-    restricted: `Sending through Resend, but only to ${outbox.only_to}. Everything else is held here.`, live: `Sending through Resend${outbox.from ? ` as ${outbox.from}` : ''}.` };
-  const statusText = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '' };
-  const testTo = input({ type: 'email', value: state.user?.email || '', 'aria-label': 'Send a test email to' });
-  const outPanel = panel('Email outbox', { subtitle: 'Every email the platform sends: sign-in codes, welcome emails, booking changes, invoices and receipts.' },
-    h('p', { class: 'small', style: `margin:0;color:${outbox.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, modeText[outbox.mode] || ''),
-    h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, testTo, btn('Send test email', async (e) => {
-      e.target.disabled = true;
-      try { await post('/v1/outbox/test', { to: testTo.value }); toast('Test email sent. Check the inbox.'); render(); }
-      catch (err) { toast(err.message, 'warn'); } finally { e.target.disabled = false; }
-    }, 'outline')),
-    outbox.data.length ? outbox.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.to_email} · ${m.subject}${statusText[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No emails yet.'));
-  const texts = await get('/v1/texts');
-  const textMode = { test: 'No text service is connected, so texts stay here and are not sent. Add your Twilio settings on the server to start sending.',
-    restricted: `Sending through Twilio, but only to ${texts.only_to}. Everything else is held here.`, live: 'Sending through Twilio.' };
-  const textStatus = { logged: ' (not sent)', failed: ' (failed)', held: ' (held)', sent: '', received: '' };
-  const testPhone = input({ type: 'tel', placeholder: '(512) 555-0100', 'aria-label': 'Send a test text to' });
-  const textPanel = panel('Texts', { subtitle: 'Every text sent to parents, and their replies. Parents turn texts on in the parent portal and can reply STOP at any time.' },
-    h('p', { class: 'small', style: `margin:0;color:${texts.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, textMode[texts.mode] || ''),
-    texts.mode === 'test' ? null : h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, testPhone, btn('Send test text', (e) => busy(e.currentTarget, async () => {
-      try { await post('/v1/texts/test', { to: testPhone.value }); toast('Test text sent.'); render(); } catch (err) { toast(err.message, 'warn'); }
-    }), 'outline')),
-    texts.data.length ? texts.data.slice(0, 15).map((m) => h('details', { class: 'list-item', style: 'display:block' }, h('summary', { class: 'small', style: 'cursor:pointer' }, `${ago(m.created_at)} · ${m.direction === 'in' ? 'From' : 'To'} ${phoneText(m.phone)}${textStatus[m.status] ?? ` (${m.status})`}`), m.error ? h('p', { class: 'small', style: 'color:var(--amber);margin:8px 0 0' }, m.error) : null, h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:8px 0 0' }, m.body))) : h('p', { class: 'muted' }, 'No texts yet.'));
-  fill(main, header('API & integrations', 'Connect Diamond Protocol to your other systems.'), h('div', { class: 'grid grid-2' }, keysPanel, hooksPanel), docs, outPanel, textPanel);
-}
-
 // ---------- Point of sale ----------
 const remember = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } } };
 const setupLink = () => h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell/setup' }, 'Locations, products & readers');
@@ -1819,7 +1788,9 @@ async function viewSell(main) {
     }, 'ghost')) : null);
   }
   function drawDiscount() {
-    if (!itemCount() || !(discountMax > 0)) return fill(discountBox);
+    if (!itemCount()) return fill(discountBox);
+    // Only the owner gives discounts (unless the owner set a limit for staff).
+    if (!(discountMax > 0)) return fill(discountBox, h('div', { class: 'row small muted', style: 'gap:8px' }, h('span', { class: 'grow' }, 'Discount'), h('span', null, 'Not available. Ask the owner.')));
     const d = sale.discount;
     if (!d) return fill(discountBox, h('div', { class: 'row' }, btn('Add discount', () => { sale.discount = { type: 'percent', value: 0, reason: '' }; changed(); setTimeout(() => discountBox.querySelector('input')?.focus(), 0); }, 'ghost')));
     const typeBtn = (t, label) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': d.type === t ? 'true' : 'false', onClick: () => { if (d.type !== t) { d.type = t; d.value = 0; changed(); } } }, label);
@@ -2234,11 +2205,11 @@ async function viewSetup(main) {
       p.active === false ? btn('Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: true }); toast(`${p.name} is offered again.`); render(); }), 'ghost') : null);
     planPanel = panel('Monthly memberships', { subtitle: 'Billed to the saved card every month. Change prices or retire them in Billing.', action: btn('Add membership', () => planForm(), 'secondary') },
       ...(plans.data.filter((p) => p.active !== false).map(planRow)), retired('Retired memberships', plans.data.filter((p) => p.active === false).map(planRow)));
-    const pct = input({ type: 'number', min: '0', max: '100', step: '1', inputmode: 'numeric', value: settings.staff_discount_max_pct ?? '20', style: 'width:100px', 'aria-label': 'Largest discount for staff, in percent' });
+    const pct = input({ type: 'number', min: '0', max: '100', step: '1', inputmode: 'numeric', value: settings.staff_discount_max_pct ?? '0', style: 'width:100px', 'aria-label': 'Largest discount for staff, in percent' });
     discountPanel = panel('Discounts', { subtitle: 'You can give any discount. Every discount needs a reason, shows on the receipt, and is in the activity log.' },
       h('form', { class: 'row wrap', style: 'gap:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { const s = await patch('/v1/settings', { staff_discount_max_pct: Number(pct.value) }); toast(Number(s.staff_discount_max_pct) ? `Coaches and front desk can give up to ${s.staff_discount_max_pct}% off.` : 'Only you can give discounts now.'); }); } },
         h('span', null, 'Coaches and front desk can give up to'), pct, h('span', null, '% off a sale'), btn('Save', null, 'secondary', { type: 'submit' })),
-      h('p', { class: 'small muted', style: 'margin:0' }, '0 means only you can give discounts.'));
+      h('p', { class: 'small muted', style: 'margin:0' }, '0 (the default) means only you can give discounts. Staff see "Ask the owner" instead.'));
   }
   fill(main, header('Point of sale setup', manage ? 'Where you train, what you sell and your card readers.' : 'Where you train, what you sell and your card readers. Ask the owner to change them.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'Back to sales')),
     h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, locPanel, readerPanel, discountPanel), h('div', { class: 'stack', style: 'gap:24px' }, prodPanel, planPanel)));
@@ -2342,7 +2313,9 @@ function editSeriesDialog(x, locs, coaches) {
     if (!Object.keys(changed).length) throw new Error('Nothing to change.');
     const removed = x.weekdays.filter((d) => !weekdays.includes(d));
     if (removed.length && !confirm(`Sessions on ${removed.map((d) => DAY_NAMES[d]).join(', ')} will be canceled. Credits come back, drop-ins are refunded and families are emailed. Continue?`)) return false;
-    const r = (await patch(`/v1/class-series/${x.id}`, changed)).changes;
+    const saved = await saveAnyway((c) => patch(`/v1/class-series/${x.id}`, { ...changed, ...c }));
+    if (!saved) return false;
+    const r = saved.changes;
     const bits = [r.updated ? nplural(r.updated, 'session') + ' updated' : null, r.moved ? `${r.moved} moved` : null, r.canceled ? `${r.canceled} canceled` : null, r.added ? `${r.added} added` : null, r.promoted ? `${r.promoted} moved up from the waitlist` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed` : null].filter(Boolean);
     toast(`Saved.${bits.length ? ` ${bits.join(', ')}.` : ''}`); render();
   } }, { label: 'Cancel', variant: 'ghost' }]);
@@ -2429,9 +2402,10 @@ async function viewSchedule(main) {
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
-    const x = await post('/v1/class-series', { name: f.name.value, kind: f.kind.value, location_id: f.loc.value, weekdays, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value),
+    const x = await saveAnyway((c) => post('/v1/class-series', { name: f.name.value, kind: f.kind.value, location_id: f.loc.value, weekdays, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value),
       age_min: f.ageMin.value ? Number(f.ageMin.value) : undefined, age_max: f.ageMax.value ? Number(f.ageMax.value) : undefined, drop_in_cents: dollars(f.dropIn), registration_cents: dollars(f.reg),
-      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined, coach_id: f.coach.value || null });
+      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined, coach_id: f.coach.value || null, ...c }));
+    if (!x) return;
     toast(`${x.name} added: ${x.upcoming_sessions} sessions on the schedule.`); render();
   }); } },
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, field('Name', f.name), field('Type', f.kind), field('Coach', f.coach, 'Leads every session. Swap in a sub on a single session.')),
@@ -2449,8 +2423,9 @@ async function viewSchedule(main) {
     dropIn: input({ type: 'number', step: '0.01', placeholder: 'Leave empty if not sold' }), note: input({ maxlength: '500', placeholder: 'Only staff see this' }), coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
   const oneForm = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     if (o.date.value && o.date.value < bizDate()) throw new Error('Pick today or a later date.');
-    const x = await post('/v1/sessions', { name: o.name.value, kind: o.kind.value, location_id: o.loc.value, date: o.date.value, start_time: o.time.value, duration_min: Number(o.dur.value), capacity: Number(o.cap.value),
-      coach_id: o.coach.value || null, staff_note: o.note.value || undefined, ...(isOwner() ? { drop_in_cents: dollars(o.dropIn) } : {}) });
+    const x = await saveAnyway((c) => post('/v1/sessions', { name: o.name.value, kind: o.kind.value, location_id: o.loc.value, date: o.date.value, start_time: o.time.value, duration_min: Number(o.dur.value), capacity: Number(o.cap.value),
+      coach_id: o.coach.value || null, staff_note: o.note.value || undefined, ...(isOwner() ? { drop_in_cents: dollars(o.dropIn) } : {}), ...c }));
+    if (!x) return;
     toast(`${x.name} added for ${tzFmt(x.starts_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.`); location.hash = `#/schedule/${x.id}`;
   }); } },
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(160px,1fr))' }, field('Name', o.name), field('Type', o.kind), field('Coach', o.coach), field('Where', o.loc)),
@@ -2472,7 +2447,7 @@ async function viewSchedule(main) {
     if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
     const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${x.name}`, style: 'width:auto;max-width:180px' });
     sel.addEventListener('change', () => busy(sel, async () => {
-      await patch(`/v1/class-series/${x.id}`, { coach_id: sel.value || null });
+      if (!(await saveAnyway((c) => patch(`/v1/class-series/${x.id}`, { coach_id: sel.value || null, ...c })))) return render();
       toast(sel.value ? `${sel.selectedOptions[0].textContent} now leads ${x.name}. Sessions with a sub keep their sub.` : `${x.name} has no coach set.`); render();
     }));
     return sel;
@@ -2506,7 +2481,8 @@ function editSessionDialog(x, locs, coaches, again) {
     field('Where', f.loc), field('Staff note', f.note, 'Families don\'t see it.'),
     x.booked_count ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, notify, h('span', null, 'Email booked families if the time or place changes')) : null);
   teamDialog('Edit session', body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
-    const r = await patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked });
+    const r = await saveAnyway((c) => patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked, ...c }));
+    if (!r) return false;
     toast([`Saved: ${r.changed.join(', ')}.`, r.promoted ? `${nplural(r.promoted, 'athlete')} moved up from the waitlist.` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed.` : null].filter(Boolean).join(' '));
     again();
   } }, { label: 'Cancel', variant: 'ghost' }]);
@@ -2539,7 +2515,7 @@ async function viewSession(main, id) {
   // Who leads this session. Changing it here only changes this one (a sub); the class keeps its coach.
   const coachSel = leads() && x.status === 'scheduled' ? coachPicker(coachList.data, x.coach_id, x.coach_name, { 'aria-label': 'Coach for this session', style: 'width:auto;min-width:200px' }) : null;
   coachSel?.addEventListener('change', () => busy(coachSel, async () => {
-    await patch(`/v1/sessions/${id}`, { coach_id: coachSel.value || null });
+    if (!(await saveAnyway((c) => patch(`/v1/sessions/${id}`, { coach_id: coachSel.value || null, ...c })))) return again();
     toast(coachSel.value ? `${coachSel.selectedOptions[0].textContent} leads this session.${x.series_id ? ' The rest of the class keeps its coach.' : ''}` : 'No coach set for this session.'); again();
   }));
   const coachLine = h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('span', { class: 'dp-label', style: 'margin:0' }, 'Coach'), coachSel ?? h('span', { class: 'strong' }, x.coach_name ?? 'No coach set'),
@@ -2733,7 +2709,7 @@ async function viewScheduleSetup(main) {
   const hoursCoach = (x) => {
     if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
     const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${DAY_NAMES[x.weekday]} ${x.start_time} hours`, style: 'width:auto;max-width:180px' });
-    sel.addEventListener('change', () => busy(sel, async () => { await patch(`/v1/availability/${x.id}`, { coach_id: sel.value || null }); toast(sel.value ? `These hours are ${sel.selectedOptions[0].textContent}'s now.` : 'These hours have no coach set.'); render(); }));
+    sel.addEventListener('change', () => busy(sel, async () => { if (!(await saveAnyway((c) => patch(`/v1/availability/${x.id}`, { coach_id: sel.value || null, ...c })))) return render(); toast(sel.value ? `These hours are ${sel.selectedOptions[0].textContent}'s now.` : 'These hours have no coach set.'); render(); }));
     return sel;
   };
   // Hours, grouped by what they're for, with what parents can book in the next 7 days so you can see them working.
@@ -2752,7 +2728,8 @@ async function viewScheduleSetup(main) {
     !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px;margin-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const weekdays = dayBoxes.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
       if (!weekdays.length) throw new Error('Tick at least one day.');
-      const r = await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekdays, start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null });
+      const r = await saveAnyway((c) => post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekdays, start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null, ...c }));
+      if (!r) return;
       toast(`Hours added on ${r.added.map((x) => DAY_NAMES[x.weekday]).join(', ')}.`); render();
     }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Coach', a.coach)),
       h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days (tick several to add them all at once)'), h('div', { class: 'row wrap', style: 'gap:12px' }, dayBoxes)),
@@ -2858,6 +2835,32 @@ function teamDialog(title, body, actions) {
   d.addEventListener('close', () => fill(d), { once: true });
   d.showModal();
   return d;
+}
+// Owner decision: a coach clash (another session of theirs at that time, at any place, or a day off) is a warning. Show
+// what clashes and let them save anyway: the same request again with confirm: true. Resolves to the response, or null
+// when they go back.
+async function saveAnyway(send) {
+  try { return await send({}); } catch (e) {
+    if (e.code !== 'coach_conflict') throw e;
+    if (!(await clashDialog(e))) return null;
+    return send({ confirm: true });
+  }
+}
+function clashDialog(e) {
+  const d = h('dialog', { 'aria-labelledby': 'clash-title' }), w = e.details?.warnings ?? [];
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (yes) => { if (settled) return; settled = true; d.close(); d.remove(); resolve(yes); };
+    fill(d, h('div', { class: 'stack' },
+      h('h2', { id: 'clash-title', class: 'week-title', style: 'color:var(--steel)' }, `${e.details?.coach?.name ?? 'This coach'} is busy then`),
+      h('ul', { class: 'small', style: 'margin:0;padding-left:20px' }, w.map((x) => h('li', null, x.message))),
+      e.details?.total > w.length ? h('p', { class: 'small muted', style: 'margin:0' }, `And ${e.details.total - w.length} more.`) : null,
+      h('p', { class: 'small muted', style: 'margin:0' }, 'You can keep it anyway, or go back and pick another coach or time.'),
+      h('div', { class: 'row wrap' }, btn('Save anyway', () => done(true), 'primary'), btn('Go back', () => done(false), 'ghost'))));
+    d.addEventListener('cancel', (ev) => { ev.preventDefault(); done(false); });
+    document.body.append(d);
+    d.showModal();
+  });
 }
 // A toast with an Undo button for a few seconds.
 function undoToast(msg, onUndo) {
@@ -3117,7 +3120,8 @@ async function viewTeam(main, id) {
     ended ? h('p', { class: 'muted small' }, 'This contract has ended. Restart it to schedule team sessions.') : !locs.data.length ? h('p', { class: 'muted small' }, 'Add a location first (Point of sale, Locations).') : h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
       if (!weekdays.length) throw new Error('Choose at least one day.');
-      const x = await post(`/v1/team-contracts/${id}/sessions`, { location_id: sd.loc.value, weekdays, start_time: sd.time.value, duration_min: Number(sd.dur.value), start_date: sd.start.value, coach_id: sd.coach.value || null });
+      const x = await saveAnyway((c) => post(`/v1/team-contracts/${id}/sessions`, { location_id: sd.loc.value, weekdays, start_time: sd.time.value, duration_min: Number(sd.dur.value), start_date: sd.start.value, coach_id: sd.coach.value || null, ...c }));
+      if (!x) return;
       toast(`${nplural(x.upcoming_sessions, 'team session')} added to your schedule${c.end_date ? `, until ${ymd(c.end_date)}` : ' for the next 8 weeks (more are added as time goes on)'}.`); render();
     }); } },
       h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:4px 14px' }, days)),
@@ -3975,98 +3979,6 @@ function renderPasswordChange(forced) {
   cur.focus();
 }
 
-async function viewStaff(main) {
-  if (!isOwner()) return fill(main, header('Staff & security', 'Only owners can manage staff.'));
-  const [staff, audit, bk, jobs] = await Promise.all([get('/v1/staff'), get('/v1/audit?limit=100'), get('/v1/backups'), get('/v1/jobs')]);
-  const ROLE = { owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' };
-  const n = input(), e = input({ type: 'email' }), role = select(Object.keys(staff.roles).map((k) => [k, ROLE[k]]), { value: 'coach' });
-  const roleHelp = h('p', { class: 'small muted' }, staff.roles.coach);
-  role.addEventListener('change', () => { roleHelp.textContent = staff.roles[role.value]; });
-  const showPw = (who, pw) => alert(`One-time password for ${who}:\n\n${pw}\n\nIt was also emailed to them. They'll choose their own when they sign in.`);
-  const staffPanel = panel('Staff', { subtitle: 'Each person gets their own sign-in. Roles decide what they can see and do.' },
-    staff.data.map((u) => h('div', { class: 'list-item', style: `flex-wrap:wrap;${u.active ? '' : 'opacity:.55'}` },
-      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, u.name, u.id === state.user.id ? h('span', { class: 'small muted' }, ' (you)') : null),
-        h('span', { class: 'small muted' }, `${u.email} · ${u.last_login_at ? `last signed in ${ago(u.last_login_at)}` : 'never signed in'}${u.must_change_password ? ' · needs to set a password' : ''}`)),
-      u.locked ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Locked') : null,
-      !u.active ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Off') : null,
-      (() => { const sel = select(Object.keys(staff.roles).map((k) => [k, ROLE[k]]), { value: u.role, 'aria-label': `Role for ${u.name}`, style: 'width:140px' });
-        sel.addEventListener('change', () => busy(sel, async () => { try { await patch(`/v1/staff/${u.id}`, { role: sel.value }); toast(`${u.name} is now ${ROLE[sel.value]}. They'll sign in again.`); } catch (x) { sel.value = u.role; throw x; } render(); })); return sel; })(),
-      u.locked ? btn('Unlock', (ev) => busy(ev.currentTarget, async () => { await patch(`/v1/staff/${u.id}`, { unlock: true }); render(); }), 'outline') : null,
-      btn('Reset password', (ev) => { if (confirm(`Give ${u.name} a new one-time password? They'll be signed out.`)) busy(ev.currentTarget, async () => { const r = await post(`/v1/staff/${u.id}/reset-password`); showPw(u.name, r.temporary_password); render(); }); }, 'ghost'),
-      u.id === state.user.id ? null : btn(u.active ? 'Turn off' : 'Turn on', (ev) => { if (!u.active || confirm(`Turn off ${u.name}'s account? They're signed out everywhere right away.`)) busy(ev.currentTarget, async () => { await patch(`/v1/staff/${u.id}`, { active: !u.active }); render(); }); }, 'ghost'))),
-    h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (ev) => { ev.preventDefault(); busy(ev.submitter, async () => { const u = await post('/v1/staff', { name: n.value, email: e.value, role: role.value }); showPw(u.name, u.temporary_password); render(); }); } },
-      h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 2fr 1fr' }, field('Name', n), field('Email', e), field('Role', role)), roleHelp,
-      h('div', null, btn('Add staff member', null, 'primary', { type: 'submit' }))));
-  const ACT = (a) => (a.action === 'sign-in' ? (a.status === 200 ? 'Signed in' : a.status === 429 ? 'Sign-in blocked (locked or too many tries)' : 'Failed sign-in') : a.action.replace(/^(POST|PATCH|PUT|DELETE|GET) /, (m) => ({ 'POST ': 'Created/ran ', 'PATCH ': 'Changed ', 'PUT ': 'Set ', 'DELETE ': 'Removed ', 'GET ': 'Opened ' }[m])));
-  const auditPanel = panel('Activity log', { subtitle: 'Every change, refused attempt and sign-in by staff, API keys and parents. Request contents are never stored.' },
-    h('div', { style: 'overflow-x:auto' }, h('table', { class: 'table' },
-      h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'Who'), h('th', null, 'What'), h('th', null, 'Record'), h('th', null, 'Result'))),
-      h('tbody', null, audit.data.map((a) => h('tr', null, h('td', { class: 'small muted', style: 'white-space:nowrap' }, ago(a.at)),
-        h('td', { class: 'small' }, `${a.actor_name ?? '—'}${a.role ? ` (${ROLE[a.role] ?? a.role})` : a.actor_type !== 'staff' ? ` (${a.actor_type.replace('_', ' ')})` : ''}`),
-        h('td', { class: 'small' }, a.action === 'sign-in' ? ACT(a) : a.description ?? ACT(a)), h('td', { class: 'small muted', style: 'font-family:var(--font-mono)' }, a.target ?? ''),
-        h('td', null, h('span', { class: `dp-badge dp-badge--${a.status < 300 ? 'good' : a.status === 403 || a.status === 429 || a.status === 401 ? 'warn' : 'muted'}` }, a.status < 300 ? 'OK' : a.status === 403 ? 'Refused' : a.status === 401 ? 'Denied' : a.status === 429 ? 'Blocked' : String(a.status)))))))));
-  const kb = (b) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`);
-  const off = bk.offsite;
-  const offFailing = off.last_error && (!off.last_ok_at || off.last_error_at > off.last_ok_at);
-  const offLine = h('p', { class: 'small' + (offFailing ? '' : ' muted'), role: offFailing ? 'status' : null },
-    h('span', { class: `dp-badge dp-badge--${!off.configured || (!off.last_ok_at && !offFailing) ? 'muted' : offFailing ? 'warn' : 'good'}` },
-      !off.configured ? 'Off-site: not set up' : offFailing ? 'Off-site: failing' : off.last_ok_at ? 'Off-site: OK' : 'Off-site: waiting'), ' ',
-    !off.configured ? 'Copies stay on this server\'s disk only. Setup steps are in DEPLOY.md under Backups.'
-      : offFailing ? `${off.last_error} Last try: ${ago(off.last_error_at)}. It retries every hour.`
-      : off.last_ok_at ? `Newest encrypted copy sent and restore-checked. Last sent: ${ago(off.last_ok_at)}.` : 'The first encrypted copy goes out within the hour.');
-  const backupPanel = panel('Backups', { subtitle: `A full copy of everything is saved every day, and the last 30 are kept. ${off.configured ? 'Each day\'s copy is also encrypted, sent to off-site storage, and read back to check it restores.' : 'Download one now and then and keep it somewhere safe, off this server.'}` },
-    offLine,
-    bk.data.length ? bk.data.slice(0, 7).map((b) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, new Date(b.created_at).toLocaleString()), h('span', { class: 'muted' }, kb(b.bytes)),
-      btn('Download', (ev) => busy(ev.currentTarget, () => download(`/v1/backups/${b.name}`)), 'ghost'))) : h('p', { class: 'muted small' }, 'No backups yet.'),
-    h('div', null, btn('Back up now', (ev) => busy(ev.currentTarget, async () => {
-      const r = await post('/v1/backups');
-      if (r.offsite && !r.offsite.ok) toast(`Backup saved, but the off-site copy failed: ${r.offsite.error}`, 'warn');
-      else toast(r.offsite ? 'Backup saved and sent off-site.' : 'Backup saved.');
-      render();
-    }), 'secondary')),
-    h('p', { class: 'small muted' }, 'Backup files contain client, family and medical information. Store them like you would paper records.'));
-  const every = (sec) => (sec < 60 ? `every ${sec} seconds` : sec < 3600 ? `every ${sec / 60} min` : sec === 3600 ? 'hourly' : `every ${sec / 3600} hours`);
-  const jobBadge = (j) => (j.running ? ['muted', 'Running'] : j.health === 'failing' ? ['warn', j.fail_streak > 1 ? `Failed ${j.fail_streak}×` : 'Failed'] : j.health === 'waiting' ? ['muted', 'Not run yet'] : j.recent[0]?.status === 'skipped' && j.recent[0].started_at === j.last_run_at ? ['muted', 'Nothing to do'] : ['good', 'OK']);
-  const jobsPanel = panel('Background jobs', { subtitle: 'The work the server does on its own: billing, school invoices, the schedule, reminders, follow-ups, money checks, webhooks, device syncs and backups. Owners get an email when a job fails and when it recovers.' },
-    jobs.data.map((j) => { const [tone, label] = jobBadge(j); return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, j.name),
-        h('span', { class: 'small muted' }, `${every(j.every_seconds)}${j.last_run_at ? ` · last ran ${ago(j.last_run_at)}` : ''}${j.health === 'failing' ? (j.last_ok_at ? ` · last worked ${ago(j.last_ok_at)}` : ' · has not worked yet') : ''}`),
-        j.last_error ? h('span', { class: 'small', style: 'font-family:var(--font-mono);word-break:break-word' }, j.last_error) : null),
-      h('span', { class: `dp-badge dp-badge--${tone}` }, label),
-      btn('Run now', (ev) => busy(ev.currentTarget, async () => {
-        const r = await post(`/v1/jobs/${encodeURIComponent(j.name)}/run`);
-        toast(r.status === 'failed' ? `${j.name} failed. The error is shown below.` : r.status === 'skipped' ? `${j.name} had nothing to do.` : `${j.name} ran.`, r.status === 'failed' ? 'warn' : 'good');
-        render();
-      }), 'ghost', j.running ? { disabled: true } : {})); }));
-  const requests = await get('/v1/data-requests');
-  const openReqs = requests.data.filter((r) => r.status === 'open');
-  const reqPanel = panel('Data requests', { subtitle: openReqs.length ? 'Parents asking for their family\'s data to be deleted. Check with your accountant what payment records you must keep; the app keeps them without names.' : 'Parents can download their own data from the portal. Deletion requests appear here.' },
-    requests.data.length ? requests.data.slice(0, 20).map((r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-      h('div', { class: 'grow stack-tight', style: 'min-width:240px' }, h('span', { class: 'strong' }, `${r.family_name ?? 'Family'}: ${r.kind === 'delete' ? 'delete account' : 'copy of data'}`),
-        h('span', { class: 'small muted' }, `${r.requested_by.split(' <')[0]} · ${ago(r.created_at)}${r.note ? ` · "${r.note}"` : ''}${r.resolution ? ` · ${r.resolution}` : ''}`)),
-      h('span', { class: `dp-badge dp-badge--${r.status === 'open' ? 'warn' : r.status === 'done' ? 'good' : 'muted'}` }, { open: 'Open', done: 'Done', declined: 'Declined' }[r.status]),
-      r.status === 'open' && r.family_id ? btn('Download their data', (e) => busy(e.currentTarget, () => download(`/v1/families/${r.family_id}/export`)), 'ghost') : null,
-      r.status === 'open' && r.family_id ? btn('Delete', (e) => {
-        const typed = prompt(`Delete the ${r.family_name}'s personal information? Payment records stay without names. This can't be undone.\n\nType the family name to confirm: ${r.family_name}`);
-        if (!typed) return;
-        busy(e.currentTarget, async () => { await del(`/v1/families/${r.family_id}`, { confirm: typed, request_id: r.id }); toast('Deleted. The family has been emailed.'); render(); });
-      }, 'outline') : null,
-      r.status === 'open' ? btn('Decline', (e) => { const reason = prompt('Why? (kept with the request)'); if (reason) busy(e.currentTarget, async () => { await post(`/v1/data-requests/${r.id}/decline`, { reason }); render(); }); }, 'ghost') : null))
-      : h('p', { class: 'muted small' }, 'No requests yet.'));
-  // Connection check: what the hosting proxy sent and which address the app picked, to confirm TRUST_PROXY.
-  const connOut = h('div', { class: 'stack-tight' });
-  const connPanel = panel('Connection check', { subtitle: 'Sign-in limits and the activity log go by the visitor\'s internet address. This shows which one the app sees for you, so you can confirm the TRUST_PROXY setting on each server.' },
-    connOut, h('div', null, btn('Check my connection', (ev) => busy(ev.currentTarget, async () => {
-      const c = await get('/v1/staff/connection');
-      const row = (label, value) => h('div', { class: 'list-item small', style: 'flex-wrap:wrap' }, h('span', { class: 'grow muted', style: 'min-width:180px' }, label), h('code', { style: 'word-break:break-all' }, value ?? 'none'));
-      const KIND = { private: 'hosting network', cloudflare: 'Cloudflare proxy', public: 'public' };
-      fill(connOut, row('X-Forwarded-For header', c.forwarded_for), row('Connection address', c.connection_address), row('Address the app decided on', c.decided_address), row('TRUST_PROXY', c.trust_proxy ?? 'not set'),
-        h('p', { class: 'strong', style: 'margin:8px 0 0' }, c.guidance),
-        ...(c.previews ?? []).map((p) => h('div', { class: 'small', style: `padding:2px 0${p.trust_proxy === c.proxies_trusted ? ';font-weight:600' : ''}` }, `With TRUST_PROXY=${p.trust_proxy} the app would pick: `, h('code', null, p.address), h('span', { class: 'muted' }, ` (${KIND[p.kind] ?? p.kind})${p.trust_proxy === c.proxies_trusted ? ' · now' : ''}`))));
-    }), 'secondary')));
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, jobsPanel, auditPanel);
-}
-
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.
 // Everyone results can be linked to: clients (not archived) and active team roster players.
 const linkableAthletes = async () => (await get('/v1/athletes')).data;
@@ -4461,3 +4373,64 @@ async function viewUpload(main) {
 }
 
 boot();
+
+// ---------- Parent requests and one profile per athlete (owner) ----------
+// Membership requests from the parent portal: the owner makes the change on the client page, then marks it done (or
+// declines), and the parent is emailed. Nothing about billing changes by itself.
+const REQUEST_WORDS = { switch: 'Switch plans', pause: 'Pause', cancel: 'Cancel' };
+function requestLine(r) {
+  return `${REQUEST_WORDS[r.kind] ?? r.kind}${r.kind === 'switch' && r.plan_name ? ` to ${r.plan_name}` : ''} · asked by ${r.guardian_name ?? 'a parent'} ${date(r.created_at)}`;
+}
+function resolveRequest(r, done) {
+  const note = prompt(done ? 'Mark done. A note for the parent (optional):' : 'Decline. A note for the parent (optional):', '');
+  if (note === null) return;
+  return post(`/v1/membership-requests/${r.id}/resolve`, { status: done ? 'done' : 'declined', note: note || undefined }).then(() => { toast(done ? 'Marked done. The parent was emailed.' : 'Declined. The parent was emailed.'); render(); }).catch((e) => toast(e.message, 'warn'));
+}
+// Merge `fromId` into `keepId` after showing what happens.
+async function mergeDialog(keepId, fromId) {
+  const p = await get(`/v1/clients/${keepId}/merge-preview?from=${encodeURIComponent(fromId)}`);
+  const d = document.getElementById('dialog');
+  const side = (x, label) => h('div', { class: 'dp-panel stack-tight' }, h('span', { class: 'dp-label', style: 'margin:0' }, label), h('strong', null, x.name), h('span', { class: 'small muted' }, [x.athlete_id, x.birth_date ? `born ${x.birth_date}` : 'no birthday', x.family_name ?? 'no family', x.membership ?? 'no membership'].join(' · ')),
+    h('span', { class: 'small muted' }, `${x.results} results · ${x.bookings} bookings · ${x.teams} teams · ${x.notes} notes`));
+  fill(d, h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, 'Merge two profiles'),
+    h('div', { class: 'grid grid-2' }, side(p.keep, 'Keep this profile'), side(p.from, 'Move everything from this one')),
+    p.problems.length ? h('div', { class: 'test-banner' }, p.problems.join(' ')) : h('p', { class: 'small' }, `Results, bookings, attendance, payments, notes, teams and device links move to ${p.keep.name} (${p.keep.athlete_id}). ${p.from.athlete_id} keeps finding them. The other profile is removed. This can't be undone and is written to the activity log.`),
+    h('div', { class: 'row wrap', style: 'justify-content:flex-end' },
+      p.problems.length ? null : btn('Merge', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${keepId}/merge`, { from: fromId, confirm: true }); d.close(); toast('Merged into one profile.'); location.hash = `#/clients/${keepId}`; render(); }), 'primary'),
+      btn('Close', () => d.close(), 'ghost'))));
+  d.showModal();
+}
+function profilePanels(c, reqs, claims) {
+  const open = reqs.filter((r) => r.status === 'open'), past = reqs.filter((r) => r.status !== 'open').slice(0, 3);
+  const reqPanel = reqs.length ? panel('Requests from parents', { subtitle: 'Make the change above, then mark it done. The parent is emailed either way.' },
+    open.map((r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, requestLine(r)), r.note ? h('span', { class: 'small muted', style: 'white-space:pre-wrap' }, `"${r.note}"`) : null),
+      btn('Mark done', () => resolveRequest(r, true), 'outline'), btn('Decline', () => resolveRequest(r, false), 'ghost'))),
+    past.map((r) => h('div', { class: 'list-item' }, h('span', { class: 'grow small muted' }, `${requestLine(r)} · ${r.status}${r.resolved_by ? ` by ${r.resolved_by}` : ''}${r.resolution_note ? `: ${r.resolution_note}` : ''}`)))) : null;
+  const mine = claims.filter((k) => k.claimed_client_id === c.id || k.new_client_id === c.id);
+  const search = h('input', { class: 'dp-input', placeholder: 'Name or Athlete ID of the other profile', 'aria-label': 'Find the other profile' });
+  const results = h('div');
+  search.addEventListener('input', debounce(async () => {
+    const q = search.value.trim();
+    if (q.length < 2) return fill(results);
+    const { data } = await get(`/v1/clients?q=${encodeURIComponent(q)}&archived=all`);
+    fill(results, data.filter((x) => x.id !== c.id).slice(0, 6).map((x) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, `${x.name} · ${x.athlete_id}${x.family?.name ? ` · ${x.family.name}` : ''}`), btn('Check', () => mergeDialog(c.id, x.id).catch((e) => toast(e.message, 'warn')), 'outline'))));
+  }, 250));
+  const mergePanel = panel('Same athlete, two profiles?', { subtitle: `Merge the other profile into ${c.name.split(' ')[0]}'s. Everything moves here, and the other Athlete ID keeps working.` },
+    mine.map((k) => {
+      const other = k.claimed_client_id === c.id ? { id: k.new_client_id, name: k.new_name, athlete_id: k.new_athlete_id } : { id: k.claimed_client_id, name: k.claimed_name, athlete_id: k.claimed_athlete_id };
+      return h('div', { class: 'test-banner stack-tight' }, h('span', null, `${k.guardian_name ?? 'A parent'} gave ${k.athlete_id} when adding ${k.new_name ?? 'an athlete'} (${{ birthday: 'different birthday, same year', name: 'different name', no_birthday: 'no birthday on file to check', birth_year: 'different birth year', in_family: 'profile already in a family', archived: 'profile archived' }[k.reason] ?? 'no match'}).`),
+        h('div', { class: 'row wrap' }, other.id ? btn(`Check merging ${other.name}`, () => mergeDialog(k.claimed_client_id, k.new_client_id).catch((e) => toast(e.message, 'warn')), 'outline') : null,
+          btn('Not the same athlete', () => post(`/v1/profile-claims/${k.id}/dismiss`).then(() => { toast('Dismissed.'); render(); }), 'ghost')));
+    }), search, results);
+  return [reqPanel, mergePanel];
+}
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+// Today (owner): open parent requests and profile checks, each linking to the client page.
+async function parentRequestsPanel() {
+  const [reqs, claims] = await Promise.all([get('/v1/membership-requests').catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]);
+  if (!reqs.data.length && !claims.data.length) return null;
+  return panel(`From parents (${reqs.data.length + claims.data.length})`, { subtitle: 'Membership requests to answer, and athletes who may have two profiles.' },
+    reqs.data.map((r) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.client_name), h('span', { class: 'small muted' }, requestLine(r))))),
+    claims.data.map((k) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${k.claimed_client_id}`, class: 'strong', style: 'color:var(--steel)' }, `${k.claimed_name} (${k.claimed_athlete_id})`),
+      h('span', { class: 'small muted' }, `${k.guardian_name ?? 'A parent'} gave this Athlete ID when adding ${k.new_name ?? 'an athlete'}. Check and merge.`)))));
+}

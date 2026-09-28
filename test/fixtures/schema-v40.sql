@@ -15,13 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL,
-  id TEXT,                               -- version 42: names a device in "signed in on" lists (the token hash never leaves the server)
-  kind TEXT,                             -- version 42: web or app (the iPhone app)
-  created_at TEXT,                       -- version 42: when they signed in on this device
-  last_seen_at TEXT,                     -- version 42: last request (written at most every 5 minutes)
-  ip TEXT,                               -- version 42: address at sign-in
-  user_agent TEXT                        -- version 42: browser or app at sign-in
+  expires_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS plans (
   id TEXT PRIMARY KEY,
@@ -43,8 +37,7 @@ CREATE TABLE IF NOT EXISTS families (
   waiver_version INTEGER,
   waiver_signed_by TEXT,
   waiver_signed_at TEXT,
-  created_at TEXT NOT NULL,
-  card_exp TEXT                          -- version 41: the saved card's expiry as YYYY-MM (for "expires soon" reminders)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS guardians (
   id TEXT PRIMARY KEY,
@@ -56,9 +49,7 @@ CREATE TABLE IF NOT EXISTS guardians (
   is_primary INTEGER NOT NULL DEFAULT 0,
   sms_opt_in_at TEXT,                    -- the parent turned texts on in the portal (phone is then stored as +15125550100)
   sms_opt_out_at TEXT,                   -- the parent replied STOP; no texts until they reply START or turn texts on again
-  created_at TEXT NOT NULL,
-  calendar_token_hash TEXT,              -- version 41: hash of the secret in the parent's private calendar feed link (/cal/<secret>.ics)
-  calendar_created_at TEXT
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
@@ -85,8 +76,7 @@ CREATE TABLE IF NOT EXISTS clients (
   card_last4 TEXT,
   archived_at TEXT,                      -- no longer training: hidden from lists, pickers and automatic messages (version 31)
   archived_by TEXT,                      -- who archived them (staff name)
-  created_at TEXT NOT NULL,
-  card_exp TEXT                          -- version 41: the saved card's expiry as YYYY-MM
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -124,11 +114,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   voided_at TEXT,
   void_reason TEXT,
   paid_method TEXT,
-  paid_reference TEXT,
-  -- version 43: automatic charges tried (the first charge and the scheduled retries). Only these count toward canceling
-  -- after MAX_ATTEMPTS; a retry the owner or a parent starts
-  -- adds to attempts but not here.
-  auto_attempts INTEGER NOT NULL DEFAULT 0
+  paid_reference TEXT
 );
 CREATE INDEX IF NOT EXISTS invoices_client ON invoices(client_id);
 -- Version 38: each refund of a membership payment, dated when the money went back. source 'stripe' is a refund made in
@@ -192,24 +178,15 @@ CREATE INDEX IF NOT EXISTS assignments_client ON assignments(client_id, active);
 CREATE TABLE IF NOT EXISTS workout_logs (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  -- Version 43: deleting a program or workout keeps the athlete's log (the assignment and workout become empty, and the
-  -- snapshot below says what it was).
-  assignment_id TEXT REFERENCES assignments(id) ON DELETE SET NULL,   -- empty when logged on the weight-room screen by an athlete not on that program
-  workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,
+  assignment_id TEXT REFERENCES assignments(id) ON DELETE CASCADE,   -- empty when logged on the weight-room screen by an athlete not on that program
+  workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   notes TEXT,
   completed_at TEXT NOT NULL,
   session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,   -- logged on the weight-room screen during this session (version 23)
   rpe INTEGER,                                   -- version 40: how hard it felt, 1 to 10
   started_at TEXT,                               -- version 40: first set logged in the app (for time taken)
   request_id TEXT,                               -- version 40: the phone's id for this Finish, so a resend saves nothing twice
-  edited_at TEXT,                                -- version 40: reopened and saved again by the athlete
-  -- version 43: what the workout was, written when its program or workout is deleted, so the history still reads right
-  program_id TEXT,
-  program_name TEXT,
-  workout_title TEXT,
-  workout_week INTEGER,
-  workout_day INTEGER,
-  exercises_snapshot TEXT                        -- JSON [{id, exercise_id, name, prescription, done}]
+  edited_at TEXT                                 -- version 40: reopened and saved again by the athlete
 );
 CREATE INDEX IF NOT EXISTS workout_logs_client ON workout_logs(client_id, completed_at);
 CREATE TABLE IF NOT EXISTS exercise_logs (
@@ -224,8 +201,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   key_hash TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL,
   last_used_at TEXT,
-  revoked_at TEXT,
-  scope TEXT NOT NULL DEFAULT 'full' CHECK (scope IN ('read','results','full'))   -- version 42: read only, read and send results, or full access
+  revoked_at TEXT
 );
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
   id TEXT PRIMARY KEY,
@@ -233,12 +209,7 @@ CREATE TABLE IF NOT EXISTS webhook_endpoints (
   secret TEXT NOT NULL,
   events TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  label TEXT,                            -- version 42: a name for the receiving system
-  previous_secret TEXT,                  -- version 42: after a new signing secret, the old one also signs until previous_secret_until
-  previous_secret_until TEXT,
-  secret_rotated_at TEXT,
-  failures INTEGER NOT NULL DEFAULT 0    -- version 42: failed tries in a row (3 or more = failing)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -247,24 +218,16 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_created ON events(created_at);
--- Version 42 rebuilt this table: test events have no event row (event_id empty, event_type and payload instead), and a
--- delivery is marked 'sending' while one server copy sends it, so nothing sends it twice.
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id TEXT PRIMARY KEY,
   endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
-  event_id TEXT REFERENCES events(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('pending','sending','succeeded','failed')),
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   response_code INTEGER,
   last_error TEXT,
   next_attempt_at TEXT,
-  created_at TEXT NOT NULL,
-  event_type TEXT,                       -- version 42: a test event's type
-  payload TEXT,                          -- version 42: a test event's body
-  test INTEGER NOT NULL DEFAULT 0,       -- version 42: sent with Send test event
-  last_attempt_at TEXT,                  -- version 42
-  duration_ms INTEGER,                   -- version 42: how long the receiver took to answer
-  response_body TEXT                     -- version 42: the start of the receiver's answer
+  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_pending ON webhook_deliveries(status, next_attempt_at);
 
@@ -515,7 +478,6 @@ CREATE TABLE IF NOT EXISTS bookings (
   reminded_at TEXT,                      -- reminder text handled (sent, or skipped because nobody in the family gets texts)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  note TEXT,                             -- version 41: the parent's note for the coach on a private or evaluation
   UNIQUE (session_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS bookings_client ON bookings(client_id);
@@ -554,10 +516,7 @@ CREATE TABLE IF NOT EXISTS login_codes (
 CREATE TABLE IF NOT EXISTS portal_sessions (
   token_hash TEXT PRIMARY KEY,
   guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL,
-  created_at TEXT,                       -- version 41: signed-in devices (Family tab): when, the browser, last used
-  user_agent TEXT,
-  last_seen_at TEXT
+  expires_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS outbox (
   id TEXT PRIMARY KEY,
@@ -566,8 +525,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   body TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('logged','sent','failed')),
   error TEXT,
-  created_at TEXT NOT NULL,
-  sensitive INTEGER NOT NULL DEFAULT 0   -- version 42: held a password or a private link; never sent to another address
+  created_at TEXT NOT NULL
 );
 -- Text messages sent to parents (out) and their replies (in). Without Twilio settings they're only logged here.
 CREATE TABLE IF NOT EXISTS texts (
@@ -606,8 +564,7 @@ CREATE TABLE IF NOT EXISTS leads (
   converted_at TEXT,
   created_by TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL   -- version 43: the coach the owner gave this lead to (coaches see only theirs)
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS leads_status ON leads(status, next_follow_up_at);
 CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
@@ -873,7 +830,7 @@ CREATE INDEX IF NOT EXISTS results_queue_status ON results_queue(status, provide
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   at TEXT NOT NULL,
-  actor_type TEXT NOT NULL,                     -- staff, api_key, parent, athlete (their app link), public, system
+  actor_type TEXT NOT NULL,                     -- staff, api_key, parent, public
   actor_id TEXT,
   actor_name TEXT,
   role TEXT,
@@ -1176,25 +1133,6 @@ CREATE TABLE IF NOT EXISTS lesson_assignments (
   CHECK ((lesson_id IS NULL) <> (course_id IS NULL)),
   CHECK ((client_id IS NULL) <> (contract_id IS NULL))
 );
--- ---- Version 44 (batch B11): Education, coach side ----
--- The first time an athlete (or a parent with them) opened a lesson, so coaches see "Opened" before "Finished".
-CREATE TABLE IF NOT EXISTS lesson_views (
-  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  opened_at TEXT NOT NULL,
-  PRIMARY KEY (lesson_id, client_id)
-);
--- Reading reminders a coach sent: one row per athlete reminded. An assignment is reminded at most every 12 hours,
--- and an athlete gets at most one reading reminder every 12 hours, whichever assignment it was for.
-CREATE TABLE IF NOT EXISTS lesson_reminders (
-  id TEXT PRIMARY KEY,
-  assignment_id TEXT REFERENCES lesson_assignments(id) ON DELETE SET NULL,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  sent_by TEXT,
-  sent_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS lesson_reminders_client ON lesson_reminders(client_id, sent_at);
-CREATE INDEX IF NOT EXISTS lesson_reminders_assignment ON lesson_reminders(assignment_id, sent_at);
 -- Staff notes on a client: dated, with the author. Pinned notes show at the top of the client page; coach-only notes
 -- are never shown to front desk.
 CREATE TABLE IF NOT EXISTS client_notes (
@@ -1292,104 +1230,3 @@ CREATE TABLE IF NOT EXISTS workout_sets (
 CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);
 CREATE UNIQUE INDEX IF NOT EXISTS workout_logs_request ON workout_logs(client_id, request_id) WHERE request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS workout_logs_workout ON workout_logs(workout_id);
-
--- ---------- Version 41: parent portal (batches B12 and B13) ----------
--- A parent asks to switch plans, pause or cancel a membership. Nothing about billing changes: the owner is emailed, sees
--- it on the client page and makes the change (or says no) by hand. One open request per athlete.
-CREATE TABLE IF NOT EXISTS membership_requests (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  subscription_id TEXT REFERENCES subscriptions(id) ON DELETE SET NULL,
-  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
-  guardian_name TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('switch','pause','cancel')),
-  plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,   -- switch: the plan they'd like
-  note TEXT,
-  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','declined','withdrawn')),
-  created_at TEXT NOT NULL,
-  resolved_at TEXT,
-  resolved_by TEXT,
-  resolution_note TEXT
-);
-CREATE INDEX IF NOT EXISTS membership_requests_client ON membership_requests(client_id, created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS membership_requests_open ON membership_requests(client_id) WHERE status = 'open';
--- A parent signing up (or adding a child) said their child already has a profile, with its Athlete ID. When the name
--- and birth year match a profile with no family, it joins the family at once ('attached'). Otherwise the new athlete is
--- made as usual and, if the ID belongs to a profile with no family, the owner is asked to check and merge ('open').
-CREATE TABLE IF NOT EXISTS profile_claims (
-  id TEXT PRIMARY KEY,
-  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
-  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
-  guardian_name TEXT,
-  athlete_id TEXT NOT NULL,                     -- the ID as the parent typed it (upper case)
-  claimed_client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,   -- the existing profile
-  new_client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,      -- the athlete the parent's form made (open claims)
-  status TEXT NOT NULL CHECK (status IN ('attached','open','merged','dismissed')),
-  reason TEXT,                                  -- open: why it wasn't attached at once (name, birth year, no birthday on file)
-  created_at TEXT NOT NULL,
-  resolved_at TEXT,
-  resolved_by TEXT
-);
-CREATE INDEX IF NOT EXISTS profile_claims_status ON profile_claims(status, created_at);
-
--- ---------- Version 42: API & integrations, Staff & security (batch B14) ----------
--- Every request made with an API key, kept 30 days: never the body or the query string.
-CREATE TABLE IF NOT EXISTS api_requests (
-  id TEXT PRIMARY KEY,
-  key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-  at TEXT NOT NULL,
-  method TEXT NOT NULL,
-  path TEXT NOT NULL,
-  status INTEGER NOT NULL,
-  duration_ms INTEGER,
-  ip TEXT,
-  error TEXT                             -- the error message sent back
-);
-CREATE INDEX IF NOT EXISTS api_requests_key ON api_requests(key_id, at);
-CREATE INDEX IF NOT EXISTS api_requests_at ON api_requests(at);
--- "Forgot password" links for staff: only a hash of the secret, single use, 30 minutes.
-CREATE TABLE IF NOT EXISTS password_resets (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash TEXT NOT NULL UNIQUE,
-  expires_at TEXT NOT NULL,
-  used_at TEXT,
-  ip TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS password_resets_user ON password_resets(user_id, created_at);
-CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS webhook_deliveries_endpoint ON webhook_deliveries(endpoint_id, created_at);
-
--- ---------- Version 43: owner decisions (charge attempts, late approvals) ----------
--- Every membership charge tried, with Stripe's PaymentIntent id, so a bank approval that arrives late can always be
--- matched to its invoice, even after a pay link or a hand payment replaced the invoice's payment_ref, or after the
--- charge call errored before an id came back (the attempt's id travels in the charge's metadata). source says who
--- started the try: automatic (the first charge, the scheduled retries), new_card (a family saved a new card; counts as
--- automatic), owner (Retry or Retry all) or parent (the portal's Try again); manual = owner or parent, which don't count
--- toward canceling. A late approval of an invoice already paid another way (or voided) is refunded automatically, once:
--- late_outcome says how that went, and the owner's Today alert stays until handled_at.
-CREATE TABLE IF NOT EXISTS invoice_charges (
-  id TEXT PRIMARY KEY,
-  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-  attempt INTEGER NOT NULL,
-  manual INTEGER NOT NULL DEFAULT 0,
-  source TEXT NOT NULL DEFAULT 'automatic' CHECK (source IN ('automatic','new_card','owner','parent')),
-  amount_cents INTEGER NOT NULL,
-  ref TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','succeeded','declined','error')),
-  error TEXT,
-  created_at TEXT NOT NULL,
-  settled_at TEXT,
-  late_outcome TEXT CHECK (late_outcome IN ('refunded','refund_failed')),
-  late_reason TEXT,
-  late_at TEXT,
-  refund_ref TEXT,
-  refund_error TEXT,
-  handled_at TEXT,
-  handled_by TEXT
-);
-CREATE INDEX IF NOT EXISTS invoice_charges_invoice ON invoice_charges(invoice_id);
-CREATE INDEX IF NOT EXISTS invoice_charges_ref ON invoice_charges(ref);
-CREATE INDEX IF NOT EXISTS invoice_charges_late ON invoice_charges(late_outcome, handled_at);
-CREATE INDEX IF NOT EXISTS leads_coach ON leads(coach_id);

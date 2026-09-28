@@ -73,7 +73,15 @@ test('discounts: percent or amount off the whole sale, with a reason, and never 
   assert.ok(app.ctx.db.get(`SELECT id FROM audit_log WHERE action = 'discount' AND target = ?`, pct.body.id));
 });
 
-test('coaches and front desk give discounts only up to the owner\'s limit; the limit is the owner\'s to change', async () => {
+test('only the owner gives discounts by default; a limit for staff is the owner\'s to set', async () => {
+  // Owner decision: coaches and front desk can't give discounts (staff_discount_max_pct starts at 0).
+  for (const who of ['desk', 'coach']) {
+    const r = await cash({ items: [{ product_id: shirt.id }], discount: { type: 'percent', value: 5, reason: 'Friend' } }, who);
+    assert.equal(r.status, 403, who);
+    assert.match(r.body.error.message, /Only the owner can give discounts/);
+  }
+  assert.equal((await call('GET', '/v1/settings', null, 'desk')).body.staff_discount_max_pct, '0');
+  assert.equal((await call('PATCH', '/v1/settings', { staff_discount_max_pct: 20 })).status, 200);
   const over = await cash({ items: [{ product_id: shirt.id }], discount: { type: 'percent', value: 25, reason: 'Friend' } }, 'desk');
   assert.equal(over.status, 403);
   assert.match(over.body.error.message, /up to 20% off/);
@@ -90,7 +98,6 @@ test('coaches and front desk give discounts only up to the owner\'s limit; the l
   assert.match(none.body.error.message, /Only the owner can give discounts/);
   // The owner can still give any discount that leaves something to pay.
   assert.equal((await cash({ items: [{ product_id: shirt.id }], discount: { type: 'percent', value: 99, reason: 'Staff shirt' } })).status, 201);
-  await call('PATCH', '/v1/settings', { staff_discount_max_pct: 20 });
 });
 
 test('a card sale is charged the discounted amount, and a refund can\'t go past what was paid', async () => {
@@ -259,14 +266,14 @@ test('the day\'s takings: midnight to midnight in the business time zone, by met
   const day = '2030-03-10';        // daylight saving starts in the US that morning
   // Sign-ins would expire in 2030, so the sales are rung up through the service with the clock moved.
   const at = (iso) => { app.ctx.now = () => iso; };
-  const ring = (body) => commerce.createSale(app.ctx, { location_id: facility.id, method: 'cash', ...body }, users.desk.id, { counter: true, role: 'front_desk', userId: users.desk.id });
+  const ring = (body, role = 'front_desk') => commerce.createSale(app.ctx, { location_id: facility.id, method: 'cash', ...body }, users.desk.id, { counter: true, role, userId: users.desk.id });
   const refund = (id, cents) => commerce.refundSale(app.ctx, id, { amount_cents: cents }, { actor: users.owner.id });
   let t, atPark, next, todayDate;
   try {
     at('2030-03-10T05:30:00.000Z');       // 11:30 pm on the 9th in Chicago: the day before
     await ring({ items: [{ product_id: shirt.id }] });
     at('2030-03-10T06:30:00.000Z');       // 12:30 am on the 10th
-    const early = await ring({ items: [{ product_id: shirt.id, quantity: 2 }], discount: { type: 'amount', value: 500, reason: 'Team' } });
+    const early = await ring({ items: [{ product_id: shirt.id, quantity: 2 }], discount: { type: 'amount', value: 500, reason: 'Team' } }, 'owner');   // only the owner gives discounts
     at('2030-03-10T18:00:00.000Z');
     const card = await ring({ location_id: park.id, method: 'card_on_file', client_id: maya.id, items: [{ product_id: single.id }] });
     await refund(early.id, 1000);

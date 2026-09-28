@@ -50,7 +50,7 @@
 /* Calendar */
 .eg-cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
 .eg-cal-head span{font-size:11px;color:var(--steel-muted);text-align:center}
-.eg-day{aspect-ratio:1;max-height:48px;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);background:var(--ground);position:relative;display:flex;align-items:flex-start;justify-content:flex-start;padding:3px 5px}
+.eg-day{aspect-ratio:1;min-height:44px;max-height:52px;width:100%;cursor:pointer;color:inherit;font:inherit;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);background:var(--ground);position:relative;display:flex;align-items:flex-start;justify-content:flex-start;padding:3px 5px}
 .eg-day--empty{border:0;background:none}
 .eg-day--trained{background:var(--green-deep);border-color:var(--green-mid)}
 .eg-day--today{outline:2px solid var(--steel);outline-offset:-2px}
@@ -141,3 +141,37 @@
 .eg-choice{display:flex;gap:10px;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer}
 .eg-choice input{width:20px;height:20px;accent-color:var(--green-bright)}
 .eg-choice:has(input:checked){border-color:var(--green-bright);background:var(--green-deep)}
+
+/* Batch B11: goal day strip, new-message banner, day details, recent check-ins, test history, finished course. */
+.eg-day--empty{cursor:default}
+.eg-day[aria-pressed="true"]{border-color:var(--green-bright);box-shadow:0 0 0 1px var(--green-bright) inset}
+.eg-day:focus-visible,.eg-wday:focus-visible,.eg-banner:focus-visible,.eg-trow-btn:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.eg-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.eg-wday{min-height:48px;border:1px solid var(--control-border);background:var(--surface);color:var(--steel);border-radius:var(--radius-sm);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font:inherit;cursor:pointer;padding:0}
+.eg-wday span{font-size:11px;color:var(--steel-muted)}
+.eg-wday b{font:600 16px/1 var(--font-display)}
+.eg-wday[aria-pressed="true"]{background:var(--green);border-color:var(--green-mid);color:var(--on-green)}
+.eg-wday[aria-pressed="true"] span{color:var(--on-green)}
+.eg-wday--today{outline:2px solid var(--steel);outline-offset:-2px}
+.eg-wday:disabled{opacity:.4;cursor:default}
+.eg-banner{display:flex;align-items:center;gap:12px;width:100%;min-height:48px;padding:10px 14px;border:1px solid var(--green-mid);background:var(--green-deep);color:var(--steel);border-radius:var(--radius-md);font:500 15px/1.3 var(--font-sans);text-align:left;cursor:pointer}
+.eg-dayinfo{border-top:1px solid var(--line-subtle);padding-top:10px;display:flex;flex-direction:column;gap:4px}
+.eg-dayinfo p{margin:0}
+.eg-scroll{overflow-x:auto}
+.eg-recent th,.eg-recent td{padding:6px 6px;text-align:center;white-space:nowrap}
+.eg-recent tbody th{text-align:left;font-weight:500}
+.eg-trow-btn{width:100%;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;min-height:44px}
+.eg-hist{margin:0 0 10px}
+.eg-hist th,.eg-hist td{padding:6px 4px}
+.eg-finished{display:flex;flex-direction:column;gap:2px;border:1px solid var(--green-mid);background:var(--green-deep);border-radius:var(--radius-md);padding:12px}
+/* Coach Education screen */
+.edu-stats{grid-template-columns:repeat(4,minmax(0,1fr))}
+.edu-bar>.dp-badge{align-self:flex-start;white-space:nowrap}
+.edu-link{background:none;border:0;padding:0;color:var(--steel);font:inherit;text-align:left;cursor:pointer;min-height:44px;display:inline-flex;align-items:center;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.edu-link:hover{color:var(--green-bright)}
+.edu-people{margin:4px 0 8px;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.edu-pick{max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:var(--radius-sm);padding:4px 10px}
+.edu-pick-row{display:flex;align-items:center;gap:10px;min-height:48px;border-top:1px solid var(--line-subtle);cursor:pointer}
+.edu-pick-row:first-child{border-top:0}
+.edu-pick-row input{width:20px;height:20px;accent-color:var(--green-bright);flex-shrink:0}
+@media (max-width:760px){.edu-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.edu-acts .dp-btn{min-height:44px}}

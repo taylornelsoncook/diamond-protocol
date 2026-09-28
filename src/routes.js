@@ -12,6 +12,8 @@ import * as perfImport from './services/perf-import.js';
 import * as uploads from './services/uploads.js';
 import * as queue from './services/queue.js';
 import * as security from './services/security.js';
+import * as staff from './services/staff.js';
+import * as integrations from './services/integrations.js';
 import * as backups from './services/backups.js';
 import * as offsite from './services/offsite.js';
 import * as reports from './services/reports.js';
@@ -19,7 +21,7 @@ import * as library from './services/library.js';
 import * as legal from './services/legal.js';
 import * as clientImport from './services/client-import.js';
 import * as engage from './services/engage.js';
-import { listOutbox, sendEmail, mailMode } from './services/mail.js';
+import { listOutbox, outboxCounts, resendEmail, sendEmail, mailMode } from './services/mail.js';
 import * as sms from './services/sms.js';
 import * as insights from './services/insights.js';
 import * as leads from './services/leads.js';
@@ -34,6 +36,8 @@ import * as spots from './services/spots.js';
 import * as notes from './services/notes.js';
 import * as moneychecks from './services/moneychecks.js';
 import * as today from './services/today.js';
+import * as portal from './services/portal.js';
+import * as profiles from './services/profiles.js';
 import { portalRoutes } from './portal-routes.js';
 import { portalInvite } from './services/notify.js';
 import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocalDay } from './util.js';
@@ -65,14 +69,22 @@ const subOf = (ctx, clientId) => {
 
 export const routes = [
   // Coach login
-  ['POST', '/auth/login', 'public', 'Auth', 'Sign in as a coach. Sets a session cookie.', (ctx, r) => access.login(ctx, r.body)],
+  ['POST', '/auth/login', 'public', 'Auth', 'Sign in as a coach. Sets a session cookie.', (ctx, r) => access.login(ctx, r.body, { ip: r.ip, userAgent: r.userAgent })],
   ['POST', '/auth/logout', 'session', 'Auth', 'Sign out.', (ctx, r) => { access.logout(ctx, r.sessionToken); return { ok: true }; }],
-  ['POST', '/auth/token', 'public', 'Auth', 'Sign in from the iPhone coach app. Returns a 90-day bearer token (dp_app_...).', (ctx, r) => access.appLogin(ctx, r.body)],
-  ['POST', '/auth/password', 'session', 'Auth', 'Change your password: current_password, new_password (10+ characters).', (ctx, r) => security.changePassword(ctx, r.user, r.body)],
-  ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { ...r.user, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate } })],
+  ['POST', '/auth/token', 'public', 'Auth', 'Sign in from the iPhone coach app. Returns a 90-day bearer token (dp_app_...).', (ctx, r) => access.appLogin(ctx, r.body, { ip: r.ip, userAgent: r.userAgent })],
+  ['POST', '/auth/password', 'session', 'Auth', 'Change your password: current_password, new_password (10+ characters). Signs out your other devices and emails you.', (ctx, r) => security.changePassword(ctx, r.user, r.body)],
+  ['POST', '/auth/forgot', 'public', 'Auth', 'Forgot password: email. Emails a staff account a link that works once, for 30 minutes. The answer is the same for any email.', (ctx, r) => staff.requestPasswordReset(ctx, r.body, { ip: r.ip, baseUrl: r.baseUrl })],
+  ['POST', '/auth/reset/check', 'public', 'Auth', 'Check a reset link before choosing a password: token.', (ctx, r) => staff.checkReset(ctx, r.body)],
+  ['POST', '/auth/reset', 'public', 'Auth', 'Choose a new password with an emailed reset link: token, password (10+ characters). Signs out every device.', (ctx, r) => staff.resetPassword(ctx, r.body)],
+  ['GET', '/auth/account', 'session', 'Auth', 'Your account: the devices you are signed in on and your recent sign-ins.', (ctx, r) => ({
+    user: { id: r.user.id, name: r.user.name, email: r.user.email, role: r.user.role }, devices: access.listDevices(ctx, r.user.id, r.user.session_id),
+    sign_ins: security.listAudit(ctx, { staff_id: r.user.id, kind: 'sign_ins', limit: 10 }).map((a) => ({ at: a.at, action: a.action, status: a.status, ip: a.ip })) })],
+  ['POST', '/auth/devices/:id/sign-out', 'session', 'Auth', 'Sign out one of your other devices.', (ctx, r) => access.endSession(ctx, r.user.id, r.params.id, r.user.session_id)],
+  ['POST', '/auth/sign-out-others', 'session', 'Auth', 'Sign out every device but this one.', (ctx, r) => ({ ok: true, signed_out: access.endSessions(ctx, r.user.id, { exceptId: r.user.session_id }) })],
+  ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { id: r.user.id, email: r.user.email, name: r.user.name, role: r.user.role, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate } })],
 
   // Dashboard
-  ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner' })],
+  ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner', userId: r.user?.id ?? null })],
   ['GET', '/v1/today', 'any', 'Dashboard', 'Today\'s floor: sessions with their state (live, next, done, later), everyone booked today for one-tap check-in (still to arrive first) with door alerts (medical notes, no waiver, unpaid, a rough daily check-in, birthday), birthdays in the next 7 days, daily check-ins that need a look, tomorrow in one line, and (owners and coaches) athletes to check on with what was followed up lately.', (ctx, r) => today.todayBoard(ctx, { role: r.user?.role ?? 'owner' })],
   ['POST', '/v1/today/follow-ups', 'any', 'Dashboard', 'Follow up on a Today item (owners and coaches): key (risk:<client id> or flag:<client id>:<date>), action (reached_out, noted or reviewed), optional days (1 to 60; default 7 for athletes, through the next day for check-ins) and note. Hides it from everyone\'s Today until then and says who did it.', (ctx, r) => insights.snoozeFollowUp(ctx, r.body, r.user ?? { name: r.apiKey?.label ?? 'API' }), 201],
   ['DELETE', '/v1/today/follow-ups/:id', 'any', 'Dashboard', 'Undo a follow-up: the item comes back on Today.', (ctx, r) => insights.unsnooze(ctx, r.params.id)],
@@ -81,7 +93,7 @@ export const routes = [
   ['GET', '/v1/digest', 'any', 'Dashboard', 'This week\'s owner summary: money in, members, athletes to check on, open spots and suggested actions. Includes the email text.', (ctx) => { const d = insights.buildDigest(ctx); return { ...d, text: insights.digestText(ctx, d) }; }],
   ['POST', '/v1/digest/send', 'session', 'Dashboard', 'Email this week\'s summary to the owners now.', (ctx) => insights.sendDigest(ctx)],
   ['GET', '/v1/events', 'any', 'Dashboard', 'Recent events, newest first. Filter with ?type=.', (ctx, r) => list(events.listEvents(ctx, { type: r.query.type, limit: v.int(r.query.limit ?? 50, 'limit', { min: 1, max: 200 }) })
-    .filter((e) => !r.user || r.user.role === 'owner' || !security.OWNER_EVENTS.test(e.type)))],
+    .filter((e) => !r.user || r.user.role === 'owner' || (!security.OWNER_EVENTS.test(e.type) && !(r.user.role === 'coach' && security.LEAD_EVENTS.test(e.type)))))],
 
   // Clients
   ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name, athlete ID, email, family, school, or a parent\'s name, email or phone; phone numbers also match on digits) and ?status= (a membership status, none, current for active clients: paid up or on a free trial, team for athletes on a school or club team with no membership, or no_waiver for families who haven\'t signed the current waiver). ?sort= name (default), last_seen (longest since last seen first) or newest. Each client has flags (medical, no_waiver, no_card), pinned_notes, teams and last_seen_at (latest check-in or workout). Archived clients are left out: ?archived=true lists only them, ?archived=all everyone. archived_matches says how many archived clients the search would have found.', (ctx, r) => {
@@ -95,9 +107,15 @@ export const routes = [
     return { __file: file };
   }],
   ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program (not front desk). Refused with 409 duplicate_email when the email belongs to a client, parent_exists when the parent\'s email already signs in for a family (add the athlete to that family instead), and possible_duplicate when a client has the same name and birthday (archived clients too) or the same phone number; details.duplicates lists them (possible_duplicate only with check_duplicates: true, which the dashboard sends; resend without it to create the account anyway).', (ctx, r) => clients.createClient(ctx, r.body, { staff: { role: r.user?.role ?? 'owner' } }), 201],
-  ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role })],
+  ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: !r.apiKey || r.apiKey.scope === 'full', role: r.user?.role })],   // the app link lets anyone who has it log workouts: not for read-only keys
   ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone, notes and profile fields (birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, athlete_id).', (ctx, r) => { clients.updateClient(ctx, r.params.id, r.body); return clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role }); }],
   ['GET', '/v1/clients/:id/attendance', 'any', 'Clients', 'Attendance: visits (roster and walk-in check-ins), no-shows and late cancels in the last 30 days, visits in 90 days, the last visit, and the 12 most recent outcomes (attended, walk_in, no_show, late_cancel, in_progress). A booking in a session that is still running isn\'t a no-show yet.', (ctx, r) => clients.attendance(ctx, r.params.id)],
+  ['GET', '/v1/clients/:id/merge-preview', 'any', 'Clients', 'Owner: what merging another profile (?from=) into this one would do: both profiles side by side, and anything that stops it (both have a membership, different families, both booked for one session).', (ctx, r) => profiles.mergePreview(ctx, r.params.id, r.query.from)],
+  ['POST', '/v1/clients/:id/merge', 'any', 'Clients', 'Owner: merge the profile from (a client id) into this one, with confirm=true. Results, bookings, attendance, payments, notes, teams and device links move over in one transaction; the other profile is removed and its Athlete ID keeps finding this athlete. Written to the activity log. Refused when both have a membership or they are in different families.', (ctx, r) => profiles.mergeProfiles(ctx, r.params.id, v.str(r.body.from, 'from', { max: 64 }), r.body, r.user)],
+  ['GET', '/v1/membership-requests', 'any', 'Clients', 'Owner: parents\' requests to switch plans, pause or cancel. ?status=open (default), done, declined, withdrawn or all; ?client_id= for one athlete.', (ctx, r) => list(portal.listMembershipRequests(ctx, { status: r.query.status ?? 'open', clientId: r.query.client_id }))],
+  ['POST', '/v1/membership-requests/:id/resolve', 'any', 'Clients', 'Owner: answer a request: status done (you made the change) or declined, optional note (emailed to the parent). Make the billing change itself on the client page.', (ctx, r) => portal.resolveMembershipRequest(ctx, r.params.id, r.body, r.user)],
+  ['GET', '/v1/profile-claims', 'any', 'Clients', 'Owner: parents who gave an Athlete ID when adding a child. ?status=open (to check and merge; default), attached (joined their family at once), merged, dismissed or all.', (ctx, r) => list(profiles.listClaims(ctx, { status: r.query.status ?? 'open' }))],
+  ['POST', '/v1/profile-claims/:id/dismiss', 'any', 'Clients', 'Owner: not the same athlete; stop asking.', (ctx, r) => profiles.dismissClaim(ctx, r.params.id, r.user)],
   ['POST', '/v1/clients/:id/family', 'any', 'Clients', 'Put a client who has no family (a team roster athlete, say) in one (owner and coach): family_id of a family you already have, or parent {name, email, phone} for a new family (the parent is emailed how to sign in; send_welcome=false to skip). Someone already in a family is not moved.', (ctx, r) => clients.joinFamily(ctx, r.params.id, r.body)],
   ['POST', '/v1/clients/:id/archive', 'any', 'Clients', 'Archive a client who stopped training (owner and coach): hidden from lists, search, pickers and automatic messages; nothing is deleted. Refused while they have a membership. Upcoming bookings and standing spots are canceled, which needs confirm: true.', (ctx, r) => clients.archiveClient(ctx, r.params.id, r.body, r.user)],
   ['POST', '/v1/clients/:id/restore', 'any', 'Clients', 'Bring an archived client back.', (ctx, r) => clients.restoreClient(ctx, r.params.id, r.user)],
@@ -121,7 +139,8 @@ export const routes = [
   ['PATCH', '/v1/plans/:id', 'any', 'Billing', 'Update a plan. Set active=false to stop offering it.', (ctx, r) => billing.updatePlan(ctx, r.params.id, r.body)],
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
   ['GET', '/v1/invoices', 'any', 'Billing', 'List invoices. Filter with ?status= (open, paid, failed, void).', (ctx, r) => list(billing.listInvoices(ctx, { status: r.query.status }))],
-  ['POST', '/v1/invoices/:id/retry', 'any', 'Billing', 'Charge a failed invoice again now.', (ctx, r) => billing.retryInvoice(ctx, r.params.id)],
+  ['POST', '/v1/invoices/:id/retry', 'any', 'Billing', 'Charge a failed invoice again now. A retry you start never cancels the membership and doesn\'t count toward the automatic-retry limit.', (ctx, r) => billing.retryInvoice(ctx, r.params.id)],
+  ['POST', '/v1/invoices/:id/charges/:cid/handled', 'any', 'Billing', 'Mark a late card approval handled: a charge the bank approved after the invoice was paid another way or voided (it was refunded automatically, or the alert says to refund it in Stripe). Takes it off Today.', (ctx, r) => billing.markLateChargeHandled(ctx, r.params.id, r.params.cid, r.user ?? { name: r.apiKey?.label })],
   ['GET', '/v1/money-checks', 'any', 'Billing', 'Daily money checks, newest first (?limit=, default 14): possible double charges, refund spikes, stuck payments and, with Stripe connected, card payments matched one by one.', (ctx, r) => moneychecks.listChecks(ctx, { limit: r.query.limit })],
   ['POST', '/v1/money-checks/run', 'any', 'Billing', 'Check a day now: date (YYYY-MM-DD, default yesterday). Replaces that day\'s check.', (ctx, r) => moneychecks.runCheck(ctx, r.body, r.user)],
   ['PATCH', '/v1/money-checks/:id', 'any', 'Billing', 'Mark a day\'s findings as looked at (reviewed: true; false undoes it).', (ctx, r) => moneychecks.markReviewed(ctx, r.params.id, r.body, r.user)],
@@ -172,7 +191,7 @@ export const routes = [
   ['GET', '/v1/programs/activity', 'any', 'Training', 'The Programs page: workouts logged in the last 7 days, clients on a program, who needs a check-in (no workout for 7 days), who finished, and recent workouts with effort, sets and new bests. ?program_id= for one program, ?days= (1-60, default 14) for the feed. Archived clients are left out.', (ctx, r) => programs.programsActivity(ctx, { programId: r.query.program_id || undefined, days: v.int(r.query.days ?? 14, 'days', { min: 1, max: 60 }) })],
   ['GET', '/v1/programs/:id', 'any', 'Training', 'A program with every workout and exercise, how often each workout was logged, and each client\'s progress (done, next, last workout, needs a check-in).', (ctx, r) => programs.programDetail(ctx, r.params.id)],
   ['PATCH', '/v1/programs/:id', 'any', 'Training', 'Update a program. Weeks can\'t go below the last week that has workouts.', (ctx, r) => programs.updateProgram(ctx, r.params.id, r.body)],
-  ['DELETE', '/v1/programs/:id', 'any', 'Training', 'Delete a program nobody is on.', (ctx, r) => programs.deleteProgram(ctx, r.params.id)],
+  ['DELETE', '/v1/programs/:id', 'any', 'Training', 'Delete a program nobody is on. Athletes\' logged workouts and sets stay in their history (logs_kept says how many), out of the program\'s numbers.', (ctx, r) => programs.deleteProgram(ctx, r.params.id)],
   ['POST', '/v1/programs/:id/duplicate', 'any', 'Training', 'Copy a program with all its weeks and workouts. Optional name (default "<name> (copy)").', (ctx, r) => programs.duplicateProgram(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/workouts', 'any', 'Training', 'Add a workout: week, day (default: the next free day, up to 7), title (default "Day N").', (ctx, r) => programs.addWorkout(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/weeks/:week/copy', 'any', 'Training', 'Copy every workout in a week to week to (default the next week), or to each week from to through through. Weeks that have workouts need replace: true; replacing logged workouts needs confirm: true. The program grows to the last week copied to.', (ctx, r) => programs.copyWeek(ctx, r.params.id, r.params.week, r.body)],
@@ -180,7 +199,7 @@ export const routes = [
   ['POST', '/v1/programs/:id/assign', 'any', 'Training', 'Put client_id on this program. Replaces their current program (previous_program says which). Refused for archived clients and for a client already on it.', (ctx, r) => programs.assign(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), r.body.start_date), 201],
   ['DELETE', '/v1/programs/:id/clients/:clientId', 'any', 'Training', 'Take a client off this program. Their logged workouts stay.', (ctx, r) => programs.unassign(ctx, r.params.id, r.params.clientId)],
   ['PATCH', '/v1/workouts/:id', 'any', 'Training', 'Rename a workout: title.', (ctx, r) => programs.updateWorkout(ctx, r.params.id, r.body)],
-  ['DELETE', '/v1/workouts/:id', 'any', 'Training', 'Delete a workout. When athletes logged it, send confirm: true (their logs of it go too).', (ctx, r) => programs.deleteWorkout(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/workouts/:id', 'any', 'Training', 'Delete a workout. When athletes logged it, send confirm: true (their logs of it stay in their history, out of the program\'s numbers).', (ctx, r) => programs.deleteWorkout(ctx, r.params.id, r.body)],
   ['POST', '/v1/workouts/:id/copy', 'any', 'Training', 'Copy a workout to week (default its own) and day (default the next free day of that week), with an optional new title.', (ctx, r) => programs.copyWorkout(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/workouts/:id/exercises', 'any', 'Training', 'Add exercise_id to a workout with a prescription like "3 × 10". Optional load_test and load_pct set the weight from the athlete\'s latest tested max; position puts it at that place (Undo after removing).', (ctx, r) => programs.addWorkoutExercise(ctx, r.params.id, r.body), 201],
   ['PATCH', '/v1/workout-exercises/:id', 'any', 'Training', 'Change an exercise\'s prescription, swap it for another exercise_id in the same slot, or change its weight: load_test (squat_1rm, bench_1rm, power_clean_1rm, or null) and load_pct (30 to 110).', (ctx, r) => programs.updateWorkoutExercise(ctx, r.params.id, r.body)],
@@ -288,8 +307,9 @@ export const routes = [
   ['GET', '/v1/families/:id/agreements', 'any', 'Families', 'Terms and privacy acceptances for a family.', (ctx, r) => list(legal.familyConsents(ctx, r.params.id))],
   ['GET', '/v1/settings', 'any', 'Families', 'Business settings: time zone, late-cancel window, waiver text.', (ctx) => families.getSettings(ctx)],
   ['PATCH', '/v1/settings', 'session', 'Families', 'Update settings. Changing the waiver text asks every family to sign again.', (ctx, r) => families.updateSettings(ctx, r.body)],
-  ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, and how email is set up (mode: test, restricted or live).', (ctx) => ({ ...list(listOutbox(ctx)), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
-  ['GET', '/v1/texts', 'session', 'Families', 'Text messages sent to parents and their replies, and how texting is set up (mode: test, restricted or live).', (ctx) => ({ ...list(sms.listTexts(ctx)), mode: sms.smsMode(ctx), only_to: ctx.sms?.onlyTo || null, kinds: sms.TEXT_KINDS })],
+  ['GET', '/v1/outbox', 'session', 'Families', 'Emails the platform sent or logged, newest first, and how email is set up (mode: test, restricted or live). Filter with ?status= (sent, failed, held, not_sent) and ?q= (address, subject or text); ?limit, ?offset. counts has the number in each status.', (ctx, r) => ({ ...list(listOutbox(ctx, r.query)), counts: outboxCounts(ctx), mode: mailMode(ctx), from: ctx.mail?.from || null, only_to: ctx.mail?.onlyTo || null })],
+  ['POST', '/v1/outbox/:id/resend', 'session', 'Families', 'Send an email again as a new message: to the same address, or to (another address) for emails that hold no sign-in code, password or private link.', (ctx, r) => resendEmail(ctx, r.params.id, r.body)],
+  ['GET', '/v1/texts', 'session', 'Families', 'Text messages sent to parents and their replies, newest first, and how texting is set up (mode: test, restricted or live). Filter with ?status= (sent, failed, held, logged, received) and ?q= (number or text).', (ctx, r) => ({ ...list(sms.listTexts(ctx, r.query)), counts: sms.textCounts(ctx), mode: sms.smsMode(ctx), only_to: ctx.sms?.onlyTo || null, kinds: sms.TEXT_KINDS })],
   ['POST', '/v1/texts/test', 'session', 'Families', 'Send a test text to a phone number (to) and wait for the text service to answer.', async (ctx, r) => {
     if (sms.smsMode(ctx) === 'test') throw badRequest('No text service is connected. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM on the server.');
     const out = await sms.sendText(ctx, { to: v.str(r.body?.to, 'to', { max: 40 }), kind: 'test', body: `Test text from ${families.getSetting(ctx, 'business_name')}. Texting is working.` });
@@ -306,10 +326,10 @@ export const routes = [
   }],
 
   // Leads
-  ['GET', '/v1/leads', 'any', 'Leads', 'Families who asked about training, newest first, with counts by stage. Filter with ?status= (new, contacted, signed_up, evaluation, member, lost).', (ctx, r) => leads.listLeads(ctx, { status: r.query.status ? v.oneOf(r.query.status, 'status', leads.STAGES) : undefined })],
+  ['GET', '/v1/leads', 'any', 'Leads', 'Families who asked about training, newest first, with counts by stage and the coach each was given to (coach_id, coach_name). Filter with ?status= (new, contacted, signed_up, evaluation, member, lost). Owners and front desk see every lead; a coach sees only the leads the owner gave them.', (ctx, r) => leads.listLeads(ctx, { status: r.query.status ? v.oneOf(r.query.status, 'status', leads.STAGES) : undefined, user: r.user })],
   ['POST', '/v1/leads', 'any', 'Leads', 'Add a lead: parent_name, email and/or phone, athlete_name, athlete_age, sport, message, source (manual, phone, walk_in, event, referral), texts_ok, follow_up=false to skip the automatic emails.', (ctx, r) => leads.addLead(ctx, r.body, r.user ?? r.apiKey), 201],
-  ['GET', '/v1/leads/:id', 'any', 'Leads', 'A lead.', (ctx, r) => leads.getLead(ctx, r.params.id)],
-  ['PATCH', '/v1/leads/:id', 'any', 'Leads', 'Update a lead: status, notes, lost_reason, contacted=true (you reached out), follow_up=false (stop automatic follow-up).', (ctx, r) => leads.updateLead(ctx, r.params.id, r.body)],
+  ['GET', '/v1/leads/:id', 'any', 'Leads', 'A lead (a coach: only one the owner gave them).', (ctx, r) => leads.getLead(ctx, r.params.id, { user: r.user })],
+  ['PATCH', '/v1/leads/:id', 'any', 'Leads', 'Update a lead: status, notes, lost_reason, contacted=true (you reached out), follow_up=false (stop automatic follow-up), coach_id (owner only: give the lead to a coach, who is emailed; null takes it back). A coach can update only a lead given to them.', (ctx, r) => leads.updateLead(ctx, r.params.id, r.body, { user: r.user })],
   ['DELETE', '/v1/leads/:id', 'session', 'Leads', 'Delete a lead and its details (owner only).', (ctx, r) => leads.deleteLead(ctx, r.params.id)],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
@@ -460,12 +480,25 @@ export const routes = [
   ['DELETE', '/v1/integrations/:provider', 'session', 'Performance', 'Disconnect a system.', (ctx, r) => perfImport.disconnect(ctx, r.params.provider)],
 
   // Staff, security and backups (owner only)
-  ['GET', '/v1/staff', 'session', 'Admin', 'Staff accounts and their roles.', (ctx) => ({ data: security.listStaff(ctx), roles: security.ROLES })],
-  ['POST', '/v1/staff', 'session', 'Admin', 'Add a staff member: name, email, role (owner, coach, front_desk). Returns a one-time password, also emailed.', (ctx, r) => security.addStaff(ctx, r.body, r.baseUrl), 201],
-  ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change role, rename, turn an account off (active=false) or unlock it (unlock=true).', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
-  ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
+  ['GET', '/v1/staff', 'session', 'Admin', 'Staff accounts and their roles, each with devices signed in, what they still lead (work: upcoming sessions, classes, hours) and still_leading (turned off or front desk but still leading).', (ctx) => ({ data: security.listStaff(ctx), roles: security.ROLES })],
+  ['GET', '/v1/staff/summary', 'session', 'Admin', 'Security summary: staff who can sign in, turned off, locked, not signed in yet, accounts still leading sessions, failed sign-ins in 24 hours, refused requests in 7 days, and backups (last, overdue, total size, off-site).', (ctx) => staff.securitySummary(ctx)],
   ['GET', '/v1/staff/connection', 'session', 'Admin', 'Connection check: the X-Forwarded-For header this request arrived with, the connection address, the address the app decided on and TRUST_PROXY, with what to change.', (ctx, r) => security.connectionCheck(r.connection)],
-  ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in: who, what, when, from where. ?actor_id, ?target, ?failures=true, ?limit.', (ctx, r) => list(security.listAudit(ctx, r.query).map((a) => ({ ...a, description: describeAction(a.action) })))],
+  ['POST', '/v1/staff', 'session', 'Admin', 'Add a staff member: name, email, role (owner, coach, front_desk). Returns a one-time password, also emailed. An email of a turned-off account says so (details.user_id).', (ctx, r) => security.addStaff(ctx, r.body, r.baseUrl), 201],
+  ['GET', '/v1/staff/:id', 'session', 'Admin', 'One staff member: devices they are signed in on, recent activity and what they still lead.', (ctx, r) => staff.staffDetail(ctx, r.params.id, r.user.session_id)],
+  ['PATCH', '/v1/staff/:id', 'session', 'Admin', 'Change name, email or role, turn an account off (active=false) or on, or unlock it (unlock=true). A new role or turning off signs them out; a new email or turning off cancels emailed reset links.', (ctx, r) => security.updateStaff(ctx, r.params.id, r.body, r.user)],
+  ['POST', '/v1/staff/:id/reset-password', 'session', 'Admin', 'Give a staff member a new one-time password (for someone who never signed in: resend the invite). Signs them out and cancels emailed reset links.', (ctx, r) => security.resetStaffPassword(ctx, r.params.id, r.baseUrl)],
+  ['POST', '/v1/staff/:id/sign-out', 'session', 'Admin', 'Sign a staff member out of every device (your own: every device but this one) without changing their password.', (ctx, r) => ({ ok: true, signed_out: access.endSessions(ctx, staff.staffDetail(ctx, r.params.id).id, { exceptId: r.params.id === r.user.id ? r.user.session_id : null }) })],
+  ['POST', '/v1/staff/:id/devices/:device/sign-out', 'session', 'Admin', 'Sign a staff member out of one device.', (ctx, r) => access.endSession(ctx, staff.staffDetail(ctx, r.params.id).id, r.params.device, r.user.session_id)],
+  ['GET', '/v1/staff/:id/hand-over', 'session', 'Admin', 'Before handing over: what they lead (upcoming sessions, classes, hours, booked clients), the next sessions, and with ?to= (a coach or owner) any sessions that clash for that person (they already lead something then, any place, or are off that day), each with its warnings.', (ctx, r) => staff.handOverPreview(ctx, r.params.id, r.query.to === undefined ? undefined : r.query.to === 'none' ? null : r.query.to)],
+  ['POST', '/v1/staff/:id/hand-over', 'session', 'Admin', 'Hand everything they lead from now on to another active coach or owner: to (their id, or null for nobody: sessions and classes left without a coach, hours removed). Clashes are warnings, as for every coach change: the answer is 409 coach_conflict (details.warnings, details.conflicts) until the request comes with confirm=true (hand everything over anyway) or leave_conflicts=true (leave the clashing sessions with this person).', (ctx, r) => staff.handOver(ctx, r.params.id, r.body, r.user)],
+  ['GET', '/v1/audit', 'session', 'Admin', 'Every change and sign-in, newest first: who, what, when, from where. Filter with ?who= (staff, api_key, parent, athlete, public, system), ?staff_id, ?actor_id, ?target, ?kind= (sign_ins, refused, failures), ?failures=true, ?since and ?until (dates, business time zone), ?q (name, record, address or what happened); ?limit, ?offset. total is the number matching.', (ctx, r) => {
+    const q = auditQuery(r.query);
+    return { ...list(security.listAudit(ctx, q).map((a) => ({ ...a, description: describeAction(a.action) }))), total: security.countAudit(ctx, q) };
+  }],
+  ['GET', '/v1/audit/export', 'session', 'Admin', 'The activity log as a CSV file, with the same filters as GET /v1/audit (up to 20,000 rows). Cells that could run as spreadsheet formulas are made safe.', (ctx, r) => {
+    const { csv } = security.auditCsv(ctx, auditQuery(r.query), (a) => describeAction(a.action));
+    return { __file: { filename: `activity-${new Date().toISOString().slice(0, 10)}.csv`, type: 'text/csv; charset=utf-8', body: csv } };
+  }],
   ['GET', '/v1/backups', 'session', 'Admin', 'Database backups (one a day, the last 30 kept) and the off-site copy status.', (ctx) => ({ data: backups.listBackups(ctx), dir: backups.backupDir(ctx), offsite: offsite.status(ctx) })],
   ['POST', '/v1/backups', 'session', 'Admin', 'Make a backup now, and send it off-site when that is set up.', async (ctx) => {
     const b = backups.createBackup(ctx);
@@ -475,16 +508,28 @@ export const routes = [
   ['GET', '/v1/jobs', 'session', 'Admin', 'Background jobs: health, last runs and errors (runs are kept 30 days).', (ctx) => ({ data: ctx.jobs.status() })],
   ['POST', '/v1/jobs/:name/run', 'session', 'Admin', 'Run a background job now.', (ctx, r) => ctx.jobs.runNow(r.params.name)],
 
-  // Integrations (coach login only)
-  ['GET', '/v1/api-keys', 'session', 'Integrations', 'List API keys.', (ctx) => list(access.listApiKeys(ctx))],
-  ['POST', '/v1/api-keys', 'session', 'Integrations', 'Create an API key. The full key is shown once.', (ctx, r) => access.createApiKey(ctx, r.body), 201],
+  // Integrations (owner, signed in to the dashboard: API keys can't manage keys or webhooks)
+  ['GET', '/v1/api-status', 'session', 'Integrations', 'API & integrations at a glance: API keys (requests and errors in 30 days), webhooks (failing, failed in 7 days, waiting), email and texts (mode, failures in 7 days, counts) and exercise video coverage.', (ctx) => integrations.apiStatus(ctx)],
+  ['GET', '/v1/api-keys', 'session', 'Integrations', 'List API keys, each with its access level (scope: read, results or full) and requests and errors in the last 30 days.', (ctx) => ({ ...list(access.listApiKeys(ctx)), scopes: access.KEY_SCOPES })],
+  ['POST', '/v1/api-keys', 'session', 'Integrations', 'Create an API key: label and scope (read = read only, the default; results = read and send test results and device files; full = everything an API key can do). The full key is shown once.', (ctx, r) => access.createApiKey(ctx, r.body), 201],
+  ['PATCH', '/v1/api-keys/:id', 'session', 'Integrations', 'Rename a key (label) or change its access level (scope) without replacing it.', (ctx, r) => access.updateApiKey(ctx, r.params.id, r.body)],
   ['POST', '/v1/api-keys/:id/revoke', 'session', 'Integrations', 'Revoke a key immediately.', (ctx, r) => access.revokeApiKey(ctx, r.params.id)],
-  ['GET', '/v1/webhooks', 'session', 'Integrations', 'List webhook endpoints.', (ctx) => list(events.listEndpoints(ctx))],
-  ['POST', '/v1/webhooks', 'session', 'Integrations', 'Add an endpoint: url and events (or ["*"]).', (ctx, r) => events.createEndpoint(ctx, r.body), 201],
-  ['PATCH', '/v1/webhooks/:id', 'session', 'Integrations', 'Change url, events or active.', (ctx, r) => events.updateEndpoint(ctx, r.params.id, r.body)],
+  ['GET', '/v1/api-keys/:id/requests', 'session', 'Integrations', 'Requests made with a key in the last 30 days, newest first: method, address, answer, time taken, from where and the error sent back (never what was sent). ?status=errors, ?limit.', (ctx, r) => access.apiRequests(ctx, r.params.id, r.query)],
+  ['GET', '/v1/webhooks', 'session', 'Integrations', 'List webhook endpoints, each with how it is doing: delivered and failed in 7 days, waiting, failures in a row (failing after 3). The signing secret is shown only as a hint.', (ctx) => list(events.listEndpoints(ctx))],
+  ['POST', '/v1/webhooks', 'session', 'Integrations', 'Add an endpoint: url (a public https address), events (or ["*"]), optional label. Returns the signing secret. A URL already used by another webhook is refused.', (ctx, r) => events.createEndpoint(ctx, r.body), 201],
+  ['PATCH', '/v1/webhooks/:id', 'session', 'Integrations', 'Change label, url, events or active.', (ctx, r) => events.updateEndpoint(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/webhooks/:id', 'session', 'Integrations', 'Delete an endpoint.', (ctx, r) => events.deleteEndpoint(ctx, r.params.id)],
-  ['GET', '/v1/webhooks/:id/deliveries', 'session', 'Integrations', 'Recent delivery attempts for an endpoint.', (ctx, r) => list(events.listDeliveries(ctx, r.params.id))],
-  ['GET', '/v1/event-types', 'any', 'Integrations', 'Every event type a webhook can subscribe to.', () => list(events.EVENT_TYPES)],
+  ['GET', '/v1/webhooks/:id/secret', 'session', 'Integrations', 'Show an endpoint\'s signing secret.', (ctx, r) => events.endpointSecret(ctx, r.params.id)],
+  ['POST', '/v1/webhooks/:id/rotate-secret', 'session', 'Integrations', 'Make a new signing secret, shown once. The old one also signs (a second v1= in DP-Signature) for keep_old_hours (0 to 72, default 24) so your receiver can switch over.', (ctx, r) => events.rotateSecret(ctx, r.params.id, r.body)],
+  ['POST', '/v1/webhooks/:id/test', 'session', 'Integrations', 'Send a test event now and wait for the answer: event (test.ping, the default, or a sample of any event type, marked "test": true). Tried once; never in the activity feed.', (ctx, r) => events.sendTest(ctx, r.params.id, r.body)],
+  ['POST', '/v1/webhooks/:id/resend-failed', 'session', 'Integrations', 'Send every delivery that failed in the last 7 days again (up to 50).', (ctx, r) => events.resendFailed(ctx, r.params.id)],
+  ['GET', '/v1/webhooks/:id/deliveries', 'session', 'Integrations', 'Delivery attempts for an endpoint, newest first. ?status= (failed, delivered, waiting), ?event=, ?limit, ?offset.', (ctx, r) => events.listDeliveries(ctx, r.params.id, r.query)],
+  ['GET', '/v1/webhook-deliveries', 'session', 'Integrations', 'Deliveries to every endpoint, newest first, with the same filters.', (ctx, r) => events.listDeliveries(ctx, null, r.query)],
+  ['GET', '/v1/webhook-deliveries/:id', 'session', 'Integrations', 'One delivery: what was sent, the answer (code, the start of the response, time taken), a plain reason for a failure and tries so far.', (ctx, r) => events.getDelivery(ctx, r.params.id)],
+  ['POST', '/v1/webhook-deliveries/:id/resend', 'session', 'Integrations', 'Send a delivery again now: the same body and DP-Delivery id, signed with the current secret.', (ctx, r) => events.resendDelivery(ctx, r.params.id)],
+  ['GET', '/v1/event-types', 'any', 'Integrations', 'Every event type a webhook can subscribe to. info has what each means and a sample of its data.', () => ({ ...list(events.EVENT_TYPES), info: events.EVENT_INFO })],
+  ['GET', '/v1/video-coverage', 'session', 'Integrations', 'Exercise demo videos: how many exercises have one that plays in the workout app, and those that need one (used in programs first; unplayable links flagged).', (ctx) => integrations.videoCoverage(ctx)],
+  ['GET', '/v1/athletes/:athlete_id/results', 'any', 'Performance', 'One athlete\'s test results by Athlete ID, newest first; best marks each test\'s best among those returned. ?test= (key), ?since= (a date, from midnight in the business time zone), ?limit.', (ctx, r) => integrations.athleteResults(ctx, r.params.athlete_id, r.query)],
 
   // Accountability, performance targets and education. Owners and coaches manage; front desk views.
   ['GET', '/v1/clients/:id/engagement', 'any', 'Engagement', 'Accountability for one athlete: streaks, this week, 30-day check-in averages and flags, goals, messages, test targets, rankings and assigned reading.', (ctx, r) => engage.staffOverview(ctx, clients.getClient(ctx, r.params.id).id)],
@@ -507,7 +552,10 @@ export const routes = [
   ['DELETE', '/v1/badge-awards/:id', 'any', 'Engagement', 'Take back a badge awarded by mistake.', (ctx, r) => engage.removeAward(ctx, r.params.id)],
   ['GET', '/v1/engagement/settings', 'any', 'Engagement', 'Whether rankings and readiness-adjusted weights are on.', (ctx) => engage.engagementSettings(ctx)],
   ['PATCH', '/v1/engagement/settings', 'any', 'Engagement', 'Turn rankings ("on" or "off": athletes and parents see where a best result ranks, never anyone else\'s name) or readiness_adjust ("on" or "off": after a rough daily check-in, weights set from a tested max come down 10 or 20 points of the max in the athlete app) on or off.', (ctx, r) => engage.setRankings(ctx, r.body)],
-  ['GET', '/v1/education', 'any', 'Education', 'Every course and lesson with completions, and each assignment with who has finished.', (ctx) => engage.educationReport(ctx)],
+  ['GET', '/v1/education', 'any', 'Education', 'Summary numbers (open, overdue, finished in the last 7 days, published), every assignment with each athlete\'s status (not started, opened, started, finished) overdue first, every course and lesson with finished and opened counts, and the latest lessons finished. Archived athletes aren\'t counted.', (ctx) => engage.educationReport(ctx)],
+  ['GET', '/v1/education/athletes', 'any', 'Education', 'Athletes who can be given reading (not archived), with their active teams and programs, for assigning to several at once.', (ctx) => engage.assignPicker(ctx)],
+  ['GET', '/v1/lessons/:id/progress', 'any', 'Education', 'Who finished a lesson and when, who opened it but hasn\'t finished, and where it is assigned.', (ctx, r) => engage.lessonProgress(ctx, r.params.id)],
+  ['POST', '/v1/lessons/:id/duplicate', 'any', 'Education', 'Copy a lesson as a draft at the end of the same course.', (ctx, r) => engage.duplicateLesson(ctx, r.params.id), 201],
   ['GET', '/v1/lessons/:id', 'any', 'Education', 'One lesson with its full text.', (ctx, r) => engage.getLesson(ctx, r.params.id)],
   ['POST', '/v1/lessons', 'any', 'Education', 'Post a lesson: title, summary, body (plain text; blank lines start paragraphs), video_url (https), minutes, course_id, published.', (ctx, r) => engage.createLesson(ctx, r.body), 201],
   ['PATCH', '/v1/lessons/:id', 'any', 'Education', 'Edit a lesson. published=false hides it from athletes. quiz_text adds a quiz: a question per line followed by choices starting with - (the right one with *), a blank line between questions; empty removes it.', (ctx, r) => engage.updateLesson(ctx, r.params.id, r.body)],
@@ -517,7 +565,10 @@ export const routes = [
   ['PATCH', '/v1/courses/:id', 'any', 'Education', 'Edit a course. published=false hides it from athletes.', (ctx, r) => engage.updateCourse(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/courses/:id', 'any', 'Education', 'Delete a course. Its lessons stay in the library.', (ctx, r) => engage.deleteCourse(ctx, r.params.id)],
   ['PUT', '/v1/courses/:id/order', 'any', 'Education', 'Reorder a course\'s lessons: lesson_ids in the new order.', (ctx, r) => engage.reorderCourse(ctx, r.params.id, r.body)],
-  ['POST', '/v1/lesson-assignments', 'any', 'Education', 'Assign reading: lesson_id or course_id, to client_id or a team (contract_id), optional due_date and note. The athletes and their parents are emailed.', (ctx, r) => engage.assign(ctx, r.body, r.user ?? r.apiKey), 201],
+  ['POST', '/v1/lesson-assignments', 'any', 'Education', 'Assign reading: lesson_id or course_id, to client_id, a team (contract_id) or several athletes (client_ids, up to 200; those who already have it are skipped and listed), optional due_date (today to a year out) and note. The athletes and their parents are emailed.', (ctx, r) => engage.assign(ctx, r.body, r.user ?? r.apiKey), 201],
+  ['PATCH', '/v1/lesson-assignments/:id', 'any', 'Education', 'Change an assignment\'s due_date (empty removes it) or note. Nobody is emailed.', (ctx, r) => engage.updateAssignment(ctx, r.params.id, r.body)],
+  ['POST', '/v1/lesson-assignments/remind-overdue', 'any', 'Education', 'Remind everyone who hasn\'t finished an overdue assignment: one email per athlete (and their parents) listing all of theirs. Assignments reminded in the last 12 hours, athletes reminded in the last 12 hours, archived athletes and addresses that asked for no more emails are left out.', (ctx, r) => engage.remindOverdue(ctx, r.user ?? r.apiKey)],
+  ['POST', '/v1/lesson-assignments/:id/remind', 'any', 'Education', 'Remind the athletes on an assignment who haven\'t finished it (and their parents). Once every 12 hours per assignment; athletes reminded in the last 12 hours and addresses that asked for no more emails are skipped and listed.', (ctx, r) => engage.remindAssignment(ctx, r.params.id, r.user ?? r.apiKey)],
   ['DELETE', '/v1/lesson-assignments/:id', 'any', 'Education', 'Remove an assignment. Completed lessons stay completed.', (ctx, r) => engage.unassign(ctx, r.params.id)],
 
   // Client app (authenticated by the client's private link token)
@@ -527,7 +578,7 @@ export const routes = [
   ['PUT', '/app/api/logs/:id', 'client', 'Client app', 'Save a reopened workout again (your latest one, within 2 hours of finishing): the same fields as finishing. Replaces what was logged.', (ctx, r) => programs.editLog(ctx, r.client, r.params.id, r.body)],
   ['GET', '/app/api/engage', 'client', 'Client app', 'Accountability, performance and education for the athlete.', (ctx, r) => engage.athleteView(ctx, r.client.id, { parentView: true })],
   ['POST', '/app/api/daily-check-in', 'client', 'Client app', 'Today\'s check-in: sleep_hours (0-16), hydration, soreness, energy, mood (1-5), note. Saving again today updates it.', (ctx, r) => engage.saveCheckin(ctx, r.client.id, r.body)],
-  ['POST', '/app/api/goals/:id/check', 'client', 'Client app', 'Tick a custom goal for today (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, r.client.id, r.params.id, r.body.done !== false)],
+  ['POST', '/app/api/goals/:id/check', 'client', 'Client app', 'Tick a custom goal for today, or for a day missed earlier this week with date (done=false to untick).', (ctx, r) => engage.checkGoal(ctx, r.client.id, r.params.id, r.body.done !== false, r.body.date)],
   ['POST', '/app/api/messages/read', 'client', 'Client app', 'Mark coach messages read.', (ctx, r) => engage.markRead(ctx, r.client.id)],
   ['POST', '/app/api/messages', 'client', 'Client app', 'Write back to your coach: body.', (ctx, r) => engage.replyMessage(ctx, r.client.id, r.body, { from: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/lessons/:id', 'client', 'Client app', 'Read a lesson.', (ctx, r) => engage.lessonFor(ctx, r.client.id, r.params.id)],
@@ -569,4 +620,12 @@ function describeAction(action) {
   const [method, path] = action.split(' ');
   const r = routes.find((x) => x.method === method && x.path === path);
   return r ? r.summary.split(/[:.(]/)[0].trim() : action;
+}
+// The activity log's text search also matches what happened in plain English: the log actions whose description has
+// the words, passed on to security.listAudit.
+function auditQuery(q) {
+  const text = String(q.q ?? '').trim().toLowerCase();
+  if (!text) return q;
+  const actions = [...new Set([...routes.map((r) => `${r.method} ${r.path}`), ...Object.keys(SPECIAL)])].filter((a) => describeAction(a).toLowerCase().includes(text));
+  return { ...q, actions };
 }

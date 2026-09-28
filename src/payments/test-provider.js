@@ -57,7 +57,7 @@ export function createTestProvider() {
 
     // No hosted card page in test mode; the dashboard offers "Add test card" instead.
     async cardSetupSession() { return { id: null, url: null }; },
-    testCard() { return { paymentMethod: `pm_test_${token(8)}`, brand: 'visa', last4: '4242' }; },
+    testCard() { return { paymentMethod: `pm_test_${token(8)}`, brand: 'visa', last4: '4242', expMonth: 12, expYear: new Date().getUTCFullYear() + 3 }; },
 
     verifyWebhook() { throw new Error('Webhooks are only used with Stripe.'); }
   };

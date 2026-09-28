@@ -178,8 +178,8 @@ test('a card charge the bank approves after the family paid by check goes back a
   const out = await reconcileInvoicePayment(app.ctx, m.inv.id, { ref, succeeded: true });
   assert.equal(out, 'refunded');
   assert.deepEqual(refunds.map((r) => [r.paymentRef, r.amountCents]), [[ref, 15000]]);
-  assert.equal(await reconcileInvoicePayment(app.ctx, m.inv.id, { ref, succeeded: true }), 'refunded', 'a repeated event asks Stripe with the same key');
-  assert.equal(refunds[1].idempotencyKey, refunds[0].idempotencyKey);
+  assert.equal(await reconcileInvoicePayment(app.ctx, m.inv.id, { ref, succeeded: true }), 'refunded', 'a repeated event changes nothing');
+  assert.equal(refunds.length, 1, 'refunded exactly once');
   assert.equal(invoice(m.inv.id).status, 'paid');
 });
 
@@ -217,14 +217,16 @@ test('a void and a payment of the same invoice at the same moment: exactly one h
   assert.equal((await owner('POST', `/v1/invoices/${paidInv.inv.id}/void`, {})).body.error.message, 'This invoice is paid. Refund it instead.');
 });
 
-test('the bank approving a charge after it was voided marks it paid (the money is in)', async () => {
+test('the bank approving a charge after it was voided refunds it (owner decision: a voided invoice isn\'t collected)', async () => {
   const m = await member({ declining: true });
   db().run(`UPDATE invoices SET payment_ref = 'pi_approved_late' WHERE id = ?`, m.inv.id);
   await owner('POST', `/v1/invoices/${m.inv.id}/void`, {});
-  assert.equal(await reconcileInvoicePayment(app.ctx, m.inv.id, { ref: 'pi_approved_late', succeeded: true }), 'paid');
+  refunds.length = 0;
+  assert.equal(await reconcileInvoicePayment(app.ctx, m.inv.id, { ref: 'pi_approved_late', succeeded: true }), 'refunded');
+  assert.deepEqual(refunds.map((r) => r.paymentRef), ['pi_approved_late']);
   const inv = invoice(m.inv.id);
-  assert.equal(inv.status, 'paid');
-  assert.equal(inv.voided_at, null);
+  assert.equal(inv.status, 'void', 'still void');
+  assert.ok(inv.voided_at);
 });
 
 // ---------------------------------------------------------------- retries and reminders
@@ -246,6 +248,24 @@ test('retry refuses a family with no card, and a declined manual retry never can
   r = await owner('POST', `/v1/invoices/${m.inv.id}/retry`);
   assert.equal(r.body.status, 'paid');
   assert.equal(r.body.membership_reactivated, true);
+});
+
+test('manual retries don\'t count toward canceling: only the automatic tries do', async () => {
+  const m = await member({ declining: true });
+  assert.equal(invoice(m.inv.id).attempts, 1);
+  for (let i = 0; i < 3; i++) await attemptCharge(app.ctx, m.inv.id, now(), { manual: true });
+  assert.deepEqual([invoice(m.inv.id).attempts, invoice(m.inv.id).auto_attempts], [4, 1]);
+  // The second automatic try (of 4) comes due: still past due, not canceled.
+  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+  assert.equal(invoice(m.inv.id).status, 'failed');
+  assert.equal(subOf(m.id).status, 'past_due');
+  assert.equal((await owner('GET', `/v1/invoices/${m.inv.id}`)).body.retries_left, 2, 'two automatic tries left');
+  // The third and fourth automatic tries: canceled after the fourth.
+  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+  assert.equal(subOf(m.id).status, 'past_due');
+  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+  assert.equal(invoice(m.inv.id).status, 'void');
+  assert.equal(subOf(m.id).status, 'canceled');
 });
 
 test('retry all charges every declined payment with a card and reports what happened', async () => {

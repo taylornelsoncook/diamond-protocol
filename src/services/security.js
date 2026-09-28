@@ -1,17 +1,17 @@
 import { randomBytes } from 'node:crypto';
-import { newId, v, notFound, conflict, badRequest, HttpError, hashPassword, verifyPassword } from '../util.js';
+import { newId, v, notFound, conflict, badRequest, HttpError, hashPassword, verifyPassword, zonedToUtc, addDaysToDate, localDate } from '../util.js';
 import { sendEmail } from './mail.js';
 import { getSetting } from './families.js';
 
 // ---------- Roles ----------
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
-  coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
-  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) programs, goals, messages and lessons, and email an athlete their workout app link.'
+  coach: 'Coach: clients, schedule, testing, programs and point of sale, and the leads the owner gives them. No discounts, billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
+  front_desk: 'Front desk: check-ins, sales (no discounts), bookings, rosters, leads, adding clients and families, and entering test results. Can view (not change) programs, goals, messages and lessons, and email an athlete their workout app link.'
 };
 const OWNER_ONLY = [
-  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
-  /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/
+  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|api-status|webhooks|webhook-deliveries|outbox|texts|video-coverage|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
+  /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/clients\/:id\/(merge|merge-preview)$/, /^\/v1\/(membership-requests|profile-claims)(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
@@ -37,7 +37,8 @@ const FRONT_DESK = [
 // Front desk may look at clients, but sharing a progress report outside the business is for owners and coaches.
 const FRONT_DESK_DENY = [/^\/v1\/clients\/:id\/(report-links|report\/email)(\/|$)/];
 // Coaches take payments but never see the business's takings.
-const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
+// Owner decision: coaches work only the leads the owner gives them (leads.js filters them), so they don't add or delete leads.
+const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;
@@ -47,6 +48,15 @@ export function can(role, method, path) {
   if (role === 'coach') return !COACH_DENY.some(([m, re]) => m === method && re.test(path));
   if (role === 'front_desk') return !FRONT_DESK_DENY.some((re) => re.test(path)) && FRONT_DESK.some(([m, re]) => m === method && re.test(path));
   return false;
+}
+// API keys act for the owner on the routes an API key can use at all (auth 'any'), within their access level: read only
+// keys only read (GET), "read and send results" keys may also send test results and device files, and full-access keys
+// do everything. Anything unknown is treated as read only. Checked on every request in server.js.
+const RESULTS_WRITES = [['POST', /^\/v1\/results$/], ['POST', /^\/v1\/imports$/]];
+export function keyAllows(scope, method, path) {
+  if (scope === 'full') return true;
+  if (method === 'GET' || method === 'HEAD') return true;
+  return scope === 'results' && RESULTS_WRITES.some(([m, re]) => m === method && re.test(path));
 }
 // Coaches and front desk never see money. They take payments at the counter, so what the counter sells from (products,
 // stock, plans), sales and collecting for a booking keep their amounts (coaches only get their own sales; the iPhone app
@@ -65,23 +75,51 @@ export function hideMoney(role, method, path, out) {
 }
 // Activity that is only about money (memberships, refunds, school contracts) stays with the owner.
 export const OWNER_EVENTS = /^(invoice|subscription|team_invoice|team_contract|sale\.refunded)/;
+// Leads in the activity feed name families who asked about training: coaches see only the leads given to them, so none here.
+export const LEAD_EVENTS = /^lead\./;
 export const roleName = (r) => ({ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[r] ?? r);
 
 // ---------- Staff ----------
 const tempPassword = () => randomBytes(9).toString('base64url');             // 12 characters
+// What someone still leads: upcoming sessions, weekly classes (and camps, clinics, team sessions) and private or
+// evaluation hours. Shown before turning a coach off or moving them to front desk, and flagged while it isn't handed over.
+export function workload(ctx, userId) {
+  const now = ctx.now();
+  return {
+    sessions: ctx.db.get(`SELECT COUNT(*) AS n FROM class_sessions WHERE coach_id = ? AND status = 'scheduled' AND starts_at >= ?`, userId, now).n,
+    classes: ctx.db.get('SELECT COUNT(*) AS n FROM class_series WHERE coach_id = ? AND active = 1', userId).n,
+    hours: ctx.db.get('SELECT COUNT(*) AS n FROM availability WHERE coach_id = ?', userId).n,
+    booked_clients: ctx.db.get(`SELECT COUNT(DISTINCT b.client_id) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id
+      WHERE s.coach_id = ? AND s.status = 'scheduled' AND s.starts_at >= ? AND b.status IN ('booked','waitlisted')`, userId, now).n
+  };
+}
+const hasWork = (w) => w.sessions + w.classes + w.hours > 0;
 export function listStaff(ctx) {
-  return ctx.db.all('SELECT id, email, name, role, active, must_change_password, locked_until, last_login_at, created_at FROM users ORDER BY active DESC, role, name')
-    .map((u) => ({ ...u, active: !!u.active, must_change_password: !!u.must_change_password, locked: !!(u.locked_until && u.locked_until > ctx.now()) }));
+  const now = ctx.now();
+  return ctx.db.all(`SELECT id, email, name, role, active, must_change_password, locked_until, last_login_at, created_at,
+      (SELECT COUNT(*) FROM sessions s WHERE s.user_id = users.id AND s.expires_at > ?) AS devices FROM users ORDER BY active DESC, role, name`, now)
+    .map((u) => {
+      const work = workload(ctx, u.id);
+      return { ...u, active: !!u.active, must_change_password: !!u.must_change_password, locked: !!(u.locked_until && u.locked_until > now),
+        never_signed_in: !u.last_login_at, work, still_leading: (!u.active || u.role === 'front_desk') && hasWork(work) };
+    });
 }
 const activeOwners = (ctx) => ctx.db.get(`SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND active = 1`).n;
+// Emailed "forgot password" links still open for someone stop working when their password is set another way (an owner
+// reset, changing it themselves, a reset link used), their email changes or their account is turned off.
+export const cancelResets = (ctx, userId) => Number(ctx.db.run('UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL', ctx.now(), userId).changes);
+const staffAccountEmail = (ctx, { name, email, role, pw, baseUrl, again }) => sendEmail(ctx, { to: email, sensitive: true, secret: pw,
+  subject: `Your ${getSetting(ctx, 'business_name')} staff account`,
+  text: `Hi ${name.split(' ')[0]},\n\n${again ? 'Here is a new one-time password for your staff account' : `You've been added as ${roleName(role)}`}.\n\nSign in at ${baseUrl ?? ctx.publicUrl ?? ''}/ with:\nEmail: ${email}\nOne-time password: ${pw}\n\nYou'll choose your own password when you sign in.` });
 
 // New staff get a one-time password (shown once and emailed); they must choose their own on first sign-in.
 export async function addStaff(ctx, body, baseUrl) {
   const email = v.email(body.email), name = v.str(body.name, 'name', { max: 120 }), role = v.oneOf(body.role ?? 'coach', 'role', Object.keys(ROLES));
-  if (ctx.db.get('SELECT id FROM users WHERE email = ?', email)) throw conflict(`${email} already has a staff account.`);
+  const existing = ctx.db.get('SELECT id, name, active FROM users WHERE email = ?', email);
+  if (existing) throw Object.assign(conflict(existing.active ? `${email} already has a staff account.` : `${existing.name}'s turned-off account uses ${email}. Turn their account back on instead.`), { details: { user_id: existing.id, active: !!existing.active } });
   const pw = tempPassword(), id = newId('usr');
   ctx.db.run('INSERT INTO users (id, email, name, password_hash, role, active, must_change_password, created_at) VALUES (?, ?, ?, ?, ?, 1, 1, ?)', id, email, name, hashPassword(pw), role, ctx.now());
-  await sendEmail(ctx, { to: email, subject: `Your ${getSetting(ctx, 'business_name')} staff account`, text: `Hi ${name.split(' ')[0]},\n\nYou've been added as ${roleName(role)}.\n\nSign in at ${baseUrl ?? ctx.publicUrl ?? ''}/ with:\nEmail: ${email}\nOne-time password: ${pw}\n\nYou'll choose your own password when you sign in.` });
+  await staffAccountEmail(ctx, { name, email, role, pw, baseUrl });
   return { ...listStaff(ctx).find((u) => u.id === id), temporary_password: pw };
 }
 export function updateStaff(ctx, id, body, actor) {
@@ -89,30 +127,55 @@ export function updateStaff(ctx, id, body, actor) {
   if (!u) throw notFound('Staff member');
   const role = body.role !== undefined ? v.oneOf(body.role, 'role', Object.keys(ROLES)) : u.role;
   const active = body.active !== undefined ? !!body.active : !!u.active;
-  if (u.role === 'owner' && u.active && (role !== 'owner' || !active) && activeOwners(ctx) <= 1) throw conflict('There has to be at least one active owner.');
-  if (actor?.id === id && !active) throw conflict('You can\'t deactivate your own account.');
-  ctx.db.run('UPDATE users SET name = ?, role = ?, active = ?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END, failed_logins = CASE WHEN ? THEN 0 ELSE failed_logins END WHERE id = ?',
-    body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : u.name, role, active ? 1 : 0, body.unlock ? 1 : 0, body.unlock ? 1 : 0, id);
-  if (!active || role !== u.role) ctx.db.run('DELETE FROM sessions WHERE user_id = ?', id);       // takes effect immediately
+  const email = body.email !== undefined ? v.email(body.email) : u.email;
+  const emailChanged = email.toLowerCase() !== u.email.toLowerCase();
+  if (emailChanged && ctx.db.get('SELECT id FROM users WHERE email = ? AND id != ?', email, id)) throw conflict(`${email} already has a staff account.`);
+  if (u.role === 'owner' && u.active && (role !== 'owner' || !active) && activeOwners(ctx) <= 1) throw conflict('There has to be at least one active owner. Make someone else an owner first.');
+  if (actor?.id === id && !active) throw conflict('You can\'t turn off your own account. Ask another owner.');
+  if (actor?.id === id && role !== u.role) throw conflict('You can\'t change your own role. Ask another owner.');
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE users SET name = ?, email = ?, role = ?, active = ?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END, failed_logins = CASE WHEN ? THEN 0 ELSE failed_logins END WHERE id = ?',
+      body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : u.name, email, role, active ? 1 : 0, body.unlock ? 1 : 0, body.unlock ? 1 : 0, id);
+    if (!active || role !== u.role) ctx.db.run('DELETE FROM sessions WHERE user_id = ?', id);       // takes effect immediately
+    if (!active || emailChanged) cancelResets(ctx, id);                                             // a link sent to the old address stops working
+  });
   return listStaff(ctx).find((x) => x.id === id);
 }
+// A new one-time password, emailed (and shown once to the owner). Signs them out everywhere and cancels any emailed
+// reset link, so an owner's reset of a lost or shared account always wins. For someone who never signed in it's
+// "Resend invite".
 export async function resetStaffPassword(ctx, id, baseUrl) {
   const u = ctx.db.get('SELECT * FROM users WHERE id = ?', id);
   if (!u) throw notFound('Staff member');
+  if (!u.active) throw conflict(`${u.name}'s account is turned off. Turn it on first.`);
+  const invite = !u.last_login_at;
   const pw = tempPassword();
-  ctx.db.run('UPDATE users SET password_hash = ?, must_change_password = 1, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(pw), id);
-  ctx.db.run('DELETE FROM sessions WHERE user_id = ?', id);
-  await sendEmail(ctx, { to: u.email, subject: 'Your password was reset', text: `Your one-time password is ${pw}. Sign in at ${baseUrl ?? ctx.publicUrl ?? ''}/ and choose a new one.` });
-  return { id, temporary_password: pw };
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE users SET password_hash = ?, must_change_password = 1, failed_logins = 0, locked_until = NULL WHERE id = ?', hashPassword(pw), id);
+    ctx.db.run('DELETE FROM sessions WHERE user_id = ?', id);
+    cancelResets(ctx, id);
+  });
+  await staffAccountEmail(ctx, { name: u.name, email: u.email, role: u.role, pw, baseUrl, again: true });
+  return { id, temporary_password: pw, invite };
 }
+export const passwordChangedEmail = (ctx, u, how) => sendEmail(ctx, { to: u.email, subject: `Your ${getSetting(ctx, 'business_name')} password was changed`,
+  text: `Hi ${u.name.split(' ')[0]},\n\nThe password for ${u.email} was changed ${how}. Your other devices were signed out.\n\nIf this wasn't you, ask an owner to reset your password straight away.` }).catch(() => {});
+// Changing your own password needs the current one, signs out your other devices (not this one), cancels any emailed
+// reset link and emails you that it happened.
 export function changePassword(ctx, user, body) {
   const u = ctx.db.get('SELECT * FROM users WHERE id = ?', user.id);
   if (!verifyPassword(String(body.current_password ?? ''), u.password_hash)) throw new HttpError(400, 'invalid_request', 'Your current password is wrong.');
   const pw = v.str(body.new_password, 'new_password', { max: 200 });
   if (pw.length < 10) throw badRequest('Use at least 10 characters.');
   if (pw === body.current_password) throw badRequest('Choose a different password.');
-  ctx.db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', hashPassword(pw), u.id);
-  return { ok: true };
+  let signedOut = 0;
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', hashPassword(pw), u.id);
+    signedOut = Number((user.session_id ? ctx.db.run('DELETE FROM sessions WHERE user_id = ? AND (id IS NULL OR id != ?)', u.id, user.session_id) : ctx.db.run('DELETE FROM sessions WHERE user_id = ?', u.id)).changes);
+    cancelResets(ctx, u.id);
+  });
+  if (!u.must_change_password) passwordChangedEmail(ctx, u, 'from your account page');     // not for choosing a first password
+  return { ok: true, signed_out: signedOut };
 }
 
 // ---------- Connection check (owner, Staff & security) ----------
@@ -159,12 +222,64 @@ export function audit(ctx, e) {
       newId('aud'), new Date().toISOString(), e.actor_type, e.actor_id ?? null, e.actor_name ?? null, e.role ?? null, e.action, e.target ?? null, e.status ?? null, e.ip ?? null);
   } catch (err) { console.error('audit', err.message); }
 }
-export function listAudit(ctx, q = {}) {
+// Filters shared by the activity log and its CSV export:
+//   who (staff, api_key, parent, public, system), staff_id (that person's own actions, plus sign-ins and reset requests
+//   typed with their email), actor_id, target, kind (sign_ins, refused, failures), failures=true, since and until
+//   (YYYY-MM-DD, whole days in the business time zone) and q (name, record, address, or the plain-English description:
+//   actions lists the log actions whose description matches, worked out by routes.js).
+const AUDIT_WHO = ['staff', 'api_key', 'parent', 'athlete', 'public', 'system'];
+const SIGN_IN_ACTIONS = ['sign-in', 'POST /auth/forgot', 'POST /auth/reset'];
+function auditWhere(ctx, q) {
   const where = [], p = [];
+  if (q.who) {
+    if (!AUDIT_WHO.includes(q.who)) throw badRequest(`who must be one of: ${AUDIT_WHO.join(', ')}.`);
+    where.push('actor_type = ?'); p.push(q.who);
+  }
+  if (q.staff_id) {
+    const u = ctx.db.get('SELECT id, email FROM users WHERE id = ?', q.staff_id);
+    if (!u) throw notFound('Staff member');
+    where.push(`((actor_type = 'staff' AND actor_id = ?) OR (actor_type = 'public' AND action IN (${SIGN_IN_ACTIONS.map(() => '?').join(', ')}) AND actor_name = ? COLLATE NOCASE))`);
+    p.push(u.id, ...SIGN_IN_ACTIONS, u.email);
+  }
   if (q.actor_id) { where.push('actor_id = ?'); p.push(q.actor_id); }
   if (q.target) { where.push('target = ?'); p.push(q.target); }
-  if (q.failures === 'true') where.push('status >= 400');
-  return ctx.db.all(`SELECT * FROM audit_log ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY at DESC LIMIT ?`, ...p, Math.min(Number(q.limit) || 200, 1000));
+  if (q.failures === 'true' || q.kind === 'failures') where.push('status >= 400');
+  if (q.kind === 'sign_ins') { where.push(`action IN (${SIGN_IN_ACTIONS.map(() => '?').join(', ')})`); p.push(...SIGN_IN_ACTIONS); }
+  else if (q.kind === 'refused') where.push('status = 403');
+  else if (q.kind && q.kind !== 'failures') throw badRequest('kind must be sign_ins, refused or failures.');
+  const zone = getSetting(ctx, 'timezone');
+  const day = (x, name) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(x)) || Number.isNaN(Date.parse(x))) throw badRequest(`${name} must be a date like 2026-09-01.`); return x; };
+  if (q.since) { where.push('at >= ?'); p.push(zonedToUtc(day(q.since, 'since'), '00:00', zone)); }
+  if (q.until) { where.push('at < ?'); p.push(zonedToUtc(addDaysToDate(day(q.until, 'until'), 1), '00:00', zone)); }
+  const text = String(q.q ?? '').trim().slice(0, 100);
+  if (text) {
+    const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const actions = (q.actions ?? []).slice(0, 500);
+    where.push(`(actor_name LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR ip LIKE ? ESCAPE '\\' OR action LIKE ? ESCAPE '\\'${actions.length ? ` OR action IN (${actions.map(() => '?').join(', ')})` : ''})`);
+    p.push(like, like, like, like, ...actions);
+  }
+  return { sql: where.length ? `WHERE ${where.join(' AND ')}` : '', p };
+}
+export function listAudit(ctx, q = {}) {
+  const { sql, p } = auditWhere(ctx, q);
+  const limit = Math.min(Math.max(Number(q.limit) || 200, 1), 1000), offset = Math.max(Math.floor(Number(q.offset)) || 0, 0);
+  return ctx.db.all(`SELECT * FROM audit_log ${sql} ORDER BY at DESC, rowid DESC LIMIT ? OFFSET ?`, ...p, limit, offset);
+}
+export function countAudit(ctx, q = {}) {
+  const { sql, p } = auditWhere(ctx, q);
+  return ctx.db.get(`SELECT COUNT(*) AS n FROM audit_log ${sql}`, ...p).n;
+}
+// A spreadsheet cell that starts with = + - @ (or a tab or carriage return) could run as a formula when opened, so it
+// gets a leading apostrophe (also after leading spaces, which some spreadsheets skip); every cell is quoted.
+export const csvCell = (x) => { let t = x == null ? '' : String(x); if (/^[\s]*[=+\-@]|^[\t\r]/.test(t)) t = `'${t}`; return `"${t.replace(/"/g, '""')}"`; };
+export function auditCsv(ctx, q, describe) {
+  const { sql, p } = auditWhere(ctx, q);
+  const zone = getSetting(ctx, 'timezone');
+  const local = (iso) => { const d = new Date(iso); return `${localDate(iso, zone)} ${new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d)}`; };
+  const rows = ctx.db.all(`SELECT * FROM audit_log ${sql} ORDER BY at DESC, rowid DESC LIMIT 20000`, ...p);
+  const lines = [['When (UTC)', `When (${zone})`, 'Who', 'Kind', 'Role', 'What', 'Record', 'Result', 'From'].map(csvCell).join(',')]
+    .concat(rows.map((a) => [a.at, local(a.at), a.actor_name ?? '', a.actor_type, a.role ? roleName(a.role) : '', describe(a), a.target ?? '', a.status ?? '', a.ip ?? ''].map(csvCell).join(',')));
+  return { csv: `${lines.join('\r\n')}\r\n`, count: rows.length };
 }
 
 // ---------- Rate limits (per server, in memory) ----------

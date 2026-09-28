@@ -4,6 +4,7 @@ import { payerFor, getSetting } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
+import { notifyFamily } from './mail.js';
 import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
 
@@ -140,8 +141,10 @@ async function ensureCustomer(ctx, payer) {
   payer.stripe_customer_id = id;
   return id;
 }
-function saveCard(ctx, payer, { paymentMethod, brand, last4 }) {
-  ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, payer.id);
+// The card's expiry as YYYY-MM (Stripe gives the month and the 4-digit year), or null when it isn't known.
+export const cardExp = (month, year) => (Number.isInteger(Number(month)) && Number(month) >= 1 && Number(month) <= 12 && /^\d{4}$/.test(String(year ?? '')) ? `${year}-${String(Number(month)).padStart(2, '0')}` : null);
+function saveCard(ctx, payer, { paymentMethod, brand, last4, expMonth, expYear }) {
+  ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ?, card_exp = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, paymentMethod ? cardExp(expMonth, expYear) : null, payer.id);
   emit(ctx, 'client.card_updated', { [payer.metadataKey]: payer.id, client_name: payer.name, card_brand: paymentMethod ? brand ?? null : null, card_last4: paymentMethod ? last4 ?? null : null });
 }
 const payerById = (ctx, table, id) => {
@@ -171,13 +174,15 @@ export async function addTestCard(ctx, clientId) {
 }
 // A new card pays any membership payment that failed on the old one.
 const retryFailed = (ctx, payer) => retryWithNewCard(ctx, payer.table === 'families' ? { familyId: payer.id } : { clientId: payer.id }).catch((e) => console.error('retry', e.message));
+// Take a payer's card off file (the family card, or a client paying for themselves).
+export function clearCard(ctx, payer) { saveCard(ctx, payer, {}); }
 export function removeCard(ctx, clientId) {
   saveCard(ctx, payerFor(ctx, clientId), {});
   return cardSummary(ctx, clientId);
 }
 export function cardSummary(ctx, clientId) {
   const p = payerFor(ctx, clientId);
-  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
+  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
 }
 
 // ---------- Session credits and check-ins ----------
@@ -285,7 +290,8 @@ export function listSales(ctx, { since, days, q, locationId, clientId, status, c
 }
 
 // A discount on the whole sale: a percent (1 to 100) or an amount off, always with a reason, and never the whole sale.
-// Owners give any discount; coaches and front desk up to the owner's limit (staff_discount_max_pct; 0 = owners only).
+// Owners give any discount. Owner decision: coaches and front desk give none (staff_discount_max_pct is 0 unless the
+// owner raises it in Point of sale setup; then up to that percent).
 function parseDiscount(ctx, d, subtotal, role) {
   if (d === undefined || d === null) return { cents: 0, reason: null };
   if (typeof d !== 'object' || Array.isArray(d)) throw badRequest('discount must be { type: "percent" or "amount", value, reason }.');
@@ -298,7 +304,7 @@ function parseDiscount(ctx, d, subtotal, role) {
   if (cents >= subtotal) throw badRequest(`A discount has to leave something to pay. The sale is ${money(subtotal)} before the discount.`);
   if (role && role !== 'owner') {
     const max = Number(getSetting(ctx, 'staff_discount_max_pct'));
-    if (!(max > 0)) throw new HttpError(403, 'forbidden', 'Only the owner can give discounts. Ask the owner, who can allow them in Point of sale setup.');
+    if (!(max > 0)) throw new HttpError(403, 'forbidden', 'Only the owner can give discounts. Ask the owner.');
     if (pct ? pct > max : cents * 100 > subtotal * max) throw new HttpError(403, 'forbidden', `You can give up to ${max}% off (${money(Math.floor(subtotal * max / 100))} on this sale). Ask the owner for a bigger discount.`);
   }
   return { cents, reason };
@@ -669,7 +675,7 @@ export async function handleStripeEvent(ctx, event) {
     if (s) await syncSale(ctx, s.id);
     // Membership renewals: a charge approved or failed after the renewal ran.
     else if (obj.metadata?.invoice_id && ['payment_intent.succeeded', 'payment_intent.payment_failed'].includes(event.type)) {
-      await reconcileInvoicePayment(ctx, obj.metadata.invoice_id, { ref: obj.id, succeeded: event.type === 'payment_intent.succeeded', error: obj.last_payment_error?.message });
+      await reconcileInvoicePayment(ctx, obj.metadata.invoice_id, { ref: obj.id, attemptId: obj.metadata.charge_attempt_id, succeeded: event.type === 'payment_intent.succeeded', error: obj.last_payment_error?.message });
     }
   } else if (event.type === 'charge.refunded') {
     // A sale's payment, or else a membership payment (billing.js keeps membership refunds in step the same way).
@@ -683,14 +689,19 @@ export async function handleStripeEvent(ctx, event) {
     // The bank reissued the card (new number or expiry): keep the label on file right. Renewals keep working either way.
     for (const table of ['families', 'clients']) {
       const row = ctx.db.get(`SELECT id FROM ${table} WHERE card_payment_method = ?`, obj.id);
-      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4 }); }
+      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4, expMonth: obj.card?.exp_month, expYear: obj.card?.exp_year }); }
     }
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
     const info = await ctx.payments.getSetupSession(obj.id);
     const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
-    if (payer && info.paymentMethod) { saveCard(ctx, payer, info); await retryFailed(ctx, payer); }
+    if (payer && info.paymentMethod) {
+      saveCard(ctx, payer, info);
+      // Every parent hears about a new family card (the one who saved it too: the card page doesn't say who it was).
+      if (payer.table === 'families') notifyFamily(ctx, payer.id, 'A card was saved to your family account', `A card ending ${info.last4 ?? ''} was saved to your family account. It pays for memberships, packs, camps and drop-ins.\n\nNot you? Reply to this email.\n\n${getSetting(ctx, 'business_name')}`);
+      await retryFailed(ctx, payer);
+    }
   }
   return { received: true };
 }

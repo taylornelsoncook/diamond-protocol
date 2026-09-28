@@ -19,6 +19,9 @@ import { createUser } from './services/access.js';
 import * as engage from './services/engage.js';
 import * as inventory from './services/inventory.js';
 import * as shop from './services/shop.js';
+import * as leads from './services/leads.js';
+import * as profiles from './services/profiles.js';
+import * as portal from './services/portal.js';
 import { addDays, newId } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -150,7 +153,7 @@ await schedule.createSeries(ctx, { name: 'QB & Receiver Clinic', kind: 'clinic',
 // Privates: Riley's at the facility and the park (whatever Riley leads anywhere blocks them), the head coach's on Tue/Thu.
 for (const d of [1, 3, 5]) schedule.addAvailability(ctx, { kind: 'private', location_id: facility.id, weekday: d, start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: riley.id });
 for (const d of [2, 4]) schedule.addAvailability(ctx, { kind: 'private', location_id: facility.id, weekday: d, start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: headCoach.id });
-schedule.addAvailability(ctx, { kind: 'private', location_id: park.id, weekday: 6, start_time: '08:00', end_time: '11:00', slot_minutes: 60, coach_id: riley.id });
+schedule.addAvailability(ctx, { kind: 'private', location_id: park.id, weekday: 6, start_time: '08:00', end_time: '11:00', slot_minutes: 60, coach_id: riley.id, confirm: true });   // around Riley's 9:00 class there (a coach clash warning, saved anyway)
 schedule.addAvailability(ctx, { kind: 'evaluation', location_id: facility.id, weekday: 6, start_time: '11:00', end_time: '13:00', slot_minutes: 60, price_cents: 7500, coach_id: headCoach.id });
 // Riley is off one day next week (their privates that day aren't offered), and the facility closes for a holiday.
 const nextFriday = addDaysToDate(today, ((5 - new Date(`${today}T12:00:00Z`).getUTCDay() + 7) % 7) + 7);
@@ -161,11 +164,12 @@ const next = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now
 if (next) { await schedule.book(ctx, { sessionId: next.id, clientId: cole.id, isCoach: true }); await schedule.book(ctx, { sessionId: next.id, clientId: nguyen.id, isCoach: true, overrideAge: true }); }
 // The head coach subs for Riley on the second Speed & Agility session.
 const second = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now() + 14 * 86400000).toISOString(), kind: 'group' }).filter((x) => x.series_id === speed.id)[1];
-if (second) schedule.updateSession(ctx, second.id, { coach_id: headCoach.id });
+if (second) schedule.updateSession(ctx, second.id, { coach_id: headCoach.id, confirm: true });
 // Jordan's younger group (so three coaches have classes this week), a private Riley has booked, and last week's
-// sessions with check-ins, so Today's Coaches panel has attendance to show.
-await schedule.createSeries(ctx, { coach_id: jordan.id, name: 'Youth Foundations', kind: 'group', location_id: facility.id, weekdays: [2, 5], start_time: '16:30', duration_min: 60, capacity: 10, age_min: 7, age_max: 11, drop_in_cents: 2000, start_date: today, description: 'Running form, jumping and landing, and games for younger athletes.' });
-const colePrivate = await schedule.createSession(ctx, { name: 'Private: Cole Park', kind: 'private', location_id: facility.id, date: addDaysToDate(today, 2), start_time: '10:00', duration_min: 60, coach_id: riley.id, drop_in_cents: 8000 });
+// sessions with check-ins, so Today's Coaches panel has attendance to show. The days off above can fall on these
+// (depending on today's weekday): coach clashes are only warnings, so the sample data saves anyway (confirm).
+await schedule.createSeries(ctx, { confirm: true, coach_id: jordan.id, name: 'Youth Foundations', kind: 'group', location_id: facility.id, weekdays: [2, 5], start_time: '16:30', duration_min: 60, capacity: 10, age_min: 7, age_max: 11, drop_in_cents: 2000, start_date: today, description: 'Running form, jumping and landing, and games for younger athletes.' });
+const colePrivate = await schedule.createSession(ctx, { confirm: true, name: 'Private: Cole Park', kind: 'private', location_id: facility.id, date: addDaysToDate(today, 2), start_time: '10:00', duration_min: 60, coach_id: riley.id, drop_in_cents: 8000 });
 await schedule.book(ctx, { sessionId: colePrivate.id, clientId: cole.id, isCoach: true });
 const benLopez = ctx.db.get(`SELECT id FROM clients WHERE name = 'Ben Lopez'`).id;
 for (const [name, coachId, daysAgo, who] of [['Speed & Agility', riley.id, 5, [[lopez.id, 'attended'], [cole.id, 'attended'], [nguyen.id, 'no_show']]], ['High School Strength', headCoach.id, 4, [[nguyen.id, 'attended'], [cole.id, 'attended']]],
@@ -339,9 +343,74 @@ for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], 
   });
 }
 
+// Two families who asked about training: one the owner gave to Riley (coaches see only the leads given to them), one not.
+{
+  const quiet = { ...ctx, publicUrl: '' };
+  const given = await leads.addLead(quiet, { parent_name: 'Tanya Brooks', email: 'tanya.brooks@example.com', athlete_name: 'Jalen Brooks', athlete_age: 13, sport: 'Football', source: 'event', follow_up: false }, { name: 'Sample data' });
+  ctx.db.run('UPDATE leads SET coach_id = ? WHERE id = ?', riley.id, given.id);
+  await leads.addLead(quiet, { parent_name: 'Omar Haddad', phone: '(512) 555-0142', athlete_name: 'Sami Haddad', athlete_age: 11, sport: 'Soccer', source: 'phone', follow_up: false }, { name: 'Sample data' });
+}
+// Parent portal (batches B12 and B13). The Jensen family: two kids, card (expiring next month) and waiver on file, booked
+// into classes, with a pack bought. Luke Jensen was already on the Westlake roster (team only, no birthday on file), so the
+// parent's Athlete ID can't be checked: the owner is asked to merge the two profiles. The Silva family has no card or
+// waiver yet. Mia Nguyen's family card declines, so her membership is past due. A Winter retest is planned.
+teams.addRoster(ctx, westlake.id, { names: 'Luke Jensen, P, 2030' });
+const lukeTeam = ctx.db.get(`SELECT id, athlete_id FROM clients WHERE name = 'Luke Jensen'`);
+const jensen = await clients.createClient(ctx, { name: 'Luke Jensen', birth_date: '2012-08-14', sex: 'M', sport: 'Baseball', emergency_name: 'Anna Jensen', emergency_phone: '(512) 555-0161', parent: { name: 'Kurt Jensen', email: 'kurt.jensen@example.com', phone: '(512) 555-0160' }, send_welcome: false });
+const lily = await clients.createClient(ctx, { name: 'Lily Jensen', birth_date: '2014-11-02', sex: 'F', sport: 'Soccer', family_id: jensen.family.id, send_welcome: false });
+{
+  const kurt = ctx.db.get('SELECT * FROM guardians WHERE family_id = ?', jensen.family.id);
+  const tried = profiles.tryClaim(ctx, { code: lukeTeam.athlete_id, name: 'Luke Jensen', birthDate: '2012-08-14', familyId: jensen.family.id, guardian: kurt });
+  profiles.fileClaim(ctx, { code: lukeTeam.athlete_id, familyId: jensen.family.id, guardian: kurt, claim: tried, newClientId: jensen.id });
+}
+await commerce.addTestCard(ctx, jensen.id);
+{
+  const d = new Date(); d.setUTCMonth(d.getUTCMonth() + 1);
+  ctx.db.run(`UPDATE families SET waiver_version = 1, waiver_signed_by = 'Kurt Jensen <kurt.jensen@example.com>', waiver_signed_at = ?, card_exp = ? WHERE id = ?`, ctx.now(), d.toISOString().slice(0, 7), jensen.family.id);
+}
+await sell({ location_id: facility.id, method: 'card_on_file', client_id: jensen.id, items: [{ product_id: groupPack.id }] });
+{
+  const soon = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now() + 14 * 86400000).toISOString(), kind: 'group' });
+  const speedNext = soon.find((x) => x.series_id === speed.id), youth = soon.find((x) => x.name === 'Youth Foundations');
+  if (speedNext) await schedule.book(ctx, { sessionId: speedNext.id, clientId: jensen.id, actor: 'seed' });
+  if (youth) await schedule.book(ctx, { sessionId: youth.id, clientId: lily.id, isCoach: true });
+}
+const silva = await clients.createClient(ctx, { name: 'Rafa Silva', birth_date: '2013-05-20', sport: 'Soccer', parent: { name: 'Paulo Silva', email: 'paulo.silva@example.com', phone: '(512) 555-0170' }, send_welcome: false });
+void silva;
+ctx.db.run(`UPDATE families SET card_status = 'declining' WHERE id = ?`, nguyen.family.id);
+await billing.subscribe(ctx, nguyen.id, groupPlan.id);
+perf.createSession(ctx, { name: 'Winter retest', date: addDaysToDate(today, 21), tests: ['height', 'weight', 'dash_40yd', 'vertical_standing', 'broad_jump'], athletes: [{ client_id: lopez.id }, { client_id: jensen.id }, { client_id: lily.id }] });
+// Maria asked to pause Ava's membership over the holidays (it shows on Ava's client page for the owner).
+portal.requestMembershipChange(ctx, ctx.db.get(`SELECT * FROM guardians WHERE email = 'maria.lopez@example.com'`), lopez.id, { kind: 'pause', note: 'We travel for three weeks in December.' });
+// ---- API & integrations and Staff & security (batch B14) ----
+{
+  // A coach who left: turned off but still holding a block of private hours, so Staff & security flags "Hand over".
+  const sam = createUser(ctx, { email: 'sam@diamondprotocol.local', name: 'Sam Ortiz', password, role: 'coach' });
+  const place = ctx.db.get('SELECT id FROM locations WHERE active = 1 ORDER BY created_at LIMIT 1');
+  if (place) ctx.db.run(`INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, coach_id, created_at) VALUES (?, 'private', ?, 6, '09:00', '11:00', 60, ?, ?)`, newId('av'), place.id, sam.id, ctx.now());
+  ctx.db.run('UPDATE users SET active = 0, last_login_at = ? WHERE id = ?', addDays(ctx.now(), -40), sam.id);
+  // Two API keys with a month of requests: timing gates that send results, and a read-only website widget.
+  const key = (label, scope) => { const id = newId('key'); ctx.db.run('INSERT INTO api_keys (id, label, prefix, key_hash, created_at, scope, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, label, `dp_live_${id.slice(-4)}`, `demo-${id}`, addDays(ctx.now(), -30), scope, addDays(ctx.now(), -0.1)); return id; };
+  const gates = key('Timing gates (Freelap)', 'results'), site = key('Website schedule widget', 'read');
+  const reqs = [[gates, 'POST', '/v1/results', 201], [gates, 'GET', '/v1/tests', 200], [site, 'GET', '/v1/schedule', 200], [site, 'GET', '/v1/slots', 200]];
+  for (let i = 0; i < 40; i++) {
+    const [k, m, p, s] = reqs[i % reqs.length];
+    ctx.db.run('INSERT INTO api_requests (id, key_id, at, method, path, status, duration_ms, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('req'), k, addDays(ctx.now(), -i * 0.6), m, p, s, 20 + (i * 7) % 60, '203.0.113.24');
+  }
+  ctx.db.run('INSERT INTO api_requests (id, key_id, at, method, path, status, duration_ms, ip, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', newId('req'), site, addDays(ctx.now(), -2), 'POST', '/v1/slots/book', 403, 4, '203.0.113.24',
+    'This API key is read only. Ask the owner for a key that can send data.');
+  // A paused webhook with a delivered and a failed send (paused, so the demo never sends anything out).
+  const hook = newId('whe');
+  ctx.db.run(`INSERT INTO webhook_endpoints (id, url, secret, events, active, created_at, label, failures) VALUES (?, 'https://hooks.zapier.com/hooks/catch/000000/demo/', ?, '["client.created","booking.created","sale.completed"]', 0, ?, 'Zapier (CRM)', 1)`,
+    hook, `whsec_demo${newId('x').slice(-8)}`, addDays(ctx.now(), -20));
+  const evs = ctx.db.all(`SELECT id, type, created_at FROM events WHERE type IN ('client.created','booking.created') ORDER BY created_at DESC LIMIT 2`);
+  evs.forEach((e, i) => ctx.db.run(`INSERT INTO webhook_deliveries (id, endpoint_id, event_id, event_type, status, attempts, response_code, last_error, created_at, last_attempt_at, duration_ms, response_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    newId('whd'), hook, e.id, e.type, i ? 'failed' : 'succeeded', i ? 6 : 1, i ? 500 : 200, i ? 'The receiver answered 500.' : null, e.created_at, e.created_at, i ? 812 : 143, i ? 'Internal Server Error' : '{"status":"success"}'));
+}
+
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);
-console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com; in test mode the code is shown on screen)`);
+console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com, kurt.jensen@example.com (two kids), linh.nguyen@example.com (card declining) or paulo.silva@example.com (no card or waiver yet); in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
 console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);
 ctx.db.close();

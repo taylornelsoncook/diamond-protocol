@@ -66,6 +66,77 @@ function coachInput(ctx, x) {
   return u.id;
 }
 
+// ---------- Coach double-booking ----------
+// Owner decision: giving a coach (or a sub) a session, moving a session, changing a class's coach, time or days, and giving
+// a coach hours for privates first check that coach's other sessions at overlapping times (at any place) and their days
+// off (their own and the facility's). Anything found is a warning, not a refusal: the save is refused with 409
+// coach_conflict and details.warnings until it's sent again with confirm: true ("Save anyway").
+const WARN_LIMIT = 20;
+function coachWarnings(ctx, coachId, slots, { excludeIds = [], excludeSeries = null, skip = null } = {}) {
+  if (!coachId || !slots.length) return [];
+  const zone = tz(ctx), out = [], seen = new Set();
+  const from = slots.reduce((m, x) => (x.starts_at < m ? x.starts_at : m), slots[0].starts_at), to = slots.reduce((m, x) => (x.ends_at > m ? x.ends_at : m), slots[0].ends_at);
+  const theirs = ctx.db.all(`SELECT s.id, s.name, s.kind, s.series_id, s.location_id, s.starts_at, s.ends_at, l.name AS location_name FROM class_sessions s JOIN locations l ON l.id = s.location_id
+    WHERE s.coach_id = ? AND s.status = 'scheduled' AND s.starts_at < ? AND s.ends_at > ? AND s.ends_at > ?`, coachId, to, from, ctx.now())
+    .filter((x) => !excludeIds.includes(x.id) && !(excludeSeries && x.series_id === excludeSeries) && !(skip && skip(x)));
+  const off = ctx.db.all(`SELECT id, user_id, start_date, end_date, note FROM time_off WHERE (user_id = ? OR user_id IS NULL) AND end_date >= ? AND start_date <= ?`, coachId, localDate(from, zone), localDate(to, zone));
+  for (const slot of slots) {
+    for (const x of theirs) {
+      if (!(x.starts_at < slot.ends_at && x.ends_at > slot.starts_at) || seen.has(`s:${x.id}`)) continue;
+      seen.add(`s:${x.id}`);
+      out.push({ kind: 'session', session_id: x.id, name: x.name, starts_at: x.starts_at, ends_at: x.ends_at, location_name: x.location_name, at: slot.starts_at,
+        message: `Already leads ${x.name} ${when(ctx, x.starts_at)} at ${x.location_name}.` });
+    }
+    const day = localDate(slot.starts_at, zone);
+    for (const t of off) {
+      if (t.start_date > day || t.end_date < day || seen.has(`t:${t.id}`)) continue;
+      seen.add(`t:${t.id}`);
+      const span = t.start_date === t.end_date ? t.start_date : `${t.start_date} to ${t.end_date}`;
+      out.push({ kind: 'time_off', time_off_id: t.id, facility: !t.user_id, start_date: t.start_date, end_date: t.end_date, note: t.note ?? null, at: slot.starts_at,
+        message: `${t.user_id ? 'Is off' : 'The facility is closed'} ${span}${t.note ? ` (${t.note})` : ''}, and ${when(ctx, slot.starts_at)} falls then.` });
+    }
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}
+function confirmCoach(ctx, coachId, warnings, body) {
+  if (!warnings.length || body?.confirm === true) return;
+  const name = ctx.db.get('SELECT name FROM users WHERE id = ?', coachId)?.name ?? 'This coach';
+  const list = warnings.slice(0, WARN_LIMIT);
+  const e = new HttpError(409, 'coach_conflict', `${name}: ${list.slice(0, 3).map((w) => w.message.replace(/\.$/, '')).join('; ')}${warnings.length > 3 ? `; and ${plural(warnings.length - 3, 'more clash', 'more clashes')}` : ''}. Save anyway with confirm: true, or pick another coach or time.`);
+  e.details = { coach: { id: coachId, name }, warnings: list, total: warnings.length };
+  throw e;
+}
+// Handing a coach's sessions to someone else (staff.js handOver): which of them clash for the new coach, by the same rules
+// as every other coach change here (their other sessions at overlapping times, any place, and their days off or the
+// facility's). Each clashing session with its warnings; the hand-over answers 409 coach_conflict like confirmCoach.
+export function handOverClashes(ctx, coachId, sessions) {
+  const ids = sessions.map((x) => x.id), out = [];
+  for (const x of sessions) {
+    const w = coachWarnings(ctx, coachId, [{ starts_at: x.starts_at, ends_at: x.ends_at }], { excludeIds: ids });
+    if (!w.length) continue;
+    out.push({ id: x.id, name: x.name, starts_at: x.starts_at, ends_at: x.ends_at, clash_id: w[0].session_id ?? null,
+      clash_name: w[0].kind === 'session' ? w[0].name : w[0].facility ? 'the facility closed' : 'a day off', warnings: w,
+      message: `${x.name} ${when(ctx, x.starts_at)}: ${w.map((y) => y.message.replace(/\.$/, '')).join('; ')}.` });
+  }
+  return out;
+}
+export function handOverConflict(ctx, coach, clashes, fromName) {
+  const e = new HttpError(409, 'coach_conflict', `${coach.name} is busy for ${clashes.length === 1 ? clashes[0].name : `${clashes.length} of these sessions`}: ${clashes.slice(0, 3).map((c) => c.message.replace(/\.$/, '')).join('; ')}${clashes.length > 3 ? '; and more' : ''}. Hand over anyway with confirm: true, leave ${clashes.length === 1 ? 'it' : 'them'} with ${fromName} for now (leave_conflicts: true), or choose someone else.`);
+  e.details = { coach: { id: coach.id, name: coach.name }, warnings: clashes.slice(0, WARN_LIMIT).map((c) => ({ kind: 'hand_over', session_id: c.id, name: c.name, starts_at: c.starts_at, message: c.message })), total: clashes.length, conflicts: clashes };
+  return e;
+}
+// Where a class would put sessions from start to its end date or the scheduling horizon, on class days not already taken.
+function plannedDays(ctx, s, taken = new Set()) {
+  const zone = tz(ctx), today = localDate(ctx.now(), zone), horizon = addDaysToDate(today, HORIZON_DAYS);
+  const days = JSON.parse(s.weekdays), last = s.end_date && s.end_date < horizon ? s.end_date : horizon, out = [];
+  for (let d = s.start_date > today ? s.start_date : today; d <= last; d = addDaysToDate(d, 1)) {
+    if (!days.includes(weekdayOf(d)) || taken.has(d)) continue;
+    const starts = zonedToUtc(d, s.start_time, zone);
+    if (starts > ctx.now()) out.push({ starts_at: starts, ends_at: new Date(Date.parse(starts) + s.duration_min * 60000).toISOString() });
+  }
+  return out;
+}
+
 // ---------- Series (recurring classes, camps, clinics, team sessions) ----------
 function seriesInput(body, cur = {}) {
   const pick = (k, fn) => (body[k] !== undefined ? fn(body[k]) : cur[k]);
@@ -102,6 +173,7 @@ export async function createSeries(ctx, body) {
     if (!contractId) throw notFound('Team contract');
   }
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
+  confirmCoach(ctx, coachId, coachWarnings(ctx, coachId, plannedDays(ctx, s)), body);
   const id = newId('ser');
   ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, coach_id, active, created_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
@@ -183,6 +255,21 @@ async function updateSeriesNow(ctx, id, body) {
       if (planned.has(at) || (next.starts_at && ctx.db.get('SELECT 1 FROM class_sessions WHERE series_id = ? AND starts_at = ? AND id != ?', id, at, x.id))) throw conflict(`${cur.name} already has a session at ${when(ctx, at)}. Move or cancel it first.`);
       planned.add(at);
     }
+    // The coach's other sessions and days off, for every session whose coach or time changes and every new class day.
+    const timing = ['start_time', 'duration_min', 'weekdays', 'start_date', 'end_date'].some((k) => (s[k] ?? null) !== (k === 'weekdays' ? JSON.stringify(cur.weekdays) : cur[k] ?? null));
+    if ((after.coach_id ?? null) !== (cur.coach_id ?? null) || timing) {
+      const byCoach = new Map();
+      const add = (coach, slot) => { if (!coach) return; if (!byCoach.has(coach)) byCoach.set(coach, []); byCoach.get(coach).push(slot); };
+      for (const { x, next } of plan) {
+        if (!('coach_id' in next) && !next.starts_at && !next.ends_at) continue;
+        add('coach_id' in next ? next.coach_id : x.coach_id, { starts_at: next.starts_at ?? x.starts_at, ends_at: next.ends_at ?? x.ends_at });
+      }
+      if (timing) {
+        const taken = new Set(ctx.db.all('SELECT slot_date, starts_at FROM class_sessions WHERE series_id = ?', id).map((x) => slotDay(x, zone)));
+        for (const slot of plannedDays(ctx, { ...s, weekdays: s.weekdays }, taken)) add(coachId, slot);
+      }
+      for (const [coach, slots] of byCoach) confirmCoach(ctx, coach, coachWarnings(ctx, coach, slots, { excludeSeries: id }), body);
+    }
     ctx.db.tx(() => {
       ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1 WHERE id = ?`,
         s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, id);
@@ -222,20 +309,46 @@ function bookedFamilies(ctx, sessionIds, { waitlist = false } = {}) {
   }
   return out;
 }
-// Tell booked families their sessions moved (new day, time or place): one email per family however many of their
-// sessions changed. moves: [{ before, after }]. Returns how many families were emailed.
+// Tell families their sessions moved (new day, time or place): one email per family however many of their sessions
+// changed. Owner decision: families on the waitlist hear too, in the same email, that they're still on the waitlist. A
+// family only on waitlists isn't emailed at an address that opted out of our emails; archived athletes are left out.
+// moves: [{ before, after }]. Returns how many families were emailed.
 function notifyMoved(ctx, moves) {
   if (!moves.length) return 0;
   const byId = new Map(moves.map((m) => [m.after.id, m]));
   const place = (m) => (m.before.location_id !== m.after.location_id ? ` at ${ctx.db.get('SELECT name FROM locations WHERE id = ?', m.after.location_id)?.name ?? 'a new place'}` : '');
   const line = (m) => (m.before.starts_at !== m.after.starts_at ? `${m.after.name} on ${when(ctx, m.before.starts_at)} has moved to ${when(ctx, m.after.starts_at)}${place(m)}.` : `${m.after.name} on ${when(ctx, m.after.starts_at)} has moved${place(m)}.`);
-  const fams = bookedFamilies(ctx, moves.map((m) => m.after.id));
-  for (const [fam, f] of fams) {
-    const lines = [...f.sessions].map((sid) => line(byId.get(sid)));
-    const who = [...f.names];
-    notifyFamily(ctx, fam, `New time: ${moves[0].after.name}`, `${lines.length === 1 ? lines[0] : `These sessions have moved:\n${lines.map((l) => `- ${l}`).join('\n')}\n`} ${andList(who)} ${who.length > 1 ? 'are' : 'is'} still booked. If the new time doesn't work, cancel from the parent portal.`);
+  const ids = moves.map((m) => m.after.id);
+  const booked = bookedFamilies(ctx, ids);
+  const waiting = new Map();
+  for (const sid of ids) {
+    for (const b of ctx.db.all(`SELECT c.name, c.family_id FROM bookings b JOIN clients c ON c.id = b.client_id WHERE b.session_id = ? AND b.status = 'waitlisted' AND c.family_id IS NOT NULL AND c.archived_at IS NULL ORDER BY b.created_at`, sid)) {
+      if (!waiting.has(b.family_id)) waiting.set(b.family_id, { names: new Set(), sessions: new Set() });
+      waiting.get(b.family_id).names.add(first(b.name));
+      waiting.get(b.family_id).sessions.add(sid);
+    }
   }
-  return fams.size;
+  let emailed = 0;
+  for (const fam of new Set([...booked.keys(), ...waiting.keys()])) {
+    const f = booked.get(fam), w = waiting.get(fam);
+    const parts = [];
+    if (f) {
+      const lines = [...f.sessions].map((sid) => line(byId.get(sid)));
+      const who = [...f.names];
+      parts.push(`${lines.length === 1 ? lines[0] : `These sessions have moved:\n${lines.map((l) => `- ${l}`).join('\n')}\n`} ${andList(who)} ${who.length > 1 ? 'are' : 'is'} still booked. If the new time doesn't work, cancel from the parent portal.`);
+    }
+    if (w) {
+      const lines = [...w.sessions].map((sid) => line(byId.get(sid)));
+      const who = [...w.names];
+      parts.push(`${lines.length === 1 ? lines[0] : `${f ? 'And these' : 'These'} sessions have moved:\n${lines.map((l) => `- ${l}`).join('\n')}\n`} ${andList(who)} ${who.length > 1 ? 'are' : 'is'} still on the waitlist${lines.length > 1 ? ' for them' : ''} at the new time. If a spot opens, we book ${who.length > 1 ? 'them' : who[0]} in and email you. If the new time doesn't work, cancel the waitlist spot in the parent portal.`);
+    }
+    const subject = `New time: ${moves[0].after.name}`;
+    const to = ctx.db.all(`SELECT email FROM guardians WHERE family_id = ? AND email IS NOT NULL${f ? '' : ' AND lower(email) NOT IN (SELECT lower(email) FROM email_optouts)'}`, fam);
+    if (!to.length) continue;
+    for (const g of to) sendEmail(ctx, { to: g.email, subject, text: parts.join('\n\n') }).catch(() => {});
+    emailed++;
+  }
+  return emailed;
 }
 // Cancel several sessions of one class (days it no longer runs, or the whole class archived): credits back, paid drop-ins
 // refunded, and one email (and text) per family listing every session of theirs, instead of one per session. A session
@@ -311,6 +424,7 @@ export async function createSession(ctx, body) {
   const starts = zonedToUtc(body.date, body.start_time, tz(ctx));
   const dur = v.int(body.duration_min ?? 60, 'duration_min', { min: 10, max: 600 });
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
+  confirmCoach(ctx, coachId, coachWarnings(ctx, coachId, [{ starts_at: starts, ends_at: new Date(Date.parse(starts) + dur * 60000).toISOString() }]), body);
   const id = newId('cls');
   ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, staff_note, status, created_at)
               VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
@@ -359,6 +473,10 @@ async function updateSessionNow(ctx, id, body) {
   }
   const keys = Object.keys(next);
   if (!keys.length) throw badRequest('Nothing to change.');
+  if ('coach_id' in next || next.starts_at || next.ends_at) {
+    const coach = 'coach_id' in next ? next.coach_id : s.coach_id;
+    confirmCoach(ctx, coach, coachWarnings(ctx, coach, [{ starts_at: next.starts_at ?? s.starts_at, ends_at: next.ends_at ?? s.ends_at }], { excludeIds: [id] }), body);
+  }
   ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), id);
   const promoted = next.capacity > s.capacity ? await promoteNow(ctx, id) : 0;
   const moved = !!(next.starts_at || next.location_id);
@@ -520,19 +638,37 @@ async function undoCover(ctx, clientId, r) {
 }
 const commerceMoney = (c) => `$${(c / 100).toFixed(c % 100 ? 2 : 0)}`;
 
-async function releaseBooking(ctx, b, status) {
-  if (b.coverage === 'credit' && status === 'canceled' && ['booked'].includes(b.status)) {
-    ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, 1, 'cancel', 'Booking canceled', ?)`, newId('cr'), b.client_id, b.credit_type, ctx.now());
-  }
+// The card refund goes first (if it fails, nothing changes and the booking can be canceled again); then the credit, the
+// booking's new status and anything the caller adds (then) are saved in one transaction. Callers hold the session's
+// booking lock, so a double tap can't return a credit or refund twice.
+async function releaseBooking(ctx, b, status, then) {
   if (b.coverage === 'paid' && b.sale_id && status === 'canceled') {
     const sale = ctx.db.get('SELECT status FROM sales WHERE id = ?', b.sale_id);
     if (['succeeded', 'partially_refunded'].includes(sale?.status)) await commerce.refundSale(ctx, b.sale_id, {});
   }
-  ctx.db.run('UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?', status, ctx.now(), b.id);
+  ctx.db.tx(() => {
+    if (b.coverage === 'credit' && status === 'canceled' && ['booked'].includes(b.status)) {
+      ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, 1, 'cancel', 'Booking canceled', ?)`, newId('cr'), b.client_id, b.credit_type, ctx.now());
+    }
+    ctx.db.run('UPDATE bookings SET status = ?, updated_at = ? WHERE id = ?', status, ctx.now(), b.id);
+    then?.();
+  });
 }
 
 // Bookings for one session go one at a time, so a double tap can't charge twice and two families can't both take the last spot.
-export function book(ctx, args) { return withLock(`book:${args.sessionId}`, () => bookNow(ctx, args)); }
+// A parent booking also holds the athlete's lock, so two bookings of one athlete into overlapping sessions can't both pass
+// the clash check at once.
+export function book(ctx, args) {
+  const run = () => withLock(`book:${args.sessionId}`, () => bookNow(ctx, args));
+  return args.isCoach ? run() : withLock(`athlete-book:${args.clientId}`, run);
+}
+// Families can't book an athlete into two sessions at the same time (a waitlist spot counts: it could move up). Staff can,
+// with a warning (clashFor). Returns the reason, or null.
+export function clashText(ctx, clientId, sessionId, name) {
+  const x = clashFor(ctx, clientId, sessionId);
+  if (!x) return null;
+  return `${first(name)} is already ${x.status === 'waitlisted' ? 'on the waitlist for' : 'booked for'} ${x.name} at ${when(ctx, x.starts_at)}, which overlaps. Cancel that first to book this one.`;
+}
 async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, overrideAge = false, offerPriceCents }) {
   const s = getSession(ctx, sessionId);
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
@@ -546,6 +682,7 @@ async function bookNow(ctx, { sessionId, clientId, pay, actor, isCoach = false, 
   if (ageProblem && !(isCoach && overrideAge)) throw conflict(ageProblem);
   const existing = ctx.db.get('SELECT * FROM bookings WHERE session_id = ? AND client_id = ?', sessionId, clientId);
   if (existing && ['booked', 'attended', 'waitlisted'].includes(existing.status)) throw conflict(`${first(c.name)} is already ${existing.status === 'waitlisted' ? 'on the waitlist' : 'booked'} for this session.`);
+  if (!isCoach) { const clash = clashText(ctx, clientId, sessionId, c.name); if (clash) throw conflict(clash); }
 
   const full = s.booked_count >= s.capacity;
   // A trial offer is for a spot, not the waitlist: the waitlist later books at the usual price.
@@ -589,13 +726,20 @@ async function cancelBookingNow(ctx, id, { isCoach = false, waive = false } = {}
   const hours = Number(getSetting(ctx, 'late_cancel_hours'));
   const late = b.status === 'booked' && Date.parse(b.starts_at) - Date.now() < hours * 3600000 && !(isCoach && waive);
   if (!isCoach && b.starts_at <= ctx.now()) throw conflict('This session has already started. Message your coach.');
-  await releaseBooking(ctx, b, late ? 'late_canceled' : 'canceled');
-  // A private or evaluation booked from open hours exists only for this athlete: take it off the schedule so the time opens again.
-  if (['private', 'evaluation'].includes(b.kind) && !ctx.db.get('SELECT series_id FROM class_sessions WHERE id = ?', b.session_id).series_id
-    && !ctx.db.get(`SELECT 1 FROM bookings WHERE session_id = ? AND status IN ('booked','attended','waitlisted')`, b.session_id)) {
-    ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ? AND status = 'scheduled'`, b.session_id);
-  }
+  const oneOff = ['private', 'evaluation'].includes(b.kind) && !ctx.db.get('SELECT series_id FROM class_sessions WHERE id = ?', b.session_id).series_id;
+  // A private or evaluation booked from open hours exists only for this athlete: take it off the schedule (in the same
+  // transaction as the cancel) so the time opens again.
+  await releaseBooking(ctx, b, late ? 'late_canceled' : 'canceled', () => {
+    if (oneOff && !ctx.db.get(`SELECT 1 FROM bookings WHERE session_id = ? AND status IN ('booked','attended','waitlisted')`, b.session_id)) {
+      ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ? AND status = 'scheduled'`, b.session_id);
+    }
+  });
   emit(ctx, 'booking.canceled', { booking_id: id, session_id: b.session_id, session_name: b.session_name, client_id: b.client_id, client_name: b.client_name, late });
+  // The coach hears when a family cancels a private or evaluation (after it's saved).
+  if (!isCoach && ['private', 'evaluation'].includes(b.kind)) {
+    const coach = ctx.db.get('SELECT u.name, u.email FROM class_sessions s JOIN users u ON u.id = s.coach_id WHERE s.id = ? AND u.active = 1', b.session_id);
+    if (coach?.email) sendEmail(ctx, { to: coach.email, subject: `Canceled: ${b.session_name}, ${when(ctx, b.starts_at)}`, text: `Hi ${first(coach.name)},\n\n${b.client_name}'s family canceled ${b.kind === 'private' ? 'the private session' : 'the evaluation'} on ${when(ctx, b.starts_at)} at ${b.location_name}.${late ? ` It was less than ${hours} hours before, so it still counts as used.` : oneOff ? ' The time is open for booking again.' : ''}\n\n${getSetting(ctx, 'business_name')}` }).catch(() => {});
+  }
   if (b.status === 'booked') await promoteNow(ctx, b.session_id);
   return { ...bookingDetail(ctx, id), late, message: late ? `Canceled less than ${hours} hours before the session, so the session is still used.` : 'Canceled.' };
 }
@@ -717,6 +861,7 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
   if (sessions.some((x) => x.booked_count >= x.capacity)) throw conflict(`${s.name} is full.`);
   const ageProblem = ageCheck(c, sessions[0]);
   if (ageProblem && !isCoach) throw conflict(ageProblem);
+  if (!isCoach) for (const x of sessions) { const clash = clashText(ctx, clientId, x.id, c.name); if (clash) throw conflict(clash); }
   let saleId = null;
   if (pay === 'card_on_file' && s.registration_cents > 0) {
     const sale = await commerce.createSale(ctx, { location_id: s.location_id, method: 'card_on_file', client_id: clientId, custom: { description: `${s.name} registration`, amount_cents: s.registration_cents } }, actor);
@@ -750,6 +895,7 @@ export function addAvailability(ctx, body) {
   if (!Array.isArray(days) || !days.length || days.length > 7) throw badRequest('weekdays must list days 0 (Sunday) to 6 (Saturday).');
   const weekdays = [...new Set(days.map((d) => v.int(d, 'weekday', { min: 0, max: 6 })))].sort();
   const slot = v.int(body.slot_minutes ?? 60, 'slot_minutes', { min: 15, max: 240 }), price = v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000, optional: true });
+  confirmCoach(ctx, coachId, hoursWarnings(ctx, coachId, { location_id: loc.id, weekdays, start_time: body.start_time, end_time: body.end_time }), body);
   const ids = ctx.db.tx(() => weekdays.map((wd) => {
     const id = newId('av');
     ctx.db.run('INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, price_cents, coach_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -763,8 +909,20 @@ export function addAvailability(ctx, body) {
 export function updateAvailability(ctx, id, body) {
   if (!ctx.db.get('SELECT id FROM availability WHERE id = ?', id)) throw notFound('Availability');
   if (body.coach_id === undefined) throw badRequest('Send coach_id (or null to clear it).');
-  ctx.db.run('UPDATE availability SET coach_id = ? WHERE id = ?', coachInput(ctx, body.coach_id), id);
+  const coachId = coachInput(ctx, body.coach_id), a = ctx.db.get('SELECT * FROM availability WHERE id = ?', id);
+  if (coachId && coachId !== a.coach_id) confirmCoach(ctx, coachId, hoursWarnings(ctx, coachId, { ...a, weekdays: [a.weekday] }), body);
+  ctx.db.run('UPDATE availability SET coach_id = ? WHERE id = ?', coachId, id);
   return listAvailability(ctx).find((a) => a.id === id);
+}
+// Weekly hours for a coach: over the next 8 weeks, the coach's other sessions in those hours at any place (privates and
+// evaluations booked from hours at the same place are those hours at work, not a clash) and their days off. Hours at two
+// places at once are fine: the first booking takes the coach, and the other place's slot goes (openSlots).
+function hoursWarnings(ctx, coachId, a) {
+  if (!coachId) return [];
+  const zone = tz(ctx), today = localDate(ctx.now(), zone), slots = [];
+  for (let d = today, i = 0; i < HORIZON_DAYS; d = addDaysToDate(d, 1), i++) if (a.weekdays.includes(weekdayOf(d))) slots.push({ starts_at: zonedToUtc(d, a.start_time, zone), ends_at: zonedToUtc(d, a.end_time, zone) });
+  const own = (x) => ['private', 'evaluation'].includes(x.kind) && !x.series_id && x.location_id === a.location_id;
+  return coachWarnings(ctx, coachId, slots.filter((x) => x.ends_at > ctx.now()), { skip: own });
 }
 export function removeAvailability(ctx, id) {
   if (!ctx.db.get('SELECT id FROM availability WHERE id = ?', id)) throw notFound('Availability');
@@ -823,7 +981,7 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
   const blocks = ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name FROM availability a JOIN locations l ON l.id = a.location_id
-    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach')))`, kind);   // a coach moved to front desk no longer leads
+    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach'))) ORDER BY a.created_at, a.id`, kind);   // a coach moved to front desk no longer leads
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
   const busy = ctx.db.all(`SELECT s.location_id, s.coach_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
     AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)
@@ -832,7 +990,9 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const isOff = (a, d) => off.some((t) => t.start_date <= d && t.end_date >= d && (t.user_id == null || t.user_id === a.coach_id));
   const takes = (a, b) => (a.coach_id ? b.coach_id === a.coach_id || (b.coach_id == null && b.location_id === a.location_id) : b.location_id === a.location_id);
   const minStart = new Date(Date.now() + 2 * 3600000).toISOString();            // at least 2 hours' notice
-  const out = [];
+  // A coach with two blocks of hours covering the same time at the same place (say, after taking over another coach's
+  // hours) is offered that time once: the older block's.
+  const out = [], offered = new Set();
   for (let d = today, i = 0; i <= days; d = addDaysToDate(d, 1), i++) {
     for (const a of blocks.filter((b) => b.weekday === weekdayOf(d))) {
       if (isOff(a, d)) continue;
@@ -840,13 +1000,17 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
       for (let t = zonedToUtc(d, a.start_time, zone); Date.parse(t) + a.slot_minutes * 60000 <= Date.parse(blockEnd); t = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString()) {
         const tEnd = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString();
         if (t < minStart || busy.some((b) => takes(a, b) && b.starts_at < tEnd && b.ends_at > t)) continue;
+        const once = a.coach_id ? `${a.coach_id}|${a.location_id}|${t}|${tEnd}` : null;
+        if (once && offered.has(once)) continue;
+        if (once) offered.add(once);
         out.push({ kind, starts_at: t, ends_at: tEnd, location_id: a.location_id, location_name: a.location_name, price_cents: a.price_cents, availability_id: a.id, coach_id: a.coach_id ?? null, coach_name: a.coach_name ?? null });
       }
     }
   }
   return out.sort((x, y) => x.starts_at.localeCompare(y.starts_at));
 }
-export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId, clientId, pay, actor, isCoach = false }) {
+export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId, clientId, pay, actor, isCoach = false, note }) {
+  const noteText = note == null || note === '' ? null : v.str(note, 'note', { max: 500 });
   const slot = openSlots(ctx, { kind, days: 60 }).find((x) => x.starts_at === startsAt && x.availability_id === availabilityId);
   if (!slot) throw conflict('That time was just taken or is no longer available. Pick another.');
   const c = ctx.db.get('SELECT name, archived_at FROM clients WHERE id = ?', clientId);
@@ -856,8 +1020,17 @@ export async function bookSlot(ctx, { kind = 'private', startsAt, availabilityId
   const id = newId('cls');
   ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, coach_id, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, 1, ?, ?, 'scheduled', ?)`,
     id, `${kind === 'private' ? 'Private' : 'Evaluation'}: ${c.name}`, kind, slot.location_id, slot.starts_at, slot.ends_at, slot.price_cents, slot.coach_id, ctx.now());
-  try { return await book(ctx, { sessionId: id, clientId, pay, actor, isCoach }); }
+  let out;
+  try { out = await book(ctx, { sessionId: id, clientId, pay, actor, isCoach }); }
   catch (e) { ctx.db.run('DELETE FROM class_sessions WHERE id = ?', id); throw e; }        // release the slot if payment fails
+  // The coach gets the family's note (and hears about the booking) by email.
+  const coach = slot.coach_id ? ctx.db.get('SELECT name, email FROM users WHERE id = ? AND active = 1', slot.coach_id) : null;
+  if (noteText) ctx.db.run('UPDATE bookings SET note = ? WHERE id = ?', noteText, out.id);
+  if (coach?.email && !isCoach) {
+    sendEmail(ctx, { to: coach.email, subject: `Booked: ${kind === 'private' ? 'private session' : 'evaluation'} with ${c.name}, ${when(ctx, slot.starts_at)}`,
+      text: `Hi ${first(coach.name)},\n\n${c.name} is booked for ${kind === 'private' ? 'a private session' : 'an evaluation'} with you on ${when(ctx, slot.starts_at)} at ${slot.location_name}.${noteText ? `\n\nNote from the family:\n${noteText}` : ''}\n\n${getSetting(ctx, 'business_name')}` }).catch(() => {});
+  }
+  return bookingDetail(ctx, out.id);
 }
 
 // ---------- Coach views ----------

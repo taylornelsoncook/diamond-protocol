@@ -3,6 +3,7 @@ import { emit } from './events.js';
 import { payerFor, getSetting } from './families.js';
 import { membershipReceipt, paymentFailed, trialReminders, cardReminder, invoiceRefundReceipt } from './notify.js';
 import { csvCell } from './clients.js';
+import { sendEmail } from './mail.js';
 
 export const MAX_ATTEMPTS = 4;        // after the 4th failed automatic charge the subscription is canceled
 export const RETRY_EVERY_DAYS = 3;
@@ -182,31 +183,60 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
 }
 
 // One charge or payment per invoice at a time: a retry waiting on Stripe and a pay link paid meanwhile can't both land.
-// A retry the owner asks for (manual) never cancels the membership when it declines, and leaves the next automatic retry
-// where it was; only the automatic retries count down to canceling.
+// A retry the owner or a parent asks for (manual) never cancels the membership when it declines, leaves the next automatic
+// retry where it was, and doesn't count toward the limit: only automatic charges (the first charge, the scheduled retries and
+// the charge when a family saves a new card, counted in auto_attempts) count down to canceling after MAX_ATTEMPTS. attempts counts every try (Stripe's idempotency key).
+// Every try is written to invoice_charges before Stripe is asked, with its id in the charge's metadata, so a late answer
+// from the bank always finds its invoice (reconcile below).
 export function attemptCharge(ctx, invoiceId, asOf = ctx.now(), opts = {}) { return withLock(`invoice:${invoiceId}`, () => chargeInvoice(ctx, invoiceId, asOf, opts)); }
-async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFailed = false } = {}) {
+// source: 'automatic' (the first charge and the scheduled retries), 'new_card' (a family saved a new card: counts like an
+// automatic try, as the owner decided), 'owner' (Retry or Retry all) or 'parent' (the portal's Try again). The owner's and
+// a parent's are manual tries. manual: true alone means the owner's.
+const SOURCES = ['automatic', 'new_card', 'owner', 'parent'];
+async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, source: sourceOpt = null, onlyIfFailed = false } = {}) {
+  const source = SOURCES.includes(sourceOpt) ? sourceOpt : manualOpt ? 'owner' : 'automatic';
+  const manual = source === 'owner' || source === 'parent';
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status === 'paid') return inv;
   // A retry picked from a list: the invoice may have been voided or paid by hand since it was listed. Nothing to do.
   if (onlyIfFailed && inv.status !== 'failed') return inv;
   if (inv.status === 'void') throw conflict('This invoice was voided and cannot be charged.');
   const client = payerFor(ctx, inv.client_id);          // a family's card pays for its athletes
-  const attempts = inv.attempts + 1;
-  const result = inv.amount_cents === 0
-    ? { ok: true, ref: null }
-    : await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: 'Diamond Protocol membership', idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id } });
+  // A try the webhook settled after its call errored (or a charge left waiting) has used its idempotency key at Stripe, so
+  // the next try goes past it (the same key with a new try's metadata would be refused by Stripe).
+  const settled = ctx.db.get(`SELECT MAX(attempt) AS n FROM invoice_charges WHERE invoice_id = ? AND status IN ('succeeded','declined')`, inv.id)?.n ?? 0;
+  const attempts = Math.max(inv.attempts, settled) + 1;
+  const autoAttempts = manual ? inv.auto_attempts : inv.auto_attempts + 1;
+  let attemptId = null, result;
+  if (inv.amount_cents === 0) result = { ok: true, ref: null };
+  else {
+    // A try whose call to Stripe errored before an answer came back is tried again with the same idempotency key, so it
+    // reuses that row (Stripe needs the same metadata with the same key, and returns the first charge if it went through).
+    const errored = ctx.db.get(`SELECT id FROM invoice_charges WHERE invoice_id = ? AND attempt = ? AND status IN ('error','pending') ORDER BY created_at DESC LIMIT 1`, inv.id, attempts);
+    attemptId = errored?.id ?? newId('ich');
+    if (errored) ctx.db.run(`UPDATE invoice_charges SET status = 'pending', manual = ?, source = ?, error = NULL, settled_at = NULL WHERE id = ?`, manual ? 1 : 0, source, attemptId);
+    else ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`, attemptId, inv.id, attempts, manual ? 1 : 0, source, inv.amount_cents, ctx.now());
+    try {
+      result = await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: 'Diamond Protocol membership', idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id, charge_attempt_id: attemptId } });
+    } catch (e) {
+      ctx.db.run(`UPDATE invoice_charges SET status = 'error', error = ?, settled_at = ? WHERE id = ?`, String(e.message ?? e).slice(0, 300), ctx.now(), attemptId);
+      throw e;
+    }
+  }
 
   ctx.db.tx(() => {
     const s = getSubscription(ctx, inv.subscription_id);
+    // A payment Stripe is still processing counts as paid but stays 'pending' (waiting on the bank) until its webhook: only
+    // a charge the bank confirmed is final, so a failure event arriving after it (out of order) is stale (reconcile).
+    if (attemptId) ctx.db.run(`UPDATE invoice_charges SET status = ?, ref = COALESCE(?, ref), error = ?, settled_at = ? WHERE id = ?`, result.ok ? (result.processing ? 'pending' : 'succeeded') : 'declined', result.ref ?? null, result.ok ? null : result.error ?? null, result.processing ? null : ctx.now(), attemptId);
     if (result.ok) {
-      recordPaid(ctx, inv, s, { attempts, ref: result.ref });
+      recordPaid(ctx, inv, s, { attempts, autoAttempts, ref: result.ref });
     } else {
-      const giveUp = !manual && attempts >= MAX_ATTEMPTS;
+      const giveUp = !manual && autoAttempts >= MAX_ATTEMPTS;
       const nextRetry = giveUp ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
-      ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
-        attempts, result.error, nextRetry, result.ref ?? null, inv.id);
-      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, error: result.error, final: giveUp });
+      ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, auto_attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
+        attempts, autoAttempts, result.error, nextRetry, result.ref ?? null, inv.id);
+      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, automatic_attempts: autoAttempts, manual, source, error: result.error, final: giveUp });
       if (giveUp) {
         ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id);
         setStatus(ctx, s.id, 'canceled', { canceled_at: ctx.now() });
@@ -220,10 +250,10 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFaile
   return getInvoice(ctx, inv.id);
 }
 
-function recordPaid(ctx, inv, s, { attempts = inv.attempts, ref, method = null, reference = null }) {
-  // A payment recorded by hand keeps the last card charge's reference, so a late answer from Stripe about it still matches.
-  ctx.db.run(`UPDATE invoices SET status = 'paid', attempts = ?, paid_at = ?, payment_ref = ${method ? 'payment_ref' : '?'}, paid_method = ?, paid_reference = ?, last_error = NULL, next_retry_at = NULL, voided_at = NULL, void_reason = NULL WHERE id = ?`,
-    ...[attempts, ctx.now(), ...(method ? [] : [ref]), method, reference, inv.id]);
+function recordPaid(ctx, inv, s, { attempts = inv.attempts, autoAttempts = inv.auto_attempts, ref, method = null, reference = null }) {
+  // A payment recorded by hand keeps the last card charge's reference (every charge's is also in invoice_charges).
+  ctx.db.run(`UPDATE invoices SET status = 'paid', attempts = ?, auto_attempts = ?, paid_at = ?, payment_ref = ${method ? 'payment_ref' : '?'}, paid_method = ?, paid_reference = ?, last_error = NULL, next_retry_at = NULL, voided_at = NULL, void_reason = NULL WHERE id = ?`,
+    ...[attempts, autoAttempts, ctx.now(), ...(method ? [] : [ref]), method, reference, inv.id]);
   emit(ctx, 'invoice.paid', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents });
   // Past due stays past due while another of its charges is still declined (so that one keeps being retried and reminded).
   if (s.status === 'trialing' || (s.status === 'past_due' && !ctx.db.get(`SELECT 1 FROM invoices WHERE subscription_id = ? AND status = 'failed' AND id != ?`, s.id, inv.id))) setStatus(ctx, s.id, 'active');
@@ -242,37 +272,57 @@ export async function retryWithNewCard(ctx, { familyId, clientId }) {
   const rows = ctx.db.all(`SELECT i.id FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN clients c ON c.id = i.client_id
     WHERE i.status = 'failed' AND i.next_retry_at IS NOT NULL AND s.status = 'past_due' AND ${familyId ? 'c.family_id = ?' : 'c.id = ?'}`, familyId ?? clientId);
   const out = [];
-  for (const r of rows) out.push(await attemptCharge(ctx, r.id, ctx.now(), { onlyIfFailed: true }));
+  for (const r of rows) out.push(await attemptCharge(ctx, r.id, ctx.now(), { source: 'new_card', onlyIfFailed: true }));
   return out;
 }
 
-// Stripe webhook: a membership charge settled differently from what the charge call said. A card the bank
-// asked the client to approve can succeed later, and a payment still processing can fail later. Only the
-// invoice's latest PaymentIntent counts, and nothing changes when the invoice already agrees.
+// Stripe webhook: a membership charge settled differently from what the charge call said. A card the bank asked the
+// client to approve can succeed later, and a payment still processing can fail later. The charge is found among the
+// invoice's tries (invoice_charges) by Stripe's id, or by the try's id in its metadata when the call errored before an id
+// came back; an invoice from before version 43 matches its payment_ref as before.
+// - Approved while the invoice is still owed: this charge pays it.
+// - Approved after the invoice was paid another way (a pay link, cash or check, another charge) or voided: the money goes
+//   back automatically, exactly once (under the invoice lock, the try's late_outcome is checked first, and Stripe's
+//   idempotency key is fixed per charge), and the owner is emailed, sees it on Today and in the activity feed.
+// - Failed after it was counted as paid: the invoice is owed again, as before.
 export function reconcileInvoicePayment(ctx, invoiceId, outcome) { return withLock(`invoice:${invoiceId}`, () => reconcile(ctx, invoiceId, outcome)); }
-async function reconcile(ctx, invoiceId, { ref, succeeded, error }) {
+async function reconcile(ctx, invoiceId, { ref, succeeded, error, attemptId }) {
   const inv = ctx.db.get(`SELECT i.*, c.name AS client_name FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
-  if (!inv || !ref || inv.payment_ref !== ref) return 'ignored';
-  // Voided (written off, or the membership was canceled) before the bank approved the charge: the money is in, so the
-  // invoice is paid. The owner can refund it from Billing.
-  if (succeeded && ['failed', 'void'].includes(inv.status)) {
-    ctx.db.tx(() => recordPaid(ctx, inv, getSubscription(ctx, inv.subscription_id), { ref }));
-    await membershipReceipt(ctx, inv.id);
-    return 'paid';
+  if (!inv || !ref) return 'ignored';
+  let a = ctx.db.get('SELECT * FROM invoice_charges WHERE invoice_id = ? AND ref = ?', inv.id, ref)
+    ?? (attemptId ? ctx.db.get('SELECT * FROM invoice_charges WHERE id = ? AND invoice_id = ?', String(attemptId), inv.id) : null);
+  if (a && a.ref && a.ref !== ref) return 'ignored';                   // the try's id with somebody else's payment
+  if (!a && inv.payment_ref === ref) {
+    // A charge from before every try was written down: add it now so it's matched (and refunded) only once.
+    const id = newId('ich');
+    ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, ref, status, created_at, settled_at) VALUES (?, ?, ?, 0, 'automatic', ?, ?, ?, ?, ?)`,
+      id, inv.id, inv.attempts, inv.amount_cents, ref, inv.status === 'paid' && !inv.paid_method ? 'pending' : 'declined', inv.created_at, ctx.now());   // pending: it may still have been processing
+    a = ctx.db.get('SELECT * FROM invoice_charges WHERE id = ?', id);
   }
-  // Paid by hand (cash or check) while the card charge was waiting on the bank, which then approved it: paid twice, so
-  // the card payment goes back.
-  if (succeeded && inv.status === 'paid' && inv.paid_method) {
-    const r = await ctx.payments.refund({ paymentRef: ref, amountCents: inv.amount_cents, idempotencyKey: `invoice-paid-twice-${inv.id}-${ref}` });
-    emit(ctx, 'invoice.paid_twice', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, refunded: !!r.ok, error: r.ok ? null : r.error });
-    return r.ok ? 'refunded' : 'paid_twice';
+  if (!a) return 'ignored';
+  if (!a.ref) ctx.db.run('UPDATE invoice_charges SET ref = ? WHERE id = ?', ref, a.id);
+
+  if (succeeded) {
+    if (a.late_outcome === 'refunded') return 'refunded';              // already sent back: a repeated event changes nothing
+    if (a.status !== 'succeeded') ctx.db.run(`UPDATE invoice_charges SET status = 'succeeded', error = NULL, settled_at = ? WHERE id = ?`, ctx.now(), a.id);
+    if (['failed', 'open'].includes(inv.status)) {
+      ctx.db.tx(() => recordPaid(ctx, inv, getSubscription(ctx, inv.subscription_id), { ref }));
+      await membershipReceipt(ctx, inv.id);
+      return 'paid';
+    }
+    if (inv.status === 'paid' && !inv.paid_method && inv.payment_ref === ref) return 'unchanged';   // the payment itself
+    return refundLateCharge(ctx, inv, { ...a, ref });
   }
-  if (!succeeded && inv.status === 'paid' && !inv.paid_method && !inv.refunded_cents) {
-    const giveUp = inv.attempts >= MAX_ATTEMPTS;
+  // Stripe doesn't promise the order of events, and a PaymentIntent that succeeded never fails afterwards: a failure event
+  // for a charge the bank confirmed is an older one arriving late, and changes nothing (the invoice stays paid).
+  if (a.status === 'succeeded') return 'unchanged';
+  if (a.status === 'pending' || a.status === 'error') ctx.db.run(`UPDATE invoice_charges SET status = 'declined', error = ?, settled_at = ? WHERE id = ?`, error || 'The payment failed after it was taken.', ctx.now(), a.id);
+  if (inv.status === 'paid' && !inv.paid_method && inv.payment_ref === ref && !inv.refunded_cents) {
+    const giveUp = inv.auto_attempts >= MAX_ATTEMPTS;
     ctx.db.tx(() => {
       ctx.db.run(`UPDATE invoices SET status = 'failed', paid_at = NULL, last_error = ?, next_retry_at = ? WHERE id = ?`,
         error || 'The payment failed after it was taken.', giveUp ? null : addDays(ctx.now(), RETRY_EVERY_DAYS), inv.id);
-      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts: inv.attempts, error, final: giveUp });
+      emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts: inv.attempts, automatic_attempts: inv.auto_attempts, error, final: giveUp });
       const s = getSubscription(ctx, inv.subscription_id);
       if (giveUp) { ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id); setStatus(ctx, s.id, 'canceled', { canceled_at: ctx.now() }); }
       else if (s.status !== 'canceled') setStatus(ctx, s.id, 'past_due');
@@ -282,16 +332,58 @@ async function reconcile(ctx, invoiceId, { ref, succeeded, error }) {
   }
   return 'unchanged';
 }
+const LATE_REASON = {
+  hand: (inv) => `it had already been paid by ${(HAND_METHODS[inv.paid_method] ?? 'hand').toLowerCase()}`,
+  other: () => 'it had already been paid another way (a pay link or another charge)',
+  void: () => 'the invoice had been voided'
+};
+// Called under the invoice lock. A try refunded before (or refused by Stripe before) is asked again with the same key,
+// so Stripe never sends the money back twice.
+async function refundLateCharge(ctx, inv, a) {
+  const why = inv.status === 'void' ? 'void' : inv.paid_method ? 'hand' : 'other';
+  const reason = LATE_REASON[why](inv);
+  const r = await ctx.payments.refund({ paymentRef: a.ref, amountCents: a.amount_cents, idempotencyKey: `invoice-paid-twice-${inv.id}-${a.ref}` });
+  // The owner hears once per outcome: a repeated event that finds the refund still refused changes nothing they need to know.
+  if (!r.ok && a.late_outcome === 'refund_failed') {
+    ctx.db.run('UPDATE invoice_charges SET refund_error = ? WHERE id = ?', String(r.error ?? 'Refund failed').slice(0, 300), a.id);
+    return 'paid_twice';
+  }
+  ctx.db.tx(() => {
+    ctx.db.run(`UPDATE invoice_charges SET late_outcome = ?, late_reason = ?, late_at = COALESCE(late_at, ?), refund_ref = ?, refund_error = ? WHERE id = ?`,
+      r.ok ? 'refunded' : 'refund_failed', reason, ctx.now(), r.ok ? r.ref ?? null : null, r.ok ? null : String(r.error ?? 'Refund failed').slice(0, 300), a.id);
+    emit(ctx, 'invoice.paid_twice', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: a.amount_cents, payment_ref: a.ref, reason: why, refunded: !!r.ok, error: r.ok ? null : r.error });
+  });
+  const what = `A ${money(a.amount_cents)} membership charge for ${inv.client_name} was approved by the bank after ${reason}.`;
+  for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
+    sendEmail(ctx, { to: o.email, subject: r.ok ? `Refunded a late card charge: ${money(a.amount_cents)} for ${inv.client_name}` : `Refund needed: ${money(a.amount_cents)} charged twice for ${inv.client_name}`,
+      text: `${what}\n\n${r.ok ? `The ${money(a.amount_cents)} was refunded to the card automatically. Nothing else to do; it's on Today until you mark it handled.` : `The automatic refund didn't work (${r.error}). Refund payment ${a.ref} in the Stripe dashboard, then mark it handled on Today.`}\n\nInvoice: ${inv.id}` }).catch(() => {});
+  }
+  return r.ok ? 'refunded' : 'paid_twice';
+}
+// The owner saw a late charge alert on Today and dealt with it.
+export function markLateChargeHandled(ctx, invoiceId, chargeId, actor) {
+  const a = ctx.db.get('SELECT * FROM invoice_charges WHERE id = ? AND invoice_id = ?', chargeId, invoiceId);
+  if (!a || !a.late_outcome) throw notFound('Late charge');
+  ctx.db.run('UPDATE invoice_charges SET handled_at = COALESCE(handled_at, ?), handled_by = COALESCE(handled_by, ?) WHERE id = ?', ctx.now(), actor?.name ?? 'Owner', a.id);
+  return { id: a.id, handled: true };
+}
+// Late charges refunded (or needing a refund) that the owner hasn't marked handled, for Today.
+export function lateChargeAlerts(ctx) {
+  return ctx.db.all(`SELECT a.id AS charge_id, a.invoice_id, a.amount_cents, a.ref, a.late_outcome, a.late_reason, a.late_at, a.refund_error, i.client_id, c.name
+    FROM invoice_charges a JOIN invoices i ON i.id = a.invoice_id JOIN clients c ON c.id = i.client_id
+    WHERE a.late_outcome IS NOT NULL AND a.handled_at IS NULL ORDER BY a.late_at`);
+}
 
 // Manual retry from the dashboard or API. A family with no card is refused before anything is tried (a try with no card
 // would only use up a retry). membership_reactivated says whether this brought a past-due membership back.
-export async function retryInvoice(ctx, invoiceId) {
+// by: 'owner' (dashboard or API) or 'parent' (the portal): both are manual tries.
+export async function retryInvoice(ctx, invoiceId, { by = 'owner' } = {}) {
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status !== 'failed') throw conflict(inv.status === 'paid' ? 'This invoice is already paid.' : 'Only a failed invoice can be retried.');
   const payer = payerFor(ctx, inv.client_id);
   if (!payer.card_payment_method) throw conflict(`There's no card on file for ${payer.table === 'families' ? 'this family' : inv.client_name.split(' ')[0]}. Send a card reminder or a pay link, or record a cash or check payment.`);
   const before = getSubscription(ctx, inv.subscription_id).status;
-  const out = await attemptCharge(ctx, invoiceId, ctx.now(), { manual: true });
+  const out = await attemptCharge(ctx, invoiceId, ctx.now(), { source: by === 'parent' ? 'parent' : 'owner' });
   return { ...out, membership_reactivated: before === 'past_due' && getSubscription(ctx, inv.subscription_id).status === 'active' };
 }
 
@@ -390,7 +482,7 @@ function invoiceRows(ctx, { from, to } = {}) {
   const sql = `WITH rows AS (
     SELECT 'membership' AS kind, i.id, NULL AS number, i.client_id, c.name AS client_name, c.family_id, c.archived_at AS client_archived_at,
       NULL AS contract_id, NULL AS org_name, p.name AS description, i.amount_cents, i.refunded_cents, i.status, i.created_at AS issued_at, NULL AS due_on,
-      i.paid_at, i.paid_method, i.paid_reference, i.attempts, i.next_retry_at, i.last_error, i.reminded_at, i.voided_at, i.void_reason, i.period_start, i.period_end,
+      i.paid_at, i.paid_method, i.paid_reference, i.attempts, i.auto_attempts, i.next_retry_at, i.last_error, i.reminded_at, i.voided_at, i.void_reason, i.period_start, i.period_end,
       s.id AS subscription_id, s.status AS subscription_status, ${cardSql()} AS card_last4, ${brandSql()} AS card_brand,
       CASE WHEN i.status IN ('failed','open','void') THEN i.status WHEN i.amount_cents > 0 AND i.refunded_cents >= i.amount_cents THEN 'refunded'
         WHEN i.refunded_cents > 0 THEN 'partially_refunded' ELSE 'paid' END AS state, i.created_at AS sort_at
@@ -398,7 +490,7 @@ function invoiceRows(ctx, { from, to } = {}) {
     ${mDate.length ? `WHERE ${mDate.join(' AND ')}` : ''}
     UNION ALL
     SELECT 'school', t.id, t.number, NULL, NULL, NULL, NULL, t.contract_id, o.name, tc.name, t.amount_cents, 0, t.status, t.issued_on, t.due_on,
-      t.paid_on, t.paid_method, t.paid_reference, 0, NULL, NULL, t.reminded_at, NULL, NULL, t.period_start, t.period_end,
+      t.paid_on, t.paid_method, t.paid_reference, 0, 0, NULL, NULL, t.reminded_at, NULL, NULL, t.period_start, t.period_end,
       NULL, NULL, NULL, NULL,
       CASE WHEN t.status = 'open' AND t.due_on < ? THEN 'overdue' ELSE t.status END, t.issued_on || 'T23:59:59.999Z'
     FROM team_invoices t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = t.org_id
@@ -423,7 +515,7 @@ function invoiceFilter(query = {}) {
   }
   return { view, kind, from: query.from ? String(query.from) : null, to: query.to ? String(query.to) : null, where: where.join(' AND '), params, q };
 }
-const withFlags = (r) => ({ ...r, overdue: r.state === 'overdue', retries_left: r.state === 'failed' ? Math.max(0, MAX_ATTEMPTS - r.attempts) : null, has_card: r.kind === 'membership' ? !!r.card_last4 : null });
+const withFlags = (r) => ({ ...r, overdue: r.state === 'overdue', retries_left: r.state === 'failed' ? Math.max(0, MAX_ATTEMPTS - r.auto_attempts) : null, has_card: r.kind === 'membership' ? !!r.card_last4 : null });
 
 // GET /v1/billing/invoices: ?view= (all, failed, unpaid, overdue, paid, refunds, void), ?kind= (membership, school),
 // ?from=/?to= (dates), ?q= (name, plan, school, team or invoice number), ?limit= (Show more). Returns the page, the count and
@@ -476,6 +568,11 @@ export function invoiceDetail(ctx, id) {
   const r = withFlags(ctx.db.get(`${sql} SELECT * FROM rows WHERE kind = 'membership' AND id = ?`, ...params, id));
   const payer = payerFor(ctx, r.client_id);
   const refunds = ctx.db.all(`SELECT x.id, x.amount_cents, x.reason, x.source, x.created_at, u.name AS by_name FROM invoice_refunds x LEFT JOIN users u ON u.id = x.created_by WHERE x.invoice_id = ? ORDER BY x.created_at, x.rowid`, id);
+  // Every card charge tried (manual = a retry the owner or a parent started, which doesn't count toward canceling; source
+  // says which), with any late
+  // approval that was refunded automatically.
+  const charges = ctx.db.all(`SELECT id, attempt, manual, source, amount_cents, ref, status, error, created_at, settled_at, late_outcome, late_reason, late_at, refund_error, handled_at
+    FROM invoice_charges WHERE invoice_id = ? ORDER BY created_at, rowid`, id).map((c) => ({ ...c, manual: !!c.manual }));
   const links = ctx.db.all(`SELECT id, status, amount_cents, sent_to, sent_at, paid_at, expires_at, created_at FROM pay_links WHERE invoice_id = ? ORDER BY created_at DESC`, id)
     .map((l) => ({ ...l, status: l.status === 'open' && l.expires_at <= ctx.now() ? 'expired' : l.status }));
   const owed = ['failed', 'open'].includes(r.status);
@@ -483,7 +580,7 @@ export function invoiceDetail(ctx, id) {
   const remindedToday = remindedTodayFor(ctx, r.client_id);
   const emails = recipientsFor(ctx, r.client_id);
   return {
-    ...r, refunds, pay_links: links, refundable_cents: refundable,
+    ...r, refunds, charges, pay_links: links, refundable_cents: refundable,
     card: payer.card_last4 ? { brand: payer.card_brand, last4: payer.card_last4, declining: payer.card_status === 'declining' } : null,
     email: emails[0] ?? null, paid_by: r.status === 'paid' ? (HAND_METHODS[r.paid_method] ?? 'Card') : null,
     reminded_today: remindedToday,
@@ -601,7 +698,7 @@ export async function retryDeclined(ctx) {
     const inv = getInvoice(ctx, r.id);
     if (inv.status !== 'failed') continue;                  // paid by link or card update while we worked down the list
     const before = getSubscription(ctx, inv.subscription_id).status;
-    const after = await attemptCharge(ctx, r.id, ctx.now(), { manual: true, onlyIfFailed: true });
+    const after = await attemptCharge(ctx, r.id, ctx.now(), { source: 'owner', onlyIfFailed: true });
     if (after.attempts === inv.attempts) continue;         // voided or paid another way while it waited its turn: not charged here
     out.tried++;
     if (after.status === 'paid') {

@@ -50,7 +50,7 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
         }, { idempotencyKey });
         // 'processing' counts as paid; if it fails later the payment_intent.payment_failed webhook reopens the invoice.
         // The PaymentIntent id comes back either way so webhooks can find the invoice.
-        return ['succeeded', 'processing'].includes(pi.status) ? { ok: true, ref: pi.id } : { ok: false, ref: pi.id, error: `Payment ${pi.status.replace(/_/g, ' ')}.` };
+        return ['succeeded', 'processing'].includes(pi.status) ? { ok: true, ref: pi.id, processing: pi.status === 'processing' } : { ok: false, ref: pi.id, error: `Payment ${pi.status.replace(/_/g, ' ')}.` };
       } catch (e) {
         if (e.status === 402 || e.stripe?.type === 'card_error') return { ok: false, ref: e.stripe?.payment_intent?.id ?? null, error: e.message };
         throw e;
@@ -158,11 +158,11 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
     async getSetupSession(id) {
       const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`, { expand: ['setup_intent.payment_method'] });
       const pm = s.setup_intent?.payment_method;
-      return { clientId: s.metadata?.client_id, familyId: s.metadata?.family_id, paymentMethod: pm?.id, brand: pm?.card?.brand, last4: pm?.card?.last4 };
+      return { clientId: s.metadata?.client_id, familyId: s.metadata?.family_id, paymentMethod: pm?.id, brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year };
     },
     async getPaymentMethod(id) {
       const pm = await call('GET', `/v1/payment_methods/${encodeURIComponent(id)}`);
-      return { brand: pm.card?.brand, last4: pm.card?.last4 };
+      return { brand: pm.card?.brand, last4: pm.card?.last4, expMonth: pm.card?.exp_month, expYear: pm.card?.exp_year };
     },
 
     // Stripe-Signature: t=<time>,v1=<hmac>[,v1=...]

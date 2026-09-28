@@ -121,6 +121,13 @@ function checkinStreak(ctx, clientId) {
   while (dates.has(d)) { n++; d = addDaysToDate(d, -1); }
   return n;
 }
+// The longest run of check-in days in the last year.
+function bestCheckinStreak(ctx, clientId) {
+  const dates = ctx.db.all('SELECT date FROM daily_checkins WHERE client_id = ? AND date >= ? ORDER BY date', clientId, addDaysToDate(today(ctx), -400)).map((r) => r.date);
+  let best = 0, run = 0, prev = null;
+  for (const d of dates) { run = prev && addDaysToDate(prev, 1) === d ? run + 1 : 1; best = Math.max(best, run); prev = d; }
+  return best;
+}
 // Active weeks in a row: weeks with 2 or more training days, ending this week (or last week if this one isn't there yet).
 function activeWeekStreak(ctx, clientId) {
   const thisWeek = weekStart(today(ctx));
@@ -136,23 +143,47 @@ function goalRows(ctx, clientId, { activeOnly = true } = {}) {
   const teams = teamsOf(ctx, clientId);
   return ctx.db.all(`SELECT * FROM goals WHERE ${activeOnly ? 'active = 1 AND' : ''} (client_id = ? OR contract_id IN (${inList(teams)})) ORDER BY created_at, id`, clientId, ...teams);
 }
+// This week's progress on each goal, last week's result, and how many weeks in a row it was met (counting this week
+// once it's met, and never weeks before the goal was set). Past weeks are measured against today's target. Custom goals
+// also get this week's days, Monday to Sunday, so a day missed earlier in the week can be ticked off.
 export function goalsFor(ctx, clientId) {
-  const t = today(ctx), ws = weekStart(t), we = addDaysToDate(ws, 6);
-  const c = counts(ctx, clientId, ws, we);
-  return goalRows(ctx, clientId).map((g) => {
-    const checks = g.kind === 'custom' ? ctx.db.all('SELECT date FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date BETWEEN ? AND ?', g.id, clientId, ws, we).map((r) => r.date) : [];
-    const progress = g.kind === 'custom' ? checks.length : c[g.kind];
+  const rows = goalRows(ctx, clientId);
+  if (!rows.length) return [];
+  const t = today(ctx), ws = weekStart(t), we = addDaysToDate(ws, 6), lastWs = addDaysToDate(ws, -7), from = addDaysToDate(ws, -7 * 52), tz = zone(ctx);
+  const bump = (m, d) => { const k = weekStart(d); m.set(k, (m.get(k) ?? 0) + 1); };
+  const weekly = { workouts: new Map(), sessions: new Map(), checkins: new Map() };
+  for (const r of training(ctx, clientId, from, we)) bump(weekly[r.kind], r.date);
+  for (const r of ctx.db.all('SELECT date FROM daily_checkins WHERE client_id = ? AND date BETWEEN ? AND ?', clientId, from, we)) bump(weekly.checkins, r.date);
+  const week = Array.from({ length: 7 }, (_, i) => addDaysToDate(ws, i));
+  return rows.map((g) => {
+    let perWeek = weekly[g.kind], checks = [];
+    if (g.kind === 'custom') {
+      const dates = ctx.db.all('SELECT date FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date BETWEEN ? AND ?', g.id, clientId, from, we).map((r) => r.date);
+      perWeek = new Map();
+      for (const d of dates) bump(perWeek, d);
+      checks = dates.filter((d) => d >= ws);
+    }
+    const progress = perWeek.get(ws) ?? 0, met = (w) => (perWeek.get(w) ?? 0) >= g.target;
+    const startDay = localDate(g.created_at, tz), firstWeek = weekStart(startDay);
+    let inRow = 0;
+    for (let w = met(ws) ? ws : lastWs; w >= firstWeek && inRow < 52 && met(w); w = addDaysToDate(w, -7)) inRow++;
     return { id: g.id, title: g.title, kind: g.kind, kind_label: GOAL_KINDS[g.kind], target: g.target, progress, done: progress >= g.target,
-      team: !!g.contract_id, checked_today: checks.includes(t), week_start: ws, week_end: we };
+      team: !!g.contract_id, checked_today: checks.includes(t), week_start: ws, week_end: we,
+      last_week: lastWs >= firstWeek ? { week_start: lastWs, progress: perWeek.get(lastWs) ?? 0, done: met(lastWs) } : null, weeks_in_row: inRow,
+      days: g.kind === 'custom' ? week.map((d) => ({ date: d, checked: checks.includes(d), today: d === t, future: d > t, before_start: d < startDay })) : null };
   });
 }
-// The athlete (or a parent) ticks a custom goal once per day.
-export function checkGoal(ctx, clientId, goalId, done = true) {
+// The athlete (or a parent) ticks a custom goal once per day: today, or a day missed earlier this week (never a future
+// day or last week), in the business time zone.
+export function checkGoal(ctx, clientId, goalId, done = true, date = null) {
   const g = goalRows(ctx, clientId).find((x) => x.id === goalId);
   if (!g) throw notFound('Goal');
   if (g.kind !== 'custom') throw badRequest('This goal counts itself from training and check-ins.');
-  if (done) ctx.db.run('INSERT OR IGNORE INTO goal_checks (goal_id, client_id, date) VALUES (?, ?, ?)', g.id, clientId, today(ctx));
-  else ctx.db.run('DELETE FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date = ?', g.id, clientId, today(ctx));
+  const t = today(ctx), d = blank(date) ? t : date;
+  if (!isDate(d) || d > t || d < weekStart(t)) throw badRequest('Tick off a day from this week, up to today.');
+  if (done && d < localDate(g.created_at, zone(ctx))) throw badRequest(`This goal was set on ${fmtDay(localDate(g.created_at, zone(ctx)))}. Tick off a day from then on.`);
+  if (done) ctx.db.run('INSERT OR IGNORE INTO goal_checks (goal_id, client_id, date) VALUES (?, ?, ?)', g.id, clientId, d);
+  else ctx.db.run('DELETE FROM goal_checks WHERE goal_id = ? AND client_id = ? AND date = ?', g.id, clientId, d);
   return goalsFor(ctx, clientId).find((x) => x.id === g.id);
 }
 const goalTarget = (x) => {
@@ -200,11 +231,12 @@ export function markRead(ctx, clientId, { guardianId } = {}) {
   return { read: unread.length };
 }
 // Emails the athlete (when they have their own address) and every parent, with a link to see it.
-function notifyAthlete(ctx, c, subject, text) {
+// tab: the app tab the link opens (/app?token=…#education).
+function notifyAthlete(ctx, c, subject, text, { tab = null } = {}) {
   const base = ctx.publicUrl ?? '';
   const biz = getSetting(ctx, 'business_name');
   if (c.family_id) notifyFamily(ctx, c.family_id, subject, `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}`);
-  if (c.email) sendEmail(ctx, { to: c.email, subject, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}\n\n${biz}` }).catch(() => {});
+  if (c.email) sendEmail(ctx, { to: c.email, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}${tab ? `#${tab}` : ''}\n\n${biz}` }).catch(() => {});
 }
 const staffName = (actor) => actor?.name ?? actor?.label ?? 'Your coach';
 export function sendMessage(ctx, { clientId = null, contractId = null }, body = {}, actor) {
@@ -284,7 +316,19 @@ function testSummary(profile) {
   }
   return [...byTest.values()];
 }
+// How far is left to a target, in the test's own units: "0.13 s to go", "3 in to go", "2 ft 1 in to go".
+export function gapText(gap, unit, decimals = 2) {
+  if (gap == null || !(gap > 0)) return null;
+  if (unit === 'in' && gap >= 12) {
+    let ft = Math.floor(gap / 12), inch = Math.round(gap - ft * 12);
+    if (inch === 12) { ft++; inch = 0; }
+    return `${ft} ft${inch ? ` ${inch} in` : ''} to go`;
+  }
+  const u = UNIT_TEXT[unit] ?? unit;
+  return `${+gap.toFixed(unit === 'in' ? 1 : decimals)}${u ? ` ${u}` : ''} to go`;
+}
 function targetsFor(ctx, clientId, tests) {
+  const t = today(ctx);
   return ctx.db.all(`SELECT tt.*, t.key, t.name FROM test_targets tt JOIN perf_tests t ON t.id = tt.test_id WHERE tt.client_id = ? ORDER BY t.name`, clientId).map((x) => {
     const m = ctx.db.get('SELECT unit, better, decimals FROM perf_metrics WHERE test_id = ? ORDER BY sort LIMIT 1', x.test_id);
     const r = tests.find((t) => t.test === x.key);
@@ -294,8 +338,10 @@ function targetsFor(ctx, clientId, tests) {
       if (lower ? best <= x.target : best >= x.target) pct = 100;
       else if (first != null && first !== x.target) pct = Math.max(0, Math.min(99, Math.round(((lower ? first - best : best - first) / Math.abs(x.target - first)) * 100)));
     }
+    const gap = best == null || pct === 100 ? null : +(lower ? best - x.target : x.target - best).toFixed(Math.max(m.decimals ?? 2, 1));   // no float noise (0.19, not 0.19000000000000039)
     return { id: x.id, test: x.key, test_name: x.name, unit: m.unit, better: m.better, target: x.target, due_date: x.due_date, best, first, pct, reached: pct === 100,
-      best_text: fmtValue(best, m.unit, m.decimals), target_text: fmtValue(x.target, m.unit, m.decimals) };
+      best_text: fmtValue(best, m.unit, m.decimals), target_text: fmtValue(x.target, m.unit, m.decimals),
+      gap, gap_text: gapText(gap, m.unit, m.decimals), overdue: pct !== 100 && !!x.due_date && x.due_date < t };
   });
 }
 export function setTarget(ctx, clientId, body = {}, actor) {
@@ -519,6 +565,7 @@ function requireOpen(ctx, clientId, l) {
 export function education(ctx, clientId) {
   clientRow(ctx, clientId);
   const done = doneSet(ctx, clientId), t = today(ctx);
+  const seen = new Set(ctx.db.all('SELECT lesson_id FROM lesson_views WHERE client_id = ?', clientId).map((r) => r.lesson_id));
   const lessons = ctx.db.all(`SELECT * FROM lessons WHERE published = 1 AND ${ATHLETE_LESSON} ORDER BY position, created_at`);
   const locked = lockedCourses(ctx, clientId);
   const courses = ctx.db.all(`SELECT * FROM courses WHERE published = 1 AND audience = 'athletes' ORDER BY created_at`).map((c) => {
@@ -526,15 +573,19 @@ export function education(ctx, clientId) {
     return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done),
       ...(locked.has(c.id) ? { locked: true, price_cents: c.price_cents } : {}) };
   }).filter((c) => c.total > 0);
+  // The lesson to open next in a course: the first one not done yet.
+  const nextOf = (c) => { const n = c.lessons.find((l) => !l.done); return n ? { id: n.id, title: n.title } : null; };
   const assigned = assignmentRows(ctx, clientId).map((x) => {
     if (x.lesson_id) {
       const l = lessons.find((y) => y.id === x.lesson_id);
       if (!l) return null;
-      return { id: x.id, type: 'lesson', lesson_id: l.id, title: l.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: done.has(l.id), overdue: !done.has(l.id) && !!x.due_date && x.due_date < t };
+      return { id: x.id, type: 'lesson', lesson_id: l.id, title: l.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: done.has(l.id), opened: seen.has(l.id), overdue: !done.has(l.id) && !!x.due_date && x.due_date < t };
     }
     const c = courses.find((y) => y.id === x.course_id);
     if (!c) return null;
-    return { id: x.id, type: 'course', course_id: c.id, title: c.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: c.complete, progress: `${c.done} of ${c.total}`, overdue: !c.complete && !!x.due_date && x.due_date < t };
+    return { id: x.id, type: 'course', course_id: c.id, title: c.title, due_date: x.due_date, note: x.note, team: !!x.contract_id, done: c.complete, progress: `${c.done} of ${c.total}`,
+      opened: c.lessons.some((l) => seen.has(l.id)), next_lesson: nextOf(c),
+      overdue: !c.complete && !!x.due_date && x.due_date < t };
   }).filter(Boolean);
   return { assigned, courses, lessons: lessons.filter((l) => !l.course_id || !courses.some((c) => c.id === l.course_id)).map((l) => lessonItem(l, done)), completed: done.size, certificates: certificatesFor(ctx, clientId) };
 }
@@ -543,6 +594,7 @@ export function lessonFor(ctx, clientId, lessonId) {
   const l = ctx.db.get(`SELECT * FROM lessons WHERE id = ? AND published = 1 AND ${ATHLETE_LESSON}`, lessonId);
   if (!l) throw notFound('Lesson');
   requireOpen(ctx, clientId, l);
+  recordView(ctx, clientId, l.id);
   const course = l.course_id ? ctx.db.get('SELECT id, title FROM courses WHERE id = ? AND published = 1', l.course_id) : null;
   const siblings = course ? ctx.db.all('SELECT id, title FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', course.id) : [];
   const i = siblings.findIndex((s) => s.id === l.id);
@@ -550,7 +602,8 @@ export function lessonFor(ctx, clientId, lessonId) {
   return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: course ?? null,
     quiz: quiz ? { questions: quiz.map((x) => ({ q: x.q, choices: x.choices })), pass_pct: QUIZ_PASS_PCT, passed: passedQuiz(ctx, l.id, clientId), last: last ? { ...last, passed: !!last.passed } : null } : null,
     done: !!ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', l.id, clientId),
-    next: i >= 0 ? siblings[i + 1] ?? null : null, position: i >= 0 ? { n: i + 1, of: siblings.length } : null };
+    next: i >= 0 ? siblings[i + 1] ?? null : null, position: i >= 0 ? { n: i + 1, of: siblings.length } : null,
+    course_complete: siblings.length > 0 && siblings.every((x) => doneSet(ctx, clientId).has(x.id)) };
 }
 export function completeLesson(ctx, clientId, lessonId, done = true) {
   const l = lessonFor(ctx, clientId, lessonId);
@@ -690,57 +743,290 @@ export function reorderCourse(ctx, id, body = {}) {
   const c = getCourse(ctx, id);
   const ids = Array.isArray(body.lesson_ids) ? body.lesson_ids.map(String) : [];
   const mine = new Set(c.lessons.map((l) => l.id));
-  if (ids.length !== mine.size || !ids.every((x) => mine.has(x))) throw badRequest('Send every lesson in this course once, in the new order.');
+  if (ids.length !== mine.size || new Set(ids).size !== ids.length || !ids.every((x) => mine.has(x))) throw badRequest('That order doesn\'t match the lessons in this course. Reload the page and try again.');
   ctx.db.tx(() => ids.forEach((lid, i) => ctx.db.run('UPDATE lessons SET position = ? WHERE id = ?', i, lid)));
   return getCourse(ctx, id);
 }
 
-// Assign a lesson or a course to an athlete or a team. The athlete and their parents are emailed.
-export function assign(ctx, body = {}, actor) {
+// ---------- Assigning reading (coach side) ----------
+// Only published work can be assigned: a lesson, or a course with at least one published lesson. Parent courses show in
+// the portal on their own. Archived or deleted athletes and teams whose contract ended can't be given new reading, and an
+// athlete or team that already has the lesson or course isn't given it twice.
+const gone = (c) => String(c?.access_token ?? '').startsWith('gone_');
+const LIVE = `c.archived_at IS NULL AND c.access_token NOT LIKE 'gone_%'`;
+function assignableItem(ctx, body) {
   if (blank(body.lesson_id) === blank(body.course_id)) throw badRequest('Choose a lesson or a course.');
-  if (blank(body.client_id) === blank(body.contract_id)) throw badRequest('Choose an athlete or a team.');
-  const item = body.lesson_id ? getLesson(ctx, String(body.lesson_id)) : getCourse(ctx, String(body.course_id));
-  if (!item.published) throw conflict(`Publish "${item.title}" before assigning it.`);
-  const forParents = body.course_id ? item.audience === 'parents' : !!item.course_id && ctx.db.get(`SELECT 1 FROM courses WHERE id = ? AND audience = 'parents'`, item.course_id);
+  const kind = body.lesson_id ? 'lesson' : 'course';
+  const item = kind === 'lesson' ? getLesson(ctx, String(body.lesson_id)) : getCourse(ctx, String(body.course_id));
+  if (!item.published) throw conflict(`Publish "${item.title}" before assigning it. Athletes only see published ${kind}s.`);
+  const forParents = kind === 'course' ? item.audience === 'parents' : !!item.course_id && ctx.db.get(`SELECT 1 FROM courses WHERE id = ? AND audience = 'parents'`, item.course_id);
   if (forParents) throw conflict(`"${item.title}" is for parents. It shows in the parent portal on its own, so there's nothing to assign.`);
-  const who = body.client_id ? [clientRow(ctx, String(body.client_id))] : (teamRow(ctx, String(body.contract_id)), rosterClients(ctx, String(body.contract_id)));
-  const due = blank(body.due_date) ? null : body.due_date;
-  if (due && !isDate(due)) throw badRequest('due_date must be a date like 2026-12-01.');
+  if (kind === 'course' && !item.lessons.some((l) => l.published)) throw conflict(`"${item.title}" has no published lessons yet. Add or publish a lesson before assigning it.`);
+  return { item, kind };
+}
+function assignableClient(ctx, id) {
+  const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', String(id));
+  if (!c || gone(c)) throw notFound('Athlete');
+  if (c.archived_at) throw conflict(`${c.name} is archived. Restore them before assigning reading.`);
+  return c;
+}
+function assignableTeam(ctx, id) {
+  const t = ctx.db.get('SELECT t.id, t.name, t.status, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', String(id));
+  if (!t) throw notFound('Team');
+  if (t.status !== 'active') throw conflict(`${teamLabel(t)}'s contract has ended, so it can't be given new reading.`);
+  return t;
+}
+// A due date is a real day from today to a year out. Empty means no due date. keep: the date already saved (allowed
+// even when it has passed, so changing only the note works on an overdue assignment).
+function dueDate(ctx, x, { keep = null } = {}) {
+  if (blank(x)) return null;
+  if (!isDate(x)) throw badRequest('Pick a due date like 2026-12-01.');
+  if (x === keep) return x;
+  const t = today(ctx);
+  if (x < t) throw badRequest('Pick a due date from today on.');
+  if (x > addDaysToDate(t, 366)) throw badRequest('Pick a due date within a year.');
+  return x;
+}
+const itemCol = (kind) => (kind === 'lesson' ? 'lesson_id' : 'course_id');
+// Why an athlete already has this lesson or course: their own assignment, or one for a team they're on.
+function alreadyHas(ctx, kind, itemId, clientId) {
+  if (ctx.db.get(`SELECT 1 FROM lesson_assignments WHERE ${itemCol(kind)} = ? AND client_id = ?`, itemId, clientId)) return 'already has it';
+  const teams = teamsOf(ctx, clientId);
+  const t = teams.length ? ctx.db.get(`SELECT o.name AS org_name, t.name FROM lesson_assignments x JOIN team_contracts t ON t.id = x.contract_id JOIN organizations o ON o.id = t.org_id
+    WHERE x.${itemCol(kind)} = ? AND x.contract_id IN (${inList(teams)}) LIMIT 1`, itemId, ...teams) : null;
+  return t ? `has it through ${teamLabel(t)}` : null;
+}
+const assignedEmail = (ctx, c, kind, item, due, note, actor) => notifyAthlete(ctx, c, `New ${kind} for ${firstName(c)}: ${item.title}`,
+  `${staffName(actor).split(' ')[0]} assigned "${item.title}" to ${firstName(c)}${due ? ` (due ${fmtDay(due)})` : ''}.${note ? `\n\n${note}` : ''}`, { tab: 'education' });
+
+// Assign a lesson or a course to one athlete, a team (everyone on the roster, including athletes added later), or
+// several athletes at once with client_ids (athletes who already have it are skipped and named). Everyone assigned and
+// their parents are emailed.
+export function assign(ctx, body = {}, actor) {
+  if (Array.isArray(body.client_ids)) return assignMany(ctx, body, actor);
+  const { item, kind } = assignableItem(ctx, body);
+  if (blank(body.client_id) === blank(body.contract_id)) throw badRequest('Choose an athlete or a team.');
+  let who, label;
+  if (body.client_id) { const c = assignableClient(ctx, body.client_id); who = [c]; label = c.name; }
+  else { const t = assignableTeam(ctx, body.contract_id); who = rosterClients(ctx, t.id); label = teamLabel(t); }
+  const col = body.client_id ? 'client_id' : 'contract_id', whoId = body.client_id ? who[0].id : String(body.contract_id);
+  if (ctx.db.get(`SELECT 1 FROM lesson_assignments WHERE ${itemCol(kind)} = ? AND ${col} = ?`, item.id, whoId)) throw conflict(`${label} already has "${item.title}". Change the due date on that assignment instead.`);
+  const due = dueDate(ctx, body.due_date);
   const note = v.str(body.note, 'note', { max: 500, optional: true });
   const id = newId('lasg');
   ctx.db.run('INSERT INTO lesson_assignments (id, lesson_id, course_id, client_id, contract_id, due_date, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, body.lesson_id ? item.id : null, body.course_id ? item.id : null, body.client_id ? who[0].id : null, body.contract_id ? String(body.contract_id) : null, due, note, actor?.id ?? null, ctx.now());
-  const kind = body.lesson_id ? 'lesson' : 'course';
-  for (const c of who) notifyAthlete(ctx, c, `New ${kind} for ${firstName(c)}: ${item.title}`, `${staffName(actor).split(' ')[0]} assigned "${item.title}" to ${firstName(c)}${due ? ` (due ${fmtDay(due)})` : ''}.${note ? `\n\n${note}` : ''}`);
-  return { id, title: item.title, type: kind, due_date: due, note, recipients: who.length };
+    id, kind === 'lesson' ? item.id : null, kind === 'course' ? item.id : null, body.client_id ? whoId : null, body.contract_id ? whoId : null, due, note, actor?.id ?? null, ctx.now());
+  for (const c of who) assignedEmail(ctx, c, kind, item, due, note, actor);
+  return { id, title: item.title, type: kind, due_date: due, note, assigned_to: label, recipients: who.length };
+}
+export function assignMany(ctx, body = {}, actor) {
+  const { item, kind } = assignableItem(ctx, body);
+  const ids = [...new Set(body.client_ids.map((x) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean))];
+  if (!ids.length) throw badRequest('Choose at least one athlete.');
+  if (ids.length > 200) throw badRequest('Assign to 200 athletes or fewer at a time, or assign it to their team.');
+  const due = dueDate(ctx, body.due_date);
+  const note = v.str(body.note, 'note', { max: 500, optional: true });
+  // Every athlete is checked first; nothing is assigned while any of them can't be.
+  const rows = ids.map((id) => ctx.db.get('SELECT * FROM clients WHERE id = ?', id));
+  const missing = rows.filter((c) => !c || gone(c)).length, archived = rows.filter((c) => c && !gone(c) && c.archived_at);
+  if (missing) throw badRequest(`${missing === 1 ? 'One athlete' : `${missing} athletes`} you chose no longer ${missing === 1 ? 'exists' : 'exist'}. Reload the page and choose again.`);
+  if (archived.length) throw conflict(`${archived.map((c) => c.name).join(', ')} ${archived.length === 1 ? 'is' : 'are'} archived. Take them off the list, or restore them first.`);
+  const skipped = [], todo = [];
+  for (const c of rows) { const why = alreadyHas(ctx, kind, item.id, c.id); if (why) skipped.push({ id: c.id, name: c.name, reason: why }); else todo.push(c); }
+  if (!todo.length) throw conflict(skipped.length === 1 ? `${skipped[0].name} ${skipped[0].reason} ("${item.title}").` : `Everyone you chose already has "${item.title}".`);
+  const assigned = ctx.db.tx(() => todo.map((c) => {
+    const id = newId('lasg');
+    ctx.db.run('INSERT INTO lesson_assignments (id, lesson_id, course_id, client_id, contract_id, due_date, note, created_by, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+      id, kind === 'lesson' ? item.id : null, kind === 'course' ? item.id : null, c.id, due, note, actor?.id ?? null, ctx.now());
+    return { id: c.id, name: c.name, assignment_id: id };
+  }));
+  for (const c of todo) assignedEmail(ctx, c, kind, item, due, note, actor);
+  return { title: item.title, type: kind, due_date: due, note, assigned, skipped, recipients: assigned.length };
+}
+function assignmentRow(ctx, id) {
+  const x = ctx.db.get('SELECT * FROM lesson_assignments WHERE id = ?', id);
+  if (!x) throw notFound('Assignment');
+  return x;
+}
+// Change the due date (empty removes it) or the note. Nobody is emailed.
+export function updateAssignment(ctx, id, body = {}) {
+  const x = assignmentRow(ctx, id);
+  if (body.due_date === undefined && body.note === undefined) throw badRequest('Send a due_date or a note to change.');
+  const due = body.due_date === undefined ? x.due_date : dueDate(ctx, body.due_date, { keep: x.due_date });
+  const note = body.note === undefined ? x.note : v.str(body.note, 'note', { max: 500, optional: true });
+  ctx.db.run('UPDATE lesson_assignments SET due_date = ?, note = ? WHERE id = ?', due, note, id);
+  const { people, ...out } = assignmentView(ctx, progressIndex(ctx), assignmentWithNames(ctx, id), today(ctx));
+  return { ...out, people };
 }
 export function unassign(ctx, id) {
   if (!ctx.db.run('DELETE FROM lesson_assignments WHERE id = ?', id).changes) throw notFound('Assignment');
   return { id, deleted: true };
 }
+// The athlete (or a parent with them) opened a lesson. Only the first time is kept.
+function recordView(ctx, clientId, lessonId) {
+  ctx.db.run('INSERT OR IGNORE INTO lesson_views (lesson_id, client_id, opened_at) VALUES (?, ?, ?)', lessonId, clientId, ctx.now());
+}
+// A copy of a lesson, saved as a draft at the end of the same course.
+export function duplicateLesson(ctx, id) {
+  const l = getLesson(ctx, id);
+  return createLesson(ctx, { title: `${l.title} (copy)`.slice(0, 160), summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course_id: l.course_id, published: false,
+    quiz_text: l.quiz_text || undefined });
+}
 
-// The Education screen: every course and lesson with completions, and each assignment with who has finished.
+// ---------- Who has read what ----------
+// Everything needed to say where each athlete is on each assignment, loaded once.
+function progressIndex(ctx) {
+  const done = new Map(), opened = new Map(), courseLessons = new Map();
+  const at = (m, k, make) => m.get(k) ?? m.set(k, make()).get(k);
+  for (const r of ctx.db.all('SELECT lesson_id, client_id, completed_at FROM lesson_progress')) at(done, r.client_id, () => new Map()).set(r.lesson_id, r.completed_at);
+  for (const r of ctx.db.all('SELECT lesson_id, client_id, opened_at FROM lesson_views')) at(opened, r.client_id, () => new Map()).set(r.lesson_id, r.opened_at);
+  for (const r of ctx.db.all('SELECT id, course_id FROM lessons WHERE published = 1 AND course_id IS NOT NULL ORDER BY position, created_at')) at(courseLessons, r.course_id, () => []).push(r.id);
+  return { done, opened, courseLessons, rosters: new Map() };
+}
+// Where one athlete is on one assignment: finished (with the date), started part of a course, opened, or not started.
+function personStatus(ix, x, c) {
+  const mine = ix.done.get(c.id) ?? new Map(), seen = ix.opened.get(c.id) ?? new Map();
+  const base = { id: c.id, name: c.name };
+  if (x.lesson_id) {
+    const doneAt = mine.get(x.lesson_id) ?? null;
+    return { ...base, status: doneAt ? 'finished' : seen.has(x.lesson_id) ? 'opened' : 'not_started', completed_at: doneAt, opened_at: seen.get(x.lesson_id) ?? null };
+  }
+  const ids = ix.courseLessons.get(x.course_id) ?? [];
+  const dates = ids.map((id) => mine.get(id)).filter(Boolean).sort();
+  const finished = ids.length > 0 && dates.length === ids.length;
+  return { ...base, status: finished ? 'finished' : dates.length ? 'started' : ids.some((id) => seen.has(id)) ? 'opened' : 'not_started',
+    done: dates.length, of: ids.length, completed_at: finished ? dates.at(-1) : null };
+}
+const ASSIGNMENT_SQL = `SELECT x.*, l.title AS lesson_title, c.title AS course_title, cl.name AS client_name, cl.archived_at AS client_archived, cl.access_token AS client_token,
+    t.name AS team_name, t.status AS team_status, o.name AS org_name, u.name AS assigned_by,
+    (SELECT MAX(sent_at) FROM lesson_reminders r WHERE r.assignment_id = x.id) AS reminded_at
+  FROM lesson_assignments x LEFT JOIN lessons l ON l.id = x.lesson_id LEFT JOIN courses c ON c.id = x.course_id LEFT JOIN clients cl ON cl.id = x.client_id
+  LEFT JOIN team_contracts t ON t.id = x.contract_id LEFT JOIN organizations o ON o.id = t.org_id LEFT JOIN users u ON u.id = x.created_by`;
+const assignmentWithNames = (ctx, id) => ctx.db.get(`${ASSIGNMENT_SQL} WHERE x.id = ?`, id);
+// One assignment with every athlete's status. Archived athletes are left out (an assignment for one says so), so they
+// never make an assignment overdue; a team's roster is today's roster.
+function assignmentView(ctx, ix, x, t) {
+  const archived = !!x.client_id && (!!x.client_archived || gone({ access_token: x.client_token }));
+  let who;
+  if (x.client_id) who = archived ? [] : [{ id: x.client_id, name: x.client_name }];
+  else {
+    if (!ix.rosters.has(x.contract_id)) ix.rosters.set(x.contract_id, rosterClients(ctx, x.contract_id).map((c) => ({ id: c.id, name: c.name })));
+    who = ix.rosters.get(x.contract_id);
+  }
+  const order = { not_started: 0, opened: 1, started: 2, finished: 3 };
+  const people = who.map((c) => personStatus(ix, x, c)).sort((a, b) => order[a.status] - order[b.status] || a.name.localeCompare(b.name));
+  const finished = people.filter((p) => p.status === 'finished').length;
+  // A team whose contract ended keeps its reading, but it's never overdue and nobody on it is reminded.
+  const ended = !!x.contract_id && x.team_status !== 'active';
+  const status = archived ? 'archived' : people.length && finished === people.length ? 'finished' : x.due_date && x.due_date < t && people.length && !ended ? 'overdue' : 'open';
+  return { id: x.id, type: x.lesson_id ? 'lesson' : 'course', lesson_id: x.lesson_id, course_id: x.course_id, title: x.lesson_title ?? x.course_title,
+    client_id: x.client_id, contract_id: x.contract_id, assigned_to: x.client_id ? x.client_name : `${x.org_name} ${x.team_name}`, archived, team_ended: ended,
+    due_date: x.due_date, note: x.note, created_at: x.created_at, assigned_by: x.assigned_by ?? null, reminded_at: x.reminded_at ?? null, status,
+    finished, total: people.length, opened: people.filter((p) => p.status === 'opened' || p.status === 'started').length,
+    not_finished: people.filter((p) => p.status !== 'finished').map((p) => ({ id: p.id, name: p.name })).slice(0, 50), people };
+}
+const STATUS_ORDER = { overdue: 0, open: 1, finished: 2, archived: 3 };
+const byUrgency = (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || (a.due_date ?? '9999-12-31').localeCompare(b.due_date ?? '9999-12-31') || b.created_at.localeCompare(a.created_at);
+function allAssignments(ctx, ix = progressIndex(ctx)) {
+  const t = today(ctx);
+  return ctx.db.all(`${ASSIGNMENT_SQL} ORDER BY x.created_at DESC LIMIT 1000`).map((x) => assignmentView(ctx, ix, x, t)).sort(byUrgency);
+}
+
+// The Education screen: summary numbers, every assignment with each athlete's status (overdue first), every course and
+// lesson with how many finished and opened, and the latest lessons finished. Archived athletes aren't counted.
 export function educationReport(ctx) {
-  const lessons = ctx.db.all('SELECT l.*, (SELECT COUNT(*) FROM lesson_progress p WHERE p.lesson_id = l.id) AS completions FROM lessons l ORDER BY l.position, l.created_at')
-    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published, completions: l.completions, updated_at: l.updated_at }));
+  const ix = progressIndex(ctx);
+  const lessons = ctx.db.all(`SELECT l.*,
+      (SELECT COUNT(*) FROM lesson_progress p JOIN clients c ON c.id = p.client_id WHERE p.lesson_id = l.id AND ${LIVE}) AS completions,
+      (SELECT COUNT(*) FROM lesson_views w JOIN clients c ON c.id = w.client_id WHERE w.lesson_id = l.id AND ${LIVE} AND NOT EXISTS (SELECT 1 FROM lesson_progress p WHERE p.lesson_id = w.lesson_id AND p.client_id = w.client_id)) AS opened,
+      (SELECT COUNT(*) FROM lesson_assignments x WHERE x.lesson_id = l.id) AS assigned
+    FROM lessons l ORDER BY l.position, l.created_at`)
+    .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, position: l.position, published: !!l.published,
+      completions: l.completions, opened: l.opened, assigned: l.assigned, updated_at: l.updated_at }));
   const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
     certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, for_sale: !!c.for_sale && c.price_cents > 0, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
+    assigned: ctx.db.get('SELECT COUNT(*) AS n FROM lesson_assignments WHERE course_id = ?', c.id).n,
     parents_reading: c.audience === 'parents' ? ctx.db.get('SELECT COUNT(DISTINCT p.guardian_id) AS n FROM guardian_lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE l.course_id = ?', c.id).n : undefined }));
-  const finishedCourse = (courseId, clientId) => {
-    const ids = ctx.db.all('SELECT id FROM lessons WHERE course_id = ? AND published = 1', courseId).map((r) => r.id);
-    return ids.length > 0 && ids.every((lid) => ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', lid, clientId));
+  const assignments = allAssignments(ctx, ix);
+  const since = new Date(Date.parse(ctx.now()) - 7 * 86400000).toISOString();
+  const recent = ctx.db.all(`SELECT p.completed_at, p.client_id, c.name, l.id AS lesson_id, l.title, co.title AS course FROM lesson_progress p JOIN clients c ON c.id = p.client_id
+      JOIN lessons l ON l.id = p.lesson_id LEFT JOIN courses co ON co.id = l.course_id WHERE ${LIVE} ORDER BY p.completed_at DESC, p.rowid DESC LIMIT 40`);
+  const parentCourse = new Set(courses.filter((c) => c.audience === 'parents').map((c) => c.id));
+  const stats = {
+    open: assignments.filter((x) => x.status === 'open' || x.status === 'overdue').length,
+    overdue: assignments.filter((x) => x.status === 'overdue').length,
+    finished_7d: ctx.db.get(`SELECT COUNT(*) AS n FROM lesson_progress p JOIN clients c ON c.id = p.client_id WHERE p.completed_at >= ? AND ${LIVE}`, since).n,
+    readers_7d: ctx.db.get(`SELECT COUNT(DISTINCT p.client_id) AS n FROM lesson_progress p JOIN clients c ON c.id = p.client_id WHERE p.completed_at >= ? AND ${LIVE}`, since).n,
+    published: lessons.filter((l) => l.published && !parentCourse.has(l.course_id)).length, drafts: lessons.filter((l) => !l.published).length
   };
-  const assignments = ctx.db.all(`SELECT x.*, l.title AS lesson_title, c.title AS course_title, cl.name AS client_name, t.name AS team_name, o.name AS org_name FROM lesson_assignments x
-      LEFT JOIN lessons l ON l.id = x.lesson_id LEFT JOIN courses c ON c.id = x.course_id LEFT JOIN clients cl ON cl.id = x.client_id
-      LEFT JOIN team_contracts t ON t.id = x.contract_id LEFT JOIN organizations o ON o.id = t.org_id
-    ORDER BY x.created_at DESC LIMIT 200`).map((x) => {
-    const who = x.client_id ? ctx.db.all('SELECT id, name FROM clients WHERE id = ?', x.client_id) : rosterClients(ctx, x.contract_id);
-    const finished = who.filter((c) => (x.lesson_id ? !!ctx.db.get('SELECT 1 FROM lesson_progress WHERE lesson_id = ? AND client_id = ?', x.lesson_id, c.id) : finishedCourse(x.course_id, c.id)));
-    return { id: x.id, type: x.lesson_id ? 'lesson' : 'course', lesson_id: x.lesson_id, course_id: x.course_id, title: x.lesson_title ?? x.course_title,
-      client_id: x.client_id, contract_id: x.contract_id, assigned_to: x.client_id ? x.client_name : `${x.org_name} ${x.team_name}`, due_date: x.due_date, note: x.note, created_at: x.created_at,
-      finished: finished.length, total: who.length, not_finished: who.filter((c) => !finished.includes(c)).map((c) => ({ id: c.id, name: c.name })).slice(0, 50) };
-  });
-  return { courses, lessons: lessons.filter((l) => !l.course_id), assignments };
+  return { today: today(ctx), stats, courses, lessons: lessons.filter((l) => !l.course_id), assignments, recent };
+}
+// One lesson: who finished it and when, who opened it but hasn't finished, and where it's assigned (on its own or with its course).
+export function lessonProgress(ctx, lessonId) {
+  const l = getLesson(ctx, lessonId);
+  const course = l.course_id ? ctx.db.get('SELECT id, title, published, audience FROM courses WHERE id = ?', l.course_id) : null;
+  const finished = ctx.db.all(`SELECT c.id, c.name, p.completed_at FROM lesson_progress p JOIN clients c ON c.id = p.client_id WHERE p.lesson_id = ? AND ${LIVE} ORDER BY p.completed_at DESC`, l.id);
+  const opened = ctx.db.all(`SELECT c.id, c.name, w.opened_at FROM lesson_views w JOIN clients c ON c.id = w.client_id WHERE w.lesson_id = ? AND ${LIVE}
+    AND NOT EXISTS (SELECT 1 FROM lesson_progress p WHERE p.lesson_id = w.lesson_id AND p.client_id = w.client_id) ORDER BY w.opened_at DESC`, l.id);
+  const ix = progressIndex(ctx), t = today(ctx);
+  const assignments = ctx.db.all(`${ASSIGNMENT_SQL} WHERE x.lesson_id = ? OR (x.course_id IS NOT NULL AND x.course_id = ?) ORDER BY x.created_at DESC`, l.id, l.course_id ?? '')
+    .map((x) => assignmentView(ctx, ix, x, t)).map(({ people, not_finished, ...x }) => x);
+  return { id: l.id, title: l.title, published: l.published, course: course ? { id: course.id, title: course.title, published: !!course.published, audience: course.audience } : null,
+    finished, opened, assignments };
+}
+
+// ---------- Reading reminders ----------
+// A coach reminds everyone on an assignment who hasn't finished it (and their parents), or every overdue assignment at
+// once (one email per athlete listing all of theirs). No spam: an assignment is reminded at most every 12 hours, an
+// athlete gets at most one reading reminder every 12 hours, archived athletes are never reminded, and addresses that
+// asked for no more emails are left out.
+const REMIND_GAP_MS = 12 * 3600000;
+function reminderAddresses(ctx, c) {
+  const out = new Set(ctx.db.all('SELECT email FROM email_optouts').map((r) => String(r.email).toLowerCase()));
+  return { athlete: c.email && !out.has(c.email.toLowerCase()) ? c.email : null,
+    parents: c.family_id ? ctx.db.all('SELECT email FROM guardians WHERE family_id = ?', c.family_id).map((g) => g.email).filter((e) => e && !out.has(e.toLowerCase())) : [] };
+}
+const hoursText = (ms) => { const hrs = Math.max(1, Math.ceil(ms / 3600000)); return `${hrs} ${hrs === 1 ? 'hour' : 'hours'}`; };
+// items: Map of client id -> [{ assignment, person }]. One email per athlete (and one to each parent).
+function remindAthletes(ctx, items, actor) {
+  const since = new Date(Date.parse(ctx.now()) - REMIND_GAP_MS).toISOString();
+  const base = ctx.publicUrl ?? '', biz = getSetting(ctx, 'business_name'), coach = staffName(actor).split(' ')[0], t = today(ctx);
+  const reminded = [], skipped = [];
+  for (const [clientId, list] of items) {
+    const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);
+    if (!c || c.archived_at || gone(c)) continue;
+    if (ctx.db.get('SELECT 1 FROM lesson_reminders WHERE client_id = ? AND sent_at >= ?', c.id, since)) { skipped.push({ id: c.id, name: c.name, reason: 'reminded in the last 12 hours' }); continue; }
+    const to = reminderAddresses(ctx, c);
+    if (!to.athlete && !to.parents.length) { skipped.push({ id: c.id, name: c.name, reason: c.email || c.family_id ? 'asked for no more emails' : 'no email on file' }); continue; }
+    const lines = list.map(({ assignment: x, person: p }) => `- "${x.title}"${x.type === 'course' && p.of ? ` (${p.done} of ${p.of} lessons done)` : ''}${x.due_date ? `, ${x.due_date < t ? 'was due' : 'due'} ${fmtDay(x.due_date)}` : ''}`).join('\n');
+    const subject = list.length === 1 ? `Reminder: ${firstName(c)} has "${list[0].assignment.title}" to finish` : `Reminder: ${firstName(c)} has ${list.length} lessons to finish`;
+    const text = `${coach} sent a reminder. ${firstName(c)} still has this to finish:\n\n${lines}`;
+    if (to.athlete) sendEmail(ctx, { to: to.athlete, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}#education\n\n${biz}` }).catch(() => {});
+    for (const email of to.parents) sendEmail(ctx, { to: email, subject, text: `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}` }).catch(() => {});
+    for (const { assignment: x } of list) ctx.db.run('INSERT INTO lesson_reminders (id, assignment_id, client_id, sent_by, sent_at) VALUES (?, ?, ?, ?, ?)', newId('lrem'), x.id, c.id, actor?.id ?? null, ctx.now());
+    reminded.push({ id: c.id, name: c.name });
+  }
+  return { reminded, skipped };
+}
+export function remindAssignment(ctx, id, actor) {
+  assignmentRow(ctx, id);
+  const x = assignmentView(ctx, progressIndex(ctx), assignmentWithNames(ctx, id), today(ctx));
+  if (x.archived) throw conflict(`${x.assigned_to} is archived, so nobody is reminded.`);
+  if (x.team_ended) throw conflict(`${x.assigned_to}'s contract has ended, so nobody is reminded.`);
+  const wait = x.reminded_at ? REMIND_GAP_MS - (Date.parse(ctx.now()) - Date.parse(x.reminded_at)) : 0;
+  if (wait > 0) throw conflict(`This was reminded less than 12 hours ago. You can remind again in ${hoursText(wait)}.`);
+  const todo = x.people.filter((p) => p.status !== 'finished');
+  if (!todo.length) throw conflict(x.total ? 'Everyone has finished it, so there\'s nobody to remind.' : 'Nobody is on this roster yet.');
+  const out = remindAthletes(ctx, new Map(todo.map((p) => [p.id, [{ assignment: x, person: p }]])), actor);
+  return { id: x.id, title: x.title, ...out };
+}
+export function remindOverdue(ctx, actor) {
+  const since = Date.parse(ctx.now()) - REMIND_GAP_MS;
+  const due = allAssignments(ctx).filter((x) => x.status === 'overdue' && !(x.reminded_at && Date.parse(x.reminded_at) > since));
+  const items = new Map();
+  for (const x of due) for (const p of x.people) if (p.status !== 'finished') { if (!items.has(p.id)) items.set(p.id, []); items.get(p.id).push({ assignment: x, person: p }); }
+  if (!items.size) return { assignments: 0, reminded: [], skipped: [] };
+  return { assignments: due.length, ...remindAthletes(ctx, items, actor) };
 }
 
 // ---------- Parent education ----------
@@ -799,19 +1085,42 @@ export function addStarterParentCourses(ctx) {
 }
 
 // ---------- The three tabs, as the athlete or a parent sees them ----------
+// What happened on each day: workouts finished (with effort), sessions attended (booked classes, walk-in check-ins,
+// team sessions), in the business time zone.
+function dayDetails(ctx, clientId, from, to) {
+  const tz = zone(ctx), lo = zonedToUtc(from, '00:00', tz), hi = zonedToUtc(addDaysToDate(to, 1), '00:00', tz);
+  const out = new Map(), on = (iso) => { const d = localDate(iso, tz); if (!out.has(d)) out.set(d, { workouts: [], sessions: [] }); return out.get(d); };
+  const time = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+  // A log outlives a deleted program or workout (version 43): it shows the title it had then.
+  for (const r of ctx.db.all('SELECT COALESCE(w.title, l.workout_title, \'Workout\') AS title, l.completed_at, l.rpe FROM workout_logs l LEFT JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? AND l.completed_at >= ? AND l.completed_at < ? ORDER BY l.completed_at', clientId, lo, hi))
+    on(r.completed_at).workouts.push({ title: r.title, time: time(r.completed_at), effort: r.rpe ?? null });
+  for (const r of ctx.db.all(`SELECT s.name, s.starts_at FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?
+      UNION ALL SELECT s.name, s.starts_at FROM team_attendance a JOIN class_sessions s ON s.id = a.session_id WHERE a.client_id = ? AND s.starts_at >= ? AND s.starts_at < ? ORDER BY 2`, clientId, lo, hi, clientId, lo, hi))
+    on(r.starts_at).sessions.push({ name: r.name, time: time(r.starts_at) });
+  for (const r of ctx.db.all('SELECT k.created_at, l.name FROM check_ins k JOIN locations l ON l.id = k.location_id WHERE k.client_id = ? AND k.created_at >= ? AND k.created_at < ? ORDER BY k.created_at', clientId, lo, hi))
+    on(r.created_at).sessions.push({ name: `Checked in at ${r.name}`, time: time(r.created_at) });
+  return out;
+}
 export function accountability(ctx, clientId, { guardianId } = {}) {
   clientRow(ctx, clientId);
   const t = today(ctx), ws = weekStart(t), from = addDaysToDate(t, -27);
-  const days = trainingDays(ctx, clientId, from, t);
-  const checked = new Set(ctx.db.all('SELECT date FROM daily_checkins WHERE client_id = ? AND date BETWEEN ? AND ?', clientId, from, t).map((r) => r.date));
-  const messages = messagesFor(ctx, clientId, 30, { guardianId });
+  const days = trainingDays(ctx, clientId, from, t), details = dayDetails(ctx, clientId, from, t);
+  const checkins = new Map(ctx.db.all('SELECT * FROM daily_checkins WHERE client_id = ? AND date BETWEEN ? AND ?', clientId, from, t).map((r) => [r.date, r]));
+  const messages = messagesFor(ctx, clientId, 50, { guardianId });
   return {
     today: t, week_start: ws,
-    streaks: { active_weeks: activeWeekStreak(ctx, clientId), checkin_days: checkinStreak(ctx, clientId) },
+    streaks: { active_weeks: activeWeekStreak(ctx, clientId), checkin_days: checkinStreak(ctx, clientId), best_checkin_days: bestCheckinStreak(ctx, clientId) },
     this_week: counts(ctx, clientId, ws, addDaysToDate(ws, 6)), this_month: counts(ctx, clientId, `${t.slice(0, 8)}01`, t),
-    calendar: Array.from({ length: 28 }, (_, i) => { const d = addDaysToDate(from, i); return { date: d, trained: days.has(d), checked_in: checked.has(d) }; }),
-    checkin_today: shapeCheckin(ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, t)),
-    recent_checkins: ctx.db.all('SELECT * FROM daily_checkins WHERE client_id = ? ORDER BY date DESC LIMIT 7', clientId).map(shapeCheckin),
+    // Each day of the last four weeks, with what happened on it (tap a day to see it).
+    calendar: Array.from({ length: 28 }, (_, i) => {
+      const d = addDaysToDate(from, i), x = details.get(d) ?? { workouts: [], sessions: [] };
+      return { date: d, trained: days.has(d), checked_in: checkins.has(d), workouts: x.workouts, sessions: x.sessions, checkin: shapeCheckin(checkins.get(d)) };
+    }),
+    checkin_today: shapeCheckin(checkins.get(t)),
+    // Yesterday's answers, for "Same as yesterday".
+    checkin_yesterday: shapeCheckin(checkins.get(addDaysToDate(t, -1))),
+    // The last 7 days, newest first (days without a check-in are left out).
+    recent_checkins: [...checkins.values()].filter((c) => c.date >= addDaysToDate(t, -6)).sort((a, b) => b.date.localeCompare(a.date)).map(shapeCheckin),
     goals: goalsFor(ctx, clientId), messages, unread: messages.filter((m) => !m.read).length
   };
 }
@@ -882,3 +1191,23 @@ export function setRankings(ctx, body = {}) {
   return engagementSettings(ctx);
 }
 export const engagementSettings = (ctx) => ({ rankings: rankingsOn(ctx) ? 'on' : 'off', readiness_adjust: readinessOn(ctx) ? 'on' : 'off' });
+
+// Who can be given reading, for assigning to several athletes at once: every athlete who isn't archived (members and
+// team-only athletes), with the active teams they're on and the programs they're following, so a coach can pick by team,
+// by program or by hand.
+export function assignPicker(ctx) {
+  const teamsBy = new Map(), programsBy = new Map();
+  for (const r of ctx.db.all(`SELECT DISTINCT r.client_id, r.contract_id FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id WHERE r.active = 1 AND t.status = 'active' AND r.client_id IS NOT NULL`)) {
+    if (!teamsBy.has(r.client_id)) teamsBy.set(r.client_id, []);
+    teamsBy.get(r.client_id).push(r.contract_id);
+  }
+  for (const r of ctx.db.all('SELECT DISTINCT client_id, program_id FROM assignments WHERE active = 1')) {
+    if (!programsBy.has(r.client_id)) programsBy.set(r.client_id, []);
+    programsBy.get(r.client_id).push(r.program_id);
+  }
+  const athletes = ctx.db.all(`SELECT c.id, c.name, c.athlete_id, EXISTS (SELECT 1 FROM subscriptions s WHERE s.client_id = c.id AND s.status IN ('active', 'trialing')) AS member
+    FROM clients c WHERE ${LIVE} ORDER BY c.name`).map((c) => ({ id: c.id, name: c.name, athlete_id: c.athlete_id, member: !!c.member, team_ids: teamsBy.get(c.id) ?? [], program_ids: programsBy.get(c.id) ?? [] }));
+  const used = new Set([...programsBy.values()].flat());
+  return { athletes, teams: listTeams(ctx).map((t) => ({ id: t.id, label: t.label, roster_count: t.roster_count })),
+    programs: ctx.db.all('SELECT id, name FROM programs ORDER BY name').filter((p) => used.has(p.id)) };
+}

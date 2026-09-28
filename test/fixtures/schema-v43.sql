@@ -873,7 +873,7 @@ CREATE INDEX IF NOT EXISTS results_queue_status ON results_queue(status, provide
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   at TEXT NOT NULL,
-  actor_type TEXT NOT NULL,                     -- staff, api_key, parent, athlete (their app link), public, system
+  actor_type TEXT NOT NULL,                     -- staff, api_key, parent, public
   actor_id TEXT,
   actor_name TEXT,
   role TEXT,
@@ -1176,25 +1176,6 @@ CREATE TABLE IF NOT EXISTS lesson_assignments (
   CHECK ((lesson_id IS NULL) <> (course_id IS NULL)),
   CHECK ((client_id IS NULL) <> (contract_id IS NULL))
 );
--- ---- Version 44 (batch B11): Education, coach side ----
--- The first time an athlete (or a parent with them) opened a lesson, so coaches see "Opened" before "Finished".
-CREATE TABLE IF NOT EXISTS lesson_views (
-  lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  opened_at TEXT NOT NULL,
-  PRIMARY KEY (lesson_id, client_id)
-);
--- Reading reminders a coach sent: one row per athlete reminded. An assignment is reminded at most every 12 hours,
--- and an athlete gets at most one reading reminder every 12 hours, whichever assignment it was for.
-CREATE TABLE IF NOT EXISTS lesson_reminders (
-  id TEXT PRIMARY KEY,
-  assignment_id TEXT REFERENCES lesson_assignments(id) ON DELETE SET NULL,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  sent_by TEXT,
-  sent_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS lesson_reminders_client ON lesson_reminders(client_id, sent_at);
-CREATE INDEX IF NOT EXISTS lesson_reminders_assignment ON lesson_reminders(assignment_id, sent_at);
 -- Staff notes on a client: dated, with the author. Pinned notes show at the top of the client page; coach-only notes
 -- are never shown to front desk.
 CREATE TABLE IF NOT EXISTS client_notes (

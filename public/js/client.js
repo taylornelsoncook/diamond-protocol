@@ -12,7 +12,7 @@ try {
   if (tokenValue) localStorage.setItem('dp_client_token', tokenValue);
   else tokenValue = localStorage.getItem('dp_client_token');
 } catch { /* storage blocked: keep the token in memory */ }
-if (params.has('token')) history.replaceState(null, '', '/app');
+if (params.has('token')) history.replaceState(null, '', `/app${location.hash}`);   // keep #education and the like
 
 const root = document.getElementById('root');
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
@@ -29,7 +29,10 @@ const live = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' 
 let spoken = [];
 const say = (msg) => { spoken.push(msg); if (spoken.length === 1) queueMicrotask(() => { live.textContent = spoken.join(' '); spoken = []; }); };
 
-const state = { tab: 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map() };
+// A link like /app?token=…#education opens that tab, and changing the # while the app is open switches tabs.
+const TAB_KEYS = ['workout', 'accountability', 'performance', 'education'];
+const hashTab = () => { const k = location.hash.replace(/^#\/?/, '').toLowerCase(); return TAB_KEYS.includes(k) ? k : null; };
+const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map() };
 const view = h('div', { class: 'c-view' });
 const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), post: (p, b) => api('POST', `/app/api/${p}`, b ?? {}) }, onData: () => drawTabs() });
 const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
@@ -40,6 +43,7 @@ function drawTabs() {
 }
 function show(tab) {
   state.tab = tab;
+  if ((hashTab() ?? 'workout') !== tab) history.replaceState(null, '', `${location.pathname}${location.search}${tab === 'workout' ? '' : `#${tab}`}`);
   drawTabs();
   window.scrollTo(0, 0);
   if (tab === 'workout') {
@@ -54,6 +58,7 @@ function show(tab) {
   fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, ENGAGE_TABS.find(([k]) => k === tab)[1])), where);
   engage.render(where, tab);
 }
+window.addEventListener('hashchange', () => { const k = hashTab() ?? 'workout'; if (k !== state.tab && root.contains(tabs)) show(k); });
 async function refresh() {
   try { const home = await api('GET', '/app/api/home'); state.home = home; if (state.tab === 'workout' && !state.done && !editing()) render(); }
   catch { /* offline: keep what's on screen */ }
@@ -71,7 +76,7 @@ async function load() {
   fill(root, view, tabs, live);
   state.home = home;
   drawTabs();
-  if (state.tab === 'workout') render();
+  if (state.tab === 'workout') render(); else show(state.tab);
   engage.load().then(() => { if (state.tab !== 'workout') show(state.tab); }).catch(() => {});
   flush();
 }

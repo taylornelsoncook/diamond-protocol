@@ -72,6 +72,8 @@ export function exportFamily(ctx, familyId) {
       workout_sets: per(`SELECT l.completed_at, s.exercise_name AS exercise, s.set_no, s.weight, s.reps FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id WHERE l.client_id = ? ORDER BY l.completed_at, s.exercise_name, s.set_no`, k.id),
       daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
+      lessons_opened: per(`SELECT l.title AS lesson, v.opened_at FROM lesson_views v JOIN lessons l ON l.id = v.lesson_id WHERE v.client_id = ? ORDER BY v.opened_at`, k.id),
+      reading_reminders: per(`SELECT sent_at FROM lesson_reminders WHERE client_id = ? ORDER BY sent_at`, k.id),
       quizzes: per(`SELECT l.title AS lesson, q.score, q.total, q.passed, q.created_at FROM quiz_attempts q JOIN lessons l ON l.id = q.lesson_id WHERE q.client_id = ? ORDER BY q.created_at`, k.id),
       certificates: per(`SELECT c.title AS course, x.issued_at FROM course_certificates x JOIN courses c ON c.id = x.course_id WHERE x.client_id = ? ORDER BY x.issued_at`, k.id),
       progress_notes: per(`SELECT s.name AS testing_day, s.date, n.body AS note, n.approved_at FROM progress_notes n JOIN perf_sessions s ON s.id = n.perf_session_id WHERE n.client_id = ? AND n.approved_at IS NOT NULL ORDER BY s.date`, k.id),
@@ -118,12 +120,12 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       // Team rosters: the athlete comes off, and the line keeps no name or ID (team attendance counts stay).
       ctx.db.run(`UPDATE team_roster SET name = 'Deleted athlete', athlete_id = NULL, position = NULL, grad_year = NULL, active = 0 WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
-      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
-      ctx.db.run(`UPDATE sales SET receipt_email = NULL, receipt_token = NULL WHERE client_id = ?`, id);
+      ctx.db.run(`UPDATE sales SET receipt_email = NULL, receipt_token = NULL WHERE client_id = ?`, id);   // sales stay; where receipts went and their links go
       ctx.db.run(`UPDATE bookings SET note = NULL WHERE client_id = ?`, id);                       // a note to the coach (parent portal)
-      ctx.db.run(`DELETE FROM membership_requests WHERE client_id = ?`, id);   // sales stay; where receipts went and their links go
+      ctx.db.run(`DELETE FROM membership_requests WHERE client_id = ?`, id);
       // Membership payments and refunds stay as amounts; the free text typed about them (reasons, check numbers) goes.
       ctx.db.run(`UPDATE invoices SET void_reason = NULL, paid_reference = NULL, last_error = NULL WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE invoice_refunds SET reason = NULL WHERE invoice_id IN (SELECT id FROM invoices WHERE client_id = ?)`, id);
@@ -141,6 +143,8 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
     ctx.db.run('DELETE FROM guardian_lesson_progress WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
     ctx.db.run('DELETE FROM guardian_message_reads WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
+    // The audit log keeps what was done and by which record, but not the names of the family's parents or athletes.
+    ctx.db.run(`UPDATE audit_log SET actor_name = NULL WHERE (actor_type = 'parent' AND actor_id IN (SELECT id FROM guardians WHERE family_id = ?)) OR (actor_type = 'athlete' AND actor_id IN (${kids.map(() => '?').join(', ') || 'NULL'}))`, familyId, ...kids);
     ctx.db.run('DELETE FROM profile_claims WHERE family_id = ?', familyId);
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);                            // their portal sessions and calendar feeds go with them
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, card_exp = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);

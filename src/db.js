@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 43;
+const SCHEMA_VERSION = 44;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -82,7 +82,9 @@ const ADDED_TABLES = {
   // ---- Version 42 (batch B14): API key request log, staff "forgot password" links ----
   42: ['api_requests', 'password_resets'],
   // ---- Version 43: owner decisions (every membership charge attempt, for late approvals) ----
-  43: ['invoice_charges']
+  43: ['invoice_charges'],
+  // ---- Version 44 (batch B11): Education, coach side: lessons opened, reading reminders sent ----
+  44: ['lesson_views', 'lesson_reminders']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41

@@ -1,4 +1,4 @@
-// Databases from earlier versions (schema 30 to 42) open with this version: new columns and tables are
+// Databases from earlier versions (schema 30 to 43) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +14,7 @@ import { syncLibrary, getTest, updateTest, getSession } from '../src/services/pe
 import { seedPresets } from '../src/services/library.js';
 import { recentUploads, undoUpload } from '../src/services/uploads.js';
 
-const LATEST = 43;   // the schema version every upgrade ends on
+const LATEST = 44;   // the schema version every upgrade ends on
 
 // Every database from before version 36 gains the point-of-sale pieces (version 36), and every one from before version 37
 // puts roster-only athletes on a profile of their own (version 37). These two helpers add a partly refunded cash sale and
@@ -811,7 +811,7 @@ test('a version 39 database keeps its billing, schedule and Today data and gains
 
 // Version 40 (9dc3cc8: Billing, Schedule and Today, Programs) to 41 (parent portal): what the earlier blocks wrote is kept
 // (a sale's booking, workout effort, exercise categories), and the parent portal gains membership requests, profile
-// claims, the card's expiry, the calendar feed, a booking's note for the coach and signed-in devices (ending at 43). A portal session
+// claims, the card's expiry, the calendar feed, a booking's note for the coach and signed-in devices (ending at the latest version). A portal session
 // from before the upgrade keeps working (its device details are simply empty).
 test('a version 40 database keeps its data and gains the parent portal tables and columns, opened twice', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -1062,8 +1062,8 @@ test('a version 42 database keeps keys, devices, webhooks and portal data and ga
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Upgraded from 40, 41 or 42, a database has the same tables and columns as a brand-new one.
-test('databases upgraded from versions 40, 41 and 42 have the same tables and columns as a new one', () => {
+// Upgraded from 40, 41, 42 or 43, a database has the same tables and columns as a brand-new one.
+test('databases upgraded from versions 40, 41, 42 and 43 have the same tables and columns as a new one', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   try {
     const shape = (db) => Object.fromEntries(db.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
@@ -1071,7 +1071,7 @@ test('databases upgraded from versions 40, 41 and 42 have the same tables and co
     const fresh = openDb(join(dir, 'new.db'));
     const want = shape(fresh);
     fresh.close();
-    for (const v of [40, 41, 42]) {
+    for (const v of [40, 41, 42, 43]) {
       const file = join(dir, `v${v}.db`);
       const old = new DatabaseSync(file);
       old.exec(readFileSync(new URL(`./fixtures/schema-v${v}.sql`, import.meta.url), 'utf8'));
@@ -1079,6 +1079,86 @@ test('databases upgraded from versions 40, 41 and 42 have the same tables and co
       old.close();
       const db = openDb(file);
       assert.deepEqual(shape(db), want, `upgraded from ${v}`);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- Version 44 (batch B11): Education, coach side ----
+test('a version 40 database gains lesson opens and reading reminders, keeps its reading, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v40.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 40');
+    const at = '2026-09-01T17:00:00.000Z';
+    old.exec(`INSERT INTO clients (id, name, athlete_id, access_token, created_at) VALUES ('cli_ava', 'Ava Lopez', 'AVALOP2026', 'tok-ava', '${at}')`);
+    old.exec(`INSERT INTO lessons (id, title, published, position, created_at, updated_at) VALUES ('les_1', 'Sleep', 1, 0, '${at}', '${at}')`);
+    old.exec(`INSERT INTO lesson_progress (lesson_id, client_id, completed_at) VALUES ('les_1', 'cli_ava', '${at}')`);
+    old.exec(`INSERT INTO lesson_assignments (id, lesson_id, client_id, due_date, note, created_at) VALUES ('lasg_1', 'les_1', 'cli_ava', '2026-09-10', 'Read it', '${at}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.equal(db.get('PRAGMA user_version').user_version, LATEST, `round ${round}`);
+      assert.deepEqual(cols('lesson_views'), ['lesson_id', 'client_id', 'opened_at']);
+      assert.deepEqual(cols('lesson_reminders'), ['id', 'assignment_id', 'client_id', 'sent_by', 'sent_at']);
+      assert.deepEqual({ ...db.get(`SELECT due_date, note FROM lesson_assignments WHERE id = 'lasg_1'`) }, { due_date: '2026-09-10', note: 'Read it' }, `reading is kept, round ${round}`);
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lesson_progress').n, 1);
+      if (round === 1) {
+        db.run(`INSERT INTO lesson_views (lesson_id, client_id, opened_at) VALUES ('les_1', 'cli_ava', ?)`, at);
+        db.run(`INSERT INTO lesson_reminders (id, assignment_id, client_id, sent_at) VALUES ('lrem_1', 'lasg_1', 'cli_ava', ?)`, at);
+      }
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lesson_views').n, 1, `round ${round}`);
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lesson_reminders').n, 1, `round ${round}`);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 43 (d18cf97: the parent portal, API & integrations, Staff & security and the owner's decisions together) to 44
+// (Education): the reading, charge tries, leads for a coach and workout logs that outlive their program are kept; the
+// version 43 block does not run again (a staff discount limit set after it stays); the Education tables are added.
+test('a version 43 database keeps its reading, charge tries and orphaned logs and gains lesson opens and reading reminders, opened twice', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v43.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 43');
+    const at = '2026-09-01T17:00:00.000Z';
+    old.exec(`INSERT INTO settings (key, value) VALUES ('staff_discount_max_pct', '10')`);
+    old.exec(`INSERT INTO users (id, email, name, password_hash, role, active, created_at) VALUES ('usr_c', 'c@x.dev', 'Carl', 'x', 'coach', 1, '${at}')`);
+    old.exec(`INSERT INTO clients (id, name, athlete_id, access_token, created_at) VALUES ('cli_ava', 'Ava Lopez', 'AVALOP2026', 'tok-ava', '${at}')`);
+    old.exec(`INSERT INTO plans (id, name, price_cents, trial_days, active, created_at) VALUES ('plan_1', 'Monthly', 15000, 0, 1, '${at}')`);
+    old.exec(`INSERT INTO subscriptions (id, client_id, plan_id, status, current_period_start, current_period_end, created_at, updated_at) VALUES ('sub_1', 'cli_ava', 'plan_1', 'past_due', '${at}', '2026-10-01T17:00:00.000Z', '${at}', '${at}')`);
+    old.exec(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, auto_attempts, created_at) VALUES ('inv_1', 'sub_1', 'cli_ava', 15000, 'failed', '${at}', '2026-10-01T17:00:00.000Z', 3, 1, '${at}')`);
+    old.exec(`INSERT INTO leads (id, parent_name, email, source, status, coach_id, created_at, updated_at) VALUES ('lead_1', 'Gia', 'gia@example.com', 'inquiry', 'new', 'usr_c', '${at}', '${at}')`);
+    old.exec(`INSERT INTO workout_logs (id, client_id, workout_id, program_name, workout_title, rpe, completed_at) VALUES ('log_1', 'cli_ava', NULL, 'Strength', 'Lower body', 7, '${at}')`);
+    old.exec(`INSERT INTO lessons (id, title, published, position, created_at, updated_at) VALUES ('les_1', 'Sleep', 1, 0, '${at}', '${at}')`);
+    old.exec(`INSERT INTO lesson_progress (lesson_id, client_id, completed_at) VALUES ('les_1', 'cli_ava', '${at}')`);
+    old.exec(`INSERT INTO lesson_assignments (id, lesson_id, client_id, due_date, note, created_at) VALUES ('lasg_1', 'les_1', 'cli_ava', '2026-09-10', 'Read it', '${at}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.equal(db.get('PRAGMA user_version').user_version, LATEST, `round ${round}`);
+      assert.equal(db.get('PRAGMA integrity_check').integrity_check, 'ok');
+      assert.deepEqual(cols('lesson_views'), ['lesson_id', 'client_id', 'opened_at']);
+      assert.deepEqual(cols('lesson_reminders'), ['id', 'assignment_id', 'client_id', 'sent_by', 'sent_at']);
+      assert.equal(db.get(`SELECT value FROM settings WHERE key = 'staff_discount_max_pct'`).value, '10', 'the version 43 block does not run again');
+      assert.deepEqual({ ...db.get(`SELECT attempts, auto_attempts FROM invoices WHERE id = 'inv_1'`) }, { attempts: 3, auto_attempts: 1 });
+      assert.equal(db.get(`SELECT coach_id FROM leads WHERE id = 'lead_1'`).coach_id, 'usr_c');
+      assert.deepEqual({ ...db.get(`SELECT workout_id, workout_title, rpe FROM workout_logs WHERE id = 'log_1'`) }, { workout_id: null, workout_title: 'Lower body', rpe: 7 }, 'a log without its workout is kept');
+      assert.deepEqual({ ...db.get(`SELECT due_date, note FROM lesson_assignments WHERE id = 'lasg_1'`) }, { due_date: '2026-09-10', note: 'Read it' }, `reading is kept, round ${round}`);
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lesson_progress').n, 1);
+      if (round === 1) {
+        db.run(`INSERT INTO lesson_views (lesson_id, client_id, opened_at) VALUES ('les_1', 'cli_ava', ?)`, at);
+        db.run(`INSERT INTO lesson_reminders (id, assignment_id, client_id, sent_by, sent_at) VALUES ('lrem_1', 'lasg_1', 'cli_ava', 'usr_c', ?)`, at);
+      }
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lesson_views').n, 1, `the second open keeps data written after the upgrade, round ${round}`);
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lesson_reminders').n, 1, `round ${round}`);
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

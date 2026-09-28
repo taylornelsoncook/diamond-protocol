@@ -147,7 +147,8 @@ test('messages: coach writes, athlete sees them unread, opening marks them read;
   assert.equal(acc.unread, 0);
   assert.equal(acc.messages[0].read, true);
 
-  assert.equal((await coach('POST', `/v1/teams/${team.id}/messages`, { body: 'Bring water Thursday.' })).body.recipients, 1);
+  // Every roster athlete has a profile (one profile per athlete), so the team message reaches all three.
+  assert.equal((await coach('POST', `/v1/teams/${team.id}/messages`, { body: 'Bring water Thursday.' })).body.recipients, 3);
   acc = (await me('GET', 'engage')).body.accountability;
   assert.ok(acc.messages.find((x) => x.body === 'Bring water Thursday.' && x.team && !x.read));
   assert.ok(!(await athlete(cole)('GET', 'engage')).body.accountability.messages.some((x) => x.team));
@@ -262,9 +263,9 @@ test('education: lessons, courses, assignments and completion, with unpublished 
   assert.deepEqual([row.finished, row.total, row.assigned_to], [1, 1, 'Ava Lopez']);
   assert.equal(report.courses.find((x) => x.id === c.id).lessons.find((l) => l.id === l1.id).completions, 1);
 
-  // Team reading reaches roster athletes with the app.
+  // Team reading reaches every roster athlete (each has a profile and the app).
   const t = await coach('POST', '/v1/lesson-assignments', { lesson_id: l1.id, contract_id: team.id });
-  assert.equal(t.body.recipients, 1);
+  assert.equal(t.body.recipients, 3);
   assert.ok((await me('GET', 'engage')).body.education.assigned.find((x) => x.id === t.body.id && x.team && x.done));
   await coach('PATCH', `/v1/lessons/${l1.id}`, { published: false });
   assert.equal((await me('GET', `lessons/${l1.id}`)).status, 404, 'unpublishing hides it again');

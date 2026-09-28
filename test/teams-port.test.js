@@ -87,7 +87,7 @@ test('names that match a client you already have can be linked instead of added 
   const ava = (await owner('POST', '/v1/clients', { name: 'Ava Lopez', email: 'ava@example.com' })).body;
   await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'Zoe Patel' });
   const plan = (await owner('POST', `/v1/team-contracts/${c.id}/roster/check`, { names: 'ava lopez, Winger, 2031\nZoe Patel\nSofia Ramirez' })).body;
-  assert.deepEqual(plan.counts, { new: 1, match: 1, skip: 1, error: 0 });
+  assert.deepEqual(plan.counts, { new: 1, link: 0, match: 1, skip: 1, error: 0 });
   assert.equal(plan.rows[0].matches[0].id, ava.id);
   assert.equal((await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'ava lopez\nSofia Ramirez', links: { 1: 'cli_not_a_match' } })).status, 409, 'a link must be one of the matches');
   assert.equal((await owner('POST', `/v1/team-contracts/${c.id}/roster`, { names: 'ava lopez\nSofia Ramirez', links: { 2: ava.id } })).status, 409, 'a line that doesn\'t match can\'t be linked');

@@ -331,11 +331,10 @@ test('review: team roster attendance counts as a visit and as last seen', async 
   const c = await kid('Tia Teamvisit');
   const school = (await owner('POST', '/v1/team-contracts', { organization: { name: 'Roosevelt HS', contact_email: 'ad@roosevelt.example' }, name: 'JV', monthly_cents: 50000 })).body;
   assert.equal((await owner('POST', `/v1/team-contracts/${school.id}/roster/existing`, { client_id: c.id })).status, 201);
-  const roster = app.ctx.db.get('SELECT id FROM team_roster WHERE client_id = ?', c.id);
   const s = new Date(Date.now() - 26 * 3600000).toISOString(), e = new Date(Date.now() - 25 * 3600000).toISOString();
   app.ctx.db.run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, status, created_at) VALUES ('cls_team_visit', 'JV lift', 'team', ?, ?, ?, 30, 'scheduled', ?)`, facility.id, s, e, s);
   assert.equal((await coach('GET', `/v1/clients/${c.id}/attendance`)).body.summary.visits_30, 0);
-  app.ctx.db.run('INSERT INTO team_attendance (session_id, roster_id, created_at) VALUES (?, ?, ?)', 'cls_team_visit', roster.id, e);
+  app.ctx.db.run('INSERT INTO team_attendance (session_id, client_id, created_at) VALUES (?, ?, ?)', 'cls_team_visit', c.id, e);
   const a = (await coach('GET', `/v1/clients/${c.id}/attendance`)).body;
   assert.equal(a.summary.visits_30, 1);
   assert.equal(a.summary.last_visit_at, s);

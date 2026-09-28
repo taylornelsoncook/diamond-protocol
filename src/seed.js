@@ -227,7 +227,8 @@ const hillCountry = ctx.db.get(`SELECT id FROM team_contracts WHERE name = '14U 
 teams.addRoster(ctx, hillCountry, { name: 'Ava Lopez', position: 'Winger', grad_year: 2031, client_id: lopez.id });
 teams.addRoster(ctx, hillCountry, { names: 'Sofia Ramirez, Midfield, 2031\nEmma Clarke, Defender, 2031\nHannah Brooks, Forward, 2030\nZoe Patel, Goalkeeper, 2031' });
 teams.addRoster(ctx, westlake.id, { name: 'Cole Park', position: 'WR', grad_year: 2029, client_id: cole.id });
-const roster = (contractId) => ctx.db.all('SELECT id, name FROM team_roster WHERE contract_id = ? AND client_id IS NULL AND active = 1 ORDER BY name', contractId);
+// Team-only athletes: on the roster with a profile of their own, no family (Ava and Cole train privately too).
+const roster = (contractId) => ctx.db.all('SELECT r.id, r.name FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND c.family_id IS NULL AND r.active = 1 ORDER BY r.name', contractId);
 const preseason = addDaysToDate(today, -9);
 const hcDay = perf.createSession(ctx, { name: 'Hill Country preseason testing', date: preseason, contract_id: hillCountry, tests: ['dash_40yd', 'vertical_standing', 'broad_jump'] });
 const hcVals = [[6.05, 16, 74], [5.88, 17.5, 79], [6.21, 15, 70], [5.97, 16.5, 76]];

@@ -1,6 +1,7 @@
 import { newId, v, badRequest, notFound, conflict, localDate, isDate } from '../util.js';
 import { getSetting } from './families.js';
 import { findByAthleteId } from './athlete-ids.js';
+import { activeRoster } from './teams.js';
 import { unitFromHeader } from './units.js';
 import { listTests, getTest, getSession, recordResults, rangeOf, outOfRange, rangeText } from './performance.js';
 import { parseCsv, guessMapping } from './perf-import.js';
@@ -33,7 +34,7 @@ function templateIndex(ctx) {
 
 function athletesFor(ctx, { session_id, contract_id, client_ids }) {
   if (session_id) return getSession(ctx, session_id).athletes.map((a) => ({ athlete_id: a.athlete_id, name: a.name }));
-  if (contract_id) return ctx.db.all('SELECT athlete_id, name FROM team_roster WHERE contract_id = ? AND active = 1 ORDER BY name', contract_id);
+  if (contract_id) return activeRoster(ctx, contract_id).map((r) => ({ athlete_id: r.athlete_id, name: r.name }));
   const ids = String(client_ids ?? '').split(',').filter(Boolean);
   if (ids.length) return ids.map((id) => ctx.db.get('SELECT athlete_id, name FROM clients WHERE id = ?', id)).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
   return [];
@@ -142,8 +143,8 @@ function checkUpload(ctx, { headers, rows, options }) {
     if (!rawId) return err(rowNo, idCol, 'This row has results but no Athlete ID.');
     const who = findByAthleteId(ctx, rawId);
     if (!who) return err(rowNo, idCol, /^[A-Za-z]{6}\d{4}(-\d{1,3})?$/.test(rawId) ? `No athlete has the ID ${rawId.toUpperCase()}.` : `"${rawId}" isn't an Athlete ID (they look like AVALOP2026).`);
-    const key = who.client_id ?? who.roster_id;
-    if (!athleteCache.has(key)) athleteCache.set(key, who.client_id ? ctx.db.get('SELECT name, athlete_id FROM clients WHERE id = ?', key) : ctx.db.get('SELECT name, athlete_id FROM team_roster WHERE id = ?', key));
+    const key = who.client_id;   // an old team roster ID finds the athlete's profile too
+    if (!athleteCache.has(key)) athleteCache.set(key, ctx.db.get('SELECT name, athlete_id FROM clients WHERE id = ?', key));
     const profile = athleteCache.get(key);
     if (roles.id && roles.name && row[roles.name] && !sameName(row[roles.name], profile.name)) return err(rowNo, roles.name, `${profile.athlete_id} is ${profile.name}, but this row says "${row[roles.name]}". Check the ID or the name.`, profile.athlete_id);
     let date = roles.date && row[roles.date] ? String(excelDate(row[roles.date])).trim() : null;
@@ -184,7 +185,7 @@ function checkUpload(ctx, { headers, rows, options }) {
       const bk = `${key}|${test.id}|${metric.key}|${it.side ?? ''}`;
       if (!bests.has(bk)) {
         const agg = metric.better === 'lower' ? 'MIN(value)' : metric.better === 'higher' ? 'MAX(value)' : '(SELECT value FROM perf_results x WHERE x.id = MAX(r.id))';
-        bests.set(bk, ctx.db.get(`SELECT ${metric.better === 'none' ? 'value AS b FROM perf_results r' : `${agg} AS b FROM perf_results r`} WHERE ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND voided = 0 AND COALESCE(side, '') = ?${metric.better === 'none' ? ' ORDER BY recorded_at DESC LIMIT 1' : ''}`, key, test.id, metric.key, it.side ?? '')?.b ?? null);
+        bests.set(bk, ctx.db.get(`SELECT ${metric.better === 'none' ? 'value AS b FROM perf_results r' : `${agg} AS b FROM perf_results r`} WHERE client_id = ? AND test_id = ? AND metric = ? AND voided = 0 AND COALESCE(side, '') = ?${metric.better === 'none' ? ' ORDER BY recorded_at DESC LIMIT 1' : ''}`, key, test.id, metric.key, it.side ?? '')?.b ?? null);
       }
       const ref = bests.get(bk);
       if (ref != null) {
@@ -215,7 +216,7 @@ const SAME = 1e-9;
 function planItems(ctx, check) {
   const sessionId = check.session?.id ?? null;
   for (const it of check.items) {
-    const col = it.who.client_id ? 'client_id' : 'roster_id', wid = it.who.client_id ?? it.who.roster_id;
+    const col = 'client_id', wid = it.who.client_id;
     const slot = sessionId
       ? ctx.db.all(`SELECT id, value, source FROM perf_results WHERE session_id = ? AND ${col} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND COALESCE(attempt, 1) = ? AND voided = 0`,
         sessionId, wid, it.test.id, it.metric.key, it.side ?? '', it.attempt ?? 1)
@@ -231,15 +232,15 @@ function planItems(ctx, check) {
   const setAside = new Set(check.items.flatMap((it) => it.replaces));
   const groups = new Map();
   for (const it of check.items) {
-    const k = `${it.who.client_id ?? it.who.roster_id}|${it.test.id}|${it.metric.key}|${it.side ?? ''}`;
+    const k = `${it.who.client_id}|${it.test.id}|${it.metric.key}|${it.side ?? ''}`;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(it);
   }
   for (const items of groups.values()) {
     const { who, test, metric, side } = items[0];
     const lower = metric.better === 'lower';
-    const rows = ctx.db.all(`SELECT id, value FROM perf_results WHERE ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND voided = 0`,
-      who.client_id ?? who.roster_id, test.id, metric.key, side ?? '').filter((r) => !setAside.has(r.id)).map((r) => r.value);
+    const rows = ctx.db.all(`SELECT id, value FROM perf_results WHERE client_id = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND voided = 0`,
+      who.client_id, test.id, metric.key, side ?? '').filter((r) => !setAside.has(r.id)).map((r) => r.value);
     const prev = metric.better === 'none' || !rows.length ? null : lower ? Math.min(...rows) : Math.max(...rows);
     for (const it of items) it.previous_best = prev;
     if (prev == null) continue;
@@ -253,7 +254,7 @@ function planItems(ctx, check) {
 function summarize(ctx, check) {
   const groups = new Map();
   for (const it of check.items) {
-    const k = it.who.client_id ?? it.who.roster_id;
+    const k = it.who.client_id;
     if (!groups.has(k)) groups.set(k, { ...it.who, name: it.athlete.name, athlete_id: it.athlete.athlete_id, results: [] });
     const w = check.warnings.find((x) => x.key === it.key);
     groups.get(k).results.push({ key: it.key, row: it.row, column: it.column, test: it.test.key, test_name: it.test.name, metric_name: it.metric.name, side: it.side, attempt: it.attempt,
@@ -287,7 +288,7 @@ export function previewUpload(ctx, body) {
     session: check.session ? { id: check.session.id, name: check.session.name, date: check.session.date } : null,
     read: check.read,
     errors: check.errors.slice(0, 200), error_count: check.errors.length, warnings: check.warnings,
-    summary: { results: check.items.length, athletes: new Set(check.items.map((i) => i.who.client_id ?? i.who.roster_id)).size, to_confirm: check.warnings.length, ...(plan ?? { new: 0, replaced: 0, unchanged: 0, prs: 0 }) },
+    summary: { results: check.items.length, athletes: new Set(check.items.map((i) => i.who.client_id)).size, to_confirm: check.warnings.length, ...(plan ?? { new: 0, replaced: 0, unchanged: 0, prs: 0 }) },
     athletes: check.errors.length ? [] : summarize(ctx, check)
   };
 }
@@ -342,9 +343,8 @@ export function commitUpload(ctx, body, user = null) {
     ctx.db.run('DELETE FROM upload_previews WHERE id = ?', p.id);
     return { plan, prs: r.prs, batchId };
   });
-  const athletes = summarize(ctx, check).map((g) => ({ client_id: g.client_id ?? null, roster_id: g.roster_id ?? null, name: g.name, athlete_id: g.athlete_id,
-    contract_id: g.roster_id ? ctx.db.get('SELECT contract_id FROM team_roster WHERE id = ?', g.roster_id).contract_id : null,
-    results: g.results.length, prs: out.prs.filter((x) => (x.client_id ?? x.roster_id) === (g.client_id ?? g.roster_id)).length }));
+  const athletes = summarize(ctx, check).map((g) => ({ client_id: g.client_id, name: g.name, athlete_id: g.athlete_id,
+    results: g.results.length, prs: out.prs.filter((x) => x.client_id === g.client_id).length }));
   return { batch_id: out.batchId, saved: out.plan.new + out.plan.replaced, created: out.plan.new, replaced: out.plan.replaced, already_saved: out.plan.unchanged, prs: out.prs.length, athletes };
 }
 

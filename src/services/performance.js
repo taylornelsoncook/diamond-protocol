@@ -3,7 +3,7 @@ import { getSetting } from './families.js';
 import { emit } from './events.js';
 import { TESTS, CATEGORIES, PROTOCOLS, RANGES } from './test-library.js';
 import { convert, normalizeUnit, compatibleUnits } from './units.js';
-import { findByAthleteId } from './athlete-ids.js';
+import { findByAthleteId, clientOfRoster } from './athlete-ids.js';
 
 export { CATEGORIES };
 const MAX_BATCH = 1000;
@@ -187,14 +187,12 @@ export function updateTest(ctx, keyOrId, body) {
   return { ...getTest(ctx, t.id), changes: uniq };
 }
 
-// ---------- Athletes: clients and team roster players ----------
+// ---------- Athletes: one profile per athlete ----------
+// Team roster athletes are clients too (version 36), so every result, link and testing day athlete is a client.
+// A roster_id sent by an older integration means that roster line's client.
 const norm = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-function athleteIdOf(ctx, a) {
-  return a.client_id ? ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', a.client_id)?.athlete_id : ctx.db.get('SELECT athlete_id FROM team_roster WHERE id = ?', a.roster_id)?.athlete_id;
-}
-function athleteName(ctx, a) {
-  return a.client_id ? ctx.db.get('SELECT name FROM clients WHERE id = ?', a.client_id)?.name : ctx.db.get('SELECT name FROM team_roster WHERE id = ?', a.roster_id)?.name;
-}
+const athleteIdOf = (ctx, a) => (a.client_id ? ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', a.client_id)?.athlete_id : undefined);
+const athleteName = (ctx, a) => (a.client_id ? ctx.db.get('SELECT name FROM clients WHERE id = ?', a.client_id)?.name : undefined);
 // Finds who a result belongs to. Only certain identifiers count: our Athlete ID (in any field),
 // our internal IDs, or a device ID the coach linked by hand. Names are never guessed; anything
 // else waits in the queue for the coach.
@@ -204,10 +202,11 @@ export function resolveAthlete(ctx, ref = {}, provider) {
   if (byId) return byId;
   if (ref.athlete_id) return null;
   if (ref.client_id) return ctx.db.get('SELECT id FROM clients WHERE id = ?', ref.client_id) ? { client_id: ref.client_id } : null;
-  if (ref.roster_id) return ctx.db.get('SELECT id FROM team_roster WHERE id = ?', ref.roster_id) ? { roster_id: ref.roster_id } : null;
+  if (ref.roster_id) { const c = clientOfRoster(ctx, ref.roster_id); return c ? { client_id: c } : null; }
   if (provider) {
     const l = ctx.db.get('SELECT client_id, roster_id FROM athlete_links WHERE provider = ? AND external_id = ?', provider, identityOf(ref).replace(/^id:/, ''));
-    if (l) return l.client_id ? { client_id: l.client_id } : { roster_id: l.roster_id };
+    const c = l ? l.client_id ?? clientOfRoster(ctx, l.roster_id) : null;
+    if (c) return { client_id: c };
   }
   return null;
 }
@@ -227,27 +226,27 @@ export function enqueue(ctx, { provider, source, ref, item, sessionId }, created
 
 export function linkAthlete(ctx, body) {
   const provider = v.str(body.provider, 'provider', { max: 40 }).toLowerCase(), ext = v.str(String(body.external_id ?? ''), 'external_id', { max: 200 });
-  const target = body.client_id ? { client_id: body.client_id } : body.roster_id ? { roster_id: body.roster_id } : null;
-  if (!target || !resolveAthlete(ctx, target)) throw badRequest('Choose a client or roster athlete to link.');
-  ctx.db.run(`INSERT INTO athlete_links (provider, external_id, external_name, client_id, roster_id, created_at) VALUES (?, ?, ?, ?, ?, ?)
-              ON CONFLICT(provider, external_id) DO UPDATE SET client_id = excluded.client_id, roster_id = excluded.roster_id, external_name = COALESCE(excluded.external_name, athlete_links.external_name)`,
-    provider, ext, body.external_name ?? null, target.client_id ?? null, target.roster_id ?? null, ctx.now());
+  const target = body.client_id || body.roster_id ? resolveAthlete(ctx, { client_id: body.client_id, roster_id: body.client_id ? undefined : body.roster_id }) : null;
+  if (!target) throw badRequest('Choose the athlete to link.');
+  ctx.db.run(`INSERT INTO athlete_links (provider, external_id, external_name, client_id, roster_id, created_at) VALUES (?, ?, ?, ?, NULL, ?)
+              ON CONFLICT(provider, external_id) DO UPDATE SET client_id = excluded.client_id, roster_id = NULL, external_name = COALESCE(excluded.external_name, athlete_links.external_name)`,
+    provider, ext, body.external_name ?? null, target.client_id, ctx.now());
   return { provider, external_id: ext, ...target, name: athleteName(ctx, target) };
 }
-// Everyone results can go to: clients (not archived) and active team roster players, with their Athlete ID. No money.
+// Everyone results can go to: clients who aren't archived (team roster athletes included), with their Athlete ID and
+// the active teams they're on. No money.
 export function listAthletes(ctx) {
-  return [
-    ...ctx.db.all('SELECT id AS client_id, NULL AS roster_id, name, athlete_id, NULL AS team FROM clients WHERE archived_at IS NULL'),
-    ...ctx.db.all(`SELECT NULL AS client_id, r.id AS roster_id, r.name, r.athlete_id, o.name || ' ' || t.name AS team FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id
-      JOIN organizations o ON o.id = t.org_id WHERE r.active = 1 AND t.status = 'active'`)
-  ].map((a) => Object.fromEntries(Object.entries(a).filter(([, x]) => x != null))).sort((a, b) => a.name.localeCompare(b.name));
+  return ctx.db.all(`SELECT c.id AS client_id, c.name, c.athlete_id, (SELECT group_concat(o.name || ' ' || t.name, '; ') FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id
+      JOIN organizations o ON o.id = t.org_id WHERE r.client_id = c.id AND r.active = 1 AND t.status = 'active') AS team
+    FROM clients c WHERE c.archived_at IS NULL`)
+    .map((a) => Object.fromEntries(Object.entries(a).filter(([, x]) => x != null))).sort((a, b) => a.name.localeCompare(b.name));
 }
 export function listLinks(ctx, { provider, client_id, roster_id } = {}) {
   const where = [], p = [];
   if (provider) { where.push('l.provider = ?'); p.push(provider); }
   if (client_id) { where.push('l.client_id = ?'); p.push(client_id); }
-  if (roster_id) { where.push('l.roster_id = ?'); p.push(roster_id); }
-  return ctx.db.all(`SELECT l.*, COALESCE(c.name, r.name) AS athlete_name, COALESCE(c.athlete_id, r.athlete_id) AS athlete_id, c.archived_at AS athlete_archived_at FROM athlete_links l LEFT JOIN clients c ON c.id = l.client_id LEFT JOIN team_roster r ON r.id = l.roster_id
+  if (roster_id) { where.push('l.client_id = ?'); p.push(clientOfRoster(ctx, roster_id)); }
+  return ctx.db.all(`SELECT l.*, c.name AS athlete_name, c.athlete_id, c.archived_at AS athlete_archived_at FROM athlete_links l LEFT JOIN clients c ON c.id = l.client_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY l.provider, l.external_name`, ...p);
 }
 // Returns what was removed, so the screen can offer Undo (linking it again).
@@ -270,7 +269,7 @@ function parseWhen(x, fallback) {
   return new Date(t).toISOString();
 }
 
-// Record one or many results. Each item: athlete (client_id, roster_id, email, external_id or name),
+// Record one or many results. Each item: athlete (athlete_id, client_id, roster_id, email, external_id or name),
 // test (key), metric (defaults to the headline metric), value, unit, side, attempt, recorded_at,
 // timing, device, external_id. Partial success: bad items are reported, good ones are saved.
 export function recordResults(ctx, items, { source = 'api', provider = null, sessionId = null, defaultWhen, queue = true, internal = false } = {}) {
@@ -314,25 +313,25 @@ export function recordResults(ctx, items, { source = 'api', provider = null, ses
         // One value per attempt on a testing day: the same value again is a repeat (a double tap), a different one is refused.
         const slotSession = raw.session_id ?? sessionId, attemptNo = raw.attempt != null && raw.attempt !== '' ? Number(raw.attempt) : null;
         if (slotSession && attemptNo != null) {
-          const taken = ctx.db.get(`SELECT value FROM perf_results WHERE session_id = ? AND ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND attempt = ? AND voided = 0`,
-            slotSession, who.client_id ?? who.roster_id, test.id, metric.key, side ?? '', attemptNo);
+          const taken = ctx.db.get(`SELECT value FROM perf_results WHERE session_id = ? AND client_id = ? AND test_id = ? AND metric = ? AND COALESCE(side, '') = ? AND attempt = ? AND voided = 0`,
+            slotSession, who.client_id, test.id, metric.key, side ?? '', attemptNo);
           if (taken && Math.abs(taken.value - value) < 1e-9) { out.duplicates++; return; }
           if (taken) throw badRequest(`Attempt ${attemptNo} already has ${+taken.value.toFixed(metric.decimals + 1)} ${metric.unit}. Delete it first to enter a new value.`);
         }
-        const pk = `${who.client_id ?? who.roster_id}|${test.id}|${metric.key}|${side ?? ''}`;
+        const pk = `${who.client_id}|${test.id}|${metric.key}|${side ?? ''}`;
         if (!prevBest.has(pk)) prevBest.set(pk, metric.better === 'none' ? null : ctx.db.get(
-          `SELECT ${metric.better === 'lower' ? 'MIN' : 'MAX'}(value) AS best FROM perf_results WHERE ${who.client_id ? 'client_id' : 'roster_id'} = ? AND test_id = ? AND metric = ? AND voided = 0 AND COALESCE(side, '') = ?`,
-          who.client_id ?? who.roster_id, test.id, metric.key, side ?? '').best);
+          `SELECT ${metric.better === 'lower' ? 'MIN' : 'MAX'}(value) AS best FROM perf_results WHERE client_id = ? AND test_id = ? AND metric = ? AND voided = 0 AND COALESCE(side, '') = ?`,
+          who.client_id, test.id, metric.key, side ?? '').best);
         const prev = prevBest.get(pk);
         const id = newId('res');
         ctx.db.run(`INSERT INTO perf_results (id, session_id, client_id, roster_id, test_id, metric, side, attempt, value, entered_value, entered_unit, timing, source, device, external_id, notes, recorded_at, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          id, raw.session_id ?? sessionId, who.client_id ?? null, who.roster_id ?? null, test.id, metric.key, side, raw.attempt != null ? v.int(raw.attempt, 'attempt', { min: 1, max: 50 }) : null,
+          id, raw.session_id ?? sessionId, who.client_id, null, test.id, metric.key, side, raw.attempt != null ? v.int(raw.attempt, 'attempt', { min: 1, max: 50 }) : null,
           value, num, enteredUnit, timing, src, raw.device ? String(raw.device).slice(0, 80) : null, externalId, raw.notes ? String(raw.notes).slice(0, 500) : null, when, ctx.now());
         const isPr = prev != null && (metric.better === 'lower' ? value < prev : value > prev);
         const result = { id, index, ...who, test: test.key, metric: metric.key, side, value, unit: metric.unit, recorded_at: when, pr: isPr, first: prev == null && metric.better !== 'none' };
         out.created.push(result);
-        touched.add(who.client_id ?? who.roster_id);
+        touched.add(who.client_id);
         if (isPr) out.prs.push(result);
       } catch (e) {
         out.errors.push({ index, message: e.message });
@@ -341,14 +340,14 @@ export function recordResults(ctx, items, { source = 'api', provider = null, ses
     // Several improving attempts in one batch are one PR: keep the best per athlete, test, metric and side.
     const bestPr = new Map();
     for (const p of out.prs) {
-      const k = `${p.client_id ?? p.roster_id}|${p.test}|${p.metric}|${p.side ?? ''}`, cur = bestPr.get(k);
+      const k = `${p.client_id}|${p.test}|${p.metric}|${p.side ?? ''}`, cur = bestPr.get(k);
       const lower = tests.get(p.test).metrics.find((m) => m.key === p.metric).better === 'lower';
       if (!cur || (lower ? p.value < cur.value : p.value > cur.value)) bestPr.set(k, p);
     }
-    for (const p of out.prs) if (bestPr.get(`${p.client_id ?? p.roster_id}|${p.test}|${p.metric}|${p.side ?? ''}`) !== p) p.pr = false;
+    for (const p of out.prs) if (bestPr.get(`${p.client_id}|${p.test}|${p.metric}|${p.side ?? ''}`) !== p) p.pr = false;
     out.prs = [...bestPr.values()];
     if (out.created.length) emit(ctx, 'results.recorded', { count: out.created.length, athletes: touched.size, source, session_id: sessionId });
-    for (const pr of out.prs) emit(ctx, 'performance.pr', { client_id: pr.client_id ?? null, roster_id: pr.roster_id ?? null, athlete_name: athleteName(ctx, pr), test: pr.test, test_name: tests.get(pr.test)?.name ?? pr.test, metric: pr.metric, value: pr.value, unit: pr.unit, side: pr.side });
+    for (const pr of out.prs) emit(ctx, 'performance.pr', { client_id: pr.client_id, athlete_id: athleteIdOf(ctx, pr) ?? null, athlete_name: athleteName(ctx, pr), test: pr.test, test_name: tests.get(pr.test)?.name ?? pr.test, metric: pr.metric, value: pr.value, unit: pr.unit, side: pr.side });
   });
   return { created: out.created.length, duplicates: out.duplicates, queued: out.unmatched.filter((u) => u.queue_id).length, unmatched: out.unmatched, errors: out.errors, prs: out.prs, results: out.created, new_queue_ids: out.newQueued };
 }
@@ -362,24 +361,25 @@ export function voidResult(ctx, id) {
 export function listResults(ctx, q = {}) {
   const where = ['r.voided = 0'], p = [];
   if (q.client_id) { where.push('r.client_id = ?'); p.push(q.client_id); }
-  if (q.roster_id) { where.push('r.roster_id = ?'); p.push(q.roster_id); }
+  if (q.roster_id) { where.push('r.client_id = ?'); p.push(clientOfRoster(ctx, q.roster_id)); }
   if (q.session_id) { where.push('r.session_id = ?'); p.push(q.session_id); }
   if (q.test) { where.push('(t.key = ? OR t.id = ?)'); p.push(q.test, q.test); }
   if (q.source) { where.push('r.source = ?'); p.push(q.source); }
   if (q.from) { where.push('r.recorded_at >= ?'); p.push(q.from); }
   if (q.to) { where.push('r.recorded_at < ?'); p.push(q.to); }
-  return ctx.db.all(`SELECT r.id, r.session_id, r.client_id, r.roster_id, COALESCE(c.athlete_id, tr.athlete_id) AS athlete_id, COALESCE(c.name, tr.name) AS athlete_name, t.key AS test, t.name AS test_name, r.metric, m.name AS metric_name, m.unit,
+  return ctx.db.all(`SELECT r.id, r.session_id, r.client_id, r.roster_id, c.athlete_id, c.name AS athlete_name, t.key AS test, t.name AS test_name, r.metric, m.name AS metric_name, m.unit,
       r.side, r.attempt, r.value, r.entered_value, r.entered_unit, r.timing, r.source, r.device, r.external_id, r.notes, r.recorded_at
     FROM perf_results r JOIN perf_tests t ON t.id = r.test_id JOIN perf_metrics m ON m.test_id = r.test_id AND m.key = r.metric
-    LEFT JOIN clients c ON c.id = r.client_id LEFT JOIN team_roster tr ON tr.id = r.roster_id
+    LEFT JOIN clients c ON c.id = r.client_id
     WHERE ${where.join(' AND ')} ORDER BY r.recorded_at DESC, r.created_at DESC LIMIT ?`, ...p, Math.min(Number(q.limit) || 500, 5000));
 }
 
 // Everything an athlete has been tested on: headline metric per test with best, first, latest and history.
 // from / to (YYYY-MM-DD, checked by the caller) limit it to a period.
-export function athleteProfile(ctx, who, { parentView = false, from = null, to = null } = {}) {
-  const col = who.client_id ? 'client_id' : 'roster_id', id = who.client_id ?? who.roster_id;
-  if (!resolveAthlete(ctx, who)) throw notFound('Athlete');
+export function athleteProfile(ctx, ref, { parentView = false, from = null, to = null } = {}) {
+  const who = resolveAthlete(ctx, { client_id: ref.client_id, roster_id: ref.client_id ? undefined : ref.roster_id });
+  if (!who) throw notFound('Athlete');
+  const col = 'client_id', id = who.client_id;
   const rows = ctx.db.all(`SELECT r.*, t.key AS test_key, t.name AS test_name, t.category, m.name AS metric_name, m.unit, m.better, m.decimals, m.sort AS msort
     FROM perf_results r JOIN perf_tests t ON t.id = r.test_id JOIN perf_metrics m ON m.test_id = r.test_id AND m.key = r.metric
     WHERE r.${col} = ? AND r.voided = 0 ${parentView ? parentFilter(ctx) : ''} ${from ? 'AND substr(r.recorded_at, 1, 10) >= ?' : ''} ${to ? 'AND substr(r.recorded_at, 1, 10) <= ?' : ''}
@@ -414,8 +414,17 @@ export function parentFilter(ctx) {
 }
 
 // ---------- Testing days ----------
-const whoKey = (a) => (a.client_id ? { client_id: a.client_id } : { roster_id: a.roster_id });
-const sameAthlete = (a, b) => (a.client_id ? a.client_id === b.client_id : !!a.roster_id && a.roster_id === b.roster_id);
+const whoKey = (a) => ({ client_id: a.client_id });
+const sameAthlete = (a, b) => !!a.client_id && a.client_id === b.client_id;
+// A testing day's planned athletes, as profiles (a {roster_id} left from before version 36 is that line's client).
+const plannedOf = (ctx, s) => {
+  const out = [];
+  for (const a of JSON.parse(s.athletes)) {
+    const c = a.client_id ?? clientOfRoster(ctx, a.roster_id);
+    if (c && !out.some((x) => x.client_id === c)) out.push({ client_id: c });
+  }
+  return out;
+};
 const isArchived = (ctx, a) => !!(a.client_id && ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', a.client_id)?.archived_at);
 const needsConfirm = (message, details) => { const e = new HttpError(409, 'confirmation_required', message); e.details = details; return e; };
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -428,11 +437,13 @@ export function createSession(ctx, body) {
   const past = body.retest_of ? getSession(ctx, body.retest_of) : null;
   const tests = (body.tests ?? past?.tests.map((t) => t.key) ?? []).map((k) => getTest(ctx, k).key);
   let athletes = (body.athletes ?? past?.athletes.filter((a) => a.name !== 'Removed athlete').map(whoKey) ?? []).map((a) => resolveAthlete(ctx, a)).filter(Boolean);
-  if (past) athletes = athletes.filter((a) => !a.roster_id || ctx.db.get('SELECT active FROM team_roster WHERE id = ?', a.roster_id)?.active);
+  // A retest of a team's day leaves out athletes who have since come off that team.
+  if (past?.contract_id && !body.athletes) athletes = athletes.filter((a) => !ctx.db.get('SELECT 1 FROM team_roster WHERE contract_id = ? AND client_id = ? AND active = 0', past.contract_id, a.client_id)
+    || ctx.db.get('SELECT 1 FROM team_roster WHERE contract_id = ? AND client_id = ? AND active = 1', past.contract_id, a.client_id));
   const contractId = body.contract_id ?? (past && !body.athletes ? past.contract_id : null);
   if (contractId) {
     if (!ctx.db.get('SELECT id FROM team_contracts WHERE id = ?', contractId)) throw notFound('Team contract');
-    if (!athletes.length) athletes = ctx.db.all('SELECT id FROM team_roster WHERE contract_id = ? AND active = 1 ORDER BY name', contractId).map((r) => ({ roster_id: r.id }));
+    if (!athletes.length) athletes = ctx.db.all(`SELECT DISTINCT r.client_id FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 ORDER BY c.name`, contractId).map((r) => ({ client_id: r.client_id }));
   }
   const unique = [];
   for (const a of athletes) if (!unique.some((x) => sameAthlete(x, a))) unique.push(whoKey(a));
@@ -454,7 +465,7 @@ export function updateSession(ctx, id, body) {
   if (body.athletes !== undefined && !Array.isArray(body.athletes)) throw badRequest('athletes must be a list.');
   const tests = body.tests !== undefined ? [...new Set(body.tests.map((k) => getTest(ctx, k).key))] : s.tests.map((t) => t.key);
   if (body.tests !== undefined && !tests.length) throw badRequest('A testing day needs at least one test. Add another before removing this one.');
-  const planned = JSON.parse(ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id).athletes);
+  const planned = plannedOf(ctx, ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id));
   const athletes = body.athletes !== undefined ? body.athletes.map((a) => resolveAthlete(ctx, a)).filter(Boolean).map(whoKey) : planned;
   if (body.athletes !== undefined) {
     const archived = athletes.find((a) => !s.athletes.some((x) => sameAthlete(x, a)) && isArchived(ctx, a));
@@ -464,13 +475,13 @@ export function updateSession(ctx, id, body) {
   const goneAthletes = body.athletes !== undefined ? s.athletes.filter((a) => !athletes.some((x) => sameAthlete(x, a))) : [];
   const doomed = new Set([
     ...goneTests.flatMap((t) => ctx.db.all('SELECT id FROM perf_results WHERE session_id = ? AND test_id = ? AND voided = 0', id, t.id)),
-    ...goneAthletes.flatMap((a) => ctx.db.all(`SELECT id FROM perf_results WHERE session_id = ? AND ${a.client_id ? 'client_id' : 'roster_id'} = ? AND voided = 0`, id, a.client_id ?? a.roster_id))
+    ...goneAthletes.flatMap((a) => ctx.db.all('SELECT id FROM perf_results WHERE session_id = ? AND client_id = ? AND voided = 0', id, a.client_id))
   ].map((r) => r.id));
   if (doomed.size && body.confirm !== true) throw needsConfirm(`${plural(doomed.size, 'result')} on this day would be deleted from every profile. Confirm to go ahead.`, { results: doomed.size, tests: goneTests.map((t) => t.name), athletes: goneAthletes.map((a) => a.name) });
   ctx.db.tx(() => {
     // Set-aside (voided) results of what's removed go too, so nothing comes back later.
     for (const t of goneTests) ctx.db.run('DELETE FROM perf_results WHERE session_id = ? AND test_id = ?', id, t.id);
-    for (const a of goneAthletes) ctx.db.run(`DELETE FROM perf_results WHERE session_id = ? AND ${a.client_id ? 'client_id' : 'roster_id'} = ?`, id, a.client_id ?? a.roster_id);
+    for (const a of goneAthletes) ctx.db.run('DELETE FROM perf_results WHERE session_id = ? AND client_id = ?', id, a.client_id);
     ctx.db.run('UPDATE perf_sessions SET name = ?, date = ?, notes = ?, test_keys = ?, athletes = ? WHERE id = ?',
       body.name !== undefined ? v.str(String(body.name).trim(), 'name', { max: 120 }) : s.name, body.date ?? s.date,
       body.notes !== undefined ? v.str(body.notes, 'notes', { max: 2000, optional: true }) : s.notes, JSON.stringify(tests), JSON.stringify(athletes), id);
@@ -485,21 +496,21 @@ export function addSessionAthlete(ctx, id, body = {}) {
   if (!who) throw badRequest(body.athlete_id ? `No athlete has the ID ${String(body.athlete_id).toUpperCase()}.` : 'Pick an athlete to add.');
   if (isArchived(ctx, who)) throw badRequest(`${athleteName(ctx, who)} is archived. Restore their profile first.`);
   if (s.athletes.some((a) => sameAthlete(a, who))) return getSession(ctx, id);
-  const planned = JSON.parse(ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id).athletes);
+  const planned = plannedOf(ctx, ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id));
   ctx.db.run('UPDATE perf_sessions SET athletes = ? WHERE id = ?', JSON.stringify([...planned, whoKey(who)]), id);
   return getSession(ctx, id);
 }
 // Take off an athlete added by mistake. Their results on this day go too, so that needs confirm.
 export function removeSessionAthlete(ctx, id, athleteRef, { confirm = false } = {}) {
   const s = getSession(ctx, id);
-  const a = s.athletes.find((x) => (x.client_id && x.client_id === athleteRef) || (x.roster_id && x.roster_id === athleteRef));
+  const ref = clientOfRoster(ctx, athleteRef) ?? athleteRef;   // a client id, or a roster line (that line's client)
+  const a = s.athletes.find((x) => x.client_id === ref);
   if (!a) throw notFound('That athlete on this day');
-  const col = a.client_id ? 'client_id' : 'roster_id';
-  const n = ctx.db.get(`SELECT COUNT(*) AS n FROM perf_results WHERE session_id = ? AND ${col} = ? AND voided = 0`, id, a.client_id ?? a.roster_id).n;
+  const n = ctx.db.get('SELECT COUNT(*) AS n FROM perf_results WHERE session_id = ? AND client_id = ? AND voided = 0', id, a.client_id).n;
   if (n && !confirm) throw needsConfirm(`${a.name} has ${plural(n, 'result')} on this day. Removing ${a.name.split(' ')[0]} deletes ${n === 1 ? 'it' : 'them'}.`, { results: n });
-  const planned = JSON.parse(ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id).athletes).filter((x) => !sameAthlete(x, a));
+  const planned = plannedOf(ctx, ctx.db.get('SELECT athletes FROM perf_sessions WHERE id = ?', id)).filter((x) => !sameAthlete(x, a));
   ctx.db.tx(() => {
-    ctx.db.run(`DELETE FROM perf_results WHERE session_id = ? AND ${col} = ?`, id, a.client_id ?? a.roster_id);
+    ctx.db.run('DELETE FROM perf_results WHERE session_id = ? AND client_id = ?', id, a.client_id);
     ctx.db.run('UPDATE perf_sessions SET athletes = ? WHERE id = ?', JSON.stringify(planned), id);
   });
   return { removed: true, name: a.name, deleted_results: n };
@@ -521,7 +532,7 @@ export function deleteSession(ctx, id, { confirm = false, role = 'owner' } = {})
 function dayProgress(ctx, s, athletesCount) {
   const keys = JSON.parse(s.test_keys);
   if (!keys.length) return { done: 0, planned: 0 };
-  const done = ctx.db.get(`SELECT COUNT(DISTINCT COALESCE(r.client_id, r.roster_id) || '|' || t.key) AS n FROM perf_results r JOIN perf_tests t ON t.id = r.test_id
+  const done = ctx.db.get(`SELECT COUNT(DISTINCT r.client_id || '|' || t.key) AS n FROM perf_results r JOIN perf_tests t ON t.id = r.test_id
     WHERE r.session_id = ? AND r.voided = 0 AND t.key IN (${keys.map(() => '?').join(',')})`, s.id, ...keys).n;
   return { done, planned: athletesCount * keys.length };
 }
@@ -529,9 +540,9 @@ export function listSessions(ctx) {
   return ctx.db.all(`SELECT s.*, (SELECT COUNT(*) FROM perf_results r WHERE r.session_id = s.id AND r.voided = 0) AS results_count
     FROM perf_sessions s ORDER BY s.date DESC, s.created_at DESC LIMIT 200`)
     .map((s) => {
-      const planned = JSON.parse(s.athletes);
+      const planned = plannedOf(ctx, s);
       // Athletes with results who weren't planned are on the day too.
-      const extra = ctx.db.all('SELECT DISTINCT client_id, roster_id FROM perf_results WHERE session_id = ? AND voided = 0', s.id).filter((r) => !planned.some((a) => sameAthlete(a, r))).length;
+      const extra = ctx.db.all('SELECT DISTINCT client_id FROM perf_results WHERE session_id = ? AND voided = 0 AND client_id IS NOT NULL', s.id).filter((r) => !planned.some((a) => sameAthlete(a, r))).length;
       const athletesCount = planned.length + extra;
       return { id: s.id, name: s.name, date: s.date, location_id: s.location_id, contract_id: s.contract_id, team_name: s.contract_id ? teamName(ctx, s.contract_id) : null, notes: s.notes, shared_at: s.shared_at, created_at: s.created_at,
         results_count: s.results_count, tests: JSON.parse(s.test_keys), athletes_count: athletesCount, progress: dayProgress(ctx, s, athletesCount), status: s.shared_at ? 'shared' : 'open' };
@@ -548,16 +559,16 @@ const teamName = (ctx, contractId) => {
 function previousBests(ctx, s, tests) {
   const keys = tests.map((t) => t.key);
   if (!keys.length) return new Map();
-  const rows = ctx.db.all(`SELECT r.client_id, r.roster_id, t.key AS test, r.metric, COALESCE(r.side, '') AS side, MIN(r.value) AS lo, MAX(r.value) AS hi
+  const rows = ctx.db.all(`SELECT r.client_id, t.key AS test, r.metric, COALESCE(r.side, '') AS side, MIN(r.value) AS lo, MAX(r.value) AS hi
     FROM perf_results r JOIN perf_tests t ON t.id = r.test_id LEFT JOIN perf_sessions os ON os.id = r.session_id
     WHERE r.voided = 0 AND (r.session_id IS NULL OR r.session_id != ?) AND COALESCE(os.date, substr(r.recorded_at, 1, 10)) <= ? AND t.key IN (${keys.map(() => '?').join(',')})
-    GROUP BY r.client_id, r.roster_id, t.key, r.metric, COALESCE(r.side, '')`, s.id, s.date, ...keys);
+    GROUP BY r.client_id, t.key, r.metric, COALESCE(r.side, '')`, s.id, s.date, ...keys);
   const better = new Map(tests.flatMap((t) => t.metrics.map((m) => [`${t.key}|${m.key}`, m.better])));
   const out = new Map();
   for (const r of rows) {
     const b = better.get(`${r.test}|${r.metric}`);
     if (!b || b === 'none') continue;
-    const k = r.client_id ?? r.roster_id;
+    const k = r.client_id;
     if (!out.has(k)) out.set(k, {});
     out.get(k)[`${r.test}|${r.metric}|${r.side}`] = b === 'lower' ? r.lo : r.hi;
   }
@@ -567,20 +578,20 @@ export function getSession(ctx, id) {
   const s = ctx.db.get('SELECT * FROM perf_sessions WHERE id = ?', id);
   if (!s) throw notFound('Testing day');
   const results = ctx.db.all('SELECT * FROM perf_results WHERE session_id = ? AND voided = 0 ORDER BY recorded_at, created_at', id);
-  const expected = JSON.parse(s.athletes);
+  const expected = plannedOf(ctx, s);
   // Anyone with results today is on the sheet, even if they weren't planned.
   for (const r of results) {
-    const key = r.client_id ? { client_id: r.client_id } : { roster_id: r.roster_id };
-    if (!expected.some((a) => sameAthlete(a, key))) expected.push(key);
+    const key = { client_id: r.client_id };
+    if (r.client_id && !expected.some((a) => sameAthlete(a, key))) expected.push(key);
   }
   const tests = JSON.parse(s.test_keys).map((k) => getTest(ctx, k));
   const prev = previousBests(ctx, s, tests);
   const since = s.notified_at ?? s.shared_at;
   const athletes = expected.map((a) => ({ ...a, name: athleteName(ctx, a) ?? 'Removed athlete', athlete_id: athleteIdOf(ctx, a), archived: isArchived(ctx, a),
-    previous_best: prev.get(a.client_id ?? a.roster_id) ?? {},
-    results: results.filter((r) => (a.client_id ? r.client_id === a.client_id : r.roster_id === a.roster_id)).map((r) => ({ id: r.id, test_id: r.test_id, metric: r.metric, side: r.side, attempt: r.attempt, value: r.value, timing: r.timing, source: r.source, created_at: r.created_at })) }))
+    previous_best: prev.get(a.client_id) ?? {},
+    results: results.filter((r) => r.client_id === a.client_id).map((r) => ({ id: r.id, test_id: r.test_id, metric: r.metric, side: r.side, attempt: r.attempt, value: r.value, timing: r.timing, source: r.source, created_at: r.created_at })) }))
     .sort((x, y) => x.name.localeCompare(y.name));
-  const newSince = s.shared_at ? athletes.filter((a) => a.client_id && a.results.some((r) => r.created_at > since)).length : 0;
+  const newSince = s.shared_at ? athletes.filter((a) => a.results.some((r) => r.created_at > since)).length : 0;
   return { id: s.id, name: s.name, date: s.date, location_id: s.location_id, contract_id: s.contract_id, notes: s.notes, shared_at: s.shared_at, notified_at: s.notified_at ?? null, parent_note: s.parent_note, created_at: s.created_at,
     status: s.shared_at ? 'shared' : 'open', new_since_share: newSince, tests, athletes };
 }

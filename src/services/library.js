@@ -7,8 +7,8 @@ import { DEFAULT_PRESETS } from './test-library.js';
 // ---------- Usage ----------
 // Per test: saved results, athletes, testing days and the last date it was used (removed results don't count).
 function usageByTest(ctx, testId = null) {
-  return new Map(ctx.db.all(`SELECT r.test_id, COUNT(*) AS results, COUNT(DISTINCT COALESCE(r.client_id, tr.client_id, r.roster_id)) AS athletes, COUNT(DISTINCT r.session_id) AS days,
-      MAX(substr(r.recorded_at, 1, 10)) AS last_used FROM perf_results r LEFT JOIN team_roster tr ON tr.id = r.roster_id
+  return new Map(ctx.db.all(`SELECT r.test_id, COUNT(*) AS results, COUNT(DISTINCT r.client_id) AS athletes, COUNT(DISTINCT r.session_id) AS days,
+      MAX(substr(r.recorded_at, 1, 10)) AS last_used FROM perf_results r
     WHERE r.voided = 0 ${testId ? 'AND r.test_id = ?' : ''} GROUP BY r.test_id`, ...(testId ? [testId] : []))
     .map((u) => [u.test_id, { results: u.results, athletes: u.athletes, days: u.days, last_used: u.last_used }]));
 }
@@ -35,8 +35,8 @@ function inUse(ctx, t) {
 }
 
 // Each athlete's best on one number of the test, top 10. Filter by sex and by age group (the athlete's age when the
-// result was set, like any age-group record board). Archived athletes are left out. Team roster athletes count; a
-// roster athlete who also trains privately counts once.
+// result was set, like any age-group record board). Archived athletes are left out. Team roster athletes count (each
+// athlete has one profile, so someone on a team who also trains privately counts once).
 export function recordBoard(ctx, t, { metric, side, sex, age } = {}) {
   const m = metric ? t.metrics.find((x) => x.key === metric) : t.metrics[0];
   if (!m) throw badRequest(`${t.name} has no number called "${metric}".`);
@@ -44,10 +44,9 @@ export function recordBoard(ctx, t, { metric, side, sex, age } = {}) {
   if (sex != null && sex !== '' && !['M', 'F'].includes(sex)) throw badRequest('sex must be M or F.');
   if (age != null && age !== '' && !AGE_GROUPS[age]) throw badRequest(`age must be one of: ${Object.keys(AGE_GROUPS).join(', ')}.`);
   if (m.better === 'none') return { metric: m.key, metric_name: m.name, unit: m.unit, decimals: m.decimals, better: m.better, board: [], note: `${m.name} is a measurement, not a score, so there's no record board.` };
-  const rows = ctx.db.all(`SELECT r.client_id, r.roster_id, tr.client_id AS roster_client_id, r.value, r.side, r.timing, r.recorded_at, COALESCE(c.name, tr.name) AS name, COALESCE(c.athlete_id, tr.athlete_id) AS athlete_id,
-      COALESCE(c.sex, rc.sex) AS sex, COALESCE(c.birth_date, rc.birth_date) AS birth_date, COALESCE(r.client_id, tr.client_id, r.roster_id) AS person
-    FROM perf_results r LEFT JOIN clients c ON c.id = r.client_id LEFT JOIN team_roster tr ON tr.id = r.roster_id LEFT JOIN clients rc ON rc.id = tr.client_id
-    WHERE r.test_id = ? AND r.metric = ? AND r.voided = 0 ${side ? 'AND r.side = ?' : ''} AND c.archived_at IS NULL AND rc.archived_at IS NULL
+  const rows = ctx.db.all(`SELECT r.client_id, r.value, r.side, r.timing, r.recorded_at, c.name, c.athlete_id, c.sex, c.birth_date, r.client_id AS person
+    FROM perf_results r JOIN clients c ON c.id = r.client_id
+    WHERE r.test_id = ? AND r.metric = ? AND r.voided = 0 ${side ? 'AND r.side = ?' : ''} AND c.archived_at IS NULL
     ORDER BY r.recorded_at`, t.id, m.key, ...(side ? [side] : []));
   const band = age ? AGE_GROUPS[age] : null;
   const better = (a, b) => (m.better === 'lower' ? a < b : a > b);
@@ -61,7 +60,7 @@ export function recordBoard(ctx, t, { metric, side, sex, age } = {}) {
   // Equal results share a rank (1, 1, 3); the one set first is listed first.
   const sorted = [...best.values()].sort((a, b) => (m.better === 'lower' ? a.value - b.value : b.value - a.value) || a.recorded_at.localeCompare(b.recorded_at));
   const board = sorted.slice(0, 10)
-    .map((r, i) => ({ rank: sorted.findIndex((x) => x.value === r.value) + 1, client_id: r.client_id ?? r.roster_client_id ?? null, roster_id: r.client_id || r.roster_client_id ? null : r.roster_id, name: r.name, athlete_id: r.athlete_id, value: r.value, side: r.side, date: r.recorded_at.slice(0, 10), hand_timed: r.timing === 'hand' }));
+    .map((r, i) => ({ rank: sorted.findIndex((x) => x.value === r.value) + 1, client_id: r.client_id, name: r.name, athlete_id: r.athlete_id, value: r.value, side: r.side, date: r.recorded_at.slice(0, 10), hand_timed: r.timing === 'hand' }));
   return { metric: m.key, metric_name: m.name, unit: m.unit, decimals: m.decimals, better: m.better, board };
 }
 

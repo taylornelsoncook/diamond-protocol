@@ -105,6 +105,9 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`UPDATE subscriptions SET status = 'canceled', canceled_at = COALESCE(canceled_at, ?) WHERE client_id = ? AND status != 'canceled'`, ctx.now(), id);
       ctx.db.run(`DELETE FROM perf_results WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM athlete_links WHERE client_id = ?`, id);
+      ctx.db.run(`DELETE FROM athlete_id_aliases WHERE client_id = ?`, id);
+      // Team rosters: the athlete comes off, and the line keeps no name or ID (team attendance counts stay).
+      ctx.db.run(`UPDATE team_roster SET name = 'Deleted athlete', athlete_id = NULL, position = NULL, grad_year = NULL, active = 0 WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
       for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);

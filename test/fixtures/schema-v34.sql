@@ -578,8 +578,6 @@ CREATE TABLE IF NOT EXISTS team_contracts (
   notes TEXT,
   created_at TEXT NOT NULL
 );
--- One profile per athlete (version 36): every roster line links a client, and results, device links and attendance
--- are kept on that client. name and athlete_id are copies of the client's, kept for older integrations.
 CREATE TABLE IF NOT EXISTS team_roster (
   id TEXT PRIMARY KEY,
   contract_id TEXT NOT NULL REFERENCES team_contracts(id) ON DELETE CASCADE,
@@ -587,16 +585,15 @@ CREATE TABLE IF NOT EXISTS team_roster (
   athlete_id TEXT,
   position TEXT,
   grad_year INTEGER,
-  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,   -- the athlete's profile (always set since version 36)
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,   -- when the athlete also trains with you privately
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
--- Who was at a team session (version 36: by client; before that by roster line).
 CREATE TABLE IF NOT EXISTS team_attendance (
   session_id TEXT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  roster_id TEXT NOT NULL REFERENCES team_roster(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
-  PRIMARY KEY (session_id, client_id)
+  PRIMARY KEY (session_id, roster_id)
 );
 CREATE TABLE IF NOT EXISTS team_invoices (
   id TEXT PRIMARY KEY,
@@ -658,7 +655,7 @@ CREATE TABLE IF NOT EXISTS perf_sessions (
   location_id TEXT REFERENCES locations(id),
   contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL,
   test_keys TEXT NOT NULL DEFAULT '[]',
-  athletes TEXT NOT NULL DEFAULT '[]',          -- [{client_id}] expected on the day (before version 36 also {roster_id})
+  athletes TEXT NOT NULL DEFAULT '[]',          -- [{client_id} | {roster_id}] expected on the day
   notes TEXT,
   shared_at TEXT,                               -- results become visible to parents once the coach shares the day
   parent_note TEXT,
@@ -669,7 +666,7 @@ CREATE TABLE IF NOT EXISTS perf_results (
   id TEXT PRIMARY KEY,
   session_id TEXT REFERENCES perf_sessions(id) ON DELETE SET NULL,
   client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
-  roster_id TEXT REFERENCES team_roster(id) ON DELETE CASCADE,   -- before version 36 only: results now always go to client_id
+  roster_id TEXT REFERENCES team_roster(id) ON DELETE CASCADE,
   test_id TEXT NOT NULL REFERENCES perf_tests(id),
   metric TEXT NOT NULL,
   side TEXT CHECK (side IN ('L','R')),
@@ -740,6 +737,7 @@ CREATE TABLE IF NOT EXISTS import_batch_items (
 CREATE INDEX IF NOT EXISTS import_batch_items_batch ON import_batch_items(batch_id);
 CREATE INDEX IF NOT EXISTS perf_results_session ON perf_results(session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS clients_athlete_id ON clients(athlete_id);
+CREATE UNIQUE INDEX IF NOT EXISTS roster_athlete_id ON team_roster(athlete_id);
 CREATE UNIQUE INDEX IF NOT EXISTS locations_checkin_code ON locations(checkin_code);
 
 -- A checked upload waiting for the coach to confirm. Saved results always come from here, never from the browser.
@@ -1098,15 +1096,3 @@ CREATE TABLE IF NOT EXISTS report_links (
 CREATE INDEX IF NOT EXISTS report_links_client ON report_links(client_id, created_at);
 -- The test library's usage counts, record boards and "can it be deleted" checks look results up by test.
 CREATE INDEX IF NOT EXISTS perf_results_test ON perf_results(test_id, metric);
-
--- ---------- Version 36: one profile per athlete ----------
--- Athlete IDs that still find a profile: a team roster line's own ID from before version 36 (the athlete's profile
--- has another ID now), so sheets and devices using the old ID keep landing on the right athlete. Never shown as an ID.
-CREATE TABLE IF NOT EXISTS athlete_id_aliases (
-  athlete_id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  source TEXT NOT NULL,                         -- roster: a roster line's ID from before version 36
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS team_attendance_client ON team_attendance(client_id);
-CREATE INDEX IF NOT EXISTS athlete_id_aliases_client ON athlete_id_aliases(client_id);

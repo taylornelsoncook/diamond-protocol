@@ -13,7 +13,7 @@ const LIST_SQL = `
     (SELECT GROUP_CONCAT(x, char(30)) FROM (SELECT g.name || char(31) || g.email || char(31) || COALESCE(g.phone, '') AS x FROM guardians g WHERE g.family_id = c.family_id ORDER BY g.is_primary DESC, g.created_at)) AS parent_list,
     (SELECT MAX(k.created_at) FROM check_ins k WHERE k.client_id = c.id) AS last_check_in_at,
     MAX(COALESCE((SELECT MAX(x.starts_at) FROM bookings b JOIN class_sessions x ON x.id = b.session_id WHERE b.client_id = c.id AND b.status = 'attended'), ''),
-      COALESCE((SELECT MAX(x.starts_at) FROM team_attendance ta JOIN team_roster t ON t.id = ta.roster_id JOIN class_sessions x ON x.id = ta.session_id WHERE t.client_id = c.id), '')) AS last_attended_at,
+      COALESCE((SELECT MAX(x.starts_at) FROM team_attendance ta JOIN class_sessions x ON x.id = ta.session_id WHERE ta.client_id = c.id AND x.starts_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), '')) AS last_attended_at,
     (SELECT GROUP_CONCAT(tc.id || '|' || o.name || ' ' || tc.name, char(10)) FROM team_roster t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = tc.org_id
       WHERE t.client_id = c.id AND t.active = 1 AND tc.status = 'active') AS team_list,
     (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1) AS pinned_all,
@@ -353,10 +353,37 @@ export function updateClient(ctx, id, body) {
     ctx.db.run(`UPDATE ${payer.table} SET card_status = ? WHERE id = ?`, v.oneOf(body.card_status, 'card_status', ['ok', 'declining']), payer.id);
   }
   if (email && email !== c.email && ctx.db.get('SELECT id FROM clients WHERE email = ? AND id != ?', email, id)) throw conflict('A client with this email already exists.');
-  if (body.athlete_id !== undefined && String(body.athlete_id).toUpperCase() !== c.athlete_id) ctx.db.run('UPDATE clients SET athlete_id = ? WHERE id = ?', validateAthleteId(ctx, body.athlete_id, { exceptClient: id }), id);
-  ctx.db.run(`UPDATE clients SET name = ?, email = ?, phone = ?, notes = ?, birth_date = ?, sex = ?, sport = ?, position = ?, school = ?, grad_year = ?, medical_notes = ?, emergency_name = ?, emergency_phone = ? WHERE id = ?`,
-    name, email, phone, notes, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, id);
+  const newAid = body.athlete_id !== undefined && String(body.athlete_id).trim().toUpperCase() !== c.athlete_id ? validateAthleteId(ctx, body.athlete_id, { exceptClient: id }) : null;
+  ctx.db.tx(() => {
+    if (newAid) {
+      ctx.db.run('UPDATE clients SET athlete_id = ? WHERE id = ?', newAid, id);
+      ctx.db.run('DELETE FROM athlete_id_aliases WHERE athlete_id = ? AND client_id = ?', newAid, id);   // an old roster ID that is their ID again
+    }
+    ctx.db.run(`UPDATE clients SET name = ?, email = ?, phone = ?, notes = ?, birth_date = ?, sex = ?, sport = ?, position = ?, school = ?, grad_year = ?, medical_notes = ?, emergency_name = ?, emergency_phone = ? WHERE id = ?`,
+      name, email, phone, notes, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, id);
+    // Team roster lines keep a copy of the profile's name and Athlete ID (older integrations read them).
+    ctx.db.run('UPDATE team_roster SET name = ?, athlete_id = (SELECT athlete_id FROM clients WHERE id = ?) WHERE client_id = ?', name, id, id);
+  });
   emit(ctx, 'client.updated', { client_id: id, client_name: name, email });
+  return getClient(ctx, id, { withSecrets: true });
+}
+
+// A client without a family (a team roster athlete, or an adult paying for themselves) joins one: a family you already
+// have (family_id), or a new family with its first parent (parent { name, email, phone }), who is emailed how to sign in.
+// Their parents then see them in the portal. Someone already in a family isn't moved.
+export async function joinFamily(ctx, id, body = {}) {
+  const c = getClient(ctx, id);
+  const first = c.name.split(' ')[0];
+  if (c.family) throw conflict(`${first} is already in the ${c.family.name}.`);
+  if (c.archived_at) throw conflict(`${first} is archived. Bring them back first.`);
+  if (!body.family_id && !body.parent) throw badRequest('Choose a family, or enter a parent\'s name and email.');
+  let newFamily = null;
+  ctx.db.tx(() => {
+    const familyId = body.family_id ? getFamily(ctx, String(body.family_id)).id : (newFamily = createFamilyWithGuardian(ctx, body.parent, body.family_name));
+    ctx.db.run('UPDATE clients SET family_id = ? WHERE id = ? AND family_id IS NULL', familyId, id);
+  });
+  emit(ctx, 'client.updated', { client_id: id, client_name: c.name, email: c.email });
+  if (newFamily && body.send_welcome !== false) await welcomeFamily(ctx, newFamily);
   return getClient(ctx, id, { withSecrets: true });
 }
 
@@ -399,14 +426,14 @@ export function attendance(ctx, id) {
     .map((k) => ({ id: k.id, outcome: 'walk_in', at: k.created_at, session_id: null, session_name: null, kind: null, location_name: k.location_name }));
   // Team sessions: the coach ticks the team roster (team_attendance) instead of booking each athlete.
   const team = ctx.db.all(`SELECT ta.session_id, s.name AS session_name, s.kind, s.starts_at, l.name AS location_name
-      FROM team_attendance ta JOIN team_roster t ON t.id = ta.roster_id JOIN class_sessions s ON s.id = ta.session_id JOIN locations l ON l.id = s.location_id
-      WHERE t.client_id = ? AND s.status = 'scheduled' AND s.starts_at >= ? AND s.starts_at <= ?`, id, since90, now)
+      FROM team_attendance ta JOIN class_sessions s ON s.id = ta.session_id JOIN locations l ON l.id = s.location_id
+      WHERE ta.client_id = ? AND s.status = 'scheduled' AND s.starts_at >= ? AND s.starts_at <= ?`, id, since90, now)
     .map((t) => ({ id: `team:${t.session_id}`, outcome: 'attended', at: t.starts_at, session_id: t.session_id, session_name: t.session_name, kind: t.kind, location_name: t.location_name }));
   const all = [...sessions, ...walkIns, ...team];
   const count = (since, ...outcomes) => all.filter((x) => outcomes.includes(x.outcome) && x.at >= since).length;
   const lastVisit = [ctx.db.get(`SELECT MAX(s.starts_at) AS t FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended'`, id).t,
     ctx.db.get('SELECT MAX(created_at) AS t FROM check_ins WHERE client_id = ?', id).t,
-    ctx.db.get('SELECT MAX(s.starts_at) AS t FROM team_attendance ta JOIN team_roster t ON t.id = ta.roster_id JOIN class_sessions s ON s.id = ta.session_id WHERE t.client_id = ?', id).t].filter(Boolean).sort().pop() ?? null;
+    ctx.db.get('SELECT MAX(s.starts_at) AS t FROM team_attendance ta JOIN class_sessions s ON s.id = ta.session_id WHERE ta.client_id = ? AND s.starts_at <= ?', id, now).t].filter(Boolean).sort().pop() ?? null;
   return {
     summary: { visits_30: count(since30, 'attended', 'walk_in'), no_shows_30: count(since30, 'no_show'), late_cancels_30: count(since30, 'late_cancel'), visits_90: count(since90, 'attended', 'walk_in'), last_visit_at: lastVisit },
     recent: all.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12)

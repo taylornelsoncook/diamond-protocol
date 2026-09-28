@@ -113,12 +113,18 @@ test('testing days bring in a team roster and collect everyone\'s results', asyn
   const s = (await coach('POST', '/v1/testing-sessions', { name: 'Westlake preseason', date: '2026-09-20', contract_id: contract.id, tests: ['dash_40yd', 'pro_agility', 'cmj'] })).body;
   assert.deepEqual(s.athletes.map((a) => a.name), ['Jalen Brooks', 'Marcus Hill']);
   const jalen = s.athletes[0];
-  const r = (await coach('POST', '/v1/results', { session_id: s.id, results: [{ roster_id: jalen.roster_id, test: 'dash_40yd', value: 4.62, attempt: 1 }, { roster_id: jalen.roster_id, test: 'dash_40yd', value: 4.58, attempt: 2 }, { client_id: maya.id, test: 'cmj', value: 18.2 }] })).body;
+  assert.ok(jalen.client_id && !jalen.roster_id, 'a roster athlete is on the day as their profile');
+  const line = (await coach('GET', `/v1/team-contracts/${contract.id}`)).body.roster.find((a) => a.name === 'Jalen Brooks');
+  assert.equal(line.client_id, jalen.client_id);
+  // An older integration sending the roster line still lands on the profile.
+  const r = (await coach('POST', '/v1/results', { session_id: s.id, results: [{ roster_id: line.id, test: 'dash_40yd', value: 4.62, attempt: 1 }, { client_id: jalen.client_id, test: 'dash_40yd', value: 4.58, attempt: 2 }, { client_id: maya.id, test: 'cmj', value: 18.2 }] })).body;
   assert.equal(r.created, 3);
+  assert.ok(r.results.every((x) => x.client_id && !x.roster_id));
   const day = (await coach('GET', `/v1/testing-sessions/${s.id}`)).body;
   assert.equal(day.athletes.length, 3, 'walk-ups tested on the day are added');
   assert.equal(day.athletes.find((a) => a.name === 'Jalen Brooks').results.length, 2);
-  assert.equal((await coach('GET', `/v1/roster/${jalen.roster_id}/performance`)).body.data[0].best, 4.58);
+  assert.equal((await coach('GET', `/v1/roster/${line.id}/performance`)).body.data[0].best, 4.58);
+  assert.equal((await coach('GET', `/v1/clients/${jalen.client_id}/performance`)).body.data[0].best, 4.58, 'the same results on the client profile');
   assert.equal((await coach('GET', '/v1/testing-sessions')).body.data[0].results_count, 3);
 });
 

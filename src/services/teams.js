@@ -2,7 +2,7 @@ import { newId, token, v, notFound, badRequest, conflict, HttpError, isDate, add
 import { emit } from './events.js';
 import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
-import { newAthleteId } from './athlete-ids.js';
+import { newAthleteId, findByAthleteId, clientOfRoster, ID_PATTERN } from './athlete-ids.js';
 
 // Schools and clubs pay a flat monthly fee per team. Each month is invoiced in advance on the
 // anniversary of the start date and is due on the contract's terms (Net 30 by default).
@@ -153,19 +153,26 @@ function shapeInvoice(ctx, i, baseUrl) {
   return { ...i, lines: JSON.parse(i.lines), status, days_past_due: status === 'overdue' ? daysBetween(i.due_on, today(ctx)) : 0, link: `${baseUrl ?? ctx.publicUrl ?? ''}/invoice/${i.public_token}` };
 }
 
+// A team's current roster: active lines whose athlete isn't archived, with the name and Athlete ID from the athlete's
+// profile (one profile per athlete). Archived athletes stay on the roster's history and come back when restored.
+export const activeRoster = (ctx, contractId) => ctx.db.all(`SELECT r.id, r.contract_id, r.client_id, COALESCE(c.name, r.name) AS name, COALESCE(c.athlete_id, r.athlete_id) AS athlete_id,
+    r.position, r.grad_year, r.active, r.created_at
+  FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 AND c.archived_at IS NULL ORDER BY COALESCE(c.name, r.name)`, contractId);
+
 // Team sessions held so far, and each roster athlete's attendance from the day they joined (plus any earlier
 // session they were marked at), the last time they were here, and the last few sessions' check-ins.
 function attendance(ctx, contractId, { recent = 8 } = {}) {
   const sessions = ctx.db.all(`SELECT s.id, s.starts_at FROM class_sessions s JOIN class_series cs ON cs.id = s.series_id WHERE cs.contract_id = ? AND s.status = 'scheduled' ORDER BY s.starts_at`, contractId);
   const heldRows = sessions.filter((s) => s.starts_at <= ctx.now());
   const zone = getSetting(ctx, 'timezone');
+  // Attendance is kept on each athlete's profile (by client), for this team's sessions.
   const marks = new Map();
-  for (const a of ctx.db.all('SELECT a.roster_id, a.session_id FROM team_attendance a JOIN team_roster r ON r.id = a.roster_id WHERE r.contract_id = ?', contractId)) {
-    if (!marks.has(a.roster_id)) marks.set(a.roster_id, new Set());
-    marks.get(a.roster_id).add(a.session_id);
+  for (const a of ctx.db.all(`SELECT a.client_id, a.session_id FROM team_attendance a JOIN class_sessions s ON s.id = a.session_id JOIN class_series cs ON cs.id = s.series_id WHERE cs.contract_id = ?`, contractId)) {
+    if (!marks.has(a.client_id)) marks.set(a.client_id, new Set());
+    marks.get(a.client_id).add(a.session_id);
   }
-  const roster = ctx.db.all('SELECT * FROM team_roster WHERE contract_id = ? AND active = 1 ORDER BY name', contractId).map((r) => {
-    const here = marks.get(r.id) ?? new Set();
+  const roster = activeRoster(ctx, contractId).map((r) => {
+    const here = marks.get(r.client_id) ?? new Set();
     const since = startOfLocalDay(r.created_at, zone);
     const theirs = heldRows.filter((s) => s.starts_at >= since || here.has(s.id));
     const came = theirs.filter((s) => here.has(s.id));
@@ -173,8 +180,8 @@ function attendance(ctx, contractId, { recent = 8 } = {}) {
   });
   const rated = roster.filter((r) => r.attendance_rate != null);
   const recentSessions = heldRows.slice(-recent).reverse().map((s) => {
-    const expected = roster.filter((r) => s.starts_at >= r.since || (marks.get(r.id)?.has(s.id)));
-    return { id: s.id, starts_at: s.starts_at, here: expected.filter((r) => marks.get(r.id)?.has(s.id)).length, roster: expected.length };
+    const expected = roster.filter((r) => s.starts_at >= r.since || (marks.get(r.client_id)?.has(s.id)));
+    return { id: s.id, starts_at: s.starts_at, here: expected.filter((r) => marks.get(r.client_id)?.has(s.id)).length, roster: expected.length };
   });
   return {
     roster: roster.map(({ since, ...r }) => r), recent_sessions: recentSessions,
@@ -207,7 +214,7 @@ export function getContract(ctx, id, baseUrl) {
 export function listContracts(ctx) {
   const day = today(ctx);
   return ctx.db.all(`SELECT c.*, o.name AS org_name, o.kind AS org_kind, o.contact_email,
-      (SELECT COUNT(*) FROM team_roster r WHERE r.contract_id = c.id AND r.active = 1) AS roster_count
+      (SELECT COUNT(*) FROM team_roster r JOIN clients x ON x.id = r.client_id WHERE r.contract_id = c.id AND r.active = 1 AND x.archived_at IS NULL) AS roster_count
     FROM team_contracts c JOIN organizations o ON o.id = c.org_id ORDER BY c.status, o.name, c.name`).map((c) => {
     const open = ctx.db.all(`SELECT amount_cents, due_on FROM team_invoices WHERE contract_id = ? AND status = 'open'`, c.id);
     const overdue = open.filter((i) => i.due_on < day);
@@ -298,10 +305,15 @@ export async function updateContract(ctx, id, body, sched = {}, baseUrl) {
 }
 
 // ---------- Roster and attendance ----------
+// One profile per athlete: every roster line links a client. Adding someone to a roster puts a client you already have
+// on it (chosen by the coach, or by an exact Athlete ID), or creates a client for them: name, position and grad year
+// (the school for a school team), no family and no membership, so they're a "Team only" client, not an active one.
+// A name that matches a client you already have is never linked on its own: the coach chooses.
 // Pasted team lists: one athlete per line, "Name, position, grad year" (tabs from a spreadsheet work too). List and
 // jersey numbers ("1.", "#12", "Deon Parkes #22", "Deon Parkes 22", or a number column of its own) are dropped, "Class of
-// 2028" is a grad year, and a spreadsheet header row ("Name, Position, Grad year") is skipped.
-const HEADER_CELL = /^(#|no\.?|num(ber)?|jersey|name|player|athlete|full name|player name|athlete name|first name|last name|position|pos|grad( year)?|class( of)?|year)$/i;
+// 2028" is a grad year, an Athlete ID (AVALOP2026) puts that client on the team, and a spreadsheet header row
+// ("Name, Position, Grad year") is skipped.
+const HEADER_CELL = /^(#|no\.?|num(ber)?|jersey|name|player|athlete|full name|player name|athlete name|first name|last name|position|pos|grad( year)?|class( of)?|year|athlete id|id)$/i;
 const JERSEY = /^#?\s*\d{1,3}$/;
 export function parseRoster(text) {
   const lines = String(text ?? '').split(/\r?\n/).map((l, i) => ({ line: l.trim(), n: i })).filter((x) => x.line);
@@ -311,12 +323,13 @@ export function parseRoster(text) {
     const parts = cells(line);
     if (parts.length > 1 && JERSEY.test(parts[0])) parts.shift();
     const name = parts[0].replace(/^(#\s*\d{1,3}|\d{1,3}[.)]?)\s+/, '').replace(/\s+#?\s*\d{1,3}$/, '').replace(/\s+/g, ' ').trim();
-    const row = { line: n + 1, text: line, name, position: null, grad_year: null, error: null };
+    const row = { line: n + 1, text: line, name, position: null, grad_year: null, athlete_id: null, error: null };
     if (name.split(' ').length < 2 || /\d/.test(name)) { row.error = `Line ${n + 1} needs a first and last name: "${line.slice(0, 80)}"`; return row; }
     if (name.length > 120) { row.error = `Line ${n + 1}: the name is longer than 120 characters.`; return row; }
     for (const x of parts.slice(1).filter((p) => p && !JERSEY.test(p))) {
       const y = x.match(/^(?:class of\s+)?(\d{4}|'\d{2})$/i);
-      if (y) {
+      if (ID_PATTERN.test(x.toUpperCase())) row.athlete_id = x.toUpperCase();
+      else if (y) {
         const yr = y[1].startsWith("'") ? 2000 + Number(y[1].slice(1)) : Number(y[1]);
         if (yr < 2000 || yr > 2060) row.error = `Line ${n + 1}: ${y[1]} doesn't look like a grad year. Use a year like 2028.`;
         else row.grad_year = yr;
@@ -326,8 +339,12 @@ export function parseRoster(text) {
     return row;
   });
 }
-// What each pasted line will do, without saving: new, skip (already on this roster, or twice in the list),
-// match (a client you already have: link them or add a new athlete), or error.
+const otherTeamsSql = `(SELECT group_concat(o.name || ' ' || t.name, '; ') FROM team_roster x JOIN team_contracts t ON t.id = x.contract_id JOIN organizations o ON o.id = t.org_id
+  WHERE x.client_id = c.id AND x.active = 1 AND t.status = 'active' AND t.id != ?)`;
+const onRosterLine = (ctx, contractId, clientId) => ctx.db.get('SELECT id FROM team_roster WHERE contract_id = ? AND client_id = ? AND active = 1', contractId, clientId);
+// What each pasted line will do, without saving: new (a new client), link (an Athlete ID that belongs to a client you
+// have), skip (already on this roster, or twice in the list), match (a client you already have with that name: link
+// them or add a new athlete) or error.
 export function checkRoster(ctx, contractId, body) {
   getContract(ctx, contractId);
   const text = String(body.names ?? body.text ?? '');
@@ -338,39 +355,81 @@ export function checkRoster(ctx, contractId, body) {
   const seen = new Set();
   for (const r of rows) {
     if (r.error) { r.status = 'error'; continue; }
+    if (r.athlete_id) {
+      const who = findByAthleteId(ctx, r.athlete_id);
+      const c = who && ctx.db.get('SELECT id, name, athlete_id, archived_at FROM clients WHERE id = ?', who.client_id);
+      if (!c) { r.status = 'error'; r.error = `Line ${r.line}: no athlete has the ID ${r.athlete_id}. Check it, or leave it out to add ${r.name} as a new athlete.`; continue; }
+      if (c.archived_at) { r.status = 'error'; r.error = `Line ${r.line}: ${c.name} (${c.athlete_id}) is archived. Bring them back from their profile first.`; continue; }
+      if (onRosterLine(ctx, contractId, c.id) || seen.has(`id:${c.id}`)) { r.status = 'skip'; r.reason = seen.has(`id:${c.id}`) ? 'Listed twice' : 'Already on this roster'; continue; }
+      seen.add(`id:${c.id}`); seen.add(c.name.toLowerCase());
+      r.status = 'link'; r.client = { id: c.id, name: c.name, athlete_id: c.athlete_id };
+      continue;
+    }
     const key = r.name.toLowerCase();
-    const on = ctx.db.get('SELECT id, athlete_id FROM team_roster WHERE contract_id = ? AND active = 1 AND lower(name) = ?', contractId, key);
-    if (on || seen.has(key)) { r.status = 'skip'; r.reason = on ? 'Already on this roster' : 'Listed twice'; continue; }
+    const on = ctx.db.get('SELECT c.archived_at FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 AND lower(c.name) = ?', contractId, key);
+    if (on || seen.has(key)) { r.status = 'skip'; r.reason = !on ? 'Listed twice' : on.archived_at ? 'On this roster, but archived: bring them back from their profile' : 'Already on this roster'; continue; }
     seen.add(key);
-    r.matches = ctx.db.all(`SELECT c.id, c.name, c.athlete_id, c.birth_date,
-        (SELECT group_concat(o.name || ' ' || t.name, '; ') FROM team_roster x JOIN team_contracts t ON t.id = x.contract_id JOIN organizations o ON o.id = t.org_id
-          WHERE x.client_id = c.id AND x.active = 1 AND t.status = 'active' AND t.id != ?) AS teams
+    r.matches = ctx.db.all(`SELECT c.id, c.name, c.athlete_id, c.birth_date, ${otherTeamsSql} AS teams
       FROM clients c WHERE c.archived_at IS NULL AND lower(c.name) = ? AND c.id NOT IN (SELECT client_id FROM team_roster WHERE contract_id = ? AND active = 1 AND client_id IS NOT NULL)
       ORDER BY c.created_at LIMIT 5`, contractId, key, contractId);
     r.status = r.matches.length ? 'match' : 'new';
   }
   const count = (st) => rows.filter((r) => r.status === st).length;
-  return { rows, counts: { new: count('new'), match: count('match'), skip: count('skip'), error: count('error') } };
+  return { rows, counts: { new: count('new'), link: count('link'), match: count('match'), skip: count('skip'), error: count('error') } };
 }
 
-function insertRoster(ctx, contractId, { name, position, grad_year, client_id }) {
-  const id = newId('tr');
-  ctx.db.run('INSERT INTO team_roster (id, contract_id, name, athlete_id, position, grad_year, client_id, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)', id, contractId,
-    name, newAthleteId(ctx, name), position ?? null, grad_year ?? null, client_id ?? null, ctx.now());
+// A new client for a roster athlete: no family, no membership, a private app link and an Athlete ID of their own.
+function createRosterClient(ctx, contractId, { name, position, grad_year }) {
+  const org = ctx.db.get('SELECT o.name, o.kind FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', contractId);
+  const id = newId('cli'), athleteId = newAthleteId(ctx, name);
+  ctx.db.run('INSERT INTO clients (id, athlete_id, name, access_token, position, school, grad_year, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    id, athleteId, name, token(24), position ?? null, org?.kind === 'school' ? org.name : null, grad_year ?? null, ctx.now());
+  emit(ctx, 'client.created', { client_id: id, athlete_id: athleteId, client_name: name, email: null, family_id: null, team_contract_id: contractId });
   return id;
 }
-// One athlete ({ name, position, grad_year, client_id }), or a pasted list ({ names }). A list is all or nothing: every
-// line is checked first and nothing is saved while any line has a problem (the problems come back in details).
+// Puts a client on the roster (a new line, attendance counting from today). The line keeps a copy of the client's
+// name and Athlete ID; a position or grad year from the team list fills the profile's only when it has none.
+function insertRoster(ctx, contractId, clientId, { position = null, grad_year = null } = {}) {
+  const c = ctx.db.get('SELECT id, name, athlete_id, position, grad_year FROM clients WHERE id = ?', clientId);
+  if (!c) throw notFound('Client');
+  if (position && !c.position) ctx.db.run('UPDATE clients SET position = ? WHERE id = ?', position, c.id);
+  if (grad_year && !c.grad_year) ctx.db.run('UPDATE clients SET grad_year = ? WHERE id = ?', grad_year, c.id);
+  const id = newId('tr');
+  ctx.db.run('INSERT INTO team_roster (id, contract_id, name, athlete_id, position, grad_year, client_id, active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)', id, contractId,
+    c.name, c.athlete_id, position ?? c.position ?? null, grad_year ?? c.grad_year ?? null, c.id, ctx.now());
+  return id;
+}
+// A client you already have, for a roster: by client_id or exact Athlete ID. Archived clients are refused.
+function existingClient(ctx, body) {
+  let id = null;
+  if (body.client_id) id = String(body.client_id);
+  else if (body.athlete_id) {
+    const who = findByAthleteId(ctx, body.athlete_id);
+    if (!who) throw fieldError(`No athlete has the ID ${String(body.athlete_id).trim().toUpperCase()}. Check it, or leave it out to add a new athlete.`, 'athlete_id');
+    id = who.client_id;
+  }
+  if (!id) return null;
+  const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', id);
+  if (!c) throw notFound('Client');
+  if (c.archived_at) throw conflict(`${c.name} is archived. Bring them back from their profile first.`);
+  return c;
+}
+// One athlete ({ name, position, grad_year } for a new client, or client_id / athlete_id for one you already have), or
+// a pasted list ({ names }). A list is all or nothing: every line is checked first and nothing is saved while any line
+// has a problem (the problems come back in details).
 // links: { lineNumber: clientId } puts a matching client you already have on the team instead of a new athlete;
 // matching lines without a link are added as new athletes. Everything is checked again when it's saved.
 export function addRoster(ctx, contractId, body) {
   getContract(ctx, contractId);
   if (body.names === undefined) {
-    const nm = v.str(body.name, 'name', { max: 120 });
-    const clientId = body.client_id ? (ctx.db.get('SELECT id FROM clients WHERE id = ? AND archived_at IS NULL', body.client_id)?.id ?? null) : null;
-    if (clientId && ctx.db.get('SELECT 1 FROM team_roster WHERE contract_id = ? AND client_id = ? AND active = 1', contractId, clientId)) throw conflict(`${nm} is already on this roster.`);
-    ctx.db.tx(() => insertRoster(ctx, contractId, { name: nm, position: v.str(body.position, 'position', { max: 60, optional: true }), grad_year: v.int(body.grad_year, 'grad_year', { min: 2000, max: 2060, optional: true }), client_id: clientId }));
-    return { roster: getContract(ctx, contractId).roster, added: 1, linked: clientId ? 1 : 0, skipped: 0 };
+    const existing = existingClient(ctx, body);
+    const nm = existing ? existing.name : v.str(body.name, 'name', { max: 120 });
+    const position = v.str(body.position, 'position', { max: 60, optional: true }), grad = v.int(body.grad_year, 'grad_year', { min: 2000, max: 2060, optional: true });
+    ctx.db.tx(() => {
+      if (existing && onRosterLine(ctx, contractId, existing.id)) throw conflict(`${nm} is already on this roster.`);
+      insertRoster(ctx, contractId, existing ? existing.id : createRosterClient(ctx, contractId, { name: nm, position, grad_year: grad }), { position, grad_year: grad });
+    });
+    return { roster: getContract(ctx, contractId).roster, added: existing ? 0 : 1, linked: existing ? 1 : 0, skipped: 0 };
   }
   const links = Object.fromEntries(Object.entries(body.links && typeof body.links === 'object' ? body.links : {}).filter(([, x]) => x && x !== 'new'));   // 'new' = add as a new athlete
   return ctx.db.tx(() => {
@@ -384,13 +443,14 @@ export function addRoster(ctx, contractId, body) {
     let added = 0, linked = 0;
     for (const r of plan.rows) {
       if (r.status === 'skip') continue;
+      if (r.status === 'link') { insertRoster(ctx, contractId, r.client.id, r); linked++; continue; }
       const want = links[r.line];
       if (want) {
         const m = r.matches.find((x) => x.id === want);
         if (!m) throw conflict(`Line ${r.line}: choose one of the matching clients, or add ${r.name} as a new athlete.`);
-        insertRoster(ctx, contractId, { name: m.name, position: r.position, grad_year: r.grad_year, client_id: m.id });
+        insertRoster(ctx, contractId, m.id, r);
         linked++;
-      } else { insertRoster(ctx, contractId, r); added++; }
+      } else { insertRoster(ctx, contractId, createRosterClient(ctx, contractId, r), r); added++; }
     }
     return { roster: getContract(ctx, contractId).roster, added, linked, skipped: plan.counts.skip };
   });
@@ -402,9 +462,7 @@ export function searchClientsForTeam(ctx, contractId, q) {
   const s = String(q ?? '').trim().toLowerCase();
   if (s.length < 2) return [];
   const like = `%${s.replace(/[%_\\]/g, '')}%`;
-  return ctx.db.all(`SELECT c.id, c.name, c.athlete_id,
-      (SELECT group_concat(o.name || ' ' || t.name, '; ') FROM team_roster x JOIN team_contracts t ON t.id = x.contract_id JOIN organizations o ON o.id = t.org_id
-        WHERE x.client_id = c.id AND x.active = 1 AND t.status = 'active' AND t.id != ?) AS teams,
+  return ctx.db.all(`SELECT c.id, c.name, c.athlete_id, ${otherTeamsSql} AS teams,
       EXISTS (SELECT 1 FROM team_roster x WHERE x.client_id = c.id AND x.contract_id = ? AND x.active = 1) AS on_roster
     FROM clients c WHERE c.archived_at IS NULL AND (lower(c.name) LIKE ? OR lower(COALESCE(c.athlete_id, '')) LIKE ?) ORDER BY c.name LIMIT 12`, contractId, contractId, like, like)
     .map((c) => ({ ...c, on_roster: !!c.on_roster }));
@@ -417,7 +475,7 @@ export function addExistingClient(ctx, contractId, body) {
   const client = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', v.str(body.client_id, 'client_id', { max: 64 }));
   if (!client) throw notFound('Client');
   if (client.archived_at) throw conflict(`${client.name} is archived. Bring them back from their profile first.`);
-  if (ctx.db.get('SELECT 1 FROM team_roster WHERE contract_id = ? AND client_id = ? AND active = 1', contractId, client.id)) throw conflict(`${client.name} is already on this roster.`);
+  if (onRosterLine(ctx, contractId, client.id)) throw conflict(`${client.name} is already on this roster.`);
   const others = ctx.db.all(`SELECT x.id, o.name || ' ' || t.name AS team FROM team_roster x JOIN team_contracts t ON t.id = x.contract_id JOIN organizations o ON o.id = t.org_id
     WHERE x.client_id = ? AND x.active = 1 AND t.status = 'active' AND t.id != ?`, client.id, contractId);
   if (others.length && body.move !== true && body.keep !== true) {
@@ -428,10 +486,11 @@ export function addExistingClient(ctx, contractId, body) {
   const move = body.move === true;
   ctx.db.tx(() => {
     if (move) for (const o of others) ctx.db.run('UPDATE team_roster SET active = 0 WHERE id = ?', o.id);
-    insertRoster(ctx, contractId, { name: client.name, client_id: client.id });   // attendance counts from today
+    insertRoster(ctx, contractId, client.id);   // attendance counts from today
   });
   return { roster: getContract(ctx, contractId).roster, moved_from: move ? others.map((o) => o.team) : [], also_on: move ? [] : others.map((o) => o.team), team: `${c.org.name} ${c.name}` };
 }
+// Taking someone off a roster keeps their profile, results and attendance.
 export function removeRoster(ctx, contractId, rosterId) {
   const r = ctx.db.run('UPDATE team_roster SET active = 0 WHERE id = ? AND contract_id = ? AND active = 1', rosterId, contractId);
   if (!r.changes) throw notFound('Roster athlete');
@@ -439,28 +498,34 @@ export function removeRoster(ctx, contractId, rosterId) {
 }
 // Undo a removal: the same line comes back, with its join date and attendance.
 export function restoreRoster(ctx, contractId, rosterId) {
-  const r = ctx.db.get('SELECT * FROM team_roster WHERE id = ? AND contract_id = ?', rosterId, contractId);
+  const r = ctx.db.get('SELECT r.*, c.name AS client_name, c.archived_at FROM team_roster r LEFT JOIN clients c ON c.id = r.client_id WHERE r.id = ? AND r.contract_id = ?', rosterId, contractId);
   if (!r) throw notFound('Roster athlete');
   if (r.active) return getContract(ctx, contractId).roster;
-  if (r.client_id && ctx.db.get('SELECT 1 FROM team_roster WHERE contract_id = ? AND client_id = ? AND active = 1', contractId, r.client_id)) throw conflict(`${r.name} is already back on this roster.`);
+  const name = r.client_name ?? r.name;
+  if (!r.client_id) throw conflict(`${name}'s profile was deleted, so they can't come back on the roster.`);
+  if (r.archived_at) throw conflict(`${name} is archived. Bring them back from their profile first.`);
+  if (onRosterLine(ctx, contractId, r.client_id)) throw conflict(`${name} is already back on this roster.`);
   ctx.db.run('UPDATE team_roster SET active = 1 WHERE id = ?', rosterId);
   return getContract(ctx, contractId).roster;
 }
-// For a team session: the contract's roster with who was there.
+// For a team session: the contract's current roster with who was there. Each athlete's id is their roster line (as
+// before); client_id is their profile, where the check-in is kept.
 export function teamRosterFor(ctx, session) {
   const cs = session.series_id && ctx.db.get('SELECT contract_id FROM class_series WHERE id = ?', session.series_id);
   if (!cs?.contract_id) return null;
   const c = ctx.db.get('SELECT t.id, t.name, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', cs.contract_id);
-  const present = new Set(ctx.db.all('SELECT roster_id FROM team_attendance WHERE session_id = ?', session.id).map((r) => r.roster_id));
+  const present = new Set(ctx.db.all('SELECT client_id FROM team_attendance WHERE session_id = ?', session.id).map((r) => r.client_id));
   return { contract_id: c.id, team_name: c.name, org_name: c.org_name,
-    athletes: ctx.db.all('SELECT id, name, athlete_id, position, grad_year FROM team_roster WHERE contract_id = ? AND active = 1 ORDER BY name', c.id).map((r) => ({ ...r, present: present.has(r.id) })) };
+    athletes: activeRoster(ctx, c.id).map((r) => ({ id: r.id, client_id: r.client_id, name: r.name, athlete_id: r.athlete_id, position: r.position, grad_year: r.grad_year, present: present.has(r.client_id) })) };
 }
-export function setTeamAttendance(ctx, session, rosterId, present) {
+// Check an athlete in (or out) at a team session: by roster line (roster_id) or profile (client_id) of someone on the roster.
+export function setTeamAttendance(ctx, session, ref, present) {
   const team = teamRosterFor(ctx, session);
   if (!team) throw conflict('This session isn\'t linked to a team contract.');
-  if (!team.athletes.some((a) => a.id === rosterId)) throw notFound('Roster athlete');
-  if (present) ctx.db.run('INSERT OR IGNORE INTO team_attendance (session_id, roster_id, created_at) VALUES (?, ?, ?)', session.id, rosterId, ctx.now());
-  else ctx.db.run('DELETE FROM team_attendance WHERE session_id = ? AND roster_id = ?', session.id, rosterId);
+  const clientId = typeof ref === 'object' ? (ref.client_id ?? clientOfRoster(ctx, ref.roster_id)) : clientOfRoster(ctx, ref);
+  if (!clientId || !team.athletes.some((a) => a.client_id === clientId)) throw notFound('Roster athlete');
+  if (present) ctx.db.run('INSERT OR IGNORE INTO team_attendance (session_id, client_id, created_at) VALUES (?, ?, ?)', session.id, clientId, ctx.now());
+  else ctx.db.run('DELETE FROM team_attendance WHERE session_id = ? AND client_id = ?', session.id, clientId);
   return teamRosterFor(ctx, session);
 }
 
@@ -725,6 +790,6 @@ export function teamSummary(ctx) {
   const overdue = ctx.db.all(`SELECT i.id AS invoice_id, i.number, i.amount_cents, i.due_on, t.id AS contract_id, t.name AS team_name, o.name AS name FROM team_invoices i JOIN team_contracts t ON t.id = i.contract_id JOIN organizations o ON o.id = i.org_id WHERE i.status = 'open' AND i.due_on < ? ORDER BY i.due_on`, d);
   const open = ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM team_invoices WHERE status = 'open'`);
   const collected = ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM team_invoices WHERE status = 'paid' AND paid_on > ?`, addDaysToDate(d, -30)).c;
-  const athletes = ctx.db.get(`SELECT COUNT(*) AS n FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id WHERE r.active = 1 AND t.status = 'active'`).n;
+  const athletes = ctx.db.get(`SELECT COUNT(DISTINCT r.client_id) AS n FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id JOIN clients c ON c.id = r.client_id WHERE r.active = 1 AND t.status = 'active' AND c.archived_at IS NULL`).n;
   return { monthly_cents: monthly.c, active_contracts: monthly.n, open_cents: open.c, open_count: open.n, collected_30_cents: collected, athletes, overdue: overdue.map((i) => ({ ...i, days_past_due: daysBetween(i.due_on, d) })) };
 }

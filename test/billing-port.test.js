@@ -5,11 +5,13 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/server.js';
 import { createUser } from '../src/services/access.js';
 import { handleStripeEvent, takings } from '../src/services/commerce.js';
-import { reconcileInvoicePayment, runBilling, attemptCharge } from '../src/services/billing.js';
+import { reconcileInvoicePayment, runBilling, attemptCharge, moneyIn, retryDeclined, markInvoicePaid } from '../src/services/billing.js';
+import { checkDay } from '../src/services/moneychecks.js';
+import { getSetting } from '../src/services/families.js';
 import { deleteFamilyData } from '../src/services/legal.js';
 import { completePayLink } from '../src/services/paylinks.js';
 import { resetRateLimits } from '../src/services/security.js';
-import { addDays } from '../src/util.js';
+import { addDays, zonedToUtc, startOfLocalDay, localDate } from '../src/util.js';
 
 let app, base, owner, coach, desk, facility, plan, cheap;
 const refunds = [];
@@ -432,4 +434,61 @@ test('deleting a family keeps membership amounts and refunds but drops the reaso
   const inv = invoice(m.inv.id);
   assert.deepEqual([inv.amount_cents, inv.refunded_cents], [15000, 1000]);
   assert.deepEqual(db().all('SELECT amount_cents, reason FROM invoice_refunds WHERE invoice_id = ?', m.inv.id).map((r) => ({ ...r })), [{ amount_cents: 1000, reason: null }]);
+});
+
+// ---------------------------------------------------------------- review fixes
+test('a school invoice paid today counts in this month and today, and back-to-back weeks count each day once', async () => {
+  const contract = (await owner('POST', '/v1/team-contracts', { organization: { name: 'Eastside HS', contact_email: 'ad@eastside.example' }, name: 'JV', monthly_cents: 70000, start_date: new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10) })).body;
+  const [a, b] = db().all('SELECT id, amount_cents FROM team_invoices WHERE contract_id = ? ORDER BY period_start LIMIT 2', contract.id);
+  // Far in the future so nothing else was paid on those days.
+  db().run(`UPDATE team_invoices SET status = 'paid', paid_on = '2031-03-10', paid_method = 'check' WHERE id = ?`, a.id);
+  db().run(`UPDATE team_invoices SET status = 'paid', paid_on = '2031-03-03', paid_method = 'check' WHERE id = ?`, b.id);
+  const tz = getSetting(app.ctx, 'timezone');
+  const at = (d, t) => zonedToUtc(d, t, tz), midnight = (d) => startOfLocalDay(at(d, '12:00'), tz);
+  const ctx = { ...app.ctx, now: () => at('2031-03-10', '10:00') };
+  assert.equal(moneyIn(ctx, midnight('2031-03-01'), ctx.now()).teams, a.amount_cents + b.amount_cents, 'paid this morning: in this month already');
+  assert.equal(moneyIn(ctx, midnight('2031-03-10'), midnight('2031-03-11')).teams, a.amount_cents, 'and in today');
+  const week = moneyIn(ctx, addDays(ctx.now(), -7), ctx.now()).teams, prior = moneyIn(ctx, addDays(ctx.now(), -14), addDays(ctx.now(), -7)).teams;
+  assert.equal(week + prior, a.amount_cents + b.amount_cents, 'each day in exactly one of two back-to-back weeks');
+  db().run(`UPDATE team_invoices SET status = 'open', paid_on = NULL, paid_method = NULL WHERE id IN (?, ?)`, a.id, b.id);
+});
+
+test('paying one of two declined charges keeps the membership past due, so the other is still retried and reminded', async () => {
+  const m = await member({ declining: true });
+  // A second declined charge on the same membership (a payment that failed after it was taken).
+  const second = 'inv_second_' + m.id;
+  db().run(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, next_retry_at, created_at) VALUES (?, ?, ?, 15000, 'failed', ?, ?, 1, ?, ?)`,
+    second, m.inv.subscription_id, m.id, addDays(now(), -30), now(), addDays(now(), 3), now());
+  const r = await owner('POST', `/v1/invoices/${m.inv.id}/payments`, { method: 'cash' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.membership_reactivated, false);
+  assert.equal(subOf(m.id).status, 'past_due');
+  assert.ok((await owner('GET', '/v1/billing/attention')).body.failed.some((i) => i.id === second), 'the other charge still needs attention');
+  assert.equal((await owner('POST', `/v1/invoices/${second}/payments`, { method: 'check', reference: '1001' })).body.membership_reactivated, true);
+  assert.equal(subOf(m.id).status, 'active');
+});
+
+test('retry all doesn\'t count a charge paid another way while it waited as charged by the retry', async () => {
+  db().run(`UPDATE invoices SET status = 'void', next_retry_at = NULL WHERE status = 'failed'`);
+  db().run(`UPDATE subscriptions SET status = 'active' WHERE status = 'past_due'`);
+  const m = await member({ declining: true });
+  db().run(`UPDATE families SET card_status = 'ok' WHERE id = ?`, m.family_id);
+  // A pay link payment holds the invoice while the retry reaches it.
+  const paying = markInvoicePaid(app.ctx, m.inv.id, 'pi_paid_by_link');
+  const [out] = await Promise.all([retryDeclined(app.ctx), paying]);
+  assert.equal(invoice(m.inv.id).status, 'paid');
+  assert.equal(invoice(m.inv.id).attempts, 1, 'the card wasn\'t charged');
+  assert.equal(invoice(m.inv.id).payment_ref, 'pi_paid_by_link');
+  assert.deepEqual({ tried: out.tried, paid: out.paid, paid_cents: out.paid_cents }, { tried: 0, paid: 0, paid_cents: 0 });
+});
+
+test('a membership paid by check after a declined card isn\'t a card payment in the money checks', async () => {
+  const m = await member({ declining: true });
+  db().run(`UPDATE invoices SET payment_ref = 'pi_declined_card' WHERE id = ?`, m.inv.id);
+  await owner('POST', `/v1/invoices/${m.inv.id}/payments`, { method: 'check', reference: '2002' });
+  const payments = { ...app.ctx.payments, listPayments: async () => [{ ref: 'pi_declined_card', status: 'requires_payment_method', amount_cents: 15000, created_at: now() }] };
+  const row = await checkDay({ ...app.ctx, payments }, localDate(now(), getSetting(app.ctx, 'timezone')));
+  const findings = typeof row.findings === 'string' ? JSON.parse(row.findings) : row.findings;
+  assert.ok(!findings.some((f) => f.ref === 'pi_declined_card'), JSON.stringify(findings));
+  assert.ok(!findings.some((f) => (f.items ?? []).includes(`membership:${m.inv.id}`)), JSON.stringify(findings));
 });

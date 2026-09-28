@@ -225,7 +225,8 @@ function recordPaid(ctx, inv, s, { attempts = inv.attempts, ref, method = null, 
   ctx.db.run(`UPDATE invoices SET status = 'paid', attempts = ?, paid_at = ?, payment_ref = ${method ? 'payment_ref' : '?'}, paid_method = ?, paid_reference = ?, last_error = NULL, next_retry_at = NULL, voided_at = NULL, void_reason = NULL WHERE id = ?`,
     ...[attempts, ctx.now(), ...(method ? [] : [ref]), method, reference, inv.id]);
   emit(ctx, 'invoice.paid', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents });
-  if (['past_due', 'trialing'].includes(s.status)) setStatus(ctx, s.id, 'active');
+  // Past due stays past due while another of its charges is still declined (so that one keeps being retried and reminded).
+  if (s.status === 'trialing' || (s.status === 'past_due' && !ctx.db.get(`SELECT 1 FROM invoices WHERE subscription_id = ? AND status = 'failed' AND id != ?`, s.id, inv.id))) setStatus(ctx, s.id, 'active');
 }
 // A parent paid a failed or open invoice some other way (a pay link). Returns false if it was already paid or voided.
 export function markInvoicePaid(ctx, invoiceId, ref, opts = {}) { return withLock(`invoice:${invoiceId}`, () => recordInvoicePayment(ctx, invoiceId, ref, opts)); }
@@ -344,11 +345,18 @@ export function moneyIn(ctx, from, to) {
   const saleRefunds = db.get('SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM sale_refunds WHERE created_at >= ? AND created_at < ?', from, to);
   const members = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM invoices WHERE status = 'paid' AND amount_cents > 0 AND paid_at >= ? AND paid_at < ?`, from, to);
   const memberRefunds = db.get('SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM invoice_refunds WHERE created_at >= ? AND created_at < ?', from, to);
-  const teams = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM team_invoices WHERE status = 'paid' AND paid_on >= ? AND paid_on < ?`, from.slice(0, 10), to.slice(0, 10));
+  // A school invoice's paid_on is a business-local date: it counts when that day's midnight falls in the window, so one
+  // paid today is in "this month" and "today", and back-to-back windows never count a day twice.
+  const teams = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM team_invoices WHERE status = 'paid' AND paid_on >= ? AND paid_on < ?`, firstDayFrom(ctx, from), firstDayFrom(ctx, to));
   const out = { sales: sales.c - saleRefunds.c, members: members.c - memberRefunds.c, teams: teams.c };
   return { total: out.sales + out.members + out.teams, ...out,
     taken_cents: sales.c + members.c + teams.c, refunded_cents: saleRefunds.c + memberRefunds.c, sale_refunds_cents: saleRefunds.c, member_refunds_cents: memberRefunds.c,
     payments: sales.n + members.n + teams.n, refunds: saleRefunds.n + memberRefunds.n, sales_count: sales.n };
+}
+// The first business-local date whose midnight is at or after the moment.
+function firstDayFrom(ctx, iso) {
+  const z = zone(ctx), day = localDate(iso, z);
+  return startOfLocalDay(iso, z) === new Date(iso).toISOString() ? day : addDaysToDate(day, 1);
 }
 // Today, midnight to midnight in the business time zone, exactly as the day's takings count it (a day can be 23 or 25 hours).
 export function todayBounds(ctx) {
@@ -594,7 +602,7 @@ export async function retryDeclined(ctx) {
     if (inv.status !== 'failed') continue;                  // paid by link or card update while we worked down the list
     const before = getSubscription(ctx, inv.subscription_id).status;
     const after = await attemptCharge(ctx, r.id, ctx.now(), { manual: true, onlyIfFailed: true });
-    if (after.status !== 'paid' && after.status !== 'failed') continue;   // voided while we worked down the list
+    if (after.attempts === inv.attempts) continue;         // voided or paid another way while it waited its turn: not charged here
     out.tried++;
     if (after.status === 'paid') {
       out.paid++; out.paid_cents += after.amount_cents;

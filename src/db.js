@@ -138,10 +138,10 @@ function migrate(raw, schema) {
   if (version < 37) oneProfilePerAthlete(raw, schema);
   // ---- Version 38: billing (batch B6) ----
   // A sale taken for a booking said so in its note ('booking:<id>'); now it's the sale's booking_id. Copied for every such
-  // sale whose booking still exists, so a Tap to Pay sale still waiting for the card when the upgrade runs settles its
+  // sale whose booking still exists and is the sale's own client's (the new check), so a Tap to Pay sale still waiting for the card when the upgrade runs settles its
   // booking when it's paid. The note is left as it was (it is only a note now).
   if (version < 38 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
-    raw.exec(`UPDATE sales SET booking_id = substr(note, 9) WHERE booking_id IS NULL AND note LIKE 'booking:%' AND substr(note, 9) IN (SELECT id FROM bookings)`);
+    raw.exec(`UPDATE sales SET booking_id = substr(note, 9) WHERE booking_id IS NULL AND note LIKE 'booking:%' AND substr(note, 9) IN (SELECT b.id FROM bookings b WHERE b.client_id = sales.client_id)`);
   }
 }
 

@@ -594,7 +594,8 @@ test('a version 37 database gains the billing columns and refund log, and a sale
     old.exec(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_at) VALUES
       ('sale_wait', 'cli_ava', 'loc_1', 'tap_to_pay', 'pending', 3000, 'pi_wait', 'booking:bkg_1', '${at}'),
       ('sale_gone', 'cli_ava', 'loc_1', 'cash', 'succeeded', 500, NULL, 'booking:bkg_deleted', '${at}'),
-      ('sale_note', 'cli_ava', 'loc_1', 'cash', 'succeeded', 500, NULL, 'Paid for Ava', '${at}')`);
+      ('sale_note', 'cli_ava', 'loc_1', 'cash', 'succeeded', 500, NULL, 'Paid for Ava', '${at}'),
+      ('sale_other', NULL, 'loc_1', 'tap_to_pay', 'pending', 3000, 'pi_other', 'booking:bkg_1', '${at}')`);
     old.close();
     for (const round of [1, 2]) {
       const db = openDb(file);
@@ -607,8 +608,9 @@ test('a version 37 database gains the billing columns and refund log, and a sale
       assert.deepEqual(db.all(`SELECT id, booking_id, note FROM sales ORDER BY id`).map((r) => ({ ...r })), [
         { id: 'sale_gone', booking_id: null, note: 'booking:bkg_deleted' },
         { id: 'sale_note', booking_id: null, note: 'Paid for Ava' },
+        { id: 'sale_other', booking_id: null, note: 'booking:bkg_1' },
         { id: 'sale_wait', booking_id: 'bkg_1', note: 'booking:bkg_1' }
-      ], 'only a booking that exists is copied; notes stay as they were');
+      ], 'only a booking that exists, of the sale\'s own client, is copied; notes stay as they were');
       if (round === 1) {
         // The waiting sale completes after the upgrade: its session is marked paid.
         const payments = createTestProvider();

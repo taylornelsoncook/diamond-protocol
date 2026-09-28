@@ -15,7 +15,7 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 ## Commands
 - `npm run seed`: sample data (sign in `coach@diamondprotocol.local` / `change-me-now`, or the sample coaches `riley@diamondprotocol.local` and `jordan@diamondprotocol.local` and front desk `desk@diamondprotocol.local` with the same password; parent `maria.lopez@example.com`, code shown on screen in test mode). Delete `data/` first to reseed.
 - `npm start`: http://localhost:3000
-- `npm test`: the full suite (382 tests). Run it before calling anything done.
+- `npm test`: the full suite (386 tests). Run it before calling anything done.
 - Node 22.13+ only. **Zero npm dependencies** (node:sqlite, node:http, node:test, built-in fetch/zlib/crypto). Keep it that way unless the owner agrees.
 
 ## Code map

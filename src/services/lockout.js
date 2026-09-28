@@ -1,5 +1,5 @@
 // Payment lockout (owner decision): when a membership payment keeps declining, the family is locked out of everything but
-// fixing it. It starts once the payment has declined on payment_lock_tries automatic tries (the first charge and the
+// fixing it, whatever kind of client (hybrid, in-facility, remote or not set). It starts once the payment has declined on payment_lock_tries automatic tries (the first charge and the
 // scheduled retries; retries the owner or a parent start don't count, like the cancel limit), and ends the moment it's
 // paid (a new card, Try again, a pay link, or the owner), voided or the membership ends.
 // While locked:
@@ -11,7 +11,7 @@
 // A family is locked when any of its athletes' payments is; an adult with no family when their own is.
 import { getSetting } from './families.js';
 
-export const LOCK_TRIES = [0, 1, 2, 3];      // 0 = never lock; 4 automatic tries cancel the membership (billing.MAX_ATTEMPTS)
+export const LOCK_TRIES = [0, 1, 2, 3, 4];   // 0 = never lock; 4 (the default) = the first charge and 3 retries; the 5th declined automatic try cancels the membership (billing.MAX_ATTEMPTS)
 export const lockTries = (ctx) => Number(getSetting(ctx, 'payment_lock_tries'));
 
 const LOCKING = `FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN clients c ON c.id = i.client_id

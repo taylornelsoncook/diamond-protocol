@@ -446,8 +446,8 @@ for (const [name, kind] of [['Daniel Reyes', 'hybrid'], ['Aisha Rahman', 'hybrid
   if (made[name]) ctx.db.run('UPDATE clients SET training_type = ? WHERE id = ?', kind, made[name].id);
 }
 ctx.db.run(`UPDATE clients SET training_type = 'in_facility' WHERE id = ?`, lopez.id);
-// The Nguyen family's declined payment also declined on its first retry, so their portal shows the payment lockout.
-ctx.db.run(`UPDATE invoices SET attempts = max(attempts, 2), auto_attempts = 2 WHERE status = 'failed' AND client_id IN (SELECT c.id FROM clients c JOIN guardians g ON g.family_id = c.family_id WHERE g.email = 'linh.nguyen@example.com')`);
+// The Nguyen family's declined payment also declined on its three retries, so their portal shows the payment lockout.
+ctx.db.run(`UPDATE invoices SET attempts = max(attempts, 4), auto_attempts = 4 WHERE status = 'failed' AND client_id IN (SELECT c.id FROM clients c JOIN guardians g ON g.family_id = c.family_id WHERE g.email = 'linh.nguyen@example.com')`);
 engage.createLesson(ctx, { category: 'coach', title: 'Coaching the hip hinge', summary: 'Three cues that fix most deadlift patterns.', minutes: 5,
   body: 'Start with the hips, not the chest: "push the wall behind you with your hips."\n\nKeep the shins nearly still. If the knees drift forward, it has become a squat.\n\nFilm from the side. Most athletes feel straight when they are not.' });
 engage.createLesson(ctx, { category: 'blog', title: 'Summer speed camp recap', summary: 'What 40 athletes worked on this July, and what comes next.', minutes: 3,

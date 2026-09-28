@@ -150,7 +150,7 @@ await schedule.createSeries(ctx, { name: 'QB & Receiver Clinic', kind: 'clinic',
 // Privates: Riley's at the facility and the park (whatever Riley leads anywhere blocks them), the head coach's on Tue/Thu.
 for (const d of [1, 3, 5]) schedule.addAvailability(ctx, { kind: 'private', location_id: facility.id, weekday: d, start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: riley.id });
 for (const d of [2, 4]) schedule.addAvailability(ctx, { kind: 'private', location_id: facility.id, weekday: d, start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: headCoach.id });
-schedule.addAvailability(ctx, { kind: 'private', location_id: park.id, weekday: 6, start_time: '08:00', end_time: '11:00', slot_minutes: 60, coach_id: riley.id });
+schedule.addAvailability(ctx, { kind: 'private', location_id: park.id, weekday: 6, start_time: '08:00', end_time: '11:00', slot_minutes: 60, coach_id: riley.id, confirm: true });   // around Riley's 9:00 class there (a coach clash warning, saved anyway)
 schedule.addAvailability(ctx, { kind: 'evaluation', location_id: facility.id, weekday: 6, start_time: '11:00', end_time: '13:00', slot_minutes: 60, price_cents: 7500, coach_id: headCoach.id });
 // Riley is off one day next week (their privates that day aren't offered), and the facility closes for a holiday.
 const nextFriday = addDaysToDate(today, ((5 - new Date(`${today}T12:00:00Z`).getUTCDay() + 7) % 7) + 7);

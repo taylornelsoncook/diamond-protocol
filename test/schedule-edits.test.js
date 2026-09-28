@@ -226,8 +226,8 @@ test('canceling a team session emails the school contact once; hours can go on s
   const m = mail('ad@westlake.test', 'Canceled:%');
   assert.equal(m.length, 1);
   assert.match(m[0].body, /Hi Pat,\n\n.*Westlake HS Varsity .* is canceled\. Field closed\./);
-  // Hours on Monday to Friday at once.
-  const h = (await coach('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekdays: [1, 2, 3, 4, 5], start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: coachId })).body;
+  // Hours on Monday to Friday at once (the coach leads sessions in some of those hours: a warning, saved anyway).
+  const h = (await coach('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekdays: [1, 2, 3, 4, 5], start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: coachId, confirm: true })).body;
   assert.equal(h.added.length, 5);
   assert.deepEqual(h.added.map((x) => x.weekday), [1, 2, 3, 4, 5]);
   assert.equal((await coach('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekdays: [9], start_time: '15:00', end_time: '17:00' })).status, 400);

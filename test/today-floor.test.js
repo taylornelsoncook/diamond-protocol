@@ -11,7 +11,10 @@ import { emit } from '../src/services/events.js';
 import { atRisk } from '../src/services/insights.js';
 
 let app, base, owner, coach, desk, facility, ava, ben, cora, dev;
-const TZ = 'America/Chicago';
+// Sessions are placed from 2 hours ago to 2 hours ahead, so the business day must have room on both sides: use a time
+// zone where it's between 3 am and 9 pm right now (Chicago most of the time), or the test fails late at night.
+const hourIn = (tz) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+const TZ = ['America/Chicago', 'Europe/London', 'Asia/Tokyo', 'Pacific/Honolulu'].find((tz) => hourIn(tz) >= 3 && hourIn(tz) < 21);
 const DAY = 86400000;
 
 async function req(method, path, body, headers = {}) {

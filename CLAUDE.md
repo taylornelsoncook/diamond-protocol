@@ -15,7 +15,7 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 ## Commands
 - `npm run seed`: sample data (sign in `coach@diamondprotocol.local` / `change-me-now`, or the sample coaches `riley@diamondprotocol.local` and `jordan@diamondprotocol.local` and front desk `desk@diamondprotocol.local` with the same password; parent `maria.lopez@example.com`, code shown on screen in test mode). Delete `data/` first to reseed.
 - `npm start`: http://localhost:3000
-- `npm test`: the full suite (440 tests). Run it before calling anything done.
+- `npm test`: the full suite (442 tests). Run it before calling anything done.
 - Node 22.13+ only. **Zero npm dependencies** (node:sqlite, node:http, node:test, built-in fetch/zlib/crypto). Keep it that way unless the owner agrees.
 
 ## Code map
@@ -47,7 +47,7 @@ Read `README.md` for features, `CHECKLIST.md` for the owner's to-do list, `DEPLO
 - **Collecting for a booking** is only `booking_id` on a sale (checked: unpaid, not canceled, the sale's client, the sale covers the price; one at a time per booking). A sale's note is only a note.
 - **Workout logs** (`workout_logs`) are finished workouts only (streaks, goals and counts read them). The app saves a whole workout at Finish (sets, effort, note) with the phone's `request_id`, so a double tap or an offline resend returns the first save; the phone's `finished_at` counts only within 72 hours. One log per workout per program: logging on the weight-room screen after the app (same business day) links the app's log to the session; finishing in the app after the screen adds the sets to the screen's log. Weights in the app and on the screen come from the same `loadFor` (tested max, readiness drop). Paused, canceled and archived athletes can't log.
 - **Staff notes** (`client_notes`): coach-only notes never reach front desk (filtered server-side); in the family export, removed on deletion.
-- **API keys** have an access level (`read`, `results` = read and send results/device files, `full`), checked on every request in `server.js` (`security.keyAllows`); new keys are read only unless chosen, keys from before version 42 keep full access. Keys never manage keys, webhooks, staff or the outbox (session routes). Every key request is logged 30 days in `api_requests` without bodies or query strings.
+- **API keys** have an access level (`read`, `results` = read and send results/device files, `full`), checked on every request in `server.js` (`security.keyAllows`); new keys are read only unless chosen, keys from before version 42 keep full access. Keys never manage keys, webhooks, staff or the outbox (session routes), and only full-access keys get an athlete's app link. Every key request is logged 30 days in `api_requests` without bodies or query strings.
 - **Webhooks** only go to public internet addresses (`allowPrivateWebhooks` only in test mode without PUBLIC_URL, i.e. local dev and tests); the signing secret shows only as a hint in lists.
 - **Staff passwords:** "forgot password" answers the same for any email; links are single use, 30 minutes, hashed, 3 an hour per account; any other password change, an email change or turning the account off cancels them. Emails with a code, password or private link are `outbox.sensitive` and never resent to another address; passwords are hidden from the outbox once really sent.
 - Plain-English UI copy, sentence case, active voice. Errors say what to fix.

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/server.js';
 import { createUser } from '../src/services/access.js';
 import { resetRateLimits } from '../src/services/security.js';
-import { addDaysToDate, localDate, newId } from '../src/util.js';
+import { addDaysToDate, localDate, newId, zonedToUtc } from '../src/util.js';
 import { emit } from '../src/services/events.js';
 import { atRisk } from '../src/services/insights.js';
 
@@ -29,7 +29,23 @@ function session(name, startMin, durMin, bookings) {
   return id;
 }
 
+// Late in the evening a session an hour or two from now is tomorrow's, and just after midnight one two hours ago is
+// yesterday's. So while this file runs, the clock (for the tests and the app alike) is moved to between 02:30 and 22:30
+// in the business time zone, and runs on from there; between those hours it isn't moved at all.
+const RealDate = Date;
+function keepClockInTheDay() {
+  const now = RealDate.now(), local = localDate(new RealDate(now).toISOString(), TZ);
+  const from = RealDate.parse(zonedToUtc(local, '02:30', TZ)), to = RealDate.parse(zonedToUtc(local, '22:30', TZ));
+  const offset = Math.min(Math.max(now, from), to) - now;
+  if (!offset) return;
+  globalThis.Date = class extends RealDate {
+    constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + offset); }
+    static now() { return RealDate.now() + offset; }
+  };
+}
+
 before(async () => {
+  keepClockInTheDay();
   resetRateLimits();
   app = createApp({ testMode: true, jobs: false });
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia Owner', password: 'owner-password-1' });
@@ -48,7 +64,7 @@ before(async () => {
   cora = (await owner('POST', '/v1/clients', { name: 'Cora Diaz', birth_date: bday(9), parent: { name: 'Luz Diaz', email: 'luz@example.com' } })).body;
   dev = (await owner('POST', '/v1/clients', { name: 'Dev Shah', birth_date: bday(1), parent: { name: 'Raj Shah', email: 'raj@example.com' } })).body;
 });
-after(() => app.server.close());
+after(() => { app.server.close(); globalThis.Date = RealDate; });
 
 test('the check-in list puts who is still to arrive first, flags what the door should know, and never shows money', async () => {
   // Signed waivers for everyone but Ben's family.

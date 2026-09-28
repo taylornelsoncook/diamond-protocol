@@ -8,6 +8,7 @@ import { createUser } from '../src/services/access.js';
 import { resetRateLimits } from '../src/services/security.js';
 import { blockedAddress, deliverPending, listEvents, signPayload } from '../src/services/events.js';
 import { createFamilyWithGuardian } from '../src/services/families.js';
+import { routes } from '../src/routes.js';
 
 let app, base, hook, hookUrl, resend, resendUrl, owner, coach, desk;
 const got = [];          // what the webhook receiver was sent
@@ -79,6 +80,34 @@ test('API keys have access levels, enforced on every route; renaming or changing
   assert.equal((await req('GET', '/v1/clients', null, { key: results.secret })).status, 401);
 });
 
+test('every route that changes something refuses read-only keys, and every one but results and device files refuses results keys', async () => {
+  const read = (await owner('POST', '/v1/api-keys', { label: 'Sweep read' })).body;
+  const results = (await owner('POST', '/v1/api-keys', { label: 'Sweep results', scope: 'results' })).body;
+  const path = (p) => p.replace(/:(\w+)/g, 'x_$1');
+  let checked = 0;
+  for (const { method, path: p, auth } of routes) {
+    if (method === 'GET' || auth === 'public') continue;
+    for (const k of [read, results]) {
+      const res = await req(method, path(p), {}, { key: k.secret });
+      const allowed = k === results && ((method === 'POST' && p === '/v1/results') || (method === 'POST' && p === '/v1/imports'));
+      if (auth === 'any') {
+        if (allowed) assert.notEqual(res.status, 403, `${method} ${p}`);
+        else assert.deepEqual([res.status, res.body?.error?.code], [403, 'key_scope'], `${method} ${p} (${k.scope})`);
+      } else assert.equal(res.status, 401, `${method} ${p} doesn't take API keys`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 300);
+  // Reading a client with a read-only key leaves out the athlete's app link (it lets whoever has it log workouts).
+  const c = (await owner('POST', '/v1/clients', { name: 'Gia Moss', email: 'gia@example.com' })).body;
+  assert.equal((await req('GET', `/v1/clients/${c.id}`, null, { key: read.secret })).body.app_link, undefined);
+  assert.equal((await req('GET', `/v1/clients/${c.id}`, null, { key: results.secret })).body.app_link, undefined);
+  const full = (await owner('POST', '/v1/api-keys', { label: 'Sweep full', scope: 'full' })).body;
+  assert.match((await req('GET', `/v1/clients/${c.id}`, null, { key: full.secret })).body.app_link, /^\/app\?token=/);
+  assert.match((await owner('GET', `/v1/clients/${c.id}`)).body.app_link, /^\/app\?token=/);
+  resetRateLimits();
+});
+
 test('every request made with a key is logged for 30 days: no bodies, no query strings, errors counted', async () => {
   const k = (await owner('POST', '/v1/api-keys', { label: 'Logger', scope: 'read' })).body;
   await req('GET', '/v1/clients?q=secret-search', null, { key: k.secret });
@@ -121,7 +150,7 @@ test('an athlete\'s results by Athlete ID, with the best marked and since from l
 });
 
 test('private network addresses are refused as webhook URLs, when saved and when sent', async () => {
-  for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.10', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '::1', '::', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '64:ff9b::a00:1', '2002:7f00:1::1']) {
+  for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.10', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '::1', '::', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '64:ff9b::a00:1', '2002:7f00:1::1', 'fec0::1', '::ffff:0:127.0.0.1']) {
     assert.equal(blockedAddress(ip), true, ip);
   }
   for (const ip of ['8.8.8.8', '104.16.0.1', '2606:4700::1111']) assert.equal(blockedAddress(ip), false, ip);

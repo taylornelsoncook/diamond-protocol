@@ -36,6 +36,7 @@ async function boot() {
 let leaveGuard = null, lastHash = location.hash, returning = false;
 window.addEventListener('hashchange', () => {
   if (returning) { returning = false; return; }
+  if (takeResetToken()) { lastHash = ''; return render(); }     // a reset link opened in a tab that was already on this site
   const msg = leaveGuard?.check(location.hash);
   if (msg) {
     if (!confirm(msg)) { returning = true; location.hash = lastHash; return; }
@@ -49,7 +50,12 @@ window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { 
 // An emailed "forgot password" link opens /#reset=<secret>. The secret is taken out of the address at once (it never
 // reaches the server's logs or another page's referrer) and the reset page opens, even on a signed-in device.
 let resetToken = null;
-if (location.hash.startsWith('#reset=')) { resetToken = location.hash.slice(7); history.replaceState(null, '', '/'); }
+function takeResetToken() {
+  if (!location.hash.startsWith('#reset=')) return false;
+  resetToken = location.hash.slice(7); history.replaceState(null, '', '/');
+  return true;
+}
+takeResetToken();
 function render() {
   clearInterval(todayTimer);                          // Today sets its one-minute refresh again when it's open
   leaveGuard = null;                                  // the view sets it again if it has unsaved changes

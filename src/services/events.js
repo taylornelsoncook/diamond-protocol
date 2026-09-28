@@ -140,9 +140,11 @@ export function blockedAddress(ip) {
   const embedded = (hi, lo) => blockedAddress(`${hi >>> 8}.${hi & 255}.${lo >>> 8}.${lo & 255}`);
   if (w.slice(0, 5).every((x) => x === 0) && w[5] === 0xffff) return embedded(w[6], w[7]);   // ::ffff:a.b.c.d
   if (w.slice(0, 6).every((x) => x === 0)) return embedded(w[6], w[7]);                        // ::a.b.c.d (old compatible form)
+  if (w.slice(0, 4).every((x) => x === 0) && w[4] === 0xffff && w[5] === 0) return embedded(w[6], w[7]);   // ::ffff:0:a.b.c.d (translated)
   if (w[0] === 0x64 && w[1] === 0xff9b) return embedded(w[6], w[7]);                          // NAT64
   if ((w[0] & 0xfe00) === 0xfc00) return true;                      // fc00::/7 unique local
   if ((w[0] & 0xffc0) === 0xfe80) return true;                      // fe80::/10 link-local
+  if ((w[0] & 0xffc0) === 0xfec0) return true;                      // fec0::/10 old site-local
   if ((w[0] & 0xff00) === 0xff00) return true;                      // multicast
   if (w[0] === 0x2001 && w[1] === 0x0db8) return true;              // documentation
   if (w[0] === 0x2002) return embedded(w[1], w[2]);                 // 6to4 carries an IPv4 address

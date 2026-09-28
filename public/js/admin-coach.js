@@ -784,7 +784,8 @@ export async function renderReset(root, token, back) {
   fill(root, h('div', { class: 'login' }, card));
   let who;
   try { who = await api('POST', '/auth/reset/check', { token }); }
-  catch (x) { fill(card, h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.' }), h('h1', { class: 'dp-panel-title', style: 'margin:0' }, 'This link doesn\'t work'), h('p', { class: 'small' }, x.message), btn('Back to sign in', back, 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block' })); return; }
+  // Filled into the page itself (not the card): signed out, the sign-in page may have been drawn over the card meanwhile.
+  catch (x) { fill(card, h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.' }), h('h1', { class: 'dp-panel-title', style: 'margin:0' }, 'This link doesn\'t work'), h('p', { class: 'small' }, x.message), btn('Back to sign in', back, 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block' })); fill(root, h('div', { class: 'login' }, card)); return; }
   const next = passwordField('New password', { autocomplete: 'new-password', minlength: '10' }, 'At least 10 characters.');
   const again = passwordField('New password again', { autocomplete: 'new-password' });
   const submit = btn('Save my new password', null, 'primary', { type: 'submit', class: 'dp-btn dp-btn--primary dp-btn--block' });

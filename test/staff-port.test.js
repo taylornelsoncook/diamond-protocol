@@ -168,6 +168,17 @@ test('handing over a departing coach\'s classes, sessions and hours, with clashe
   assert.equal(clash.coach_id, otherId);
 });
 
+test('hours handed to a coach who already has hours at the same time and place are offered once', async () => {
+  const sam = createUser(app.ctx, { email: 'sam@test.dev', name: 'Sam Stone', password: 'sam-password-12', role: 'coach' });
+  const wd = weekdayOf(day(4));
+  for (const coach_id of [otherId, sam.id]) await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekday: wd, start_time: '13:00', end_time: '15:00', coach_id });
+  const out = (await owner('POST', `/v1/staff/${sam.id}/hand-over`, { to: otherId })).body;
+  assert.equal(out.hours, 1);
+  const slots = openSlots(app.ctx).filter((s) => s.coach_id === otherId && weekdayOf(localDate(s.starts_at, TZ)) === wd);
+  assert.ok(slots.length >= 2, 'the hours are still offered');
+  assert.equal(new Set(slots.map((s) => s.starts_at)).size, slots.length, 'each time once');
+});
+
 test('forgot password: the same answer for anyone, a link that works once for 30 minutes, 3 an hour', async () => {
   resetRateLimits();
   const known = await req('POST', '/auth/forgot', { email: 'desk@test.dev' });

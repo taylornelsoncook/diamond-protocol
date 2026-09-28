@@ -823,7 +823,7 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const zone = tz(ctx);
   const today = localDate(ctx.now(), zone);
   const blocks = ctx.db.all(`SELECT a.*, l.name AS location_name, u.name AS coach_name FROM availability a JOIN locations l ON l.id = a.location_id
-    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach')))`, kind);   // a coach moved to front desk no longer leads
+    LEFT JOIN users u ON u.id = a.coach_id WHERE a.kind = ? AND (a.coach_id IS NULL OR (u.active = 1 AND u.role IN ('owner','coach'))) ORDER BY a.created_at, a.id`, kind);   // a coach moved to front desk no longer leads
   const end = zonedToUtc(addDaysToDate(today, days + 1), '00:00', zone);
   const busy = ctx.db.all(`SELECT s.location_id, s.coach_id, s.starts_at, s.ends_at FROM class_sessions s WHERE s.status = 'scheduled' AND s.ends_at > ? AND s.starts_at < ?
     AND (s.kind NOT IN ('private','evaluation') OR s.series_id IS NOT NULL OR NOT EXISTS (SELECT 1 FROM bookings b WHERE b.session_id = s.id)
@@ -832,7 +832,9 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
   const isOff = (a, d) => off.some((t) => t.start_date <= d && t.end_date >= d && (t.user_id == null || t.user_id === a.coach_id));
   const takes = (a, b) => (a.coach_id ? b.coach_id === a.coach_id || (b.coach_id == null && b.location_id === a.location_id) : b.location_id === a.location_id);
   const minStart = new Date(Date.now() + 2 * 3600000).toISOString();            // at least 2 hours' notice
-  const out = [];
+  // A coach with two blocks of hours covering the same time at the same place (say, after taking over another coach's
+  // hours) is offered that time once: the older block's.
+  const out = [], offered = new Set();
   for (let d = today, i = 0; i <= days; d = addDaysToDate(d, 1), i++) {
     for (const a of blocks.filter((b) => b.weekday === weekdayOf(d))) {
       if (isOff(a, d)) continue;
@@ -840,6 +842,9 @@ export function openSlots(ctx, { kind = 'private', days = 14 } = {}) {
       for (let t = zonedToUtc(d, a.start_time, zone); Date.parse(t) + a.slot_minutes * 60000 <= Date.parse(blockEnd); t = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString()) {
         const tEnd = new Date(Date.parse(t) + a.slot_minutes * 60000).toISOString();
         if (t < minStart || busy.some((b) => takes(a, b) && b.starts_at < tEnd && b.ends_at > t)) continue;
+        const once = a.coach_id ? `${a.coach_id}|${a.location_id}|${t}|${tEnd}` : null;
+        if (once && offered.has(once)) continue;
+        if (once) offered.add(once);
         out.push({ kind, starts_at: t, ends_at: tEnd, location_id: a.location_id, location_name: a.location_name, price_cents: a.price_cents, availability_id: a.id, coach_id: a.coach_id ?? null, coach_name: a.coach_name ?? null });
       }
     }

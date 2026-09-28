@@ -1,4 +1,4 @@
-import { localDate } from '../util.js';
+import { localDate, newId, v, badRequest, notFound, isDate, addDaysToDate } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
 import { teamSummary } from './teams.js';
@@ -14,15 +14,18 @@ const first = (name) => String(name ?? '').split(' ')[0];
 // ---------- At-risk athletes ----------
 // A score from signals the app already has. Each signal adds points and a plain-English reason; 40 or more is "at risk".
 // Payment signals are left out for coaches and front desk, who never see money.
-export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20 } = {}) {
+// hideSnoozed (Today): athletes someone followed up on recently (today_snoozes) are left out until the follow-up runs out.
+export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20, hideSnoozed = false } = {}) {
   const now = Date.parse(asOf);
   const iso = (days) => new Date(now + days * DAY).toISOString();
   const day = (days) => localDate(iso(days), getSetting(ctx, 'timezone'));        // check-in dates are business days
   const people = ctx.db.all(`SELECT c.id, c.name, c.family_id, f.name AS family_name, f.card_status AS family_card, c.card_status,
       (SELECT status FROM subscriptions s WHERE s.client_id = c.id AND s.status IN ('active','trialing','past_due') ORDER BY s.created_at DESC LIMIT 1) AS membership
     FROM clients c LEFT JOIN families f ON f.id = c.family_id WHERE c.athlete_id IS NOT NULL AND c.archived_at IS NULL`);   // deleted athletes have no ID; archived ones stopped training
+  const snoozed = hideSnoozed ? new Set(activeSnoozes(ctx).filter((z) => z.kind === 'risk').map((z) => z.client_id)) : new Set();
   const out = [];
   for (const p of people) {
+    if (snoozed.has(p.id)) continue;
     const attended = (from, to) => ctx.db.get(`SELECT COUNT(*) AS n FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?`, p.id, from, to).n;
     const recent = attended(iso(-14), asOf), before = attended(iso(-56), iso(-14));   // last 2 weeks vs the 6 weeks before
     if (!p.membership && !recent && !before) continue;                                  // not an active athlete: nothing to lose
@@ -42,9 +45,54 @@ export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20 } = {
       if (p.membership === 'past_due') { score += 25; reasons.push('Membership payment failed'); }
       if (p.membership === 'trialing' && !recent) { score += 15; reasons.push('On a free trial but hasn\'t come in 2 weeks'); }
     }
-    if (score >= 40) out.push({ client_id: p.id, name: p.name, family_id: p.family_id, family_name: p.family_name, score: Math.min(score, 100), reasons, membership: role === 'owner' ? p.membership : undefined });
+    if (score >= 40) out.push({ client_id: p.id, key: `risk:${p.id}`, name: p.name, family_id: p.family_id, family_name: p.family_name, score: Math.min(score, 100), reasons, membership: role === 'owner' ? p.membership : undefined,
+      phone: p.family_id ? ctx.db.get(`SELECT phone FROM guardians WHERE family_id = ? AND phone IS NOT NULL AND phone != '' ORDER BY is_primary DESC LIMIT 1`, p.family_id)?.phone ?? null : null });
   }
   return out.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, limit);
+}
+
+// ---------- Follow-ups on Today ----------
+// "Reached out", "Send a note" or "Mark reviewed" hides an item from everyone's Today until a date and says who did it.
+// Items: an athlete to check on (key risk:<client id>, hidden 7 days by default, 1 to 60) and a daily check-in that needs a
+// look (key flag:<client id>:<check-in date>; it only shows for that day and the next, so it stays hidden through then).
+const SNOOZE_ACTIONS = { reached_out: 'Reached out', noted: 'Sent a note', reviewed: 'Reviewed' };
+export function activeSnoozes(ctx) {
+  const today = localDate(ctx.now(), getSetting(ctx, 'timezone'));
+  return ctx.db.all(`SELECT z.id, z.key, z.kind, z.client_id, c.name, z.until, z.action, z.note, z.created_by, z.created_at FROM today_snoozes z JOIN clients c ON c.id = z.client_id
+    WHERE z.until >= ? AND c.archived_at IS NULL ORDER BY z.created_at DESC`, today).map((z) => ({ ...z, label: SNOOZE_ACTIONS[z.action] ?? 'Hidden' }));
+}
+export function snoozeFollowUp(ctx, body, actor) {
+  const zone = getSetting(ctx, 'timezone'), today = localDate(ctx.now(), zone);
+  const key = typeof body.key === 'string' ? body.key.trim() : '';
+  const m = /^(risk|flag):([A-Za-z0-9_-]{1,64})(?::(\d{4}-\d{2}-\d{2}))?$/.exec(key);
+  if (!m || (m[1] === 'flag') !== !!m[3]) throw badRequest('That item can\'t be followed up from Today.');
+  const [, kind, clientId, flagDate] = m;
+  // A check-in shows for its day and the next; allow one more day so a page left open past midnight still works.
+  if (kind === 'flag' && (!isDate(flagDate) || flagDate > today || flagDate < addDaysToDate(today, -2))) throw badRequest('That check-in is no longer on Today.');
+  const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', clientId);
+  if (!c || c.archived_at) throw notFound('Client');
+  const action = body.action === undefined ? (kind === 'flag' ? 'reviewed' : 'reached_out') : v.oneOf(body.action, 'action', Object.keys(SNOOZE_ACTIONS));
+  let until;
+  if (body.days !== undefined && body.days !== null && body.days !== '') {
+    const days = typeof body.days === 'number' || typeof body.days === 'string' ? Number(body.days) : NaN;
+    if (!Number.isInteger(days) || days < 1 || days > 60) throw badRequest('Hide it for 1 to 60 days.');
+    until = addDaysToDate(today, days - 1);
+  } else until = kind === 'flag' ? addDaysToDate(flagDate, 1) : addDaysToDate(today, 6);
+  const note = v.str(body.note, 'note', { max: 300, optional: true });
+  const id = newId('snz');
+  ctx.db.tx(() => {
+    ctx.db.run('DELETE FROM today_snoozes WHERE key = ?', key);
+    ctx.db.run('INSERT INTO today_snoozes (id, key, kind, client_id, until, action, note, created_by_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, key, kind, clientId, until, action, note, actor?.id ?? null, actor?.name ?? 'API', ctx.now());
+  });
+  const back = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(`${addDaysToDate(until, 1)}T12:00:00Z`));
+  return { id, key, until, message: kind === 'flag' ? `Marked ${c.name}'s check-in as reviewed.` : `${SNOOZE_ACTIONS[action]}: ${c.name}. Back on Today ${back} if nothing changes.` };
+}
+export function unsnooze(ctx, id) {
+  const z = ctx.db.get('SELECT z.*, c.name FROM today_snoozes z JOIN clients c ON c.id = z.client_id WHERE z.id = ?', id);
+  if (!z) throw notFound('Follow-up');
+  ctx.db.run('DELETE FROM today_snoozes WHERE id = ?', id);
+  return { id, key: z.key, message: `${z.name} is back on Today.` };
 }
 
 // ---------- Weekly owner digest ----------

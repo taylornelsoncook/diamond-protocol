@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 37;
+const SCHEMA_VERSION = 39;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -70,7 +70,9 @@ const ADDED_TABLES = {
   // ---- version 36 (batch B5, point of sale): refunds with their own date, for the day's takings
   36: ['sale_refunds'],
   // ---- Version 37: one profile per athlete (team roster athletes are clients) ----
-  37: ['athlete_id_aliases']
+  37: ['athlete_id_aliases'],
+  // ---- Version 39: Schedule and Today (batches B2 and B3): follow-ups hidden from Today for a while ----
+  39: ['today_snoozes']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -84,7 +86,7 @@ const ADDED_COLUMNS = {
   workout_exercises: ['load_test TEXT', 'load_pct INTEGER'],             // version 21: weights from tested maxes
   coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies
   class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],      // version 4; coach: version 31
-  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],           // version 23: weight-room screen; coach: version 31
+  // class_sessions: see version 39 below (workout_id: version 23 weight-room screen; coach_id: version 31)
   availability: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],                  // version 31
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL'],        // version 23 (then rebuilt so assignment_id can be empty)
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
@@ -99,7 +101,9 @@ const ADDED_COLUMNS = {
   import_batches: ['kind TEXT', 'source_label TEXT', 'result_source TEXT', 'session_id TEXT', 'replaced INTEGER NOT NULL DEFAULT 0', 'unchanged INTEGER NOT NULL DEFAULT 0',
     'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT'],
   // ---- version 36 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
-  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT']
+  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT'],
+  // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT']
 };
 
 function migrate(raw, schema) {

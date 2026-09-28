@@ -6,8 +6,8 @@ Everything that needs your identity, your money, your hardware or your decisions
 
 The app is built: every tab from the earlier version has been brought over, plus the CRM, off-site backups, Stripe webhooks and background job alerts. All of it is on `main` and on staging. Production changes only when you press Manual Deploy. Do these in order:
 
-- [ ] **Look over staging.** Sign in as `coach@diamondprotocol.local` / `change-me-now` and click through each tab, especially the new ones: Today (check-in list, birthdays, open spots, trial offers), Leads (the pipeline board and lead pages), Education, Billing and the parent portal (`/parent`, sign in as `maria.lopez@example.com`). Also sign in as `riley@diamondprotocol.local` (coach) and `desk@diamondprotocol.local` (front desk) and confirm you see no dollar amounts. Write down anything that looks wrong.
-- [ ] **Render → diamond-protocol → Environment:** set `TRUST_PROXY` to `2`, and delete `ADMIN_PASSWORD`.
+- [x] **Look over staging.** Sign in as `coach@diamondprotocol.local` / `change-me-now` and click through each tab, especially the new ones: Today (check-in list, birthdays, open spots, trial offers), Leads (the pipeline board and lead pages), Education, Billing and the parent portal (`/parent`, sign in as `maria.lopez@example.com`). Also sign in as `riley@diamondprotocol.local` (coach) and `desk@diamondprotocol.local` (front desk) and confirm you see no dollar amounts. Write down anything that looks wrong.
+- [ ] **Render → diamond-protocol → Environment:** set `TRUST_PROXY` to `2`. (`ADMIN_PASSWORD` is deleted.)
 - [ ] **Off-site backups:** follow DEPLOY.md → Backups (a Cloudflare R2 bucket, then five settings in Render). Save the passphrase in your password manager.
 - [ ] **Press Manual Deploy** on `diamond-protocol`. The database upgrades itself on start (a backup is made first).
 - [ ] **On production:** Staff & security → Check my connection (it should show your own internet address), then Back up now (it should say the backup was sent off-site).
@@ -82,7 +82,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Set the settings DEPLOY.md lists: `PUBLIC_URL`, `BUSINESS_TZ`, Stripe live keys, Resend key and `EMAIL_FROM`, and `ADMIN_EMAIL` + `ADMIN_PASSWORD` for the first start only.
 - [x] Point your domain at the host and confirm the padlock (HTTPS) shows.
 - [ ] Check `https://your-domain/healthz` shows `{"ok":true}`.
-- [ ] **First sign-in:** choose your own password, then remove `ADMIN_PASSWORD` from the host's settings. (Your owner account on production is made; removing `ADMIN_PASSWORD` is still to do.)
+- [x] **First sign-in:** choose your own password, then remove `ADMIN_PASSWORD` from the host's settings.
 - [ ] **Stripe webhook:** add `https://your-domain/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
 - [ ] **Uptime alert:** sign up for a free uptime monitor (UptimeRobot, Better Stack or similar) pointed at `/healthz`, so you get a text or email if the site goes down.
 

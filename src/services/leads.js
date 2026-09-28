@@ -435,7 +435,10 @@ export async function updateLead(ctx, id, body, { user } = {}) {
   if (Object.keys(details).length) {
     const next = { ...l, ...details };
     if (!next.email && !next.phone) throw badRequest('Keep an email or a phone number so you can follow up.');
-    if (details.email && details.email !== l.email && openLeadFor(ctx, details.email, l.id)) throw conflict(`There's already an open lead for ${details.email}.`);
+    if (details.email && details.email !== l.email && openLeadFor(ctx, details.email, l.id)) {
+      // A coach can't tell other leads exist, so they aren't told whose it is.
+      throw conflict(isCoach(user) ? `${details.email} can't be used for this lead. Check it, or ask the owner.` : `There's already an open lead for ${details.email}.`);
+    }
     const phoneChanged = details.phone !== undefined && (details.phone ?? null) !== (l.phone ?? null);
     const keys = Object.keys(details);
     ctx.db.run(`UPDATE leads SET ${keys.map((k) => `${k} = ?`).join(', ')}${phoneChanged ? ', texts_ok = 0, texts_ok_source = NULL, texts_ok_at = NULL' : ''}, last_activity_at = ?, updated_at = ? WHERE id = ?`,

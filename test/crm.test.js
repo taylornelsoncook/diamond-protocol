@@ -324,6 +324,12 @@ test('a coach sees nothing of a lead that isn\'t theirs on any lead route', asyn
     assert.equal((await coach(m, p, m === 'GET' ? undefined : {})).status, 403, `${m} ${p}`);
   }
   assert.ok(!(await coach('GET', '/v1/leads?q=Hana')).body.data.length, 'search finds nothing');
+  // Changing their own lead's email to another lead's address is refused without saying whose it is.
+  const mine = await addLead(owner, { parent_name: 'Coach Own', email: 'own@example.com' });
+  await owner('PATCH', `/v1/leads/${mine.id}`, { coach_id: coachId });
+  const clash = await coach('PATCH', `/v1/leads/${mine.id}`, { email: 'hana@example.com' });
+  assert.equal(clash.status, 409);
+  assert.doesNotMatch(clash.body.error.message, /open lead|Hana/);
   assert.ok(!(await coach('GET', '/v1/activity?limit=100')).body.data.some((e) => e.type.startsWith('lead')));
   // Front desk works the lead, but reports, export, import and group messages are the owner's.
   assert.equal((await desk('POST', `/v1/leads/${l.id}/activity`, { kind: 'call', outcome: 'no_answer' })).status, 201);

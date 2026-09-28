@@ -54,6 +54,11 @@ export function exportFamily(ctx, familyId) {
     announcement_emails: ctx.db.all('SELECT c.subject, r.email, r.sent_at, r.clicked_at, r.unsubscribed_at FROM campaign_recipients r JOIN campaigns c ON c.id = r.campaign_id WHERE r.family_id = ? ORDER BY r.sent_at', familyId),
     review_requests: ctx.db.all('SELECT reason, detail, sent_to, sent_at, clicked_at, opted_out_at FROM review_requests WHERE family_id = ? ORDER BY sent_at', familyId),
     inquiries: ctx.db.all(`SELECT parent_name, email, phone, athlete_name, athlete_age, sport, message, source, status, created_at FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId),
+    // CRM (version 45): notes, calls, emails and texts with the family or from their inquiry, and follow-up tasks.
+    contact_history: ctx.db.all(`SELECT kind, outcome, subject, body, sent_to, by_name AS by, at FROM lead_activity WHERE family_id = ? OR client_id IN (SELECT id FROM clients WHERE family_id = ?)
+      OR lead_id IN (SELECT id FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)) ORDER BY at`, familyId, familyId, familyId, familyId),
+    follow_up_tasks: ctx.db.all(`SELECT title, due_date, done_at, created_at FROM crm_tasks WHERE family_id = ? OR client_id IN (SELECT id FROM clients WHERE family_id = ?)
+      OR lead_id IN (SELECT id FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)) ORDER BY created_at`, familyId, familyId, familyId, familyId),
     agreements: familyConsents(ctx, familyId),
     // Parent portal: profiles a parent said were their child's (by Athlete ID), and the devices signed in.
     profile_claims: ctx.db.all('SELECT athlete_id, guardian_name AS asked_by, status, created_at, resolved_at FROM profile_claims WHERE family_id = ? ORDER BY created_at', familyId),
@@ -137,8 +142,11 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     ctx.db.run(`UPDATE pay_links SET description = 'Deleted family', sent_to = NULL WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?)`, familyId);
     ctx.db.run('DELETE FROM review_requests WHERE family_id = ?', familyId);
     ctx.db.run('DELETE FROM spot_offers WHERE family_id = ?', familyId);
-    ctx.db.run('UPDATE campaign_recipients SET email = \'deleted\', name = NULL, family_id = NULL WHERE family_id = ?', familyId);
-    ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId);
+    ctx.db.run('UPDATE campaign_recipients SET email = \'deleted\', phone = NULL, name = NULL, family_id = NULL WHERE family_id = ?', familyId);
+    // CRM: the family's contact history and tasks go; their leads (with their own history) go below.
+    ctx.db.run('DELETE FROM lead_activity WHERE family_id = ? OR client_id IN (SELECT id FROM clients WHERE family_id = ?)', familyId, familyId);
+    ctx.db.run('DELETE FROM crm_tasks WHERE family_id = ? OR client_id IN (SELECT id FROM clients WHERE family_id = ?)', familyId, familyId);
+    ctx.db.run(`DELETE FROM leads WHERE family_id = ? OR client_id IN (SELECT id FROM clients WHERE family_id = ?) OR email IN (SELECT email FROM guardians WHERE family_id = ?)`, familyId, familyId, familyId);
     ctx.db.run('DELETE FROM guardian_lesson_progress WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
     ctx.db.run('DELETE FROM guardian_message_reads WHERE guardian_id IN (SELECT id FROM guardians WHERE family_id = ?)', familyId);
     ctx.db.run('DELETE FROM profile_claims WHERE family_id = ?', familyId);

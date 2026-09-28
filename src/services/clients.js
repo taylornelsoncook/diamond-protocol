@@ -305,7 +305,9 @@ function checkDuplicates(ctx, { name, email, phone, birthDate, parent, familyId,
 // Create the account, start the subscription (trial first if the plan has one) and assign a program.
 // staff: { role } when staff add the client from the dashboard or the API: duplicates are checked (see above) and
 // front desk can't assign a program (that's for coaches).
-export async function createClient(ctx, body, { staff } = {}) {
+// inTx(clientId, familyId) runs inside the same transaction as the new client (converting a lead links the lead there, so
+// a failure leaves neither a client nor a half-converted lead).
+export async function createClient(ctx, body, { staff, inTx } = {}) {
   const name = v.str(body.name, 'name', { max: 120 });
   const hasParent = !!(body.family_id || body.parent);
   // Athletes with a parent account don't need their own email; adults paying for themselves do.
@@ -330,6 +332,7 @@ export async function createClient(ctx, body, { staff } = {}) {
       id, newAthleteId(ctx, name), name, email, phone, notes, token(24), familyId, profile.birth_date, profile.sex, profile.sport, profile.position, profile.school, profile.grad_year, profile.medical_notes, profile.emergency_name, profile.emergency_phone, ctx.now());
     emit(ctx, 'client.created', { client_id: id, athlete_id: ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', id).athlete_id, client_name: name, email, family_id: familyId });
     if (body.program_id) programs.assign(ctx, body.program_id, id);
+    if (inTx) inTx(id, familyId);
   });
   if (body.plan_id) await billing.subscribe(ctx, id, body.plan_id);
   // Welcome email: to the parents of a new family, or to an adult paying for themselves. Siblings don't trigger another.

@@ -89,7 +89,7 @@ const FILTERS = {
   bookings: /^(booking\.|session\.(canceled|messaged)$|enrollment\.|spots\.)/,
   training: /^(workout\.|program\.|badge\.|course\.)/,
   testing: /^(results\.|performance\.|testing\.|queue\.|integration\.|progress_note\.)/,
-  clients: /^(client\.|clients\.|family\.|lead\.)/,
+  clients: /^(client\.|clients\.|family\.|leads?\.)/,
   money: /^(invoice\.|sale\.|subscription\.|team_invoice\.|team_contract\.|pay_link\.|purchase\.|payment\.|money_check\.)/
 };
 export function activity(ctx, { role = 'owner', filter, before, limit = 20 } = {}) {

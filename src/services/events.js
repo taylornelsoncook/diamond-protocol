@@ -17,7 +17,8 @@ export const EVENT_TYPES = [
   'results.recorded', 'performance.pr', 'integration.synced', 'queue.linked', 'testing.shared',
   'family.signed_up', 'family.deletion_requested', 'family.deleted', 'clients.imported',
   'lead.created', 'lead.updated', 'pay_link.created', 'pay_link.paid', 'stock.changed', 'badge.awarded', 'course.completed', 'purchase.completed', 'spots.offered', 'progress_note.approved', 'session.messaged',
-  'subscription.change_requested', 'client.merged', 'client.claimed'
+  'subscription.change_requested', 'client.merged', 'client.claimed',
+  'lead.stage_changed', 'lead.converted', 'leads.imported'   // version 45 (CRM)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -68,7 +69,10 @@ const INFO = {
   'family.deleted': ['A family\'s personal information is deleted (payment records stay, without names).', { family_id: 'fam_sample', athletes: 2 }],
   'clients.imported': ['Clients are imported from a spreadsheet.', { athletes: 40, families: 32, filename: 'clients.xlsx' }],
   'lead.created': ['A family asks about training (website form, unfinished sign-up or added by staff).', { lead_id: 'lead_sample', source: 'website', parent_name: 'Sarah Miller', athlete_name: 'Jake Miller' }],
-  'lead.updated': ['A lead moves to another stage.', { lead_id: 'lead_sample', status: 'evaluation', family_id: null }],
+  'lead.updated': ['A lead moves to another stage or is given to a coach.', { lead_id: 'lead_sample', status: 'evaluation', family_id: null }],
+  'lead.stage_changed': ['A lead moves to another stage (also sent as lead.updated): from, to, whether it moved on its own and why.', { lead_id: 'lead_sample', from: 'contacted', to: 'evaluation', auto: true, reason: 'Booked an evaluation', family_id: 'fam_sample' }],
+  'lead.converted': ['A lead becomes a client (a new profile, or one staff linked by Athlete ID).', { lead_id: 'lead_sample', client_id: 'cli_sample', family_id: 'fam_sample' }],
+  'leads.imported': ['Leads are imported from a spreadsheet.', { count: 25, by: 'Head Coach' }],
   'pay_link.created': ['A pay-by-card link is made.', { pay_link_id: 'pl_sample', client_id: 'cli_sample', kind: 'invoice', amount_cents: 18900 }],
   'pay_link.paid': ['A pay link is paid.', { pay_link_id: 'pl_sample', client_id: 'cli_sample', kind: 'invoice', amount_cents: 18900, sale_id: null, invoice_id: 'inv_sample' }],
   'stock.changed': ['Gear stock changes: a delivery arrives, a count or an adjustment.', { product_id: 'prod_sample', product_name: 'DP training shirt', variant_id: 'var_sample', size: 'Youth M', reason: 'received', delta: 12, on_hand: 20 }],

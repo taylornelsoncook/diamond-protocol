@@ -342,17 +342,16 @@ CREATE TABLE IF NOT EXISTS campaigns (
   id TEXT PRIMARY KEY,
   subject TEXT NOT NULL,
   body TEXT NOT NULL,
-  audience TEXT NOT NULL,                        -- {group, age_min, age_max, sport, stages}
+  audience TEXT NOT NULL,                        -- {group, age_min, age_max, sport}
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sending','sent')),
   created_by TEXT,
   created_at TEXT NOT NULL,
-  sent_at TEXT,
-  channel TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','text'))   -- version 45: group texts too
+  sent_at TEXT
 );
 CREATE TABLE IF NOT EXISTS campaign_recipients (
   id TEXT PRIMARY KEY,
   campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-  email TEXT,                                    -- version 45: empty for a group text (phone instead)
+  email TEXT NOT NULL,
   name TEXT,
   family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
@@ -361,8 +360,7 @@ CREATE TABLE IF NOT EXISTS campaign_recipients (
   links TEXT,                                    -- the original links, in order, for the counted redirects
   sent_at TEXT NOT NULL,
   clicked_at TEXT,
-  unsubscribed_at TEXT,
-  phone TEXT                                     -- version 45: a group text went to this number
+  unsubscribed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS campaign_recipients_campaign ON campaign_recipients(campaign_id);
 -- Addresses that asked for no more announcement or review emails (receipts and booking emails still go).
@@ -596,10 +594,8 @@ CREATE TABLE IF NOT EXISTS leads (
   athlete_age INTEGER,
   sport TEXT,
   message TEXT,
-  -- version 45: social, camp, team (a school or club), import (CSV) and client (put back in the pipeline from a profile)
-  source TEXT NOT NULL CHECK (source IN ('inquiry','signup_unfinished','manual','phone','walk_in','event','referral','social','camp','team','import','client')),
-  -- version 45: trial (a free trial membership) between evaluation and member
-  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','signed_up','evaluation','trial','member','lost')),
+  source TEXT NOT NULL CHECK (source IN ('inquiry','signup_unfinished','manual','phone','walk_in','event','referral')),
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','signed_up','evaluation','member','lost')),
   texts_ok INTEGER NOT NULL DEFAULT 0,       -- they ticked "text me about this" on the form
   follow_up_step INTEGER NOT NULL DEFAULT 0, -- 0: thank-you, 1: 2-day nudge, 2: 7-day last note, 3: done
   next_follow_up_at TEXT,                    -- NULL when follow-up has stopped
@@ -611,15 +607,7 @@ CREATE TABLE IF NOT EXISTS leads (
   created_by TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,  -- version 43: the coach the owner gave this lead to (coaches see only theirs)
-  -- version 45 (CRM): when it reached its stage, the last time anyone worked it (stale after 7 days), the client it
-  -- became (converted or linked), why it was lost (a reason key, plus a note), and who said texts are OK and how
-  stage_changed_at TEXT,
-  last_activity_at TEXT,
-  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
-  lost_note TEXT,
-  texts_ok_source TEXT,
-  texts_ok_at TEXT
+  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL   -- version 43: the coach the owner gave this lead to (coaches see only theirs)
 );
 CREATE INDEX IF NOT EXISTS leads_status ON leads(status, next_follow_up_at);
 CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
@@ -1405,68 +1393,3 @@ CREATE INDEX IF NOT EXISTS invoice_charges_invoice ON invoice_charges(invoice_id
 CREATE INDEX IF NOT EXISTS invoice_charges_ref ON invoice_charges(ref);
 CREATE INDEX IF NOT EXISTS invoice_charges_late ON invoice_charges(late_outcome, handled_at);
 CREATE INDEX IF NOT EXISTS leads_coach ON leads(coach_id);
-
--- ---------- Version 45: CRM (batch B15) ----------
--- Every stage a lead has been in: moved by staff (by_name) or on its own (auto = 1, reason says what happened).
-CREATE TABLE IF NOT EXISTS lead_stage_history (
-  id TEXT PRIMARY KEY,
-  lead_id TEXT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  from_stage TEXT,
-  to_stage TEXT NOT NULL,
-  auto INTEGER NOT NULL DEFAULT 0,
-  reason TEXT,
-  by_id TEXT,
-  by_name TEXT,
-  at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS lead_stage_history_lead ON lead_stage_history(lead_id, at);
--- Contact with a lead or a family: notes, calls (with how they went), and emails and texts sent from the lead page or
--- the client profile (texts also stay in the texts log). A family's rows go when the family is deleted; a lead's with
--- the lead. token: the email's own "stop these emails" link (/u/<token>).
-CREATE TABLE IF NOT EXISTS lead_activity (
-  id TEXT PRIMARY KEY,
-  lead_id TEXT REFERENCES leads(id) ON DELETE CASCADE,
-  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
-  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('note','call','email','text')),
-  outcome TEXT,                                  -- calls: reached, voicemail, no_answer; emails and texts: how it went
-  subject TEXT,
-  body TEXT,
-  sent_to TEXT,
-  token TEXT UNIQUE,
-  by_id TEXT,
-  by_name TEXT,
-  at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS lead_activity_lead ON lead_activity(lead_id, at);
-CREATE INDEX IF NOT EXISTS lead_activity_family ON lead_activity(family_id, at);
--- Follow-up tasks on a lead or a family, due on a day in the business time zone, for one staff member.
-CREATE TABLE IF NOT EXISTS crm_tasks (
-  id TEXT PRIMARY KEY,
-  lead_id TEXT REFERENCES leads(id) ON DELETE CASCADE,
-  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
-  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
-  title TEXT NOT NULL,
-  due_date TEXT NOT NULL,                        -- YYYY-MM-DD
-  assignee_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-  done_at TEXT,
-  done_by TEXT,
-  created_by_id TEXT,
-  created_by TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS crm_tasks_assignee ON crm_tasks(assignee_id, done_at, due_date);
-CREATE INDEX IF NOT EXISTS crm_tasks_lead ON crm_tasks(lead_id);
-CREATE INDEX IF NOT EXISTS crm_tasks_family ON crm_tasks(family_id);
--- Email and text templates for one-to-one messages from the lead page and the client profile (the owner edits them).
-CREATE TABLE IF NOT EXISTS message_templates (
-  id TEXT PRIMARY KEY,
-  channel TEXT NOT NULL CHECK (channel IN ('email','text')),
-  name TEXT NOT NULL,
-  subject TEXT,
-  body TEXT NOT NULL,
-  sort INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS leads_client ON leads(client_id);

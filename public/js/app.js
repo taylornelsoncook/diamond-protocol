@@ -2,6 +2,7 @@ import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, selec
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, workoutRow } from './programs-coach.js';
 import { initAdmin, viewIntegrations, viewStaff, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
+import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -25,6 +26,7 @@ const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
 initPrograms({ api, render, header, role: () => state.user?.role, pulseTile: (...a) => pulseTile(...a) });
 initAdmin({ api, render, header, pulseTile: (...a) => pulseTile(...a), download: (p) => download(p), me: () => state.user, saveAnyway: (send) => saveAnyway(send) });
+initCrm({ api, render, header, pulseTile: (...a) => pulseTile(...a), download: (p) => download(p), me: () => state.user });
 
 // ---------- Shell ----------
 async function boot() {
@@ -79,7 +81,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, staff: viewStaff, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -155,7 +157,10 @@ const EVENT_TEXT = {
   'badge.awarded': (d) => `${d.client_name} earned the ${d.badge_name} badge`,
   'course.completed': (d) => `${d.client_name} finished the course ${d.course_title}`,
   'lead.created': (d) => `${d.parent_name ?? 'A family'} asked about training${d.athlete_name ? ` for ${d.athlete_name}` : ''}`,
-  'lead.updated': (d) => `A lead moved to ${String(d.status ?? '').replace('_', ' ')}`,
+  'lead.updated': (d) => (d.status ? `A lead moved to ${String(d.status ?? '').replace('_', ' ')}` : d.coach_name ? `A lead was given to ${d.coach_name}` : 'A lead was taken back from its coach'),
+  'lead.stage_changed': (d) => `A lead moved from ${String(d.from ?? '').replace('_', ' ')} to ${String(d.to ?? '').replace('_', ' ')}${d.auto && d.reason ? ` (${d.reason.toLowerCase()})` : ''}`,
+  'lead.converted': () => 'A lead became a client',
+  'leads.imported': (d) => `${d.count} ${d.count === 1 ? 'lead' : 'leads'} imported`,
   'pay_link.created': (d) => `Pay link made${d.amount_cents == null ? '' : ` for ${money(d.amount_cents)}`}`,
   'pay_link.paid': (d) => `Pay link paid${d.amount_cents == null ? '' : `: ${money(d.amount_cents)}`}`,
   'progress_note.approved': () => 'A progress note for parents was approved',
@@ -366,6 +371,7 @@ async function viewToday(main) {
     header('Today', `${dateLine}. ${isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${first(state.user.name)}. Today's sessions and anything that needs you.`}`, addClientBtn()),
     pulseBlock(d.pulse),
     parentSlot,
+    todayTasksPanel(board.tasks, refresh),
     agendaPanel,
     checkinPanelEl,
     h('div', { class: 'grid grid-2' },
@@ -538,142 +544,76 @@ function coachesPanel(t) {
     t.facility_time_off.length ? h('p', { class: 'small muted', style: 'margin:8px 0 0' }, `Facility closed: ${t.facility_time_off.map(offText).map((s) => s.replace(/^Off /, '')).join(' · ')}`) : null);
 }
 
-// ---------- Leads ----------
-const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['signed_up', 'Signed up'], ['evaluation', 'Evaluation booked'], ['member', 'Member'], ['lost', 'Not now']];
-const LEAD_SOURCE = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event', referral: 'Referral' };
-async function viewLeads(main) {
-  const filter = new URLSearchParams(location.hash.split('?')[1] ?? '').get('status') ?? '';
-  // Owner decision: owners and front desk work every lead; a coach sees only the leads the owner gave them.
-  const coachView = state.user.role === 'coach';
-  const [res, settings, reviews, coachList] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), coachView ? null : get('/v1/review-requests'), isOwner() ? get('/v1/coaches') : null]);
-  const chips = h('div', { class: 'row wrap', style: 'gap:8px' }, [['', 'All open'], ...LEAD_STAGES].map(([k, label]) => h('a', { class: `dp-btn dp-btn--${filter === k ? 'secondary' : 'ghost'}`, href: `#/leads${k ? `?status=${k}` : ''}` }, k ? `${label} (${res.counts[k] ?? 0})` : label)));
-  const rows = (filter ? res.data : res.data.filter((l) => !['member', 'lost'].includes(l.status))).map((l) => {
-    const stage = select(LEAD_STAGES, { value: l.status, 'aria-label': 'Stage' });
-    const notes = h('textarea', { class: 'dp-input', placeholder: 'Notes: when you called, what they need, best times' }); notes.value = l.notes ?? '';
-    const save = (body, msg) => (e) => busy(e.currentTarget, async () => { await patch(`/v1/leads/${l.id}`, body); toast(msg); render(); });
-    return h('details', { class: 'list-item', style: 'display:block' },
-      h('summary', { style: 'cursor:pointer;list-style:none' }, h('div', { class: 'row wrap', style: 'gap:12px' },
-        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.parent_name, l.athlete_name ? h('span', { class: 'muted' }, ` for ${l.athlete_name}${l.athlete_age ? `, ${l.athlete_age}` : ''}`) : null),
-          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null, !coachView && l.coach_name ? `given to ${l.coach_name}` : null].filter(Boolean).join(' · '))),
-        h('span', { class: `dp-badge dp-badge--${{ new: 'warn', contacted: 'neutral', signed_up: 'good', evaluation: 'good', member: 'good', lost: 'muted' }[l.status]}` }, LEAD_STAGES.find(([k]) => k === l.status)?.[1] ?? l.status))),
-      h('div', { class: 'stack', style: 'margin-top:12px' },
-        h('p', { class: 'small', style: 'margin:0' }, [l.email, phoneText(l.phone), l.texts_ok ? 'OK to text' : null].filter(Boolean).join(' · ')),
-        l.message ? h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, `"${l.message}"`) : null,
-        l.family_id ? h('p', { class: 'small', style: 'margin:0' }, `Signed up as the ${l.family_name ?? 'family'}.`) : null,
-        field('Notes', notes),
-        h('div', { class: 'row wrap', style: 'gap:8px' }, stage,
-          btn('Save', save({ status: stage.value, notes: notes.value }, 'Saved.'), 'primary'),
-          ['new', 'contacted'].includes(l.status) ? btn('I reached out', save({ contacted: true, notes: notes.value }, 'Marked as contacted.'), 'outline') : null,
-          l.follow_up === 'on' ? btn('Stop automatic follow-up', save({ follow_up: false }, 'Automatic follow-up stopped.'), 'ghost') : null,
-          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null),
-        isOwner() ? (() => {
-          const giveTo = select([['', 'Nobody (you and the front desk)'], ...coachList.data.filter((c) => c.role === 'coach').map((c) => [c.id, c.name]),
-            ...(l.coach_id && !coachList.data.some((c) => c.id === l.coach_id && c.role === 'coach') ? [[l.coach_id, l.coach_name ?? 'Former coach']] : [])], { value: l.coach_id ?? '', 'aria-label': `Give ${l.parent_name}'s lead to a coach`, style: 'width:auto;min-width:200px' });
-          giveTo.addEventListener('change', () => busy(giveTo, async () => { await patch(`/v1/leads/${l.id}`, { coach_id: giveTo.value || null }); toast(giveTo.value ? `${giveTo.selectedOptions[0].textContent} can see and work this lead now. They were emailed.` : 'Taken back: only you and the front desk see it.'); render(); }));
-          return h('div', { class: 'row wrap', style: 'gap:8px' }, h('span', { class: 'small muted' }, 'Give to a coach:'), giveTo);
-        })() : null));
-  });
-  if (coachView) {
-    fill(main, header('Leads', 'Families the owner asked you to follow up with. Only you, the owner and the front desk see them.'),
-      chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No leads for you right now. When the owner gives you one, it shows here and you get an email.')));
-    return;
-  }
-  const f = { parent_name: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), athlete_name: input(), athlete_age: input({ type: 'number', inputmode: 'numeric' }), sport: input(), message: h('textarea', { class: 'dp-input' }) };
-  const source = select([['phone', 'Phone call'], ['walk_in', 'Walk-in'], ['event', 'Event'], ['referral', 'Referral'], ['manual', 'Other']]);
-  const followUp = h('input', { type: 'checkbox', checked: true });
-  const addPanel = h('details', { class: 'dp-panel' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:32px' }, '+ Add a lead'),
-    h('form', { class: 'stack', style: 'margin-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/leads', { ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value || undefined])), athlete_age: f.athlete_age.value ? Number(f.athlete_age.value) : undefined, source: source.value, follow_up: followUp.checked });
-      toast('Lead added.'); render();
-    }); } },
-      h('div', { class: 'form-grid' }, field('Parent name', f.parent_name), field('How they found you', source)),
-      h('div', { class: 'form-grid' }, field('Email', f.email), field('Phone', f.phone)),
-      h('div', { class: 'form-grid' }, field('Athlete name', f.athlete_name), field('Athlete age', f.athlete_age)),
-      field('Sport', f.sport), field('What they\'re looking for', f.message),
-      h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, followUp, h('span', null, 'Send the automatic follow-up emails')),
-      h('div', null, btn('Add lead', null, 'primary', { type: 'submit' }))));
-  const followToggle = h('input', { type: 'checkbox', checked: settings.lead_follow_up !== 'off' });
-  const howPanel = panel('How follow-up works', { subtitle: 'Every lead with an email gets a thank-you with your sign-up link right away, a nudge after 2 days and a last note after 7. It stops as soon as they sign up, you mark them, or they reply STOP to a text.' },
-    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/start`),
-      btn('Copy inquiry form link', async () => { await navigator.clipboard?.writeText(`${location.origin}/start`).catch(() => {}); toast('Link copied. Put it on your website and Instagram.'); }, 'secondary')),
-    isOwner() ? h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, followToggle, h('span', null, 'Send automatic follow-up'), btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { lead_follow_up: followToggle.checked ? 'on' : 'off' }); toast('Saved.'); }), 'ghost')) : null);
-  // The public Book now page, for the website and Instagram bio.
-  const embedCode = `<script src="${location.origin}/embed.js" async></script>`;
-  const copy = (text, msg) => async () => { await navigator.clipboard?.writeText(text).catch(() => {}); toast(msg); };
-  const schedToggle = h('input', { type: 'checkbox', checked: settings.public_schedule !== 'off' });
-  const bookPanel = panel('Book now page', { subtitle: 'Your upcoming classes with open spots and the next evaluation times, for your website, Instagram bio and Google profile. Families sign in (or sign up) to book. No names are shown.' },
-    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/book`),
-      btn('Copy link', copy(`${location.origin}/book`, 'Link copied. Put it in your Instagram bio and on Google.'), 'secondary'),
-      h('a', { class: 'dp-btn dp-btn--ghost', href: '/book', target: '_blank', rel: 'noopener' }, 'Open it')),
-    h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Show the schedule on your website'),
-    h('p', { class: 'small muted', style: 'margin:0' }, 'Paste this where the schedule should appear (in Squarespace or Wix, use a Code or Embed block). For a single "Book now" button instead, add data-button="Book now" inside the tag.'),
-    h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { class: 'small', style: 'word-break:break-all' }, embedCode), btn('Copy code', copy(embedCode, 'Code copied. Paste it into your website.'), 'secondary')),
-    isOwner() ? h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, schedToggle, h('span', null, 'Show the Book now page'), btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_schedule: schedToggle.checked ? 'on' : 'off' }); toast('Saved.'); }), 'ghost')) : null);
-  // Google review requests: one friendly email after a 10th session or a personal best.
-  const reviewUrl = input({ type: 'url', placeholder: 'https://g.page/r/.../review', value: reviews.review_url, 'aria-label': 'Google review link' });
-  const reviewOn = h('input', { type: 'checkbox', checked: reviews.on });
-  const r90 = reviews.last_90_days;
-  const REVIEW_WHY = { milestone: (x) => `${x.detail}`, pr: (x) => `personal best${x.detail ? ` (${x.detail})` : ''}` };
-  const reviewPanel = panel('Google review requests', { subtitle: 'After an athlete\'s 10th session, or a personal best on a testing day the family can see, we email the parent once asking for a Google review. At most once every 6 months per family, never to a family behind on a payment, and only between 10 am and 7 pm.' },
-    !reviews.review_url ? h('p', { class: 'warn-text', style: 'margin:0' }, 'Off until you add your Google review link. Find it in your Google Business Profile under "Ask for reviews".') :
-      h('p', { style: 'margin:0' }, `Last 90 days: ${r90.sent} asked, ${r90.clicked} opened the review page${r90.stopped ? `, ${r90.stopped} asked us to stop` : ''}.`),
-    isOwner() ? h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      try { await patch('/v1/settings', { review_url: reviewUrl.value, review_requests: reviewOn.checked ? 'on' : 'off' }); toast('Saved.'); render(); } catch (err) { toast(err.message, 'warn'); }
-    }); } },
-      field('Google review link', reviewUrl),
-      h('div', { class: 'row wrap', style: 'gap:12px' }, h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, reviewOn, h('span', null, 'Send review requests')), btn('Save', null, 'secondary', { type: 'submit' }))) : null,
-    reviews.recent.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Recent'), ...reviews.recent.map((x) => h('div', { class: 'row small', style: 'gap:10px' },
-      h('span', { class: 'grow' }, `${x.family_name ?? 'Deleted family'} · ${x.athlete_name ?? ''}: ${REVIEW_WHY[x.reason](x)}`), h('span', { class: 'muted' }, ago(x.sent_at)),
-      x.opted_out_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Stop asking') : x.clicked_at ? h('span', { class: 'dp-badge dp-badge--good' }, 'Opened') : h('span', { class: 'dp-badge dp-badge--neutral' }, 'Sent')))) : null,
-    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, 'See the email'),
-      h('p', { class: 'strong small', style: 'margin:8px 0 4px' }, reviews.sample.subject), h('p', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' }, reviews.sample.text)));
-  fill(main, header('Leads', `${res.last_30_days.leads} ${res.last_30_days.leads === 1 ? 'family' : 'families'} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.`, isOwner() ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/leads/campaigns' }, 'Email a group') : null),
-    chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel, reviewPanel);
-}
-
-// ---------- Announcement emails ----------
-const GROUPS = [['everyone', 'All families'], ['members', 'Members'], ['lapsed', 'Lapsed members (canceled in the last year)'], ['no_membership', 'Families without a membership'], ['leads', 'Families who asked about training']];
+// ---------- Group messages (announcement emails and group texts) ----------
+// Owner only. Email or text a group: every family, members, lapsed members, families without a membership, families
+// whose free trial ended, or leads (by stage). The preview shows who it reaches and who is left out, and why (asked to
+// stop emails, texts not turned on, texted STOP, no email or phone, archived, asked for deletion).
+const GROUPS = [['everyone', 'All families'], ['members', 'Members'], ['lapsed', 'Lapsed members (canceled in the last year)'], ['no_membership', 'Families without a membership'], ['trial_ended', 'Families whose free trial ended without joining'], ['leads', 'Families who asked about training (leads)']];
 async function viewCampaigns(main) {
   const [{ data }, settings] = await Promise.all([get('/v1/campaigns'), get('/v1/settings')]);
   let editing = null, reach = null;
-  const f = { subject: input({ maxlength: '120', placeholder: 'Summer camp registration is open' }), body: h('textarea', { class: 'dp-input', rows: '10', placeholder: 'Hi {first_name},\n\nSummer camp runs June 9 to 13...' }),
+  const f = { channel: select([['email', 'Email'], ['text', 'Text']], { 'aria-label': 'Send as' }), subject: input({ maxlength: '120', placeholder: 'Summer camp registration is open' }), body: h('textarea', { class: 'dp-input', rows: '10', placeholder: 'Hi {first_name},\n\nSummer camp runs June 9 to 13...' }),
     group: select(GROUPS, { 'aria-label': 'Who it goes to' }), age_min: input({ type: 'number', min: '3', max: '99', inputmode: 'numeric', placeholder: 'Any', style: 'width:90px' }), age_max: input({ type: 'number', min: '3', max: '99', inputmode: 'numeric', placeholder: 'Any', style: 'width:90px' }), sport: input({ placeholder: 'Any sport' }) };
-  const audience = () => ({ group: f.group.value, age_min: f.age_min.value || null, age_max: f.age_max.value || null, sport: f.sport.value || undefined });
-  const body = () => ({ subject: f.subject.value, body: f.body.value, audience: audience() });
-  const reachBox = h('p', { class: 'small', style: 'margin:0' }), err = h('div', { class: 'dp-error', role: 'alert' });
+  const stageBoxes = LEAD_STAGE_LIST.map(([k, label]) => [k, h('input', { type: 'checkbox', value: k, checked: k === 'new' || k === 'contacted' }), label]);
+  const stagesRow = h('fieldset', { class: 'row wrap', style: 'gap:4px 16px;border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Lead stages'), stageBoxes.map(([, el, label]) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, el, h('span', null, label))));
+  const subjectField = field('Subject', f.subject);
+  const count = h('p', { class: 'small muted', style: 'margin:0' });
+  const isText = () => f.channel.value === 'text';
+  const audience = () => ({ group: f.group.value, age_min: f.age_min.value || null, age_max: f.age_max.value || null, sport: f.sport.value || undefined,
+    ...(f.group.value === 'leads' ? { stages: stageBoxes.filter(([, el]) => el.checked).map(([k]) => k) } : {}) });
+  const body = () => ({ channel: f.channel.value, subject: isText() ? undefined : f.subject.value, body: f.body.value, audience: audience() });
+  const reachBox = h('div', { class: 'stack-tight' }), err = h('div', { class: 'dp-error', role: 'alert' });
   const sendBtn = btn('Send', (e) => send(e.currentTarget), 'primary');
+  const testBtn = btn('Send me a test', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/test`); toast(`Test sent to ${r.sent_to}.`); } catch (x) { err.textContent = x.message; } }), 'secondary');
+  const shape = () => {
+    subjectField.hidden = isText(); testBtn.hidden = isText(); stagesRow.hidden = f.group.value !== 'leads';
+    f.body.maxLength = isText() ? 480 : 20000;
+    count.textContent = isText() ? `${f.body.value.length} of 480 characters. "${settings.business_name}:" goes first and "Reply STOP to stop." last. Only parents who turned texts on, and leads who said texts are OK, get it.` : '';
+  };
   let t;
-  const refreshReach = () => { clearTimeout(t); t = setTimeout(async () => {
-    try { reach = await post('/v1/campaigns/preview', { audience: audience() }); reachBox.className = 'small'; fill(reachBox, h('span', { class: 'strong' }, `Goes to ${reach.count} ${reach.count === 1 ? 'person' : 'people'}`), reach.sample.length ? `: ${reach.sample.join(', ')}${reach.count > reach.sample.length ? ' and more' : ''}.` : '.'); sendBtn.textContent = `Send to ${reach.count}`; sendBtn.disabled = !reach.count; }
-    catch (e) { reach = null; reachBox.className = 'small warn-text'; reachBox.textContent = e.message; sendBtn.disabled = true; }
+  const refreshReach = () => { shape(); clearTimeout(t); t = setTimeout(async () => {
+    try {
+      reach = await post('/v1/campaigns/preview', { audience: audience(), channel: f.channel.value });
+      const lo = reach.left_out;
+      fill(reachBox, h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'strong' }, `Goes to ${reach.count} ${reach.count === 1 ? 'person' : 'people'}`), reach.sample.length ? `: ${reach.sample.join(', ')}${reach.count > reach.sample.length ? ' and more' : ''}.` : '.'),
+        lo.count ? h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `Left out: ${lo.count} (${Object.entries(lo.reasons).map(([k, n]) => `${n} ${k.toLowerCase()}`).join(', ')})`),
+          h('ul', { class: 'small', style: 'margin:0;padding-left:20px' }, lo.people.map((p) => h('li', null, p.lead_id ? h('a', { href: `#/leads/${p.lead_id}` }, p.name) : p.client_id ? h('a', { href: `#/clients/${p.client_id}` }, p.name) : p.name, ` · ${p.reason}`)),
+            lo.count > lo.people.length ? h('li', null, `and ${lo.count - lo.people.length} more`) : null)) : null);
+      sendBtn.textContent = `Send to ${reach.count}`; sendBtn.disabled = !reach.count;
+    } catch (e) { reach = null; fill(reachBox, h('p', { class: 'small warn-text', style: 'margin:0' }, e.message)); sendBtn.disabled = true; }
   }, 250); };
-  for (const el of [f.group, f.age_min, f.age_max, f.sport]) { el.addEventListener('input', refreshReach); el.addEventListener('change', refreshReach); }
+  for (const el of [f.channel, f.group, f.age_min, f.age_max, f.sport, ...stageBoxes.map(([, el]) => el)]) { el.addEventListener('input', refreshReach); el.addEventListener('change', refreshReach); }
+  f.body.addEventListener('input', shape);
   const save = async () => { editing = editing ? await patch(`/v1/campaigns/${editing.id}`, body()) : await post('/v1/campaigns', body()); return editing; };
   async function send(button) {
     err.textContent = '';
     if (!reach?.count) return;
-    if (!confirm(`Send "${f.subject.value}" to ${reach.count} ${reach.count === 1 ? 'person' : 'people'} now? This can't be undone.`)) return;
+    if (!confirm(`Send this ${isText() ? 'text' : `email "${f.subject.value}"`} to ${reach.count} ${reach.count === 1 ? 'person' : 'people'} now? This can't be undone.`)) return;
     await busy(button, async () => {
       try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/send`, { confirm_count: reach.count }); toast(`Sent to ${r.sent} ${r.sent === 1 ? 'person' : 'people'}.`); editing = null; render(); }
       catch (e) { err.textContent = e.message; }
     });
   }
-  const load = (c) => { editing = c.status === 'draft' ? c : null; f.subject.value = c.subject; f.body.value = c.body; f.group.value = c.audience.group; f.age_min.value = c.audience.age_min ?? ''; f.age_max.value = c.audience.age_max ?? ''; f.sport.value = c.audience.sport ?? ''; refreshReach(); main.scrollIntoView({ behavior: 'smooth' }); };
-  const compose = panel('New email', { subtitle: 'For news every family should hear: camp registration, a closure, a new class. Receipts and booking emails go out on their own. Write {first_name} for the parent\'s first name. Links are counted when clicked, and every email ends with your address and a "stop these emails" link.' },
+  const load = (c) => {
+    editing = c.status === 'draft' ? c : null; f.channel.value = c.channel ?? 'email'; f.subject.value = c.channel === 'text' ? '' : c.subject; f.body.value = c.body; f.group.value = c.audience.group;
+    f.age_min.value = c.audience.age_min ?? ''; f.age_max.value = c.audience.age_max ?? ''; f.sport.value = c.audience.sport ?? '';
+    for (const [k, el] of stageBoxes) el.checked = (c.audience.stages ?? ['new', 'contacted']).includes(k);
+    refreshReach(); main.scrollIntoView({ behavior: 'smooth' });
+  };
+  const compose = panel('New message', { subtitle: 'For news every family should hear: camp registration, a closure, a new class. Receipts and booking emails go out on their own. Write {first_name} for the parent\'s first name. Email links are counted when clicked, and every email ends with your address and a "stop these emails" link.' },
     settings.business_address ? null : h('p', { class: 'warn-text', style: 'margin:0' }, 'Add your mailing address in Schedule → Hours & settings first. US law (CAN-SPAM) requires it at the bottom of announcement emails.'),
-    field('Subject', f.subject), field('Message', f.body),
-    h('div', { class: 'form-grid' }, field('Who it goes to', f.group), field('Sport (optional)', f.sport)),
-    h('div', { class: 'row wrap', style: 'gap:12px' }, field('Athlete age from', f.age_min), field('to', f.age_max)),
+    h('div', { class: 'form-grid' }, field('Send as', f.channel), field('Who it goes to', f.group)), stagesRow,
+    subjectField, field('Message', f.body), count,
+    h('div', { class: 'form-grid' }, field('Sport (optional)', f.sport), h('div', { class: 'row wrap', style: 'gap:12px' }, field('Athlete age from', f.age_min), field('to', f.age_max))),
     reachBox, err,
-    h('div', { class: 'row wrap', style: 'gap:8px' }, sendBtn,
-      btn('Send me a test', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { const c = await save(); const r = await post(`/v1/campaigns/${c.id}/test`); toast(`Test sent to ${r.sent_to}.`); } catch (x) { err.textContent = x.message; } }), 'secondary'),
+    h('div', { class: 'row wrap', style: 'gap:8px' }, sendBtn, testBtn,
       btn('Save draft', (e) => busy(e.currentTarget, async () => { err.textContent = ''; try { await save(); toast('Draft saved.'); render(); } catch (x) { err.textContent = x.message; } }), 'ghost')));
   const rows = data.map((c) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, c.subject), h('span', { class: 'small muted' }, `${c.audience_text} · ${c.status === 'draft' ? `draft, ${ago(c.created_at)}` : `sent ${date(c.sent_at)}`}`)),
-    c.status === 'draft' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Draft') : h('span', { class: 'small' }, `${c.sent} sent · ${c.clicked} clicked${c.stopped ? ` · ${c.stopped} stopped` : ''}`),
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong', style: 'overflow-wrap:anywhere' }, c.subject), h('span', { class: 'small muted' }, `${c.channel === 'text' ? 'Text' : 'Email'} · ${c.audience_text} · ${c.status === 'draft' ? `draft, ${ago(c.created_at)}` : `sent ${date(c.sent_at)}`}`)),
+    c.status === 'draft' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Draft') : h('span', { class: 'small' }, c.channel === 'text' ? `${c.sent} sent` : `${c.sent} sent · ${c.clicked} clicked${c.stopped ? ` · ${c.stopped} stopped` : ''}`),
     c.status === 'draft' ? btn('Edit', () => load(c), 'ghost') : btn('Copy', (e) => busy(e.currentTarget, async () => load(await post(`/v1/campaigns/${c.id}/copy`))), 'ghost'),
     c.status === 'draft' ? btn('Delete', (e) => { if (confirm('Delete this draft?')) busy(e.currentTarget, async () => { await api('DELETE', `/v1/campaigns/${c.id}`); render(); }); }, 'ghost') : null));
-  fill(main, header('Email a group', 'Announcements to families, narrowed by membership, age and sport.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/leads' }, 'Back to leads')),
+  fill(main, header('Group messages', 'Emails and texts to families and leads, narrowed by membership, stage, age and sport.'), leadNav('campaigns'),
     compose, panel('Sent and drafts', {}, rows.length ? rows : h('p', { class: 'muted' }, 'Nothing sent yet.')));
   refreshReach();
 }
@@ -1100,7 +1040,7 @@ async function viewClient(main, id) {
     c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
   const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(requestsPanel, 'requests'), 'Requests'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks], [mergePanel]];
-  const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
+  const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(contactHistoryPanel(id, c), 'contact'), 'Contact history'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
     header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),

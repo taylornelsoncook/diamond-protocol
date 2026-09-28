@@ -6,13 +6,16 @@ import { getSetting } from './families.js';
 // ---------- Roles ----------
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
-  coach: 'Coach: clients, schedule, testing, programs and point of sale, and the leads the owner gives them. No discounts, billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
-  front_desk: 'Front desk: check-ins, sales (no discounts), bookings, rosters, leads, adding clients and families, and entering test results. Can view (not change) programs, goals, messages and lessons, and email an athlete their workout app link.'
+  coach: 'Coach: clients, schedule, testing, programs and point of sale, and the leads the owner gives them (with their own tasks). No discounts, billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
+  front_desk: 'Front desk: check-ins, sales (no discounts), bookings, rosters, leads (notes, calls, one-to-one emails and texts, tasks, converting; no lead reports, import, export or group messages), adding clients and families, and entering test results. Can view (not change) programs, goals, messages and lessons, and email an athlete their workout app link.'
 };
 const OWNER_ONLY = [
   /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|api-status|webhooks|webhook-deliveries|outbox|texts|video-coverage|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
-  /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/clients\/:id\/(merge|merge-preview)$/, /^\/v1\/(membership-requests|profile-claims)(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/
+  /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/clients\/:id\/(merge|merge-preview)$/, /^\/v1\/(membership-requests|profile-claims)(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/,
+  /^\/v1\/leads\/(report|export|import)(\/|$)/   // CRM (version 45): lead reports, export and import are the owner's
 ];
+// The owner changes these; others may read them (message templates for one-to-one emails and texts).
+const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
   ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
@@ -32,19 +35,28 @@ const FRONT_DESK = [
   ['POST', /^\/v1\/testing-sessions\/:id\/athletes$/],   // walk-ups on a testing day (not removing athletes, editing or deleting days)
   ['GET', /^\/v1\/kiosks$/], ['POST', /^\/v1\/kiosks$/],   // set up the check-in tablet at the desk
   ['GET', /^\/v1\/inventory$/], ['POST', /^\/v1\/products\/:id\/stock$/],   // receive deliveries and count the shelf
-  ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/]   // inquiries at the counter and on the phone
+  ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/],   // inquiries at the counter and on the phone
+  // CRM (version 45): work every lead (notes, calls, one-to-one emails and texts, converting), their own tasks, and a
+  // family's contact history on the client profile. Reports, import, export and group messages stay with the owner.
+  ['POST', /^\/v1\/leads\/:id\/(activity|email|text|convert)$/], ['GET', /^\/v1\/(tasks|message-templates)(\/|$)/],
+  ['POST', /^\/v1\/tasks$/], ['PATCH', /^\/v1\/tasks\/:id$/], ['DELETE', /^\/v1\/tasks\/:id$/],
+  ['POST', /^\/v1\/clients\/:id\/(activity|email|text|lead)$/]
 ];
 // Front desk may look at clients, but sharing a progress report outside the business is for owners and coaches.
 const FRONT_DESK_DENY = [/^\/v1\/clients\/:id\/(report-links|report\/email)(\/|$)/];
 // Coaches take payments but never see the business's takings.
 // Owner decision: coaches work only the leads the owner gives them (leads.js filters them), so they don't add or delete leads.
-const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
+// CRM: a coach can't search every lead and family for duplicates, and doesn't email, text or re-open families one-to-one
+// (they message athletes and families through coach messages and sessions); they log notes and calls and add their own tasks.
+const COACH_DENY = [['GET', /^\/v1\/leads\/duplicates$/], ['POST', /^\/v1\/clients\/:id\/(email|text|lead)$/],
+  ['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;
   if (role === 'owner') return true;
   if (method === 'GET' && /^\/v1\/plans$/.test(path)) return true;     // everyone needs plan names on client pages
   if (OWNER_ONLY.some((re) => re.test(path))) return false;
+  if (method !== 'GET' && OWNER_WRITES.some((re) => re.test(path))) return false;
   if (role === 'coach') return !COACH_DENY.some(([m, re]) => m === method && re.test(path));
   if (role === 'front_desk') return !FRONT_DESK_DENY.some((re) => re.test(path)) && FRONT_DESK.some(([m, re]) => m === method && re.test(path));
   return false;
@@ -76,7 +88,7 @@ export function hideMoney(role, method, path, out) {
 // Activity that is only about money (memberships, refunds, school contracts) stays with the owner.
 export const OWNER_EVENTS = /^(invoice|subscription|team_invoice|team_contract|sale\.refunded)/;
 // Leads in the activity feed name families who asked about training: coaches see only the leads given to them, so none here.
-export const LEAD_EVENTS = /^lead\./;
+export const LEAD_EVENTS = /^leads?\./;
 export const roleName = (r) => ({ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[r] ?? r);
 
 // ---------- Staff ----------

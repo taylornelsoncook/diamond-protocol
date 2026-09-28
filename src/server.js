@@ -29,6 +29,7 @@ import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { followCampaignLink } from './services/campaigns.js';
+import { followContactLink } from './services/contact.js';
 import { calendarFeed } from './services/portal.js';
 
 // What was typed as the email on the sign-in and forgot-password forms, for the activity log: only if it looks like an
@@ -74,10 +75,11 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (url.pathname === '/stripe/webhook' && req.method === 'POST') return stripeWebhook(ctx, req, res);
       // The review link in the email: count the click and go on to Google (or stop asking, with ?stop=1).
       // Links in announcement emails work the same way: /c/<token>/<n> counts the click, /c/<token>?stop=1 stops them.
-      const review = url.pathname.match(/^\/r\/([\w-]{8,40})$/), camp = url.pathname.match(/^\/c\/([\w-]{8,40})(?:\/(\d{1,3}))?$/);
-      if ((review || camp) && (req.method === 'GET' || req.method === 'POST')) {
+      // A one-to-one CRM email's stop link is /u/<token> (it only stops emails).
+      const review = url.pathname.match(/^\/r\/([\w-]{8,40})$/), camp = url.pathname.match(/^\/c\/([\w-]{8,40})(?:\/(\d{1,3}))?$/), unsub = url.pathname.match(/^\/u\/([\w-]{8,40})$/);
+      if ((review || camp || unsub) && (req.method === 'GET' || req.method === 'POST')) {
         rateLimit(`link:${clientIp(req)}`, 60, 15 * 60000);
-        const stop = url.searchParams.has('stop') || (camp && camp[2] === undefined);
+        const stop = url.searchParams.has('stop') || (camp && camp[2] === undefined) || !!unsub;
         const page = (text, form = '') => {
           res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store' });
           return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your emails</title><link rel="stylesheet" href="/styles.css"><body style="padding:48px 16px;text-align:center"><p style="font-size:18px">${text.replace(/[<>&]/g, '')}</p>${form}</body>`);
@@ -85,7 +87,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         // Stopping takes a button press, so email scanners that open every link can't unsubscribe anyone.
         if (stop && req.method === 'GET') return page('Stop these emails?', `<form method="post" action="${url.pathname}?stop=1"><button class="dp-btn dp-btn--primary" type="submit">Yes, stop them</button></form>`);
         if (req.method === 'POST' && !stop) throw new HttpError(405, 'method_not_allowed', 'That method is not allowed here.');
-        const out = review ? followReviewLink(ctx, review[1], { stop }) : followCampaignLink(ctx, camp[1], camp[2], { stop });
+        const out = review ? followReviewLink(ctx, review[1], { stop }) : unsub ? followContactLink(ctx, unsub[1], { stop }) : followCampaignLink(ctx, camp[1], camp[2], { stop });
         if (out.redirect) { res.writeHead(302, { location: out.redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
         return page(out.page);
       }
@@ -105,7 +107,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         throw new HttpError(known ? 405 : 404, known ? 'method_not_allowed' : 'not_found', known ? 'That method is not allowed here.' : 'No such endpoint.');
       }
       const r = { params: url.pathname.match(route.regex).groups ?? {}, query: Object.fromEntries(url.searchParams), body: {}, baseUrl };
-      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview'].includes(url.pathname) ? 30_000_000 : 1_000_000);
+      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview', '/v1/leads/import'].includes(url.pathname) ? 30_000_000 : 1_000_000);
       const ip = clientIp(req);
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };

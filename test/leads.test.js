@@ -167,9 +167,11 @@ test('front desk can add and update leads; only the owner can delete; phone lead
   assert.equal((await coach('DELETE', `/v1/leads/${added.body.id}`)).status, 403);
   assert.equal((await frontDesk('DELETE', `/v1/leads/${added.body.id}`)).status, 403);
   assert.equal((await owner('DELETE', `/v1/leads/${added.body.id}`)).status, 200);
+  // A lost lead needs a reason. A reason in an integration's own words (from before the CRM) is kept as the note, under "other".
+  assert.match((await owner('PATCH', `/v1/leads/${lead('quiet@example.com').id}`, { status: 'lost' })).body.error.message, /Pick why they didn't join/);
   const lost = await owner('PATCH', `/v1/leads/${lead('quiet@example.com').id}`, { status: 'lost', lost_reason: 'Went with a travel team' });
   assert.equal(lost.body.status, 'lost');
-  assert.equal(lost.body.lost_reason, 'Went with a travel team');
+  assert.deepEqual([lost.body.lost_reason, lost.body.lost_note, lost.body.lost_reason_label], ['other', 'Went with a travel team', 'Other']);
 });
 
 test('the dashboard flags new inquiries, and deleting a family removes their inquiry', async () => {

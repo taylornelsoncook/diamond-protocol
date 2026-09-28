@@ -16,6 +16,8 @@ export const TEXT_KINDS = {
   payment_failed: 'When a membership payment doesn\'t go through',
   open_spot: 'When a class your athlete fits has an open spot'
 };
+// Every kind of text in the log, for the Texts list (TEXT_KINDS are the automatic ones the owner can turn off).
+export const TEXT_LABELS = { ...TEXT_KINDS, lead: 'Automatic follow-up to a lead', crm: 'Sent from a lead or client page', group: 'Group text', reply: 'Reply', opt_in: 'Texts turned on', test: 'Test text' };
 const STOP_WORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'REVOKE', 'OPTOUT'];
 const START_WORDS = ['START', 'UNSTOP', 'YES'];
 
@@ -183,9 +185,27 @@ export async function handleInbound(ctx, params) {
     return null;
   }
   if (word === 'HELP' || word === 'INFO') return `${biz}: texts about bookings, schedule changes and payments. Manage them in the parent portal: ${ctx.publicUrl ?? ''}/parent. Reply STOP to stop.`;
-  const who = parents.length ? `${parents[0].name} (${pretty(phone)})` : pretty(phone);
-  for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
-    sendEmail(ctx, { to: o.email, subject: `Text from ${parents[0]?.name ?? pretty(phone)}`, text: `${who} texted:\n\n${body}\n\nTexts can't be answered from the app yet. Reply by phone or email.` }).catch(() => {});
+  // A reply from someone who asked about training shows on their lead's timeline; the coach the owner gave the lead to
+  // hears about it too (never about leads that aren't theirs).
+  const leads = ctx.db.all(`SELECT id, parent_name, phone, coach_id, status FROM leads WHERE phone IS NOT NULL ORDER BY created_at DESC`).filter((l) => normalizePhone(l.phone) === phone);
+  const lead = leads.find((l) => !['member', 'lost'].includes(l.status)) ?? leads[0];
+  if (lead) ctx.db.run('UPDATE leads SET last_activity_at = ?, updated_at = ? WHERE id = ?', ctx.now(), ctx.now(), lead.id);
+  const name = parents[0]?.name ?? lead?.parent_name ?? null;
+  const who = name ? `${name} (${pretty(phone)})` : pretty(phone);
+  const where = lead ? `Reply from their lead: ${ctx.publicUrl ?? ''}/#/leads/${lead.id}` : parents.length ? 'Reply from their client profile (Contact history), or by phone or email.' : 'Reply by phone or email.';
+  const to = ctx.db.all(`SELECT email FROM users WHERE active = 1 AND (role = 'owner' OR (role = 'coach' AND id = ?))`, lead?.coach_id ?? '');
+  for (const o of to) {
+    sendEmail(ctx, { to: o.email, subject: `Text from ${name ?? pretty(phone)}`, text: `${who} texted:\n\n${body}\n\n${where}` }).catch(() => {});
   }
   return null;
+}
+// Test mode only (no text service connected): pretend a family or lead texted in, to try replies, STOP and START.
+export async function simulateInbound(ctx, body = {}) {
+  if (smsMode(ctx) !== 'test') throw badRequest('A text service is connected, so real replies come in. Pretend replies are only for test mode.');
+  const phone = normalizePhone(body.from);
+  if (!phone) throw badRequest('Enter the phone number the text comes from, with its area code.');
+  const text = String(body.body ?? '').trim();
+  if (!text) throw badRequest('Type what they texted.');
+  const reply = await handleInbound(ctx, { From: phone, Body: text.slice(0, 1000), MessageSid: `SIM${Date.now()}` });
+  return { ok: true, from: phone, reply, stopped: numberStopped(ctx, phone) };
 }

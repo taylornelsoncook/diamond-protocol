@@ -71,7 +71,7 @@ export function createJobRunner(ctx) {
     if (status === 'skipped') return;
     const st = ctx.db.get('SELECT * FROM job_state WHERE job = ?', j.name);
     const owners = ctx.db.all(`SELECT name, email FROM users WHERE role = 'owner' AND active = 1`);
-    const link = ctx.publicUrl ? `\n\nSee the run history under Staff & security:\n${ctx.publicUrl.replace(/\/$/, '')}/` : '\n\nSee the run history under Staff & security.';
+    const link = ctx.publicUrl ? `\n\nSee the run history under Settings → Backups & jobs:\n${ctx.publicUrl.replace(/\/$/, '')}/#/settings?tab=backups` : '\n\nSee the run history under Settings → Backups & jobs.';
     if (status === 'ok') {
       ctx.db.run('UPDATE job_state SET fail_streak = 0, last_ok_at = ?, alerted_at = NULL WHERE job = ?', iso(), j.name);
       if (!st?.alerted_at) return;

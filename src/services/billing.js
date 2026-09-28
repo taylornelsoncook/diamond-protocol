@@ -67,8 +67,8 @@ export function updatePlan(ctx, id, body) {
 // ---- Subscriptions ----
 export function getSubscription(ctx, id) {
   const s = ctx.db.get(
-    `SELECT s.*, p.name AS plan_name, p.price_cents, c.name AS client_name
-     FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = s.client_id WHERE s.id = ?`, id);
+    `SELECT s.*, p.name AS plan_name, p.price_cents, c.name AS client_name, pp.name AS pending_plan_name, pp.price_cents AS pending_price_cents
+     FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = s.client_id LEFT JOIN plans pp ON pp.id = s.pending_plan_id WHERE s.id = ?`, id);
   if (!s) throw notFound('Subscription');
   return s;
 }
@@ -118,15 +118,79 @@ export async function subscribe(ctx, clientId, planId, asOf = ctx.now()) {
   return getSubscription(ctx, sub.id);
 }
 
-export function changePlan(ctx, subId, planId) {
+// Changing a membership's plan (owner). when:
+//   now:        the new plan starts today; nothing is charged now and the next renewal charges the new price.
+//   renewal:    stays on the current plan until the membership renews, then moves (pending_plan_id; Cancel change undoes it).
+//   difference: the new plan starts today and the price difference for the rest of this paid month is charged now to the
+//               card on file, as its own invoice (a membership that is paid up only). A cheaper plan charges nothing.
+// Any change made now clears a change waiting for the renewal. Returns the subscription and, for difference, the charge.
+export const PLAN_CHANGE_WHEN = ['now', 'renewal', 'difference'];
+const MIN_CHARGE_CENTS = 50;          // Stripe's smallest card charge
+export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
+  if (!PLAN_CHANGE_WHEN.includes(when)) throw badRequest('when must be now, renewal or difference.');
   const s = getSubscription(ctx, subId);
   if (s.status === 'canceled') throw conflict('This subscription is canceled. Start a new one instead.');
   const plan = getPlan(ctx, planId);
   if (!plan.active) throw badRequest('That plan is no longer offered.');
-  ctx.db.run('UPDATE subscriptions SET plan_id = ?, updated_at = ? WHERE id = ?', planId, ctx.now(), subId);
+  if (planId === s.plan_id && when !== 'renewal') throw conflict(`${s.client_name.split(' ')[0]} is already on ${plan.name}.`);
+  if (when === 'renewal') {
+    if (planId === s.plan_id) return cancelPendingPlan(ctx, subId);
+    ctx.db.run('UPDATE subscriptions SET pending_plan_id = ?, pending_set_at = ?, updated_at = ? WHERE id = ?', planId, ctx.now(), ctx.now(), subId);
+    const after = getSubscription(ctx, subId);
+    emit(ctx, 'subscription.updated', { subscription_id: subId, client_id: s.client_id, client_name: s.client_name, plan_name: s.plan_name, status: s.status, pending_plan_name: plan.name, changes_on: s.current_period_end });
+    return { subscription: after, when, charged: null };
+  }
+  let diff = 0;
+  if (when === 'difference') {
+    if (s.status !== 'active') throw conflict(s.status === 'trialing' ? 'Nothing has been charged yet during the free trial. Choose Start now: the trial ends on the new plan\'s price.'
+      : s.status === 'past_due' ? 'This month\'s payment was declined. Collect it first, or choose Start now.' : 'A paused membership has no paid month to top up. Choose Start now or at renewal.');
+    if (!payerFor(ctx, s.client_id).card_payment_method) throw conflict('There\'s no card on file to charge the difference. Add a card first, or choose Start now.');
+    diff = differenceCents(ctx, s, plan.price_cents);
+  }
+  ctx.db.run('UPDATE subscriptions SET plan_id = ?, pending_plan_id = NULL, pending_set_at = NULL, updated_at = ? WHERE id = ?', planId, ctx.now(), subId);
   const after = getSubscription(ctx, subId);
   emit(ctx, 'subscription.updated', { subscription_id: subId, client_id: s.client_id, client_name: s.client_name, plan_name: after.plan_name, status: after.status, previous_plan_name: s.plan_name });
-  return after;
+  let charged = null;
+  if (diff >= MIN_CHARGE_CENTS) {
+    const id = newId('inv');
+    ctx.db.run(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, note)
+      VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, diff, ctx.now(), s.current_period_end, ctx.now(), `Plan change: ${s.plan_name} to ${plan.name}, the rest of this month`);
+    try {
+      const inv = await attemptCharge(ctx, id, ctx.now());
+      charged = { invoice_id: id, amount_cents: diff, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null };
+    } catch (e) {
+      // The card processor didn't answer: the plan has changed and the charge is left to retry from Billing.
+      ctx.db.run(`UPDATE invoices SET status = 'failed', last_error = ? WHERE id = ? AND status = 'open'`, String(e.message ?? e).slice(0, 300), id);
+      charged = { invoice_id: id, amount_cents: diff, status: 'failed', error: 'The card processor didn\'t answer. Retry the charge from Billing.' };
+    }
+  }
+  return { subscription: getSubscription(ctx, subId), when, charged, difference_cents: when === 'difference' ? diff : null };
+}
+// The price difference for the rest of the paid month: what the new plan costs for the time left, less what was already
+// paid toward that time (the month's payment and any earlier differences, after refunds, each spread over the time it
+// covered). So changing back and forth within a month never charges twice for the same days.
+function differenceCents(ctx, s, newPrice) {
+  const now = Date.parse(ctx.now()), end = Date.parse(s.current_period_end), start = Date.parse(s.current_period_start);
+  if (!(end > now) || !(end > start)) return 0;
+  const owed = (newPrice * (end - now)) / (end - start);
+  const paid = ctx.db.all(`SELECT amount_cents - refunded_cents AS net, period_start, period_end FROM invoices WHERE subscription_id = ? AND status = 'paid' AND period_end = ?`, s.id, s.current_period_end)
+    .reduce((t, i) => { const a = Date.parse(i.period_start), b = Date.parse(i.period_end); return b > a ? t + (Math.max(0, i.net) * Math.min(1, (b - now) / (b - a))) : t; }, 0);
+  return Math.round(owed - paid);
+}
+export function cancelPendingPlan(ctx, subId) {
+  const s = getSubscription(ctx, subId);
+  if (!s.pending_plan_id) return { subscription: s, when: 'renewal', charged: null };
+  ctx.db.run('UPDATE subscriptions SET pending_plan_id = NULL, pending_set_at = NULL, updated_at = ? WHERE id = ?', ctx.now(), subId);
+  emit(ctx, 'subscription.updated', { subscription_id: subId, client_id: s.client_id, client_name: s.client_name, plan_name: s.plan_name, status: s.status, pending_plan_name: null });
+  return { subscription: getSubscription(ctx, subId), when: 'renewal', charged: null };
+}
+// At a renewal (or a paused membership resuming), a plan change waiting for it takes effect before the new month is charged.
+function applyPendingPlan(ctx, subId) {
+  const s = ctx.db.get('SELECT s.pending_plan_id, s.plan_id, s.client_id, s.status, p.name AS plan_name, c.name AS client_name FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = s.client_id WHERE s.id = ?', subId);
+  if (!s?.pending_plan_id) return;
+  const next = ctx.db.get('SELECT name FROM plans WHERE id = ?', s.pending_plan_id);
+  ctx.db.run('UPDATE subscriptions SET plan_id = COALESCE(?, plan_id), pending_plan_id = NULL, pending_set_at = NULL, updated_at = ? WHERE id = ?', next ? s.pending_plan_id : null, ctx.now(), subId);
+  if (next) emit(ctx, 'subscription.updated', { subscription_id: subId, client_id: s.client_id, client_name: s.client_name, plan_name: next.name, status: s.status, previous_plan_name: s.plan_name });
 }
 
 export function pause(ctx, subId) {
@@ -142,6 +206,7 @@ export async function resume(ctx, subId, asOf = ctx.now()) {
   if (s.status !== 'paused') throw conflict('Only a paused subscription can be resumed.');
   const end = addMonths(asOf, 1);
   ctx.db.run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, updated_at = ? WHERE id = ?', asOf, end, ctx.now(), subId);
+  applyPendingPlan(ctx, subId);
   setStatus(ctx, subId, 'active');
   await invoiceAndCharge(ctx, subId, asOf, end, asOf);
   return getSubscription(ctx, subId);
@@ -232,15 +297,18 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
     if (result.ok) {
       recordPaid(ctx, inv, s, { attempts, autoAttempts, ref: result.ref });
     } else {
-      const giveUp = !manual && autoAttempts >= MAX_ATTEMPTS;
-      const nextRetry = giveUp ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
+      // A one-off charge (a plan change's difference, invoices.note) that declines stays for the owner or the parent to retry:
+      // it never makes the membership past due, retries on its own, cancels it or locks the family out.
+      const oneOff = !!inv.note;
+      const giveUp = !oneOff && !manual && autoAttempts >= MAX_ATTEMPTS;
+      const nextRetry = giveUp || oneOff ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
       ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, auto_attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
         attempts, autoAttempts, result.error, nextRetry, result.ref ?? null, inv.id);
       emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, automatic_attempts: autoAttempts, manual, source, error: result.error, final: giveUp });
       if (giveUp) {
         ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id);
         setStatus(ctx, s.id, 'canceled', { canceled_at: ctx.now() });
-      } else if (s.status !== 'canceled') {
+      } else if (s.status !== 'canceled' && !oneOff) {
         setStatus(ctx, s.id, 'past_due');
       }
     }
@@ -401,6 +469,7 @@ export async function runBilling(ctx, asOf = ctx.now()) {
     for (const s of due) {
       const start = s.current_period_end, end = addMonths(start, 1);
       ctx.db.run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, updated_at = ? WHERE id = ?', start, end, ctx.now(), s.id);
+      applyPendingPlan(ctx, s.id);
       summary.renewed++;
       count(await invoiceAndCharge(ctx, s.id, start, end, asOf));
     }
@@ -481,7 +550,7 @@ function invoiceRows(ctx, { from, to } = {}) {
   const sArgs = [...(from ? [from] : []), ...(to ? [to] : [])];
   const sql = `WITH rows AS (
     SELECT 'membership' AS kind, i.id, NULL AS number, i.client_id, c.name AS client_name, c.family_id, c.archived_at AS client_archived_at,
-      NULL AS contract_id, NULL AS org_name, p.name AS description, i.amount_cents, i.refunded_cents, i.status, i.created_at AS issued_at, NULL AS due_on,
+      NULL AS contract_id, NULL AS org_name, COALESCE(i.note, p.name) AS description, i.amount_cents, i.refunded_cents, i.status, i.created_at AS issued_at, NULL AS due_on,
       i.paid_at, i.paid_method, i.paid_reference, i.attempts, i.auto_attempts, i.next_retry_at, i.last_error, i.reminded_at, i.voided_at, i.void_reason, i.period_start, i.period_end,
       s.id AS subscription_id, s.status AS subscription_status, ${cardSql()} AS card_last4, ${brandSql()} AS card_brand,
       CASE WHEN i.status IN ('failed','open','void') THEN i.status WHEN i.amount_cents > 0 AND i.refunded_cents >= i.amount_cents THEN 'refunded'
@@ -778,7 +847,7 @@ export function billingSummary(ctx) {
   const failed = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(i.amount_cents), 0) AS c, COALESCE(SUM(CASE WHEN (${cardSql()}) IS NULL THEN 1 ELSE 0 END), 0) AS no_card
     FROM invoices i JOIN clients c ON c.id = i.client_id LEFT JOIN families f ON f.id = c.family_id WHERE i.status = 'failed'`);
   const school = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS c, COALESCE(SUM(due_on < ?), 0) AS overdue_n, COALESCE(SUM(CASE WHEN due_on < ? THEN amount_cents ELSE 0 END), 0) AS overdue_c FROM team_invoices WHERE status = 'open'`, today, today);
-  const upcoming = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(p.price_cents), 0) AS c, COALESCE(SUM(s.status = 'trialing'), 0) AS trials FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+  const upcoming = db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE((SELECT pp.price_cents FROM plans pp WHERE pp.id = s.pending_plan_id), p.price_cents)), 0) AS c, COALESCE(SUM(s.status = 'trialing'), 0) AS trials FROM subscriptions s JOIN plans p ON p.id = s.plan_id
     WHERE s.status IN ('active','trialing') AND s.current_period_end <= ?`, week);
   const month = moneyIn(ctx, monthStart, now), day = moneyIn(ctx, todayRange.from, todayRange.to);
   const { counts } = listBillingInvoices(ctx, { limit: 1 });
@@ -832,7 +901,8 @@ export function listMemberships(ctx, query = {}) {
   const [cond, cp] = membershipViewSql(view, now);
   const order = view === 'canceled' ? 's.canceled_at DESC' : `CASE s.status WHEN 'past_due' THEN 0 WHEN 'trialing' THEN 1 WHEN 'active' THEN 2 ELSE 3 END, s.current_period_end`;
   const data = ctx.db.all(`SELECT s.id, s.client_id, c.name AS client_name, c.athlete_id, c.archived_at AS client_archived_at, f.name AS family_name, s.plan_id, p.name AS plan_name, p.active AS plan_active,
-      p.price_cents, s.status, s.trial_ends_at, s.current_period_end, s.canceled_at, s.created_at,
+      p.price_cents, s.status, s.trial_ends_at, s.current_period_end, s.canceled_at, s.created_at, s.pending_plan_id,
+      (SELECT pp.name FROM plans pp WHERE pp.id = s.pending_plan_id) AS pending_plan_name,
       CASE WHEN s.status IN ('active','trialing') THEN s.current_period_end END AS next_charge_at, ${cardSql()} AS card_last4, ${brandSql()} AS card_brand,
       (SELECT COALESCE(SUM(i.amount_cents), 0) FROM invoices i WHERE i.subscription_id = s.id AND i.status = 'failed') AS failed_cents
     ${from} WHERE ${cond}${more} ORDER BY ${order}, c.name LIMIT 500`, ...cp, ...p).map((r) => ({ ...r, plan_active: !!r.plan_active }));
@@ -842,6 +912,6 @@ export function listMemberships(ctx, query = {}) {
     counts[key] = ctx.db.get(`SELECT COUNT(*) AS n ${from} WHERE ${c2}${more}`, ...p2, ...p).n;
   }
   const [rc, rp] = membershipViewSql('renewing', now);
-  const up = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(p.price_cents), 0) AS c ${from} WHERE ${rc}`, ...rp);
+  const up = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(COALESCE((SELECT pp.price_cents FROM plans pp WHERE pp.id = s.pending_plan_id), p.price_cents)), 0) AS c ${from} WHERE ${rc}`, ...rp);   // a change waiting for the renewal charges the new price
   return { data, view, counts, upcoming: { days: 7, count: up.n, cents: up.c } };
 }

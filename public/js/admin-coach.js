@@ -1,6 +1,8 @@
-// Owner screens: API & integrations and Staff & security. Also everyone's own Account page, the "forgot password" form
+// Owner screens: API & integrations and Settings (exercise library for all staff; staff, security, backups, data
+// requests and the activity report for owners). Also everyone's own Account page, the "forgot password" form
 // on the sign-in page and the page an emailed reset link opens. The server checks every rule; these screens only follow.
 import { h, fill, toast, date, ago, btn, busy, field, input, select, panel } from './ui.js';
+import { exerciseLibrary } from './programs-coach.js';
 
 let api, render, header, pulseTile, download, me, saveAnyway;
 export function initAdmin(deps) { ({ api, render, header, pulseTile, download, me, saveAnyway } = deps); }
@@ -447,7 +449,7 @@ async function videoTab(box, ctx) {
 }
 
 // =====================================================================================================================
-// Staff & security
+// Settings: staff, security, backups and jobs, data requests, the activity report
 // =====================================================================================================================
 const ROLE = { owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' };
 const workText = (w) => [w.sessions && plural(w.sessions, 'upcoming session'), w.classes && plural(w.classes, 'class', 'classes'), w.hours && `${plural(w.hours, 'block')} of hours`].filter(Boolean).join(', ');
@@ -468,20 +470,30 @@ function rolesTable() {
     h('tbody', null, CAN.map(([what, ...v]) => h('tr', null, h('td', { class: 'small' }, what), ...v.map(cell))))));
 }
 
-export async function viewStaff(main) {
-  if (me()?.role !== 'owner') return fill(main, header('Staff & security', 'Only owners can manage staff.'));
-  const [summary, staff, bk, jobs, requests] = await Promise.all([get('/v1/staff/summary'), get('/v1/staff'), get('/v1/backups'), get('/v1/jobs'), get('/v1/data-requests')]);
-  const s = summary;
-  const leading = s.still_leading;
-  const tiles = h('div', { class: 'pulse', style: 'margin-bottom:16px' },
-    pulseTile('Can sign in', String(s.can_sign_in), s.turned_off ? `${s.turned_off} turned off` : 'Everyone is on'),
-    pulseTile('Locked', String(s.locked), s.locked ? 'Too many wrong passwords' : 'None', { tone: s.locked ? 'warn' : null }),
-    pulseTile('Not signed in yet', String(s.not_signed_in_yet), s.not_signed_in_yet ? 'Invited, waiting' : 'Everyone has'),
-    pulseTile('Failed sign-ins', String(s.failed_sign_ins_24h), 'Last 24 hours', { tone: s.failed_sign_ins_24h >= 10 ? 'warn' : null, href: '#/staff?log=failures' }),
-    pulseTile('Refused', String(s.refused_7d), 'Requests a role can\'t make, 7 days', { href: '#/staff?log=refused' }),
-    pulseTile('Last backup', s.backups.last_at ? ago(s.backups.last_at) : 'None', s.backups.overdue ? 'Overdue: check Background jobs' : s.backups.count ? `${s.backups.count} kept, ${kb(s.backups.total_bytes)}` : 'Not in this copy', { tone: s.backups.overdue ? 'warn' : null }),
-    leading.length ? pulseTile('Still leading', String(leading.length), `${leading.map((u) => u.name).join(', ')}: hand over their sessions`, { tone: 'warn' }) : null);
+// =====================================================================================================================
+// Settings. Everyone sees the exercise library; the other tabs are the owner's (the server refuses them to staff anyway).
+// =====================================================================================================================
+const SETTINGS_TABS = [['exercises', 'Exercise library'], ['staff', 'Staff'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
+export async function viewSettings(main) {
+  const owner = me()?.role === 'owner';
+  const list = owner ? SETTINGS_TABS : SETTINGS_TABS.slice(0, 1);
+  let current = list.some(([k]) => k === queryOf().get('tab')) ? queryOf().get('tab') : 'exercises';
+  const body = h('div', { id: 'tab-panel', role: 'tabpanel', class: 'stack', style: 'margin-top:16px' });
+  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), staff: staffTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
+  let loading = 0;
+  async function loadTab() {
+    const n = ++loading;
+    const box = h('div', { class: 'stack' });
+    try { await loaders[current](box); } catch (e) { fill(box, h('p', { class: 'dp-error' }, e.message)); }
+    if (n === loading) fill(body, box);
+  }
+  const t$ = owner ? tabs(list, current, (key) => { current = key; setQuery('settings', { tab: key === 'exercises' ? '' : key }); loadTab(); }) : null;
+  fill(main, header('Settings', owner ? 'Your exercise library, staff, security, backups, data requests and the activity report.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), t$?.bar, body);
+  await loadTab();
+}
 
+async function staffTab(box) {
+  const staff = await get('/v1/staff');
   const addBtn = btn('Add staff member', () => addStaffDialog(staff.roles), 'primary');
   // Turned-off accounts fold away, unless they still lead something that needs handing over.
   const on = staff.data.filter((u) => u.active || u.still_leading), off = staff.data.filter((u) => !u.active && !u.still_leading);
@@ -494,14 +506,28 @@ export async function viewStaff(main) {
     u.locked ? tag('warn', 'Locked') : null, !u.active ? tag('muted', 'Off') : null, u.active && u.never_signed_in && u.must_change_password ? tag('muted', 'Invited') : null,
     u.still_leading ? btn('Hand over', () => handOverDialog(u), 'secondary') : null,
     btn('Manage', () => manageDialog(u.id, staff.roles), 'ghost', { 'aria-label': `Manage ${u.name}` }));
-  const staffPanel = panel('Staff', { subtitle: 'Each person has their own sign-in. Their role decides what they can see and do.', action: addBtn },
+  fill(box, panel('Staff', { subtitle: 'Each person has their own sign-in. Their role decides what they can see and do.', action: addBtn },
     on.map(row), off.length ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'small muted', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `Turned off (${off.length})`), off.map(row)) : null,
-    h('details', { style: 'margin-top:12px' }, h('summary', { class: 'strong small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'What each role can do'), rolesTable()));
+    h('details', { style: 'margin-top:12px' }, h('summary', { class: 'strong small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'What each role can do'), rolesTable())));
+}
 
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), tiles, staffPanel,
-    backupsPanel(bk, s), requestsPanel(requests), jobsPanel(jobs), connectionPanel(), await activityPanel(staff.data));
-  const log = queryOf().get('log');
-  if (log) document.getElementById('activity-log')?.scrollIntoView({ block: 'start' });
+async function securityTab(box) {
+  const s = await get('/v1/staff/summary');
+  const leading = s.still_leading;
+  fill(box, h('div', { class: 'pulse' },
+    pulseTile('Can sign in', String(s.can_sign_in), s.turned_off ? `${s.turned_off} turned off` : 'Everyone is on', { href: '#/settings?tab=staff' }),
+    pulseTile('Locked', String(s.locked), s.locked ? 'Too many wrong passwords' : 'None', { tone: s.locked ? 'warn' : null, href: '#/settings?tab=staff' }),
+    pulseTile('Not signed in yet', String(s.not_signed_in_yet), s.not_signed_in_yet ? 'Invited, waiting' : 'Everyone has', { href: '#/settings?tab=staff' }),
+    pulseTile('Failed sign-ins', String(s.failed_sign_ins_24h), 'Last 24 hours', { tone: s.failed_sign_ins_24h >= 10 ? 'warn' : null, href: '#/settings?tab=activity&log=failures' }),
+    pulseTile('Refused', String(s.refused_7d), 'Requests a role can\'t make, 7 days', { href: '#/settings?tab=activity&log=refused' }),
+    pulseTile('Last backup', s.backups.last_at ? ago(s.backups.last_at) : 'None', s.backups.overdue ? 'Overdue: check Backups & jobs' : s.backups.count ? `${s.backups.count} kept, ${kb(s.backups.total_bytes)}` : 'Not in this copy', { tone: s.backups.overdue ? 'warn' : null, href: '#/settings?tab=backups' }),
+    leading.length ? pulseTile('Still leading', String(leading.length), `${leading.map((u) => u.name).join(', ')}: hand over their sessions`, { tone: 'warn', href: '#/settings?tab=staff' }) : null),
+  connectionPanel());
+}
+
+async function backupsTab(box) {
+  const [s, bk, jobs] = await Promise.all([get('/v1/staff/summary'), get('/v1/backups'), get('/v1/jobs')]);
+  fill(box, backupsPanel(bk, s), jobsPulldown(jobs));
 }
 
 function addStaffDialog(roles) {
@@ -581,7 +607,7 @@ async function manageDialog(id, roles) {
     section('Signed in on', devices, u.devices.some((d) => !d.current) ? h('div', null, btn(self ? 'Sign out my other devices' : 'Sign out everywhere', (e) => busy(e.currentTarget, async () => {
       const r = await post(`/v1/staff/${u.id}/sign-out`); toast(`Signed out of ${plural(r.signed_out, 'device')}.`); reopen();
     }), 'secondary')) : null),
-    section('Recent activity', activity, h('div', null, btn('See all in the activity log', () => { dialog().close(); filterLogTo(u.id); }, 'ghost'))),
+    section('Recent activity', activity, h('div', null, btn('See all in the activity report', () => { dialog().close(); filterLogTo(u.id); }, 'ghost'))),
     section('Account',
       h('div', { class: 'row wrap', style: 'gap:6px' },
         u.active ? btn(invite ? 'Resend invite' : 'Reset password', (e) => { if (confirm(invite ? `Email ${u.name} a new one-time password?` : `Give ${u.name} a new one-time password? They're signed out everywhere and any reset link they asked for stops working.`)) busy(e.currentTarget, async () => { const r = await post(`/v1/staff/${u.id}/reset-password`); showOneTime(u.name, r.temporary_password, 'It was emailed to them.'); render(); }); }, 'secondary') : null,
@@ -654,10 +680,17 @@ function backupsPanel(bk, s) {
     }), 'secondary')),
     h('p', { class: 'small muted', style: 'margin:0' }, 'Backup files contain client, family and medical information. Store them like you would paper records.'));
 }
-function jobsPanel(jobs) {
+let jobsOpen = false;     // stays open across a Run now
+function jobsPulldown(jobs) {
   const every = (sec) => (sec < 60 ? `every ${sec} seconds` : sec < 3600 ? `every ${sec / 60} min` : sec === 3600 ? 'hourly' : `every ${sec / 3600} hours`);
   const jobBadge = (j) => (j.running ? ['muted', 'Running'] : j.health === 'failing' ? ['warn', j.fail_streak > 1 ? `Failed ${j.fail_streak}×` : 'Failed'] : j.health === 'waiting' ? ['muted', 'Not run yet'] : j.recent[0]?.status === 'skipped' && j.recent[0].started_at === j.last_run_at ? ['muted', 'Nothing to do'] : ['good', 'OK']);
-  return panel('Background jobs', { subtitle: 'The work the server does on its own: billing, school invoices, the schedule, reminders, follow-ups, money checks, webhooks, device syncs and backups. Owners get an email when a job fails and when it recovers.' },
+  const failing = jobs.data.filter((j) => j.health === 'failing'), running = jobs.data.filter((j) => j.running).length;
+  const d = h('details', { class: 'dp-panel', open: jobsOpen || null, onToggle: () => { jobsOpen = d.open; } },
+    h('summary', { style: 'cursor:pointer;min-height:44px;display:flex;align-items:center;gap:10px;flex-wrap:wrap' },
+      h('span', { class: 'dp-panel-title', style: 'margin:0' }, 'Background jobs'),
+      tag(failing.length ? 'warn' : 'good', failing.length ? `${failing.length} failing` : 'All OK'),
+      h('span', { class: 'small muted' }, failing.length ? failing.map((j) => j.name).join(', ') : `${plural(jobs.data.length, 'job')}${running ? `, ${running} running now` : ''}. Open to see each one.`)),
+    h('p', { class: 'small muted' }, 'The work the server does on its own: billing, school invoices, the schedule, reminders, follow-ups, money checks, webhooks, device syncs and backups. Owners get an email when a job fails and when it recovers.'),
     jobs.data.map((j) => { const [tone, label] = jobBadge(j); return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
       h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, j.name),
         h('span', { class: 'small muted' }, `${every(j.every_seconds)}${j.last_run_at ? ` · last ran ${ago(j.last_run_at)}` : ''}${j.health === 'failing' ? (j.last_ok_at ? ` · last worked ${ago(j.last_ok_at)}` : ' · has not worked yet') : ''}`),
@@ -668,6 +701,7 @@ function jobsPanel(jobs) {
         toast(r.status === 'failed' ? `${j.name} failed. The error is shown below.` : r.status === 'skipped' ? `${j.name} had nothing to do.` : `${j.name} ran.`, r.status === 'failed' ? 'warn' : 'good');
         render();
       }), 'ghost', j.running ? { disabled: true, 'aria-label': `Run ${j.name} now` } : { 'aria-label': `Run ${j.name} now` })); }));
+  return d;
 }
 function requestsPanel(requests) {
   const openReqs = requests.data.filter((r) => r.status === 'open');
@@ -704,20 +738,25 @@ const actionText = (a) => (a.action === 'sign-in' ? (a.status === 200 ? 'Signed 
 const WHO = [['', 'Everyone'], ['staff', 'Staff'], ['api_key', 'API keys'], ['parent', 'Parents'], ['athlete', 'Athletes (app link)'], ['public', 'Sign-in page and public'], ['system', 'System']];
 const KIND = [['', 'Everything'], ['sign_ins', 'Sign-ins and resets'], ['refused', 'Refused'], ['failures', 'Anything that failed']];
 let logFilter = { who: '', staff_id: '', kind: '', since: '', until: '', q: '' };
-let filterLogTo = () => {};
-async function activityPanel(staff) {
+let runLogNow = false;       // set when another screen asks for the report (a tile, a staff member's "See all")
+// From a staff member's manage panel: the report for just them.
+const filterLogTo = (id) => { logFilter = { who: '', staff_id: id, kind: '', since: '', until: '', q: '' }; runLogNow = true; location.hash = '#/settings?tab=activity'; };
+// The activity report: nothing loads until the owner picks filters and presses Show report (or arrives from a tile).
+async function activityTab(box) {
+  const staff = (await get('/v1/staff')).data;
   const fromUrl = queryOf().get('log');
-  if (fromUrl === 'failures' || fromUrl === 'refused') logFilter = { ...logFilter, kind: fromUrl };
+  if (fromUrl === 'failures' || fromUrl === 'refused') { logFilter = { ...logFilter, kind: fromUrl }; runLogNow = true; setQuery('settings', { tab: 'activity' }); }
   const f = logFilter;
   const who = select(WHO, { value: f.who, 'aria-label': 'Who', style: 'width:auto' });
   const person = select([['', 'Any staff member'], ...staff.map((u) => [u.id, u.name])], { value: f.staff_id, 'aria-label': 'Staff member', style: 'width:auto;max-width:200px' });
   const kind = select(KIND, { value: f.kind, 'aria-label': 'What', style: 'width:auto' });
   const since = input({ type: 'date', value: f.since, 'aria-label': 'From', style: 'width:auto' }), until = input({ type: 'date', value: f.until, 'aria-label': 'To', style: 'width:auto' });
   const q = input({ type: 'search', value: f.q, placeholder: 'Search names, records, addresses or what happened', 'aria-label': 'Search the activity log', style: 'flex:1 1 220px' });
-  const out = h('div'), count = h('span', { class: 'small muted', role: 'status' });
-  let limit = 50;
+  const out = h('div', null, h('p', { class: 'muted small' }, 'Pick who, what and the dates, then press Show report. Leave them blank for everything.')), count = h('span', { class: 'small muted', role: 'status' });
+  let limit = 50, shown = false;
   const params = () => new URLSearchParams(Object.entries(logFilter).filter(([, v]) => v));
   async function draw() {
+    shown = true;
     const qs = params(); qs.set('limit', String(limit));
     let r;
     try { r = await get(`/v1/audit?${qs}`); } catch (e) { return fill(out, h('p', { class: 'dp-error' }, e.message)); }
@@ -733,18 +772,19 @@ async function activityPanel(staff) {
         h('td', null, tag(a.status < 300 ? 'good' : [401, 403, 429].includes(a.status) ? 'warn' : 'muted', a.status == null ? 'Done' : resultWord(a.status)))))))) : h('p', { class: 'muted' }, 'Nothing matches these filters.'),
       r.total > r.data.length ? h('div', { style: 'margin-top:8px' }, btn(`Show more (${(r.total - r.data.length).toLocaleString()} older)`, () => { limit += 50; draw(); }, 'ghost')) : null);
   }
-  const apply = () => { logFilter = { who: who.value, staff_id: person.value, kind: kind.value, since: since.value, until: until.value, q: q.value.trim() }; limit = 50; draw(); };
+  const read = () => { logFilter = { who: who.value, staff_id: person.value, kind: kind.value, since: since.value, until: until.value, q: q.value.trim() }; limit = 50; };
+  const apply = () => { read(); if (shown) draw(); };     // once the report is showing, changing a filter updates it
   for (const el of [who, person, kind, since, until]) el.addEventListener('change', apply);
   let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(apply, 300); });
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); read(); draw(); } });
+  const run = btn('Show report', (e) => busy(e.currentTarget, async () => { read(); await draw(); }), 'primary');
   const clear = btn('Clear filters', () => { for (const el of [who, person, kind, since, until, q]) el.value = ''; apply(); }, 'ghost');
-  filterLogTo = (id) => { person.value = id; apply(); document.getElementById('activity-log')?.scrollIntoView({ block: 'start' }); };
-  const csv = btn('Download CSV', (e) => busy(e.currentTarget, () => download(`/v1/audit/export?${params()}`)), 'outline');
-  const p = panel('Activity log', { subtitle: 'Every change, refused attempt and sign-in by staff, API keys and parents. What was typed or sent is never stored (failed sign-ins show the email typed).', action: csv },
+  const csv = btn('Download CSV', (e) => busy(e.currentTarget, () => { read(); return download(`/v1/audit/export?${params()}`); }), 'outline');
+  const p = panel('Activity report', { subtitle: 'Every change, refused attempt and sign-in by staff, API keys and parents. What was typed or sent is never stored (failed sign-ins show the email typed).' },
     h('div', { class: 'row wrap', style: 'gap:8px' }, who, person, kind, h('label', { class: 'row small', style: 'gap:6px' }, 'From', since), h('label', { class: 'row small', style: 'gap:6px' }, 'To', until)),
-    h('div', { class: 'row wrap', style: 'gap:8px' }, q, clear, count), out);
-  p.id = 'activity-log';
-  await draw();
-  return p;
+    h('div', { class: 'row wrap', style: 'gap:8px' }, q, run, csv, clear, count), out);
+  if (runLogNow) { runLogNow = false; await draw(); }
+  fill(box, p);
 }
 
 // =====================================================================================================================

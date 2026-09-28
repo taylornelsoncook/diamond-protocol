@@ -2,6 +2,7 @@ import { newId, token, v, notFound, conflict, badRequest, HttpError, ageOn } fro
 import { getSetting } from './families.js';
 import { getSession, listSessions, book } from './schedule.js';
 import { sendEmail } from './mail.js';
+import { clientLock, lockMessage } from './lockout.js';
 import { textFamily } from './sms.js';
 import { emit } from './events.js';
 
@@ -259,6 +260,8 @@ export async function bookOffer(ctx, tok, body = {}) {
   if (view.status === 'full') throw conflict('Sorry, that spot was just taken. We\'ll let you know next time one opens.');
   const clientId = v.str(body.athlete_id, 'athlete_id');
   if (!o.client_ids.split(',').includes(clientId)) throw notFound('Athlete');
+  const lock = clientLock(ctx, clientId);
+  if (lock) throw new HttpError(402, 'payment_locked', lockMessage(lock));
   if (!view.waiver_signed) throw new HttpError(409, 'waiver_required', 'Sign the waiver in the parent portal first (Family tab), then come back to this link.');
   const trial = o.price_cents != null, price = view.trial?.price_cents;
   if (trial && (o.booked_at || trialInFlight.has(o.id))) throw conflict('This trial offer has already been used. Book another session from the parent portal.');

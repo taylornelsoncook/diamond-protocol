@@ -325,23 +325,39 @@ const remindToast = (r) => {
 
 // ---------- Lesson and course editors ----------
 // The editor asks before throwing away typed text (Escape or Cancel); a click outside it does nothing.
+// Education tabs (engage.js EDU_CATEGORIES). Courses are athlete or parent education; the other tabs are stand-alone posts.
+const EDU_TABS = [['athlete', 'Athlete education'], ['parent', 'Parent education'], ['coach', 'Coach\'s education'], ['blog', 'Blogs'], ['research', 'Research']];
+const CATEGORY_READERS = { athlete: 'Athletes (and their parents with them)', parent: 'Parents, in the parent portal', coach: 'Staff, and anyone on the public page /learn', blog: 'Athletes and parents', research: 'Athletes and parents' };
+const courseCat = (c) => (c?.audience === 'parents' ? 'parent' : 'athlete');
 async function lessonDialog(lesson, courses, preset = {}) {
-  const l = lesson ? await get(`/v1/lessons/${lesson.id}`) : { published: true, course_id: preset.course_id ?? null };
+  const l = lesson ? await get(`/v1/lessons/${lesson.id}`) : { published: true, course_id: preset.course_id ?? null, category: preset.category ?? 'athlete' };
   const f = { title: input({ value: l.title ?? '', maxlength: '160' }), summary: input({ value: l.summary ?? '', maxlength: '300' }), body: textarea(l.body ?? '', { style: 'min-height:200px' }),
     video_url: input({ type: 'url', value: l.video_url ?? '', placeholder: 'https://www.youtube.com/watch?v=…' }), minutes: input({ type: 'number', min: '1', max: '240', inputmode: 'numeric', value: l.minutes ?? '' }),
-    course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, `${c.title}${c.published ? '' : ' (draft)'}`])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }),
+    course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, `${c.title}${c.published ? '' : ' (draft)'}${c.audience === 'parents' ? ' · parents' : ''}`])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }),
+    category: select(EDU_TABS, { value: l.category ?? 'athlete' }),
     quiz: textarea(l.quiz_text ?? '', { style: 'min-height:140px;font-family:var(--font-mono);font-size:14px', placeholder: 'What should your knees do when you land?\n- Cave inward\n* Track over your toes\n- Lock straight' }) };
+  const readers = h('p', { class: 'small muted', style: 'margin:0' });
+  const catField = field('Tab', f.category);
+  const syncCat = () => {
+    const c = courses.find((x) => x.id === f.course_id.value);
+    if (c) f.category.value = courseCat(c);
+    f.category.disabled = !!c;
+    readers.textContent = `Who reads it: ${CATEGORY_READERS[f.category.value]}.${c ? ' A lesson in a course is for the course\'s readers.' : ''}`;
+  };
+  f.course_id.addEventListener('change', syncCat); f.category.addEventListener('change', syncCat); syncCat();
   const snapshot = () => JSON.stringify(Object.values(f).map((x) => (x.type === 'checkbox' ? x.checked : x.value)));
   const start = snapshot();
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const leave = () => { if (snapshot() === start || confirm('Throw away your changes to this lesson?')) d.close(); };
   const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
     try {
-      const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked, quiz_text: f.quiz.value };
+      const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked, quiz_text: f.quiz.value,
+        ...(f.course_id.value ? {} : { category: f.category.value }) };
       if (lesson) await patch(`/v1/lessons/${lesson.id}`, body); else await post('/v1/lessons', body);
       const course = courses.find((c) => c.id === body.course_id);
       d.close();
-      toast(!f.published.checked ? 'Draft saved. Athletes won\'t see it until you publish it.' : course && !course.published ? `Saved. Athletes see it once you publish the course "${course.title}".` : lesson ? 'Lesson saved.' : 'Lesson posted. Athletes can read it now.');
+      const who = { athlete: 'Athletes', parent: 'Parents', coach: 'Staff and the public page', blog: 'Athletes and parents', research: 'Athletes and parents' }[body.category ?? courseCat(course)];
+      toast(!f.published.checked ? `Draft saved. ${who} won't see it until you publish it.` : course && !course.published ? `Saved. It shows once you publish the course "${course.title}".` : lesson ? 'Lesson saved.' : `Posted. ${who} can read it now.`);
       refresh();
     } catch (x) { err.textContent = x.message; }
   }); } },
@@ -349,9 +365,9 @@ async function lessonDialog(lesson, courses, preset = {}) {
     field('Title', f.title), field('Summary', f.summary, 'One line under the title.'),
     field('Lesson text', f.body, 'Plain text. Leave a blank line between paragraphs.'),
     h('div', { class: 'form-grid' }, field('Video link (optional)', f.video_url, 'YouTube, Vimeo or a direct .mp4 link, starting with https://'), field('Minutes to read or watch', f.minutes)),
-    field('Course', f.course_id, 'Moving a lesson into a course puts it last.'),
+    h('div', { class: 'form-grid' }, field('Course', f.course_id, 'Moving a lesson into a course puts it last.'), catField), readers,
     field('Quiz (optional)', f.quiz, 'A question on one line, then its choices below, each starting with - and the right one with *. A blank line between questions. Up to 10. Athletes need 80% to finish the lesson.'),
-    h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, f.published, h('span', null, 'Published: athletes and parents can see it')),
+    h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, f.published, h('span', null, 'Published: its readers can see it')),
     err, h('div', { class: 'row' }, btn(lesson ? 'Save lesson' : 'Post lesson', null, 'primary', { type: 'submit' }), btn('Cancel', leave, 'ghost'))));
   onCancel(d, leave);
   f.title.focus();
@@ -362,9 +378,9 @@ async function saleDialog(courseId) {
   const d = openDialog(h('div', { class: 'stack' }, h('h2', { class: 'dp-panel-title' }, `Sell ${info.title} online`),
     saleForm(put, 'course', info, () => { d.close(); refresh(); }), h('div', null, btn('Close', () => d.close(), 'ghost'))));
 }
-function courseDialog(course) {
+function courseDialog(course, preset = {}) {
   const title = input({ value: course?.title ?? '', maxlength: '160' }), desc = textarea(course?.description ?? '', { rows: '3', style: 'min-height:72px' }), pub = h('input', { type: 'checkbox', checked: course ? course.published : true });
-  const audience = select([['athletes', 'Athletes (and their parents with them)'], ['parents', 'Parents only: shows under For parents in the parent portal']], { value: course?.audience ?? 'athletes' });
+  const audience = select([['athletes', 'Athletes (and their parents with them)'], ['parents', 'Parents only: shows under For parents in the parent portal']], { value: course?.audience ?? preset.audience ?? 'athletes' });
   const ageMin = input({ type: 'number', min: '3', max: '25', inputmode: 'numeric', value: course?.age_min ?? '', placeholder: 'Any' }), ageMax = input({ type: 'number', min: '3', max: '25', inputmode: 'numeric', value: course?.age_max ?? '', placeholder: 'Any' });
   const ages = h('div', { class: 'form-grid', hidden: audience.value !== 'parents' }, field('For parents of athletes aged from', ageMin), field('to', ageMax));
   audience.addEventListener('change', () => { ages.hidden = audience.value !== 'parents'; });
@@ -397,11 +413,11 @@ async function lessonDetail(id, courses) {
   const p = await get(`/v1/lessons/${id}/progress`);
   const manage = canManage(), again = () => lessonDetail(id, courses);
   const person = (x, when) => h('li', null, h('a', { href: `#/clients/${x.id}`, onClick: () => document.getElementById('dialog').close() }, x.name), h('span', { class: 'muted' }, ` · ${when}`));
-  const forParents = p.course?.audience === 'parents';
+  const forParents = p.course?.audience === 'parents' || ['parent', 'coach'].includes(p.category);
   const d = openDialog(h('div', { class: 'stack' },
     h('div', { class: 'row' }, h('h2', { class: 'week-title grow', style: 'color:var(--steel)' }, p.title), btn('Close', () => d.close(), 'ghost')),
     h('p', { class: 'small muted', style: 'margin:0' }, [p.course ? `In ${p.course.title}${p.course.published ? '' : ' (draft course)'}` : 'Stand-alone lesson', p.published ? 'Published' : 'Draft'].join(' · ')),
-    forParents ? h('p', { class: 'small muted' }, 'A lesson for parents: they read it in the parent portal.') : [
+    forParents ? h('p', { class: 'small muted' }, p.category === 'coach' ? 'Coach\'s education: staff read it here, and anyone can on the public page (/learn) once it\'s published.' : 'A lesson for parents: they read it in the parent portal.') : [
       h('div', { class: 'dp-label' }, `Finished (${p.finished.length})`),
       p.finished.length ? h('ul', { class: 'small edu-people' }, p.finished.map((x) => person(x, onDay(x.completed_at)))) : h('p', { class: 'small muted' }, 'Nobody yet.'),
       h('div', { class: 'dp-label' }, `Opened, not finished (${p.opened.length})`),
@@ -418,17 +434,19 @@ async function lessonDetail(id, courses) {
 }
 
 // ---------- Education screen ----------
-// Assigned, Library and Recent tabs. The tab, filters and searches stay in the address (#/education?tab=…), and a change
-// redraws in place without jumping to the top.
+// Tabs: Athlete education, Parent education, Coach's education, Blogs and Research (each its courses and lessons), then
+// Assigned and Recent. The tab, filters and searches stay in the address (#/education?tab=…), and a change redraws in place
+// without jumping to the top.
 export async function viewEducation(main) {
   const q = new URLSearchParams(location.hash.split('?')[1] ?? '');
-  const ui = { tab: ['assigned', 'library', 'recent'].includes(q.get('tab')) ? q.get('tab') : 'assigned', q: q.get('q') ?? '', f: ['open', 'overdue', 'finished', 'all'].includes(q.get('f')) ? q.get('f') : 'open',
+  const TAB_KEYS = [...EDU_TABS.map(([k]) => k), 'assigned', 'recent'];
+  const ui = { tab: TAB_KEYS.includes(q.get('tab')) ? q.get('tab') : q.get('tab') === 'library' ? 'athlete' : 'athlete', q: q.get('q') ?? '', f: ['open', 'overdue', 'finished', 'all'].includes(q.get('f')) ? q.get('f') : 'open',
     lq: q.get('lq') ?? '', lf: ['all', 'published', 'drafts'].includes(q.get('lf')) ? q.get('lf') : 'all' };
   const saveUrl = () => {
     const p = new URLSearchParams();
-    if (ui.tab !== 'assigned') p.set('tab', ui.tab);
+    if (ui.tab !== 'athlete') p.set('tab', ui.tab);
     if (ui.tab === 'assigned') { if (ui.q) p.set('q', ui.q); if (ui.f !== 'open') p.set('f', ui.f); }
-    if (ui.tab === 'library') { if (ui.lq) p.set('lq', ui.lq); if (ui.lf !== 'all') p.set('lf', ui.lf); }
+    if (EDU_TABS.some(([k]) => k === ui.tab)) { if (ui.lq) p.set('lq', ui.lq); if (ui.lf !== 'all') p.set('lf', ui.lf); }
     const s = p.toString();
     history.replaceState(null, '', `#/education${s ? `?${s}` : ''}`);
   };
@@ -439,14 +457,14 @@ export async function viewEducation(main) {
   function draw() {
     const s = edu.stats;
     const tabs = h('div', { class: 'row wrap', role: 'tablist', 'aria-label': 'Education', style: 'gap:8px' },
-      [['assigned', `Assigned (${s.open})`], ['library', 'Library'], ['recent', 'Recent']].map(([k, label]) => btn(label, () => { ui.tab = k; saveUrl(); draw(); }, ui.tab === k ? 'secondary' : 'ghost',
+      [...EDU_TABS.map(([k, label]) => [k, s.by_category?.[k] ? `${label} (${s.by_category[k]})` : label]), ['assigned', `Assigned (${s.open})`], ['recent', 'Recent']].map(([k, label]) => btn(label, () => { ui.tab = k; saveUrl(); draw(); }, ui.tab === k ? 'secondary' : 'ghost',
         { role: 'tab', 'aria-selected': String(ui.tab === k), style: 'min-height:44px' })));
-    fill(main, deps.header('Education', `Lessons and courses for athletes and parents: sleep, fueling, recovery, mindset. ${manage ? 'Assign reading and see who has read it.' : 'View only.'}`,
+    fill(main, deps.header('Education', `Athlete, parent and coach's education, blogs and research. ${manage ? 'Assign reading and see who has read it.' : 'View only.'}`,
       manage ? btn('Assign', () => assignDialog({})) : null),
     h('div', { class: 'cl-stats edu-stats' }, stat('Open assignments', s.open), stat('Overdue', s.overdue, s.overdue ? 'warn-text' : ''), stat('Lessons finished, last 7 days', s.finished_7d),
       stat('Published lessons', s.published, '', s.drafts ? `${plural(s.drafts, 'draft')} not published` : null)),
     tabs, body);
-    ({ assigned: drawAssigned, library: drawLibrary, recent: drawRecent })[ui.tab]();
+    if (ui.tab === 'assigned') drawAssigned(); else if (ui.tab === 'recent') drawRecent(); else drawLibrary(ui.tab);
   }
   eduRedraw = async () => {
     if (!main.isConnected) { eduRedraw = null; return deps.render(); }
@@ -505,8 +523,10 @@ export async function viewEducation(main) {
   }
 
   // ---- Library ----
-  function drawLibrary() {
-    const search = input({ type: 'search', value: ui.lq, placeholder: 'Search lessons and courses', 'aria-label': 'Search the library', autocomplete: 'off' });
+  function drawLibrary(cat) {
+    const hasCourses = cat === 'athlete' || cat === 'parent';
+    const catLabel = EDU_TABS.find(([k]) => k === cat)[1];
+    const search = input({ type: 'search', value: ui.lq, placeholder: hasCourses ? 'Search lessons and courses' : `Search ${catLabel.toLowerCase()}`, 'aria-label': `Search ${catLabel}`, autocomplete: 'off' });
     const filters = h('div', { class: 'row wrap', role: 'group', 'aria-label': 'Show', style: 'gap:6px' });
     const list = h('div', { class: 'stack' });
     const drawFilters = () => fill(filters, [['all', 'All'], ['published', 'Published'], ['drafts', 'Drafts']].map(([k, label]) =>
@@ -516,18 +536,28 @@ export async function viewEducation(main) {
       const hit = (t) => !needle || String(t ?? '').toLowerCase().includes(needle);
       const keep = (l, course) => (ui.lf === 'all' || (ui.lf === 'published' ? l.published && (!course || course.published) : !l.published || (course && !course.published)))
         && (hit(l.title) || hit(l.summary) || (course && hit(course.title)));
-      const courses = edu.courses.map((c) => ({ c, lessons: c.lessons.filter((l) => keep(l, c)) }))
+      const courses = edu.courses.filter((c) => hasCourses && courseCat(c) === cat).map((c) => ({ c, lessons: c.lessons.filter((l) => keep(l, c)) }))
         .filter(({ c, lessons }) => lessons.length || ((ui.lf === 'all' || (ui.lf === 'drafts') === !c.published) && hit(c.title)));
-      const lone = edu.lessons.filter((l) => keep(l, null));
-      const starter = !edu.courses.some((c) => c.audience === 'parents') && manage && !needle ? h('div', { class: 'dp-panel stack', style: 'background:transparent' },
+      const mine = edu.lessons.filter((l) => (l.category ?? 'athlete') === cat);
+      const lone = mine.filter((l) => keep(l, null));
+      const starter = cat === 'parent' && !edu.courses.some((c) => c.audience === 'parents') && manage && !needle ? h('div', { class: 'dp-panel stack', style: 'background:transparent' },
         h('span', { class: 'strong' }, 'Courses for parents'), h('p', { class: 'small muted', style: 'margin:0' }, 'Short courses parents read in the parent portal, shown by their athlete\'s age. Start from three drafts (growth spurts, fueling, recruiting basics), then read, edit and publish them.'),
         h('div', null, btn('Add starter drafts', (e) => busy(e.currentTarget, async () => { toast((await post('/v1/courses/starter-parent')).message); refresh(); }), 'secondary'))) : null;
+      const link = `${location.origin}/learn`;
+      const intro = { athlete: 'Athletes read these in their app, and parents with them in the portal. Assign them to athletes or teams.',
+        parent: 'Parents read these in the parent portal under For parents. Courses can be shown only to parents of athletes a certain age.',
+        coach: 'For your staff, and public: anyone can read published coach\'s education on your website page.',
+        blog: 'Posts athletes see in their app and parents see in the portal, newest first.', research: 'Studies and summaries athletes see in their app and parents see in the portal.' }[cat];
       fill(list,
-        panel('Courses', { subtitle: 'Lessons in order. Athletes see the next lesson when they finish one. Parent courses show in the parent portal.', action: manage ? btn('New course', () => courseDialog(null), 'secondary') : null },
+        h('p', { class: 'small muted', style: 'margin:0' }, intro),
+        cat === 'coach' ? h('div', { class: 'row wrap', style: 'gap:8px' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
+          btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website.')).catch(() => toast('Copy did not work here. Select the link and copy it.', 'warn')), 'ghost'),
+          h('a', { class: 'dp-btn dp-btn--ghost', href: '/learn', target: '_blank', rel: 'noopener' }, 'View')) : null,
+        hasCourses ? panel('Courses', { subtitle: cat === 'parent' ? 'Lessons in order, in the parent portal.' : 'Lessons in order. Athletes see the next lesson when they finish one.', action: manage ? btn('New course', () => courseDialog(null, { audience: cat === 'parent' ? 'parents' : 'athletes' }), 'secondary') : null },
           starter,
-          courses.length ? courses.map(({ c, lessons }) => courseBlock(c, lessons)) : h('p', { class: 'muted' }, edu.courses.length ? 'No courses match.' : 'No courses yet. A course is a short series of lessons, like "Recovery basics".')),
-        panel('Lesson library', { subtitle: 'Stand-alone lessons.', action: manage ? btn('New lesson', () => lessonDialog(null, edu.courses), 'primary') : null },
-          lone.length ? h('div', null, lone.map((l, i, arr) => lessonRow(l, i, arr, null))) : h('p', { class: 'muted' }, edu.lessons.length ? 'No lessons match.' : 'No stand-alone lessons yet.')));
+          courses.length ? courses.map(({ c, lessons }) => courseBlock(c, lessons)) : h('p', { class: 'muted' }, edu.courses.some((c) => courseCat(c) === cat) ? 'No courses match.' : 'No courses yet. A course is a short series of lessons, like "Recovery basics".')) : null,
+        panel(hasCourses ? 'Stand-alone lessons' : catLabel, { subtitle: hasCourses ? 'Lessons that aren\'t in a course.' : null, action: manage ? btn(hasCourses ? 'New lesson' : 'New post', () => lessonDialog(null, edu.courses, { category: cat }), 'primary') : null },
+          lone.length ? h('div', null, lone.map((l, i, arr) => lessonRow(l, i, arr, null))) : h('p', { class: 'muted' }, mine.length ? 'Nothing matches.' : hasCourses ? 'No stand-alone lessons yet.' : 'Nothing posted yet.')));
     };
     let t = null;
     search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { ui.lq = search.value; saveUrl(); drawList(); }, 150); });
@@ -551,7 +581,7 @@ export async function viewEducation(main) {
       shown.length ? h('div', null, shown.map((l) => lessonRow(l, c.lessons.indexOf(l), c.lessons, c))) : h('p', { class: 'muted small' }, c.lessons.length ? 'No lessons match.' : 'No lessons yet.'));
   }
   function lessonRow(l, i, all, course) {
-    const parents = course?.audience === 'parents';
+    const parents = course?.audience === 'parents' || ['parent', 'coach'].includes(l.category);   // nothing athletes finish or get assigned
     return h('div', { class: 'edu-row' },
       course ? h('span', { class: 'edu-n' }, i + 1) : null,
       h('div', { class: 'edu-grow stack-tight' },
@@ -562,7 +592,7 @@ export async function viewEducation(main) {
         course && manage ? [btn('↑', (e) => move(e, course, i, -1), 'ghost', { 'aria-label': `Move ${l.title} up`, disabled: i === 0 }), btn('↓', (e) => move(e, course, i, 1), 'ghost', { 'aria-label': `Move ${l.title} down`, disabled: i === all.length - 1 })] : null,
         manage && !l.published ? btn('Publish', (e) => busy(e.currentTarget, async () => {
           await patch(`/v1/lessons/${l.id}`, { published: true });
-          toast(course && !course.published ? `Published. Athletes see it once you publish the course "${course.title}".` : parents ? 'Published. Parents can read it now.' : 'Published. Athletes can read it now.'); refresh();
+          toast(course && !course.published ? `Published. It shows once you publish the course "${course.title}".` : `Published. ${CATEGORY_READERS[l.category ?? courseCat(course)]} can read it now.`); refresh();
         }), 'secondary') : null,
         manage && l.published && !parents && (!course || course.published) ? btn('Assign', () => assignDialog({ lesson_id: l.id }), 'ghost') : null,
         manage ? btn('Edit', () => lessonDialog(l, edu.courses), 'ghost') : null));

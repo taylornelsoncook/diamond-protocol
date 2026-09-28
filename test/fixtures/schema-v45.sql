@@ -86,8 +86,7 @@ CREATE TABLE IF NOT EXISTS clients (
   archived_at TEXT,                      -- no longer training: hidden from lists, pickers and automatic messages (version 31)
   archived_by TEXT,                      -- who archived them (staff name)
   created_at TEXT NOT NULL,
-  card_exp TEXT,                         -- version 41: the saved card's expiry as YYYY-MM
-  training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote'))   -- version 46: how they train, picked by staff (shown under the name)
+  card_exp TEXT                          -- version 41: the saved card's expiry as YYYY-MM
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -100,9 +99,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   canceled_at TEXT,
   trial_reminded_at TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  pending_plan_id TEXT REFERENCES plans(id),   -- version 46: the plan it moves to at the next renewal ("wait till the end of the membership")
-  pending_set_at TEXT
+  updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS subscriptions_client ON subscriptions(client_id);
 CREATE INDEX IF NOT EXISTS subscriptions_due ON subscriptions(status, current_period_end);
@@ -131,8 +128,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- version 43: automatic charges tried (the first charge and the scheduled retries). Only these count toward canceling
   -- after MAX_ATTEMPTS; a retry the owner or a parent starts
   -- adds to attempts but not here.
-  auto_attempts INTEGER NOT NULL DEFAULT 0,
-  note TEXT                               -- version 46: what a one-off charge was for (the price difference of a plan change)
+  auto_attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS invoices_client ON invoices(client_id);
 -- Version 38: each refund of a membership payment, dated when the money went back. source 'stripe' is a refund made in
@@ -1083,11 +1079,7 @@ CREATE TABLE IF NOT EXISTS lessons (
   published INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  quiz TEXT,                                    -- JSON [{q, choices, answer}]; pass it to finish the lesson (version 24)
-  -- version 46: the Education tab it's under and who reads it: athlete (athletes and their parents), parent (parents in the
-  -- portal), coach (staff and the public /learn page), blog and research (athletes and parents). A lesson in a course
-  -- takes the course's audience (athlete or parent).
-  category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))
+  quiz TEXT                                     -- JSON [{q, choices, answer}]; pass it to finish the lesson (version 24)
 );
 CREATE TABLE IF NOT EXISTS lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,

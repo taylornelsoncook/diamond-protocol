@@ -2,6 +2,20 @@
 
 Everything that needs your identity, your money, your hardware or your decisions. Work top to bottom: the first section has the longest waits, so start it today.
 
+## Next up (updated September 28, 2026)
+
+The app is built: every tab from the earlier version has been brought over, plus the CRM, off-site backups, Stripe webhooks and background job alerts. All of it is on `main` and on staging. Production changes only when you press Manual Deploy. Do these in order:
+
+- [x] **Look over staging.** Sign in as `coach@diamondprotocol.local` / `change-me-now` and click through each tab, especially the new ones: Today (check-in list, birthdays, open spots, trial offers), Leads (the pipeline board and lead pages), Education, Billing and the parent portal (`/parent`, sign in as `maria.lopez@example.com`). Also sign in as `riley@diamondprotocol.local` (coach) and `desk@diamondprotocol.local` (front desk) and confirm you see no dollar amounts. Write down anything that looks wrong.
+- [ ] **Look over your improvements on staging** once they're merged: Settings (exercise library first; background jobs fold away; Activity report runs when you press Show report), client tags (Hybrid athlete, In-facility, Remote client), Billing → Change plan and Refunds, Education's five tabs and the public page `/learn`, and the payment lockout (sign in to the parent portal as `linh.nguyen@example.com`).
+- [ ] **Decide when a declined payment locks a family out:** Billing → Needs attention. The default is after the first retry also declines (about 3 days after the first decline); you can choose the first decline, the second retry, or never.
+- [ ] **Render → diamond-protocol → Environment:** set `TRUST_PROXY` to `2`. (`ADMIN_PASSWORD` is deleted.)
+- [ ] **Off-site backups:** follow DEPLOY.md → Backups (a Cloudflare R2 bucket, then five settings in Render). Save the passphrase in your password manager.
+- [ ] **Press Manual Deploy** on `diamond-protocol`. The database upgrades itself on start (a backup is made first).
+- [ ] **On production:** Staff & security → Check my connection (it should show your own internet address), then Back up now (it should say the backup was sent off-site).
+- [ ] **On production:** add your real coaches and front desk under Staff & security.
+- [ ] **Stripe webhook:** when Stripe is live, add the three new events listed in section 7 (`charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`).
+
 ## 1. Start today (these involve waiting on others)
 
 - [ ] **Business entity and EIN.** Apple requires a legal business (LLC or corporation) for an organization developer account. If you're a sole proprietor, talk to your accountant about forming an LLC first.
@@ -58,19 +72,19 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 
 ## 6. Accounts and domain
 
-- [ ] **Domain name** for the app, for example `app.diamondprotocol.com` (a subdomain of your main site works well).
-- [ ] **Email sending:** create a Resend account (resend.com), verify your domain by adding the DNS records it gives you, then keep the API key handy. Parents can't sign in until email works.
+- [x] **Domain name** for the app, for example `app.diamondprotocol.com` (a subdomain of your main site works well).
+- [x] **Email sending:** create a Resend account (resend.com), verify your domain by adding the DNS records it gives you, then keep the API key handy. Parents can't sign in until email works.
 - [ ] **Stripe live mode:** business verification complete, bank account added, live keys available (`sk_live_...`).
-- [ ] **A private GitHub repository** with the project in it (Claude Code can set this up with you).
-- [ ] **Hosting account** (Render is simplest). It needs a paid plan with a persistent disk.
+- [x] **A private GitHub repository** with the project in it (Claude Code can set this up with you).
+- [x] **Hosting account** (Render is simplest). It needs a paid plan with a persistent disk.
 
 ## 7. Put it online (follow DEPLOY.md, ideally with Claude Code)
 
-- [ ] Deploy with `render.yaml` (or `fly.toml`), one instance with a disk at `/data`.
+- [x] Deploy with `render.yaml` (or `fly.toml`), one instance with a disk at `/data`.
 - [ ] Set the settings DEPLOY.md lists: `PUBLIC_URL`, `BUSINESS_TZ`, Stripe live keys, Resend key and `EMAIL_FROM`, and `ADMIN_EMAIL` + `ADMIN_PASSWORD` for the first start only.
-- [ ] Point your domain at the host and confirm the padlock (HTTPS) shows.
+- [x] Point your domain at the host and confirm the padlock (HTTPS) shows.
 - [ ] Check `https://your-domain/healthz` shows `{"ok":true}`.
-- [ ] **First sign-in:** choose your own password, then remove `ADMIN_PASSWORD` from the host's settings.
+- [x] **First sign-in:** choose your own password, then remove `ADMIN_PASSWORD` from the host's settings.
 - [ ] **Stripe webhook:** add `https://your-domain/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
 - [ ] **Uptime alert:** sign up for a free uptime monitor (UptimeRobot, Better Stack or similar) pointed at `/healthz`, so you get a text or email if the site goes down.
 
@@ -116,11 +130,10 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 
 ## Still on my side (next builds)
 
-Done: family self sign-up, client import from a spreadsheet, terms and privacy with recorded acceptance, data download and deletion requests, and automatic emails (welcome, receipts, trial reminders, failed payments).
+Done: family self sign-up, client import from a spreadsheet, terms and privacy with recorded acceptance, data download and deletion requests, automatic emails, online programs for sale, pay links, every tab from the earlier version, the CRM (pipeline, tasks, timelines, texts and emails to leads), encrypted off-site backups, Stripe webhooks (dashboard refunds, disputes, reissued cards) and alerts when a background job fails.
 
 Next:
-- Online programs for sale in the parent portal.
-- Pay links.
+- Fix anything you find on staging.
 - Sales tax, once you know your rules.
 - Private video uploads for exercise demos.
 - Confirm the OVR import against a real export file.

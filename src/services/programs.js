@@ -1,4 +1,5 @@
 import { newId, v, notFound, badRequest, conflict, HttpError, startOfLocalDay } from '../util.js';
+import { clientLock, athleteLockMessage } from './lockout.js';
 import { emit } from './events.js';
 import { parentFilter } from './performance.js';
 import { readinessToday } from './engage.js';
@@ -379,6 +380,7 @@ export function appAccess(ctx, client) {
   const sub = ctx.db.get(`SELECT status FROM subscriptions WHERE client_id = ? ORDER BY (status = 'canceled'), created_at DESC LIMIT 1`, client.id);
   const status = sub?.status ?? 'none';
   if (client.archived_at) return { status, open: false, message: 'Your profile is on hold. Message your coach to get back in.' };
+  if (clientLock(ctx, client.id)) return { status, open: false, payment_locked: true, message: athleteLockMessage };
   const bought = !ACCESS[status] && ctx.db.get(`SELECT a.id FROM assignments a JOIN purchases b ON b.client_id = a.client_id AND b.item_kind = 'program' AND b.item_id = a.program_id AND b.status = 'active' WHERE a.client_id = ? AND a.active = 1`, client.id);
   if (ACCESS[status] || bought) return { status, open: true };
   return { status, open: false, message: status === 'paused' ? 'Your membership is paused. Message your coach to pick back up.' : 'You don\'t have an active membership. Message your coach to get started.' };

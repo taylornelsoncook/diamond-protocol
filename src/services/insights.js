@@ -126,7 +126,7 @@ export function buildDigest(ctx, asOf = ctx.now()) {
   const zone = getSetting(ctx, 'timezone');
   const when = (x) => new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(x));
   const actions = [];
-  if (deletions) actions.push(`Handle ${deletions === 1 ? 'a family\'s deletion request' : `${deletions} deletion requests`} (Staff & security).`);
+  if (deletions) actions.push(`Handle ${deletions === 1 ? 'a family\'s deletion request' : `${deletions} deletion requests`} (Settings → Data requests).`);
   if (failed.length) actions.push(`Ask ${failed.length === 1 ? `${failed[0].name}'s family` : `${failed.length} families`} to update their card (${money(failed.reduce((t, f) => t + f.amount_cents, 0))} waiting).`);
   if (overdue.length) actions.push(`Follow up on ${overdue.length} overdue school ${overdue.length === 1 ? 'invoice' : 'invoices'} (${money(overdue.reduce((t, i) => t + i.amount_cents, 0))}).`);
   if (risk.length) {

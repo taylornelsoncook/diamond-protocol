@@ -267,8 +267,8 @@ export function countAudit(ctx, q = {}) {
   return ctx.db.get(`SELECT COUNT(*) AS n FROM audit_log ${sql}`, ...p).n;
 }
 // A spreadsheet cell that starts with = + - @ (or a tab or carriage return) could run as a formula when opened, so it
-// gets a leading apostrophe; every cell is quoted.
-export const csvCell = (x) => { let t = x == null ? '' : String(x); if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`; return `"${t.replace(/"/g, '""')}"`; };
+// gets a leading apostrophe (also after leading spaces, which some spreadsheets skip); every cell is quoted.
+export const csvCell = (x) => { let t = x == null ? '' : String(x); if (/^[\s]*[=+\-@]|^[\t\r]/.test(t)) t = `'${t}`; return `"${t.replace(/"/g, '""')}"`; };
 export function auditCsv(ctx, q, describe) {
   const { sql, p } = auditWhere(ctx, q);
   const zone = getSetting(ctx, 'timezone');

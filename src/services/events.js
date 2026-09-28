@@ -155,7 +155,7 @@ function cleanUrl(ctx, raw) {
   const u = new URL(url);
   if (u.username || u.password) throw badRequest('Leave the user name and password out of the URL. Your receiver can check the DP-Signature header instead.');
   if (!allowPrivate(ctx)) {
-    const host = u.hostname.replace(/^\[|\]$/g, '');
+    const host = u.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '');          // "localhost." is localhost
     if (net.isIP(host) ? blockedAddress(host) : LOCAL_NAMES.test(host) || !host.includes('.')) throw badRequest('That URL points inside a private network. Webhooks can only go to a public internet address.');
   }
   return url;
@@ -370,6 +370,8 @@ export async function deliverPending(ctx, { limit = 20 } = {}) {
   ctx.webhooksRunning = true;
   let sent = 0;
   try {
+    // An old signing secret whose grace period is over is forgotten.
+    ctx.db.run('UPDATE webhook_endpoints SET previous_secret = NULL, previous_secret_until = NULL WHERE previous_secret IS NOT NULL AND previous_secret_until <= ?', ctx.now());
     const due = ctx.db.all(
       `SELECT d.id FROM webhook_deliveries d JOIN webhook_endpoints w ON w.id = d.endpoint_id
        WHERE w.active = 1 AND ((d.status = 'pending' AND d.next_attempt_at <= ?) OR (d.status = 'sending' AND d.last_attempt_at < ?))

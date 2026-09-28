@@ -30,6 +30,9 @@ import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { followCampaignLink } from './services/campaigns.js';
 
+// What was typed as the email on the sign-in and forgot-password forms, for the activity log: only if it looks like an
+// email, so a password typed into the wrong box is never stored.
+const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(0, 120); return /^[^\s@]+@[^\s@]+$/.test(t) ? t : t ? '(not an email address)' : null; };
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -118,7 +121,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/public/report') rateLimit(`report:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);
       try { authenticate(ctx, req, route, r, url); }
-      catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: String(r.body?.email ?? '').slice(0, 120), action: 'sign-in', status: e.status, ip }); throw e; }
+      catch (e) { if (route.path === '/auth/login') audit(ctx, { actor_type: 'public', actor_name: typedEmail(r.body), action: 'sign-in', status: e.status, ip }); throw e; }
       // Reads are logged only when they hand out something private: a backup file, the activity log itself as a CSV, or a
       // webhook signing secret.
       const auditable = (req.method !== 'GET' && route.path !== '/stripe/webhook') || (req.method === 'GET' && AUDITED_READS.test(route.path));
@@ -129,7 +132,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       res.on('finish', () => {
         if (!auditable && res.statusCode !== 403) return;
-        const typed = ['/auth/login', '/auth/token', '/auth/forgot'].includes(route.path) ? String(r.body?.email ?? '').slice(0, 120) : route.path === '/auth/reset' ? r.auditName ?? null : null;
+        const typed = ['/auth/login', '/auth/token', '/auth/forgot'].includes(route.path) ? typedEmail(r.body) : route.path === '/auth/reset' ? r.auditName ?? null : null;
         const actor = r.user ? { actor_type: 'staff', actor_id: r.user.id, actor_name: r.user.name, role: r.user.role }
           : r.apiKey ? { actor_type: 'api_key', actor_id: r.apiKey.id, actor_name: r.apiKey.label } : r.guardian ? { actor_type: 'parent', actor_id: r.guardian.id, actor_name: r.guardian.name }
           : { actor_type: 'public', actor_name: typed };

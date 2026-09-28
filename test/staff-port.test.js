@@ -235,6 +235,8 @@ test('forgot password: the same answer for anyone, a link that works once for 30
 test('the activity log filters by who, staff member, kind, dates and words, and exports a formula-safe CSV', async () => {
   resetRateLimits();
   await login('riley.brooks@test.dev', 'nope-wrong-pass');
+  await req('POST', '/auth/login', { email: 'my-secret-password-1', password: 'x' });      // a password typed in the email box
+  assert.ok(!db().all('SELECT actor_name FROM audit_log').some((x) => x.actor_name?.includes('my-secret-password-1')), 'only something that looks like an email is logged');
   const tricky = (await owner('POST', '/v1/staff', { name: '=HYPERLINK("http://evil.example","x")', email: 'tricky@test.dev', role: 'coach' })).body;
   await owner('PATCH', `/v1/staff/${tricky.id}`, { active: false });
 
@@ -264,7 +266,7 @@ test('the activity log filters by who, staff member, kind, dates and words, and 
   assert.ok(!/(^|,)"[=+\-@]/m.test(all), 'no cell starts with a formula character');
   assert.ok(db().get(`SELECT 1 FROM audit_log WHERE action = 'GET /v1/audit/export'`), 'exports are logged');
   const { csvCell } = await import('../src/services/security.js');
-  assert.deepEqual(['=1+1', '+1', '-1', '@SUM(A1)', '\tx', 'plain "quoted"'].map(csvCell), ['"\'=1+1"', '"\'+1"', '"\'-1"', '"\'@SUM(A1)"', '"\'\tx"', '"plain ""quoted"""']);
+  assert.deepEqual(['=1+1', '+1', '-1', '@SUM(A1)', '\tx', '  =1+1', 'plain "quoted"'].map(csvCell), ['"\'=1+1"', '"\'+1"', '"\'-1"', '"\'@SUM(A1)"', '"\'\tx"', '"\'  =1+1"', '"plain ""quoted"""']);
   // No one-time password or other secret is ever in the log.
   assert.ok(!db().all('SELECT * FROM audit_log').some((a) => JSON.stringify(a).includes(tricky.temporary_password)));
 });

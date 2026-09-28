@@ -128,7 +128,7 @@ test('private network addresses are refused as webhook URLs, when saved and when
   const prod = createApp({ testMode: false, jobs: false, publicUrl: 'https://app.example.org' });
   try {
     const { createEndpoint } = await import('../src/services/events.js');
-    for (const url of ['https://127.0.0.1/x', 'https://localhost/x', 'https://[::1]/x', 'https://10.0.0.5/x', 'https://169.254.169.254/latest/meta-data', 'https://printer.local/x', 'https://intranet/x', 'https://[::ffff:10.0.0.1]/x', 'http://example.com/x']) {
+    for (const url of ['https://127.0.0.1/x', 'https://localhost/x', 'https://[::1]/x', 'https://10.0.0.5/x', 'https://169.254.169.254/latest/meta-data', 'https://printer.local/x', 'https://intranet/x', 'https://[::ffff:10.0.0.1]/x', 'https://localhost./x', 'https://db.internal./x', 'http://example.com/x']) {
       assert.throws(() => createEndpoint(prod.ctx, { url, events: ['*'] }), /private network|https:\/\//, url);
     }
     assert.throws(() => createEndpoint(prod.ctx, { url: 'https://user:pass@hooks.example.com/x', events: ['*'] }), /user name and password/);

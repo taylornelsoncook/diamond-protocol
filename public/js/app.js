@@ -585,7 +585,7 @@ async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
   const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
-  const [en, testLib, owed, products, badgeLib, notesList, att] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`)]);
+  const [en, testLib, owed, products, badgeLib, notesList, att, famList] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   tzName = settings.timezone;
   const fam = c.family;
@@ -791,6 +791,25 @@ async function viewClient(main, id) {
           h('div', { class: 'grow' }, field('Parent name', gName)), field('Email', gEmail), field('Phone', gPhone), h('div', { style: 'align-self:flex-end' }, btn('Add parent', null, 'secondary', { type: 'submit' })))))
     : null;
 
+  // No family yet (a team roster athlete, or an adult): add a parent, or put them in a family you already have, so the
+  // parents see them in the portal. Owners and coaches only.
+  const noFamilyPanel = !fam && famList && !c.archived_at ? (() => {
+    const np = { name: input({ autocomplete: 'off' }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }) };
+    const pick = famList.data.length ? select([['', 'Choose a family'], ...famList.data.map((x) => [x.id, `${x.name}${x.guardians ? ` (${x.guardians})` : ''}`])], { 'aria-label': 'Family' }) : null;
+    return panel('Family', { subtitle: `${first} isn't in a family yet. Add a parent so they can sign in to the parent portal and see ${first}'s results and team news.` },
+      h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        if (!np.name.value.trim() || !np.email.value.trim()) throw new Error('Enter the parent\'s name and email.');
+        await post(`/v1/clients/${id}/family`, { parent: { name: np.name.value, email: np.email.value, phone: np.phone.value || undefined } });
+        toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/parent with ${np.email.value.trim()}.`); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:160px' }, field('Parent name', np.name)), field('Email', np.email), field('Phone', np.phone), btn('Add parent', null, 'secondary', { type: 'submit' })),
+      pick ? h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+        if (!pick.value) throw new Error('Choose the family first.');
+        const name = pick.selectedOptions[0].textContent;
+        if (!confirm(`Put ${first} in ${name}? Its parents will see ${first}'s profile, results and messages in the portal.`)) return;
+        await post(`/v1/clients/${id}/family`, { family_id: pick.value }); toast(`${first} is in the family now.`); render();
+      }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('Or a family you already have', pick)), btn('Put in this family', null, 'ghost', { type: 'submit' })) : null);
+  })() : null;
+
   // Upcoming sessions: book one from here (next two weeks) and cancel (credits back, card payments refunded, waitlist moves up).
   const lateHours = Number(settings.late_cancel_hours ?? 12);
   const cancelBooking = (b) => {
@@ -885,7 +904,7 @@ async function viewClient(main, id) {
     contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
     c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
-  const left = [[sectionId(familyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks]];
+  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks]];
   const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
@@ -2262,7 +2281,7 @@ async function viewTeam(main, id) {
     h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Paste a team list'),
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, () => pasteRoster(c, names)); } },
       names, h('div', null, btn('Check the list', null, 'secondary', { type: 'submit' })),
-      h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing is saved until the whole list checks out. Each new player gets an Athlete ID. Names already on the roster are skipped, and names that match a client you already have can be linked instead. Rows copied from a spreadsheet work too.')));
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing is saved until the whole list checks out. Each new player gets a client profile and an Athlete ID (a team-only client: no membership). An Athlete ID on a line puts that client on the team. Names already on the roster are skipped, and names that match a client you already have can be linked instead. Rows copied from a spreadsheet work too.')));
   const rosterPanel = h('div', { id: 'tm-roster' }, panel(`Roster · ${c.roster.length}`, { subtitle: [c.team_rate != null ? `Team attendance ${pctText(c.team_rate)}` : 'Check athletes in from each team session. Attendance counts from the day each athlete joins.', last ? `last session ${tzFmt(last.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}: ${last.here} of ${Math.max(last.here, last.roster)} here` : null].filter(Boolean).join(' · '), action: bars },
     h('div', { class: 'row wrap', style: 'gap:8px' }, find ? h('div', { class: 'grow', style: 'min-width:160px' }, find) : null, sort ? h('div', { style: 'min-width:180px' }, sort) : null,
       btn('Add existing client', () => addExistingDialog(c), 'secondary'),

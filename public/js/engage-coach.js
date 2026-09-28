@@ -163,7 +163,7 @@ export async function teamPanel(contractId) {
   const manage = canManage();
   const kind = select(GOAL_KINDS.filter(([k]) => k !== 'custom'), { value: 'sessions', 'aria-label': 'What the goal counts' }), per = input({ type: 'number', min: '1', max: '14', value: '2' }), title = input({ placeholder: 'Make 2 team sessions this week' });
   const body = textarea('', { rows: '3', maxlength: '2000', placeholder: 'Write to the whole team', 'aria-label': 'Message to the team' });
-  return panel('Goals, messages & reading', { subtitle: t.athletes.length ? `Reaches ${plural(t.athletes.length, 'athlete')} on this roster who ${t.athletes.length === 1 ? 'has' : 'have'} the app${t.unlinked ? ` (${t.unlinked} more ${t.unlinked === 1 ? 'isn\'t' : 'aren\'t'} set up as clients yet)` : ''}.` : 'No one on this roster has the athlete app yet. Link roster athletes to their client profiles to reach them.',
+  return panel('Goals, messages & reading', { subtitle: t.athletes.length ? `Reaches ${plural(t.athletes.length, 'athlete')} on this roster who ${t.athletes.length === 1 ? 'has' : 'have'} the app.` : 'No one is on this roster yet. Add athletes on the Roster panel to reach them.',
     action: manage ? btn('Assign lesson', () => assignDialog({ team: { id: contractId, name: t.team.name } }), 'secondary') : null },
     h('div', { class: 'dp-label' }, 'Weekly team goals'),
     t.goals.length ? t.goals.map((g) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${g.title} · ${g.kind_label}, ${g.target} a week`),

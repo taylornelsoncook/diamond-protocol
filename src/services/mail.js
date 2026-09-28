@@ -83,7 +83,7 @@ export async function sendEmail(ctx, { to, subject, text, sensitive = false, sec
 }
 // Emails that carry a way in (a sign-in or sign-up code, a password, a reset link, an athlete's app link, a pay, invoice,
 // receipt, report or offer link, a personal unsubscribe link) go only to the address they were written for.
-const PRIVATE = /(sign-in code|sign-up code|one-time password|[?&#](token|reset|share)=|\/(pay|here|spot|receipt|invoice|r|c|cal)\/[\w-]{8,}|\/app\?)/i;
+const PRIVATE = /(sign-in code|sign-up code|one-time password|[?&#](token|reset|share)=|\/(pay|here|spot|receipt|invoice|r|c|u|cal)\/[\w-]{8,}|\/app\?)/i;
 export const privateContent = (subject, text) => PRIVATE.test(subject) || PRIVATE.test(text);
 
 // The outbox: status (sent, failed, held, not_sent), q (address, subject or text), newest first, with counts by status.

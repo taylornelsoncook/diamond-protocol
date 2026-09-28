@@ -394,6 +394,7 @@ async function textsTab(box, ctx) {
       fill(box, panel('Texts', { subtitle: 'Every text sent to parents, and their replies. Parents turn texts on in the parent portal and can reply STOP at any time.' },
         h('p', { class: 'small', style: `margin:0;color:${r.mode === 'test' ? 'var(--amber)' : 'var(--green-bright)'}` }, modeText[r.mode] ?? ''),
         r.mode === 'test' ? null : h('div', { class: 'row wrap', style: 'gap:8px' }, phone, btn('Send test text', (e) => busy(e.currentTarget, async () => { await post('/v1/texts/test', { to: phone.value }); toast('Test text sent.'); draw(); ctx.refreshStrip(); }), 'secondary')),
+        r.mode === 'test' ? pretendReply(() => { draw(); ctx.refreshStrip(); }) : null,
         chips, h('div', { class: 'row wrap' }, search), list));
     }
     const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
@@ -409,6 +410,18 @@ async function textsTab(box, ctx) {
       r.data.length >= f.limit ? h('div', { style: 'margin-top:8px' }, btn('Show more', () => { f.limit += 30; draw(); }, 'ghost')) : null);
   }
   await draw();
+}
+
+// Test mode only: pretend a family or lead texted in (a reply, STOP, START or HELP) to see what happens.
+function pretendReply(done) {
+  const from = input({ type: 'tel', placeholder: '(512) 555-0100', 'aria-label': 'Their phone number', style: 'max-width:200px' });
+  const body = input({ placeholder: 'What they texted, like STOP or "Tuesday works"', 'aria-label': 'What they texted', style: 'flex:1 1 220px' });
+  return h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Pretend someone texted back (test mode)'),
+    h('form', { class: 'row wrap', style: 'gap:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const r = await post('/v1/texts/simulate', { from: from.value, body: body.value });
+      toast(r.stopped ? `${phoneText(r.from)} is stopped now: no more texts to that number.` : r.reply ? `Answered automatically: "${r.reply}"` : 'Reply saved. It shows on their lead and the owner was emailed.');
+      body.value = ''; done();
+    }); } }, from, body, btn('Add reply', null, 'secondary', { type: 'submit' })));
 }
 
 // ---- Exercise video ----

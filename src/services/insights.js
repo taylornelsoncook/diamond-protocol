@@ -106,7 +106,7 @@ export function buildDigest(ctx, asOf = ctx.now()) {
   const members = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE status IN ('active','trialing','past_due')`).n;
   const joined = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE created_at >= ?`, iso(-7)).n;
   const left = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE status = 'canceled' AND canceled_at >= ?`, iso(-7)).n;
-  const leads = ctx.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN status IN ('signed_up','evaluation','member') THEN 1 ELSE 0 END) AS won FROM leads WHERE created_at >= ?`, iso(-7));
+  const leads = ctx.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN status IN ('signed_up','evaluation','trial','member') THEN 1 ELSE 0 END) AS won FROM leads WHERE created_at >= ?`, iso(-7));
   const untouched = ctx.db.get(`SELECT COUNT(*) AS n FROM leads WHERE status = 'new' AND created_at < ?`, iso(-1)).n;   // nobody has reached out yet
   const failed = ctx.db.all(`SELECT c.name, i.amount_cents FROM invoices i JOIN clients c ON c.id = i.client_id JOIN subscriptions s ON s.id = i.subscription_id WHERE i.status = 'failed' AND s.status = 'past_due'`);
   const overdue = teamSummary(ctx).overdue;

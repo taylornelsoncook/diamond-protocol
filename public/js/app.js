@@ -404,7 +404,7 @@ function pulseBlock(p) {
     pulseTile('Booked, next 7 days', p.bookings_next_7_days, 'Spots booked on the schedule', { href: '#/schedule' }),
     pulseTile('Workouts logged', p.workouts.last_7_days, `Last 7 days · ${p.workouts.athletes} ${p.workouts.athletes === 1 ? 'athlete' : 'athletes'}`, { tone: p.workouts.last_7_days ? 'good' : null, href: '#/programs' }),
     pulseTile('Most active members', p.most_active.length ? p.most_active[0].name.split(' ')[0] : '–', p.most_active.length ? `30 days · ${p.most_active.map((a) => `${a.name.split(' ')[0]} ${a.sessions + a.workouts}`).join(' · ')}` : 'No sessions or workouts in 30 days', { href: p.most_active.length ? `#/clients/${p.most_active[0].client_id}` : '#/clients' }),
-    pulseTile('Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
+    pulseTile(state.user.role === 'coach' ? 'Your leads this month' : 'Leads this month', p.leads.this_month, `${p.leads.won} signed up · ${p.leads.open} still open`, { href: '#/leads' }));
   return h('section', { class: 'pulse', 'aria-label': 'How the business is doing' }, ...tiles);
 }
 
@@ -526,7 +526,9 @@ const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['signed_up', '
 const LEAD_SOURCE = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event', referral: 'Referral' };
 async function viewLeads(main) {
   const filter = new URLSearchParams(location.hash.split('?')[1] ?? '').get('status') ?? '';
-  const [res, settings, reviews] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), get('/v1/review-requests')]);
+  // Owner decision: owners and front desk work every lead; a coach sees only the leads the owner gave them.
+  const coachView = state.user.role === 'coach';
+  const [res, settings, reviews, coachList] = await Promise.all([get(`/v1/leads${filter ? `?status=${filter}` : ''}`), get('/v1/settings'), coachView ? null : get('/v1/review-requests'), isOwner() ? get('/v1/coaches') : null]);
   const chips = h('div', { class: 'row wrap', style: 'gap:8px' }, [['', 'All open'], ...LEAD_STAGES].map(([k, label]) => h('a', { class: `dp-btn dp-btn--${filter === k ? 'secondary' : 'ghost'}`, href: `#/leads${k ? `?status=${k}` : ''}` }, k ? `${label} (${res.counts[k] ?? 0})` : label)));
   const rows = (filter ? res.data : res.data.filter((l) => !['member', 'lost'].includes(l.status))).map((l) => {
     const stage = select(LEAD_STAGES, { value: l.status, 'aria-label': 'Stage' });
@@ -535,7 +537,7 @@ async function viewLeads(main) {
     return h('details', { class: 'list-item', style: 'display:block' },
       h('summary', { style: 'cursor:pointer;list-style:none' }, h('div', { class: 'row wrap', style: 'gap:12px' },
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.parent_name, l.athlete_name ? h('span', { class: 'muted' }, ` for ${l.athlete_name}${l.athlete_age ? `, ${l.athlete_age}` : ''}`) : null),
-          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null].filter(Boolean).join(' · '))),
+          h('span', { class: 'small muted' }, [LEAD_SOURCE[l.source], l.sport, ago(l.created_at), l.follow_up === 'on' ? `next follow-up ${date(l.next_follow_up_at)}` : null, !coachView && l.coach_name ? `given to ${l.coach_name}` : null].filter(Boolean).join(' · '))),
         h('span', { class: `dp-badge dp-badge--${{ new: 'warn', contacted: 'neutral', signed_up: 'good', evaluation: 'good', member: 'good', lost: 'muted' }[l.status]}` }, LEAD_STAGES.find(([k]) => k === l.status)?.[1] ?? l.status))),
       h('div', { class: 'stack', style: 'margin-top:12px' },
         h('p', { class: 'small', style: 'margin:0' }, [l.email, phoneText(l.phone), l.texts_ok ? 'OK to text' : null].filter(Boolean).join(' · ')),
@@ -546,8 +548,19 @@ async function viewLeads(main) {
           btn('Save', save({ status: stage.value, notes: notes.value }, 'Saved.'), 'primary'),
           ['new', 'contacted'].includes(l.status) ? btn('I reached out', save({ contacted: true, notes: notes.value }, 'Marked as contacted.'), 'outline') : null,
           l.follow_up === 'on' ? btn('Stop automatic follow-up', save({ follow_up: false }, 'Automatic follow-up stopped.'), 'ghost') : null,
-          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null)));
+          isOwner() ? btn('Delete', (e) => { if (confirm(`Delete ${l.parent_name}'s details?`)) busy(e.currentTarget, async () => { await api('DELETE', `/v1/leads/${l.id}`); toast('Deleted.'); render(); }); }, 'ghost') : null),
+        isOwner() ? (() => {
+          const giveTo = select([['', 'Nobody (you and the front desk)'], ...coachList.data.filter((c) => c.role === 'coach').map((c) => [c.id, c.name]),
+            ...(l.coach_id && !coachList.data.some((c) => c.id === l.coach_id && c.role === 'coach') ? [[l.coach_id, l.coach_name ?? 'Former coach']] : [])], { value: l.coach_id ?? '', 'aria-label': `Give ${l.parent_name}'s lead to a coach`, style: 'width:auto;min-width:200px' });
+          giveTo.addEventListener('change', () => busy(giveTo, async () => { await patch(`/v1/leads/${l.id}`, { coach_id: giveTo.value || null }); toast(giveTo.value ? `${giveTo.selectedOptions[0].textContent} can see and work this lead now. They were emailed.` : 'Taken back: only you and the front desk see it.'); render(); }));
+          return h('div', { class: 'row wrap', style: 'gap:8px' }, h('span', { class: 'small muted' }, 'Give to a coach:'), giveTo);
+        })() : null));
   });
+  if (coachView) {
+    fill(main, header('Leads', 'Families the owner asked you to follow up with. Only you, the owner and the front desk see them.'),
+      chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No leads for you right now. When the owner gives you one, it shows here and you get an email.')));
+    return;
+  }
   const f = { parent_name: input(), email: input({ type: 'email' }), phone: input({ type: 'tel' }), athlete_name: input(), athlete_age: input({ type: 'number', inputmode: 'numeric' }), sport: input(), message: h('textarea', { class: 'dp-input' }) };
   const source = select([['phone', 'Phone call'], ['walk_in', 'Walk-in'], ['event', 'Event'], ['referral', 'Referral'], ['manual', 'Other']]);
   const followUp = h('input', { type: 'checkbox', checked: true });

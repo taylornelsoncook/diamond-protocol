@@ -37,7 +37,8 @@ const FRONT_DESK = [
 // Front desk may look at clients, but sharing a progress report outside the business is for owners and coaches.
 const FRONT_DESK_DENY = [/^\/v1\/clients\/:id\/(report-links|report\/email)(\/|$)/];
 // Coaches take payments but never see the business's takings.
-const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
+// Owner decision: coaches work only the leads the owner gives them (leads.js filters them), so they don't add or delete leads.
+const COACH_DENY = [['GET', /^\/v1\/sales\/takings$/], ['DELETE', /^\/v1\/families\/:id$/], ['DELETE', /^\/v1\/leads\/:id$/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/settings$/], ['PUT', /^\/v1\/integrations\//], ['DELETE', /^\/v1\/integrations\//]];
 
 export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;
@@ -65,6 +66,8 @@ export function hideMoney(role, method, path, out) {
 }
 // Activity that is only about money (memberships, refunds, school contracts) stays with the owner.
 export const OWNER_EVENTS = /^(invoice|subscription|team_invoice|team_contract|sale\.refunded)/;
+// Leads in the activity feed name families who asked about training: coaches see only the leads given to them, so none here.
+export const LEAD_EVENTS = /^lead\./;
 export const roleName = (r) => ({ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[r] ?? r);
 
 // ---------- Staff ----------

@@ -19,6 +19,7 @@ import { createUser } from './services/access.js';
 import * as engage from './services/engage.js';
 import * as inventory from './services/inventory.js';
 import * as shop from './services/shop.js';
+import * as leads from './services/leads.js';
 import { addDays, newId } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -337,6 +338,14 @@ for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], 
     ctx.db.run('UPDATE workout_logs SET rpe = ?, started_at = ?, notes = ? WHERE id = ?', [6, 7, 5, 8, 7, 6][i % 6], new Date(Date.parse(l.completed_at) - (38 + i * 3) * 60000).toISOString(),
       i === avaLogs.length - 1 ? 'Lunges felt easier today.' : null, l.id);
   });
+}
+
+// Two families who asked about training: one the owner gave to Riley (coaches see only the leads given to them), one not.
+{
+  const quiet = { ...ctx, publicUrl: '' };
+  const given = await leads.addLead(quiet, { parent_name: 'Tanya Brooks', email: 'tanya.brooks@example.com', athlete_name: 'Jalen Brooks', athlete_age: 13, sport: 'Football', source: 'event', follow_up: false }, { name: 'Sample data' });
+  ctx.db.run('UPDATE leads SET coach_id = ? WHERE id = ?', riley.id, given.id);
+  await leads.addLead(quiet, { parent_name: 'Omar Haddad', phone: '(512) 555-0142', athlete_name: 'Sami Haddad', athlete_age: 11, sport: 'Soccer', source: 'phone', follow_up: false }, { name: 'Sample data' });
 }
 
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);

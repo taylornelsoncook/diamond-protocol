@@ -5,7 +5,7 @@ import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
-import { OWNER_EVENTS, can } from './security.js';
+import { OWNER_EVENTS, LEAD_EVENTS, can } from './security.js';
 import { clientCounts } from './clients.js';
 import { moneyIn, todayBounds, lateChargeAlerts } from './billing.js';
 
@@ -103,7 +103,7 @@ function collected(ctx, from, to) {
   const m = moneyIn(ctx, from, to);
   return { total: m.total, sales: m.sales, members: m.members, teams: m.teams, refunded: m.refunded_cents };
 }
-export function pulse(ctx, { role = 'owner' } = {}) {
+export function pulse(ctx, { role = 'owner', userId = null } = {}) {
   const db = ctx.db, now = ctx.now(), { thisStart, prevStart, sameDayLastMonth, dayStart } = monthStarts(ctx);
   const dayEnd = addDays(dayStart, 1), weekAgo = addDays(now, -7), weekAhead = addDays(now, 7);
   const counts = clientCounts(ctx);
@@ -130,7 +130,8 @@ export function pulse(ctx, { role = 'owner' } = {}) {
       (SELECT COUNT(*) FROM workout_logs l WHERE l.client_id = c.id AND l.completed_at >= ?) AS workouts
     FROM clients c WHERE c.archived_at IS NULL AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.client_id = c.id AND s.status IN ('active','trialing','past_due'))
     ORDER BY sessions + workouts DESC, c.name LIMIT 3`, monthAgo, monthAgo).filter((r) => r.sessions + r.workouts > 0);
-  const leads = db.get(`SELECT COUNT(*) AS n, SUM(converted_at IS NOT NULL) AS won, SUM(status IN ('new','contacted','evaluation')) AS open FROM leads WHERE created_at >= ?`, thisStart);
+  // A coach counts only the leads the owner gave them (owner decision: coaches see only those).
+  const leads = db.get(`SELECT COUNT(*) AS n, SUM(converted_at IS NOT NULL) AS won, SUM(status IN ('new','contacted','evaluation')) AS open FROM leads WHERE created_at >= ?${role === 'coach' ? ' AND coach_id = ?' : ''}`, thisStart, ...(role === 'coach' ? [userId ?? ''] : []));
   const out = {
     clients: { active: counts.current, trialing: counts.trialing, new_this_month: newClients, canceled_this_month: canceled },
     new_members: { this_month: newMembers.n, trialing: newMembers.trialing ?? 0 },
@@ -168,7 +169,7 @@ export function pulse(ctx, { role = 'owner' } = {}) {
 }
 
 // ---- Dashboard ----
-export function dashboard(ctx, { role = 'owner' } = {}) {
+export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
   const db = ctx.db;
   // Client counts come from the same place as the client list's filters (clients.js#clientCounts), so "Active clients"
   // here is exactly what the list's Active filter shows: not archived, paid up or on a free trial.
@@ -205,7 +206,10 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   const overdueTeams = teams.overdue.map((r) => ({ kind: 'team_invoice_overdue', ...r }));
   const q = queueCount(ctx);
   const waiting = q.n ? [{ kind: 'results_waiting', count: q.n, groups: q.groups, can_link: can(role, 'GET', '/v1/queue') }] : [];   // front desk can't open the queue
-  const fresh = db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ?`, weekAgo);
+  // A coach hears only about leads the owner gave them.
+  const fresh = role === 'coach'
+    ? db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ? AND coach_id = ?`, weekAgo, userId ?? '')
+    : db.get(`SELECT COUNT(*) AS n, MAX(parent_name) AS name FROM leads WHERE status IN ('new','contacted') AND created_at >= ?`, weekAgo);
   if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
   const replies = unreadReplies(ctx);
   if (replies.length) waiting.unshift({ kind: 'replies', count: replies.length, items: replies.slice(0, 4).map((x) => ({ client_id: x.client_id, name: x.name, author: x.author, count: x.count, last_at: x.last_at })) });
@@ -213,12 +217,12 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   if (low.length) waiting.push({ kind: 'low_stock', count: low.length, items: low.slice(0, 4).map((x) => ({ name: x.name, on_hand: x.on_hand })) });
   if (role !== 'owner') {
     // Money stays with the owner: coaches and front desk see the work, not the revenue.
-    return { pulse: pulse(ctx, { role }), today_sales: null, metrics: { active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, archived_clients: counts.archived, workouts_last_7_days: workouts }, teams: null,
+    return { pulse: pulse(ctx, { role, userId }), today_sales: null, metrics: { active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, archived_clients: counts.archived, workouts_last_7_days: workouts }, teams: null,
       attention: [...waiting, ...quiet, ...(role === 'front_desk' ? pendingSales.map(({ amount_cents, ...x }) => x) : pendingSales)],
-      activity: listEvents(ctx, { limit: 12 }).filter((e) => !OWNER_EVENTS.test(e.type)) };
+      activity: listEvents(ctx, { limit: 12 }).filter((e) => !OWNER_EVENTS.test(e.type) && !(role === 'coach' && LEAD_EVENTS.test(e.type))) };
   }
   return {
-    pulse: pulse(ctx, { role }),
+    pulse: pulse(ctx, { role, userId }),
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
     today_sales: (() => { const t = todayBounds(ctx), m = moneyIn(ctx, t.from, t.to); return { cents: m.sales, n: m.sales_count }; })(),
     metrics: { mrr_cents: active.mrr, active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, archived_clients: counts.archived, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },

@@ -6,7 +6,7 @@ import { getSetting } from './families.js';
 import { listSessions, isBirthday } from './schedule.js';
 import { recentFlags } from './engage.js';
 import { atRisk, activeSnoozes } from './insights.js';
-import { OWNER_EVENTS } from './security.js';
+import { OWNER_EVENTS, LEAD_EVENTS } from './security.js';
 
 const BIRTHDAY_DAYS = 7;
 
@@ -114,6 +114,7 @@ export function activity(ctx, { role = 'owner', filter, before, limit = 20 } = {
     for (const r of rows) {
       last = { at: r.created_at, row: r.row };
       if (role !== 'owner' && OWNER_EVENTS.test(r.type)) continue;
+      if (role === 'coach' && LEAD_EVENTS.test(r.type)) continue;           // coaches see only the leads given to them (Leads)
       if (re && !re.test(r.type)) continue;
       out.push({ id: r.id, type: r.type, data: JSON.parse(r.data), created_at: r.created_at });
       if (out.length === n) break;

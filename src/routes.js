@@ -72,7 +72,7 @@ export const routes = [
   ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { ...r.user, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate } })],
 
   // Dashboard
-  ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner' })],
+  ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner', userId: r.user?.id ?? null })],
   ['GET', '/v1/today', 'any', 'Dashboard', 'Today\'s floor: sessions with their state (live, next, done, later), everyone booked today for one-tap check-in (still to arrive first) with door alerts (medical notes, no waiver, unpaid, a rough daily check-in, birthday), birthdays in the next 7 days, daily check-ins that need a look, tomorrow in one line, and (owners and coaches) athletes to check on with what was followed up lately.', (ctx, r) => today.todayBoard(ctx, { role: r.user?.role ?? 'owner' })],
   ['POST', '/v1/today/follow-ups', 'any', 'Dashboard', 'Follow up on a Today item (owners and coaches): key (risk:<client id> or flag:<client id>:<date>), action (reached_out, noted or reviewed), optional days (1 to 60; default 7 for athletes, through the next day for check-ins) and note. Hides it from everyone\'s Today until then and says who did it.', (ctx, r) => insights.snoozeFollowUp(ctx, r.body, r.user ?? { name: r.apiKey?.label ?? 'API' }), 201],
   ['DELETE', '/v1/today/follow-ups/:id', 'any', 'Dashboard', 'Undo a follow-up: the item comes back on Today.', (ctx, r) => insights.unsnooze(ctx, r.params.id)],
@@ -81,7 +81,7 @@ export const routes = [
   ['GET', '/v1/digest', 'any', 'Dashboard', 'This week\'s owner summary: money in, members, athletes to check on, open spots and suggested actions. Includes the email text.', (ctx) => { const d = insights.buildDigest(ctx); return { ...d, text: insights.digestText(ctx, d) }; }],
   ['POST', '/v1/digest/send', 'session', 'Dashboard', 'Email this week\'s summary to the owners now.', (ctx) => insights.sendDigest(ctx)],
   ['GET', '/v1/events', 'any', 'Dashboard', 'Recent events, newest first. Filter with ?type=.', (ctx, r) => list(events.listEvents(ctx, { type: r.query.type, limit: v.int(r.query.limit ?? 50, 'limit', { min: 1, max: 200 }) })
-    .filter((e) => !r.user || r.user.role === 'owner' || !security.OWNER_EVENTS.test(e.type)))],
+    .filter((e) => !r.user || r.user.role === 'owner' || (!security.OWNER_EVENTS.test(e.type) && !(r.user.role === 'coach' && security.LEAD_EVENTS.test(e.type)))))],
 
   // Clients
   ['GET', '/v1/clients', 'any', 'Clients', 'List clients. Filter with ?q= (name, athlete ID, email, family, school, or a parent\'s name, email or phone; phone numbers also match on digits) and ?status= (a membership status, none, current for active clients: paid up or on a free trial, team for athletes on a school or club team with no membership, or no_waiver for families who haven\'t signed the current waiver). ?sort= name (default), last_seen (longest since last seen first) or newest. Each client has flags (medical, no_waiver, no_card), pinned_notes, teams and last_seen_at (latest check-in or workout). Archived clients are left out: ?archived=true lists only them, ?archived=all everyone. archived_matches says how many archived clients the search would have found.', (ctx, r) => {
@@ -307,10 +307,10 @@ export const routes = [
   }],
 
   // Leads
-  ['GET', '/v1/leads', 'any', 'Leads', 'Families who asked about training, newest first, with counts by stage. Filter with ?status= (new, contacted, signed_up, evaluation, member, lost).', (ctx, r) => leads.listLeads(ctx, { status: r.query.status ? v.oneOf(r.query.status, 'status', leads.STAGES) : undefined })],
+  ['GET', '/v1/leads', 'any', 'Leads', 'Families who asked about training, newest first, with counts by stage and the coach each was given to (coach_id, coach_name). Filter with ?status= (new, contacted, signed_up, evaluation, member, lost). Owners and front desk see every lead; a coach sees only the leads the owner gave them.', (ctx, r) => leads.listLeads(ctx, { status: r.query.status ? v.oneOf(r.query.status, 'status', leads.STAGES) : undefined, user: r.user })],
   ['POST', '/v1/leads', 'any', 'Leads', 'Add a lead: parent_name, email and/or phone, athlete_name, athlete_age, sport, message, source (manual, phone, walk_in, event, referral), texts_ok, follow_up=false to skip the automatic emails.', (ctx, r) => leads.addLead(ctx, r.body, r.user ?? r.apiKey), 201],
-  ['GET', '/v1/leads/:id', 'any', 'Leads', 'A lead.', (ctx, r) => leads.getLead(ctx, r.params.id)],
-  ['PATCH', '/v1/leads/:id', 'any', 'Leads', 'Update a lead: status, notes, lost_reason, contacted=true (you reached out), follow_up=false (stop automatic follow-up).', (ctx, r) => leads.updateLead(ctx, r.params.id, r.body)],
+  ['GET', '/v1/leads/:id', 'any', 'Leads', 'A lead (a coach: only one the owner gave them).', (ctx, r) => leads.getLead(ctx, r.params.id, { user: r.user })],
+  ['PATCH', '/v1/leads/:id', 'any', 'Leads', 'Update a lead: status, notes, lost_reason, contacted=true (you reached out), follow_up=false (stop automatic follow-up), coach_id (owner only: give the lead to a coach, who is emailed; null takes it back). A coach can update only a lead given to them.', (ctx, r) => leads.updateLead(ctx, r.params.id, r.body, { user: r.user })],
   ['DELETE', '/v1/leads/:id', 'session', 'Leads', 'Delete a lead and its details (owner only).', (ctx, r) => leads.deleteLead(ctx, r.params.id)],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations

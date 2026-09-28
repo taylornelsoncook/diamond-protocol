@@ -156,18 +156,35 @@ export async function runFollowUps(ctx, { asOf = ctx.now(), only = null } = {}) 
 }
 
 // ---------- Staff ----------
-export function listLeads(ctx, { status } = {}) {
-  const rows = ctx.db.all(`SELECT l.*, f.name AS family_name FROM leads l LEFT JOIN families f ON f.id = l.family_id ${status ? 'WHERE l.status = ?' : ''} ORDER BY CASE l.status WHEN 'new' THEN 0 WHEN 'contacted' THEN 1 ELSE 2 END, l.created_at DESC LIMIT 500`, ...(status ? [status] : []));
+// Owner decision: owners and front desk work every lead; a coach sees, and works, only the leads the owner gave them
+// (coach_id), and can't hand a lead to anyone. Coaches don't add leads (security.js). user is the signed-in staff member
+// (none for an API key, which works like the owner).
+const isCoach = (user) => user?.role === 'coach';
+function leadScope(user) { return isCoach(user) ? { sql: 'l.coach_id = ?', args: [user.id] } : { sql: '1 = 1', args: [] }; }
+export function listLeads(ctx, { status, user } = {}) {
+  const scope = leadScope(user);
+  const rows = ctx.db.all(`SELECT l.*, f.name AS family_name, u.name AS coach_name FROM leads l LEFT JOIN families f ON f.id = l.family_id LEFT JOIN users u ON u.id = l.coach_id
+    WHERE ${scope.sql} ${status ? 'AND l.status = ?' : ''} ORDER BY CASE l.status WHEN 'new' THEN 0 WHEN 'contacted' THEN 1 ELSE 2 END, l.created_at DESC LIMIT 500`, ...scope.args, ...(status ? [status] : []));
   const counts = Object.fromEntries(STAGES.map((s) => [s, 0]));
-  for (const r of ctx.db.all('SELECT status, COUNT(*) AS n FROM leads GROUP BY status')) counts[r.status] = r.n;
+  for (const r of ctx.db.all(`SELECT l.status, COUNT(*) AS n FROM leads l WHERE ${scope.sql} GROUP BY l.status`, ...scope.args)) counts[r.status] = r.n;
   const since = new Date(Date.now() - 30 * 86400000).toISOString();
-  const month = ctx.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN status IN ('signed_up','evaluation','member') THEN 1 ELSE 0 END) AS won FROM leads WHERE created_at >= ?`, since);
-  return { data: rows.map((r) => ({ ...r, texts_ok: !!r.texts_ok, follow_up: r.next_follow_up_at ? 'on' : 'done' })), counts, last_30_days: { leads: month.n, signed_up: month.won ?? 0 } };
+  const month = ctx.db.get(`SELECT COUNT(*) AS n, SUM(CASE WHEN l.status IN ('signed_up','evaluation','member') THEN 1 ELSE 0 END) AS won FROM leads l WHERE ${scope.sql} AND l.created_at >= ?`, ...scope.args, since);
+  return { data: rows.map((r) => ({ ...r, texts_ok: !!r.texts_ok, follow_up: r.next_follow_up_at ? 'on' : 'done' })), counts, last_30_days: { leads: month.n, signed_up: month.won ?? 0 },
+    only_assigned: isCoach(user) };
 }
-export function getLead(ctx, id) {
-  const l = ctx.db.get('SELECT * FROM leads WHERE id = ?', id);
-  if (!l) throw notFound('Lead');
+export function getLead(ctx, id, { user } = {}) {
+  const l = ctx.db.get('SELECT l.*, u.name AS coach_name FROM leads l LEFT JOIN users u ON u.id = l.coach_id WHERE l.id = ?', id);
+  if (!l || (isCoach(user) && l.coach_id !== user.id)) throw notFound('Lead');      // a coach can't tell other leads exist
   return { ...l, texts_ok: !!l.texts_ok };
+}
+// Who a lead can go to: an active owner or coach (front desk accounts don't take leads).
+function leadCoach(ctx, x) {
+  if (x === null || x === '') return null;
+  const u = ctx.db.get('SELECT id, name, role, active FROM users WHERE id = ?', v.str(x, 'coach_id', { max: 64 }));
+  if (!u) throw notFound('Coach');
+  if (!u.active) throw badRequest(`${u.name}'s account is turned off. Pick an active coach.`);
+  if (u.role === 'front_desk') throw badRequest(`${u.name} is front desk. Give the lead to a coach, or leave it with the front desk and you.`);
+  return u;
 }
 export async function addLead(ctx, body, actor) {
   const data = leadInput(body, { needContact: false });
@@ -178,8 +195,20 @@ export async function addLead(ctx, body, actor) {
   else await runFollowUps(ctx, { only: id });
   return getLead(ctx, id);
 }
-export function updateLead(ctx, id, body) {
-  const l = getLead(ctx, id);
+export async function updateLead(ctx, id, body, { user } = {}) {
+  const l = getLead(ctx, id, { user });
+  if (body.coach_id !== undefined) {
+    if (user && user.role !== 'owner') throw new HttpError(403, 'forbidden', 'Only the owner gives a lead to a coach.');
+    const coach = leadCoach(ctx, body.coach_id);
+    if ((coach?.id ?? null) !== (l.coach_id ?? null)) {
+      ctx.db.run('UPDATE leads SET coach_id = ?, updated_at = ? WHERE id = ?', coach?.id ?? null, ctx.now(), id);
+      emit(ctx, 'lead.updated', { lead_id: id, coach_id: coach?.id ?? null, coach_name: coach?.name ?? null });
+      if (coach && coach.role === 'coach' && coach.id !== user?.id) {
+        const c = ctx.db.get('SELECT email FROM users WHERE id = ?', coach.id);
+        await sendEmail(ctx, { to: c.email, subject: `A lead for you: ${l.parent_name}`, text: `Hi ${first(coach.name)},\n\n${l.parent_name}${l.athlete_name ? ` (for ${l.athlete_name}${l.athlete_age ? `, ${l.athlete_age}` : ''})` : ''} asked about training, and it's yours to follow up. See it under Leads: ${base(ctx)}/#/leads\n\n${biz(ctx)}` }).catch(() => {});
+      }
+    }
+  }
   if (body.status !== undefined) {
     const status = v.oneOf(body.status, 'status', STAGES);
     ctx.db.run('UPDATE leads SET status = ?, next_follow_up_at = CASE WHEN ? IN (\'new\',\'contacted\') THEN next_follow_up_at ELSE NULL END, lost_reason = ?, updated_at = ? WHERE id = ?',
@@ -189,7 +218,7 @@ export function updateLead(ctx, id, body) {
   if (body.notes !== undefined) ctx.db.run('UPDATE leads SET notes = ?, updated_at = ? WHERE id = ?', v.str(body.notes, 'notes', { max: 4000, optional: true }) ?? null, ctx.now(), id);
   if (body.follow_up === false) ctx.db.run('UPDATE leads SET next_follow_up_at = NULL, updated_at = ? WHERE id = ?', ctx.now(), id);
   if (body.contacted === true) ctx.db.run(`UPDATE leads SET status = CASE WHEN status = 'new' THEN 'contacted' ELSE status END, last_contacted_at = ?, updated_at = ? WHERE id = ?`, ctx.now(), ctx.now(), id);
-  return getLead(ctx, l.id);
+  return getLead(ctx, l.id, { user });
 }
 export function deleteLead(ctx, id) {
   getLead(ctx, id);

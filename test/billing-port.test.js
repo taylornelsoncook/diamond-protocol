@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/server.js';
 import { createUser } from '../src/services/access.js';
 import { handleStripeEvent, takings } from '../src/services/commerce.js';
-import { reconcileInvoicePayment, runBilling } from '../src/services/billing.js';
+import { reconcileInvoicePayment, runBilling, attemptCharge } from '../src/services/billing.js';
+import { deleteFamilyData } from '../src/services/legal.js';
 import { completePayLink } from '../src/services/paylinks.js';
 import { resetRateLimits } from '../src/services/security.js';
 import { addDays } from '../src/util.js';
@@ -411,4 +412,24 @@ test('coaches and front desk can\'t reach any of Billing', async () => {
 test('the billing clock still renews and retries', async () => {
   const r = await runBilling(app.ctx, addDays(now(), 40));
   assert.ok(r.renewed > 0);
+});
+
+test('a retry picked from a list skips an invoice voided or paid by hand since, instead of stopping the run', async () => {
+  const m = await member({ declining: true });
+  await owner('POST', `/v1/invoices/${m.inv.id}/void`, {});
+  const out = await attemptCharge(app.ctx, m.inv.id, now(), { onlyIfFailed: true });
+  assert.equal(out.status, 'void');
+  assert.equal(out.attempts, 1, 'nothing was charged');
+  const r = await runBilling(app.ctx, addDays(now(), 4));
+  assert.ok(r.retried >= 0);
+});
+
+test('deleting a family keeps membership amounts and refunds but drops the reasons typed about them', async () => {
+  const m = await member();
+  await owner('POST', `/v1/invoices/${m.inv.id}/refund`, { amount_cents: 1000, reason: 'Their grandma Rosa was ill' });
+  const fam = db().get('SELECT name FROM families WHERE id = ?', m.family_id).name;
+  await deleteFamilyData(app.ctx, m.family_id, { confirm: fam });
+  const inv = invoice(m.inv.id);
+  assert.deepEqual([inv.amount_cents, inv.refunded_cents], [15000, 1000]);
+  assert.deepEqual(db().all('SELECT amount_cents, reason FROM invoice_refunds WHERE invoice_id = ?', m.inv.id).map((r) => ({ ...r })), [{ amount_cents: 1000, reason: null }]);
 });

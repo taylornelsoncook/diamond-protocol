@@ -185,9 +185,11 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
 // A retry the owner asks for (manual) never cancels the membership when it declines, and leaves the next automatic retry
 // where it was; only the automatic retries count down to canceling.
 export function attemptCharge(ctx, invoiceId, asOf = ctx.now(), opts = {}) { return withLock(`invoice:${invoiceId}`, () => chargeInvoice(ctx, invoiceId, asOf, opts)); }
-async function chargeInvoice(ctx, invoiceId, asOf, { manual = false } = {}) {
+async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFailed = false } = {}) {
   const inv = getInvoice(ctx, invoiceId);
   if (inv.status === 'paid') return inv;
+  // A retry picked from a list: the invoice may have been voided or paid by hand since it was listed. Nothing to do.
+  if (onlyIfFailed && inv.status !== 'failed') return inv;
   if (inv.status === 'void') throw conflict('This invoice was voided and cannot be charged.');
   const client = payerFor(ctx, inv.client_id);          // a family's card pays for its athletes
   const attempts = inv.attempts + 1;
@@ -239,7 +241,7 @@ export async function retryWithNewCard(ctx, { familyId, clientId }) {
   const rows = ctx.db.all(`SELECT i.id FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN clients c ON c.id = i.client_id
     WHERE i.status = 'failed' AND i.next_retry_at IS NOT NULL AND s.status = 'past_due' AND ${familyId ? 'c.family_id = ?' : 'c.id = ?'}`, familyId ?? clientId);
   const out = [];
-  for (const r of rows) out.push(await attemptCharge(ctx, r.id));
+  for (const r of rows) out.push(await attemptCharge(ctx, r.id, ctx.now(), { onlyIfFailed: true }));
   return out;
 }
 
@@ -317,7 +319,9 @@ export async function runBilling(ctx, asOf = ctx.now()) {
        AND NOT EXISTS (SELECT 1 FROM pay_links p WHERE p.invoice_id = i.id AND p.status = 'open' AND p.checkout_started_at > ?)`, asOf, new Date(Date.parse(asOf) - 3600000).toISOString());   // a parent is paying by link right now
   for (const r of retries) {
     summary.retried++;
-    const inv = await attemptCharge(ctx, r.id, asOf);
+    const tries = getInvoice(ctx, r.id).attempts;
+    const inv = await attemptCharge(ctx, r.id, asOf, { onlyIfFailed: true });
+    if (inv.attempts === tries) { summary.retried--; continue; }      // voided or paid another way since it was listed
     count(inv);
     if (inv.status === 'void') summary.canceled++;
   }
@@ -589,7 +593,8 @@ export async function retryDeclined(ctx) {
     const inv = getInvoice(ctx, r.id);
     if (inv.status !== 'failed') continue;                  // paid by link or card update while we worked down the list
     const before = getSubscription(ctx, inv.subscription_id).status;
-    const after = await attemptCharge(ctx, r.id, ctx.now(), { manual: true });
+    const after = await attemptCharge(ctx, r.id, ctx.now(), { manual: true, onlyIfFailed: true });
+    if (after.status !== 'paid' && after.status !== 'failed') continue;   // voided while we worked down the list
     out.tried++;
     if (after.status === 'paid') {
       out.paid++; out.paid_cents += after.amount_cents;

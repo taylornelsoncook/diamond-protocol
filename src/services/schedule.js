@@ -1,7 +1,7 @@
-import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localDate, weekdayOf, addDaysToDate, ageOn, isTime, isDate, withLock } from '../util.js';
+import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localDate, weekdayOf, addDaysToDate, ageOn, isTime, isDate, withLock, sha256 } from '../util.js';
 import { emit } from './events.js';
 import { getSetting, payerFor } from './families.js';
-import { notifyFamily } from './mail.js';
+import { notifyFamily, sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
 import * as commerce from './commerce.js';
 import { teamRosterFor } from './teams.js';
@@ -14,6 +14,13 @@ const first = (name) => name.split(' ')[0];
 const isMember = (ctx, clientId) => !!ctx.db.get(`SELECT id FROM subscriptions WHERE client_id = ? AND status IN ('active','trialing','past_due') LIMIT 1`, clientId);
 const notArchived = (c, isCoach) => { if (c.archived_at) throw conflict(isCoach ? `${first(c.name)} is archived. Restore them on their client page first.` : `${first(c.name)}'s account is archived. Ask your coach to reopen it.`); };
 const when = (ctx, iso) => new Intl.DateTimeFormat('en-US', { timeZone: tz(ctx), weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+// '17:30': the wall-clock time of an instant in the business time zone (daylight saving included).
+const localTime = (iso, zone) => new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+const minutesOf = (x) => Math.round((Date.parse(x.ends_at) - Date.parse(x.starts_at)) / 60000);
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const andList = (xs) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+// The class day a session of a series stands for: where it was first scheduled, even if it moved to another day since.
+const slotDay = (x, zone) => x.slot_date ?? localDate(x.starts_at, zone);
 
 // ---------- Coaches ----------
 // Staff who can lead a session: active owners and coaches. Front desk accounts don't lead sessions.
@@ -120,33 +127,149 @@ export function listSeries(ctx, { kind, includeInactive = false } = {}) {
     FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.kind, s.start_date, s.start_time`, ...p)
     .map((s) => ({ ...s, weekdays: JSON.parse(s.weekdays), active: !!s.active }));
 }
-// Changes apply to future sessions. Archiving cancels future sessions (credits returned, families emailed).
-// A new coach takes over the upcoming sessions, except ones given to a sub.
-export async function updateSeries(ctx, id, body) {
+// Edit a class, camp or clinic. Every upcoming session follows what changed: a new time or place (booked families get
+// one email listing every session of theirs that moved), length, spots, ages, price, coach and name. A session changed on
+// its own (a sub coach, a moved time, more spots) keeps that change: a field is carried to a session only while the
+// session still has the class's old value. Sessions on days the class no longer runs are canceled (credits back, paid
+// drop-ins refunded, one email per family); new days are added. Sessions never move into the past, spots never drop
+// below what a session already has booked, and a time another session of the class already has is refused.
+// active=false archives the class: every future session is canceled. A new coach takes over the upcoming sessions,
+// except ones given to a sub. One edit at a time per class, and never while the schedule job is adding its sessions.
+export function updateSeries(ctx, id, body) { return withLock(`series:${id}`, () => updateSeriesNow(ctx, id, body)); }
+const SESSION_COPIES = ['name', 'capacity', 'age_min', 'age_max', 'drop_in_cents', 'location_id', 'coach_id'];
+async function updateSeriesNow(ctx, id, body) {
   const cur = getSeries(ctx, id);
-  const s = seriesInput(body, { ...cur, weekdays: undefined });
-  if (body.coach_id !== undefined) {
-    const coachId = coachInput(ctx, body.coach_id);
-    if (coachId !== (cur.coach_id ?? null)) {
-      ctx.db.run('UPDATE class_series SET coach_id = ? WHERE id = ?', coachId, id);
-      ctx.db.run(`UPDATE class_sessions SET coach_id = ? WHERE series_id = ? AND starts_at > ? AND status = 'scheduled' AND coach_id IS ?`, coachId, id, ctx.now(), cur.coach_id ?? null);
+  const zone = tz(ctx), now = ctx.now();
+  const s = seriesInput({ ...body, kind: undefined }, { ...cur, weekdays: JSON.stringify(cur.weekdays) });   // the type never changes
+  if (s.location_id !== cur.location_id) commerce.getLocation(ctx, s.location_id);
+  const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : cur.coach_id ?? null;
+  if (body.active === false) {
+    ctx.db.run('UPDATE class_series SET active = 0 WHERE id = ?', id);
+    const canceled = await cancelMany(ctx, cur, ctx.db.all(`SELECT * FROM class_sessions WHERE series_id = ? AND status = 'scheduled' AND starts_at > ? ORDER BY starts_at`, id, now), 'This class is no longer on the schedule.');
+    return { ...getSeries(ctx, id), changes: { updated: 0, moved: 0, canceled: canceled.sessions, added: 0, families_emailed: canceled.families, promoted: 0 } };
+  }
+  if (!cur.active && body.active !== true) throw conflict('This class is archived. Send active: true to put it back on the schedule.');
+  const after = { ...s, coach_id: coachId };
+  const days = JSON.parse(s.weekdays);
+  const fits = (d) => days.includes(weekdayOf(d)) && d >= s.start_date && (!s.end_date || d <= s.end_date);
+  const futureSql = `SELECT x.*, (SELECT COUNT(*) FROM bookings b WHERE b.session_id = x.id AND b.status IN ('booked','attended')) AS booked_count
+    FROM class_sessions x WHERE x.series_id = ? AND x.status = 'scheduled' AND x.starts_at > ? ORDER BY x.starts_at`;
+  // Check and save while holding every upcoming session's booking lock: a card payment for the last spot that is still
+  // going through finishes first, so its booking is counted before spots are lowered.
+  const ids = ctx.db.all(futureSql, id, now).map((x) => x.id);
+  const { plan, drop } = await withSessionLocks(ids, () => {
+    const future = ctx.db.all(futureSql, id, now);
+    const keep = future.filter((x) => fits(slotDay(x, zone))), drop = future.filter((x) => !fits(slotDay(x, zone)));
+    // What each kept session becomes: only the class fields that changed, only where the session still had the old value.
+    const plan = keep.map((x) => {
+      const next = {};
+      for (const k of SESSION_COPIES) if ((after[k] ?? null) !== (cur[k] ?? null) && (x[k] ?? null) === (cur[k] ?? null)) next[k] = after[k] ?? null;
+      let starts = x.starts_at, dur = minutesOf(x);
+      if (s.start_time !== cur.start_time && localTime(x.starts_at, zone) === cur.start_time) {
+        const moved = zonedToUtc(localDate(x.starts_at, zone), s.start_time, zone);
+        if (moved > now) starts = moved;                                     // never move a session into the past
+      }
+      if (s.duration_min !== cur.duration_min && dur === cur.duration_min) dur = s.duration_min;
+      if (starts !== x.starts_at) next.starts_at = starts;
+      if (starts !== x.starts_at || dur !== minutesOf(x)) next.ends_at = new Date(Date.parse(starts) + dur * 60000).toISOString();
+      if (next.starts_at && !x.slot_date) next.slot_date = localDate(x.starts_at, zone);
+      return { x, next };
+    });
+    const planned = new Set();
+    for (const { x, next } of plan) {
+      // Never squeeze anyone out: spots can't go below what an upcoming session already has booked.
+      if (next.capacity != null && x.booked_count > next.capacity) throw badRequest(`${plural(x.booked_count, 'athlete')} ${x.booked_count === 1 ? 'is' : 'are'} booked on ${when(ctx, x.starts_at)}. Set spots to ${x.booked_count} or more, or remove someone first.`);
+      const at = next.starts_at ?? x.starts_at;
+      if (planned.has(at) || (next.starts_at && ctx.db.get('SELECT 1 FROM class_sessions WHERE series_id = ? AND starts_at = ? AND id != ?', id, at, x.id))) throw conflict(`${cur.name} already has a session at ${when(ctx, at)}. Move or cancel it first.`);
+      planned.add(at);
     }
-  }
-  const weekdays = body.weekdays !== undefined ? s.weekdays : JSON.stringify(cur.weekdays);
-  ctx.db.run(`UPDATE class_series SET name = ?, description = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, end_date = ?, weekdays = ?, active = ? WHERE id = ?`,
-    s.name, s.description, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.end_date, weekdays, body.active !== undefined ? !!body.active : cur.active, id);
-  ctx.db.run(`UPDATE class_sessions SET name = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ? WHERE series_id = ? AND starts_at > ? AND status = 'scheduled'`,
-    s.name, s.capacity, s.age_min, s.age_max, s.drop_in_cents, id, ctx.now());
-  if (body.active === false || (s.end_date && s.end_date !== cur.end_date)) {
-    const cutoff = body.active === false ? ctx.now() : zonedToUtc(addDaysToDate(s.end_date, 1), '00:00', tz(ctx));
-    for (const row of ctx.db.all(`SELECT id FROM class_sessions WHERE series_id = ? AND status = 'scheduled' AND starts_at > ?`, id, cutoff)) await cancelSession(ctx, row.id, { reason: 'This class is no longer on the schedule.' });
-  }
-  if (body.active !== false) await generateSessions(ctx, id);
-  return getSeries(ctx, id);
+    ctx.db.tx(() => {
+      ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1 WHERE id = ?`,
+        s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, id);
+      for (const { x, next } of plan) {
+        const keys = Object.keys(next);
+        if (keys.length) ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), x.id);
+      }
+    });
+    return { plan, drop };
+  });
+  const moves = plan.filter(({ next }) => next.starts_at || next.location_id).map(({ x, next }) => ({ before: x, after: { ...x, ...next } }));
+  const families = notifyMoved(ctx, moves);
+  let promoted = 0;
+  for (const { x, next } of plan) if (next.capacity > x.capacity) promoted += await promoteWaitlist(ctx, x.id);
+  const canceled = await cancelMany(ctx, { ...cur, name: s.name }, drop, `${s.name} no longer runs on that day.`);
+  const added = await generateNow(ctx, id);
+  return { ...getSeries(ctx, id), changes: { updated: plan.filter(({ next }) => Object.keys(next).length).length, moved: moves.length, canceled: canceled.sessions, added, families_emailed: families + canceled.families, promoted } };
 }
 
+// Hold several sessions' booking locks at once, taken in the same order every time. Nothing else holds more than one.
+// fn must not take any of these locks again (they aren't reentrant).
+function withSessionLocks(ids, fn) {
+  const keys = [...new Set(ids)].sort();
+  const step = (i) => (i === keys.length ? fn() : withLock(`book:${keys[i]}`, () => step(i + 1)));
+  return step(0);
+}
+// Families of the athletes booked into these sessions (and waitlisted, if asked): one entry per family, with their
+// athletes' first names and which of the sessions they're in.
+function bookedFamilies(ctx, sessionIds, { waitlist = false } = {}) {
+  const out = new Map();
+  for (const sid of sessionIds) {
+    for (const b of ctx.db.all(`SELECT c.name, c.family_id FROM bookings b JOIN clients c ON c.id = b.client_id WHERE b.session_id = ? AND b.status IN (${waitlist ? "'booked','attended','waitlisted'" : "'booked','attended'"}) AND c.family_id IS NOT NULL AND c.archived_at IS NULL ORDER BY b.created_at`, sid)) {
+      if (!out.has(b.family_id)) out.set(b.family_id, { names: new Set(), sessions: new Set() });
+      out.get(b.family_id).names.add(first(b.name));
+      out.get(b.family_id).sessions.add(sid);
+    }
+  }
+  return out;
+}
+// Tell booked families their sessions moved (new day, time or place): one email per family however many of their
+// sessions changed. moves: [{ before, after }]. Returns how many families were emailed.
+function notifyMoved(ctx, moves) {
+  if (!moves.length) return 0;
+  const byId = new Map(moves.map((m) => [m.after.id, m]));
+  const place = (m) => (m.before.location_id !== m.after.location_id ? ` at ${ctx.db.get('SELECT name FROM locations WHERE id = ?', m.after.location_id)?.name ?? 'a new place'}` : '');
+  const line = (m) => (m.before.starts_at !== m.after.starts_at ? `${m.after.name} on ${when(ctx, m.before.starts_at)} has moved to ${when(ctx, m.after.starts_at)}${place(m)}.` : `${m.after.name} on ${when(ctx, m.after.starts_at)} has moved${place(m)}.`);
+  const fams = bookedFamilies(ctx, moves.map((m) => m.after.id));
+  for (const [fam, f] of fams) {
+    const lines = [...f.sessions].map((sid) => line(byId.get(sid)));
+    const who = [...f.names];
+    notifyFamily(ctx, fam, `New time: ${moves[0].after.name}`, `${lines.length === 1 ? lines[0] : `These sessions have moved:\n${lines.map((l) => `- ${l}`).join('\n')}\n`} ${andList(who)} ${who.length > 1 ? 'are' : 'is'} still booked. If the new time doesn't work, cancel from the parent portal.`);
+  }
+  return fams.size;
+}
+// Cancel several sessions of one class (days it no longer runs, or the whole class archived): credits back, paid drop-ins
+// refunded, and one email (and text) per family listing every session of theirs, instead of one per session. A session
+// nobody was booked on (no bookings, team check-ins or open-spot offers) is removed instead, like team sessions after a
+// shorter contract, so putting the day back (or the class back on the schedule) schedules it again.
+async function cancelMany(ctx, series, sessions, reason) {
+  const byFamily = new Map();
+  for (const x of sessions) {
+    if (await withLock(`book:${x.id}`, () => removeIfUnused(ctx, x.id))) continue;
+    const r = await cancelSessionNow(ctx, x.id, { reason, notify: false });
+    for (const b of r.released) {
+      if (!b.family_id) continue;
+      if (!byFamily.has(b.family_id)) byFamily.set(b.family_id, []);
+      byFamily.get(b.family_id).push(`${when(ctx, r.session.starts_at)}: ${releaseWords(b)}`);
+    }
+  }
+  for (const [fam, lines] of byFamily) {
+    notifyFamily(ctx, fam, `Canceled: ${series.name}${lines.length > 1 ? ` (${lines.length} sessions)` : ''}`, `${reason} ${lines.length === 1 ? 'This session is canceled' : 'These sessions are canceled'}:\n${lines.map((l) => `- ${l}`).join('\n')}`);
+    textFamily(ctx, fam, 'canceled', `${series.name}: ${lines.length === 1 ? '1 session is' : `${lines.length} sessions are`} canceled. Details are in your email.`);
+  }
+  return { sessions: sessions.length, families: byFamily.size };
+}
+function removeIfUnused(ctx, id) {
+  const used = ctx.db.get(`SELECT (SELECT COUNT(*) FROM bookings WHERE session_id = ?) + (SELECT COUNT(*) FROM team_attendance WHERE session_id = ?) + (SELECT COUNT(*) FROM spot_offers WHERE session_id = ?) AS n`, id, id, id).n;
+  if (used) return false;
+  return ctx.db.run(`DELETE FROM class_sessions WHERE id = ? AND status = 'scheduled'`, id).changes > 0;
+}
+const releaseWords = (b) => `${first(b.name)}'s ${b.coverage === 'credit' && b.status === 'booked' ? 'session credit has been returned' : b.coverage === 'paid' && b.status === 'booked' ? 'payment has been refunded' : 'spot has been released'}.`;
+
 // Create the individual sessions for a series up to the scheduling horizon, and book enrolled athletes into new ones.
-export async function generateSessions(ctx, seriesId) {
+// At most one session per class day: a day that already has one (moved to another time or day, or canceled) gets no
+// second one, so changing a class's time after today's session, or moving one session, never doubles a day.
+export function generateSessions(ctx, seriesId) { return withLock(`series:${seriesId}`, () => generateNow(ctx, seriesId)); }
+async function generateNow(ctx, seriesId) {
   const s = ctx.db.get('SELECT * FROM class_series WHERE id = ?', seriesId);
   if (!s || !s.active) return 0;
   const zone = tz(ctx);
@@ -154,14 +277,16 @@ export async function generateSessions(ctx, seriesId) {
   const horizon = addDaysToDate(today, HORIZON_DAYS);
   const days = JSON.parse(s.weekdays);
   const last = s.end_date && s.end_date < horizon ? s.end_date : horizon;
+  const taken = new Set(ctx.db.all('SELECT slot_date, starts_at FROM class_sessions WHERE series_id = ? AND (slot_date >= ? OR starts_at >= ?)', s.id, addDaysToDate(today, -1), zonedToUtc(addDaysToDate(today, -8), '00:00', zone))
+    .map((x) => slotDay(x, zone)));
   let made = 0;
   for (let d = s.start_date > today ? s.start_date : today; d <= last; d = addDaysToDate(d, 1)) {
-    if (!days.includes(weekdayOf(d))) continue;
+    if (!days.includes(weekdayOf(d)) || taken.has(d)) continue;
     const starts = zonedToUtc(d, s.start_time, zone);
     if (starts <= ctx.now()) continue;
-    const r = ctx.db.run(`INSERT OR IGNORE INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, status, created_at)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
-      newId('cls'), s.id, s.name, s.kind, s.location_id, starts, new Date(Date.parse(starts) + s.duration_min * 60000).toISOString(), s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.coach_id ?? null, ctx.now());
+    const r = ctx.db.run(`INSERT OR IGNORE INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, slot_date, status, created_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+      newId('cls'), s.id, s.name, s.kind, s.location_id, starts, new Date(Date.parse(starts) + s.duration_min * 60000).toISOString(), s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.coach_id ?? null, d, ctx.now());
     if (r.changes) {
       made++;
       const sessionId = ctx.db.get('SELECT id FROM class_sessions WHERE series_id = ? AND starts_at = ?', s.id, starts).id;
@@ -177,6 +302,7 @@ export async function extendSchedule(ctx) {
 }
 
 // ---------- Sessions ----------
+// A one-off session (a makeup, a one-time clinic): not part of a class. staff_note is for staff only.
 export async function createSession(ctx, body) {
   const kind = v.oneOf(body.kind ?? 'group', 'kind', ['group', 'clinic', 'team', 'evaluation', 'private']);
   const loc = commerce.getLocation(ctx, v.str(body.location_id, 'location_id'));
@@ -186,21 +312,96 @@ export async function createSession(ctx, body) {
   const dur = v.int(body.duration_min ?? 60, 'duration_min', { min: 10, max: 600 });
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   const id = newId('cls');
-  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, status, created_at)
-              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, staff_note, status, created_at)
+              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
     id, v.str(body.name, 'name', { max: 80 }), kind, loc.id, starts, new Date(Date.parse(starts) + dur * 60000).toISOString(),
     v.int(body.capacity ?? (kind === 'private' ? 1 : 12), 'capacity', { min: 1, max: 500 }),
     v.int(body.age_min, 'age_min', { min: 3, max: 99, optional: true }), v.int(body.age_max, 'age_max', { min: 3, max: 99, optional: true }),
-    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, ctx.now());
+    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, v.str(body.staff_note, 'staff_note', { max: 500, optional: true }), ctx.now());
   return getSession(ctx, id);
 }
-// Change one session: coach_id sets who leads it (a sub for this day; null leaves it with nobody).
-export function updateSession(ctx, id, body) {
+// Change one session: coach_id (a sub for this day; null leaves it with nobody), name, date and start_time, duration_min,
+// capacity (never below who is booked; more spots move the waitlist up), location_id and staff_note. Only real changes
+// count: nothing changed is refused. A new time or place emails booked families (one email each) unless notify is false.
+// A class session moved to another day still stands for its class day, so the schedule job doesn't add that day again.
+// Runs under the session's booking lock, so a booking can't slip in between the spots check and the save.
+const SESSION_FIELD_WORDS = { name: 'name', starts_at: 'time', ends_at: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note' };
+export function updateSession(ctx, id, body) { return withLock(`book:${id}`, () => updateSessionNow(ctx, id, body)); }
+async function updateSessionNow(ctx, id, body) {
   const s = getSession(ctx, id);
-  if (body.coach_id === undefined) throw badRequest('Send coach_id (or null to clear it).');
-  if (s.status !== 'scheduled') throw conflict('This session was canceled.');
-  ctx.db.run('UPDATE class_sessions SET coach_id = ? WHERE id = ?', coachInput(ctx, body.coach_id), id);
-  return getSession(ctx, id);
+  if (s.status !== 'scheduled') throw conflict('This session was canceled. Add a new one instead.');
+  const zone = tz(ctx), next = {};
+  if (body.name !== undefined) { const n = v.str(body.name, 'name', { max: 80 }); if (n !== s.name) next.name = n; }
+  if (body.coach_id !== undefined) { const c = coachInput(ctx, body.coach_id); if (c !== (s.coach_id ?? null)) next.coach_id = c; }
+  if (body.location_id !== undefined) { const l = commerce.getLocation(ctx, v.str(body.location_id, 'location_id')).id; if (l !== s.location_id) next.location_id = l; }
+  if (body.staff_note !== undefined) { const n = v.str(body.staff_note, 'staff_note', { max: 500, optional: true }); if (n !== (s.staff_note ?? null)) next.staff_note = n; }
+  if (body.date !== undefined || body.start_time !== undefined || body.duration_min !== undefined) {
+    const date = body.date ?? localDate(s.starts_at, zone), time = body.start_time ?? localTime(s.starts_at, zone);
+    if (!isDate(date)) throw badRequest('date must look like 2026-10-05.');
+    if (!isTime(time)) throw badRequest('start_time must look like 17:30.');
+    const dur = body.duration_min !== undefined ? v.int(body.duration_min, 'duration_min', { min: 10, max: 600 }) : minutesOf(s);
+    const starts = zonedToUtc(date, time, zone);
+    if (starts !== s.starts_at) {
+      if (date < localDate(ctx.now(), zone)) throw badRequest('Pick today or a later date.');
+      if (starts <= ctx.now()) throw badRequest('That time has already passed today. Pick a later time.');
+      if (s.series_id && ctx.db.get('SELECT 1 FROM class_sessions WHERE series_id = ? AND starts_at = ? AND id != ?', s.series_id, starts, id)) throw conflict('This class already has a session at that time. Move or cancel that one first.');
+      next.starts_at = starts;
+      if (s.series_id && !s.slot_date) next.slot_date = localDate(s.starts_at, zone);
+    }
+    if (starts !== s.starts_at || dur !== minutesOf(s)) next.ends_at = new Date(Date.parse(starts) + dur * 60000).toISOString();
+  }
+  if (body.capacity !== undefined) {
+    const c = v.int(body.capacity, 'capacity', { min: 1, max: 500 });
+    if (c !== s.capacity) {
+      if (c < s.booked_count) throw badRequest(`${plural(s.booked_count, 'athlete')} ${s.booked_count === 1 ? 'is' : 'are'} booked. Set spots to ${s.booked_count} or more, or remove someone first.`);
+      next.capacity = c;
+    }
+  }
+  const keys = Object.keys(next);
+  if (!keys.length) throw badRequest('Nothing to change.');
+  ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), id);
+  const promoted = next.capacity > s.capacity ? await promoteNow(ctx, id) : 0;
+  const moved = !!(next.starts_at || next.location_id);
+  const emailed = moved && body.notify !== false ? notifyMoved(ctx, [{ before: s, after: { ...s, ...next } }]) : 0;
+  const changed = [...new Set(keys.filter((k) => k !== 'slot_date' && !(k === 'ends_at' && next.starts_at && minutesOf({ ...s, ...next }) === minutesOf(s))).map((k) => SESSION_FIELD_WORDS[k]))];
+  return { ...getSession(ctx, id), changed, families_emailed: emailed, promoted };
+}
+
+// Email the families of everyone booked (and the waitlist, if asked), like "Running 10 minutes late" or "Bring your
+// cleats". A team session reaches every family on the team roster too. One email per family, signed by who sent it;
+// the same message to the same session twice within 10 minutes is refused (a double tap).
+export function messageSession(ctx, id, body, actor) { return withLock(`message:${id}`, () => messageNow(ctx, id, body, actor)); }
+function messageNow(ctx, id, body, actor) {
+  const s = getSession(ctx, id);
+  const text = v.str(body.message, 'message', { max: 1000 });
+  const fams = bookedFamilies(ctx, [id], { waitlist: !!body.include_waitlist });
+  if (s.team) {
+    for (const a of s.team.athletes) {
+      const c = ctx.db.get('SELECT name, family_id, archived_at FROM clients WHERE id = ?', a.client_id);
+      if (!c?.family_id || c.archived_at) continue;
+      if (!fams.has(c.family_id)) fams.set(c.family_id, { names: new Set(), sessions: new Set([id]) });
+      fams.get(c.family_id).names.add(first(c.name));
+    }
+  }
+  if (!fams.size) throw conflict('Nobody to email yet. Book someone first.');
+  const hash = sha256(text.toLowerCase());
+  const since = new Date(Date.parse(ctx.now()) - 10 * 60000).toISOString();
+  if (ctx.db.all(`SELECT data FROM events WHERE type = 'session.messaged' AND created_at >= ?`, since).some((e) => { const d = JSON.parse(e.data); return d.session_id === id && d.hash === hash; })) {
+    throw conflict('That message already went to these families a few minutes ago.');
+  }
+  const by = actor?.name ?? 'Your coach';
+  for (const [fam] of fams) notifyFamily(ctx, fam, `${s.name}, ${when(ctx, s.starts_at)}`, `${text}\n\n${by}, ${getSetting(ctx, 'business_name')}`);
+  emit(ctx, 'session.messaged', { session_id: id, session_name: s.name, starts_at: s.starts_at, families: fams.size, by, hash });
+  return { sent: fams.size };
+}
+
+// Staff booking an athlete who is already booked (or waitlisted) for another session at an overlapping time: allowed,
+// but staff hear about it. Returns the other session, or null.
+export function clashFor(ctx, clientId, sessionId) {
+  const s = ctx.db.get('SELECT starts_at, ends_at FROM class_sessions WHERE id = ?', sessionId);
+  if (!s) return null;
+  return ctx.db.get(`SELECT x.id, x.name, x.starts_at, l.name AS location_name, b.status FROM bookings b JOIN class_sessions x ON x.id = b.session_id JOIN locations l ON l.id = x.location_id
+    WHERE b.client_id = ? AND b.session_id != ? AND b.status IN ('booked','attended','waitlisted') AND x.status = 'scheduled' AND x.starts_at < ? AND x.ends_at > ? ORDER BY x.starts_at LIMIT 1`, clientId, sessionId, s.ends_at, s.starts_at) ?? null;
 }
 
 const SESSION_LIST_SQL = `SELECT s.*, l.name AS location_name, cs.registration_cents, cu.name AS coach_name,
@@ -224,30 +425,55 @@ export function getSession(ctx, id) {
   const s = ctx.db.get(`${SESSION_LIST_SQL} WHERE s.id = ?`, id);
   if (!s) throw notFound('Session');
   const roster = ctx.db.all(
-    `SELECT b.id, b.status, b.coverage, b.credit_type, b.sale_id, b.created_at, c.id AS client_id, c.name, c.birth_date, c.medical_notes, c.family_id,
-       f.name AS family_name, (SELECT phone FROM guardians g WHERE g.family_id = c.family_id ORDER BY is_primary DESC LIMIT 1) AS parent_phone
+    `SELECT b.id, b.status, b.coverage, b.credit_type, b.sale_id, b.created_at, c.id AS client_id, c.name, c.athlete_id, c.birth_date, c.medical_notes, c.family_id,
+       f.name AS family_name, f.waiver_version, (SELECT phone FROM guardians g WHERE g.family_id = c.family_id ORDER BY is_primary DESC LIMIT 1) AS parent_phone
      FROM bookings b JOIN clients c ON c.id = b.client_id LEFT JOIN families f ON f.id = c.family_id
-     WHERE b.session_id = ? ORDER BY CASE b.status WHEN 'waitlisted' THEN 1 WHEN 'canceled' THEN 2 WHEN 'late_canceled' THEN 2 ELSE 0 END, b.created_at`, id)
-    .map((r) => ({ ...r, age: ageOn(r.birth_date, s.starts_at), has_medical_notes: !!r.medical_notes }));
-  return { ...shapeSession(s), roster, team: teamRosterFor(ctx, s) };
+     WHERE b.session_id = ? ORDER BY CASE b.status WHEN 'waitlisted' THEN 1 WHEN 'canceled' THEN 2 WHEN 'late_canceled' THEN 2 ELSE 0 END, b.created_at`, id);
+  // Flags for the roster: the family hasn't signed the current waiver, it's the athlete's birthday on the session's day.
+  const waiver = Number(getSetting(ctx, 'waiver_version')), day = localDate(s.starts_at, tz(ctx));
+  const out = roster.map(({ waiver_version, ...r }) => ({ ...r, age: ageOn(r.birth_date, s.starts_at), has_medical_notes: !!r.medical_notes,
+    no_waiver: !!r.family_id && Number(waiver_version ?? 0) !== waiver, birthday: isBirthday(r.birth_date, day) }));
+  return { ...shapeSession(s), roster: out, team: teamRosterFor(ctx, s) };
+}
+// A birthday on this day (YYYY-MM-DD). Someone born on February 29 celebrates on February 28 in other years.
+export function isBirthday(birthDate, day) {
+  if (!birthDate) return false;
+  const md = birthDate.slice(5), leap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  return md === day.slice(5) || (md === '02-29' && day.slice(5) === '02-28' && !leap(Number(day.slice(0, 4))));
 }
 
 // Cancel a whole session (weather, coach sick). Credits go back, paid drop-ins are refunded, families are emailed.
-export async function cancelSession(ctx, id, { reason } = {}) {
+// notifyTeam (staff canceling one team session): the school or club contact is emailed too, since most players never
+// book. Runs under the session's booking lock, so a double tap can't return a credit or refund twice.
+export async function cancelSession(ctx, id, opts = {}) {
+  const r = await cancelSessionNow(ctx, id, opts);
+  return { ...r.session, families_emailed: r.families_emailed, team_contact_emailed: r.team_contact_emailed };
+}
+function cancelSessionNow(ctx, id, opts) { return withLock(`book:${id}`, () => cancelInner(ctx, id, opts)); }
+async function cancelInner(ctx, id, { reason, notify = true, notifyTeam = false } = {}) {
   const s = getSession(ctx, id);
-  if (s.status === 'canceled') return s;
+  if (s.status === 'canceled') return { session: s, released: [], families_emailed: 0, team_contact_emailed: false };
   ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ?`, id);
+  const released = [], fams = new Set();
   for (const b of s.roster.filter((r) => ['booked', 'waitlisted'].includes(r.status))) {
     await releaseBooking(ctx, b, 'canceled');
-    const fam = ctx.db.get('SELECT family_id FROM clients WHERE id = ?', b.client_id).family_id;
-    notifyFamily(ctx, fam, `Canceled: ${s.name} on ${when(ctx, s.starts_at)}`,
-      `${s.name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''} ${first(b.name)}'s ${b.coverage === 'credit' ? 'session credit has been returned' : b.coverage === 'paid' ? 'payment has been refunded' : 'spot has been released'}.`);
-    textFamily(ctx, fam, 'canceled', `${s.name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''} Details are in your email.`);
+    released.push(b);
+    if (!notify || !b.family_id) continue;
+    fams.add(b.family_id);
+    notifyFamily(ctx, b.family_id, `Canceled: ${s.name} on ${when(ctx, s.starts_at)}`, `${s.name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''} ${releaseWords(b)}`);
+    textFamily(ctx, b.family_id, 'canceled', `${s.name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''} Details are in your email.`);
+  }
+  let teamEmailed = false;
+  if (notifyTeam && s.team) {
+    const org = ctx.db.get('SELECT o.contact_email, o.contact_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', s.team.contract_id);
+    if (org?.contact_email) {
+      sendEmail(ctx, { to: org.contact_email, subject: `Canceled: ${s.name} on ${when(ctx, s.starts_at)}`, text: `Hi${org.contact_name ? ` ${first(org.contact_name)}` : ''},\n\n${s.name} for ${s.team.org_name} ${s.team.team_name} on ${when(ctx, s.starts_at)} is canceled.${reason ? ` ${reason}` : ''}\n\n${getSetting(ctx, 'business_name')}` }).catch(() => {});
+      teamEmailed = true;
+    }
   }
   emit(ctx, 'session.canceled', { session_id: id, name: s.name, starts_at: s.starts_at, reason: reason ?? null });
-  return getSession(ctx, id);
+  return { session: getSession(ctx, id), released, families_emailed: fams.size, team_contact_emailed: teamEmailed };
 }
-
 // ---------- Booking ----------
 function ageCheck(client, session) {
   const age = ageOn(client.birth_date, session.starts_at);
@@ -351,8 +577,13 @@ export function bookingDetail(ctx, id) {
   return b;
 }
 
-// Parents cancelling inside the late window keep the booking charged; coaches can waive it.
-export async function cancelBooking(ctx, id, { isCoach = false, waive = false } = {}) {
+// Parents cancelling inside the late window keep the booking charged; coaches can waive it. Runs under the session's
+// booking lock: a double tap can't return a credit twice, and the waitlist moves up once.
+export async function cancelBooking(ctx, id, opts = {}) {
+  const sessionId = bookingDetail(ctx, id).session_id;
+  return withLock(`book:${sessionId}`, () => cancelBookingNow(ctx, id, opts));
+}
+async function cancelBookingNow(ctx, id, { isCoach = false, waive = false } = {}) {
   const b = bookingDetail(ctx, id);
   if (!['booked', 'waitlisted'].includes(b.status)) throw conflict('This booking is already canceled or finished.');
   const hours = Number(getSetting(ctx, 'late_cancel_hours'));
@@ -365,25 +596,47 @@ export async function cancelBooking(ctx, id, { isCoach = false, waive = false } 
     ctx.db.run(`UPDATE class_sessions SET status = 'canceled' WHERE id = ? AND status = 'scheduled'`, b.session_id);
   }
   emit(ctx, 'booking.canceled', { booking_id: id, session_id: b.session_id, session_name: b.session_name, client_id: b.client_id, client_name: b.client_name, late });
-  if (b.status === 'booked') await promoteWaitlist(ctx, b.session_id);
+  if (b.status === 'booked') await promoteNow(ctx, b.session_id);
   return { ...bookingDetail(ctx, id), late, message: late ? `Canceled less than ${hours} hours before the session, so the session is still used.` : 'Canceled.' };
 }
 
 // Fill open spots from the waitlist in order. Covered automatically when possible; otherwise payment is due at the session.
-export async function promoteWaitlist(ctx, sessionId) {
-  let s = getSession(ctx, sessionId);
+// Returns how many moved up.
+export function promoteWaitlist(ctx, sessionId) { return withLock(`book:${sessionId}`, () => promoteNow(ctx, sessionId)); }
+async function promoteNow(ctx, sessionId) {
+  let s = getSession(ctx, sessionId), moved = 0;
   while (s.booked_count < s.capacity && s.status === 'scheduled' && s.starts_at > ctx.now()) {
     const next = ctx.db.get(`SELECT b.*, c.name, c.family_id FROM bookings b JOIN clients c ON c.id = b.client_id WHERE b.session_id = ? AND b.status = 'waitlisted' ORDER BY b.created_at LIMIT 1`, sessionId);
     if (!next) break;
-    const client = ctx.db.get('SELECT * FROM clients WHERE id = ?', next.client_id);
-    const r = await cover(ctx, s, client, { allowUnpaid: true });
-    ctx.db.run('UPDATE bookings SET status = ?, coverage = ?, credit_type = ?, updated_at = ? WHERE id = ?', 'booked', r.coverage, r.credit_type ?? null, ctx.now(), next.id);
-    emit(ctx, 'booking.created', { booking_id: next.id, session_id: sessionId, session_name: s.name, starts_at: s.starts_at, client_id: next.client_id, client_name: next.name, coverage: r.coverage, from_waitlist: true });
-    notifyFamily(ctx, next.family_id, `A spot opened: ${s.name}, ${when(ctx, s.starts_at)}`,
-      `Good news: ${first(next.name)} moved off the waitlist and is booked for ${s.name}, ${when(ctx, s.starts_at)}.${r.coverage === 'unpaid' ? ' Payment is due at the session. If you can\'t make it, cancel from the parent portal.' : ''}`);
-    textFamily(ctx, next.family_id, 'waitlist', `A spot opened. ${first(next.name)} is now booked for ${s.name}, ${when(ctx, s.starts_at)}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/parent`);
+    await moveUp(ctx, s, next);
+    moved++;
     s = getSession(ctx, sessionId);
   }
+  return moved;
+}
+async function moveUp(ctx, s, next, { staff = false } = {}) {
+  const client = ctx.db.get('SELECT * FROM clients WHERE id = ?', next.client_id);
+  const r = await cover(ctx, s, client, { allowUnpaid: true });
+  ctx.db.run('UPDATE bookings SET status = ?, coverage = ?, credit_type = ?, updated_at = ? WHERE id = ?', 'booked', r.coverage, r.credit_type ?? null, ctx.now(), next.id);
+  emit(ctx, 'booking.created', { booking_id: next.id, session_id: s.id, session_name: s.name, starts_at: s.starts_at, client_id: next.client_id, client_name: next.name, coverage: r.coverage, from_waitlist: true, ...(staff ? { over_spots: s.booked_count >= s.capacity } : {}) });
+  notifyFamily(ctx, next.family_id, `A spot opened: ${s.name}, ${when(ctx, s.starts_at)}`,
+    `Good news: ${first(next.name)} moved off the waitlist and is booked for ${s.name}, ${when(ctx, s.starts_at)}.${r.coverage === 'unpaid' ? ' Payment is due at the session. If you can\'t make it, cancel from the parent portal.' : ''}`);
+  textFamily(ctx, next.family_id, 'waitlist', `A spot opened. ${first(next.name)} is now booked for ${s.name}, ${when(ctx, s.starts_at)}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/parent`);
+  return r;
+}
+// Staff move someone off the waitlist now, even when it puts the session over its spots (the coach decides).
+export async function promoteBooking(ctx, id) {
+  const sessionId = bookingDetail(ctx, id).session_id;
+  return withLock(`book:${sessionId}`, async () => {
+    const b = ctx.db.get('SELECT b.*, c.name, c.family_id, c.archived_at FROM bookings b JOIN clients c ON c.id = b.client_id WHERE b.id = ?', id);
+    if (b.status !== 'waitlisted') throw conflict(`${first(b.name)} isn't on the waitlist.`);
+    if (b.archived_at) throw conflict(`${first(b.name)} is archived. Restore them on their client page first.`);
+    const s = getSession(ctx, sessionId);
+    if (s.status !== 'scheduled') throw conflict('This session was canceled.');
+    const r = await moveUp(ctx, s, b, { staff: true });
+    const after = getSession(ctx, sessionId);
+    return { ...bookingDetail(ctx, id), over_spots: after.booked_count > after.capacity, message: `${first(b.name)} is booked.${r.coverage === 'unpaid' ? ' Payment is due at the session.' : ''}${after.booked_count > after.capacity ? ` The session is now ${after.booked_count - after.capacity} over its spots.` : ''}` };
+  });
 }
 
 export function setAttendance(ctx, bookingId, status) {
@@ -492,11 +745,19 @@ export function addAvailability(ctx, body) {
   const loc = commerce.getLocation(ctx, v.str(body.location_id, 'location_id'));
   if (!isTime(body.start_time) || !isTime(body.end_time) || body.end_time <= body.start_time) throw badRequest('Give a start_time and a later end_time, like 15:00 and 19:00.');
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
-  const id = newId('av');
-  ctx.db.run('INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, price_cents, coach_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, kind, loc.id, v.int(body.weekday, 'weekday', { min: 0, max: 6 }), body.start_time, body.end_time,
-    v.int(body.slot_minutes ?? 60, 'slot_minutes', { min: 15, max: 240 }), v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000, optional: true }), coachId, ctx.now());
-  return listAvailability(ctx).find((a) => a.id === id);
+  // One day (weekday) or several at once (weekdays: [1,2,3,4,5] for Monday to Friday).
+  const days = body.weekdays !== undefined ? body.weekdays : [body.weekday];
+  if (!Array.isArray(days) || !days.length || days.length > 7) throw badRequest('weekdays must list days 0 (Sunday) to 6 (Saturday).');
+  const weekdays = [...new Set(days.map((d) => v.int(d, 'weekday', { min: 0, max: 6 })))].sort();
+  const slot = v.int(body.slot_minutes ?? 60, 'slot_minutes', { min: 15, max: 240 }), price = v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000, optional: true });
+  const ids = ctx.db.tx(() => weekdays.map((wd) => {
+    const id = newId('av');
+    ctx.db.run('INSERT INTO availability (id, kind, location_id, weekday, start_time, end_time, slot_minutes, price_cents, coach_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, kind, loc.id, wd, body.start_time, body.end_time, slot, price, coachId, ctx.now());
+    return id;
+  }));
+  const all = listAvailability(ctx);
+  return { ...all.find((a) => a.id === ids[0]), added: ids.map((id) => all.find((a) => a.id === id)) };
 }
 // Hand hours to another coach (coach_id), or to nobody (null: the place decides what blocks them).
 export function updateAvailability(ctx, id, body) {

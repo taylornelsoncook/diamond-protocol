@@ -240,3 +240,8 @@ td .dp-badge{white-space:nowrap}
 @media (max-width: 600px){ .bl-cards thead{display:none} .bl-cards tr{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:12px var(--space-6);border-top:1px solid var(--line-subtle)} .bl-cards td{border:0!important;padding:0!important} .bl-cards td.bl-acts{flex-basis:100%} .bl-cards td.bl-acts .row{justify-content:flex-start!important;flex-wrap:wrap!important} }
 @media (max-width: 600px){ .bl-wide{display:none} .bl-tools .dp-input,.bl-tools .select{flex:1 1 100%} }
 #dialog .dl dd{overflow-wrap:anywhere}
+
+/* Schedule and Today: how many are checked in, as a thin bar (batch B2/B3). */
+.ck{display:inline-flex;align-items:center;gap:8px}
+.ck-bar{display:inline-block;width:88px;height:6px;border-radius:3px;background:var(--control-border);overflow:hidden}
+.ck-fill{display:block;height:100%;background:var(--green-bright)}

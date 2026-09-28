@@ -445,8 +445,6 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   created_at TEXT NOT NULL,
   workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,   -- shown on the weight-room screen (version 23)
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,         -- who leads it: the class's coach, or a sub for this one session (version 31)
-  slot_date TEXT,                        -- version 39: the class day (YYYY-MM-DD) a class session stands for, even after it moves to another day
-  staff_note TEXT,                       -- version 39: a note for staff on this one session (never shown to families)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);
@@ -1187,21 +1185,3 @@ CREATE TABLE IF NOT EXISTS athlete_id_aliases (
 );
 CREATE INDEX IF NOT EXISTS team_attendance_client ON team_attendance(client_id);
 CREATE INDEX IF NOT EXISTS athlete_id_aliases_client ON athlete_id_aliases(client_id);
-
--- ---------- Version 39: Schedule and Today (batches B2 and B3) ----------
--- Follow-ups on Today: "Reached out" or "Mark reviewed" hides an item (an athlete to check on, a check-in that needs a
--- look) from everyone's Today until a date, and says who did it. key is unique per item: risk:<client id> or
--- flag:<client id>:<check-in date>.
-CREATE TABLE IF NOT EXISTS today_snoozes (
-  id TEXT PRIMARY KEY,
-  key TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL CHECK (kind IN ('risk','flag')),
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  until TEXT NOT NULL,                          -- YYYY-MM-DD in the business time zone: hidden through this day
-  action TEXT NOT NULL,                         -- reached_out, reviewed or noted
-  note TEXT,
-  created_by_id TEXT,
-  created_by TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS today_snoozes_until ON today_snoozes(until);

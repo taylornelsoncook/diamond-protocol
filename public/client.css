@@ -18,3 +18,32 @@
 .c-ready--yellow,.c-ready--red{border-color:var(--amber);background:var(--amber-deep)}
 .c-ready--yellow .strong,.c-ready--red .strong{color:var(--amber)}
 .c-ready--red{border-width:2px}
+/* Workout tab: exercises open in place, one row per set, the rest timer, effort. */
+.c-note{padding:10px 14px;border:1px solid var(--amber);background:var(--amber-deep);color:var(--steel);border-radius:var(--radius-md);font-size:14px;line-height:20px}
+.c-ex{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden}
+.c-ex--open{border:2px solid var(--green-mid)}
+.c-ex--done .c-ex-mark{background:var(--green);color:var(--on-green)}
+.c-ex-head{display:flex;align-items:center;gap:12px;width:100%;min-height:64px;padding:10px 12px;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font:inherit}
+.c-ex-head:focus-visible,.c-hist-head:focus-visible,.c-effort-n:focus-visible{outline:2px solid var(--green-bright);outline-offset:-2px}
+.c-ex-mark{width:44px;height:44px;flex-shrink:0;border-radius:var(--radius-sm);background:var(--black);display:flex;align-items:center;justify-content:center;font-weight:700}
+.c-ex-media{padding:0 12px}
+.c-sets{display:flex;flex-direction:column;gap:6px;padding:10px 12px 12px}
+.c-set{display:flex;align-items:center;gap:8px;min-height:52px}
+.c-set--done .c-set-no{color:var(--green-bright)}
+.c-set-no{width:44px;flex-shrink:0;font:600 13px/1 var(--font-sans);color:var(--steel-muted)}
+.c-set-field{display:flex;align-items:center;gap:4px;flex:1;min-width:0}
+.c-num{min-height:44px;width:100%;min-width:0;padding:8px;font-size:17px;text-align:center}
+.c-tick{min-width:64px;flex-shrink:0}
+.c-effort{display:grid;grid-template-columns:repeat(10,1fr);gap:4px}
+.c-effort-n{min-height:44px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel);font:600 15px/1 var(--font-sans);cursor:pointer;padding:0}
+.c-effort-n[aria-checked="true"]{background:var(--green);color:var(--on-green);border-color:var(--green-mid)}
+.c-rest{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom,0px));z-index:31;display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface-raised);border-top:2px solid var(--green-mid)}
+.c-rest[hidden]{display:none}
+.c-rest-label{font:600 13px/1 var(--font-sans);color:var(--steel-muted);text-transform:uppercase;letter-spacing:.06em}
+.c-rest-time{font:700 28px/1 var(--font-display);color:var(--steel);flex:1;font-variant-numeric:tabular-nums}
+.c-rest .dp-btn{min-height:44px;padding:0 12px}
+.c-bests{padding:10px 14px;border:1px solid var(--green-mid);border-radius:var(--radius-md);color:var(--green-bright);display:flex;flex-direction:column;gap:2px}
+.c-hist{border-top:1px solid var(--line-subtle)}
+.c-hist-head{display:flex;align-items:center;gap:12px;width:100%;min-height:56px;padding:8px 0;background:none;border:0;color:inherit;text-align:left;cursor:pointer;font:inherit}
+.c-hist-body{padding:0 0 12px}
+.c-resting .c-wrap{padding-bottom:calc(170px + env(safe-area-inset-bottom,0px))}

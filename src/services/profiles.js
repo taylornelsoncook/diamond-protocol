@@ -1,6 +1,6 @@
 // One profile per athlete, from the family's side and the owner's side:
 // - A parent who signs up (or adds a child in the portal) for a child who already has a profile with no family (a team
-//   roster athlete) can give the child's Athlete ID. If the name and birth year match that profile, it joins their family
+//   roster athlete) can give the child's Athlete ID. If the name and birthday (so the birth year too) match that profile, it joins their family
 //   instead of a second profile being made. Otherwise a new profile is made as usual and, when the ID belongs to a
 //   profile, the owner is asked to check and merge. The parent gets the same answer either way, so the form never tells a
 //   stranger whether an ID exists (IDs are guessable from a name and a year).
@@ -41,6 +41,9 @@ export function tryClaim(ctx, { code, name, birthDate, familyId, guardian, field
   if (norm(c.name) !== norm(name)) return { open: 'name', client: c };
   if (!c.birth_date) return { open: 'no_birthday', client: c };
   if (!birthDate || String(birthDate).slice(0, 4) !== c.birth_date.slice(0, 4)) return { open: 'birth_year', client: c };
+  // The year matches but not the day: the owner checks. (An ID can be worked out from a name and the year they joined,
+  // and a birth year is easy to guess from a school year, so only the full birthday attaches a profile on its own.)
+  if (String(birthDate).slice(0, 10) !== c.birth_date) return { open: 'birthday', client: c };
   // A match: the profile joins the family. The coach's details stay; empty ones are filled from the parent's form.
   const keep = ['sex', 'sport', 'school', 'medical_notes', 'emergency_name', 'emergency_phone'];
   const changed = ctx.db.tx(() => {
@@ -54,11 +57,11 @@ export function tryClaim(ctx, { code, name, birthDate, familyId, guardian, field
   if (!changed) return { open: 'in_family', client: c };                                          // someone else claimed it a moment ago
   audit(ctx, { actor_type: 'parent', actor_id: guardian?.id ?? null, actor_name: guardian?.name ?? null, action: 'claim profile by Athlete ID', target: c.id, status: 200 });
   emit(ctx, 'client.claimed', { client_id: c.id, client_name: c.name, athlete_id: c.athlete_id, family_id: familyId, guardian_name: guardian?.name ?? null });
-  tellOwners(ctx, `${c.name} joined a family with their Athlete ID`, `${guardian?.name ?? 'A parent'} added ${c.name} (${c.athlete_id}) to their family using the Athlete ID, with a matching name and birth year. ${first(c.name)}'s team profile, results and attendance stay on the one profile, and the parents can see them in the portal now.\n\nNot right? Open ${first(c.name)}'s client page: ${ctx.publicUrl ?? ''}/#/clients/${c.id}`);
+  tellOwners(ctx, `${c.name} joined a family with their Athlete ID`, `${guardian?.name ?? 'A parent'} added ${c.name} (${c.athlete_id}) to their family using the Athlete ID, with a matching name and birthday. ${first(c.name)}'s team profile, results and attendance stay on the one profile, and the parents can see them in the portal now.\n\nNot right? Open ${first(c.name)}'s client page: ${ctx.publicUrl ?? ''}/#/clients/${c.id}`);
   return { attached: ctx.db.get('SELECT * FROM clients WHERE id = ?', c.id) };
 }
 // No match: the new athlete was made. The owner is asked to check (only when the ID belongs to a real profile).
-const REASONS = { name: 'the name is different', no_birthday: 'the profile has no birthday to check', birth_year: 'the birth year is different', in_family: 'the profile is already in another family', archived: 'the profile is archived' };
+const REASONS = { birthday: 'the birthday is different (the year matches)', name: 'the name is different', no_birthday: 'the profile has no birthday to check', birth_year: 'the birth year is different', in_family: 'the profile is already in another family', archived: 'the profile is archived' };
 export function fileClaim(ctx, { code, familyId, guardian, claim, newClientId }) {
   if (!claim?.open || !claim.client) return null;
   const id = newId('clm');
@@ -145,9 +148,12 @@ export function mergeProfiles(ctx, keepId, fromId, body = {}, actor) {
       ctx.db.run(`UPDATE membership_requests SET status = 'withdrawn', resolved_at = ?, resolved_by = ?, resolution_note = 'Profiles merged' WHERE client_id = ? AND status = 'open'`, ctx.now(), actor?.name ?? 'Owner', from.id);
     }
     ctx.db.run('UPDATE workout_logs SET request_id = NULL WHERE client_id = ? AND request_id IN (SELECT request_id FROM workout_logs WHERE client_id = ? AND request_id IS NOT NULL)', from.id, keep.id);
-    // Canceled bookings of the same session: keep's row stays (one booking per athlete per session).
+    // One booking per athlete per session (both live was refused above): a live booking wins over a canceled one, else keep's stays.
+    const LIVE = `('booked','waitlisted','attended')`;
+    ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status NOT IN ${LIVE} AND session_id IN (SELECT session_id FROM bookings WHERE client_id = ? AND status IN ${LIVE})`, keep.id, from.id);
     ctx.db.run('DELETE FROM bookings WHERE client_id = ? AND session_id IN (SELECT session_id FROM bookings WHERE client_id = ?)', from.id, keep.id);
-    // Team rosters: a second line for the same team goes (results and attendance are on the client, not the line).
+    // Team rosters: one line per team (results and attendance are on the client, not the line); still on the team if either was.
+    ctx.db.run(`UPDATE team_roster SET active = 1 WHERE client_id = ? AND active = 0 AND contract_id IN (SELECT contract_id FROM team_roster WHERE client_id = ? AND active = 1)`, keep.id, from.id);
     ctx.db.run('DELETE FROM team_roster WHERE client_id = ? AND contract_id IN (SELECT contract_id FROM team_roster WHERE client_id = ?)', from.id, keep.id);
     for (const { table, col } of clientRefs(ctx)) {
       const n = ctx.db.run(`UPDATE OR IGNORE ${table} SET ${col} = ? WHERE ${col} = ?`, keep.id, from.id).changes;

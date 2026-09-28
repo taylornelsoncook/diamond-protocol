@@ -55,7 +55,7 @@ function athleteCard(a, i) {
     h('div', { class: 'form-grid' }, field('Emergency contact', f('emergency_name')), field('Their phone', f('emergency_phone', { type: 'tel' }))),
     // Already on a team we train (their school or club): the Athlete ID links this sign-up to their existing profile.
     h('details', { open: !!a.athlete_code }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Already training with us on a team?'),
-      field('Athlete ID (optional)', f('athlete_code', { autocomplete: 'off', autocapitalize: 'characters', placeholder: 'AVALOP2026', maxlength: '14' }), 'On their team roster or progress report. With the same name and birth year, their team results stay on one profile.')));
+      field('Athlete ID (optional)', f('athlete_code', { autocomplete: 'off', autocapitalize: 'characters', placeholder: 'AVALOP2026', maxlength: '14' }), 'On their team roster or progress report. With the same name and birthday, their team results stay on one profile.')));
 }
 
 async function start(trap, agreed, errEl) {

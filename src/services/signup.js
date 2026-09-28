@@ -72,7 +72,7 @@ export async function finishSignup(ctx, body, ip, { userAgent } = {}) {
   const familyId = createFamilyWithGuardian(ctx, parent);
   ctx.db.run('UPDATE signup_requests SET used_at = ? WHERE id = ?', ctx.now(), r.id);
   const guardian = ctx.db.get('SELECT * FROM guardians WHERE family_id = ?', familyId);
-  // A child who already has a profile (a team athlete) joins the family when the Athlete ID, name and birth year match;
+  // A child who already has a profile (a team athlete) joins the family when the Athlete ID, name and birthday match;
   // otherwise a new profile is made and the owner is asked to check. The answer reads the same either way.
   const created = [];
   for (const { athlete_code: claim, ...a } of athletes) {

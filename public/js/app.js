@@ -4511,7 +4511,7 @@ function profilePanels(c, reqs, claims) {
   const mergePanel = panel('Same athlete, two profiles?', { subtitle: `Merge the other profile into ${c.name.split(' ')[0]}'s. Everything moves here, and the other Athlete ID keeps working.` },
     mine.map((k) => {
       const other = k.claimed_client_id === c.id ? { id: k.new_client_id, name: k.new_name, athlete_id: k.new_athlete_id } : { id: k.claimed_client_id, name: k.claimed_name, athlete_id: k.claimed_athlete_id };
-      return h('div', { class: 'test-banner stack-tight' }, h('span', null, `${k.guardian_name ?? 'A parent'} gave ${k.athlete_id} when adding ${k.new_name ?? 'an athlete'} (${{ name: 'different name', no_birthday: 'no birthday on file to check', birth_year: 'different birth year', in_family: 'profile already in a family', archived: 'profile archived' }[k.reason] ?? 'no match'}).`),
+      return h('div', { class: 'test-banner stack-tight' }, h('span', null, `${k.guardian_name ?? 'A parent'} gave ${k.athlete_id} when adding ${k.new_name ?? 'an athlete'} (${{ birthday: 'different birthday, same year', name: 'different name', no_birthday: 'no birthday on file to check', birth_year: 'different birth year', in_family: 'profile already in a family', archived: 'profile archived' }[k.reason] ?? 'no match'}).`),
         h('div', { class: 'row wrap' }, other.id ? btn(`Check merging ${other.name}`, () => mergeDialog(k.claimed_client_id, k.new_client_id).catch((e) => toast(e.message, 'warn')), 'outline') : null,
           btn('Not the same athlete', () => post(`/v1/profile-claims/${k.id}/dismiss`).then(() => { toast('Dismissed.'); render(); }), 'ghost')));
     }), search, results);

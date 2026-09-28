@@ -975,7 +975,7 @@ function addAthleteForm() {
         await refresh({ keepScroll: true });
       } catch (x) { err.textContent = x.message; }
     }); } }, field('Full name', name), h('div', { class: 'form-grid' }, field('Birthday', birth), field('Sport', sport)),
-      field('Athlete ID, if they already train with us on a team (optional)', code, 'On their team roster or report. With the same name and birth year, their team results stay on one profile.'),
+      field('Athlete ID, if they already train with us on a team (optional)', code, 'On their team roster or report. With the same name and birthday, their team results stay on one profile.'),
       err, btn('Add athlete', null, 'secondary', { type: 'submit' })));
 }
 // Parents: fix your own name and phone; add another parent.

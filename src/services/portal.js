@@ -245,7 +245,9 @@ export function membershipReceipt(ctx, familyId, invoiceId) {
 }
 // Try a declined membership payment again on the card on file. The parent can press it up to 8 tries in all (the owner
 // can still retry after that). It never cancels the membership (a manual retry), and shares the invoice's lock.
-export async function retryDeclined(ctx, familyId, invoiceId) {
+// One press at a time per payment, so two quick taps can't both get past the 8-try check.
+export function retryDeclined(ctx, familyId, invoiceId) { return withLock(`portal-retry:${invoiceId}`, () => retryNow(ctx, familyId, invoiceId)); }
+async function retryNow(ctx, familyId, invoiceId) {
   const i = ctx.db.get(`SELECT i.id, i.status, i.attempts FROM invoices i JOIN clients c ON c.id = i.client_id WHERE i.id = ? AND c.family_id = ?`, String(invoiceId ?? ''), familyId);
   if (!i) throw notFound('Payment');
   if (i.status !== 'failed') throw conflict(i.status === 'paid' ? 'This payment already went through.' : 'This payment can\'t be tried again. Message us if you have a question.');

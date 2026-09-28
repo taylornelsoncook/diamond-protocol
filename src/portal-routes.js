@@ -236,7 +236,7 @@ export const portalRoutes = [
   ['DELETE', '/portal/api/calendar', 'guardian', 'Turn off your calendar feed.', (ctx, r) => portal.stopCalendar(ctx, r.guardian)],
   ['POST', '/portal/api/waiver/email', 'guardian', 'Email yourself a copy of the signed waiver.', (ctx, r) => portal.emailWaiverCopy(ctx, r.guardian)],
   ['POST', '/portal/api/waiver', 'guardian', 'Sign the current waiver: signed_name, agree=true.', (ctx, r) => families.signWaiver(ctx, r.guardian.family_id, r.guardian, r.body)],
-  ['POST', '/portal/api/athletes', 'guardian', 'Add an athlete to the family: name, birth_date, sex, sport, school, medical notes, emergency contact. Already has a profile (a team athlete)? Add athlete_code, their Athlete ID: when the name and birth year match, that profile joins your family instead of a second one being made.', async (ctx, r) => {
+  ['POST', '/portal/api/athletes', 'guardian', 'Add an athlete to the family: name, birth_date, sex, sport, school, medical notes, emergency contact. Already has a profile (a team athlete)? Add athlete_code, their Athlete ID: when the name and birthday match, that profile joins your family instead of a second one being made.', async (ctx, r) => {
     const allowed = ['name', 'birth_date', 'sex', 'sport', 'position', 'school', 'grad_year', 'medical_notes', 'emergency_name', 'emergency_phone'];
     const body = Object.fromEntries(Object.entries(r.body).filter(([k]) => allowed.includes(k)));
     const code = profiles.claimCode(r.body.athlete_code);

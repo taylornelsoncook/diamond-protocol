@@ -60,9 +60,9 @@ before(async () => {
 });
 after(() => app.server.close());
 
-test('sign-up with the Athlete ID, name and birth year: the team profile joins the family, no second profile', async () => {
+test('sign-up with the Athlete ID, name and birthday: the team profile joins the family, no second profile', async () => {
   const before = db().get('SELECT COUNT(*) AS n FROM clients').n;
-  const { cookie, athletes } = await signUp('rosa.ortiz@example.com', 'Rosa Ortiz', [{ name: 'ty ortiz', birth_date: '2010-09-30', athlete_code: ` ${ty.athlete_id.toLowerCase()} ` }]);
+  const { cookie, athletes } = await signUp('rosa.ortiz@example.com', 'Rosa Ortiz', [{ name: 'ty ortiz', birth_date: '2010-05-04', athlete_code: ` ${ty.athlete_id.toLowerCase()} ` }]);
   assert.equal(db().get('SELECT COUNT(*) AS n FROM clients').n, before, 'no new profile');
   assert.equal(athletes.length, 1);
   assert.equal(athletes[0].id, ty.id);
@@ -79,6 +79,8 @@ test('sign-up with the Athlete ID, name and birth year: the team profile joins t
 test('a wrong birth year, an unknown ID and a profile in another family all get the same answer; the owner checks real ones', async () => {
   const wrongYear = await signUp('pat.brooks@example.com', 'Pat Brooks', [{ name: 'Jalen Brooks', birth_date: '2011-02-11', athlete_code: jalen.athlete_id }]);
   const unknown = await signUp('kim.nobody@example.com', 'Kim Nobody', [{ name: 'Nia Nobody', birth_date: '2011-02-11', athlete_code: 'NIANOB2025' }]);
+  const yearOnly = await signUp('guess@example.com', 'Gus Guess', [{ name: 'Jalen Brooks', birth_date: '2009-06-01', athlete_code: jalen.athlete_id }]);
+  assert.notEqual(yearOnly.athletes[0].id, jalen.id, 'the right birth year alone doesn\'t attach a profile (IDs and years are guessable)');
   const taken = await signUp('someone@example.com', 'Some One', [{ name: 'Ty Ortiz', birth_date: '2010-05-04', athlete_code: ty.athlete_id }]);
   const answer = async (cookie) => (await req('GET', '/portal/api/me', null, { cookie })).body.athletes[0];
   for (const x of [wrongYear, unknown, taken]) {
@@ -88,8 +90,9 @@ test('a wrong birth year, an unknown ID and a profile in another family all get 
   assert.notEqual(wrongYear.athletes[0].athlete_id, jalen.athlete_id);
   assert.equal(db().get('SELECT family_id FROM clients WHERE id = ?', jalen.id).family_id, null, 'Jalen stays team-only');
   const claims = (await owner('GET', '/v1/profile-claims')).body.data;
-  assert.equal(claims.length, 2, 'only IDs that belong to a profile reach the owner');
-  const j = claims.find((c) => c.claimed_client_id === jalen.id);
+  assert.equal(claims.length, 3, 'only IDs that belong to a profile reach the owner');
+  assert.equal(claims.find((c) => c.guardian_name === 'Gus Guess').reason, 'birthday');
+  const j = claims.find((c) => c.claimed_client_id === jalen.id && c.guardian_name === 'Pat Brooks');
   assert.equal(j.reason, 'birth_year');
   assert.equal(j.new_name, 'Jalen Brooks');
   assert.equal(claims.find((c) => c.claimed_client_id === ty.id).reason, 'in_family');
@@ -130,6 +133,8 @@ test('the owner merges the new profile into the team profile: everything moves, 
   const ses = newId('cls');
   db().run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, status, created_at) VALUES (?, 'Speed', 'group', ?, ?, ?, 8, 'scheduled', ?)`, ses, facility.id, new Date(Date.now() + 86400000).toISOString(), new Date(Date.now() + 90000000).toISOString(), app.ctx.now());
   await owner('POST', `/v1/sessions/${ses}/bookings`, { client_id: newJalen });
+  // Jalen's team profile had booked the same session and canceled: the new profile's live booking is the one kept.
+  db().run(`INSERT INTO bookings (id, session_id, client_id, status, coverage, created_at, updated_at) VALUES (?, ?, ?, 'canceled', 'none', ?, ?)`, newId('bkg'), ses, jalen.id, app.ctx.now(), app.ctx.now());
   await owner('POST', `/v1/clients/${newJalen}/credits`, { delta: 3, credit_type: 'group', note: 'Pack' });
   await owner('POST', `/v1/clients/${newJalen}/notes`, { body: 'Signed up online' });
   await owner('POST', `/v1/clients/${newJalen}/subscription`, { plan_id: plan.id });
@@ -146,7 +151,7 @@ test('the owner merges the new profile into the team profile: everything moves, 
   assert.ok(j.family_id, 'Jalen joins the parent\'s family');
   assert.equal(j.athlete_id, jalen.athlete_id, 'the team profile keeps its Athlete ID');
   assert.equal(findByAthleteId(app.ctx, oldId).client_id, jalen.id, 'the other ID finds Jalen');
-  assert.equal(db().get('SELECT COUNT(*) AS n FROM bookings WHERE client_id = ?', jalen.id).n, 1);
+  assert.deepEqual({ ...db().get('SELECT COUNT(*) AS n, MAX(status) AS s FROM bookings WHERE client_id = ?', jalen.id) }, { n: 1, s: 'booked' }, 'the live booking survives');
   assert.equal(db().get(`SELECT COALESCE(SUM(delta), 0) AS n FROM session_credits WHERE client_id = ? AND credit_type = 'group'`, jalen.id).n, 3);
   assert.ok(db().get(`SELECT 1 FROM client_notes WHERE client_id = ? AND body = 'Signed up online'`, jalen.id));
   assert.ok(db().get(`SELECT 1 FROM subscriptions WHERE client_id = ? AND status != 'canceled'`, jalen.id), 'the membership moves with its invoices');

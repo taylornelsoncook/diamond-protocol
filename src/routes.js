@@ -1,6 +1,7 @@
 import * as billing from './services/billing.js';
 import * as refunds from './services/refunds.js';
 import * as dataimport from './services/dataimport.js';
+import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
 import * as programs from './services/programs.js';
@@ -208,7 +209,9 @@ export const routes = [
 
   // Training
   ['GET', '/v1/exercises', 'any', 'Training', 'The exercise library, each with uses (workouts it\'s in) and programs. Filter with ?q= (name or cues), ?category= and ?filter=no_video or unused. categories lists the categories.', (ctx, r) => ({ ...list(programs.listExercises(ctx, { q: r.query.q, category: r.query.category, filter: r.query.filter })), categories: programs.CATEGORIES })],
-  ['POST', '/v1/exercises', 'any', 'Training', 'Add an exercise: name (not already in the library), video_url (YouTube, Vimeo or a direct video file), instructions, category.', (ctx, r) => programs.createExercise(ctx, r.body), 201],
+  ['POST', '/v1/exercises/import/preview', 'session', 'Training', 'Owner: check a list of exercises before bringing it in: csv (columns Name, and optionally Category, Video URL, Poster URL, Instructions; the video upload tool writes video-library.csv), existing (skip, add_video: give exercises with no video the file\'s, or replace_video). Returns what would be added, updated and skipped, and every problem by row and column. Nothing is saved.', (ctx, r) => exerciseimport.previewExerciseImport(ctx, r.body)],
+  ['POST', '/v1/exercises/import', 'session', 'Training', 'Owner: bring the list in, all or nothing (the same fields as the preview; checked again first).', (ctx, r) => exerciseimport.saveExerciseImport(ctx, r.body), 201],
+  ['POST', '/v1/exercises', 'any', 'Training', 'Add an exercise: name (not already in the library), video_url (YouTube, Vimeo or a direct video file), poster_url (the still shown before a video file plays), instructions, category.', (ctx, r) => programs.createExercise(ctx, r.body), 201],
   ['PATCH', '/v1/exercises/:id', 'any', 'Training', 'Update an exercise.', (ctx, r) => programs.updateExercise(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/exercises/:id', 'any', 'Training', 'Delete an exercise no workout uses. Sets athletes logged keep its name.', (ctx, r) => programs.deleteExercise(ctx, r.params.id)],
   ['GET', '/v1/programs', 'any', 'Training', 'List programs with workout and client counts, days per week and workouts logged in the last 7 days.', (ctx) => list(programs.listPrograms(ctx))],

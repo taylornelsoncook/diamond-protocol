@@ -73,7 +73,8 @@ export function panel(title, { subtitle, action } = {}, ...children) {
 }
 
 // YouTube and Vimeo links play in their embedded players; anything else is treated as a direct video file.
-export function videoEmbed(url, title, emptyText = 'No demo video yet. Edit the exercise to add a video link.') {
+// poster: the still shown before a video file plays (the video library upload makes one); the file loads only on Play.
+export function videoEmbed(url, title, emptyText = 'No demo video yet. Edit the exercise to add a video link.', poster = null) {
   if (!url) return h('div', { class: 'video-frame row', style: 'justify-content:center;text-align:center;padding:24px' }, h('span', { class: 'muted' }, emptyText));
   let u; try { u = new URL(url); } catch { return h('div', { class: 'muted' }, 'This video link is not valid.'); }
   const yt = u.hostname.includes('youtu') ? (u.hostname === 'youtu.be' ? u.pathname.slice(1) : u.searchParams.get('v') || u.pathname.split('/').pop()) : null;
@@ -81,7 +82,7 @@ export function videoEmbed(url, title, emptyText = 'No demo video yet. Edit the 
   const src = yt ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(yt)}?rel=0` : vimeo ? `https://player.vimeo.com/video/${encodeURIComponent(vimeo)}` : null;
   return h('div', { class: 'video-frame' }, src
     ? h('iframe', { src, title: `${title} demo video`, allow: 'autoplay; fullscreen; picture-in-picture', allowfullscreen: true })
-    : h('video', { src: url, controls: true, playsinline: true, preload: 'metadata' }));
+    : h('video', { src: url, controls: true, playsinline: true, preload: poster ? 'none' : 'metadata', ...(poster ? { poster } : {}), 'aria-label': `${title} demo video` }));
 }
 
 export function playIcon() {

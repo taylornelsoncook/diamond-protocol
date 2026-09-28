@@ -72,6 +72,36 @@ Backblaze B2 and AWS S3 work the same way: use their S3 endpoint (e.g. `https://
   (with the `BACKUP_S3_*` settings also set, pass just the backup name, e.g. `diamond-20260927-030000.db`, and it fetches it). The script checks the database before it writes `restored.db`.
 - **Putting it back in service:** stop the app, replace `/data/dp.db` with the restored file (renamed to `dp.db`), start the app. A file downloaded from Staff & security → Backups is already a plain database and goes in the same way.
 
+## Video library
+Your exercise videos live in your own Cloudflare R2 bucket, played from your own address (for example `https://videos.diamondprotocol.org`). Cloudflare keeps copies near each viewer, so clips start quickly on phones, and the app's server never carries the video. R2 charges about $0.015 per GB a month to store and nothing when people watch.
+
+**1. A bucket for the videos** (a new one: never the backups bucket, which must stay private)
+1. Cloudflare dashboard → **R2 Object Storage → Create bucket**, e.g. `dp-videos`.
+2. In the bucket: **Settings → Custom domains → Connect domain** → `videos.diamondprotocol.org`. Cloudflare adds the DNS record. This makes the files viewable by anyone with the link, which is what the app needs (the links are long and unguessable, but not secret).
+3. R2 → **Manage API tokens → Create API token**: **Object Read & Write**, limited to `dp-videos`. Copy the **Access Key ID**, **Secret Access Key** and the **S3 endpoint**.
+
+**2. On the computer with the videos** (a Mac here; a hard drive plugged in counts)
+1. Install Node.js 22 from nodejs.org, and Homebrew from brew.sh. Then in Terminal: `brew install ffmpeg`.
+2. Get this project: on GitHub, **Code → Download ZIP**, and unzip it (or `git clone` it). In Terminal, `cd` into the folder.
+3. Make a file called `video-upload.env` in that folder:
+   ```
+   VIDEO_S3_ENDPOINT=https://<account id>.r2.cloudflarestorage.com
+   VIDEO_S3_BUCKET=dp-videos
+   VIDEO_S3_KEY_ID=<Access Key ID>
+   VIDEO_S3_SECRET=<Secret Access Key>
+   VIDEO_PUBLIC_URL=https://videos.diamondprotocol.org
+   ```
+4. First a practice run that uploads nothing (drag each folder into Terminal to paste its path):
+   `node tools/upload-videos.mjs "/Users/you/Movies/Exercises" "/Volumes/Your Drive/Exercises" --dry-run`
+   It lists what it found and writes `video-upload-report.txt` with any name that appears twice (the first folder wins) and any file it can't use.
+5. The real run, kept awake overnight: `caffeinate -i node tools/upload-videos.mjs "/Users/you/Movies/Exercises" "/Volumes/Your Drive/Exercises"`
+   It checks the bucket and the address first, then converts and uploads two videos at a time (5,000 clips take several hours). Stop it with Ctrl+C whenever you like; the same command carries on where it stopped and retries anything that failed.
+6. When it says Done, it has written `video-library.csv`.
+
+**3. In the app:** Settings → Exercise library → **Import a list** (owner), choose `video-library.csv`, press **Check the list**, then **Bring them in**. Exercises already in the library are left as they are unless you choose to add or replace their video.
+
+Names come from the file names ("Back_squat.mp4" is Back squat; "(1)" and "copy" are dropped). A video in a folder called Lower body, Core, Speed… gets that category; other folder names are ignored. Rename files before the upload if a name should change; a renamed file uploads again on the next run.
+
 ## Updating
 Push changes to the repository. GitHub runs the full test suite and checks the Docker image builds (the **Tests** check, `.github/workflows/tests.yml`). Staging deploys only after that check passes; production still waits for Manual Deploy. If staging was set up by hand rather than from the Blueprint, set it yourself: staging service → Settings → Auto-Deploy → **After CI Checks Pass**. The database upgrades itself on start, and a backup is made on start before anything else runs each day.
 

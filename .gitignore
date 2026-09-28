@@ -1,3 +1,7 @@
 node_modules/
 data/
 .env
+video-upload.env
+video-upload-state.json
+video-upload-report.txt
+video-library.csv

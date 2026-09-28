@@ -47,11 +47,15 @@ function showVideo(x) {
   const d = document.getElementById('dialog');
   fill(d, h('div', { class: 'stack' },
     h('div', { class: 'row' }, h('h2', { class: 'week-title grow', style: 'color:var(--steel)' }, x.name), btn('Close', () => d.close(), 'ghost')),
-    videoEmbed(x.video_url, x.name), x.instructions ? h('p', { class: 'muted' }, x.instructions) : null));
+    videoEmbed(x.video_url, x.name, undefined, x.poster_url), x.instructions ? h('p', { class: 'muted' }, x.instructions) : null));
   d.addEventListener('close', () => fill(d), { once: true });
   d.showModal();
 }
-const playBtn = (x) => h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon());
+const playBtn = (x) => {
+  const b = h('button', { type: 'button', class: `dp-ex-play${x.poster_url ? ' dp-ex-play--poster' : ''}`, 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon());
+  if (x.poster_url) b.style.backgroundImage = `url("${x.poster_url.replace(/["\\\n\r]/g, encodeURIComponent)}")`;   // already a checked https link; only quotes need escaping
+  return b;
+};
 async function sendLink(c) {
   const r = await post(`/v1/clients/${c.id}/app-link/email`);
   toast(`Workout app link sent to ${r.sent_to.join(', ')}.`);
@@ -159,25 +163,64 @@ function libraryPanel(exs, edit) {
   const flt = select([['', 'All exercises'], ['no_video', 'Missing a video'], ['unused', 'Not in a program']], { value: pageState.exFilter, 'aria-label': 'Show' });
   const listBox = h('div');
   const count = h('span');
+  const PAGE = 60;
+  let showing = PAGE;           // a big library shows 60 at a time; search narrows it
   const draw = () => {
     const needle = pageState.exQ.trim().toLowerCase();
     const shown = exs.data.filter((x) => (!needle || x.name.toLowerCase().includes(needle) || (x.instructions ?? '').toLowerCase().includes(needle))
       && (!pageState.exCat || x.category === pageState.exCat) && (pageState.exFilter !== 'no_video' || !x.video_url) && (pageState.exFilter !== 'unused' || !x.uses));
     count.textContent = shown.length === exs.data.length ? plural(exs.data.length, 'exercise') : `${shown.length} of ${exs.data.length} exercises`;
-    fill(listBox, shown.length ? shown.map((x) => h('div', { class: 'list-item' },
+    fill(listBox, shown.length ? [...shown.slice(0, showing).map((x) => h('div', { class: 'list-item' },
       playBtn(x),
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name),
         h('span', { class: 'small muted' }, [x.category ?? 'No category', x.uses ? `in ${plural(x.uses, 'workout')}` : 'not in a program', x.video_url ? null : 'no video yet'].filter(Boolean).join(' · ')),
         x.programs.length ? h('span', { class: 'small muted' }, `Used in ${x.programs.map((p) => p.name).join(', ')}`) : null),
-      edit ? btn('Edit', () => exerciseDialog(x, cats), 'ghost', { 'aria-label': `Edit ${x.name}` }) : null))
+      edit ? btn('Edit', () => exerciseDialog(x, cats), 'ghost', { 'aria-label': `Edit ${x.name}` }) : null)),
+      shown.length > showing ? h('div', { class: 'row', style: 'justify-content:center;padding-top:8px' }, btn(`Show ${Math.min(PAGE, shown.length - showing)} more (${(shown.length - showing).toLocaleString()} left)`, () => { showing += PAGE; draw(); }, 'ghost')) : null]
       : h('p', { class: 'small muted' }, exs.data.length ? 'No exercises match. Clear the search or filters.' : 'No exercises yet.'));
   };
-  q.addEventListener('input', () => { pageState.exQ = q.value; draw(); });
-  cat.addEventListener('change', () => { pageState.exCat = cat.value; draw(); });
-  flt.addEventListener('change', () => { pageState.exFilter = flt.value; draw(); });
+  q.addEventListener('input', () => { pageState.exQ = q.value; showing = PAGE; draw(); });
+  cat.addEventListener('change', () => { pageState.exCat = cat.value; showing = PAGE; draw(); });
+  flt.addEventListener('change', () => { pageState.exFilter = flt.value; showing = PAGE; draw(); });
   draw();
-  return panel('Exercise library', { subtitle: count, action: edit ? btn('Add exercise', () => exerciseDialog(null, cats), 'secondary') : null },
+  return panel('Exercise library', { subtitle: count, action: edit ? h('div', { class: 'row wrap' }, isOwner() ? btn('Import a list', () => importListDialog(), 'ghost') : null, btn('Add exercise', () => exerciseDialog(null, cats), 'secondary')) : null },
     h('div', { class: 'stack', style: 'gap:8px' }, q, h('div', { class: 'form-grid', style: 'gap:8px' }, cat, flt)), listBox);
+}
+// Owner: bring in a list of exercises (the video upload tool's video-library.csv, or any CSV with a Name column).
+// Checked first, every problem listed by row and column; nothing is saved until Bring them in.
+function importListDialog() {
+  const file = h('input', { type: 'file', class: 'dp-input', accept: '.csv,text/csv', 'aria-label': 'The exercise list' });
+  const existing = select([['skip', 'Leave them as they are'], ['add_video', 'Add the video if they have none'], ['replace_video', 'Replace their video with the list\'s']], { 'aria-label': 'Exercises already in the library' });
+  const out = h('div', { class: 'stack' });
+  let csv = null;
+  const check = async () => {
+    if (!file.files[0]) throw new Error('Choose the CSV file first.');
+    csv = await file.files[0].text();
+    const p = await post('/v1/exercises/import/preview', { csv, existing: existing.value });
+    fill(out,
+      h('p', { class: 'small' }, `${p.rows.toLocaleString()} rows: ${plural(p.new, 'new exercise')} (${p.new_with_video.toLocaleString()} with a video)${p.updated ? `, ${plural(p.updated, 'video')} added or replaced` : ''}${p.skipped ? `, ${p.skipped.toLocaleString()} already in the library and left as they are` : ''}.`),
+      p.sample.length ? h('p', { class: 'small muted' }, `For example: ${p.sample.map((x) => x.name).join(', ')}.`) : null,
+      p.notes.map((n) => h('p', { class: 'small warn-text' }, n)),
+      p.problem_count ? h('div', { class: 'stack-tight' }, h('strong', { class: 'small warn-text' }, `${plural(p.problem_count, 'problem')} to fix in the file first:`),
+        h('ul', null, p.problems.map((x) => h('li', { class: 'small' }, `Row ${x.row}, ${x.column}: ${x.message}`))),
+        p.problem_count > p.problems.length ? h('p', { class: 'small' }, `And ${p.problem_count - p.problems.length} more.`) : null) : null);
+    return p;
+  };
+  file.addEventListener('change', () => { csv = null; fill(out); });
+  existing.addEventListener('change', () => { if (csv) check().catch((e) => fill(out, h('div', { class: 'dp-error' }, e.message))); });
+  dialog('Import a list of exercises', h('div', { class: 'stack' },
+    h('p', { class: 'small muted' }, 'A CSV with a Name column, and optionally Category, Video URL, Poster URL and Instructions. The video upload tool (see CHECKLIST.md) writes this file for you.'),
+    field('File', file), field('Exercises already in the library', existing), out), [
+    { label: 'Check the list', onClick: async () => { await check(); return false; } },
+    { label: 'Bring them in', variant: 'primary', onClick: async () => {
+      const p = csv ? await check() : null;
+      if (!p) throw new Error('Check the list first.');
+      if (!p.ready) throw new Error(p.problem_count ? 'Fix the problems in the file, then check it again.' : 'There\'s nothing new to bring in.');
+      const r = await post('/v1/exercises/import', { csv, existing: existing.value });
+      toast(`${plural(r.new, 'exercise')} added${r.updated ? `, ${plural(r.updated, 'video')} updated` : ''}.`);
+      deps.render();
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
 }
 function exerciseFields(x, cats) {
   const name = input({ value: x?.name ?? '', required: true }), url = input({ type: 'url', value: x?.video_url ?? '', placeholder: 'https://youtube.com/watch?v=…' });

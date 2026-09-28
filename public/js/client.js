@@ -268,7 +268,7 @@ function renderLogger(w) {
     box.append(headOf(x));
     if (isOpen) {
       box.append(h('div', { class: 'stack c-ex-media' },
-        x.video_url !== undefined ? videoEmbed(x.video_url, x.name, 'Demo video coming soon. Follow the cues below.') : null,
+        x.video_url !== undefined ? videoEmbed(x.video_url, x.name, 'Demo video coming soon. Follow the cues below.', x.poster_url) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
         x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
         x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null));

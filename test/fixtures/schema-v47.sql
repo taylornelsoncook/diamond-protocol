@@ -155,8 +155,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   video_url TEXT,
   instructions TEXT,
   created_at TEXT NOT NULL,
-  category TEXT,                                 -- version 40: Speed, Power, Lower body... (programs.js CATEGORIES)
-  poster_url TEXT                                -- version 48: the still shown before the video plays (the video library upload)
+  category TEXT                                  -- version 40: Speed, Power, Lower body... (programs.js CATEGORIES)
 );
 CREATE TABLE IF NOT EXISTS programs (
   id TEXT PRIMARY KEY,
@@ -185,7 +184,6 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   load_test TEXT,                                -- version 21: weight as a percent of this tested max (squat_1rm...)
   load_pct INTEGER
 );
-CREATE INDEX IF NOT EXISTS workout_exercises_exercise ON workout_exercises(exercise_id);   -- the library's use counts (a big video library)
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

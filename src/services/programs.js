@@ -28,7 +28,8 @@ export function listExercises(ctx, { q, category: cat, filter } = {}) {
     inPrograms.get(r.exercise_id).push({ id: r.id, name: r.name });
   }
   const needle = String(q ?? '').trim().toLowerCase();
-  return ctx.db.all(`SELECT e.*, (SELECT COUNT(*) FROM workout_exercises we WHERE we.exercise_id = e.id) AS uses FROM exercises e ORDER BY e.name COLLATE NOCASE`)
+  const uses = new Map(ctx.db.all('SELECT exercise_id, COUNT(*) AS n FROM workout_exercises GROUP BY exercise_id').map((r) => [r.exercise_id, r.n]));
+  return ctx.db.all('SELECT e.* FROM exercises e ORDER BY e.name COLLATE NOCASE').map((e) => ({ ...e, uses: uses.get(e.id) ?? 0 }))
     .map((e) => ({ ...e, programs: inPrograms.get(e.id) ?? [] }))
     .filter((e) => (!needle || e.name.toLowerCase().includes(needle) || (e.instructions ?? '').toLowerCase().includes(needle))
       && (!cat || e.category === cat) && (filter !== 'no_video' || !e.video_url) && (filter !== 'unused' || !e.uses));
@@ -41,19 +42,23 @@ export function getExercise(ctx, id) {
 export function createExercise(ctx, body) {
   const e = {
     id: newId('ex'),
-    name: uniqueName(ctx, v.str(body.name, 'name', { max: 120 })),
+    name: uniqueName(ctx, v.str(body.name, 'name', { max: 120 }).normalize('NFC')),
     video_url: v.url(body.video_url, 'video_url', { optional: true }),
+    poster_url: v.url(body.poster_url, 'poster_url', { optional: true }),
     instructions: v.str(body.instructions, 'instructions', { max: 4000, optional: true }),
     category: category(body.category)
   };
-  ctx.db.run('INSERT INTO exercises (id, name, video_url, instructions, category, created_at) VALUES (?, ?, ?, ?, ?, ?)', e.id, e.name, e.video_url, e.instructions, e.category, ctx.now());
+  ctx.db.run('INSERT INTO exercises (id, name, video_url, poster_url, instructions, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', e.id, e.name, e.video_url, e.poster_url, e.instructions, e.category, ctx.now());
   return getExercise(ctx, e.id);
 }
 export function updateExercise(ctx, id, body) {
   const e = getExercise(ctx, id);
-  ctx.db.run('UPDATE exercises SET name = ?, video_url = ?, instructions = ?, category = ? WHERE id = ?',
-    body.name !== undefined ? uniqueName(ctx, v.str(body.name, 'name', { max: 120 }), id) : e.name,
-    body.video_url !== undefined ? v.url(body.video_url, 'video_url', { optional: true }) : e.video_url,
+  // A new video link drops the old still unless a new one comes with it (the still showed the old video).
+  const newVideo = body.video_url !== undefined ? v.url(body.video_url, 'video_url', { optional: true }) : e.video_url;
+  const poster = body.poster_url !== undefined ? v.url(body.poster_url, 'poster_url', { optional: true }) : newVideo === e.video_url ? e.poster_url : null;
+  ctx.db.run('UPDATE exercises SET name = ?, video_url = ?, poster_url = ?, instructions = ?, category = ? WHERE id = ?',
+    body.name !== undefined ? uniqueName(ctx, v.str(body.name, 'name', { max: 120 }).normalize('NFC'), id) : e.name,
+    newVideo, poster,
     body.instructions !== undefined ? v.str(body.instructions, 'instructions', { max: 4000, optional: true }) : e.instructions,
     body.category !== undefined ? category(body.category) : e.category,
     id);
@@ -84,7 +89,7 @@ export function getProgram(ctx, id) {
   const p = ctx.db.get('SELECT * FROM programs WHERE id = ?', id);
   if (!p) throw notFound('Program');
   const items = ctx.db.all(
-    `SELECT we.id, we.workout_id, we.position, we.prescription, we.load_test, we.load_pct, e.id AS exercise_id, e.name, e.video_url, e.instructions, e.category
+    `SELECT we.id, we.workout_id, we.position, we.prescription, we.load_test, we.load_pct, e.id AS exercise_id, e.name, e.video_url, e.poster_url, e.instructions, e.category
      FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id
      JOIN workouts w ON w.id = we.workout_id WHERE w.program_id = ? ORDER BY we.position`, id);
   p.workouts = ctx.db.all('SELECT * FROM workouts WHERE program_id = ? ORDER BY week, day', id).map((w) => ({

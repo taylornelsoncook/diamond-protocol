@@ -50,7 +50,8 @@
 .dp-toggle[aria-pressed="true"]{background:var(--green);color:var(--on-green);border-color:var(--green-mid)}
 .dp-ex{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md)}
 .dp-ex--current{border:2px solid var(--green-mid)}
-.dp-ex-play{width:52px;height:44px;flex-shrink:0;border:0;border-radius:var(--radius-sm);background:var(--black);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.dp-ex-play{width:52px;height:44px;flex-shrink:0;border:0;border-radius:var(--radius-sm);background:var(--black);display:flex;align-items:center;justify-content:center;cursor:pointer;background-size:cover;background-position:center;overflow:hidden}
+.dp-ex-play--poster svg{filter:drop-shadow(0 0 2px #000)}
 .dp-ex-body{flex-grow:1;display:flex;flex-direction:column;gap:2px;min-width:0}
 .dp-ex-name{font:600 16px/22px var(--font-sans);color:var(--steel)}
 .dp-ex-sets{font:400 14px/20px var(--font-sans);color:var(--steel-muted)}

@@ -313,3 +313,44 @@ for (const v of [33, 34]) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+// A roster line linked to a profile whose family was deleted before version 36, and one attempt with two different
+// values (roster and client): the deleted athlete comes off the roster with no name, ID or device link, their roster
+// results are set aside (not deleted) and nothing new can reach the nameless profile; the two values are both kept and logged.
+test('a version 34 database: a deleted family\'s roster line stays deleted, and conflicting attempts are kept and logged', async () => {
+  const { findByAthleteId } = await import('../src/services/athlete-ids.js');
+  const { restoreRoster } = await import('../src/services/teams.js');
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v34.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 34');
+    seedTeams(old);
+    old.exec(`INSERT INTO families (id, name, created_at) VALUES ('fam_gone', 'Deleted family', '${T0}')`);
+    old.exec(`INSERT INTO clients (id, family_id, name, athlete_id, access_token, created_at) VALUES ('cli_gone', 'fam_gone', 'Deleted athlete', NULL, 'gone_abc', '${T0}')`);
+    old.exec(`INSERT INTO team_roster (id, contract_id, name, athlete_id, position, client_id, active, created_at) VALUES ('tr_kelly', 'tc_1', 'Kelly Gone', 'KELGON2026', 'LB', 'cli_gone', 1, '${T1}')`);
+    old.exec(`INSERT INTO perf_results (id, session_id, roster_id, test_id, metric, attempt, value, source, recorded_at, created_at) VALUES
+      ('res_k', 'tsn_1', 'tr_kelly', 'pt_sprint', 'time', 1, 5.2, 'manual', '2026-03-05T15:00:00.000Z', '${T2}'),
+      ('res_a3', 'tsn_1', 'tr_ava', 'pt_sprint', 'time', 3, 5.3, 'manual', '2026-03-05T15:00:00.000Z', '${T2}')`);
+    old.exec(`INSERT INTO perf_results (id, session_id, client_id, test_id, metric, attempt, value, source, recorded_at, created_at) VALUES ('res_c3', 'tsn_1', 'cli_ava', 'pt_sprint', 'time', 3, 5.4, 'manual', '2026-03-05T15:00:00.000Z', '${T2}')`);
+    old.exec(`INSERT INTO athlete_links (provider, external_id, roster_id, created_at) VALUES ('swift', 'SW-K', 'tr_kelly', '${T2}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const ctx = { db, now: () => new Date().toISOString() };
+      assert.deepEqual(db.get(`SELECT name, athlete_id, position, client_id, active FROM team_roster WHERE id = 'tr_kelly'`), { name: 'Deleted athlete', athlete_id: null, position: null, client_id: 'cli_gone', active: 0 }, `round ${round}`);
+      assert.equal(db.get(`SELECT athlete_id FROM clients WHERE id = 'cli_gone'`).athlete_id, null, 'the deleted profile gets no ID back');
+      assert.equal(findByAthleteId(ctx, 'KELGON2026'), null, 'the old ID finds nobody');
+      assert.deepEqual(db.get(`SELECT client_id, roster_id, voided FROM perf_results WHERE id = 'res_k'`), { client_id: 'cli_gone', roster_id: null, voided: 1 }, 'set aside, not deleted');
+      assert.equal(db.get(`SELECT 1 FROM athlete_links WHERE external_id = 'SW-K'`), undefined);
+      assert.throws(() => restoreRoster(ctx, 'tc_1', 'tr_kelly'), /deleted/);
+      assert.deepEqual(db.all(`SELECT id FROM perf_results WHERE id IN ('res_a3', 'res_c3') AND client_id = 'cli_ava' AND voided = 0 ORDER BY id`).map((r) => r.id), ['res_a3', 'res_c3'], 'two different values: both kept');
+      const log = db.all(`SELECT action FROM audit_log WHERE actor_name = 'Upgrade to version 36'`).map((r) => r.action);
+      assert.ok(log.some((a) => /res_a3/.test(a) && /res_c3/.test(a) && /different values/.test(a)), log.join('\n'));
+      const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v36'`).value);
+      assert.deepEqual([stats.deleted_profiles, stats.deleted_results_set_aside, stats.slot_conflicts], [1, 1, 1]);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

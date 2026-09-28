@@ -234,3 +234,22 @@ test('archived athletes stay on the roster\'s history but leave its current list
   const other = (await owner('POST', '/v1/clients', { name: 'Tia Other', email: 'tia@example.com' })).body;
   assert.equal((await owner('PATCH', `/v1/clients/${other.id}`, { athlete_id: 'TYLORT2026' })).status, 409);
 });
+
+test('a mistyped Athlete ID never puts someone else on a team, and a family\'s athlete on a team still counts as new', async () => {
+  const dashBefore = (await owner('GET', '/v1/dashboard')).body;
+  const kid = (await owner('POST', '/v1/clients', { name: 'Nia Grant', parent: { name: 'Lee Grant', email: 'lee.grant@example.com' } })).body;
+  const other = (await owner('POST', '/v1/team-contracts', { organization: { name: 'Lakeway FC', kind: 'club' }, name: '12U', monthly_cents: 40000 })).body;
+  // Pasted: the ID belongs to Nia, but the line says someone else. Nothing is saved.
+  const plan = (await owner('POST', `/v1/team-contracts/${other.id}/roster/check`, { names: `Deon Parkes, ${kid.athlete_id}` })).body;
+  assert.equal(plan.rows[0].status, 'error');
+  assert.match(plan.rows[0].error, new RegExp(`${kid.athlete_id} is Nia Grant, but this line says Deon Parkes`));
+  assert.equal((await owner('POST', `/v1/team-contracts/${other.id}/roster`, { names: `Deon Parkes, ${kid.athlete_id}` })).status, 409);
+  assert.equal((await owner('POST', `/v1/team-contracts/${other.id}/roster`, { athlete_id: kid.athlete_id, name: 'Deon Parkes' })).status, 400);
+  assert.equal((await rosterOf(other.id)).length, 0);
+  // The right name (any capitalization, middle name ignored) links her.
+  const ok = (await owner('POST', `/v1/team-contracts/${other.id}/roster`, { names: `nia q grant, ${kid.athlete_id.toLowerCase()}` })).body;
+  assert.deepEqual([ok.added, ok.linked], [0, 1]);
+  // Nia has a family and no membership, and is on a team: she's still a new client this month.
+  const dash = (await owner('GET', '/v1/dashboard')).body;
+  assert.equal(dash.pulse.clients.new_this_month, dashBefore.pulse.clients.new_this_month + 1);
+});

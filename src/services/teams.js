@@ -3,6 +3,7 @@ import { emit } from './events.js';
 import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
 import { newAthleteId, findByAthleteId, clientOfRoster, ID_PATTERN } from './athlete-ids.js';
+import { sameName } from './uploads.js';
 
 // Schools and clubs pay a flat monthly fee per team. Each month is invoiced in advance on the
 // anniversary of the start date and is due on the contract's terms (Net 30 by default).
@@ -360,6 +361,8 @@ export function checkRoster(ctx, contractId, body) {
       const c = who && ctx.db.get('SELECT id, name, athlete_id, archived_at FROM clients WHERE id = ?', who.client_id);
       if (!c) { r.status = 'error'; r.error = `Line ${r.line}: no athlete has the ID ${r.athlete_id}. Check it, or leave it out to add ${r.name} as a new athlete.`; continue; }
       if (c.archived_at) { r.status = 'error'; r.error = `Line ${r.line}: ${c.name} (${c.athlete_id}) is archived. Bring them back from their profile first.`; continue; }
+      // A mistyped ID must not put someone else on the team: the name on the line has to be the profile's.
+      if (!sameName(r.name, c.name)) { r.status = 'error'; r.error = `Line ${r.line}: ${r.athlete_id} is ${c.name}, but this line says ${r.name}. Check the ID or the name.`; continue; }
       if (onRosterLine(ctx, contractId, c.id) || seen.has(`id:${c.id}`)) { r.status = 'skip'; r.reason = seen.has(`id:${c.id}`) ? 'Listed twice' : 'Already on this roster'; continue; }
       seen.add(`id:${c.id}`); seen.add(c.name.toLowerCase());
       r.status = 'link'; r.client = { id: c.id, name: c.name, athlete_id: c.athlete_id };
@@ -407,6 +410,8 @@ function existingClient(ctx, body) {
     const who = findByAthleteId(ctx, body.athlete_id);
     if (!who) throw fieldError(`No athlete has the ID ${String(body.athlete_id).trim().toUpperCase()}. Check it, or leave it out to add a new athlete.`, 'athlete_id');
     id = who.client_id;
+    const named = ctx.db.get('SELECT name FROM clients WHERE id = ?', id);
+    if (body.name && named && !sameName(String(body.name), named.name)) throw fieldError(`${String(body.athlete_id).trim().toUpperCase()} is ${named.name}, but you entered ${String(body.name).trim()}. Check the ID or the name.`, 'athlete_id');
   }
   if (!id) return null;
   const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', id);
@@ -498,11 +503,11 @@ export function removeRoster(ctx, contractId, rosterId) {
 }
 // Undo a removal: the same line comes back, with its join date and attendance.
 export function restoreRoster(ctx, contractId, rosterId) {
-  const r = ctx.db.get('SELECT r.*, c.name AS client_name, c.archived_at FROM team_roster r LEFT JOIN clients c ON c.id = r.client_id WHERE r.id = ? AND r.contract_id = ?', rosterId, contractId);
+  const r = ctx.db.get('SELECT r.*, c.name AS client_name, c.archived_at, c.access_token FROM team_roster r LEFT JOIN clients c ON c.id = r.client_id WHERE r.id = ? AND r.contract_id = ?', rosterId, contractId);
   if (!r) throw notFound('Roster athlete');
   if (r.active) return getContract(ctx, contractId).roster;
   const name = r.client_name ?? r.name;
-  if (!r.client_id) throw conflict(`${name}'s profile was deleted, so they can't come back on the roster.`);
+  if (!r.client_id || String(r.access_token ?? '').startsWith('gone_')) throw conflict(`${name}'s profile was deleted, so they can't come back on the roster.`);   // a deleted family's athlete
   if (r.archived_at) throw conflict(`${name} is archived. Bring them back from their profile first.`);
   if (onRosterLine(ctx, contractId, r.client_id)) throw conflict(`${name} is already back on this roster.`);
   ctx.db.run('UPDATE team_roster SET active = 1 WHERE id = ?', rosterId);

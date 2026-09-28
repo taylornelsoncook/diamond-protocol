@@ -142,7 +142,7 @@ function oneProfilePerAthlete(raw, schema) {
   const run = (sql, ...p) => raw.prepare(sql).run(...p);
   const now = new Date().toISOString();
   const ctx = { db: { get, all, run }, now: () => now };
-  const stats = { roster_lines: 0, clients_created: 0, already_linked: 0, aliases: 0, collisions: [], results_moved: 0, duplicates_set_aside: 0, device_links_moved: 0, testing_days_updated: 0, attendance_moved: 0, attendance_merged: 0 };
+  const stats = { roster_lines: 0, clients_created: 0, already_linked: 0, deleted_profiles: 0, deleted_results_set_aside: 0, slot_conflicts: 0, aliases: 0, collisions: [], results_moved: 0, duplicates_set_aside: 0, device_links_moved: 0, testing_days_updated: 0, attendance_moved: 0, attendance_merged: 0 };
   const log = (message, target = null) => {
     if (has('audit_log')) run('INSERT INTO audit_log (id, at, actor_type, actor_name, action, target) VALUES (?, ?, ?, ?, ?, ?)', newId('aud'), now, 'system', 'Upgrade to version 36', message, target);
   };
@@ -167,7 +167,18 @@ function oneProfilePerAthlete(raw, schema) {
     stats.roster_lines = lines.length;
     for (const line of lines) {
       const aid = line.athlete_id ? String(line.athlete_id).trim().toUpperCase() : null;
-      const client = line.client_id ? get('SELECT id, athlete_id FROM clients WHERE id = ?', line.client_id) : null;
+      const client = line.client_id ? get('SELECT id, athlete_id, access_token FROM clients WHERE id = ?', line.client_id) : null;
+      if (client && String(client.access_token ?? '').startsWith('gone_')) {
+        // Linked to a profile whose family was deleted (before version 36 that left the roster line alone). Do what a
+        // deletion does now: the line comes off the roster with no name or ID, its device links go, and its results are
+        // set aside (voided, not deleted) on the nameless profile. Its old ID finds nobody, so nothing new lands there.
+        run(`UPDATE team_roster SET name = 'Deleted athlete', athlete_id = NULL, position = NULL, grad_year = NULL, active = 0 WHERE id = ?`, line.id);
+        if (cols('perf_results').includes('roster_id')) stats.deleted_results_set_aside += run('UPDATE perf_results SET client_id = ?, roster_id = NULL, voided = 1 WHERE roster_id = ?', client.id, line.id).changes;
+        if (cols('athlete_links').includes('roster_id')) run('DELETE FROM athlete_links WHERE roster_id = ?', line.id);
+        stats.deleted_profiles++;
+        log('A team roster athlete whose family was deleted came off the roster; their roster results were set aside.', client.id);
+        continue;
+      }
       if (client) {
         stats.already_linked++;
         if (aid && aid !== client.athlete_id) {
@@ -223,6 +234,15 @@ function oneProfilePerAthlete(raw, schema) {
               log(`Result ${r.id} was on the athlete's profile twice (from the team roster and the client); the copy was set aside.`, r.id);
             }
           }
+        }
+        // One attempt on a testing day with two different values, one from the roster and one from the client: both are
+        // kept (neither is known to be wrong), and the coach is told so they can delete the wrong one.
+        const slots = all(`SELECT client_id, session_id, GROUP_CONCAT(id, ',') AS ids FROM perf_results WHERE voided = 0 AND client_id IS NOT NULL AND session_id IS NOT NULL AND attempt IS NOT NULL
+          GROUP BY client_id, session_id, test_id, metric, COALESCE(side, ''), attempt HAVING COUNT(DISTINCT value) > 1`);
+        for (const s of slots) {
+          if (new Set(s.ids.split(',').map((id) => origin.get(id)?.[0])).size < 2) continue;   // not caused by the merge
+          stats.slot_conflicts++;
+          log(`Results ${s.ids.split(',').join(' and ')} are the same attempt on one testing day with different values (one from the team roster, one from the client). Both were kept: delete the wrong one on the testing day.`, s.client_id);
         }
       }
     }

@@ -84,7 +84,7 @@ export function readUpload(body) {
 export const excelDate = (x) => (/^\d{5}(\.\d+)?$/.test(String(x)) ? new Date(Date.UTC(1899, 11, 30) + Number(x) * 86400000).toISOString().slice(0, 10) : x);
 const normName = (s) => { let n = String(s ?? '').trim(); if (n.includes(',')) { const [last, first] = n.split(',', 2); n = `${first} ${last}`; } return n.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim(); };
 // A typed name matches the profile if it's the same name, or the same first and last name (middle names ignored).
-function sameName(typed, profile) {
+export function sameName(typed, profile) {
   const a = normName(typed), b = normName(profile);
   if (!a || a === b) return true;
   const x = a.split(' '), y = b.split(' ');

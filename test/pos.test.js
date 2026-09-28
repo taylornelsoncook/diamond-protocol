@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createApp } from '../src/server.js';
 import { createUser } from '../src/services/access.js';
-import { addDays } from '../src/util.js';
+import { addDays, addDaysToDate, localDate } from '../src/util.js';
 import * as commerce from '../src/services/commerce.js';
 
 // Point of sale: discounts, receipts, undo, the day's takings, recent-sales filters, readers per location, roles.
@@ -225,6 +225,20 @@ test('undo of a sale that paid for a session at the counter makes the session un
   const b = app.ctx.db.get(`SELECT coverage, sale_id FROM bookings WHERE id = 'bkg_undo'`);
   assert.equal(b.coverage, 'unpaid');
   assert.equal(b.sale_id, null);
+});
+
+test('undo of a camp registration charged when it was made makes the camp days unpaid again', async () => {
+  await call('POST', `/v1/clients/${maya.id}/card/test`, {});
+  const start = addDaysToDate(localDate(realNow(), 'America/Chicago'), 5);
+  const camp = (await call('POST', '/v1/class-series', { name: 'Undo camp', kind: 'camp', location_id: facility.id, weekdays: [new Date(`${start}T12:00:00Z`).getUTCDay()], start_time: '09:00', duration_min: 60, capacity: 10, start_date: start, end_date: addDaysToDate(start, 14), registration_cents: 20000 })).body;
+  assert.equal((await call('POST', `/v1/class-series/${camp.id}/register`, { client_id: maya.id, pay: 'card_on_file' }, 'desk')).status, 200);
+  const days = () => app.ctx.db.all(`SELECT b.coverage FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE s.series_id = ? AND b.client_id = ?`, camp.id, maya.id).map((b) => b.coverage);
+  assert.ok(days().length >= 2 && days().every((c) => c === 'registration'));
+  const sale = app.ctx.db.get(`SELECT e.sale_id AS id FROM enrollments e WHERE e.series_id = ? AND e.client_id = ?`, camp.id, maya.id);
+  const u = await call('POST', `/v1/sales/${sale.id}/undo`, {}, 'desk');
+  assert.equal(u.status, 200, JSON.stringify(u.body));
+  assert.equal(u.body.refunded_cents, 20000);
+  assert.ok(days().every((c) => c === 'unpaid'), `the $200 went back, so the camp is owed again: ${days()}`);
 });
 
 test('a second press of Charge (same request_id) returns the first sale instead of charging twice', async () => {

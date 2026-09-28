@@ -116,6 +116,14 @@ function migrate(raw, schema) {
   if (version < 34 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {
     raw.exec('UPDATE results_queue SET provider = lower(trim(provider)) WHERE provider != lower(trim(provider))');
   }
+  // Version 35: refunds made before refunds had their own rows get one (dated when the sale was paid, the best we know),
+  // so a sale's details and the day's takings add up; paid sales get a receipt link.
+  if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
+    raw.exec(`INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_at)
+      SELECT 'ref_' || lower(hex(randomblob(8))), id, refunded_cents, 'refund', 'Refunded before refunds were logged', COALESCE(completed_at, created_at) FROM sales
+      WHERE refunded_cents > 0 AND id NOT IN (SELECT sale_id FROM sale_refunds)`);
+    raw.exec(`UPDATE sales SET receipt_token = lower(hex(randomblob(18))) WHERE receipt_token IS NULL AND (client_id IS NULL OR client_id NOT IN (SELECT id FROM clients WHERE name = 'Deleted athlete'))`);
+  }
 }
 // SQLite can't change constraints in place: create the new table, copy shared columns, swap.
 function rebuild(raw, schema, tables, prerequisites = []) {

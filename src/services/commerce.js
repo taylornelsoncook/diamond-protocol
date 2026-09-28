@@ -523,6 +523,8 @@ async function refundNow(ctx, id, body, { actor, kind = 'refund' } = {}) {
     ctx.db.run('INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', newId('ref'), id, amount, kind, reason, actor ?? null, ctx.now());
     // An undone sale never happened: a session or camp it paid for at the counter is unpaid again.
     if (kind === 'undo') {
+      // A camp registration charged when it was made: its days carry the enrollment, not the sale.
+      ctx.db.run(`UPDATE bookings SET coverage = 'unpaid', updated_at = ? WHERE coverage = 'registration' AND status != 'canceled' AND enrollment_id IN (SELECT id FROM enrollments WHERE sale_id = ?)`, ctx.now(), id);
       ctx.db.run(`UPDATE enrollments SET sale_id = NULL WHERE sale_id = ?`, id);
       ctx.db.run(`UPDATE bookings SET coverage = 'unpaid', sale_id = NULL, updated_at = ? WHERE sale_id = ? AND coverage IN ('paid','registration') AND status != 'canceled'`, ctx.now(), id);
     }

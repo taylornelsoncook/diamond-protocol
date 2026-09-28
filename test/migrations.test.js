@@ -236,6 +236,7 @@ test('a version 34 database upgrades to the point-of-sale changes, and opening i
     const now = new Date().toISOString();
     old.exec(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES ('loc_1', 'Facility', 'facility', 'US', 1, '${now}')`);
     old.exec(`INSERT INTO sales (id, location_id, method, status, amount_cents, refunded_cents, created_at, completed_at) VALUES ('sale_1', 'loc_1', 'cash', 'succeeded', 4500, 0, '${now}', '${now}')`);
+    old.exec(`INSERT INTO sales (id, location_id, method, status, amount_cents, refunded_cents, created_at, completed_at) VALUES ('sale_2', 'loc_1', 'cash', 'partially_refunded', 4500, 1000, '${now}', '${now}')`);
     old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, notified_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}', '${now}')`);
     old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, kind, session_id, created_at) VALUES ('imp_1', 'upload', 'combine.xlsx', 1, 1, 'upload', 'tsn_1', '${now}')`);
     old.exec(`INSERT INTO import_batch_items (batch_id, result_id, value) VALUES ('imp_1', 'res_1', 98)`);
@@ -247,7 +248,10 @@ test('a version 34 database upgrades to the point-of-sale changes, and opening i
       assert.ok(cols('sale_refunds').includes('kind'));
       assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const s = db.get(`SELECT amount_cents, discount_cents, receipt_token FROM sales WHERE id = 'sale_1'`);
-      assert.deepEqual([s.amount_cents, s.discount_cents, s.receipt_token], [4500, 0, null]);
+      assert.deepEqual([s.amount_cents, s.discount_cents], [4500, 0]);
+      assert.match(s.receipt_token, /^[0-9a-f]{36}$/, 'sales paid before version 35 get a receipt link');
+      // A refund made before refunds had their own rows gets one, once, so the sale's details and takings add up.
+      assert.deepEqual(db.all(`SELECT sale_id, amount_cents, created_at FROM sale_refunds`), [{ sale_id: 'sale_2', amount_cents: 1000, created_at: now }]);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, now, 'families already emailed stay marked');
       const ups = recentUploads(ctx);

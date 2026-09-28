@@ -164,11 +164,12 @@ const next = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now
 if (next) { await schedule.book(ctx, { sessionId: next.id, clientId: cole.id, isCoach: true }); await schedule.book(ctx, { sessionId: next.id, clientId: nguyen.id, isCoach: true, overrideAge: true }); }
 // The head coach subs for Riley on the second Speed & Agility session.
 const second = schedule.listSessions(ctx, { from: ctx.now(), to: new Date(Date.now() + 14 * 86400000).toISOString(), kind: 'group' }).filter((x) => x.series_id === speed.id)[1];
-if (second) schedule.updateSession(ctx, second.id, { coach_id: headCoach.id });
+if (second) schedule.updateSession(ctx, second.id, { coach_id: headCoach.id, confirm: true });
 // Jordan's younger group (so three coaches have classes this week), a private Riley has booked, and last week's
-// sessions with check-ins, so Today's Coaches panel has attendance to show.
-await schedule.createSeries(ctx, { coach_id: jordan.id, name: 'Youth Foundations', kind: 'group', location_id: facility.id, weekdays: [2, 5], start_time: '16:30', duration_min: 60, capacity: 10, age_min: 7, age_max: 11, drop_in_cents: 2000, start_date: today, description: 'Running form, jumping and landing, and games for younger athletes.' });
-const colePrivate = await schedule.createSession(ctx, { name: 'Private: Cole Park', kind: 'private', location_id: facility.id, date: addDaysToDate(today, 2), start_time: '10:00', duration_min: 60, coach_id: riley.id, drop_in_cents: 8000 });
+// sessions with check-ins, so Today's Coaches panel has attendance to show. The days off above can fall on these
+// (depending on today's weekday): coach clashes are only warnings, so the sample data saves anyway (confirm).
+await schedule.createSeries(ctx, { confirm: true, coach_id: jordan.id, name: 'Youth Foundations', kind: 'group', location_id: facility.id, weekdays: [2, 5], start_time: '16:30', duration_min: 60, capacity: 10, age_min: 7, age_max: 11, drop_in_cents: 2000, start_date: today, description: 'Running form, jumping and landing, and games for younger athletes.' });
+const colePrivate = await schedule.createSession(ctx, { confirm: true, name: 'Private: Cole Park', kind: 'private', location_id: facility.id, date: addDaysToDate(today, 2), start_time: '10:00', duration_min: 60, coach_id: riley.id, drop_in_cents: 8000 });
 await schedule.book(ctx, { sessionId: colePrivate.id, clientId: cole.id, isCoach: true });
 const benLopez = ctx.db.get(`SELECT id FROM clients WHERE name = 'Ben Lopez'`).id;
 for (const [name, coachId, daysAgo, who] of [['Speed & Agility', riley.id, 5, [[lopez.id, 'attended'], [cole.id, 'attended'], [nguyen.id, 'no_show']]], ['High School Strength', headCoach.id, 4, [[nguyen.id, 'attended'], [cole.id, 'attended']]],

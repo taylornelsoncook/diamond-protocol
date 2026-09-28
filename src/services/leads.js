@@ -371,7 +371,13 @@ export function getLead(ctx, id, { user, sync = false, details = false } = {}) {
     email_block: emailBlock(ctx, l.email), text_block: textBlock(ctx, l), texts_stopped: !!(normalizePhone(l.phone) && numberStopped(ctx, normalizePhone(l.phone))),
     history: ctx.db.all('SELECT from_stage, to_stage, auto, reason, by_name, at FROM lead_stage_history WHERE lead_id = ? ORDER BY at, rowid', l.id)
       .map((h) => ({ ...h, auto: !!h.auto, from_label: STAGE_LABELS[h.from_stage] ?? null, to_label: STAGE_LABELS[h.to_stage] ?? h.to_stage })),
-    duplicates: findDuplicates(ctx, { email: l.email, phone: l.phone, exceptId: l.id, user })
+    duplicates: (() => {                       // its own family and client (once converted) aren't duplicates
+      const d = findDuplicates(ctx, { email: l.email, phone: l.phone, exceptId: l.id, user });
+      d.families = d.families.filter((f) => f.id !== l.family_id);
+      d.clients = d.clients.filter((c) => c.id !== l.client_id);
+      d.count = d.leads.length + d.families.length + d.clients.length;
+      return d;
+    })()
   };
 }
 // Who a lead can go to: an active owner or coach (front desk accounts don't take leads).
@@ -497,6 +503,9 @@ export async function convertLead(ctx, id, body = {}, { user } = {}) {
     const link = (clientId, familyId) => {
       const cur = ctx.db.get('SELECT client_id FROM leads WHERE id = ?', id);
       if (cur.client_id) throw conflict('This lead was just converted. Open it again.');
+      // A lead with no email takes the parent's sign-in email (the family's own address now).
+      const parentEmail = familyId ? ctx.db.get('SELECT email FROM guardians WHERE family_id = ? ORDER BY is_primary DESC LIMIT 1', familyId)?.email ?? null : null;
+      if (!l.email && parentEmail && !openLeadFor(ctx, parentEmail, id)) ctx.db.run('UPDATE leads SET email = ? WHERE id = ?', parentEmail, id);
       ctx.db.run('UPDATE leads SET client_id = ?, family_id = COALESCE(?, family_id), converted_at = COALESCE(converted_at, ?), next_follow_up_at = NULL, last_activity_at = ?, updated_at = ? WHERE id = ?',
         clientId, familyId, ctx.now(), ctx.now(), ctx.now(), id);
       if (note) ctx.db.run('INSERT INTO client_notes (id, client_id, body, pinned, coach_only, author_id, author_name, created_at, updated_at) VALUES (?, ?, ?, 0, 0, ?, ?, ?, ?)',

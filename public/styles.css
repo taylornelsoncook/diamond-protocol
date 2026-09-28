@@ -247,3 +247,17 @@ td .dp-badge{white-space:nowrap}
 .ck-fill{display:block;height:100%;background:var(--green-bright)}
 /* Staff & security, API & integrations (batch B14): buttons in panel headers and the menu footer stay on one line */
 .dp-panel-head .dp-btn,.dp-nav .dp-btn{white-space:nowrap}
+
+/* CRM (version 45): pipeline board, lead cards, timeline, report bars */
+.tm-view[aria-current="page"]{background:var(--surface-raised);border-color:var(--green-mid);color:var(--steel)}
+.crm-board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(200px,1fr);gap:var(--space-3);overflow-x:auto;padding-bottom:var(--space-2)}
+.crm-col{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-3);display:flex;flex-direction:column;gap:var(--space-2);min-width:0}
+.crm-col-title{margin:0 0 4px;font:600 15px/22px var(--font-sans);color:var(--steel)}
+.crm-card{background:var(--surface-raised);border:1px solid var(--line-subtle);border-radius:var(--radius-sm);padding:10px;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}
+.crm-tl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.crm-tl-item{padding:10px 0;border-top:1px solid var(--line-subtle)}
+.crm-tl-item:first-child{border-top:0}
+.crm-report-row{display:flex;flex-direction:column;gap:4px;padding:6px 0}
+.crm-bar{height:8px;background:var(--surface-raised);border-radius:var(--radius-pill);overflow:hidden}
+.crm-bar span{display:block;height:100%;background:var(--green-mid)}
+@media (max-width: 760px){ .crm-board{grid-auto-flow:row;grid-auto-columns:auto;overflow-x:visible} }

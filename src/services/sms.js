@@ -16,6 +16,8 @@ export const TEXT_KINDS = {
   payment_failed: 'When a membership payment doesn\'t go through',
   open_spot: 'When a class your athlete fits has an open spot'
 };
+// Every kind of text in the log, for the Texts list (TEXT_KINDS are the automatic ones the owner can turn off).
+export const TEXT_LABELS = { ...TEXT_KINDS, lead: 'Automatic follow-up to a lead', crm: 'Sent from a lead or client page', group: 'Group text', reply: 'Reply', opt_in: 'Texts turned on', test: 'Test text' };
 const STOP_WORDS = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT', 'REVOKE', 'OPTOUT'];
 const START_WORDS = ['START', 'UNSTOP', 'YES'];
 

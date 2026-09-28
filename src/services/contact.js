@@ -203,6 +203,7 @@ export function followContactLink(ctx, tok, { stop = false } = {}) {
 // the owner only. For a client profile: the same for the family, plus the family's leads (a coach only the ones the
 // owner gave them).
 const money = (c) => `$${(c / 100).toFixed(2).replace(/\.00$/, '')}`;
+const day = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 function actItem(a) {
   const byName = a.by_name ?? null;
   if (a.kind === 'note') return { at: a.at, kind: 'note', title: 'Note', body: a.body, by: byName };
@@ -246,7 +247,7 @@ function leadItems(ctx, l) {
     }
   }
   for (const t of ctx.db.all('SELECT t.*, u.name AS assignee FROM crm_tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.lead_id = ?', l.id)) {
-    out.push({ at: t.created_at, kind: 'task', title: `Task: ${t.title}`, body: `Due ${t.due_date}${t.assignee ? ` · ${t.assignee}` : ''}`, by: t.created_by });
+    out.push({ at: t.created_at, kind: 'task', title: `Task: ${t.title}`, body: `Due ${day(t.due_date)}${t.assignee ? ` · ${t.assignee}` : ''}`, by: t.created_by });
     if (t.done_at) out.push({ at: t.done_at, kind: 'task_done', title: `Done: ${t.title}`, by: t.done_by });
   }
   return out;
@@ -271,7 +272,7 @@ export function clientTimeline(ctx, clientId, { user, limit = 100 } = {}) {
   const leads = ctx.db.all(`SELECT l.* FROM leads l WHERE ${scope.sql} AND (l.client_id IN (${inList}) OR (l.family_id IS NOT NULL AND l.family_id IS ?))`, ...scope.args, ...kids, c.family_id);
   for (const l of leads) items.push(...leadItems(ctx, l).map((x) => ({ ...x, lead_id: l.id })));
   for (const t of ctx.db.all(`SELECT t.*, u.name AS assignee FROM crm_tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.lead_id IS NULL AND (t.family_id IS ? AND t.family_id IS NOT NULL OR t.client_id IN (${inList}))`, c.family_id, ...kids)) {
-    items.push({ at: t.created_at, kind: 'task', title: `Task: ${t.title}`, body: `Due ${t.due_date}${t.assignee ? ` · ${t.assignee}` : ''}`, by: t.created_by });
+    items.push({ at: t.created_at, kind: 'task', title: `Task: ${t.title}`, body: `Due ${day(t.due_date)}${t.assignee ? ` · ${t.assignee}` : ''}`, by: t.created_by });
     if (t.done_at) items.push({ at: t.done_at, kind: 'task_done', title: `Done: ${t.title}`, by: t.done_by });
   }
   if (c.family_id) for (const t of ctx.db.all(`SELECT direction, kind, body, status, created_at FROM texts WHERE family_id = ? AND kind != 'crm' ORDER BY created_at DESC LIMIT 50`, c.family_id)) {

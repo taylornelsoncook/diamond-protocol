@@ -255,14 +255,16 @@ test('manual retries don\'t count toward canceling: only the automatic tries do'
   assert.equal(invoice(m.inv.id).attempts, 1);
   for (let i = 0; i < 3; i++) await attemptCharge(app.ctx, m.inv.id, now(), { manual: true });
   assert.deepEqual([invoice(m.inv.id).attempts, invoice(m.inv.id).auto_attempts], [4, 1]);
-  // The second automatic try (of 4) comes due: still past due, not canceled.
+  // The second automatic try (of 5) comes due: still past due, not canceled.
   await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
   assert.equal(invoice(m.inv.id).status, 'failed');
   assert.equal(subOf(m.id).status, 'past_due');
-  assert.equal((await owner('GET', `/v1/invoices/${m.inv.id}`)).body.retries_left, 2, 'two automatic tries left');
-  // The third and fourth automatic tries: canceled after the fourth.
-  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
-  assert.equal(subOf(m.id).status, 'past_due');
+  assert.equal((await owner('GET', `/v1/invoices/${m.inv.id}`)).body.retries_left, 3, 'three automatic tries left');
+  // The third, fourth and fifth automatic tries: canceled after the fifth.
+  for (let i = 0; i < 2; i++) {
+    await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+    assert.equal(subOf(m.id).status, 'past_due');
+  }
   await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
   assert.equal(invoice(m.inv.id).status, 'void');
   assert.equal(subOf(m.id).status, 'canceled');
@@ -332,11 +334,11 @@ test('needs attention lists each decline with its card and tries, and overdue sc
   assert.equal(row.card_last4, '4242');
   assert.equal(row.attempts, 1);
   assert.ok(row.next_retry_at);
-  assert.equal(row.retries_left, 3);
+  assert.equal(row.retries_left, 4, 'the first charge declined: 4 automatic retries left');
   const late = a.overdue.find((i) => i.org_name === 'Westlake HS');
   assert.ok(late, 'the oldest school invoice is past due');
   assert.ok(late.days_past_due >= 11 && late.days_past_due <= 13, String(late.days_past_due));
-  assert.equal(a.max_attempts, 4);
+  assert.equal(a.max_attempts, 5);
 });
 
 // ---------------------------------------------------------------- invoice views and CSV

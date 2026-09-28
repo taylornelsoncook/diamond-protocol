@@ -5,7 +5,7 @@ import { membershipReceipt, paymentFailed, trialReminders, cardReminder, invoice
 import { csvCell } from './clients.js';
 import { sendEmail } from './mail.js';
 
-export const MAX_ATTEMPTS = 4;        // after the 4th failed automatic charge the subscription is canceled
+export const MAX_ATTEMPTS = 5;        // after the 5th failed automatic charge (the first charge and 4 retries) the subscription is canceled (owner decision: one more retry after the lockout)
 export const RETRY_EVERY_DAYS = 3;
 const money = (c) => `${c < 0 ? '-' : ''}$${(Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: Math.abs(c) % 100 ? 2 : 0 })}`;
 const zone = (ctx) => getSetting(ctx, 'timezone');

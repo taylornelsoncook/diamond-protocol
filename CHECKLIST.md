@@ -8,8 +8,8 @@ The app is built: every tab from the earlier version has been brought over, plus
 
 - [x] **Look over staging.** Sign in as `coach@diamondprotocol.local` / `change-me-now` and click through each tab, especially the new ones: Today (check-in list, birthdays, open spots, trial offers), Leads (the pipeline board and lead pages), Education, Billing and the parent portal (`/parent`, sign in as `maria.lopez@example.com`). Also sign in as `riley@diamondprotocol.local` (coach) and `desk@diamondprotocol.local` (front desk) and confirm you see no dollar amounts. Write down anything that looks wrong.
 - [ ] **Look over your improvements on staging** once they're merged: Settings (exercise library first; background jobs fold away; Activity report runs when you press Show report), client tags (Hybrid athlete, In-facility, Remote client), Billing → Change plan and Refunds, Education's five tabs and the public page `/learn`, and the payment lockout (sign in to the parent portal as `linh.nguyen@example.com`).
-- [ ] **Decide when a declined payment locks a family out:** Billing → Needs attention. The default is after the first retry also declines (about 3 days after the first decline); you can choose the first decline, the second retry, or never.
-- [ ] **Render → diamond-protocol → Environment:** set `TRUST_PROXY` to `2`. (`ADMIN_PASSWORD` is deleted.)
+- [x] **Decide when a declined payment locks a family out:** after the first charge and 3 retries decline (about 9 days); the membership cancels after one more retry. Change it any time on Billing → Needs attention.
+- [x] **Render → diamond-protocol → Environment:** `TRUST_PROXY` is `2` and `ADMIN_PASSWORD` is deleted.
 - [ ] **Off-site backups:** follow DEPLOY.md → Backups (a Cloudflare R2 bucket, then five settings in Render). Save the passphrase in your password manager.
 - [ ] **Press Manual Deploy** on `diamond-protocol`. The database upgrades itself on start (a backup is made first).
 - [ ] **On production:** Staff & security → Check my connection (it should show your own internet address), then Back up now (it should say the backup was sent off-site).
@@ -29,7 +29,7 @@ The app is built: every tab from the earlier version has been brought over, plus
 
 - [ ] **Prices:** single session, packs (sizes and prices), gear, and monthly plans with trial length. The app ships with sample prices. Replace them in Point of sale setup and Billing.
 - [ ] **Addresses** for every place you take payments: the facility, your business address (used for the "Mobile" location that covers clients' homes), and each park you train in.
-- [ ] **Policies:** refunds, pack expiration (packs don't expire in the app today), cancellations, and failed payments (today: retry every 3 days, cancel after 4 failures).
+- [ ] **Policies:** refunds, pack expiration (packs don't expire in the app today), cancellations, and failed payments (today: retry every 3 days, lock the family out after 4 declines, cancel after 5).
 - [ ] **Sales tax.** The app doesn't add tax. Ask your accountant whether you owe tax on sessions or gear in your state, and tell me what to build.
 - [ ] **Waiver.** Have a lawyer write your release of liability, medical consent and photo policy. Paste it in Schedule → Hours & settings.
 - [ ] **Class schedule:** each weekly class (days, time, location, ages, spots, drop-in price), your camps and clinics (dates, registration price), and your hours for privates and evaluations.

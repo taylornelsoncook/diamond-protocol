@@ -191,7 +191,7 @@ test('a declined difference is a one-off: the membership stays active and the fa
   assert.equal((await (await parent(m.email))('GET', '/portal/api/me')).body.payment_lock, null, 'never locks the family');
   await runBilling(app.ctx, addDays(new Date().toISOString(), 3.5));
   assert.equal(subOf(m.id).status, 'active');
-  await owner('PATCH', '/v1/settings', { payment_lock_tries: 2 });
+  await owner('PATCH', '/v1/settings', { payment_lock_tries: 4 });
   // No saved card: refused before anything changes.
   const n = ++seq;
   const c = (await owner('POST', '/v1/clients', { name: `Nocard ${n}`, parent: { name: 'P', email: `nocard${n}@example.com` } })).body;
@@ -204,23 +204,35 @@ test('a declined difference is a one-off: the membership stays active and the fa
 });
 
 // ---------------------------------------------------------------- lockout
+// The scheduled retries come every 3 days: the nth retry is due just after 3n days.
+const retry = (n) => runBilling(app.ctx, addDays(new Date().toISOString(), 3 * n + 0.5));
+const autoTries = (invId) => db().get('SELECT auto_attempts FROM invoices WHERE id = ?', invId).auto_attempts;
 async function lockedMember() {
   const m = await member({ declining: true });
   const inv = invoices(m.id)[0];
   assert.equal(inv.status, 'failed');
   assert.equal(subOf(m.id).status, 'past_due');
-  // The first retry declines too: two automatic tries.
-  await runBilling(app.ctx, addDays(new Date().toISOString(), 3.5));
-  assert.equal(db().get('SELECT auto_attempts FROM invoices WHERE id = ?', inv.id).auto_attempts, 2);
+  for (const n of [1, 2, 3]) await retry(n);           // the first charge and 3 retries declined
+  assert.equal(autoTries(inv.id), 4);
   return { ...m, inv };
 }
 
-test('a family whose payment declined on the first charge and the first retry can only fix it', async () => {
+test('owner decision: every client is locked out once the first charge and 3 retries decline, and canceled a retry later', async () => {
+  assert.equal((await owner('GET', '/v1/settings')).body.payment_lock_tries, '4', 'the default');
   const m = await member({ declining: true });
+  const inv = invoices(m.id)[0];
+  await owner('PATCH', `/v1/clients/${m.id}`, { training_type: 'remote' });
   const fam = await parent(m.email);
-  assert.equal((await fam('GET', '/portal/api/me')).body.payment_lock, null, 'one decline: not locked yet');
-  assert.equal((await fam('GET', '/portal/api/schedule')).status, 200);
-  await runBilling(app.ctx, addDays(new Date().toISOString(), 3.5));
+  const mails = () => db().all('SELECT body FROM outbox WHERE to_email = ? AND subject LIKE ? ORDER BY rowid', m.email, 'Payment didn%');
+  assert.match(mails().at(-1).body, /declined 3 more times, booking, the athlete app and self check-in pause/);
+  for (const n of [1, 2]) {
+    await retry(n);
+    assert.equal((await fam('GET', '/portal/api/me')).body.payment_lock, null, `${n + 1} declines: not locked yet`);
+    assert.equal((await fam('GET', '/portal/api/schedule')).status, 200);
+  }
+  assert.match(mails().at(-1).body, /declined again, booking/);
+  await retry(3);
+  assert.equal(autoTries(inv.id), 4);
   const me = (await fam('GET', '/portal/api/me')).body;
   assert.equal(me.payment_lock.amount_cents, 10000);
   assert.match(me.payment_lock.message, /didn't go through/);
@@ -243,6 +255,7 @@ test('a family whose payment declined on the first charge and the first retry ca
   assert.equal((await owner('GET', `/v1/clients/${m.id}`)).body.payment_locked.amount_cents, 10000);
   const seen = (await coach('GET', `/v1/clients/${m.id}`)).body.payment_locked;
   assert.ok(seen && seen.amount_cents === undefined, 'coaches see the lock, not the amount');
+  assert.match(mails().at(-1).body, /Until it's paid, booking, the athlete app and self check-in are paused/);
   // Paid: everything opens again.
   db().run(`UPDATE families SET card_status = 'ok' WHERE id = ?`, m.family_id);
   const tryAgain = await fam('POST', `/portal/api/payments/${invoices(m.id)[0].id}/retry`);
@@ -265,7 +278,16 @@ test('a locked athlete checks in at the desk, not the tablet; the owner can turn
   assert.equal(kioskCheckIn(app.ctx, key, { booking_id: bid }).already, false, 'no lockout: the tablet checks them in');
   assert.equal((await (await parent(m.email))('GET', '/portal/api/schedule')).status, 200);
   assert.equal((await owner('PATCH', '/v1/settings', { payment_lock_tries: 5 })).status, 400);
-  await owner('PATCH', '/v1/settings', { payment_lock_tries: 2 });
+  await owner('PATCH', '/v1/settings', { payment_lock_tries: 4 });
+});
+
+test('the 4th retry declining cancels the membership, which ends the lockout', async () => {
+  const m = await lockedMember();
+  assert.equal(subOf(m.id).status, 'past_due');
+  await retry(4);
+  assert.equal(autoTries(m.inv.id), 5);
+  assert.equal(subOf(m.id).status, 'canceled');
+  assert.equal((await (await parent(m.email))('GET', '/portal/api/me')).body.payment_lock, null);
 });
 
 // ---------------------------------------------------------------- Education tabs

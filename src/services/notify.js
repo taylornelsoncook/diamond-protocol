@@ -1,4 +1,5 @@
 import { getSetting, payerFor } from './families.js';
+import { clientLock, lockTries } from './lockout.js';
 import { sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
 import { invoicePayLink } from './paylinks.js';
@@ -113,6 +114,13 @@ export async function trialReminders(ctx, asOf = ctx.now()) {
 }
 
 // ---------- Failed payments ----------
+// What the family can still do (lockout.js): locked now, how many more declines before it locks, or nothing changes.
+function lockLine(ctx, inv) {
+  if (clientLock(ctx, inv.client_id)) return 'Until it\'s paid, booking, the athlete app and self check-in are paused. Everything opens again as soon as it goes through.';
+  const tries = lockTries(ctx), left = tries - inv.auto_attempts;
+  if (!tries || inv.note || left <= 0) return 'Training continues in the meantime.';
+  return `Training continues in the meantime. If it's declined ${left === 1 ? 'again' : `${left} more times`}, booking, the athlete app and self check-in pause until it's paid.`;
+}
 export async function paymentFailed(ctx, invoiceId) {
   const inv = ctx.db.get(`SELECT i.*, p.name AS plan_name, c.name AS client_name, c.family_id, s.status AS sub_status FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
   if (!inv || !['failed', 'void'].includes(inv.status)) return;
@@ -121,7 +129,7 @@ export async function paymentFailed(ctx, invoiceId) {
   const fix = `${link ? `Pay it now by card, no sign-in needed: ${link}\n\nOr ` : ''}${payer.table === 'families' ? `${link ? 'u' : 'U'}pdate the card in the parent portal and we'll charge it right away: ${base(ctx)}/parent (Family tab).` : `${link ? 'r' : 'R'}eply to this email and we'll send you a secure link to update your card.`}`;
   const text = inv.status === 'void' || inv.sub_status === 'canceled'
     ? `Hi ${first(payer.name)},\n\nWe tried several times but couldn't charge ${money(inv.amount_cents)} for ${inv.client_name}'s ${inv.plan_name}, so the membership has been canceled.\n\nTo start again, ${payer.table === 'families' ? `add a working card at ${base(ctx)}/parent and choose a membership under Programs` : 'reply to this email'}.\n\n${biz(ctx)}`
-    : `Hi ${first(payer.name)},\n\nThe ${money(inv.amount_cents)} payment for ${inv.client_name}'s ${inv.plan_name} didn't go through${inv.last_error ? ` (${inv.last_error})` : ''}. ${fix}\n\nWe'll try again on ${day(ctx, inv.next_retry_at)}. Training continues in the meantime.\n\n${biz(ctx)}`;
+    : `Hi ${first(payer.name)},\n\nThe ${money(inv.amount_cents)} payment for ${inv.client_name}'s ${inv.plan_name} didn't go through${inv.last_error ? ` (${inv.last_error})` : ''}. ${fix}\n\n${inv.next_retry_at ? `We'll try again on ${day(ctx, inv.next_retry_at)}. ` : ''}${lockLine(ctx, inv)}\n\n${biz(ctx)}`;
   const recipients = inv.family_id ? familyEmails(ctx, inv.family_id).map((g) => g.email) : [payer.email];
   if (on(ctx, 'payment_failed')) for (const to of recipients) await send(ctx, to, inv.status === 'void' ? `${first(inv.client_name)}'s membership was canceled` : `Payment didn't go through for ${first(inv.client_name)}'s membership`, text);
   if (inv.family_id) textFamily(ctx, inv.family_id, 'payment_failed', inv.status === 'void' || inv.sub_status === 'canceled'

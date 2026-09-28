@@ -102,11 +102,13 @@ test('billing: trial converts, failed card goes past due, retry recovers', async
   assert.equal((await call('GET', '/v1/dashboard')).body.metrics.mrr_cents, 14900);
 });
 
-test('billing: four failed charges cancel the subscription', async () => {
+test('billing: five failed charges cancel the subscription', async () => {
   const c = (await call('POST', '/v1/clients', { name: 'Sam', email: 'sam@example.com', plan_id: plan.id })).body;
   await call('POST', `/v1/clients/${c.id}/card/test`);
   await call('PATCH', `/v1/clients/${c.id}`, { card_status: 'declining' });
   for (const d of [8, 11, 14, 17]) await call('POST', '/v1/billing/run', { as_of: days(d) });
+  assert.equal((await call('GET', `/v1/clients/${c.id}`)).body.status, 'past_due', 'four declines: locked out, not canceled yet');
+  await call('POST', '/v1/billing/run', { as_of: days(20) });
   assert.equal((await call('GET', `/v1/clients/${c.id}`)).body.status, 'canceled');
 });
 

@@ -152,39 +152,46 @@ async function updateSeriesNow(ctx, id, body) {
   const after = { ...s, coach_id: coachId };
   const days = JSON.parse(s.weekdays);
   const fits = (d) => days.includes(weekdayOf(d)) && d >= s.start_date && (!s.end_date || d <= s.end_date);
-  const future = ctx.db.all(`SELECT x.*, (SELECT COUNT(*) FROM bookings b WHERE b.session_id = x.id AND b.status IN ('booked','attended')) AS booked_count
-    FROM class_sessions x WHERE x.series_id = ? AND x.status = 'scheduled' AND x.starts_at > ? ORDER BY x.starts_at`, id, now);
-  const keep = future.filter((x) => fits(slotDay(x, zone))), drop = future.filter((x) => !fits(slotDay(x, zone)));
-  // What each kept session becomes: only the class fields that changed, only where the session still had the old value.
-  const plan = keep.map((x) => {
-    const next = {};
-    for (const k of SESSION_COPIES) if ((after[k] ?? null) !== (cur[k] ?? null) && (x[k] ?? null) === (cur[k] ?? null)) next[k] = after[k] ?? null;
-    let starts = x.starts_at, dur = minutesOf(x);
-    if (s.start_time !== cur.start_time && localTime(x.starts_at, zone) === cur.start_time) {
-      const moved = zonedToUtc(localDate(x.starts_at, zone), s.start_time, zone);
-      if (moved > now) starts = moved;                                     // never move a session into the past
-    }
-    if (s.duration_min !== cur.duration_min && dur === cur.duration_min) dur = s.duration_min;
-    if (starts !== x.starts_at) next.starts_at = starts;
-    if (starts !== x.starts_at || dur !== minutesOf(x)) next.ends_at = new Date(Date.parse(starts) + dur * 60000).toISOString();
-    if (next.starts_at && !x.slot_date) next.slot_date = localDate(x.starts_at, zone);
-    return { x, next };
-  });
-  const planned = new Set();
-  for (const { x, next } of plan) {
-    // Never squeeze anyone out: spots can't go below what an upcoming session already has booked.
-    if (next.capacity != null && x.booked_count > next.capacity) throw badRequest(`${plural(x.booked_count, 'athlete')} ${x.booked_count === 1 ? 'is' : 'are'} booked on ${when(ctx, x.starts_at)}. Set spots to ${x.booked_count} or more, or remove someone first.`);
-    const at = next.starts_at ?? x.starts_at;
-    if (planned.has(at) || (next.starts_at && ctx.db.get('SELECT 1 FROM class_sessions WHERE series_id = ? AND starts_at = ? AND id != ?', id, at, x.id))) throw conflict(`${cur.name} already has a session at ${when(ctx, at)}. Move or cancel it first.`);
-    planned.add(at);
-  }
-  ctx.db.tx(() => {
-    ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1 WHERE id = ?`,
-      s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, id);
+  const futureSql = `SELECT x.*, (SELECT COUNT(*) FROM bookings b WHERE b.session_id = x.id AND b.status IN ('booked','attended')) AS booked_count
+    FROM class_sessions x WHERE x.series_id = ? AND x.status = 'scheduled' AND x.starts_at > ? ORDER BY x.starts_at`;
+  // Check and save while holding every upcoming session's booking lock: a card payment for the last spot that is still
+  // going through finishes first, so its booking is counted before spots are lowered.
+  const ids = ctx.db.all(futureSql, id, now).map((x) => x.id);
+  const { plan, drop } = await withSessionLocks(ids, () => {
+    const future = ctx.db.all(futureSql, id, now);
+    const keep = future.filter((x) => fits(slotDay(x, zone))), drop = future.filter((x) => !fits(slotDay(x, zone)));
+    // What each kept session becomes: only the class fields that changed, only where the session still had the old value.
+    const plan = keep.map((x) => {
+      const next = {};
+      for (const k of SESSION_COPIES) if ((after[k] ?? null) !== (cur[k] ?? null) && (x[k] ?? null) === (cur[k] ?? null)) next[k] = after[k] ?? null;
+      let starts = x.starts_at, dur = minutesOf(x);
+      if (s.start_time !== cur.start_time && localTime(x.starts_at, zone) === cur.start_time) {
+        const moved = zonedToUtc(localDate(x.starts_at, zone), s.start_time, zone);
+        if (moved > now) starts = moved;                                     // never move a session into the past
+      }
+      if (s.duration_min !== cur.duration_min && dur === cur.duration_min) dur = s.duration_min;
+      if (starts !== x.starts_at) next.starts_at = starts;
+      if (starts !== x.starts_at || dur !== minutesOf(x)) next.ends_at = new Date(Date.parse(starts) + dur * 60000).toISOString();
+      if (next.starts_at && !x.slot_date) next.slot_date = localDate(x.starts_at, zone);
+      return { x, next };
+    });
+    const planned = new Set();
     for (const { x, next } of plan) {
-      const keys = Object.keys(next);
-      if (keys.length) ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), x.id);
+      // Never squeeze anyone out: spots can't go below what an upcoming session already has booked.
+      if (next.capacity != null && x.booked_count > next.capacity) throw badRequest(`${plural(x.booked_count, 'athlete')} ${x.booked_count === 1 ? 'is' : 'are'} booked on ${when(ctx, x.starts_at)}. Set spots to ${x.booked_count} or more, or remove someone first.`);
+      const at = next.starts_at ?? x.starts_at;
+      if (planned.has(at) || (next.starts_at && ctx.db.get('SELECT 1 FROM class_sessions WHERE series_id = ? AND starts_at = ? AND id != ?', id, at, x.id))) throw conflict(`${cur.name} already has a session at ${when(ctx, at)}. Move or cancel it first.`);
+      planned.add(at);
     }
+    ctx.db.tx(() => {
+      ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1 WHERE id = ?`,
+        s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, id);
+      for (const { x, next } of plan) {
+        const keys = Object.keys(next);
+        if (keys.length) ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), x.id);
+      }
+    });
+    return { plan, drop };
   });
   const moves = plan.filter(({ next }) => next.starts_at || next.location_id).map(({ x, next }) => ({ before: x, after: { ...x, ...next } }));
   const families = notifyMoved(ctx, moves);
@@ -195,6 +202,13 @@ async function updateSeriesNow(ctx, id, body) {
   return { ...getSeries(ctx, id), changes: { updated: plan.filter(({ next }) => Object.keys(next).length).length, moved: moves.length, canceled: canceled.sessions, added, families_emailed: families + canceled.families, promoted } };
 }
 
+// Hold several sessions' booking locks at once, taken in the same order every time. Nothing else holds more than one.
+// fn must not take any of these locks again (they aren't reentrant).
+function withSessionLocks(ids, fn) {
+  const keys = [...new Set(ids)].sort();
+  const step = (i) => (i === keys.length ? fn() : withLock(`book:${keys[i]}`, () => step(i + 1)));
+  return step(0);
+}
 // Families of the athletes booked into these sessions (and waitlisted, if asked): one entry per family, with their
 // athletes' first names and which of the sessions they're in.
 function bookedFamilies(ctx, sessionIds, { waitlist = false } = {}) {
@@ -224,10 +238,13 @@ function notifyMoved(ctx, moves) {
   return fams.size;
 }
 // Cancel several sessions of one class (days it no longer runs, or the whole class archived): credits back, paid drop-ins
-// refunded, and one email (and text) per family listing every session of theirs, instead of one per session.
+// refunded, and one email (and text) per family listing every session of theirs, instead of one per session. A session
+// nobody was booked on (no bookings, team check-ins or open-spot offers) is removed instead, like team sessions after a
+// shorter contract, so putting the day back (or the class back on the schedule) schedules it again.
 async function cancelMany(ctx, series, sessions, reason) {
   const byFamily = new Map();
   for (const x of sessions) {
+    if (await withLock(`book:${x.id}`, () => removeIfUnused(ctx, x.id))) continue;
     const r = await cancelSessionNow(ctx, x.id, { reason, notify: false });
     for (const b of r.released) {
       if (!b.family_id) continue;
@@ -240,6 +257,11 @@ async function cancelMany(ctx, series, sessions, reason) {
     textFamily(ctx, fam, 'canceled', `${series.name}: ${lines.length === 1 ? '1 session is' : `${lines.length} sessions are`} canceled. Details are in your email.`);
   }
   return { sessions: sessions.length, families: byFamily.size };
+}
+function removeIfUnused(ctx, id) {
+  const used = ctx.db.get(`SELECT (SELECT COUNT(*) FROM bookings WHERE session_id = ?) + (SELECT COUNT(*) FROM team_attendance WHERE session_id = ?) + (SELECT COUNT(*) FROM spot_offers WHERE session_id = ?) AS n`, id, id, id).n;
+  if (used) return false;
+  return ctx.db.run(`DELETE FROM class_sessions WHERE id = ? AND status = 'scheduled'`, id).changes > 0;
 }
 const releaseWords = (b) => `${first(b.name)}'s ${b.coverage === 'credit' && b.status === 'booked' ? 'session credit has been returned' : b.coverage === 'paid' && b.status === 'booked' ? 'payment has been refunded' : 'spot has been released'}.`;
 

@@ -9,6 +9,7 @@ import { createUser } from '../src/services/access.js';
 import { resetRateLimits } from '../src/services/security.js';
 import { addDaysToDate, localDate, zonedToUtc, weekdayOf } from '../src/util.js';
 import { extendSchedule } from '../src/services/schedule.js';
+import { addTestCard } from '../src/services/commerce.js';
 
 let app, base, owner, coach, desk, coachId, subId, facility, park, ava, cole, mia, noah;
 const TZ = 'America/Chicago';
@@ -246,4 +247,39 @@ test('rosters flag missing waivers and birthdays; coaches never get prices from 
   assert.equal(c.drop_in_cents, undefined);
   assert.equal((await coach('GET', '/v1/schedule')).body.data.find((x) => x.id === s.id).drop_in_cents, undefined);
   assert.equal((await desk('GET', '/v1/schedule')).body.data.find((x) => x.id === s.id).drop_in_cents, undefined);
+});
+
+test('lowering a class\'s spots waits for a card payment for the last spot that is still going through', async () => {
+  const s = (await owner('POST', '/v1/class-series', { name: 'Last spot', kind: 'group', location_id: facility.id, weekdays: [weekdayOf(day(2))], start_time: '19:00', duration_min: 60, capacity: 2, drop_in_cents: 2500, start_date: day(1) })).body;
+  const [x] = await sessionsOf(s.id);
+  await owner('POST', `/v1/sessions/${x.id}/bookings`, { client_id: mia.id });
+  await addTestCard(app.ctx, cole.id);
+  const charge = app.ctx.payments.chargeSaved;
+  app.ctx.payments.chargeSaved = async (a) => { await new Promise((r) => setTimeout(r, 200)); return charge(a); };   // Stripe takes a moment
+  try {
+    const [b, e] = await Promise.all([owner('POST', `/v1/sessions/${x.id}/bookings`, { client_id: cole.id, pay: 'card_on_file' }),
+      new Promise((r) => setTimeout(r, 50)).then(() => owner('PATCH', `/v1/class-series/${s.id}`, { capacity: 1 }))]);
+    assert.equal(b.status, 201);
+    assert.equal(e.status, 400, 'the edit sees the paid booking and refuses to go below it');
+    assert.match(e.body.error.message, /2 athletes are booked/);
+  } finally { app.ctx.payments.chargeSaved = charge; }
+  const row = (await owner('GET', `/v1/sessions/${x.id}`)).body;
+  assert.deepEqual([row.capacity, row.booked_count], [2, 2]);
+});
+
+test('a day taken off a class by mistake comes back when it is put back; days with bookings stay canceled', async () => {
+  const [d1, d2] = [day(5), day(6)];
+  const s = (await owner('POST', '/v1/class-series', { name: 'Hitting', kind: 'group', location_id: facility.id, weekdays: [weekdayOf(d1), weekdayOf(d2)], start_time: '17:00', duration_min: 60, capacity: 4, start_date: day(1) })).body;
+  const scheduled = () => app.ctx.db.all(`SELECT id, starts_at FROM class_sessions WHERE series_id = ? AND status = 'scheduled'`, s.id);
+  const before = scheduled().length;
+  const booked = scheduled().find((x) => localDate(x.starts_at, TZ) === d2);
+  giveCredits(mia.id, 1);
+  await owner('POST', `/v1/sessions/${booked.id}/bookings`, { client_id: mia.id });
+  const off = (await owner('PATCH', `/v1/class-series/${s.id}`, { weekdays: [weekdayOf(d1)] })).body;
+  assert.equal(off.changes.canceled, before / 2);
+  assert.equal(app.ctx.db.get('SELECT status FROM class_sessions WHERE id = ?', booked.id).status, 'canceled', 'the booked day is canceled, credit back');
+  const back = (await owner('PATCH', `/v1/class-series/${s.id}`, { weekdays: [weekdayOf(d1), weekdayOf(d2)] })).body;
+  assert.equal(back.changes.added, before / 2 - 1, 'every day nobody was booked on is scheduled again');
+  assert.equal(scheduled().length, before - 1);
+  assert.equal(scheduled().filter((x) => localDate(x.starts_at, TZ) === d2).length, 0, 'the day families were told is canceled stays canceled');
 });

@@ -187,7 +187,7 @@ async function viewToday(main) {
     await busy(button, async () => {
       await post(`/v1/bookings/${a.booking_id}/attendance`, { status: 'attended' });
       todayUi.q = '';
-      undoToast(`${a.name} checked in for ${a.session_name}.`, async () => { try { await post(`/v1/bookings/${a.booking_id}/attendance`, { status: 'booked' }); toast(`${first(a.name)} is no longer checked in.`); } catch (e) { toast(e.message, 'warn'); } refresh(); });
+      undoToast(`${a.name} checked in for ${a.session_name}.`, async () => { try { await post(`/v1/bookings/${a.booking_id}/attendance`, { status: a.status === 'no_show' ? 'no_show' : 'booked' }); toast(`${first(a.name)} is no longer checked in.`); } catch (e) { toast(e.message, 'warn'); } refresh(); });
       await refresh();
       document.querySelector('[data-focus="checkin-search"]')?.focus({ preventScroll: true });
     });

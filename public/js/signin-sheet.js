@@ -14,8 +14,8 @@ async function load() {
   const zone = settings.timezone;
   const fmt = (iso, o) => new Intl.DateTimeFormat('en-US', { timeZone: zone, ...o }).format(new Date(iso));
   const when = `${fmt(s.starts_at, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })} · ${fmt(s.starts_at, { hour: 'numeric', minute: '2-digit' })}–${fmt(s.ends_at, { hour: 'numeric', minute: '2-digit' })}`;
-  const people = s.roster.filter((r) => ['booked', 'attended', 'no_show'].includes(r.status)).map((r) => ({ name: r.name, id: r.athlete_id, age: r.age, phone: r.parent_phone, medical: r.medical_notes, noWaiver: r.no_waiver, here: r.status === 'attended' }));
-  if (s.team) for (const a of s.team.athletes) if (!people.some((p) => p.name === a.name)) people.push({ name: a.name, id: a.athlete_id, team: true, here: a.present });
+  const people = s.roster.filter((r) => ['booked', 'attended', 'no_show'].includes(r.status)).map((r) => ({ client_id: r.client_id, name: r.name, id: r.athlete_id, age: r.age, phone: r.parent_phone, medical: r.medical_notes, noWaiver: r.no_waiver, here: r.status === 'attended' }));
+  if (s.team) for (const a of s.team.athletes) if (!people.some((p) => p.client_id === a.client_id)) people.push({ name: a.name, id: a.athlete_id, team: true, here: a.present });
   people.sort((a, b) => a.name.localeCompare(b.name));
   const waiting = s.roster.filter((r) => r.status === 'waitlisted');
   document.title = `Sign-in sheet · ${s.name}`;

@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 37;
+const SCHEMA_VERSION = 40;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -70,7 +70,13 @@ const ADDED_TABLES = {
   // ---- version 36 (batch B5, point of sale): refunds with their own date, for the day's takings
   36: ['sale_refunds'],
   // ---- Version 37: one profile per athlete (team roster athletes are clients) ----
-  37: ['athlete_id_aliases']
+  37: ['athlete_id_aliases'],
+  // ---- Version 38: billing (batch B6): membership refunds with their own rows ----
+  38: ['invoice_refunds'],
+  // ---- Version 39: Schedule and Today (batches B2 and B3): follow-ups hidden from Today for a while ----
+  39: ['today_snoozes'],
+  // ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
+  40: ['workout_sets']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -84,9 +90,10 @@ const ADDED_COLUMNS = {
   workout_exercises: ['load_test TEXT', 'load_pct INTEGER'],             // version 21: weights from tested maxes
   coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies
   class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],      // version 4; coach: version 31
-  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],           // version 23: weight-room screen; coach: version 31
+  // class_sessions: see version 39 below (workout_id: version 23 weight-room screen; coach_id: version 31)
   availability: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],                  // version 31
-  workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL'],        // version 23 (then rebuilt so assignment_id can be empty)
+  workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL',         // version 23 (then rebuilt so assignment_id can be empty)
+    'rpe INTEGER', 'started_at TEXT', 'request_id TEXT', 'edited_at TEXT'],                 // version 40 (batch B8): effort, time taken, one save per Finish
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
@@ -99,7 +106,14 @@ const ADDED_COLUMNS = {
   import_batches: ['kind TEXT', 'source_label TEXT', 'result_source TEXT', 'session_id TEXT', 'replaced INTEGER NOT NULL DEFAULT 0', 'unchanged INTEGER NOT NULL DEFAULT 0',
     'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT'],
   // ---- version 36 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
-  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT']
+  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT',
+    'booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL'],        // booking_id: version 38
+  // ---- Version 38: billing (batch B6): refunds, card reminders, voids and payments recorded by hand ----
+  invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT'],
+  // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
+  // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
+  exercises: ['category TEXT']
 };
 
 function migrate(raw, schema) {
@@ -131,6 +145,13 @@ function migrate(raw, schema) {
   }
   // ---- Version 37: one profile per athlete ----
   if (version < 37) oneProfilePerAthlete(raw, schema);
+  // ---- Version 38: billing (batch B6) ----
+  // A sale taken for a booking said so in its note ('booking:<id>'); now it's the sale's booking_id. Copied for every such
+  // sale whose booking still exists and is the sale's own client's (the new check), so a Tap to Pay sale still waiting for the card when the upgrade runs settles its
+  // booking when it's paid. The note is left as it was (it is only a note now).
+  if (version < 38 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
+    raw.exec(`UPDATE sales SET booking_id = substr(note, 9) WHERE booking_id IS NULL AND note LIKE 'booking:%' AND substr(note, 9) IN (SELECT b.id FROM bookings b WHERE b.client_id = sales.client_id)`);
+  }
 }
 
 // ---------- Version 37: one profile per athlete ----------

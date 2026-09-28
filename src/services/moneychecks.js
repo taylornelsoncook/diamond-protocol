@@ -34,7 +34,7 @@ function cardPayments(ctx, from, to) {
     ...ctx.db.all(`SELECT 'sale' AS kind, id, client_id, amount_cents, status, payment_ref AS ref, completed_at AS at FROM sales
       WHERE method != 'cash' AND status IN ('succeeded','partially_refunded','refunded') AND completed_at >= ? AND completed_at < ?`, from, to),
     ...ctx.db.all(`SELECT 'membership' AS kind, id, client_id, amount_cents, status, payment_ref AS ref, paid_at AS at, subscription_id, period_start FROM invoices
-      WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?`, from, to),
+      WHERE status = 'paid' AND paid_method IS NULL AND paid_at >= ? AND paid_at < ?`, from, to),   // not cash or check recorded by hand
     // School invoices only carry a paid date; count the ones paid online on that date.
     ...ctx.db.all(`SELECT 'school' AS kind, id, NULL AS client_id, amount_cents, status, paid_reference AS ref, paid_on AS at FROM team_invoices
       WHERE status = 'paid' AND paid_method = 'online' AND paid_on >= ? AND paid_on <= ?`, localDate(from, tz), localDate(minus(to, 1), tz))
@@ -46,7 +46,7 @@ function doubleCharges(ctx, from, to) {
   // The same athlete, the same amount, twice within 10 minutes (sales and memberships together), unless already refunded.
   const rows = ctx.db.all(`SELECT 'sale' AS kind, id, client_id, amount_cents, completed_at AS at FROM sales
       WHERE client_id IS NOT NULL AND method != 'cash' AND status IN ('succeeded','partially_refunded') AND completed_at >= ? AND completed_at < ?
-    UNION ALL SELECT 'membership', id, client_id, amount_cents, paid_at FROM invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?
+    UNION ALL SELECT 'membership', id, client_id, amount_cents, paid_at FROM invoices WHERE status = 'paid' AND paid_method IS NULL AND refunded_cents < amount_cents AND paid_at >= ? AND paid_at < ?
     ORDER BY client_id, amount_cents, at`, minus(from, DOUBLE_WINDOW_MIN * MIN), to, minus(from, DOUBLE_WINDOW_MIN * MIN), to);
   for (let i = 1; i < rows.length; i++) {
     const a = rows[i - 1], b = rows[i];
@@ -63,8 +63,8 @@ function doubleCharges(ctx, from, to) {
 }
 
 function refundSpike(ctx, from, to) {
-  const day = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(json_extract(data, '$.amount_cents')), 0) AS cents FROM events WHERE type = 'sale.refunded' AND created_at >= ? AND created_at < ?`, from, to);
-  const month = ctx.db.get(`SELECT COALESCE(SUM(json_extract(data, '$.amount_cents')), 0) AS cents FROM events WHERE type = 'sale.refunded' AND created_at >= ? AND created_at < ?`, minus(from, 30 * 86400000), from);
+  const day = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(json_extract(data, '$.amount_cents')), 0) AS cents FROM events WHERE type IN ('sale.refunded','invoice.refunded') AND created_at >= ? AND created_at < ?`, from, to);
+  const month = ctx.db.get(`SELECT COALESCE(SUM(json_extract(data, '$.amount_cents')), 0) AS cents FROM events WHERE type IN ('sale.refunded','invoice.refunded') AND created_at >= ? AND created_at < ?`, minus(from, 30 * 86400000), from);
   const average = Math.round(month.cents / 30);
   const big = day.cents > SPIKE_MIN_CENTS && day.cents > SPIKE_TIMES * average;
   return big || day.n >= SPIKE_COUNT ? [{ type: 'refund_spike', amount_cents: day.cents, count: day.n, daily_average_cents: average }] : [];

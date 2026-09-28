@@ -217,9 +217,9 @@ test('undo and refund of the same sale at the same moment pay back once', async 
 
 test('undo of a sale that paid for a session at the counter makes the session unpaid again', async () => {
   const sid = 'ses_undo';
-  app.ctx.db.run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, created_at) VALUES (?, 'Speed', 'group', ?, ?, ?, 10, ?)`, sid, facility.id, realNow(), addDays(realNow(), 1 / 24), realNow());
+  app.ctx.db.run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, drop_in_cents, created_at) VALUES (?, 'Speed', 'group', ?, ?, ?, 10, 2500, ?)`, sid, facility.id, realNow(), addDays(realNow(), 1 / 24), realNow());
   app.ctx.db.run(`INSERT INTO bookings (id, session_id, client_id, status, coverage, created_at, updated_at) VALUES ('bkg_undo', ?, ?, 'booked', 'unpaid', ?, ?)`, sid, maya.id, realNow(), realNow());
-  const s = await cash({ client_id: maya.id, items: [{ product_id: shirt.id }], note: 'booking:bkg_undo' });
+  const s = await cash({ client_id: maya.id, items: [{ product_id: shirt.id }], booking_id: 'bkg_undo' });
   assert.equal(app.ctx.db.get(`SELECT coverage FROM bookings WHERE id = 'bkg_undo'`).coverage, 'paid');
   await call('POST', `/v1/sales/${s.body.id}/undo`, {});
   const b = app.ctx.db.get(`SELECT coverage, sale_id FROM bookings WHERE id = 'bkg_undo'`);

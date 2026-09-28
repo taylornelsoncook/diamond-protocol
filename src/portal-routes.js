@@ -19,6 +19,7 @@ import * as portal from './services/portal.js';
 import * as profiles from './services/profiles.js';
 import { rateLimit } from './services/security.js';
 import { familyLock, lockMessage } from './services/lockout.js';
+import * as dataimport from './services/dataimport.js';
 
 const list = (data) => ({ data });
 // One of the signed-in parent's athletes (archived athletes are hidden from the family). Everything below goes through this.
@@ -172,6 +173,14 @@ export const portalRoutes = [
   ['GET', '/portal/api/tests/:key', 'guardian', 'What a test measures and how it is run.', (ctx, r) => portal.testInfo(ctx, r.params.key)],
   ['POST', '/portal/api/athletes/:id/membership-request', 'guardian', 'Ask to change a membership: kind (switch, pause or cancel), plan_id for switch, optional note. The owner is emailed and makes the change; nothing about billing changes here. One open request per athlete.', (ctx, r) => portal.requestMembershipChange(ctx, r.guardian, athleteOf(ctx, r, r.params.id).id, r.body), 201],
   ['POST', '/portal/api/athletes/:id/membership-request/withdraw', 'guardian', 'Withdraw your open membership request.', (ctx, r) => portal.withdrawMembershipRequest(ctx, r.guardian, athleteOf(ctx, r, r.params.id).id)],
+  // Outside data: a parent brings in their athlete's wearable or app export, sees it, and can undo their own imports.
+  ['GET', '/portal/api/athletes/:id/outside-data', 'guardian', 'Your athlete\'s outside data (wearables and other apps) with trends, and the files brought in for them.', (ctx, r) => {
+    const a = athleteOf(ctx, r, r.params.id);
+    return { ...dataimport.athleteData(ctx, a.id, { days: r.query.days }), recent: dataimport.listImports(ctx, { clientId: a.id, limit: 10 }).map(({ id, format_label, filename, file_kind, days, workouts, from_day, to_day, created_at, created_by, created_by_kind, undone_at }) => ({ id, format_label, filename, file_kind, days, workouts, from_day, to_day, created_at, created_by, created_by_kind, undone_at })) };
+  }],
+  ['POST', '/portal/api/athletes/:id/data-imports/preview', 'guardian', 'Check a file for your athlete before saving: file { name, csv | xlsx_base64 | pdf_base64 } or sheet_url, and mapping for a table we don\'t recognize. Nothing is saved.', (ctx, r) => dataimport.previewImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body)],
+  ['POST', '/portal/api/athletes/:id/data-imports', 'guardian', 'Save a checked file for your athlete (the same body as the preview). All or nothing.', (ctx, r) => dataimport.commitImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { kind: 'parent', name: r.guardian.name }), 201],
+  ['POST', '/portal/api/data-imports/:id/undo', 'guardian', 'Undo a file brought in for one of your athletes.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'parent', name: r.guardian.name }, { familyId: r.guardian.family_id })],
   ['GET', '/portal/api/athletes/:id/report-links', 'guardian', 'Working share links to your athlete\'s progress report: who made each, when it expires and how often it was opened.', (ctx, r) => ({ data: reports.listReportLinks(ctx, athleteOf(ctx, r, r.params.id).id) })],
   ['POST', '/portal/api/athletes/:id/report-links', 'guardian', 'Make a link to your athlete\'s progress report that works without signing in (for a grandparent or a recruiter): days (7, 30, 90 or 365), optional label. The response has the url once.', (ctx, r) => reports.createReportLink(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { kind: 'parent', id: r.guardian.id, name: `${r.guardian.name} (parent)` }, r.baseUrl), 201],
   ['DELETE', '/portal/api/athletes/:id/report-links/:link', 'guardian', 'Turn off a share link. It stops working at once.', (ctx, r) => reports.revokeReportLink(ctx, athleteOf(ctx, r, r.params.id).id, r.params.link)],

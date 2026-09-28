@@ -1,13 +1,14 @@
 import { h, fill, toast, money, busy, btn, field, input, select, panel, videoEmbed } from './ui.js';
 import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
+import { importForm, importsList, dataSummary } from './dataimport-ui.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
   const res = await fetch(`/portal/api/${path}`, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !['login', 'verify'].includes(path)) { state.me = null; render(); }
-  if (!res.ok) { const e = new Error(data.error?.message || 'Something went wrong. Try again.'); e.status = res.status; e.code = data.error?.code; throw e; }
+  if (!res.ok) { const e = new Error(data.error?.message || 'Something went wrong. Try again.'); e.status = res.status; e.code = data.error?.code; e.details = data.error?.details; throw e; }
   return data;
 }
 const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b);
@@ -590,8 +591,22 @@ async function viewProgress(main) {
     const period = store.get('dp_progress_period') ?? 'all', since = store.get('dp-report-since') ?? 'first';
     const from = period === 'year' ? minusOneYear() : period.startsWith('day:') ? period.slice(4) : '';
     const r = await get(`athletes/${a.id}/report${from ? `?from=${from}` : ''}`);
-    fill(where, drawReport(a, r, { period, since, from }));
+    const outsideBox = h('div', { class: 'stack' });
+    fill(where, drawReport(a, r, { period, since, from }), outsideBox);
     window.scrollTo(0, y);
+    drawOutside(a, outsideBox).catch(() => fill(outsideBox));
+  }
+  // Recovery and sleep from a wearable or another app: what's on file, bringing in a file, and undoing one.
+  async function drawOutside(a, box) {
+    const d = await get(`athletes/${a.id}/outside-data`);
+    const reload = () => drawOutside(a, box);
+    const form = importForm({ athlete: () => ({ id: a.id, name: a.name }), preview: (b) => post(`athletes/${a.id}/data-imports/preview`, b), commit: (b) => post(`athletes/${a.id}/data-imports`, b), onSaved: reload });
+    fill(box, dataSummary(d, { title: `${a.first_name}'s recovery and sleep`, empty: `Bring in ${a.first_name}'s WHOOP export (or another app's) below, and see recovery, heart rate variability, sleep and strain here. Our coaches see it too.` }),
+      h('details', { class: 'dp-panel', open: d.has_data ? null : true },
+        h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `Bring in a file for ${a.first_name}`),
+        h('p', { class: 'small muted' }, 'From WHOOP: open the WHOOP app, go to More → App settings → Data export, and upload the files it emails you (physiological_cycles.csv, sleeps.csv, workouts.csv). Other apps: a CSV, Excel file, Google Sheets link or PDF with a date column.'),
+        form,
+        d.recent?.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Brought in'), importsList(d.recent, { canUndo: (x) => x.created_by_kind === 'parent', undo: async (id) => { await post(`data-imports/${id}/undo`); toast('Undone.'); reload(); } })) : null));
   }
   function drawReport(a, r, { period, since, from }) {
     const next = r.next_testing_day;

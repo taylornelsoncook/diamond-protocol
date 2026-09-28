@@ -76,6 +76,10 @@ export function exportFamily(ctx, familyId) {
         LEFT JOIN workouts w ON w.id = l.workout_id LEFT JOIN programs p ON p.id = w.program_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
       workout_sets: per(`SELECT l.completed_at, s.exercise_name AS exercise, s.set_no, s.weight, s.reps FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id WHERE l.client_id = ? ORDER BY l.completed_at, s.exercise_name, s.set_no`, k.id),
       daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
+      // Outside data brought in from wearables and other apps (version 47).
+      outside_data: per(`SELECT day, metric, value, label, unit, source FROM athlete_metrics WHERE client_id = ? ORDER BY day, metric`, k.id),
+      outside_workouts: per(`SELECT started_at, ended_at, minutes, activity, strain, calories, avg_hr, max_hr, source FROM athlete_workouts WHERE client_id = ? ORDER BY started_at`, k.id),
+      outside_data_imports: per(`SELECT source, file_kind, filename, days, workouts, from_day, to_day, created_by, created_by_kind, created_at, undone_at FROM data_imports WHERE client_id = ? ORDER BY created_at`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
       lessons_opened: per(`SELECT l.title AS lesson, v.opened_at FROM lesson_views v JOIN lessons l ON l.id = v.lesson_id WHERE v.client_id = ? ORDER BY v.opened_at`, k.id),
       reading_reminders: per(`SELECT sent_at FROM lesson_reminders WHERE client_id = ? ORDER BY sent_at`, k.id),
@@ -125,7 +129,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       // Team rosters: the athlete comes off, and the line keeps no name or ID (team attendance counts stay).
       ctx.db.run(`UPDATE team_roster SET name = 'Deleted athlete', athlete_id = NULL, position = NULL, grad_year = NULL, active = 0 WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
-      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links', 'athlete_metrics', 'athlete_workouts', 'data_imports']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE sales SET receipt_email = NULL, receipt_token = NULL WHERE client_id = ?`, id);   // sales stay; where receipts went and their links go

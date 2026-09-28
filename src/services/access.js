@@ -7,6 +7,7 @@ import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
 import { OWNER_EVENTS, can } from './security.js';
 import { clientCounts } from './clients.js';
+import { moneyIn, todayBounds } from './billing.js';
 
 const SESSION_DAYS = 14;
 
@@ -96,11 +97,11 @@ function monthStarts(ctx) {
   const sameDayLastMonth = new Date(Math.min(Date.parse(prevStart) + (Date.parse(ctx.now()) - Date.parse(thisStart)), Date.parse(thisStart))).toISOString();
   return { zone, thisStart, prevStart, sameDayLastMonth, dayStart: startOfLocalDay(ctx.now(), zone) };
 }
-function collected(db, from, to) {
-  const sales = db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ? AND completed_at < ?`, from, to).c;
-  const members = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?`, from, to).c;
-  const teams = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM team_invoices WHERE status = 'paid' AND paid_on >= ? AND paid_on < ?`, from.slice(0, 10), to.slice(0, 10)).c;
-  return { total: sales + members + teams, sales, members, teams };
+// Money in, net of refunds, counted the same way as Billing's summary and the day's takings (billing.moneyIn): a refund
+// counts when the money went back.
+function collected(ctx, from, to) {
+  const m = moneyIn(ctx, from, to);
+  return { total: m.total, sales: m.sales, members: m.members, teams: m.teams, refunded: m.refunded_cents };
 }
 export function pulse(ctx, { role = 'owner' } = {}) {
   const db = ctx.db, now = ctx.now(), { thisStart, prevStart, sameDayLastMonth, dayStart } = monthStarts(ctx);
@@ -144,18 +145,19 @@ export function pulse(ctx, { role = 'owner' } = {}) {
   const mrr = db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS c, COUNT(*) AS n FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`);
   const teams = teamSummary(ctx);
   const risk = db.get(`SELECT COALESCE(SUM(i.amount_cents), 0) AS c, COUNT(*) AS n FROM invoices i WHERE i.status = 'failed'`);
-  const todaySales = db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, dayStart);
+  const tb = todayBounds(ctx), day = moneyIn(ctx, tb.from, tb.to);   // the day's takings: sales paid today minus refunds made today
+  const todaySales = { c: day.sales, n: day.sales_count };
   // Average spend: what clients paid this month (their own sales plus membership payments) per client who paid anything.
   const spend = db.get(`SELECT COALESCE(SUM(c), 0) AS cents, COUNT(*) AS clients FROM (
       SELECT client_id, SUM(c) AS c FROM (
         SELECT client_id, amount_cents - refunded_cents AS c FROM sales WHERE client_id IS NOT NULL AND status IN ('succeeded','partially_refunded') AND completed_at >= ?
-        UNION ALL SELECT client_id, amount_cents FROM invoices WHERE status = 'paid' AND paid_at >= ?) GROUP BY client_id HAVING SUM(c) > 0)`, thisStart, thisStart);
+        UNION ALL SELECT client_id, amount_cents - refunded_cents FROM invoices WHERE status = 'paid' AND paid_at >= ?) GROUP BY client_id HAVING SUM(c) > 0)`, thisStart, thisStart);
   const locations = db.all(`SELECT l.id, l.name, COALESCE(SUM(s.amount_cents - s.refunded_cents), 0) AS cents, COUNT(s.id) AS sales
     FROM locations l LEFT JOIN sales s ON s.location_id = l.id AND s.status IN ('succeeded','partially_refunded') AND s.completed_at >= ?
     WHERE l.active = 1 OR s.id IS NOT NULL GROUP BY l.id ORDER BY cents DESC, l.name`, thisStart);
   return { ...out,
     money: {
-      month: collected(db, thisStart, now), same_point_last_month: collected(db, prevStart, sameDayLastMonth).total,
+      month: collected(ctx, thisStart, now), same_point_last_month: collected(ctx, prevStart, sameDayLastMonth).total,
       today_cents: todaySales.c, today_sales: todaySales.n,
       mrr_cents: mrr.c + teams.monthly_cents, member_mrr_cents: mrr.c, team_mrr_cents: teams.monthly_cents, paying_members: mrr.n,
       failed_cents: risk.c, failed_invoices: risk.n,
@@ -218,7 +220,7 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
   return {
     pulse: pulse(ctx, { role }),
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
-    today_sales: db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ?`, startOfLocalDay(ctx.now(), getSetting(ctx, 'timezone'))),
+    today_sales: (() => { const t = todayBounds(ctx), m = moneyIn(ctx, t.from, t.to); return { cents: m.sales, n: m.sales_count }; })(),
     metrics: { mrr_cents: active.mrr, active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, archived_clients: counts.archived, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },
     attention: [...ctx.db.all(`SELECT id AS request_id, family_id, family_name, requested_by, created_at FROM data_requests WHERE status = 'open' AND kind = 'delete'`).map((x) => ({ kind: 'deletion_request', ...x })), ...failed, ...overdueTeams, ...waiting, ...trials, ...quiet, ...pendingSales],
     activity: listEvents(ctx, { limit: 12 })

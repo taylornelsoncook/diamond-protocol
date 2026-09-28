@@ -1,7 +1,7 @@
 import { newId, v, notFound, conflict, badRequest } from '../util.js';
 import { getSetting } from './families.js';
 import { kioskFor, openSessions, bookingsIn, checkInBooking, nameOnBoard } from './checkin.js';
-import { getProgram, loadFor, LOAD_TESTS } from './programs.js';
+import { getProgram, loadFor, LOAD_TESTS, readLog, saveSets, startOfToday } from './programs.js';
 import { teamRosterFor } from './teams.js';
 import { readinessToday } from './engage.js';
 import { emit } from './events.js';
@@ -87,24 +87,34 @@ export function screenAthlete(ctx, key, body = {}, asOf = ctx.now()) {
   };
 }
 
-// Log the workout from the screen. It also checks the athlete in.
+// Log the workout from the screen. It also checks the athlete in. Optional sets (workout_exercise_id, set_no, weight,
+// reps) are saved like the app's. If the athlete already logged this workout in the app today, that log is linked to
+// the session (and they're checked in) instead of logging it twice.
 export function screenLog(ctx, key, body = {}, asOf = ctx.now()) {
   const { s, a, client } = pickAthlete(ctx, key, body, asOf);
   if (loggedIn(ctx, s.id).has(client.id)) throw conflict(`${client.name.split(' ')[0]}, you already logged this one.`);
   const w = ctx.db.get('SELECT w.*, p.name AS program_name FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ?', s.workout_id);
   const valid = new Set(ctx.db.all('SELECT id FROM workout_exercises WHERE workout_id = ?', w.id).map((r) => r.id));
-  const ids = Array.isArray(body.exercise_ids) ? [...new Set(body.exercise_ids.map(String))] : [...valid];
-  if (ids.some((x) => !valid.has(x))) throw badRequest('exercise_ids contains exercises that are not in this workout.');
+  const data = readLog(ctx, w.id, { sets: body.sets, exercise_ids: Array.isArray(body.exercise_ids) ? body.exercise_ids.map(String) : body.sets?.length ? [] : [...valid] });
+  const ids = data.ids;
+  const checkIn = () => {
+    if (a.booking_id && !a.here) checkInBooking(ctx, a.booking_id);
+    if (a.team) ctx.db.run('INSERT INTO team_attendance (session_id, client_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', s.id, a.client_id, ctx.now());
+  };
+  const inApp = ctx.db.get('SELECT id FROM workout_logs WHERE client_id = ? AND workout_id = ? AND session_id IS NULL AND completed_at >= ? ORDER BY completed_at DESC LIMIT 1', client.id, w.id, startOfToday(ctx));
+  if (inApp) {
+    ctx.db.tx(() => { ctx.db.run('UPDATE workout_logs SET session_id = ? WHERE id = ?', s.id, inApp.id); checkIn(); });
+    return { name: client.name.split(' ')[0], logged: true, already: true, exercises_logged: ctx.db.get('SELECT COUNT(*) AS n FROM exercise_logs WHERE workout_log_id = ?', inApp.id).n };
+  }
   // Counts toward their program when this workout is part of it and not logged there yet.
   const asg = ctx.db.get('SELECT id FROM assignments WHERE client_id = ? AND active = 1 AND program_id = ?', client.id, w.program_id);
   const assignmentId = asg && !ctx.db.get('SELECT id FROM workout_logs WHERE assignment_id = ? AND workout_id = ?', asg.id, w.id) ? asg.id : null;
   const id = newId('wlog');
   ctx.db.tx(() => {
     ctx.db.run('INSERT INTO workout_logs (id, client_id, assignment_id, workout_id, notes, completed_at, session_id) VALUES (?, ?, ?, ?, NULL, ?, ?)', id, client.id, assignmentId, w.id, ctx.now(), s.id);
-    for (const x of ids) ctx.db.run('INSERT INTO exercise_logs (workout_log_id, workout_exercise_id) VALUES (?, ?)', id, x);
-    if (a.booking_id && !a.here) checkInBooking(ctx, a.booking_id);
-    if (a.team) ctx.db.run('INSERT INTO team_attendance (session_id, client_id, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', s.id, a.client_id, ctx.now());
+    saveSets(ctx, id, data);
+    checkIn();
   });
-  emit(ctx, 'workout.completed', { workout_log_id: id, client_id: client.id, client_name: client.name, workout_id: w.id, workout_title: w.title, program_name: w.program_name, exercises_logged: ids.length, exercises_total: valid.size, session_id: s.id });
+  emit(ctx, 'workout.completed', { workout_log_id: id, client_id: client.id, client_name: client.name, workout_id: w.id, workout_title: w.title, program_name: w.program_name, exercises_logged: ids.length, exercises_total: valid.size, sets: data.sets.length, effort: null, bests: [], session_id: s.id });
   return { name: client.name.split(' ')[0], logged: true, exercises_logged: ids.length };
 }

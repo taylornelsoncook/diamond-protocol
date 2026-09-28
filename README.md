@@ -56,7 +56,7 @@ The seed prints your login and a sample client app link. To start over, delete t
 - **Families:** athletes belong to a family with one or more parents. The family has one card that pays for every athlete, and one waiver signature. Athlete profiles hold birthday, sport, position, school, grad year, medical notes and an emergency contact.
 - **Session packs and credits:** packs add either **group** or **private** credits. Members' group classes are covered by the membership; privates always use private credits or a paid drop-in. A full refund removes the pack's unused sessions.
 - **Revenue by location:** see what the facility, each park and your mobile work bring in this month.
-- **Programs:** exercise library with demo video links (YouTube, Vimeo or a direct video file), program builder by week and day, assign to clients.
+- **Programs:** exercise library with demo video links (YouTube, Vimeo or a direct video file), categories, search and filters (missing a video, not in a program) and where each exercise is used. The builder shows one week at a time: add, copy (to a run of weeks) and delete weeks, add and copy days, add exercises from a library search (sets and reps filled in from their last use), swap or remove them (with Undo), duplicate a program or start one as a copy. Each program lists its clients with workouts done, what's next and when they last trained (amber after a quiet week); the Programs page shows workouts logged, who needs a check-in, who finished, and recent workouts with effort, sets, new bests and notes. Front desk sees it all read-only and can email the app link.
 - **API & integrations:** create and revoke API keys, add webhooks and see every delivery, link to the full API spec.
 
 **Accountability, Performance and Education**: athletes (in their app) and parents (Home tabs) get a daily check-in (sleep, hydration, soreness, energy, mood) with red flags for coaches, streaks, weekly goals, coach messages, test targets with progress, opt-in rankings by best result (no other names shown), and lessons, courses and assigned reading. Coaches run it from the Education screen and each client profile.
@@ -84,7 +84,7 @@ The seed prints your login and a sample client app link. To start over, delete t
 
 **DP Coach iPhone app** (`ios/`): your pocket point of sale with Tap to Pay on iPhone. See `ios/README.md` to build it.
 
-**Client app** (`/app?token=…`): each client gets a private link. It shows their next workout, the demo video for each exercise, logging, notes for the coach, and progress through the program. Paused or canceled members see a message instead of workouts.
+**Client app** (`/app?token=…`): each client gets a private link. It shows their next workout and progress through the program. Each exercise opens with its demo video, cues, last time's numbers and best weight; athletes log every set (weight and reps), with a rest timer between sets, rate how hard it was (1 to 10) and leave a note. Everything is kept on the phone as it's logged, so a workout done with no signal is sent when the connection returns, and never twice. The done screen shows sets, time, effort and new bests; the latest workout can be reopened for 2 hours. Coming up lists the next three workouts, and finished workouts open to show every set. Logging a workout on the weight-room screen and in the app counts once. Paused, canceled or archived athletes see a message instead of workouts.
 
 **Billing rules**
 - New subscriptions start with the plan's free trial; the first charge happens when it ends.

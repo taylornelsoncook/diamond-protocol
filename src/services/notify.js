@@ -128,3 +128,30 @@ export async function paymentFailed(ctx, invoiceId) {
     ? `We couldn't charge ${money(inv.amount_cents)} for ${first(inv.client_name)}'s ${inv.plan_name}, so the membership was canceled. To start again, add a working card in the parent portal: ${base(ctx)}/parent`
     : `The ${money(inv.amount_cents)} payment for ${first(inv.client_name)}'s ${inv.plan_name} didn't go through. ${link ? `Pay now: ${link} (or update your card in the parent portal).` : `Update your card: ${base(ctx)}/parent (Family tab).`} We'll try again ${day(ctx, inv.next_retry_at)}.`);
 }
+
+// ---------- Card reminders and membership refunds (sent by the owner from Billing) ----------
+// One email per family listing every declined membership charge, each with its pay link, and where to update the card.
+// Sent when the owner asks, even if automatic failed-payment emails are turned off.
+export async function cardReminder(ctx, clientId, invoiceIds, recipients) {
+  const payer = payerFor(ctx, clientId);
+  const rows = invoiceIds.map((id) => ctx.db.get(`SELECT i.id, i.amount_cents, p.name AS plan_name, c.name AS client_name FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, id)).filter(Boolean);
+  const total = rows.reduce((t, r) => t + r.amount_cents, 0);
+  const lines = rows.map((r) => { const link = invoicePayLink(ctx, r.id); return `- ${r.plan_name} for ${first(r.client_name)}: ${money(r.amount_cents)}${link ? `\n  Pay by card, no sign-in needed: ${link}` : ''}`; });
+  const card = payer.card_last4 ? `We couldn't charge your card ending ${payer.card_last4}` : 'We don\'t have a card on file for you';
+  const update = payer.table === 'families' ? `To add or update your card, sign in to the parent portal and open the Family tab: ${base(ctx)}/parent\nWe'll charge it as soon as it's saved.` : 'Reply to this email and we\'ll send you a secure link to update your card.';
+  const subject = rows.length === 1 ? `Please update your card: ${money(total)} didn't go through` : `Please update your card: ${rows.length} payments didn't go through`;
+  const text = `Hi ${first(payer.name)},\n\n${card}, so ${rows.length === 1 ? 'this payment is' : 'these payments are'} still due:\n\n${lines.join('\n')}\n\nTotal: ${money(total)}\n\n${update}\n\nQuestions? Just reply to this email.\n\n${biz(ctx)}`;
+  for (const to of recipients) await send(ctx, to, subject, text);
+  return recipients;
+}
+// The receipt for a membership refund, to the family's billing email (or the adult client). Returns who it went to.
+export async function invoiceRefundReceipt(ctx, invoiceId, { amountCents, reason, byCard }) {
+  const inv = ctx.db.get(`SELECT i.*, p.name AS plan_name, c.name AS client_name FROM invoices i JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = i.client_id WHERE i.id = ?`, invoiceId);
+  if (!inv) return [];
+  const payer = payerFor(ctx, inv.client_id);
+  if (!payer.email) return [];
+  const how = byCard ? `It goes back to the card you paid with${payer.card_last4 ? ` (ending ${payer.card_last4})` : ''} and usually shows within 5 to 10 business days.` : 'We\'ll hand it back the way you paid.';
+  await send(ctx, payer.email, `Refund of ${money(amountCents)} from ${biz(ctx)}`,
+    `Hi ${first(payer.name)},\n\nWe refunded ${money(amountCents)} of the ${money(inv.amount_cents)} payment for ${inv.client_name}'s ${inv.plan_name} (${day(ctx, inv.period_start)} to ${day(ctx, inv.period_end)}).\n\nReason: ${reason}\n\n${how}\n\nReceipt ${inv.id}\n\n${biz(ctx)}`);
+  return [payer.email];
+}

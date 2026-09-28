@@ -7,7 +7,7 @@ import { getSetting } from './families.js';
 export const ROLES = {
   owner: 'Owner: everything, including money, staff, contracts and API keys.',
   coach: 'Coach: clients, schedule, testing, programs and point of sale. No billing, school contracts, refunds (they can undo their own sale for 10 minutes), the day\'s takings, trial-price offers, API keys or staff.',
-  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
+  front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) programs, goals, messages and lessons, and email an athlete their workout app link.'
 };
 const OWNER_ONLY = [
   /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
@@ -15,7 +15,7 @@ const OWNER_ONLY = [
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
@@ -26,7 +26,7 @@ const FRONT_DESK = [
   ['PATCH', /^\/v1\/families\/:id\/guardians\/:gid$/], ['POST', /^\/v1\/families\/:id\/(waiver|guardians\/:gid\/welcome)$/],   // fix a parent's details, re-send sign-in, paper waiver
   ['POST', /^\/v1\/clients\/:id\/app-link\/email$/],
   ['POST', /^\/v1\/sales(\/:id\/(sync|cancel|simulate|undo|receipt))?$/], ['POST', /^\/v1\/terminal\//],   // the day's takings (GET /v1/sales/takings) too
-  ['POST', /^\/v1\/sessions\/:id\/(bookings|team-attendance)$/], ['POST', /^\/v1\/bookings\/:id\/(cancel|attendance|pay)$/],
+  ['POST', /^\/v1\/sessions\/:id\/(bookings|team-attendance|message)$/], ['POST', /^\/v1\/bookings\/:id\/(cancel|attendance|pay|promote)$/],   // run a roster: add, check in, collect, move up, email families (not change the session)
   ['POST', /^\/v1\/class-series\/:id\/(enroll|register)$/], ['POST', /^\/v1\/slots\/book$/],
   ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/],
   ['POST', /^\/v1\/testing-sessions\/:id\/athletes$/],   // walk-ups on a testing day (not removing athletes, editing or deleting days)

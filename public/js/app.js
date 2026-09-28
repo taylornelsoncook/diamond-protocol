@@ -1,6 +1,6 @@
-import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel, videoEmbed, playIcon } from './ui.js';
-import { saleForm } from './shop-admin.js';
-import { initEngage, clientPanels, flagsPanel, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
+import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
+import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
+import { initPrograms, viewPrograms, viewProgram, workoutRow } from './programs-coach.js';
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -18,10 +18,11 @@ const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
 const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['staff', 'Staff & security']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'education'] };
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education'] };   // front desk: programs read-only
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
+initPrograms({ api, render, header, role: () => state.user?.role, pulseTile: (...a) => pulseTile(...a) });
 
 // ---------- Shell ----------
 async function boot() {
@@ -44,6 +45,7 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('beforeunload', (e) => { if (leaveGuard?.check(null)) { e.preventDefault(); e.returnValue = ''; } });
 
 function render() {
+  clearInterval(todayTimer);                          // Today sets its one-minute refresh again when it's open
   leaveGuard = null;                                  // the view sets it again if it has unsaved changes
   if (!state.user) { profileDrafts.clear(); forgetSale(); return renderLogin(); }   // signed out: the next person never sees these edits or the open sale
   if (state.user.must_change_password) return renderPasswordChange(true);
@@ -106,7 +108,7 @@ const EVENT_TEXT = {
   'invoice.paid': (d) => `Payment of ${money(d.amount_cents)} received from ${d.client_name}`,
   'invoice.payment_failed': (d) => `Payment of ${money(d.amount_cents)} failed for ${d.client_name}${d.final ? '. Membership canceled.' : ''}`,
   'program.assigned': (d) => `${d.client_name} started ${d.program_name}`,
-  'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises)`,
+  'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises${d.sets ? `, ${d.sets} ${d.sets === 1 ? 'set' : 'sets'}` : ''}${d.effort ? `, effort ${d.effort}/10` : ''})${d.bests?.length ? `. New best: ${d.bests.map((b) => `${b.name} ${b.weight} lb`).join(', ')}` : ''}`,
   'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
   'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment${d.amount_cents == null ? '' : ` of ${money(d.amount_cents)}`} from ${d.client_name} didn't go through`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
@@ -135,30 +137,109 @@ const EVENT_TEXT = {
   'clients.imported': (d) => `${d.athletes} clients imported${d.filename ? ` from ${d.filename}` : ''}`,
   'queue.linked': (d) => `${d.count} waiting ${d.count === 1 ? 'result' : 'results'} linked to ${d.athlete_name} (${d.athlete_id})${d.remembered ? ', device remembered' : ''}`,
   'integration.synced': (d) => `${d.results} results synced from ${d.provider === 'hawkin' ? 'Hawkin Dynamics' : d.provider}`,
+  'badge.awarded': (d) => `${d.client_name} earned the ${d.badge_name} badge`,
+  'course.completed': (d) => `${d.client_name} finished the course ${d.course_title}`,
+  'lead.created': (d) => `${d.parent_name ?? 'A family'} asked about training${d.athlete_name ? ` for ${d.athlete_name}` : ''}`,
+  'lead.updated': (d) => `A lead moved to ${String(d.status ?? '').replace('_', ' ')}`,
+  'pay_link.created': (d) => `Pay link made${d.amount_cents == null ? '' : ` for ${money(d.amount_cents)}`}`,
+  'pay_link.paid': (d) => `Pay link paid${d.amount_cents == null ? '' : `: ${money(d.amount_cents)}`}`,
+  'progress_note.approved': () => 'A progress note for parents was approved',
+  'session.messaged': (d) => `${d.by} emailed ${d.families} ${d.families === 1 ? 'family' : 'families'} about ${d.session_name}`,
   'client.card_updated': (d) => d.card_last4 ? `${d.client_name} saved a card ending ${d.card_last4}` : `${d.client_name}'s saved card was removed`
 };
 const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Pay link' };
 
+// Today keeps a little state between its one-minute refreshes: the check-in search, the activity filter and how much of
+// the feed is showing. A refresh asked for while one is running runs once more afterwards, so two quick check-ins in a
+// row both show.
+const todayUi = { q: '', filter: '', shown: 20, running: null, queued: false };
+let todayTimer = null;
+function refreshToday(main) {
+  if (todayUi.running) { todayUi.queued = true; return todayUi.running; }
+  todayUi.running = keepPlace(() => viewToday(main)).catch(() => {}).finally(() => {
+    todayUi.running = null;
+    if (todayUi.queued) { todayUi.queued = false; refreshToday(main); }
+  });
+  return todayUi.running;
+}
+const ACTIVITY_FILTERS = { '': 'Everything', checkins: 'Check-ins', bookings: 'Bookings', training: 'Training', testing: 'Testing', clients: 'Clients', money: 'Money' };
+
 async function viewToday(main) {
   const staff = state.user.role !== 'front_desk';
   const mineSpots = state.user.role === 'coach' && hashQuery().get('mine') === '1';     // coaches: "My classes only" on the open-spots list
-  const [d, rev, ag, flags, risk, spots, team] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/agenda'), flagsPanel().catch(() => null), staff ? get('/v1/at-risk').catch(() => null) : null,
-    staff ? get(`/v1/open-spots${mineSpots ? '?coach_id=me' : ''}`).catch(() => null) : null, isOwner() ? get('/v1/coach-summary').catch(() => null) : null]);
-  tzName = ag.timezone;
-  const agendaPanel = panel('Today\'s sessions', { subtitle: ag.sessions.length ? `${ag.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
-    ag.sessions.length ? ag.sessions.map(sessionRow) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'));
-  const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'New sale') },
-    rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
-      : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
+  const [d, rev, board, spots, team, feed] = await Promise.all([get('/v1/dashboard'), isOwner() ? get('/v1/reports/revenue') : null, get('/v1/today'),
+    staff ? get(`/v1/open-spots${mineSpots ? '?coach_id=me' : ''}`).catch(() => null) : null, isOwner() ? get('/v1/coach-summary').catch(() => null) : null,
+    get(`/v1/activity?limit=${todayUi.shown}${todayUi.filter ? `&filter=${todayUi.filter}` : ''}`).catch(() => ({ data: [], next: null, filters: [] }))]);
+  tzName = board.timezone;
+  const refresh = () => refreshToday(main);
+  const first = (n) => n.split(' ')[0];
+
+  // Today's sessions: On now / Next / Done, coach, how many are checked in; tomorrow in one line.
+  const tm = board.tomorrow;
+  const agendaPanel = panel('Today\'s sessions', { subtitle: board.sessions.length ? `${board.sessions.reduce((t, x) => t + x.booked_count, 0)} athletes booked · ${board.sessions.reduce((t, x) => t + x.attended_count, 0)} checked in` : null, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Full schedule') },
+    board.sessions.length ? board.sessions.map((x) => sessionRow(x, { showState: true, state: x.state })) : h('p', { class: 'muted' }, 'Nothing on the schedule today.'),
+    h('p', { class: 'small muted', style: 'margin:12px 0 0' }, tm.sessions ? `Tomorrow: ${nplural(tm.sessions, 'session')}, first at ${timeOf(tm.first_at)}, ${tm.booked} booked.` : 'Tomorrow: nothing scheduled.'));
+
+  // Check in: everyone booked today, still to arrive first. Search by name or Athlete ID; Enter checks in the only match.
+  const search = input({ type: 'search', placeholder: 'Name or Athlete ID', 'aria-label': 'Find someone to check in', value: todayUi.q, 'data-focus': 'checkin-search', autocomplete: 'off' });
+  const rows = h('div', { class: 'stack-tight' });
+  const flagBadge = (text, tone = 'warn', title) => h('span', { class: `dp-badge dp-badge--${tone}`, title }, text);
+  const checkIn = async (a, button) => {
+    await busy(button, async () => {
+      await post(`/v1/bookings/${a.booking_id}/attendance`, { status: 'attended' });
+      todayUi.q = '';
+      undoToast(`${a.name} checked in for ${a.session_name}.`, async () => { try { await post(`/v1/bookings/${a.booking_id}/attendance`, { status: a.status === 'no_show' ? 'no_show' : 'booked' }); toast(`${first(a.name)} is no longer checked in.`); } catch (e) { toast(e.message, 'warn'); } refresh(); });
+      await refresh();
+      document.querySelector('[data-focus="checkin-search"]')?.focus({ preventScroll: true });
+    });
+  };
+  const arrivalRow = (a) => {
+    const here = a.status === 'attended', over = !here && a.state === 'done';
+    return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'data-focus': `ck-${a.booking_id}`, 'aria-pressed': String(here), 'aria-label': `${here ? 'Undo check-in for' : 'Check in'} ${a.name}`,
+        onClick: (e) => here ? busy(e.currentTarget, async () => { await post(`/v1/bookings/${a.booking_id}/attendance`, { status: 'booked' }); toast(`${first(a.name)} is no longer checked in.`); await refresh(); }) : checkIn(a, e.currentTarget) }, here ? 'Here' : 'Check in'),
+      h('div', { class: 'grow stack-tight', style: 'min-width:180px' },
+        h('a', { href: `#/clients/${a.client_id}`, class: 'strong', style: 'color:var(--steel)' }, a.name),
+        h('span', { class: 'small muted' }, `${timeOf(a.starts_at)} ${a.session_name}${a.athlete_id ? ` · ${a.athlete_id}` : ''}`),
+        over ? h('span', { class: 'small muted' }, a.status === 'no_show' ? 'Marked no-show.' : 'Session over, not checked in.') : null,
+        a.medical ? h('span', { class: 'small warn-text' }, `Medical: ${a.medical}`) : null),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        a.birthday ? flagBadge('Birthday', 'good') : null, a.no_waiver ? flagBadge('No waiver') : null, a.unpaid ? flagBadge('Unpaid') : null,
+        a.flags.length ? flagBadge('Rough check-in', 'warn', a.flags.join(', ')) : null));
+  };
+  const drawArrivals = () => {
+    const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const list = board.arrivals.filter((a) => words.every((w) => `${a.name} ${a.athlete_id ?? ''}`.toLowerCase().includes(w)));
+    fill(rows, list.length ? list.slice(0, words.length ? 50 : 40).map(arrivalRow) : h('p', { class: 'muted', style: 'margin:0' }, words.length ? `Nobody booked today matches "${search.value.trim()}".` : 'Nobody is booked today.'),
+      list.length > 40 && !words.length ? h('p', { class: 'small muted', style: 'margin:0' }, `${list.length - 40} more. Search to find them.`) : null);
+  };
+  search.addEventListener('input', () => { todayUi.q = search.value; drawArrivals(); });
+  search.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return;
+    const list = board.arrivals.filter((a) => a.status !== 'attended' && words.every((w) => `${a.name} ${a.athlete_id ?? ''}`.toLowerCase().includes(w)));
+    if (list.length === 1) return checkIn(list[0], null);
+    toast(list.length ? `${list.length} people match. Tap the right one.` : board.arrivals.some((a) => words.every((w) => `${a.name} ${a.athlete_id ?? ''}`.toLowerCase().includes(w))) ? 'Already checked in.' : `Nobody booked today matches "${search.value.trim()}".`, 'warn');
+  });
+  drawArrivals();
+  const hereCount = board.arrivals.filter((a) => a.status === 'attended').length;
+  const checkinPanelEl = board.arrivals.length ? panel(`Check in · ${hereCount} of ${board.arrivals.length} here`, { subtitle: 'Still to arrive first. Tap Check in, or type a name and press Enter. Tap Here to undo.' }, search, rows) : null;
+
+  // Needs your attention: money items (owner), unpaid bookings to collect at the door, rough check-ins, and the rest.
   const attention = d.attention.map((a) => {
     const link = h('a', { href: `#/clients/${a.client_id}`, class: 'strong', style: 'color:var(--steel)' }, a.name);
     if (a.kind === 'payment_failed') return h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `${money(a.amount_cents)} for ${a.plan_name} declined ${a.attempts}×. ${a.next_retry_at ? 'Auto-retry ' + date(a.next_retry_at) + '.' : ''}`)),
-      btn('Retry charge', (e) => busy(e.currentTarget, async () => {
-        const inv = await post(`/v1/invoices/${a.invoice_id}/retry`);
-        inv.status === 'paid' ? toast(`Charge retried. ${a.name.split(' ')[0]} is paid up.`) : toast(`Charge declined again. Send ${a.name.split(' ')[0]} a billing link.`, 'warn');
-        render();
-      }), 'outline'));
+      h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `${money(a.amount_cents)} for ${a.plan_name} declined ${a.attempts}×. ${a.next_retry_at ? 'Auto-retry ' + date(a.next_retry_at) + '.' : 'No more automatic retries: ask the family to update their card.'}`)),
+      btn('Retry charge', (e) => {
+        if (!confirm(`Charge ${money(a.amount_cents)} for ${a.plan_name} to ${first(a.name)}'s card on file now?`)) return;
+        busy(e.currentTarget, async () => {
+          const inv = await post(`/v1/invoices/${a.invoice_id}/retry`);
+          inv.status === 'paid' ? toast(`Charged ${money(a.amount_cents)}. ${first(a.name)} is paid up.`) : toast(`Declined again. Send ${first(a.name)}'s family a pay link from their client page so they can add a new card.`, 'warn');
+          refresh();
+        });
+      }, 'outline'));
     if (a.kind === 'team_invoice_overdue') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('a', { href: `#/teams/${a.contract_id}`, class: 'strong', style: 'color:var(--steel)' }, `${a.name} · ${a.team_name}`), h('span', { class: 'small muted' }, `Invoice ${a.number} for ${money(a.amount_cents)} was due ${date(a.due_on)}. Reminders go out weekly.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/teams/${a.contract_id}` }, 'Open team'));
@@ -169,7 +250,7 @@ async function viewToday(main) {
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
     if (a.kind === 'replies') return h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].author ?? a.items[0].name} wrote back about ${a.items[0].name.split(' ')[0]}` : `${a.count} athletes have new replies`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name} (${x.count})`).join(' · '))),
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].author ?? a.items[0].name} wrote back about ${first(a.items[0].name)}` : `${a.count} athletes have new replies`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name} (${x.count})`).join(' · '))),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}` }, 'Read'));
     if (a.kind === 'low_stock') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is running low` : `${a.count} items are running low`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name}: ${x.on_hand <= 0 ? 'out' : `${x.on_hand} left`}`).join(' · '))),
@@ -187,23 +268,96 @@ async function viewToday(main) {
       h('div', { class: 'grow stack-tight' }, link, h('span', { class: 'small muted' }, `No workout logged since ${date(a.last_workout_at)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.client_id}` }, 'Check in'));
   });
-  fill(main, 
-    header('Today', isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${state.user.name.split(' ')[0]}. Today's sessions and anything that needs you.`, addClientBtn()),
+  const unpaid = board.sessions.filter((x) => x.unpaid_count && x.state !== 'done').map((x) => h('div', { class: 'list-item' },
+    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${nplural(x.unpaid_count, 'unpaid booking')} in ${x.name}`), h('span', { class: 'small muted' }, `${timeOf(x.starts_at)} today. Collect at check-in: card on file, cash or Tap to Pay.`)),
+    h('a', { class: 'dp-btn dp-btn--outline', href: `#/schedule/${x.id}` }, 'Open roster')));
+  const reviewed = async (f, button) => busy(button, async () => {
+    const r = await post('/v1/today/follow-ups', { key: f.key, action: 'reviewed' });
+    undoToast(r.message, async () => { await del(`/v1/today/follow-ups/${r.id}`).catch((e) => toast(e.message, 'warn')); refresh(); });
+    refresh();
+  });
+  const flagItems = board.flags.map((f) => h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('a', { href: `#/clients/${f.client_id}`, class: 'strong', style: 'color:var(--steel)' }, `${f.name}: rough check-in ${f.today ? 'today' : 'yesterday'}`),
+      h('span', { class: 'small warn-text' }, f.flags.join(' · ')),
+      h('span', { class: 'small muted' }, f.session ? `Trains today at ${timeOf(f.session.starts_at)} (${f.session.name}).` : 'Not training here today.'),
+      f.note ? h('span', { class: 'small muted' }, `"${f.note}"`) : null),
+    staff ? btn('Mark reviewed', (e) => reviewed(f, e.currentTarget), 'ghost', { 'aria-label': `Mark ${f.name}'s check-in as reviewed` }) : h('a', { class: 'dp-btn dp-btn--ghost', href: `#/clients/${f.client_id}` }, 'Open')));
+  const allAttention = [...unpaid, ...flagItems, ...attention];
+
+  // Follow-ups (owners and coaches): athletes to check on, with a note, a call or "Reached out" that hides them for a week.
+  const followPanel = !board.follow_ups ? null : (() => {
+    const snooze = async (r, action, button, note) => busy(button, async () => {
+      const out = await post('/v1/today/follow-ups', { key: r.key, action, note });
+      undoToast(out.message, async () => { await del(`/v1/today/follow-ups/${out.id}`).catch((e) => toast(e.message, 'warn')); refresh(); });
+      refresh();
+    });
+    const noteDialog = (r) => {
+      const msg = textarea(`Hi ${first(r.name)}, we've missed you at training. Everything OK? Book your next session in the app, or reply and let us know how you're doing.`, { maxlength: '2000', style: 'min-height:120px' });
+      let sent = false;     // the note went out; a failed "hide" retried from here never sends it twice
+      teamDialog(`Send ${first(r.name)} a note`, h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `It shows in ${first(r.name)}'s app and their parents get an email. They come off Today for a week.`), field('Note', msg)),
+        [{ label: 'Send note', variant: 'primary', onClick: async () => {
+          if (!sent) { await post(`/v1/clients/${r.client_id}/messages`, { body: msg.value }); sent = true; }
+          await post('/v1/today/follow-ups', { key: r.key, action: 'noted', note: 'Sent a note' });
+          toast(`Note sent to ${first(r.name)}.`); refresh();
+        } }, { label: 'Cancel', variant: 'ghost' }]);
+      msg.focus();
+    };
+    const row = (r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.name, r.family_name ? h('span', { class: 'small muted' }, ` · ${r.family_name}`) : null), h('span', { class: 'small muted' }, r.reasons.join(' · '))),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        btn('Send a note', () => noteDialog(r), 'outline', { 'aria-label': `Send ${r.name} a note` }),
+        r.phone ? h('a', { class: 'dp-btn dp-btn--ghost', href: `tel:${r.phone}`, 'aria-label': `Call ${r.name}'s family` }, 'Call') : null,
+        btn('Reached out', (e) => snooze(r, 'reached_out', e.currentTarget), 'ghost', { 'aria-label': `Mark ${r.name} as reached out` })));
+    const done = board.followed_up.filter((z) => z.kind === 'risk');
+    const doneList = done.length ? h('details', { style: 'margin-top:8px' }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `Followed up lately (${done.length})`),
+      done.map((z) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', null, z.name), h('span', { class: 'small muted' }, `${z.label} by ${z.created_by} ${ago(z.created_at).toLowerCase()}${z.note && z.note !== 'Sent a note' ? `: "${z.note}"` : ''}. Back on Today after ${ymd(z.until)}.`)),
+        btn('Bring back', (e) => busy(e.currentTarget, async () => { const r = await del(`/v1/today/follow-ups/${z.id}`); toast(r.message); refresh(); }), 'ghost', { 'aria-label': `Bring ${z.name} back to Today` })))) : null;
+    if (!board.follow_ups.length && !done.length) return null;
+    return panel(`Athletes to check on${board.follow_ups.length ? ` (${board.follow_ups.length})` : ''}`, { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick note or call usually brings them back.' },
+      board.follow_ups.length ? board.follow_ups.map(row) : h('p', { class: 'muted', style: 'margin:0' }, 'Everyone is followed up.'), doneList);
+  })();
+
+  const bdays = board.birthdays.length ? panel('Birthdays this week', {}, board.birthdays.map((b) => h('div', { class: 'list-item' },
+    h('a', { class: 'grow strong', href: `#/clients/${b.client_id}`, style: 'color:var(--steel)' }, b.name),
+    h('span', { class: `small ${b.today ? 'good-text' : 'muted'}` }, `${b.today ? 'Today' : shortDate(b.date)} · turns ${b.turning}`)))) : null;
+
+  // Recent activity: newest first, filters, Show more; the exact time on hover.
+  const act = h('div');
+  const filters = ['', ...(feed.filters ?? [])];
+  const drawActivity = (data, next) => fill(act,
+    h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show activity', style: 'margin-bottom:8px' }, filters.map((k) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(todayUi.filter === k),
+      onClick: async (e) => busy(e.currentTarget, async () => { todayUi.filter = k; todayUi.shown = 20; const f = await get(`/v1/activity?limit=20${k ? `&filter=${k}` : ''}`); drawActivity(f.data, f.next); }) }, ACTIVITY_FILTERS[k] ?? k))),
+    data.length ? data.map((ev) => h('div', { class: 'list-item' },
+      h('div', { class: 'small muted', style: 'width:92px;flex-shrink:0', title: tzFmt(ev.created_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) }, ago(ev.created_at)),
+      h('div', { class: 'grow' }, (EVENT_TEXT[ev.type] || (() => ev.type))(ev.data)))) : h('p', { class: 'muted' }, todayUi.filter ? 'Nothing like that yet.' : 'Activity shows up here as clients join, pay and train.'),
+    next ? btn('Show more', (e) => busy(e.currentTarget, async () => { const f = await get(`/v1/activity?limit=20&before=${encodeURIComponent(next)}${todayUi.filter ? `&filter=${todayUi.filter}` : ''}`); todayUi.shown = data.length + f.data.length; drawActivity([...data, ...f.data], f.next); }), 'ghost') : null);
+  drawActivity(feed.data, feed.next);
+
+  const revPanel = !rev ? null : panel('Revenue by location', { subtitle: `This month. In-person sales plus ${money(rev.memberships_cents)} from ${rev.membership_payments} membership ${rev.membership_payments === 1 ? 'payment' : 'payments'}.`, action: h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sell' }, 'New sale') },
+    rev.locations.length ? rev.locations.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, l.name), h('span', { class: 'small muted' }, `${l.sales} ${l.sales === 1 ? 'sale' : 'sales'}`), h('span', { style: 'font:600 22px/1 var(--font-display);min-width:96px;text-align:right' }, money(l.cents))))
+      : h('p', { class: 'muted' }, 'Add your facility, parks and mobile location in Point of sale setup to track where you earn.'));
+  const dateLine = tzFmt(board.now, { weekday: 'long', month: 'long', day: 'numeric' });
+  fill(main,
+    header('Today', `${dateLine}. ${isOwner() ? 'How the business is doing, and anything that needs a decision.' : `Hi ${first(state.user.name)}. Today's sessions and anything that needs you.`}`, addClientBtn()),
     pulseBlock(d.pulse),
     agendaPanel,
+    checkinPanelEl,
+    h('div', { class: 'grid grid-2' },
+      panel(`Needs your attention${allAttention.length ? ` (${allAttention.length})` : ''}`, {}, allAttention.length ? allAttention : h('p', { class: 'muted' }, 'Nothing waiting. Every client is paid up and training.')),
+      h('div', { class: 'stack', style: 'gap:24px' }, followPanel, bdays, followPanel || bdays ? null : panel('Birthdays this week', {}, h('p', { class: 'muted', style: 'margin:0' }, 'No birthdays this week.')))),
     team ? coachesPanel(team) : null,
     spots ? spotsPanel(spots, { mine: mineSpots }) : null,
-    flags,
-    risk?.data.length ? panel('Athletes to check on', { subtitle: 'Coming less, nothing booked, or other signs they may be drifting away. A quick message usually brings them back.' },
-      risk.data.slice(0, 6).map((r) => h('div', { class: 'list-item' },
-        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.name, r.family_name ? h('span', { class: 'small muted' }, ` · ${r.family_name}`) : null), h('span', { class: 'small muted' }, r.reasons.join(' · '))),
-        h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${r.client_id}` }, 'Check in')))) : null,
-    h('div', { class: 'grid grid-2' },
-      panel('Needs your attention', {}, attention.length ? attention : h('p', { class: 'muted' }, 'Nothing waiting. Every client is paid up and training.')),
-      panel('Recent activity', {}, d.activity.length ? d.activity.map((ev) => h('div', { class: 'list-item' },
-        h('div', { class: 'small muted', style: 'width:92px;flex-shrink:0' }, ago(ev.created_at)),
-        h('div', { class: 'grow' }, (EVENT_TEXT[ev.type] || (() => ev.type))(ev.data)))) : h('p', { class: 'muted' }, 'Activity shows up here as clients join, pay and train.'))),
+    panel('Recent activity', {}, act),
     revPanel);
+  // Refresh every minute while Today is open, unless someone is typing or a dialog is open.
+  clearInterval(todayTimer);
+  todayTimer = setInterval(() => {
+    const onToday = !location.hash || /^#\/?today/.test(location.hash);
+    if (!onToday) { clearInterval(todayTimer); return; }
+    const el = document.activeElement;
+    if (document.hidden || document.querySelector('dialog[open]') || (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && el.dataset.focus !== 'checkin-search')) return;
+    refreshToday(main);
+  }, 60000);
 }
 
 // The small-print summary under Today's header: many numbers, each with one line of detail. Tiles open the screen behind them.
@@ -438,7 +592,6 @@ async function viewLeads(main) {
     chips, panel(null, {}, rows.length ? rows : h('p', { class: 'muted' }, filter ? 'No leads at this stage.' : 'No open leads. Share your inquiry form link to start collecting them.')), addPanel, howPanel, bookPanel, reviewPanel);
 }
 
-const LOAD_LIFT = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_clean_1rm: 'power clean' };
 // ---------- Announcement emails ----------
 const GROUPS = [['everyone', 'All families'], ['members', 'Members'], ['lapsed', 'Lapsed members (canceled in the last year)'], ['no_membership', 'Families without a membership'], ['leads', 'Families who asked about training']];
 async function viewCampaigns(main) {
@@ -623,6 +776,7 @@ async function viewClient(main, id) {
   const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${plural(c.workouts_completed, 'workout')} logged.` : 'No program assigned yet.' },
     role === 'front_desk' ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
       if (!progSel.value) throw new Error('Choose a program first.');
+      if (c.program && c.program.id !== progSel.value && !confirm(`Move ${first} off ${c.program.name} and onto ${progSel.selectedOptions[0].textContent}? Their logged workouts stay.`)) return;
       await post(`/v1/programs/${progSel.value}/assign`, { client_id: id }); toast(`Program assigned to ${first}.`); render();
     }), 'secondary')),
     h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),
@@ -631,7 +785,7 @@ async function viewClient(main, id) {
       btn('Copy app link', async () => { await navigator.clipboard.writeText(appUrl); toast('App link copied.'); }, 'outline'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
       role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
-    logs.data.length ? h('div', null, logs.data.slice(0, 5).map((l) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${l.workout_title} · week ${l.week}, day ${l.day}`), h('span', { class: 'muted' }, ago(l.completed_at))))) : null);
+    logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null);
 
   // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
   // leaving the page asks first.
@@ -1084,158 +1238,302 @@ function moneyChecksPanel(checks, render) {
     h('div', { class: 'row wrap', style: 'gap:8px;margin-top:12px' }, pick, btn('Check a day', (e) => run(pick.value)(e), 'ghost')));
 }
 
-async function viewBilling(main) {
-  const [plans, inv, links, checks] = await Promise.all([get('/v1/plans?include_inactive=true'), get('/v1/invoices'), get('/v1/pay-links'), get('/v1/money-checks')]);
-  const pname = input(), price = input({ type: 'number', min: '0', step: '1', inputmode: 'decimal' }), trial = input({ type: 'number', min: '0', max: '90', value: '7' });
-  const addPlan = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await post('/v1/plans', { name: pname.value, price_cents: Math.round(Number(price.value) * 100), trial_days: Number(trial.value) }); toast('Plan created.'); render();
-  }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('Plan name', pname), field('Monthly price ($)', price), field('Trial days', trial)), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' })));
+// ---------- Billing (owner only) ----------
+// The money summary, failed payments to chase, every invoice (details, refunds, write-offs, export), memberships, plans,
+// pay links, money checks and the test-mode billing clock. Filters survive a refresh of the screen after an action.
+const billingUi = { view: 'all', kind: '', period: '', q: '', limit: 50, mview: 'live', mplan: '', mq: '' };
+const BL_STATE = { failed: ['Failed', 'warn'], open: ['Open', 'neutral'], overdue: ['Overdue', 'warn'], paid: ['Paid', 'good'], partially_refunded: ['Part refunded', 'neutral'], refunded: ['Refunded', 'muted'], void: ['Void', 'muted'] };
+const blBadge = (st) => h('span', { class: `dp-badge dp-badge--${BL_STATE[st]?.[1] ?? 'muted'}` }, BL_STATE[st]?.[0] ?? st);
+const BL_VIEWS = [['all', 'All'], ['failed', 'Failed'], ['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['paid', 'Paid'], ['refunds', 'Refunds'], ['void', 'Void']];
+const BL_PERIODS = [['', 'Any time'], ['month', 'This month'], ['last', 'Last month'], ['90', 'Last 90 days'], ['year', 'This year']];
+const MEM_VIEWS = [['live', 'All members'], ['renewing', 'Renewing this week'], ['trialing', 'Free trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled lately']];
+const HAND_PAY = [['check', 'Check'], ['cash', 'Cash'], ['other', 'Other']];
+const cardText = (r) => (r.card_last4 ? `${r.card_brand ? r.card_brand[0].toUpperCase() + r.card_brand.slice(1) : 'Card'} ending ${r.card_last4}` : 'No card on file');
+function blPeriod(id) {
+  const today = bizDate(), [y, m] = today.split('-').map(Number), pad = (n) => String(n).padStart(2, '0');
+  if (id === 'month') return { from: `${y}-${pad(m)}-01`, to: today };
+  if (id === 'last') { const ly = m === 1 ? y - 1 : y, lm = m === 1 ? 12 : m - 1; return { from: `${ly}-${pad(lm)}-01`, to: new Date(Date.UTC(ly, lm, 0)).toISOString().slice(0, 10) }; }
+  if (id === '90') return { from: bizDate(-90), to: today };
+  if (id === 'year') return { from: `${y}-01-01`, to: today };
+  return {};
+}
+function blQuery(extra = {}) {
+  const p = new URLSearchParams(), r = blPeriod(billingUi.period);
+  if (billingUi.view !== 'all') p.set('view', billingUi.view);
+  if (billingUi.kind) p.set('kind', billingUi.kind);
+  if (r.from) { p.set('from', r.from); p.set('to', r.to); }
+  if (billingUi.q.trim()) p.set('q', billingUi.q.trim());
+  for (const [k, val] of Object.entries(extra)) p.set(k, val);
+  return p.toString();
+}
+// What a declined charge is waiting on: tries, card, the next automatic retry, the last reminder.
+function declineText(i) {
+  const last = i.retries_left <= 1;
+  return [`Declined ${plural(i.attempts, 'time')}`, cardText(i), i.next_retry_at ? `next automatic retry ${date(i.next_retry_at)}${last ? ' (the last one)' : ''}` : 'no more automatic retries',
+    i.reminded_at ? `card reminder sent ${i.reminded_today ? 'today' : ago(i.reminded_at).toLowerCase()}` : null].filter(Boolean).join(' · ');
+}
+function retryConfirm(i) {
+  return confirm(`Charge ${money(i.amount_cents)} to ${cardText(i).toLowerCase().replace(/^([a-z])/, (c) => c.toUpperCase())} for ${i.client_name} now?${i.retries_left <= 1 ? '\n\nIf it declines, the membership stays past due (a retry you start never cancels it).' : ''}`);
+}
+async function retryNow(i) {
+  if (!retryConfirm(i)) return;
+  const r = await post(`/v1/invoices/${i.id}/retry`);
+  if (r.status === 'paid') toast(`Charged ${money(r.amount_cents)}.${r.membership_reactivated ? ' The membership is active again.' : ''}`);
+  else toast(`The card declined again${r.last_error ? ` (${r.last_error})` : ''}. It retries on its own, or ask the family to update their card.`, 'warn');
+  render();
+}
+async function remindNow(i) {
+  const r = await post(`/v1/invoices/${i.id}/remind`);
+  toast(`Card reminder emailed to ${r.reminder_to.join(', ')}${r.invoices_in_reminder > 1 ? ` (${r.invoices_in_reminder} charges)` : ''}.`);
+  render();
+}
+function recordHandDialog(i) {
+  const method = select(HAND_PAY, { value: 'check' }), ref = input({ autocomplete: 'off', maxlength: '40', inputmode: 'numeric' });
+  const refField = field('Check number (optional)', ref);
+  method.addEventListener('change', () => { refField.querySelector('label').textContent = method.value === 'check' ? 'Check number (optional)' : 'Reference (optional)'; ref.inputMode = method.value === 'check' ? 'numeric' : 'text'; });
+  teamDialog('Record payment', h('div', { class: 'stack' }, h('p', { class: 'muted', style: 'margin:0' }, `${i.client_name} · ${i.description} · ${money(i.amount_cents)}. Mark it paid because it came in another way.`),
+    h('div', { class: 'form-grid' }, field('How they paid', method), refField)),
+  [{ label: 'Record payment', variant: 'primary', onClick: async () => {
+    const r = await post(`/v1/invoices/${i.id}/payments`, { method: method.value, reference: ref.value.trim() || undefined });
+    toast(`Marked paid by ${method.value}.${r.membership_reactivated ? ' The membership is active again.' : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+function refundDialog(d) {
+  const amount = dollarsIn(d.refundable_cents, { min: '0.01', max: (d.refundable_cents / 100).toFixed(2) }), reason = input({ maxlength: '120', placeholder: 'Like Moved away mid-month' });
+  const email = h('input', { type: 'checkbox', checked: !!d.email });
+  const byCard = !d.paid_method;
+  teamDialog('Refund', h('div', { class: 'stack' },
+    h('p', { class: 'muted', style: 'margin:0' }, `${d.client_name} · ${d.description} · paid ${money(d.amount_cents)}${d.refunded_cents ? `, ${money(d.refunded_cents)} already refunded` : ''}. ${byCard ? 'It goes back to the card they paid with.' : `They paid by ${d.paid_by.toLowerCase()}, so hand it back yourself; this records it.`} The membership carries on; cancel it separately if they're leaving.`),
+    h('div', { class: 'form-grid' }, field('Amount to refund ($)', amount, `Up to ${money(d.refundable_cents)}.`), field('Reason', reason, 'Goes on the receipt.')),
+    d.email ? h('label', { class: 'row', style: 'gap:8px' }, email, `Email a receipt to ${d.email}`) : h('p', { class: 'small muted', style: 'margin:0' }, 'There\'s no email on file, so no receipt goes out.')),
+  [{ label: 'Refund', variant: 'primary', onClick: async () => {
+    const cents = toCents(amount);
+    if (!(cents > 0)) throw new Error('Enter the amount to refund.');
+    if (cents > d.refundable_cents) throw new Error(`You can refund up to ${money(d.refundable_cents)}.`);
+    if (!reason.value.trim()) throw new Error('Say why you\'re refunding. It goes on the receipt.');
+    if (!confirm(`Refund ${money(cents)} to ${d.client_name}${byCard ? '\'s card' : ''}? This can't be undone.`)) return false;
+    const r = await post(`/v1/invoices/${d.id}/refund`, { amount_cents: cents, reason: reason.value.trim(), email: email.checked });
+    toast(`Refunded ${money(r.refunded_now_cents)}.${byCard ? ' It goes back to the card.' : ' Hand it back to the family.'}${r.emailed_to?.length ? ` Receipt emailed to ${r.emailed_to[0]}.` : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+function voidDialog(d) {
+  const reason = input({ maxlength: '120', placeholder: 'Like Comped the month' });
+  teamDialog(d.status === 'failed' ? 'Write off this charge' : 'Void this invoice', h('div', { class: 'stack' },
+    h('p', { class: 'muted', style: 'margin:0' }, `${d.client_name} · ${d.description} · ${money(d.amount_cents)}. Nothing more is charged or retried and its pay link stops working.${d.subscription_status === 'past_due' ? ' If this is the only declined charge, the membership is active again.' : ''}`),
+    field('Reason (optional)', reason)),
+  [{ label: d.status === 'failed' ? 'Write it off' : 'Void invoice', variant: 'primary', onClick: async () => {
+    const r = await post(`/v1/invoices/${d.id}/void`, { reason: reason.value.trim() || undefined });
+    toast(`${d.status === 'failed' ? 'Written off' : 'Voided'}.${r.membership_reactivated ? ' The membership is active again.' : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+// Open another dialog once this one has closed (and been emptied).
+const thenOpen = (fn) => () => { document.getElementById('dialog').addEventListener('close', () => setTimeout(fn), { once: true }); };
+// One membership payment: what happened and what can be done now.
+async function invoiceDialog(id) {
+  const d = await get(`/v1/invoices/${id}`);
+  const kv = (k, val) => (val ? [h('dt', null, k), h('dd', null, val)] : null);
+  const period = `${date(d.period_start)} – ${date(d.period_end)}`;
+  const acts = [
+    d.can.retry ? { label: 'Retry charge', variant: 'secondary', onClick: async () => { await retryNow(d); } } : null,
+    d.can.record_payment ? { label: 'Record payment', variant: 'ghost', onClick: thenOpen(() => recordHandDialog(d)) } : null,
+    d.can.remind ? { label: 'Card reminder', variant: 'ghost', onClick: async () => { await remindNow(d); } } : null,
+    d.can.pay_link ? { label: 'Send pay link', variant: 'ghost', onClick: async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: d.id, send: true }); toast(sentText(l)); render(); } } : null,
+    d.can.refund ? { label: 'Refund', variant: 'secondary', onClick: thenOpen(() => refundDialog(d)) } : null,
+    d.can.void ? { label: d.status === 'failed' ? 'Write off' : 'Void', variant: 'ghost', onClick: thenOpen(() => voidDialog(d)) } : null,
+    { label: 'Close', variant: 'ghost' }
+  ].filter(Boolean);
+  teamDialog(`${d.description} · ${d.client_name}`, h('div', { class: 'stack' },
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('span', { style: 'font:600 32px/1.1 var(--font-display)' }, money(d.amount_cents)), blBadge(d.state)),
+    h('dl', { class: 'dl' },
+      kv('Client', h('a', { href: `#/clients/${d.client_id}`, onClick: () => document.getElementById('dialog').close() }, d.client_name)), kv('Period', period), kv('Made', date(d.issued_at)),
+      kv('Card', d.card ? `${cardText({ card_brand: d.card.brand, card_last4: d.card.last4 })}${d.card.declining ? ' (declining)' : ''}` : 'No card on file'),
+      d.status === 'failed' ? kv('Declines', declineText({ ...d, reminded_today: d.reminded_today })) : null,
+      d.last_error && d.status === 'failed' ? kv('Bank said', d.last_error) : null,
+      d.paid_at ? kv('Paid', `${date(d.paid_at)} by ${(d.paid_by ?? 'card').toLowerCase()}${d.paid_reference ? ` (${d.paid_reference})` : ''}`) : null,
+      d.voided_at ? kv(d.attempts ? 'Written off' : 'Voided', `${date(d.voided_at)}${d.void_reason ? ` · ${d.void_reason}` : ''}`) : null,
+      d.refunded_cents ? kv('Refunded', `${money(d.refunded_cents)}${d.refundable_cents ? ` · ${money(d.refundable_cents)} left to refund` : ''}`) : null,
+      kv('Email', d.email)),
+    d.refunds.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Refunds'), d.refunds.map((r) => h('div', { class: 'small' },
+      `${money(r.amount_cents)} on ${date(r.created_at)}${r.source === 'stripe' ? ' in the Stripe dashboard' : r.by_name ? ` by ${r.by_name}` : ''}${r.reason ? ` · ${r.reason}` : ''}`))) : null,
+    d.pay_links.length ? h('p', { class: 'small muted', style: 'margin:0' }, `Pay link: ${{ open: 'open', paid: 'paid', settled: 'paid another way', canceled: 'canceled', expired: 'expired' }[d.pay_links[0].status] ?? d.pay_links[0].status}${d.pay_links[0].sent_at ? `, sent ${ago(d.pay_links[0].sent_at).toLowerCase()}` : ''}.`) : null), acts);
+}
 
-  const plansPanel = panel('Plans', { subtitle: 'Price changes apply from each client\'s next charge.' },
-    h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Plan', 'Price', 'Trial', 'Clients', 'Monthly revenue', ''].map((t) => h('th', null, t)))),
+async function viewBilling(main) {
+  const mp = new URLSearchParams();
+  if (billingUi.mview !== 'live') mp.set('view', billingUi.mview);
+  if (billingUi.mplan) mp.set('plan_id', billingUi.mplan);
+  if (billingUi.mq.trim()) mp.set('q', billingUi.mq.trim());
+  const [settings, s, att, inv, mem, plans, links, checks] = await Promise.all([get('/v1/settings'), get('/v1/billing/summary'), get('/v1/billing/attention'), get(`/v1/billing/invoices?${blQuery({ limit: billingUi.limit })}`),
+    get(`/v1/billing/memberships?${mp}`), get('/v1/plans?include_inactive=true'), get('/v1/pay-links'), get('/v1/money-checks')]);
+  if (settings.timezone) tzName = settings.timezone;
+  const jumpTo = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // ---- the four numbers ----
+  const tile = (label, value, note, tone, onClick) => h('button', { type: 'button', class: 'dp-metric bl-metric', onClick }, h('span', { class: 'dp-metric-label' }, label),
+    h('span', { class: `dp-metric-value${tone ? ` dp-metric-value--${tone}` : ''}` }, value), h('span', { class: 'dp-metric-note' }, note));
+  const showInvoices = (patchUi) => { Object.assign(billingUi, { view: 'all', kind: '', period: '', q: '', limit: 50 }, patchUi); render(); setTimeout(() => jumpTo('bl-inv'), 50); };
+  const numbers = h('section', { class: 'metrics bl-metrics', 'aria-label': 'Money summary' },
+    tile('Monthly recurring', money(s.mrr.total_cents), `${plural(s.mrr.paying_members, 'paying member')}${s.mrr.teams_cents ? ` · ${money(s.mrr.teams_cents)} teams` : ''}`, null, () => jumpTo('bl-mem')),
+    tile('Collected this month', money(s.month.collected_cents), `${plural(s.month.payments, 'payment')}${s.month.refunded_cents ? ` · ${money(s.month.refunded_cents)} refunded` : ''}`, 'good', () => showInvoices({ view: 'paid', period: 'month' })),
+    tile('Failed payments', String(s.failed.count), s.failed.count ? `${money(s.failed.cents)} at risk${s.failed.no_card ? ` · ${s.failed.no_card} with no card` : ''}` : 'Nothing at risk', s.failed.count ? 'warn' : null, () => jumpTo('bl-att')),
+    tile('School invoices open', money(s.school.open_cents), s.school.open_count ? `${plural(s.school.open_count, 'invoice')}${s.school.overdue_count ? ` · ${money(s.school.overdue_cents)} overdue` : ' · none overdue'}` : 'Nothing owed', s.school.overdue_count ? 'warn' : null, () => showInvoices({ view: 'unpaid', kind: 'school' })));
+  const monthNote = h('p', { class: 'small muted', style: 'margin:0' }, `Collected this month is the same number as on Today: ${money(s.month.sales_cents)} at the counter and online, ${money(s.month.members_cents)} memberships and ${money(s.month.teams_cents)} schools, after refunds (a refund counts on the day it was made). ${s.upcoming.renewals ? `In the next 7 days, ${plural(s.upcoming.renewals, 'renewal')} for ${money(s.upcoming.cents)}${s.upcoming.trials_ending ? ` (${plural(s.upcoming.trials_ending, 'trial')} ending)` : ''}.` : 'No renewals in the next 7 days.'}`);
+
+  // ---- needs attention ----
+  const attN = att.failed.length + att.overdue.length;
+  const withCard = att.failed.filter((i) => i.has_card).length;
+  const attTools = att.failed.length ? h('div', { class: 'row wrap', style: 'gap:8px' },
+    withCard ? btn(withCard === 1 ? 'Retry the declined charge' : `Retry all ${withCard}`, (e) => {
+      if (!confirm(`Charge ${withCard === 1 ? 'the declined charge' : `all ${withCard} declined charges`} with a card on file now? A decline here never cancels a membership.`)) return;
+      busy(e.currentTarget, async () => {
+        const r = await post('/v1/billing/retry-declined');
+        toast(r.tried === 1 ? (r.paid ? `Charged ${money(r.paid_cents)}.` : 'The charge declined again.') : r.paid ? `${r.paid} of ${r.tried} went through (${money(r.paid_cents)}).${r.declined ? ` ${r.declined} declined again.` : ''}` : `All ${r.tried} declined again.`, r.declined ? 'warn' : 'good');
+        render();
+      });
+    }, 'outline') : null,
+    btn('Email card reminders', (e) => busy(e.currentTarget, async () => {
+      const r = await post('/v1/billing/remind-declined');
+      toast(r.sent ? `Card reminders emailed to ${plural(r.sent, 'family', 'families')}.${r.skipped_today ? ` ${r.skipped_today} already had one today.` : ''}${r.no_email ? ` ${r.no_email} with no email.` : ''}` : r.skipped_today ? 'Every family already had a reminder today.' : 'No family has an email address to remind.', r.sent ? 'good' : 'warn');
+      render();
+    }), 'ghost')) : null;
+  const attRow = (i) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', null, h('a', { class: 'strong', href: `#/clients/${i.client_id}`, style: 'color:var(--steel)' }, i.client_name), h('span', { class: 'muted' }, ` · ${i.description}`)),
+      h('span', { class: `small ${i.has_card ? 'muted' : 'warn-text'}` }, declineText(i))),
+    h('span', { class: 'strong' }, money(i.amount_cents)), blBadge('failed'),
+    h('div', { class: 'row wrap', style: 'gap:4px' },
+      i.has_card ? btn('Retry', (e) => busy(e.currentTarget, () => retryNow(i)), 'outline', { 'aria-label': `Retry ${i.client_name}'s charge` }) : null,
+      i.reminded_today ? null : btn('Remind', (e) => busy(e.currentTarget, () => remindNow(i)), 'ghost', { 'aria-label': `Email ${i.client_name}'s family a card reminder` }),
+      btn('Details', (e) => busy(e.currentTarget, () => invoiceDialog(i.id)), 'ghost', { 'aria-label': `Details for ${i.client_name}'s charge` })));
+  const overdueRow = (i) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', null, h('a', { class: 'strong', href: `#/teams/${i.contract_id}`, style: 'color:var(--steel)' }, i.org_name), h('span', { class: 'muted' }, ` · ${i.description}`)),
+      h('span', { class: 'small warn-text' }, `${i.number} · ${plural(i.days_past_due, 'day')} past due (due ${ymd(i.due_on)})`)),
+    h('span', { class: 'strong' }, money(i.amount_cents)), blBadge('overdue'),
+    h('div', { class: 'row wrap', style: 'gap:4px' }, btn('Record payment', () => recordPaymentDialog(i), 'outline', { 'aria-label': `Record payment for ${i.number}` }),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: `#/teams/${i.contract_id}` }, 'Team')));
+  const attPanel = h('div', { id: 'bl-att' }, panel('Needs attention', {
+    subtitle: attN ? [att.failed.length ? `${plural(att.failed.length, 'declined charge')} (${money(att.failed_cents)})` : null, att.overdue.length ? `${plural(att.overdue.length, 'overdue school invoice')} (${money(att.overdue_cents)})` : null].filter(Boolean).join(' and ') + `. Declined charges retry on their own every ${att.retry_every_days} days, up to ${att.max_attempts} tries; a failed-payment email with a pay link goes out each time.` : null,
+    action: attTools },
+  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.')));
+
+  // ---- invoices ----
+  const search = input({ type: 'search', placeholder: 'Name, plan, school or invoice number', 'aria-label': 'Search invoices', value: billingUi.q });
+  let t = null;
+  search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { billingUi.q = search.value; billingUi.limit = 50; render(); }, 350); });
+  const kind = select([['', 'Every kind'], ['membership', 'Memberships'], ['school', 'School invoices']], { 'aria-label': 'Kind of invoice', value: billingUi.kind });
+  kind.addEventListener('change', () => { billingUi.kind = kind.value; billingUi.limit = 50; render(); });
+  const period = select(BL_PERIODS, { 'aria-label': 'When', value: billingUi.period });
+  period.addEventListener('change', () => { billingUi.period = period.value; billingUi.limit = 50; render(); });
+  const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show invoices' }, BL_VIEWS.map(([k, label]) =>
+    h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(billingUi.view === k), onClick: () => { billingUi.view = k; billingUi.limit = 50; render(); } }, label,
+      h('span', { class: ['failed', 'overdue'].includes(k) && inv.counts[k] ? 'warn-text' : 'muted' }, String(inv.counts[k] ?? 0)))));
+  const openRow = (i) => (i.kind === 'school' ? () => { location.hash = `#/teams/${i.contract_id}`; } : () => invoiceDialog(i.id).catch((e) => toast(e.message, 'warn')));
+  const rows = inv.data.map((i) => h('tr', { class: 'link', tabindex: '0', onClick: openRow(i), onKeydown: (e) => { if (e.key === 'Enter') openRow(i)(); } },
+    h('td', { class: 'bl-wide muted' }, i.kind === 'school' ? ymd(i.issued_at) : date(i.issued_at)),
+    h('td', null, h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, i.kind === 'school' ? i.org_name : i.client_name),
+      h('span', { class: 'small muted' }, i.kind === 'school' ? `${i.number} · ${i.description}` : i.description))),
+    h('td', { class: 'bl-wide muted' }, i.kind === 'school' ? 'School invoice' : 'Membership'),
+    h('td', { style: 'white-space:nowrap' }, money(i.amount_cents), i.refunded_cents ? h('div', { class: 'small muted' }, `${money(i.refunded_cents)} refunded`) : null),
+    h('td', null, blBadge(i.state))));
+  const exportHref = `/v1/billing/invoices/export?${blQuery()}`;
+  const invPanel = h('div', { id: 'bl-inv' }, panel('Invoices', { subtitle: 'Membership payments and school invoices, newest first. Counter sales are in Point of sale.', action: h('a', { class: 'dp-btn dp-btn--ghost', href: exportHref, download: '' }, 'Export CSV') },
+    views,
+    h('div', { class: 'row wrap bl-tools' }, search, kind, period),
+    h('p', { class: 'small muted', style: 'margin:0' }, inv.total ? `${plural(inv.total, 'invoice')} · ${money(inv.total_cents)}${inv.refunded_cents ? ` · ${money(inv.refunded_cents)} refunded` : ''}` : ''),
+    inv.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, h('th', { class: 'bl-wide' }, 'Date'), h('th', null, 'Who'), h('th', { class: 'bl-wide' }, 'Kind'), h('th', null, 'Amount'), h('th', null, 'Status'))), h('tbody', null, rows)))
+      : h('p', { class: 'muted' }, billingUi.q || billingUi.kind || billingUi.period || billingUi.view !== 'all' ? 'Nothing matches. Try another view or clear the search.' : 'No invoices yet. They appear when trials end, memberships renew and schools are billed.'),
+    inv.total > inv.data.length ? h('div', { class: 'row', style: 'justify-content:center' }, btn(`Show more (${inv.total - inv.data.length} more)`, () => { billingUi.limit = Math.min(500, billingUi.limit + 100); render(); }, 'ghost')) : null));
+
+  // ---- memberships ----
+  const mq = input({ type: 'search', placeholder: 'Athlete, family or Athlete ID', 'aria-label': 'Search memberships', value: billingUi.mq });
+  let mt = null;
+  mq.addEventListener('input', () => { clearTimeout(mt); mt = setTimeout(() => { billingUi.mq = mq.value; render(); }, 350); });
+  const mplan = select([['', 'Every plan'], ...plans.data.map((p) => [p.id, `${p.name}${p.active ? '' : ' (retired)'}`])], { 'aria-label': 'Plan', value: billingUi.mplan });
+  mplan.addEventListener('change', () => { billingUi.mplan = mplan.value; render(); });
+  const mviews = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Show memberships' }, MEM_VIEWS.map(([k, label]) =>
+    h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(billingUi.mview === k), onClick: () => { billingUi.mview = k; render(); } }, label,
+      h('span', { class: k === 'past_due' && mem.counts[k] ? 'warn-text' : 'muted' }, String(mem.counts[k] ?? 0)))));
+  const livePlans = plans.data.filter((p) => p.active);
+  const memAction = (m) => {
+    const act = (path, msg, ask) => (e) => { if (ask && !confirm(ask)) return; busy(e.currentTarget, async () => { await post(`/v1/clients/${m.client_id}/subscription/${path}`); toast(msg); render(); }); };
+    const change = select([['', 'Change plan…'], ...livePlans.filter((p) => p.id !== m.plan_id).map((p) => [p.id, `${p.name} (${money(p.price_cents)}/mo)`])], { 'aria-label': `Change ${m.client_name}'s plan`, style: 'width:150px' });
+    change.addEventListener('change', () => { const p = livePlans.find((x) => x.id === change.value); if (!p) return; if (!confirm(`Move ${m.client_name} to ${p.name}? The new price (${money(p.price_cents)}) applies from the next renewal.`)) { change.value = ''; return; } busy(change, async () => { await post(`/v1/clients/${m.client_id}/subscription/plan`, { plan_id: p.id }); toast(`${m.client_name.split(' ')[0]} is on ${p.name} now.`); render(); }); });
+    if (m.status === 'canceled') return null;
+    return h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap' },
+      livePlans.length > 1 ? change : null,
+      ['active', 'trialing'].includes(m.status) ? btn('Pause', act('pause', 'Paused. Nothing is charged until you resume.'), 'ghost', { 'aria-label': `Pause ${m.client_name}'s membership` }) : null,
+      m.status === 'paused' ? btn('Resume', act('resume', 'Resumed. A new month started today.', `Resume ${m.client_name}'s membership? A new month starts today and ${money(m.price_cents)} is charged now.`), 'ghost') : null,
+      btn('Cancel', act('cancel', 'Membership canceled.', `Cancel ${m.client_name}'s membership now? Anything unpaid on it is voided.`), 'ghost', { 'aria-label': `Cancel ${m.client_name}'s membership` }));
+  };
+  const nextText = (m) => (m.status === 'trialing' ? `Trial ends ${date(m.trial_ends_at ?? m.next_charge_at)}` : m.status === 'active' ? `Next charge ${date(m.next_charge_at)}` : m.status === 'past_due' ? `${money(m.failed_cents)} declined` : m.status === 'paused' ? 'Paused' : `Canceled ${date(m.canceled_at)}`);
+  const memPanel = h('div', { id: 'bl-mem' }, panel('Memberships', { subtitle: mem.upcoming.count ? `${plural(mem.upcoming.count, 'renewal')} in the next 7 days: ${money(mem.upcoming.cents)}.` : 'No renewals in the next 7 days.' },
+    mviews, h('div', { class: 'row wrap bl-tools' }, mq, mplan),
+    mem.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Athlete'), h('th', { class: 'bl-wide' }, 'Plan'), h('th', null, 'Next'), h('th', { class: 'bl-wide' }, 'Card'), h('th', null, ''))),
+      h('tbody', null, mem.data.map((m) => h('tr', null,
+        h('td', null, h('div', { class: 'stack-tight' }, h('a', { class: 'strong', href: `#/clients/${m.client_id}`, style: 'color:var(--steel)' }, m.client_name), h('span', { class: 'small muted bl-narrow' }, `${m.plan_name} · ${money(m.price_cents)}/mo`), h('span', null, badge(m.status)))),
+        h('td', { class: 'bl-wide' }, m.plan_name, m.plan_active ? null : h('span', { class: 'small muted' }, ' (retired)'), h('div', { class: 'small muted' }, `${money(m.price_cents)}/mo`)),
+        h('td', { class: m.status === 'past_due' ? 'warn-text' : null }, nextText(m)),
+        h('td', { class: `bl-wide ${m.card_last4 ? '' : 'warn-text'}` }, cardText(m)),
+        h('td', { class: 'bl-acts' }, memAction(m)))))))
+      : h('p', { class: 'muted' }, billingUi.mq || billingUi.mplan ? 'Nobody matches. Clear the search or choose another plan.' : 'Nobody here.')));
+
+  // ---- plans ----
+  const pname = input({ maxlength: '80' }), price = dollarsIn(null, { min: '0' }), trial = input({ type: 'number', min: '0', max: '90', value: '7', inputmode: 'numeric' });
+  const addPlan = h('details', { class: 'bl-add' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add a plan'),
+    h('form', { class: 'stack', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const cents = toCents(price);
+      if (!pname.value.trim()) throw new Error('Name the plan.');
+      if (!(cents >= 0)) throw new Error('Enter a monthly price.');
+      await post('/v1/plans', { name: pname.value.trim(), price_cents: cents, trial_days: Number(trial.value) || 0 }); toast('Plan created.'); render();
+    }); } }, h('div', { class: 'form-grid cols-3' }, field('Plan name', pname), field('Monthly price ($)', price), field('Free trial (days)', trial, 'Up to 90. 0 charges the first month right away.')), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' }))));
+  const editPlan = (p) => {
+    const f = { name: input({ maxlength: '80', value: p.name }), price: dollarsIn(p.price_cents, { min: '0' }), trial: input({ type: 'number', min: '0', max: '90', value: String(p.trial_days), inputmode: 'numeric' }) };
+    setupDialog(`Change ${p.name}`, [h('div', { class: 'form-grid cols-3' }, field('Plan name', f.name), field('Monthly price ($)', f.price), field('Free trial (days)', f.trial))], 'Save', async () => {
+      const cents = toCents(f.price);
+      if (!f.name.value.trim() || !(cents >= 0)) throw new Error('Enter a name and a monthly price.');
+      await patch(`/v1/plans/${p.id}`, { name: f.name.value.trim(), price_cents: cents, trial_days: Number(f.trial.value) || 0 });
+      return cents !== p.price_cents ? `Saved. ${plural(p.subscribers, 'member')} pay the new price from their next charge.` : 'Saved.';
+    }, 'A new price applies from each member\'s next charge. Nobody is charged when you save.');
+  };
+  const planPanel = h('div', { id: 'bl-plans' }, panel('Plans', { subtitle: 'Price changes apply from each member\'s next charge. Nobody is charged when you save.' },
+    h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Plan'), h('th', null, 'Price'), h('th', { class: 'bl-wide' }, 'Trial'), h('th', null, 'Members'), h('th', { class: 'bl-wide' }, 'Monthly'), h('th', null, ''))),
       h('tbody', null, plans.data.map((p) => h('tr', null,
         h('td', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (retired)')),
-        h('td', null, `${money(p.price_cents)} / mo`), h('td', null, p.trial_days ? `${p.trial_days} days` : 'None'), h('td', null, p.subscribers),
-        h('td', { style: 'font:600 22px/1 var(--font-display)' }, money(p.subscribers * p.price_cents)),
-        h('td', null, btn(p.active ? 'Retire' : 'Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: !p.active }); toast(p.active ? 'Plan retired. Current clients keep it.' : 'Plan offered again.'); render(); }), 'ghost'))))))),
-    addPlan);
+        h('td', { style: 'white-space:nowrap' }, `${money(p.price_cents)}/mo`), h('td', { class: 'bl-wide' }, p.trial_days ? `${p.trial_days} days` : 'None'),
+        h('td', null, p.subscribers ? h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `Show the ${plural(p.subscribers, 'member')} on ${p.name}`, onClick: () => { Object.assign(billingUi, { mview: 'live', mplan: p.id, mq: '' }); render(); setTimeout(() => jumpTo('bl-mem'), 50); } }, String(p.subscribers)) : '0'),
+        h('td', { class: 'bl-wide', style: 'font:600 20px/1 var(--font-display)' }, money(p.subscribers * p.price_cents)),
+        h('td', { class: 'bl-acts' }, h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap;justify-content:flex-end' },
+          btn('Change', () => editPlan(p), 'ghost', { 'aria-label': `Change ${p.name}` }),
+          btn(p.active ? 'Retire' : 'Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: !p.active }); toast(p.active ? 'Plan retired. Current members keep it.' : 'Plan offered again.'); render(); }), 'ghost')))))))),
+    addPlan));
 
-  const filter = select([['', 'All invoices'], ['failed', 'Failed'], ['paid', 'Paid'], ['open', 'Open'], ['void', 'Void']], { 'aria-label': 'Filter invoices', style: 'width:160px' });
-  const tbody = h('tbody');
-  const draw = () => fill(tbody, ...inv.data.filter((i) => !filter.value || i.status === filter.value).map((i) => h('tr', null,
-    h('td', null, h('a', { href: `#/clients/${i.client_id}`, style: 'color:var(--steel)', class: 'strong' }, i.client_name)), h('td', null, i.plan_name), h('td', null, money(i.amount_cents)),
-    h('td', { class: 'muted' }, date(i.created_at)), h('td', null, badge(i.status)),
-    h('td', null, i.status === 'failed' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
-      btn('Retry charge', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/invoices/${i.id}/retry`); r.status === 'paid' ? toast('Payment succeeded.') : toast('Declined again.', 'warn'); render(); }), 'outline'),
-      btn('Send pay link', (e) => busy(e.currentTarget, async () => { const l = await post('/v1/pay-links', { kind: 'invoice', invoice_id: i.id, send: true }); toast(sentText(l)); render(); }), 'ghost')) : null))));
-  filter.addEventListener('change', draw); draw();
-
-  const asOf = input({ type: 'date', value: bizDate(8) });
-  const testPanel = state.testMode ? panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
+  // ---- pay links, money checks, test clock ----
+  const linksPanel = h('div', { id: 'bl-links' }, panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },
+    links.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, ['For', 'Client', 'Amount', 'Sent', 'Status', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, links.data.slice(0, 25).map((l) => h('tr', null, h('td', null, l.description), h('td', null, l.client_id ? h('a', { href: `#/clients/${l.client_id}`, style: 'color:var(--steel)' }, l.client_name) : '—'),
+        h('td', null, money(l.amount_cents)), h('td', { class: 'muted small' }, l.sent_at ? ago(l.sent_at) : l.created_by === 'Automatic' ? 'With the failed-payment email' : 'Not sent'),
+        h('td', null, badge(l.paid_at ? 'paid' : l.status)), h('td', { class: 'bl-acts' }, l.status === 'open' ? payLinkActions(l, render) : null)))))) : h('p', { class: 'muted' }, 'No pay links yet.')));
+  const asOf = input({ type: 'date', value: bizDate(8), min: bizDate() });
+  const testPanel = state.testMode ? h('div', { id: 'bl-clock' }, panel('Billing clock (test mode)', { subtitle: 'Billing runs hourly on its own. Run it for a future date to see trials convert, renewals charge and retries happen.' },
     h('div', { class: 'row wrap' }, h('div', { style: 'width:200px' }, field('Run as of', asOf)),
       h('div', { style: 'align-self:flex-end' }, btn('Run billing', (e) => busy(e.currentTarget, async () => {
         const r = await post('/v1/billing/run', { as_of: asOf.value });
         toast(`Billing run: ${r.renewed} renewed, ${r.paid} paid, ${r.failed} failed, ${r.retried} retried.`, r.failed ? 'warn' : 'good'); render();
-      }), 'secondary')))) : null;
+      }), 'secondary'))))) : null;
+  const checksPanel = h('div', { id: 'bl-checks' }, moneyChecksPanel(checks, render));
 
-  fill(main, 
-    header('Billing', 'Plans, invoices and failed payments.'),
-    checks.needs_look ? moneyChecksPanel(checks, render) : null,
-    plansPanel,
-    panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },
-      links.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['For', 'Client', 'Amount', 'Sent', 'Status', ''].map((t) => h('th', null, t)))),
-        h('tbody', null, links.data.slice(0, 25).map((l) => h('tr', null, h('td', null, l.description), h('td', null, l.client_id ? h('a', { href: `#/clients/${l.client_id}`, style: 'color:var(--steel)' }, l.client_name) : '—'),
-          h('td', null, money(l.amount_cents)), h('td', { class: 'muted small' }, l.sent_at ? ago(l.sent_at) : l.created_by === 'Automatic' ? 'With the failed-payment email' : 'Not sent'),
-          h('td', null, badge(l.paid_at ? 'paid' : l.status)), h('td', null, l.status === 'open' ? payLinkActions(l, render) : null)))))) : h('p', { class: 'muted' }, 'No pay links yet.')),
-    panel('Invoices', { action: filter }, inv.data.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, ['Client', 'Plan', 'Amount', 'Date', 'Status', ''].map((t) => h('th', null, t)))), tbody)) : h('p', { class: 'muted' }, 'No invoices yet. They appear when trials end and memberships renew.')),
-    checks.needs_look ? null : moneyChecksPanel(checks, render),
+  const jumps = [['bl-att', 'Needs attention', attN], ['bl-inv', 'Invoices'], ['bl-mem', 'Memberships'], ['bl-plans', 'Plans'], ['bl-links', 'Pay links'], ['bl-checks', 'Money checks'], state.testMode ? ['bl-clock', 'Billing clock'] : null].filter(Boolean);
+  fill(main,
+    header('Billing', 'Money in, money owed, and who is on which plan.'),
+    numbers, monthNote,
+    h('nav', { class: 'tm-jump', 'aria-label': 'Billing sections' }, jumps.map(([id, label, n]) => h('button', { type: 'button', onClick: () => jumpTo(id) }, label, n ? h('span', { class: 'warn-text', style: 'margin-left:6px' }, String(n)) : null))),
+    checks.needs_look ? checksPanel : null,
+    attPanel, invPanel, memPanel, planPanel, linksPanel,
+    checks.needs_look ? null : checksPanel,
     testPanel);
 }
 
 // ---------- Programs ----------
-async function viewPrograms(main) {
-  const [progs, exs, shop] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), isOwner() ? get('/v1/shop') : null]);
-  const name = input(), weeks = input({ type: 'number', min: '1', max: '52', value: '8' }), level = select([['Beginner', 'Beginner'], ['Intermediate', 'Intermediate'], ['Advanced', 'Advanced'], ['All levels', 'All levels']]);
-  const create = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    const p = await post('/v1/programs', { name: name.value, weeks: Number(weeks.value), level: level.value }); toast('Program created. Add its first workout.'); location.hash = `#/programs/${p.id}`;
-  }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:2fr 1fr 1fr' }, field('Program name', name), field('Weeks', weeks), field('Level', level)), h('div', null, btn('Create program', null, 'primary', { type: 'submit' })));
-
-  const exName = input(), exUrl = input({ type: 'url', placeholder: 'https://youtube.com/watch?v=…' }), exCue = input({ placeholder: 'One or two coaching cues' });
-  const addEx = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await post('/v1/exercises', { name: exName.value, video_url: exUrl.value || undefined, instructions: exCue.value || undefined }); toast('Exercise added to the library.'); render();
-  }); } }, h('div', { class: 'form-grid' }, field('Exercise name', exName), field('Demo video link', exUrl, 'YouTube, Vimeo or a direct .mp4 link.')), field('Coaching cues', exCue), h('div', null, btn('Add exercise', null, 'secondary', { type: 'submit' })));
-
-  fill(main, 
-    header('Programs', 'Build training, attach demo videos and assign to clients.'),
-    h('div', { class: 'split' },
-      h('div', { class: 'stack', style: 'gap:24px' },
-        progs.data.length ? h('div', { class: 'workouts' }, progs.data.map((p) => h('a', { href: `#/programs/${p.id}`, class: 'dp-panel', style: 'text-decoration:none;color:inherit' },
-          h('div', { class: 'week-title', style: 'color:var(--steel)' }, p.name),
-          h('div', { class: 'small muted' }, `${p.weeks} weeks · ${p.level ?? 'Any level'} · ${p.workout_count} ${p.workout_count === 1 ? 'workout' : 'workouts'} · ${p.client_count} ${p.client_count === 1 ? 'client' : 'clients'}`)))) : h('div', { class: 'empty' }, 'No programs yet. Create your first one below.'),
-        panel('New program', {}, create),
-        shop ? storePanel(shop) : null),
-      panel('Exercise library', { subtitle: `${exs.data.length} exercises` },
-        h('div', null, exs.data.map((x) => h('div', { class: 'list-item' },
-          h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon()),
-          h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, x.video_url ? 'Has demo video' : 'No video yet')),
-          btn('Edit', () => editExercise(x), 'ghost')))),
-        addEx)));
-}
-
-// Owners: what's in the online store and the link to share.
-function storePanel(shop) {
-  const listed = [...shop.programs, ...shop.courses].filter((x) => x.listed);
-  const link = `${location.origin}/shop`;
-  return panel('Online store', { subtitle: listed.length ? `${listed.length} for sale · ${shop.last_30_days.sold} sold in the last 30 days (${money(shop.last_30_days.cents)})` : 'Nothing for sale yet. Open a program and use Sell online, or a course on the Education tab.' },
-    listed.map((x) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title), h('span', { class: 'small muted' }, `${x.kind === 'program' ? 'Program' : 'Course'} · ${money(x.price_cents)} · ${x.sold} sold`)),
-      x.kind === 'program' ? h('a', { class: 'dp-btn dp-btn--ghost', href: `#/programs/${x.id}` }, 'Open') : null)),
-    h('div', { class: 'row wrap' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
-      btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website and Instagram.')), 'ghost'),
-      h('a', { class: 'dp-btn dp-btn--ghost', href: '/shop', target: '_blank', rel: 'noopener' }, 'View')));
-}
-
-function showVideo(x) {
-  const d = document.getElementById('dialog');
-  fill(d, h('div', { class: 'stack' },
-    h('div', { class: 'row' }, h('h2', { class: 'week-title grow', style: 'color:var(--steel)' }, x.name), btn('Close', () => d.close(), 'ghost')),
-    videoEmbed(x.video_url, x.name), x.instructions ? h('p', { class: 'muted' }, x.instructions) : null));
-  d.addEventListener('close', () => fill(d), { once: true });
-  d.showModal();
-}
-function editExercise(x) {
-  const d = document.getElementById('dialog');
-  const name = input({ value: x.name }), url = input({ type: 'url', value: x.video_url ?? '' }), cue = h('textarea', { class: 'dp-input' }); cue.value = x.instructions ?? '';
-  fill(d, h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await patch(`/v1/exercises/${x.id}`, { name: name.value, video_url: url.value || null, instructions: cue.value || null }); d.close(); toast('Exercise saved.'); render();
-  }); } },
-    h('h2', { class: 'week-title', style: 'color:var(--steel)' }, 'Edit exercise'), field('Name', name), field('Demo video link', url, 'YouTube, Vimeo or a direct .mp4 link.'), field('Coaching cues', cue),
-    h('div', { class: 'row' }, btn('Save exercise', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
-  d.showModal();
-}
-
-async function viewProgram(main, id) {
-  const [p, exs, clients, shop] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), get('/v1/clients'), isOwner() ? get('/v1/shop') : null]);
-  const who = select([['', 'Choose a client'], ...clients.data.filter((c) => !['canceled'].includes(c.status)).map((c) => [c.id, c.name])], { 'aria-label': 'Client to assign' });
-  const assign = h('div', { class: 'row' }, h('div', { style: 'width:220px' }, who), btn('Assign program', (e) => busy(e.currentTarget, async () => {
-    if (!who.value) throw new Error('Choose a client first.');
-    await post(`/v1/programs/${id}/assign`, { client_id: who.value }); toast(`${p.name} assigned.`); render();
-  })));
-
-  const weeks = [...new Set(p.workouts.map((w) => w.week))];
-  const workoutCard = (w) => {
-    const exSel = select([['', 'Choose exercise'], ...exs.data.map((x) => [x.id, x.name])], { 'aria-label': `Exercise for ${w.title}` });
-    const rx = input({ placeholder: 'Sets × reps, e.g. 3 × 10', 'aria-label': 'Sets and reps' });
-    const lt = select([['', 'Weight: coach sets it'], ['squat_1rm', '% of back squat max'], ['bench_1rm', '% of bench press max'], ['power_clean_1rm', '% of power clean max']], { 'aria-label': 'Weight from a tested max' });
-    const lp = input({ type: 'number', min: '30', max: '110', inputmode: 'numeric', placeholder: '%', 'aria-label': 'Percent of max', style: 'width:80px' });
-    return h('div', { class: 'workout' },
-      h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}`), h('span', { class: 'strong' }, w.title)),
-        btn('Delete', (e) => { if (confirm(`Delete ${w.title}?`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`); toast('Workout deleted.'); render(); }); }, 'ghost')),
-      w.exercises.length ? w.exercises.map((x) => h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'dp-ex-play', 'aria-label': `Watch ${x.name} demo`, onClick: () => showVideo(x) }, playIcon()),
-        h('div', { class: 'grow stack-tight' }, h('span', null, x.name), h('span', { class: 'small muted' }, `${x.prescription}${x.load_test ? ` · ${x.load_pct}% of ${LOAD_LIFT[x.load_test]} max` : ''}`)),
-        h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `Remove ${x.name}`, onClick: (e) => busy(e.currentTarget, async () => { await del(`/v1/workout-exercises/${x.id}`); render(); }) }, 'Remove')))
-        : h('p', { class: 'small muted' }, 'No exercises yet.'),
-      h('form', { class: 'row wrap', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-        if (!exSel.value) throw new Error('Choose an exercise to add.');
-        await post(`/v1/workouts/${w.id}/exercises`, { exercise_id: exSel.value, prescription: rx.value, load_test: lt.value || undefined, load_pct: lt.value ? Number(lp.value) : undefined }); render();
-      }); } }, h('div', { style: 'flex:1 1 100%' }, exSel), h('div', { class: 'grow' }, rx), lt, lp, btn('Add exercise', null, 'secondary', { type: 'submit' })),
-      h('p', { class: 'small muted', style: 'margin:0' }, 'A weight from a max updates itself each time the athlete tests again, rounded to 5 lb.'));
-  };
-
-  const wk = input({ type: 'number', min: '1', max: String(p.weeks), value: String(weeks.length ? Math.max(...weeks) : 1) }), dy = input({ type: 'number', min: '1', max: '7', value: '1' }), title = input({ placeholder: 'Lower body' });
-  const addWorkout = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-    await post(`/v1/programs/${id}/workouts`, { week: Number(wk.value), day: Number(dy.value), title: title.value }); toast('Workout added.'); render();
-  }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:1fr 1fr 2fr' }, field('Week', wk), field('Day', dy), field('Workout title', title)), h('div', null, btn('Add workout', null, 'secondary', { type: 'submit' })));
-
-  fill(main, 
-    header(p.name, `${p.weeks} weeks · ${p.level ?? 'Any level'} · ${p.clients.length ? 'On it: ' + p.clients.map((c) => c.name.split(' ')[0]).join(', ') : 'Nobody assigned yet'}`, assign),
-    ...weeks.map((n) => h('section', { class: 'stack' }, h('h2', { class: 'week-title' }, `Week ${n}`), h('div', { class: 'workouts' }, p.workouts.filter((w) => w.week === n).map(workoutCard)))),
-    weeks.length ? null : h('div', { class: 'empty' }, 'No workouts yet. Add the first one below.'),
-    panel('Add a workout', {}, addWorkout),
-    shop ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => render())) : null,
-    h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
-      btn('Delete program', (e) => { if (confirm(`Delete ${p.name}? This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost')));
-}
+// The Programs page and the program builder live in programs-coach.js.
 
 // ---------- Integrations ----------
 async function viewIntegrations(main) {
@@ -1959,34 +2257,175 @@ const kindBadge = (k) => h('span', { class: `dp-badge dp-badge--${k === 'group' 
 const COVER = { membership: ['Member', 'good'], credit: ['Credit', 'good'], paid: ['Paid', 'good'], registration: ['Registered', 'good'], unpaid: ['Unpaid', 'warn'], none: ['—', 'muted'] };
 const coverBadge = (c) => h('span', { class: `dp-badge dp-badge--${COVER[c]?.[1] ?? 'muted'}` }, COVER[c]?.[0] ?? c);
 
-function sessionRow(x) {
-  return h('a', { class: 'list-item', href: `#/schedule/${x.id}`, style: 'text-decoration:none;color:inherit' },
-    h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
-    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
-    x.unpaid_count ? h('span', { class: 'dp-badge dp-badge--warn' }, `${x.unpaid_count} unpaid`) : null,
-    kindBadge(x.kind));
-}
-
 // Coach pickers: everyone who can lead a session, plus whoever is set now if their account was turned off since.
 const coachOptions = (coaches, current, currentName) => [['', 'No coach set'], ...coaches.map((c) => [c.id, c.name]), ...(current && !coaches.some((c) => c.id === current) ? [[current, `${currentName ?? 'Former coach'} (account off)`]] : [])];
 const coachPicker = (coaches, current, currentName, attrs = {}) => select(coachOptions(coaches, current, currentName), { value: current ?? '', ...attrs });
 const leads = () => state.user?.role !== 'front_desk';          // owners and coaches lead sessions and assign coaches
 const hashQuery = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
 
-async function viewSchedule(main) {
-  const mine = leads() && hashQuery().get('mine') === '1', onlyCoach = hashQuery().get('coach');     // ?coach=<id>: one coach's sessions (from Today's Coaches panel)
-  const [sched, series, locs, settings, coachList] = await Promise.all([get(`/v1/schedule${onlyCoach ? `?coach_id=${encodeURIComponent(onlyCoach)}` : mine ? '?coach_id=me' : ''}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/settings'), get('/v1/coaches')]);
-  const coaches = coachList.data;
-  tzName = settings.timezone;
-  const byDay = {};
-  for (const x of sched.data) (byDay[dayOf(x.starts_at)] ??= []).push(x);
+// Schedule helpers shared with Today. Dates are business days (YYYY-MM-DD in the business time zone).
+const addDaysStr = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const shortDate = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' });
+// Midnight (or any wall-clock time) on a business day, as a UTC ISO string: the same daylight-saving-safe method as the server.
+function bizIso(dateStr, timeStr = '00:00') {
+  const [y, m, d] = dateStr.split('-').map(Number), [hh, mm] = timeStr.split(':').map(Number);
+  const off = (ts) => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tzName, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(ts)).map((x) => [x.type, x.value])); return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - ts; };
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  let utc = guess - off(guess);
+  const second = guess - off(utc);
+  if (second !== utc) utc = second;
+  return new Date(utc).toISOString();
+}
+const bizDay = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: tzName, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
+const bizTime = (iso) => new Intl.DateTimeFormat('en-GB', { timeZone: tzName, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+// A session's state against the clock: live (On now), done, or upcoming.
+const sessionState = (x, now = new Date().toISOString()) => (x.status === 'canceled' ? 'canceled' : x.ends_at <= now ? 'done' : x.starts_at <= now ? 'live' : 'later');
+const stateBadge = (st) => (st === 'live' ? h('span', { class: 'dp-badge dp-badge--good' }, 'On now') : st === 'next' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Next') : st === 'done' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Done') : null);
+// How many are checked in, as a thin bar and words, once a session has started (or is today).
+const checkinBar = (x) => {
+  const n = x.booked_count, done = x.attended_count ?? 0;
+  if (!n) return null;
+  return h('span', { class: 'ck', title: `${done} of ${n} checked in` }, h('span', { class: 'ck-bar', 'aria-hidden': 'true' }, h('span', { class: 'ck-fill', style: `width:${Math.round((done / n) * 100)}%` })), h('span', { class: 'small muted' }, `${done}/${n} here`));
+};
+// Keep the page where it was after an action redraws it: same scroll position, keyboard focus back on the same control.
+async function keepPlace(run) {
+  const key = document.activeElement?.dataset?.focus, y = window.scrollY;
+  await run();
+  window.scrollTo(0, y);
+  if (key) document.querySelector(`[data-focus="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
+}
+let lastScheduleHash = '#/schedule';     // the week and filters the Schedule button on a session goes back to
 
-  const f = { name: input(), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
+function sessionRow(x, { showState = false, state } = {}) {
+  const st = state ?? sessionState(x);
+  const full = x.booked_count >= x.capacity;
+  return h('a', { class: 'list-item', href: `#/schedule/${x.id}`, style: 'text-decoration:none;color:inherit;flex-wrap:wrap' },
+    h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
+    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, x.name),
+      h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`),
+      showState && st !== 'later' ? checkinBar(x) : null),
+    h('div', { class: 'row wrap', style: 'gap:6px;justify-content:flex-end' },
+      showState ? stateBadge(st) : null,
+      full && st !== 'done' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Full') : null,
+      x.unpaid_count ? h('span', { class: 'dp-badge dp-badge--warn' }, `${x.unpaid_count} unpaid`) : null,
+      kindBadge(x.kind)));
+}
+
+// Edit a class, camp or clinic: every upcoming session follows. Prices are the owner's (coaches never see them).
+function editSeriesDialog(x, locs, coaches) {
+  const owner = isOwner();
+  const f = { name: input({ value: x.name, maxlength: '80' }), time: input({ type: 'time', value: x.start_time }), dur: input({ type: 'number', min: '10', max: '600', value: String(x.duration_min) }),
+    cap: input({ type: 'number', min: '1', max: '500', value: String(x.capacity) }), ageMin: input({ type: 'number', placeholder: 'Any', value: x.age_min ?? '' }), ageMax: input({ type: 'number', placeholder: 'Any', value: x.age_max ?? '' }),
+    loc: select(locs.map((l) => [l.id, l.name]), { value: x.location_id }), coach: coachPicker(coaches, x.coach_id, x.coach_name),
+    start: input({ type: 'date', value: x.start_date }), end: input({ type: 'date', value: x.end_date ?? '' }), desc: input({ value: x.description ?? '', maxlength: '2000' }),
+    dropIn: input({ type: 'number', step: '0.01', min: '0', value: x.drop_in_cents != null ? (x.drop_in_cents / 100).toFixed(2) : '', placeholder: 'Not sold singly' }),
+    reg: input({ type: 'number', step: '0.01', min: '0', value: x.registration_cents != null ? (x.registration_cents / 100).toFixed(2) : '', placeholder: 'Camps and clinics' }) };
+  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i), checked: x.weekdays.includes(i) }), d));
+  const cents = (el) => (el.value === '' ? null : Math.round(Number(el.value) * 100));
+  const num = (el) => (el.value === '' ? null : Number(el.value));
+  const body = h('div', { class: 'stack' },
+    h('p', { class: 'small muted', style: 'margin:0' }, 'Every upcoming session follows, except what you changed on a single session (a sub, a moved time, more spots). Families booked on a session that moves get one email. Sessions on days you take off are canceled: credits come back, drop-ins are refunded and families are emailed.'),
+    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(160px,1fr))' }, field('Name', f.name), field('Where', f.loc), field('Coach', f.coach)),
+    h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:12px' }, days)),
+    h('div', { class: 'form-grid cols-3' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap, `${x.enrolled?.length ?? x.enrolled_count ?? 0} standing or registered`)),
+    h('div', { class: 'form-grid cols-4' }, field('Min age', f.ageMin), field('Max age', f.ageMax), owner ? field('Drop-in ($)', f.dropIn) : null, owner ? field('Registration ($)', f.reg) : null),
+    h('div', { class: 'form-grid' }, field('First day', f.start), field('Last day', f.end, ['camp', 'clinic'].includes(x.kind) ? 'Camps and clinics need a last day.' : 'Leave empty for weekly classes that keep going.')),
+    field('Description (parents see this)', f.desc));
+  teamDialog(`Edit ${x.name}`, body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
+    const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
+    const next = { name: f.name.value.trim(), location_id: f.loc.value, coach_id: f.coach.value || null, weekdays, start_time: f.time.value, duration_min: num(f.dur), capacity: num(f.cap),
+      age_min: num(f.ageMin), age_max: num(f.ageMax), start_date: f.start.value, end_date: f.end.value || null, description: f.desc.value.trim() || null,
+      ...(owner ? { drop_in_cents: cents(f.dropIn), registration_cents: cents(f.reg) } : {}) };
+    const cur = { ...x, coach_id: x.coach_id ?? null, end_date: x.end_date ?? null, description: x.description ?? null, age_min: x.age_min ?? null, age_max: x.age_max ?? null, drop_in_cents: x.drop_in_cents ?? null, registration_cents: x.registration_cents ?? null };
+    const changed = Object.fromEntries(Object.entries(next).filter(([k, val]) => JSON.stringify(val) !== JSON.stringify(k === 'weekdays' ? [...cur.weekdays].sort() : cur[k])));
+    if (changed.weekdays) changed.weekdays = [...changed.weekdays].sort();
+    if (!Object.keys(changed).length) throw new Error('Nothing to change.');
+    const removed = x.weekdays.filter((d) => !weekdays.includes(d));
+    if (removed.length && !confirm(`Sessions on ${removed.map((d) => DAY_NAMES[d]).join(', ')} will be canceled. Credits come back, drop-ins are refunded and families are emailed. Continue?`)) return false;
+    const r = (await patch(`/v1/class-series/${x.id}`, changed)).changes;
+    const bits = [r.updated ? nplural(r.updated, 'session') + ' updated' : null, r.moved ? `${r.moved} moved` : null, r.canceled ? `${r.canceled} canceled` : null, r.added ? `${r.added} added` : null, r.promoted ? `${r.promoted} moved up from the waitlist` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed` : null].filter(Boolean);
+    toast(`Saved.${bits.length ? ` ${bits.join(', ')}.` : ''}`); render();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+
+async function viewSchedule(main) {
+  const q = hashQuery();
+  const settings = await get('/v1/settings');
+  tzName = settings.timezone;
+  const today = bizDate();
+  const week = /^\d{4}-\d{2}-\d{2}$/.test(q.get('week') ?? '') ? q.get('week') : today;     // seven days from this date (today by default)
+  const mine = leads() && q.get('mine') === '1', onlyCoach = q.get('coach'), kind = q.get('kind') ?? '', loc = q.get('loc') ?? '';
+  const params = new URLSearchParams({ from: bizIso(week), to: bizIso(addDaysStr(week, 7)) });
+  if (onlyCoach) params.set('coach_id', onlyCoach); else if (mine) params.set('coach_id', 'me');
+  if (kind) params.set('kind', kind);
+  if (loc) params.set('location_id', loc);
+  const [sched, series, locs, coachList] = await Promise.all([get(`/v1/schedule?${params}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/coaches')]);
+  const coaches = coachList.data;
+  lastScheduleHash = location.hash || '#/schedule';
+  // Filters live in the address, so Back, refresh and a session's Schedule button keep them.
+  const go = (changes) => {
+    const p = hashQuery();
+    for (const [k, val] of Object.entries(changes)) { if (val === '' || val == null) p.delete(k); else p.set(k, val); }
+    const s = p.toString();
+    location.hash = `#/schedule${s ? `?${s}` : ''}`;
+  };
+
+  // Search (name, place, coach) filters as you type without redrawing, and is kept in the address too.
+  const search = input({ type: 'search', placeholder: 'Find a session, place or coach', value: q.get('q') ?? '', 'aria-label': 'Find a session', style: 'max-width:320px' });
+  const list = h('div', { class: 'stack', style: 'gap:24px' });
+  const totals = h('p', { class: 'small muted', style: 'margin:0', 'aria-live': 'polite' });
+  const draw = () => {
+    const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = sched.data.filter((x) => words.every((w) => `${x.name} ${x.location_name} ${x.coach_name ?? 'no coach set'}`.toLowerCase().includes(w)));
+    const booked = rows.reduce((t, x) => t + x.booked_count, 0), unpaid = rows.reduce((t, x) => t + x.unpaid_count, 0), wait = rows.reduce((t, x) => t + x.waitlist_count, 0);
+    totals.textContent = [nplural(rows.length, 'session'), `${booked} booked`, unpaid ? `${unpaid} unpaid` : null, wait ? `${wait} waitlisted` : null].filter(Boolean).join(' · ');
+    const byDay = new Map();
+    for (const x of rows) { const d = bizDay(x.starts_at); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(x); }
+    const now = new Date().toISOString();
+    fill(list, byDay.size ? [...byDay].map(([d, xs]) => panel(`${dayOf(bizIso(d, '12:00'))}${d === today ? ' · Today' : ''}`, {}, xs.map((x) => sessionRow(x, { showState: d <= today, state: sessionState(x, now) }))))
+      : h('div', { class: 'empty' }, words.length ? `Nothing in these 7 days matches "${search.value.trim()}".` : onlyCoach ? `${coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach'} doesn't lead anything in these 7 days.` : mine ? 'You don\'t lead anything in these 7 days. Untick My sessions to see everything.' : 'Nothing scheduled in these 7 days.'));
+  };
+  let t = null;
+  search.addEventListener('input', () => {
+    draw();
+    clearTimeout(t);
+    t = setTimeout(() => { const p = hashQuery(); if (search.value.trim()) p.set('q', search.value.trim()); else p.delete('q'); const s = p.toString(); history.replaceState(null, '', `#/schedule${s ? `?${s}` : ''}`); lastScheduleHash = location.hash; }, 300);
+  });
+  draw();
+
+  const weekLabel = `${shortDate(week)} – ${shortDate(addDaysStr(week, 6))}`;
+  const weekNav = h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
+    btn('Previous week', () => go({ week: addDaysStr(week, -7) }), 'secondary', { 'aria-label': 'Previous week' }),
+    h('span', { class: 'strong', style: 'min-width:170px;text-align:center' }, weekLabel),
+    btn('Next week', () => go({ week: addDaysStr(week, 7) }), 'secondary', { 'aria-label': 'Next week' }),
+    week !== today ? btn('From today', () => go({ week: null }), 'ghost') : null);
+  const types = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Type of session' },
+    [['', 'All'], ['group', 'Group'], ['camp', 'Camps'], ['clinic', 'Clinics'], ['team', 'Team'], ['private', 'Privates'], ['evaluation', 'Evaluations']].map(([k, label]) =>
+      h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(kind === k), onClick: () => go({ kind: k }) }, label)));
+  const placeSel = select([['', 'Every place'], ...locs.data.map((l) => [l.id, l.name])], { value: loc, 'aria-label': 'Place', style: 'width:auto' });
+  placeSel.addEventListener('change', () => go({ loc: placeSel.value }));
+  let whoCtl = null;
+  if (isOwner()) {
+    whoCtl = select([['', 'Every coach'], ...coaches.map((c) => [c.id, c.name])], { value: onlyCoach ?? '', 'aria-label': 'Show sessions led by', style: 'width:auto' });
+    whoCtl.addEventListener('change', () => go({ coach: whoCtl.value, mine: null }));
+  } else if (onlyCoach) {
+    whoCtl = h('span', { class: 'small' }, `${coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach'}'s sessions · `, h('a', { href: '#/schedule' }, 'Show everyone'));
+  } else if (leads()) {
+    const box = h('input', { type: 'checkbox', checked: mine });
+    box.addEventListener('change', () => go({ mine: box.checked ? '1' : null }));
+    whoCtl = h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, box, h('span', null, 'My sessions only'));
+  }
+  const filterBar = h('div', { class: 'stack', style: 'gap:12px' },
+    h('div', { class: 'row wrap', style: 'gap:12px;justify-content:space-between' }, weekNav, h('div', { class: 'row wrap', style: 'gap:8px' }, search, placeSel, whoCtl)),
+    types, totals);
+
+  // Add a class, camp or clinic (owners and coaches).
+  const f = { name: input({ maxlength: '80' }), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
     time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }), ageMin: input({ type: 'number', placeholder: 'Any' }), ageMax: input({ type: 'number', placeholder: 'Any' }),
     dropIn: input({ type: 'number', step: '0.01', placeholder: 'Not sold singly' }), reg: input({ type: 'number', step: '0.01', placeholder: 'Camps and clinics' }),
-    start: input({ type: 'date', value: bizDate() }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }),
+    start: input({ type: 'date', value: today }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }),
     coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
-  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:36px' }, h('input', { type: 'checkbox', value: String(i) }), d));
+  const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
@@ -1997,13 +2436,38 @@ async function viewSchedule(main) {
   }); } },
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(180px,1fr))' }, field('Name', f.name), field('Type', f.kind), field('Coach', f.coach, 'Leads every session. Swap in a sub on a single session.')),
     h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:12px' }, days)),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap)),
-    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(4,minmax(0,1fr))' }, field('Min age', f.ageMin), field('Max age', f.ageMax), field('Drop-in ($)', f.dropIn), field('Registration ($)', f.reg)),
-    h('div', { class: 'form-grid' }, field('First day', f.start), field('Last day', f.end, 'Leave empty for weekly classes that keep going.')),
+    h('div', { class: 'form-grid cols-3' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap)),
+    h('div', { class: 'form-grid cols-4' }, field('Min age', f.ageMin), field('Max age', f.ageMax), field('Drop-in ($)', f.dropIn), field('Registration ($)', f.reg)),
+    h('div', { class: 'form-grid' }, field('Where', f.loc), field('First day', f.start), field('Last day', f.end, 'Leave empty for weekly classes that keep going.')),
     field('Description (parents see this)', f.desc),
     h('div', null, btn('Add to schedule', null, 'primary', { type: 'submit' })));
-
   const addPanel = panel('Add a class, camp or clinic', { subtitle: 'Sessions are created automatically. Weekly classes are always scheduled 8 weeks ahead.' }, form);
+
+  // One session that isn't part of a class: a makeup, a one-time clinic. The staff note is for staff only.
+  const o = { name: input({ maxlength: '80', placeholder: 'Like Makeup speed session' }), kind: select([['group', 'Group'], ['clinic', 'Clinic'], ['private', 'Private'], ['evaluation', 'Evaluation'], ['team', 'Team']]),
+    loc: select(locs.data.map((l) => [l.id, l.name])), date: input({ type: 'date', value: today, min: today }), time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }),
+    dropIn: input({ type: 'number', step: '0.01', placeholder: 'Leave empty if not sold' }), note: input({ maxlength: '500', placeholder: 'Only staff see this' }), coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
+  const oneForm = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+    if (o.date.value && o.date.value < bizDate()) throw new Error('Pick today or a later date.');
+    const x = await post('/v1/sessions', { name: o.name.value, kind: o.kind.value, location_id: o.loc.value, date: o.date.value, start_time: o.time.value, duration_min: Number(o.dur.value), capacity: Number(o.cap.value),
+      coach_id: o.coach.value || null, staff_note: o.note.value || undefined, ...(isOwner() ? { drop_in_cents: dollars(o.dropIn) } : {}) });
+    toast(`${x.name} added for ${tzFmt(x.starts_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.`); location.hash = `#/schedule/${x.id}`;
+  }); } },
+    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(160px,1fr))' }, field('Name', o.name), field('Type', o.kind), field('Coach', o.coach), field('Where', o.loc)),
+    h('div', { class: 'form-grid cols-4' }, field('Date', o.date), field('Starts', o.time), field('Minutes', o.dur), field('Spots', o.cap)),
+    h('div', { class: 'form-grid' }, isOwner() ? field('Drop-in ($)', o.dropIn) : null, field('Staff note', o.note, 'Why it\'s on, who it\'s for. Families don\'t see it.')),
+    h('div', null, btn('Add session', null, 'primary', { type: 'submit' })));
+  const onePanel = panel('Add one session', { subtitle: 'A makeup or one-time session that isn\'t part of a weekly class.' }, oneForm);
+  addPanel.hidden = true; onePanel.hidden = true;
+  // One green button on the page: opening a form hands it to that form's Save.
+  const addBtn = btn('Add class or camp', () => open(addPanel, f.name), 'primary');
+  const oneBtn = btn('Add one session', () => open(onePanel, o.name), 'secondary');
+  function open(p, focusEl) {
+    addPanel.hidden = p !== addPanel; onePanel.hidden = p !== onePanel;
+    addBtn.className = 'dp-btn dp-btn--secondary';
+    p.scrollIntoView({ behavior: 'smooth' }); focusEl.focus({ preventScroll: true });
+  }
+
   const seriesCoach = (x) => {
     if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
     const sel = coachPicker(coaches, x.coach_id, x.coach_name, { 'aria-label': `Coach for ${x.name}`, style: 'width:auto;max-width:180px' });
@@ -2014,39 +2478,69 @@ async function viewSchedule(main) {
     return sel;
   };
   const seriesList = series.data.length ? series.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${x.start_time} · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}`)),
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${hm12(x.start_time)} · ${x.duration_min} min · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}${x.end_date ? ` · until ${ymd(x.end_date)}` : ''}`)),
     seriesCoach(x), kindBadge(x.kind),
-    btn('Archive', (e) => { if (confirm(`Archive ${x.name}? Future sessions are canceled, credits returned and families emailed.`)) busy(e.currentTarget, async () => { await patch(`/v1/class-series/${x.id}`, { active: false }); toast('Archived.'); render(); }); }, 'ghost')))
-    : [h('p', { class: 'muted' }, 'No classes yet. Add your first one below.')];
+    leads() ? btn('Edit', () => editSeriesDialog(x, locs.data, coaches), 'outline', { 'aria-label': `Edit ${x.name}` }) : null,
+    leads() ? btn('Archive', (e) => { if (confirm(`Archive ${x.name}? Future sessions are canceled, credits returned and families emailed.`)) busy(e.currentTarget, async () => { await patch(`/v1/class-series/${x.id}`, { active: false }); toast('Archived.'); render(); }); }, 'ghost', { 'aria-label': `Archive ${x.name}` }) : null))
+    : [h('p', { class: 'muted' }, 'No classes yet.')];
 
-  // "My sessions": only what you lead, kept in the address so Back and refresh keep it.
-  const mineBox = h('input', { type: 'checkbox', checked: mine });
-  mineBox.addEventListener('change', () => { location.hash = mineBox.checked ? '#/schedule?mine=1' : '#/schedule'; });
-  // Owners pick any coach; everyone sees whose sessions a ?coach= link is showing.
-  const coachSel = isOwner() ? select([['', 'Every coach'], ...coaches.map((c) => [c.id, c.name])], { value: onlyCoach ?? '', 'aria-label': 'Show sessions led by', style: 'width:auto' }) : null;
-  coachSel?.addEventListener('change', () => { location.hash = coachSel.value ? `#/schedule?coach=${coachSel.value}` : '#/schedule'; });
-  const coachName = onlyCoach ? coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach' : null;
-  const filterBar = isOwner() ? h('div', { class: 'row wrap small', style: 'gap:8px;min-height:44px' }, h('label', { class: 'muted', for: 'sched-coach' }, 'Show'), Object.assign(coachSel, { id: 'sched-coach' }), onlyCoach ? h('span', { class: 'muted' }, `${sched.data.length} ${sched.data.length === 1 ? 'session' : 'sessions'} in the next two weeks`) : null)
-    : onlyCoach ? h('div', { class: 'row wrap small', style: 'gap:8px;min-height:44px' }, h('span', null, `${coachName}'s sessions`), h('a', { href: '#/schedule' }, 'Show everyone'))
-    : leads() ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, mineBox, h('span', null, 'My sessions only'), mine ? h('span', { class: 'muted' }, ` · ${sched.data.length} in the next two weeks`) : null) : null;
-  fill(main, 
-    header('Schedule', 'Classes, camps, clinics, privates and evaluations for the next two weeks.', h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
-      locs.data.length ? btn('Add class or camp', () => { addPanel.scrollIntoView({ behavior: 'smooth' }); f.name.focus({ preventScroll: true }); }) : null)),
+  fill(main,
+    header('Schedule', 'Classes, camps, clinics, privates and evaluations, seven days at a time.', h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
+      leads() && locs.data.length ? oneBtn : null, leads() && locs.data.length ? addBtn : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
-    filterBar,
-    ...(Object.keys(byDay).length ? Object.entries(byDay).map(([d, xs]) => panel(d, {}, xs.map(sessionRow))) : [h('div', { class: 'empty' }, onlyCoach ? `${coachName} doesn't lead anything in the next two weeks.` : mine ? 'You don\'t lead anything in the next two weeks. Untick My sessions to see everything.' : 'Nothing scheduled in the next two weeks.')]),
-    panel('Classes & camps', {}, ...seriesList),
-    locs.data.length ? addPanel : null);
+    filterBar, list,
+    panel('Classes & camps', { subtitle: leads() ? 'Edit a class and every upcoming session follows.' : null }, ...seriesList),
+    leads() && locs.data.length ? [onePanel, addPanel] : null);
+}
+
+// Edit one session: a sub, a new time or place (families can be emailed), spots, the staff note.
+function editSessionDialog(x, locs, coaches, again) {
+  const f = { name: input({ value: x.name, maxlength: '80' }), date: input({ type: 'date', value: bizDay(x.starts_at), min: bizDate() }), time: input({ type: 'time', value: bizTime(x.starts_at) }),
+    dur: input({ type: 'number', min: '10', max: '600', value: String(Math.round((Date.parse(x.ends_at) - Date.parse(x.starts_at)) / 60000)) }), cap: input({ type: 'number', min: String(Math.max(1, x.booked_count)), max: '500', value: String(x.capacity) }),
+    loc: select(locs.map((l) => [l.id, l.name]), { value: x.location_id }), coach: coachPicker(coaches, x.coach_id, x.coach_name), note: textarea(x.staff_note ?? '', { maxlength: '500', placeholder: 'Only staff see this' }) };
+  const notify = h('input', { type: 'checkbox', checked: true });
+  const body = h('div', { class: 'stack' },
+    x.series_id ? h('p', { class: 'small muted', style: 'margin:0' }, 'Changes this session only. Edit the class on the Schedule page to change every session.') : null,
+    h('div', { class: 'form-grid' }, field('Name', f.name), field('Coach', f.coach, x.series_id ? 'A sub for this session.' : null)),
+    h('div', { class: 'form-grid cols-4' }, field('Date', f.date), field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap, x.waitlist_count ? 'More spots move the waitlist up.' : x.booked_count ? `${x.booked_count} booked` : null)),
+    field('Where', f.loc), field('Staff note', f.note, 'Families don\'t see it.'),
+    x.booked_count ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, notify, h('span', null, 'Email booked families if the time or place changes')) : null);
+  teamDialog('Edit session', body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
+    const r = await patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked });
+    toast([`Saved: ${r.changed.join(', ')}.`, r.promoted ? `${nplural(r.promoted, 'athlete')} moved up from the waitlist.` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed.` : null].filter(Boolean).join(' '));
+    again();
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+}
+
+// Email everyone booked: "Running 10 minutes late", "Bring your cleats".
+function messageDialog(x) {
+  const msg = textarea('', { maxlength: '1000', style: 'min-height:120px', placeholder: 'Running 10 minutes late. See you soon!' });
+  const wl = h('input', { type: 'checkbox' });
+  let sent = false;
+  teamDialog(`Email families · ${x.name}`, h('div', { class: 'stack' },
+    h('p', { class: 'small muted', style: 'margin:0' }, `${x.team ? 'Everyone booked and every family on the team roster' : 'Everyone booked'} gets one email per family, signed with your name.`),
+    field('Message', msg),
+    x.waitlist_count ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, wl, h('span', null, `Also the waitlist (${x.waitlist_count})`)) : null),
+  [{ label: 'Send email', variant: 'primary', onClick: async () => {
+    if (sent) return;
+    if (!msg.value.trim()) throw new Error('Write a message first.');
+    const r = await post(`/v1/sessions/${x.id}/message`, { message: msg.value, include_waitlist: wl.checked });
+    sent = true;
+    toast(`Sent to ${nplural(r.sent, 'family', 'families')}.`);
+  } }, { label: 'Cancel', variant: 'ghost' }]);
+  msg.focus();
 }
 
 async function viewSession(main, id) {
-  const [x, clientsList, settings, progs, coachList] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/clients'), get('/v1/settings'), get('/v1/programs'), get('/v1/coaches')]);
+  const [x, settings, progs, coachList, locs] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/settings'), get('/v1/programs'), get('/v1/coaches'), get('/v1/locations')]);
   tzName = settings.timezone;
+  const again = () => keepPlace(() => viewSession(main, id));
+  const now = new Date().toISOString(), st = sessionState(x, now);
   // Who leads this session. Changing it here only changes this one (a sub); the class keeps its coach.
   const coachSel = leads() && x.status === 'scheduled' ? coachPicker(coachList.data, x.coach_id, x.coach_name, { 'aria-label': 'Coach for this session', style: 'width:auto;min-width:200px' }) : null;
   coachSel?.addEventListener('change', () => busy(coachSel, async () => {
     await patch(`/v1/sessions/${id}`, { coach_id: coachSel.value || null });
-    toast(coachSel.value ? `${coachSel.selectedOptions[0].textContent} leads this session.${x.series_id ? ' The rest of the class keeps its coach.' : ''}` : 'No coach set for this session.'); render();
+    toast(coachSel.value ? `${coachSel.selectedOptions[0].textContent} leads this session.${x.series_id ? ' The rest of the class keeps its coach.' : ''}` : 'No coach set for this session.'); again();
   }));
   const coachLine = h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('span', { class: 'dp-label', style: 'margin:0' }, 'Coach'), coachSel ?? h('span', { class: 'strong' }, x.coach_name ?? 'No coach set'),
     x.series_id && coachSel ? h('span', { class: 'small muted' }, 'Changes this session only. Change the whole class on the Schedule page.') : null);
@@ -2063,27 +2557,59 @@ async function viewSession(main, id) {
       if (out.sale.status === 'succeeded') toast(`${money(out.sale.amount_cents)} collected.`);
       else if (out.sale.status === 'pending') toast('Waiting for the tap on your iPhone. The booking updates when it\'s paid.');
       else toast(`Didn't go through: ${out.sale.failure_reason}`, 'warn');
-      render();
+      again();
     });
-  }, 'outline');
+  }, 'outline', { 'data-focus': `collect-${r.id}` });
+  const flag = (text, tone = 'warn') => h('span', { class: `dp-badge dp-badge--${tone}` }, text);
   const row = (r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-    h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'aria-pressed': String(r.status === 'attended'), 'aria-label': `${r.status === 'attended' ? 'Checked in' : 'Check in'} ${r.name}`,
-      onClick: (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/attendance`, { status: r.status === 'attended' ? 'booked' : 'attended' }); render(); }) }, r.status === 'attended' ? 'Here' : r.status === 'no_show' ? 'No-show' : 'Check in'),
-    h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.name),
-      h('span', { class: 'small muted' }, [r.age != null ? `Age ${r.age}` : null, r.family_name, r.parent_phone].filter(Boolean).join(' · ')),
-      r.has_medical_notes ? h('span', { class: 'small warn-text' }, 'Has medical notes. Open profile.') : null),
-    coverBadge(r.coverage),
-    r.coverage === 'unpaid' ? collect(r) : null,
-    r.status === 'booked' && x.starts_at < new Date().toISOString() ? btn('No-show', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/attendance`, { status: 'no_show' }); render(); }), 'ghost') : null,
-    btn('Remove', (e) => { if (confirm(`Remove ${r.name} from this session?`)) busy(e.currentTarget, async () => { const out = await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); toast(out.message); render(); }); }, 'ghost'));
+    h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'data-focus': `att-${r.id}`, 'aria-pressed': String(r.status === 'attended'), 'aria-label': `${r.status === 'attended' ? 'Checked in' : 'Check in'} ${r.name}`,
+      onClick: (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/attendance`, { status: r.status === 'attended' ? 'booked' : 'attended' }); await again(); }) }, r.status === 'attended' ? 'Here' : r.status === 'no_show' ? 'No-show' : 'Check in'),
+    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('a', { href: `#/clients/${r.client_id}`, class: 'strong', style: 'color:var(--steel)' }, r.name),
+      h('span', { class: 'small muted' }, [r.age != null ? `Age ${r.age}` : null, r.family_name, r.parent_phone ? phoneText(r.parent_phone) : null].filter(Boolean).join(' · ')),
+      r.has_medical_notes ? h('span', { class: 'small warn-text' }, `Medical: ${r.medical_notes}`) : null),
+    h('div', { class: 'row wrap', style: 'gap:6px' },
+      r.birthday ? flag('Birthday', 'good') : null, r.no_waiver ? flag('No waiver') : null, r.status === 'no_show' ? flag('No-show', 'muted') : null, coverBadge(r.coverage)),
+    r.coverage === 'unpaid' && r.status !== 'no_show' ? collect(r) : null,
+    r.status === 'booked' && x.starts_at < now ? btn('No-show', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/attendance`, { status: 'no_show' }); await again(); }), 'ghost', { 'data-focus': `ns-${r.id}` }) : null,
+    btn('Remove', (e) => { if (confirm(`Remove ${r.name} from this session? A credit comes back and a paid drop-in is refunded.`)) busy(e.currentTarget, async () => { const out = await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); toast(out.message); again(); }); }, 'ghost', { 'aria-label': `Remove ${r.name}` }));
 
-  const who = select([['', 'Add an athlete…'], ...clientsList.data.filter((c) => c.status !== 'canceled').map((c) => [c.id, c.name])], { 'aria-label': 'Athlete to add' });
-  const addForm = h('div', { class: 'row' }, h('div', { class: 'grow' }, who), btn('Add', (e) => busy(e.currentTarget, async () => {
-    if (!who.value) throw new Error('Choose an athlete.');
-    try { const b = await post(`/v1/sessions/${id}/bookings`, { client_id: who.value }); toast(b.status === 'waitlisted' ? 'Session is full. Added to the waitlist.' : `Added (${COVER[b.coverage][0].toLowerCase()}).`); }
-    catch (err) { if (!/is \d+\. This session/.test(err.message) || !confirm(`${err.message}\n\nAdd anyway?`)) throw err; await post(`/v1/sessions/${id}/bookings`, { client_id: who.value, override_age: true }); toast('Added.'); }
-    render();
-  }), 'secondary'));
+  // Add an athlete: search by name or Athlete ID; Enter adds the only match (searching for what's typed now).
+  const booked = new Set(x.roster.filter((r) => ['booked', 'attended', 'no_show', 'waitlisted'].includes(r.status)).map((r) => r.client_id));
+  const find = input({ type: 'search', placeholder: 'Add an athlete: name or Athlete ID', 'aria-label': 'Find an athlete to add', autocomplete: 'off', 'data-focus': 'add-athlete' });
+  const results = h('div', { class: 'stack-tight', 'aria-live': 'polite' });
+  const add = async (c, button) => busy(button, async () => {
+    let b;
+    try { b = await post(`/v1/sessions/${id}/bookings`, { client_id: c.id }); }
+    catch (err) { if (!/is \d+\. This session/.test(err.message) || !confirm(`${err.message}\n\nAdd anyway?`)) throw err; b = await post(`/v1/sessions/${id}/bookings`, { client_id: c.id, override_age: true }); }
+    toast(`${b.status === 'waitlisted' ? `The session is full. ${c.name.split(' ')[0]} is on the waitlist.` : `${c.name.split(' ')[0]} is booked (${(COVER[b.coverage]?.[0] ?? b.coverage).toLowerCase()}).`}${b.clash ? ` ${c.name.split(' ')[0]} is also booked for ${b.clash.name} then (${tzFmt(b.clash.starts_at, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}).` : ''}`, b.clash ? 'warn' : 'good');
+    find.value = '';
+    await again();
+    document.querySelector('[data-focus="add-athlete"]')?.focus({ preventScroll: true });
+  });
+  let seq = 0;
+  const lookup = async () => { const term = find.value.trim(); const mySeq = ++seq; if (term.length < 2) return { term, list: null }; const r = await get(`/v1/clients?q=${encodeURIComponent(term)}`); return mySeq === seq ? { term, list: r.data } : null; };
+  const show = (res) => {
+    if (!res) return;
+    if (!res.list) return fill(results);
+    if (!res.list.length) return fill(results, h('p', { class: 'small muted', style: 'margin:0' }, `Nobody matches "${res.term}". Check the spelling, or add them in Clients first.`));
+    fill(results, res.list.slice(0, 8).map((c) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.name), h('span', { class: 'small muted' }, [c.athlete_id, c.family_name].filter(Boolean).join(' · '))),
+      booked.has(c.id) ? h('span', { class: 'small muted' }, 'Already booked') : btn('Add', (e) => add(c, e.currentTarget), 'secondary', { 'aria-label': `Add ${c.name}` }))),
+    res.list.length > 8 ? h('p', { class: 'small muted', style: 'margin:0' }, `${res.list.length - 8} more. Keep typing to narrow it down.`) : null);
+  };
+  let tt = null;
+  find.addEventListener('input', () => { clearTimeout(tt); tt = setTimeout(async () => show(await lookup().catch(() => null)), 200); });
+  find.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); clearTimeout(tt);
+    const res = await lookup().catch((err) => { toast(err.message, 'warn'); return null; });
+    if (!res?.list) return;
+    show(res);
+    const open = res.list.filter((c) => !booked.has(c.id));
+    if (res.list.length === 1 && !open.length) return toast(`${res.list[0].name} is already booked for this session.`, 'warn');
+    if (open.length === 1 && res.list.length === 1) return add(open[0], null);
+    if (res.list.length > 1) toast(`${res.list.length} athletes match. Pick one below.`, 'warn');
+  });
+  const addForm = h('div', { class: 'stack-tight' }, find, results);
 
   // The workout on the weight-room screen (/tv) during this session.
   const canPick = state.user?.role !== 'front_desk';
@@ -2100,32 +2626,46 @@ async function viewSession(main, id) {
     x.workout ? h('ol', { class: 'small', style: 'margin:0;padding-left:20px' }, x.workout.exercises.map((e) => h('li', null, `${e.name} · ${e.prescription || ''}${e.load ? ` · ${e.load}` : ''}`))) : null,
     canPick && x.status === 'scheduled' ? h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       if (!wkSel.value) throw new Error('Choose a program, then a workout.');
-      await put(`/v1/sessions/${id}/workout`, { workout_id: wkSel.value }); toast('The screen shows it now.'); render();
+      await put(`/v1/sessions/${id}/workout`, { workout_id: wkSel.value }); toast('The screen shows it now.'); again();
     }); } }, h('div', { class: 'grow' }, progSel), h('div', { class: 'grow' }, wkSel), btn(x.workout ? 'Change workout' : 'Show on screen', null, 'secondary', { type: 'submit' }),
-      x.workout ? btn('Clear', (e) => busy(e.currentTarget, async () => { await put(`/v1/sessions/${id}/workout`, { workout_id: null }); toast('Cleared.'); render(); }), 'ghost') : null) : null);
+      x.workout ? btn('Clear', (e) => busy(e.currentTarget, async () => { await put(`/v1/sessions/${id}/workout`, { workout_id: null }); toast('Cleared.'); again(); }), 'ghost') : null) : null);
 
-  fill(main, 
-    header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.coach_name ? ` · ${x.coach_name}` : ''}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')),
-    panel(null, {}, coachLine),
+  const full = x.booked_count >= x.capacity;
+  const tools = h('div', { class: 'row wrap', style: 'gap:8px' },
+    leads() && x.status === 'scheduled' ? btn('Edit session', () => editSessionDialog(x, locs.data, coachList.data, again), 'secondary') : null,
+    x.status === 'scheduled' ? btn('Email families', () => messageDialog(x), 'secondary') : null,
+    h('a', { class: 'dp-btn dp-btn--ghost', href: `/signin-sheet.html#${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener' }, 'Print sign-in sheet'));
+  const rosterPanel = panel(`${x.team ? 'Guests' : 'Roster'} · ${x.booked_count}/${x.capacity}${full ? ' · Full' : ''}`, { subtitle: x.team ? 'Athletes booked who aren\'t on this team, like a tryout or a sibling.' : `${x.attended_count} checked in${x.unpaid_count ? ` · ${x.unpaid_count} unpaid` : ''}${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}` },
+    active.length ? active.map(row) : h('p', { class: 'muted' }, x.team ? 'No guests.' : 'Nobody booked yet.'), x.status === 'scheduled' ? addForm : null);
+  const promote = (r) => btn('Move up', (e) => {
+    if (full && !confirm(`${x.name} is full. Move ${r.name} up anyway? The session goes over its ${x.capacity} spots.`)) return;
+    busy(e.currentTarget, async () => { const out = await post(`/v1/bookings/${r.id}/promote`); toast(out.message, out.over_spots ? 'warn' : 'good'); again(); });
+  }, 'outline', { 'aria-label': `Move ${r.name} up from the waitlist` });
+
+  fill(main,
+    header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.coach_name ? ` · ${x.coach_name}` : ''}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: lastScheduleHash }, 'Schedule')),
+    panel(null, {}, h('div', { class: 'stack', style: 'gap:12px' }, h('div', { class: 'row wrap', style: 'gap:8px' }, stateBadge(st), kindBadge(x.kind), full && st !== 'done' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Full') : null, st !== 'later' ? checkinBar(x) : null),
+      coachLine, x.staff_note ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'dp-label', style: 'margin:0 8px 0 0' }, 'Staff note'), x.staff_note) : null, tools)),
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
         x.team.athletes.some((a) => !a.present) ? btn('Everyone\'s here', (e) => busy(e.currentTarget, async () => {
-          for (const a of x.team.athletes.filter((t) => !t.present)) await post(`/v1/sessions/${id}/team-attendance`, { roster_id: a.id, present: true });
-          toast('Everyone checked in. Tap anyone who\'s missing.'); render();
+          for (const a of x.team.athletes.filter((t) => !t.present)) await post(`/v1/sessions/${id}/team-attendance`, { client_id: a.client_id, present: true });
+          toast('Everyone checked in. Tap anyone who\'s missing.'); again();
         }), 'secondary') : null,
         h('a', { class: 'dp-btn dp-btn--secondary', href: `#/teams/${x.team.contract_id}` }, 'Team')) },
       x.team.athletes.length ? x.team.athletes.map((a) => h('div', { class: 'list-item' },
-        h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'aria-pressed': String(a.present), 'aria-label': `${a.present ? 'Here' : 'Mark here'}: ${a.name}`,
-          onClick: (e) => busy(e.currentTarget, async () => { await post(`/v1/sessions/${id}/team-attendance`, { roster_id: a.id, present: !a.present }); render(); }) }, a.present ? 'Here' : 'Check in'),
+        h('button', { type: 'button', class: 'dp-ex-log', style: 'min-width:92px', 'data-focus': `team-${a.client_id}`, 'aria-pressed': String(a.present), 'aria-label': `${a.present ? 'Here' : 'Mark here'}: ${a.name}`,
+          onClick: (e) => busy(e.currentTarget, async () => { await post(`/v1/sessions/${id}/team-attendance`, { client_id: a.client_id, present: !a.present }); await again(); }) }, a.present ? 'Here' : 'Check in'),
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.name), h('span', { class: 'small muted' }, [a.position, a.grad_year ? `Class of ${a.grad_year}` : null].filter(Boolean).join(' · '))))) : h('p', { class: 'muted' }, 'No roster yet. Add athletes on the team page.')) : null,
-    x.team && !x.roster.length ? null : panel(`Roster · ${x.booked_count}/${x.capacity}`, { subtitle: `${x.attended_count} checked in${x.unpaid_count ? ` · ${x.unpaid_count} unpaid` : ''}${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}` },
-      active.length ? active.map(row) : h('p', { class: 'muted' }, 'Nobody booked yet.'), x.status === 'scheduled' ? addForm : null),
+    rosterPanel,
+    waiting.length ? panel(`Waitlist · ${waiting.length}`, { subtitle: 'Moves up on its own, in order, when a spot opens. Move someone up now to go over the spots.' }, waiting.map((r, i) => h('div', { class: 'list-item' }, h('span', { class: 'small muted', style: 'width:24px' }, `${i + 1}.`), h('span', { class: 'grow' }, r.name),
+      x.status === 'scheduled' ? promote(r) : null,
+      btn('Remove', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); again(); }), 'ghost', { 'aria-label': `Remove ${r.name} from the waitlist` })))) : null,
     screenPanel,
-    waiting.length ? panel(`Waitlist · ${waiting.length}`, { subtitle: 'Moves up automatically when a spot opens.' }, waiting.map((r) => h('div', { class: 'list-item' }, h('span', { class: 'grow' }, r.name), btn('Remove', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); render(); }), 'ghost')))) : null,
     done.length ? panel('Canceled', {}, done.map((r) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, r.name), h('span', { class: 'muted' }, r.status === 'late_canceled' ? 'Late cancel (session used)' : 'Canceled')))) : null,
-    x.status === 'scheduled' ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Cancel this session', (e) => {
-      const reason = prompt('Tell families why (they\'ll get an email). Credits come back and drop-ins are refunded.', 'Weather');
+    x.status === 'scheduled' && leads() ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Cancel this session', (e) => {
+      const reason = prompt(`Tell families why (they'll get an email${x.team ? ', and so will the school or club contact' : ''}). Credits come back and drop-ins are refunded.`, 'Weather');
       if (reason === null) return;
-      busy(e.currentTarget, async () => { await post(`/v1/sessions/${id}/cancel`, { reason }); toast('Session canceled and families emailed.'); render(); });
+      busy(e.currentTarget, async () => { const r = await post(`/v1/sessions/${id}/cancel`, { reason }); toast(`Session canceled.${r.families_emailed ? ` ${nplural(r.families_emailed, 'family', 'families')} emailed.` : ''}${r.team_contact_emailed ? ' The team contact was emailed.' : ''}`); again(); });
     }, 'ghost')) : null);
 }
 
@@ -2179,14 +2719,16 @@ function timeOffPanel(rows, coaches) {
       await render();
     }); } },
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, who ? field('Who', who) : null, field('First day', from), field('Last day', to), field('Note', note)),
-      h('div', null, btn(owner ? 'Add time off' : 'Add my time off', null, 'primary', { type: 'submit' }))));
+      h('div', null, btn(owner ? 'Add time off' : 'Add my time off', null, 'secondary', { type: 'submit' }))));
 }
 
 async function viewScheduleSetup(main) {
-  const [av, locs, settings, kiosks, coachList, timeOff] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks'), get('/v1/coaches'), get('/v1/time-off')]);
+  const [av, locs, settings, kiosks, coachList, timeOff, privSlots, evalSlots] = await Promise.all([get('/v1/availability'), get('/v1/locations'), get('/v1/settings'), get('/v1/kiosks'), get('/v1/coaches'), get('/v1/time-off'),
+    get('/v1/slots?kind=private&days=7').catch(() => null), get('/v1/slots?kind=evaluation&days=7').catch(() => null)]);
+  const slots = { private: privSlots, evaluation: evalSlots };
   tzName = settings.timezone;
   const coaches = coachList.data;
-  const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), day: select(DAY_NAMES.map((d, i) => [String(i), d])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }),
+  const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), from: input({ type: 'time', value: '15:00' }), to: input({ type: 'time', value: '19:00' }), len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }),
     coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
   const hoursCoach = (x) => {
     if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
@@ -2194,15 +2736,26 @@ async function viewScheduleSetup(main) {
     sel.addEventListener('change', () => busy(sel, async () => { await patch(`/v1/availability/${x.id}`, { coach_id: sel.value || null }); toast(sel.value ? `These hours are ${sel.selectedOptions[0].textContent}'s now.` : 'These hours have no coach set.'); render(); }));
     return sel;
   };
+  // Hours, grouped by what they're for, with what parents can book in the next 7 days so you can see them working.
+  const hourRow = (x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, `${DAY_NAMES[x.weekday]} ${hm12(x.start_time)}–${hm12(x.end_time)} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
+      x.coach_active === false ? h('span', { class: 'small warn-text' }, `${x.coach_name} can't lead sessions now (account turned off or moved to front desk), so these hours aren't offered. Pick another coach or remove them.`) : null),
+    hoursCoach(x),
+    leads() ? btn('Remove', (e) => { if (confirm(`Remove ${DAY_NAMES[x.weekday]} ${hm12(x.start_time)}–${hm12(x.end_time)} ${x.kind === 'private' ? 'private' : 'evaluation'} hours? Times already booked stay booked.`)) busy(e.currentTarget, async () => { await del(`/v1/availability/${x.id}`); toast('Hours removed.'); render(); }); }, 'ghost', { 'aria-label': `Remove ${DAY_NAMES[x.weekday]} ${x.start_time} hours` }) : null);
+  const preview = (kind) => {
+    const s = slots[kind]?.data ?? [];
+    return h('p', { class: 'small muted', style: 'margin:0 0 4px' }, s.length ? `Next 7 days: ${nplural(s.length, 'open time')}, the first ${tzFmt(s[0].starts_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : 'Next 7 days: no open times. Add hours, or check time off and what\'s on the schedule then.');
+  };
+  const group = (kind, label) => { const rows = av.data.filter((x) => x.kind === kind); return h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label', style: 'margin-top:8px' }, `${label} (${rows.length})`), preview(kind), rows.length ? rows.map(hourRow) : h('p', { class: 'muted', style: 'margin:0' }, 'No hours yet.')); };
+  const dayBoxes = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i) }), d));
   const hours = panel('Hours for privates and evaluations', { subtitle: 'Parents book open times in the portal. Hours with a coach are blocked by anything that coach leads, anywhere, and by sessions at that place with no coach. Hours with no coach are blocked by anything at that place.' },
-    ...(av.data.length ? av.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' }, h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, `${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time} · ${x.kind === 'private' ? 'Privates' : 'Evaluations'} · ${x.slot_minutes} min · ${x.location_name}${x.price_cents ? ` · ${money(x.price_cents)}` : ''}`),
-        x.coach_active === false ? h('span', { class: 'small warn-text' }, `${x.coach_name} can't lead sessions now (account turned off or moved to front desk), so these hours aren't offered. Pick another coach or remove them.`) : null),
-      hoursCoach(x),
-      leads() ? btn('Remove', (e) => { if (confirm(`Remove ${DAY_NAMES[x.weekday]} ${x.start_time}–${x.end_time}? Times already booked stay booked.`)) busy(e.currentTarget, async () => { await del(`/v1/availability/${x.id}`); toast('Hours removed.'); render(); }); }, 'ghost') : null)) : [h('p', { class: 'muted' }, 'No hours yet.')]),
-    !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-      await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekday: Number(a.day.value), start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null });
-      toast('Hours added.'); render();
-    }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Day', a.day), field('Coach', a.coach)),
+    group('private', 'Private training'), group('evaluation', 'Evaluations'),
+    !leads() ? null : h('form', { class: 'stack', style: 'border-top:1px solid var(--line-subtle);padding-top:12px;margin-top:12px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+      const weekdays = dayBoxes.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
+      if (!weekdays.length) throw new Error('Tick at least one day.');
+      const r = await post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekdays, start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null });
+      toast(`Hours added on ${r.added.map((x) => DAY_NAMES[x.weekday]).join(', ')}.`); render();
+    }); } }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Coach', a.coach)),
+      h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days (tick several to add them all at once)'), h('div', { class: 'row wrap', style: 'gap:12px' }, dayBoxes)),
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(120px,1fr))' }, field('From', a.from), field('To', a.to), field('Minutes each', a.len), field('Price ($)', a.price)),
       h('div', null, btn('Add hours', null, 'primary', { type: 'submit' }))));
 
@@ -2220,7 +2773,7 @@ async function viewScheduleSetup(main) {
       h('div', { class: 'form-grid' }, field('Business address (on invoices)', st.addr), field('How schools can pay (on invoices)', st.payInst, 'For example who to make checks payable to.')),
       field('Parents see test results', shareSel),
       field('Waiver (have a lawyer write this)', waiver, `Version ${settings.waiver_version}`),
-      h('div', null, btn('Save settings', null, 'primary', { type: 'submit' }))));
+      h('div', null, btn('Save settings', null, 'secondary', { type: 'submit' }))));
   // Owners: public sign-up, terms and privacy, automatic emails.
   const joinUrl = `${location.origin}/join`;
   const signupToggle = h('input', { type: 'checkbox', checked: settings.public_signup === 'on' });
@@ -2233,7 +2786,7 @@ async function viewScheduleSetup(main) {
     h('div', { class: 'row wrap', style: 'gap:12px' }, h('code', { style: 'font-size:15px' }, `${location.origin}/start`),
       btn('Copy link', async () => { await navigator.clipboard?.writeText(`${location.origin}/start`).catch(() => {}); toast('Inquiry form link copied.'); }, 'secondary'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: '/start', target: '_blank' }, 'Open')),
-    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_signup: signupToggle.checked ? 'on' : 'off' }); toast(signupToggle.checked ? 'Sign-up is open.' : 'Sign-up is closed.'); render(); }), 'primary')));
+    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_signup: signupToggle.checked ? 'on' : 'off' }); toast(signupToggle.checked ? 'Sign-up is open.' : 'Sign-up is closed.'); render(); }), 'secondary')));
   const terms = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); terms.value = settings.terms_text;
   const privacy = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); privacy.value = settings.privacy_text;
   const legalPanel = panel('Terms of service and privacy policy', { subtitle: 'Paste your lawyer\'s wording. Parents agree when they sign up; changing either asks every parent to accept again before their next booking or purchase. Blank lines start new paragraphs.' },
@@ -2245,25 +2798,25 @@ async function viewScheduleSetup(main) {
       const changed = terms.value !== settings.terms_text || privacy.value !== settings.privacy_text;
       if (changed && !confirm('Every parent will be asked to accept the new version before their next booking or purchase. Continue?')) return;
       busy(e.currentTarget, async () => { await patch('/v1/settings', { terms_text: terms.value, privacy_text: privacy.value }); toast('Saved.'); render(); });
-    }, 'primary')));
+    }, 'secondary')));
   const EMAILS = { welcome: 'Welcome, when a family signs up or you add them', receipts: 'Receipts for sales and membership payments', trial_ending: 'Reminder 3 days before a free trial ends', payment_failed: 'When a membership payment doesn\'t go through' };
   const off = new Set((settings.emails_off ?? '').split(',').filter(Boolean));
   const emailBoxes = Object.entries(EMAILS).map(([k, label]) => [k, h('input', { type: 'checkbox', checked: !off.has(k) }), label]);
   const emailPanel = panel('Automatic emails', { subtitle: 'Sent from your email address once email is connected. Every email also appears in the outbox under API & integrations.' },
     emailBoxes.map(([, cb, label]) => h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, cb, h('span', null, label))),
-    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { emails_off: emailBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'primary')));
+    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { emails_off: emailBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'secondary')));
   const TEXTS = { reminder: 'Reminder the day before a booked session', waitlist: 'When an athlete moves off the waitlist', canceled: 'When you cancel a session', payment_failed: 'When a membership payment doesn\'t go through' };
   const textsOff = new Set((settings.texts_off ?? '').split(',').filter(Boolean));
   const textBoxes = Object.entries(TEXTS).map(([k, label]) => [k, h('input', { type: 'checkbox', checked: !textsOff.has(k) }), label]);
   const textPanel = panel('Automatic texts', { subtitle: 'Only sent to parents who turn texts on in the parent portal. Every text also appears under API & integrations → Texts.' },
     textBoxes.map(([, cb, label]) => h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, cb, h('span', null, label))),
-    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { texts_off: textBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'primary')));
+    h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { texts_off: textBoxes.filter(([, cb]) => !cb.checked).map(([k]) => k) }); toast('Saved.'); }), 'secondary')));
   const digestOn = h('input', { type: 'checkbox', checked: settings.weekly_digest !== 'off' });
   const digestOut = h('pre', { class: 'small muted', style: 'white-space:pre-wrap;margin:0' });
   const digestPanel = panel('Weekly summary email', { subtitle: 'Every Monday at 7 am: money in, members, athletes to check on, open spots and three things worth doing this week. Sent to every owner.' },
     h('label', { class: 'row small', style: 'gap:8px;min-height:36px' }, digestOn, h('span', null, 'Send me the weekly summary')),
     h('div', { class: 'row wrap' },
-      btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { weekly_digest: digestOn.checked ? 'on' : 'off' }); toast('Saved.'); }), 'primary'),
+      btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { weekly_digest: digestOn.checked ? 'on' : 'off' }); toast('Saved.'); }), 'secondary'),
       btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
       btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
     digestOut);

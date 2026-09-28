@@ -136,8 +136,7 @@ CREATE TABLE IF NOT EXISTS exercises (
   name TEXT NOT NULL,
   video_url TEXT,
   instructions TEXT,
-  created_at TEXT NOT NULL,
-  category TEXT                                  -- version 40: Speed, Power, Lower body... (programs.js CATEGORIES)
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS programs (
   id TEXT PRIMARY KEY,
@@ -182,11 +181,7 @@ CREATE TABLE IF NOT EXISTS workout_logs (
   workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
   notes TEXT,
   completed_at TEXT NOT NULL,
-  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,   -- logged on the weight-room screen during this session (version 23)
-  rpe INTEGER,                                   -- version 40: how hard it felt, 1 to 10
-  started_at TEXT,                               -- version 40: first set logged in the app (for time taken)
-  request_id TEXT,                               -- version 40: the phone's id for this Finish, so a resend saves nothing twice
-  edited_at TEXT                                 -- version 40: reopened and saved again by the athlete
+  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL    -- logged on the weight-room screen during this session (version 23)
 );
 CREATE INDEX IF NOT EXISTS workout_logs_client ON workout_logs(client_id, completed_at);
 CREATE TABLE IF NOT EXISTS exercise_logs (
@@ -450,8 +445,6 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   created_at TEXT NOT NULL,
   workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL,   -- shown on the weight-room screen (version 23)
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,         -- who leads it: the class's coach, or a sub for this one session (version 31)
-  slot_date TEXT,                        -- version 39: the class day (YYYY-MM-DD) a class session stands for, even after it moves to another day
-  staff_note TEXT,                       -- version 39: a note for staff on this one session (never shown to families)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);
@@ -1192,41 +1185,3 @@ CREATE TABLE IF NOT EXISTS athlete_id_aliases (
 );
 CREATE INDEX IF NOT EXISTS team_attendance_client ON team_attendance(client_id);
 CREATE INDEX IF NOT EXISTS athlete_id_aliases_client ON athlete_id_aliases(client_id);
-
--- ---------- Version 39: Schedule and Today (batches B2 and B3) ----------
--- Follow-ups on Today: "Reached out" or "Mark reviewed" hides an item (an athlete to check on, a check-in that needs a
--- look) from everyone's Today until a date, and says who did it. key is unique per item: risk:<client id> or
--- flag:<client id>:<check-in date>.
-CREATE TABLE IF NOT EXISTS today_snoozes (
-  id TEXT PRIMARY KEY,
-  key TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL CHECK (kind IN ('risk','flag')),
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  until TEXT NOT NULL,                          -- YYYY-MM-DD in the business time zone: hidden through this day
-  action TEXT NOT NULL,                         -- reached_out, reviewed or noted
-  note TEXT,
-  created_by_id TEXT,
-  created_by TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS today_snoozes_until ON today_snoozes(until);
-
--- ---------- Version 40: programs builder and set-by-set workout logging ----------
--- Each set an athlete logs: weight (lb) and reps. workout_exercise_id has no foreign key, so the coach can change the
--- program later and the athlete's history stays; exercise_id and exercise_name keep "last time" and bests following the
--- exercise across programs.
-CREATE TABLE IF NOT EXISTS workout_sets (
-  id TEXT PRIMARY KEY,
-  workout_log_id TEXT NOT NULL REFERENCES workout_logs(id) ON DELETE CASCADE,
-  workout_exercise_id TEXT NOT NULL,
-  exercise_id TEXT,
-  exercise_name TEXT NOT NULL,
-  set_no INTEGER NOT NULL CHECK (set_no BETWEEN 1 AND 12),
-  weight REAL,
-  reps INTEGER,
-  created_at TEXT NOT NULL,
-  UNIQUE (workout_log_id, workout_exercise_id, set_no)
-);
-CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);
-CREATE UNIQUE INDEX IF NOT EXISTS workout_logs_request ON workout_logs(client_id, request_id) WHERE request_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS workout_logs_workout ON workout_logs(workout_id);

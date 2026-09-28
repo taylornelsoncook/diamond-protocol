@@ -59,10 +59,12 @@ export function exportFamily(ctx, familyId) {
       ...k,
       bookings: per(`SELECT s.name AS session, s.starts_at, b.status, b.coverage FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? ORDER BY s.starts_at`, k.id),
       memberships: per(`SELECT p.name AS plan, s.status, s.created_at, s.current_period_end FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.client_id = ?`, k.id),
-      invoices: per(`SELECT amount_cents, status, period_start, period_end, created_at FROM invoices WHERE client_id = ? ORDER BY created_at`, k.id),
+      invoices: per(`SELECT amount_cents, refunded_cents, status, period_start, period_end, paid_at, created_at FROM invoices WHERE client_id = ? ORDER BY created_at`, k.id),
+      refunds: per(`SELECT r.amount_cents, r.reason, r.created_at FROM invoice_refunds r JOIN invoices i ON i.id = r.invoice_id WHERE i.client_id = ? ORDER BY r.created_at`, k.id),
       purchases: per(`SELECT (SELECT GROUP_CONCAT(i.name, ', ') FROM sale_items i WHERE i.sale_id = s.id) AS items, s.amount_cents, s.method, s.status, s.created_at FROM sales s WHERE s.client_id = ? ORDER BY s.created_at`, k.id),
       test_results: per(`SELECT t.name AS test, r.metric, r.side, r.attempt, r.value, m.unit, r.timing, r.recorded_at FROM perf_results r JOIN perf_tests t ON t.id = r.test_id JOIN perf_metrics m ON m.test_id = r.test_id AND m.key = r.metric WHERE r.client_id = ? AND r.voided = 0 ORDER BY r.recorded_at`, k.id),
-      workouts: per(`SELECT w.title AS workout, l.completed_at, l.notes FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
+      workouts: per(`SELECT w.title AS workout, l.completed_at, l.rpe AS effort, l.notes FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
+      workout_sets: per(`SELECT l.completed_at, s.exercise_name AS exercise, s.set_no, s.weight, s.reps FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id WHERE l.client_id = ? ORDER BY l.completed_at, s.exercise_name, s.set_no`, k.id),
       daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
       quizzes: per(`SELECT l.title AS lesson, q.score, q.total, q.passed, q.created_at FROM quiz_attempts q JOIN lessons l ON l.id = q.lesson_id WHERE q.client_id = ? ORDER BY q.created_at`, k.id),
@@ -113,6 +115,9 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE sales SET receipt_email = NULL, receipt_token = NULL WHERE client_id = ?`, id);   // sales stay; where receipts went and their links go
+      // Membership payments and refunds stay as amounts; the free text typed about them (reasons, check numbers) goes.
+      ctx.db.run(`UPDATE invoices SET void_reason = NULL, paid_reference = NULL, last_error = NULL WHERE client_id = ?`, id);
+      ctx.db.run(`UPDATE invoice_refunds SET reason = NULL WHERE invoice_id IN (SELECT id FROM invoices WHERE client_id = ?)`, id);
       ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', archived_by = NULL, athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,
         medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
     }

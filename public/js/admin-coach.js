@@ -3,6 +3,7 @@
 // on the sign-in page and the page an emailed reset link opens. The server checks every rule; these screens only follow.
 import { h, fill, toast, date, ago, btn, busy, field, input, select, panel } from './ui.js';
 import { exerciseLibrary } from './programs-coach.js';
+import { importForm, importsList } from './dataimport-ui.js';
 
 let api, render, header, pulseTile, download, me, saveAnyway;
 export function initAdmin(deps) { ({ api, render, header, pulseTile, download, me, saveAnyway } = deps); }
@@ -473,13 +474,13 @@ function rolesTable() {
 // =====================================================================================================================
 // Settings. Everyone sees the exercise library; the other tabs are the owner's (the server refuses them to staff anyway).
 // =====================================================================================================================
-const SETTINGS_TABS = [['exercises', 'Exercise library'], ['staff', 'Staff'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
+const SETTINGS_TABS = [['exercises', 'Exercise library'], ['import', 'Data import'], ['staff', 'Staff'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
 export async function viewSettings(main) {
-  const owner = me()?.role === 'owner';
-  const list = owner ? SETTINGS_TABS : SETTINGS_TABS.slice(0, 1);
+  const owner = me()?.role === 'owner', coach = me()?.role === 'coach';
+  const list = owner ? SETTINGS_TABS : coach ? SETTINGS_TABS.slice(0, 2) : SETTINGS_TABS.slice(0, 1);   // coaches bring in data too; front desk sees the library
   let current = list.some(([k]) => k === queryOf().get('tab')) ? queryOf().get('tab') : 'exercises';
   const body = h('div', { id: 'tab-panel', role: 'tabpanel', class: 'stack', style: 'margin-top:16px' });
-  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), staff: staffTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
+  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), import: importTab, staff: staffTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
   let loading = 0;
   async function loadTab() {
     const n = ++loading;
@@ -487,9 +488,36 @@ export async function viewSettings(main) {
     try { await loaders[current](box); } catch (e) { fill(box, h('p', { class: 'dp-error' }, e.message)); }
     if (n === loading) fill(body, box);
   }
-  const t$ = owner ? tabs(list, current, (key) => { current = key; setQuery('settings', { tab: key === 'exercises' ? '' : key }); loadTab(); }) : null;
-  fill(main, header('Settings', owner ? 'Your exercise library, staff, security, backups, data requests and the activity report.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), t$?.bar, body);
+  const t$ = list.length > 1 ? tabs(list, current, (key) => { current = key; setQuery('settings', { tab: key === 'exercises' ? '' : key }); loadTab(); }) : null;
+  fill(main, header('Settings', owner ? 'Your exercise library, data import, staff, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and bringing in athletes\' data from wearables and spreadsheets.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), t$?.bar, body);
   await loadTab();
+}
+
+// Data import: bring an athlete's numbers in from a wearable or another app (a CSV, an Excel file, a Google Sheets link or
+// a PDF). The athlete is always picked here; nothing in the file is matched by name.
+async function importTab(box) {
+  const clients = (await get('/v1/clients')).data;
+  const pre = queryOf().get('client');
+  const find = input({ type: 'search', placeholder: 'Find an athlete by name or Athlete ID', 'aria-label': 'Find an athlete', autocomplete: 'off' });
+  const pick = select([['', 'Choose the athlete'], ...clients.map((c) => [c.id, `${c.name}${c.athlete_id ? ` · ${c.athlete_id}` : ''}`])], { value: clients.some((c) => c.id === pre) ? pre : '', 'aria-label': 'Athlete' });
+  find.addEventListener('input', () => {
+    const q = find.value.trim().toLowerCase();
+    for (const o of pick.options) if (o.value) o.hidden = !!q && !o.textContent.toLowerCase().includes(q);
+    const hits = [...pick.options].filter((o) => o.value && !o.hidden);
+    if (hits.length === 1) pick.value = hits[0].value;
+  });
+  const recentBox = h('div');
+  const loadRecent = async () => fill(recentBox, importsList((await get('/v1/data-imports')).data, { showAthlete: true, undo: async (id) => { const r = await post(`/v1/data-imports/${id}/undo`); toast(`Undone: ${plural(r.removed_values, 'value')} and ${plural(r.removed_workouts, 'workout')} removed.`); loadRecent(); } }));
+  const form = importForm({
+    athlete: () => { const c = clients.find((x) => x.id === pick.value); return c ? { id: c.id, name: c.name } : null; },
+    preview: (b) => post('/v1/data-imports/preview', b),
+    commit: (b) => post('/v1/data-imports', b),
+    onSaved: () => loadRecent()
+  });
+  fill(box, panel('Bring in data', { subtitle: 'An athlete\'s numbers from a wearable or another app: WHOOP exports are recognized; any other table you match up once. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },
+    h('div', { class: 'form-grid' }, field('Athlete', h('div', { class: 'stack-tight' }, find, pick))), form),
+    panel('Recently brought in', { subtitle: 'Undo removes what that import saved.' }, recentBox));
+  await loadRecent();
 }
 
 async function staffTab(box) {

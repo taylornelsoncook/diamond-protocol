@@ -108,7 +108,8 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         throw new HttpError(known ? 405 : 404, known ? 'method_not_allowed' : 'not_found', known ? 'That method is not allowed here.' : 'No such endpoint.');
       }
       const r = { params: url.pathname.match(route.regex).groups ?? {}, query: Object.fromEntries(url.searchParams), body: {}, baseUrl };
-      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview', '/v1/leads/import'].includes(url.pathname) ? 30_000_000 : 1_000_000);
+      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview', '/v1/leads/import', '/v1/data-imports/preview', '/v1/data-imports'].includes(url.pathname)
+        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? 30_000_000 : 1_000_000);   // files come base64-encoded
       const ip = clientIp(req);
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
@@ -130,6 +131,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/shop') rateLimit(`shop:${ip}`, 120, 15 * 60000);
       if (route.path.startsWith('/portal/api/public/learn')) rateLimit(`learn:${ip}`, 120, 15 * 60000);
+      if (/data-imports(\/preview)?$/.test(route.path) && req.method === 'POST') rateLimit(`dataimport:${ip}`, 60, 15 * 60000);   // big files, and Google Sheets links we fetch
       if (route.path.startsWith('/portal/api/public/spot/')) rateLimit(`spot:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/report') rateLimit(`report:${ip}`, 60, 15 * 60000);
       rateLimit(`all:${ip}`, 1200, 60000);

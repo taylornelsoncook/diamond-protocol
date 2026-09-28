@@ -3,6 +3,7 @@
 // actions post back through the same api (athlete app: /app/api/…, parent: /portal/api/athletes/:id/…).
 import { h, fill, toast, busy, btn, ago, videoEmbed } from './ui.js';
 import { sparkline, fmtResult } from './charts.js';
+import { dataSummary } from './dataimport-ui.js';
 
 export const ENGAGE_TABS = [['accountability', 'Accountability'], ['performance', 'Performance'], ['education', 'Education']];
 
@@ -271,11 +272,18 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
           h('td', { class: better == null ? 'muted' : better ? 'good-text' : 'muted' }, diff == null ? 'First' : diff === 0 ? 'Same' : fmtResult(diff, t.unit, t.decimals, { delta: true })));
       })));
   }
+  // The athlete's recovery and sleep from a wearable (parents see it on their Progress tab).
+  function outsideBox() {
+    if (parent || !api.get) return null;
+    const box = h('div');
+    api.get('outside-data').then((d) => { if (d?.has_data) fill(box, dataSummary(d, { title: 'Your recovery and sleep' })); }).catch(() => {});
+    return box;
+  }
   function renderPerformance() {
     const p = data.performance;
     const tests = p.tests;
     const ranks = p.rankings?.length ? p.rankings : null;
-    fill(el,
+    fill(el, outsideBox(),
       tests.length ? h('div', { class: 'eg-summary' },
         h('div', null, h('b', null, tests.length), h('span', null, tests.length === 1 ? 'test' : 'tests')),
         h('div', null, h('b', { class: p.prs.length ? 'good-text' : '' }, p.prs.length), h('span', null, `new ${p.prs.length === 1 ? 'PR' : 'PRs'}`)),

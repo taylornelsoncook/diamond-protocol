@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 46;   // 44 Education, 45 the CRM, 46 the owner's improvements
+const SCHEMA_VERSION = 47;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -86,7 +86,8 @@ const ADDED_TABLES = {
   // ---- Version 44 (batch B11): Education, coach side: lessons opened, reading reminders sent ----
   44: ['lesson_views', 'lesson_reminders'],
   // ---- Version 45 (batch B15, CRM): stage history, contact log, follow-up tasks, message templates ----
-  45: ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates']
+  45: ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates'],
+  47: ['data_imports', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced']                  // outside data: wearables and spreadsheets brought in by hand
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',

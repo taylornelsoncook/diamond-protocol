@@ -43,13 +43,19 @@ function unzip(buf) {
   const count = buf.readUInt16LE(eocd + 10);
   let p = buf.readUInt32LE(eocd + 16);
   const out = {};
+  let left = 200 * 1024 * 1024;
   for (let i = 0; i < count; i++) {
     if (buf.readUInt32LE(p) !== 0x02014b50) break;
     const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20), nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), commentLen = buf.readUInt16LE(p + 32), local = buf.readUInt32LE(p + 42);
     const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
     const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
     const data = buf.subarray(start, start + size);
-    if (!name.endsWith('/')) out[name] = method === 8 ? inflateRawSync(data) : Buffer.from(data);
+    if (!name.endsWith('/')) {
+      // A limit on what a file may unpack to, so a small "zip bomb" can't run the server out of memory.
+      try { out[name] = method === 8 ? inflateRawSync(data, { maxOutputLength: Math.max(1, left) }) : Buffer.from(data); }
+      catch (e) { if (e?.code === 'ERR_BUFFER_TOO_LARGE' || e instanceof RangeError) throw new Error('That Excel file is too large to read. Save a smaller copy or export a CSV file.'); throw e; }
+      left -= out[name].length;
+    }
     p += 46 + nameLen + extraLen + commentLen;
   }
   return out;

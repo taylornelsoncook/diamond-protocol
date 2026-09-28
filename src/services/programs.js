@@ -301,7 +301,7 @@ export function addWorkoutExercise(ctx, workoutId, body) {
 // (back squat, bench press or power clean 1RM). The weight updates on its own when a new max is recorded, rounded
 // to the nearest 5 lb. Athletes only see weights from results their family can see (the share rule).
 export const LOAD_TESTS = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_clean_1rm: 'power clean' };
-function loadInput(body) {
+export function loadInput(body) {
   if (!body.load_test) return { test: null, pct: null };
   const test = v.oneOf(body.load_test, 'load_test', Object.keys(LOAD_TESTS));
   const pct = Number(body.load_pct);

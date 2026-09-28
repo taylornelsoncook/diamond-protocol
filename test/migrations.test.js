@@ -1,4 +1,4 @@
-// Databases from earlier versions (schema 30, 31, 32 and 33) open with this version: new columns and tables are
+// Databases from earlier versions (schema 30, 31, 32, 33 and 34) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,7 +39,7 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.ok(cols('clients').includes('archived_at') && cols('clients').includes('archived_by'));
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(listClients(ctx)[0].name, 'Ava Lopez');
@@ -78,7 +78,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
       const row = openSpots(ctx).data.find((x) => x.id === 'cls_1');
@@ -90,7 +90,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 32 (commit 7079ba9) to 34 (B10's version 33 part): coach-written protocols, edits to built-in tests that survive the library refresh,
+// Version 32 (commit 7079ba9) to 35 (B10's version 33 part): coach-written protocols, edits to built-in tests that survive the library refresh,
 // possible ranges, presets (the standard ones added once) and report share links.
 test('a version 32 database upgrades to the test library changes, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -111,7 +111,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
       assert.ok(cols('perf_metrics').includes('min_value') && cols('perf_metrics').includes('max_value'));
       assert.ok(cols('test_presets').includes('test_keys'));
       assert.ok(cols('report_links').includes('token_hash'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const ctx = { db, now: () => new Date().toISOString() };
       syncLibrary(ctx);
       seedPresets(ctx);
@@ -132,7 +132,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 32 (commit 09e32ca) to 34 (B9's version 34 part): testing days remember when families were emailed, and uploads can be undone.
+// Version 32 (commit 09e32ca) to 35 (B9's version 34 part): testing days remember when families were emailed, and uploads can be undone.
 // Uploads saved before the upgrade can't be undone (nothing recorded what they wrote), so they aren't offered.
 test('a version 32 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -151,7 +151,7 @@ test('a version 32 database upgrades to undoable uploads and emailed-families tr
       assert.ok(cols('perf_sessions').includes('notified_at'), `round ${round}`);
       for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
       assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
-      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
       assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
@@ -162,7 +162,7 @@ test('a version 32 database upgrades to undoable uploads and emailed-families tr
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 33 (the test library, B10) to 34: the same testing-day and undo changes on a database that already has version 33.
+// Version 33 (the test library, B10) to 35: the same testing-day and undo changes on a database that already has version 33.
 test('a version 33 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
@@ -185,7 +185,7 @@ test('a version 33 database upgrades to undoable uploads and emailed-families tr
       assert.equal(db.get(`SELECT provider FROM results_queue WHERE id = 'q_1'`).provider, 'swift', 'results that waited under "Swift" join the lower-case device links');
       for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
       assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
-      assert.equal(db.get('PRAGMA user_version').user_version, 34);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
       assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
@@ -195,6 +195,64 @@ test('a version 33 database upgrades to undoable uploads and emailed-families tr
       assert.equal(db.get(`SELECT test_keys FROM test_presets WHERE id = 'tpr_1'`).test_keys, '["broad_jump"]');
       assert.deepEqual(db.get(`SELECT min_value, max_value FROM perf_metrics WHERE test_id = 'pt_1'`), { min_value: 5, max_value: 600 });
       assert.equal(db.get(`SELECT protocol FROM perf_tests WHERE id = 'pt_1'`).protocol, 'Back flat on the wall');
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 35 (batch B5, point of sale): discounts, request ids and receipts on sales, and refunds with their own date.
+test('an older database gains the point-of-sale columns and refund log, and old sales keep their amounts', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v32.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 32');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES ('loc_1', 'Facility', 'facility', 'US', 1, '${now}')`);
+    old.exec(`INSERT INTO sales (id, location_id, method, status, amount_cents, refunded_cents, created_at, completed_at) VALUES ('sale_1', 'loc_1', 'cash', 'partially_refunded', 3000, 500, '${now}', '${now}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = db.all('PRAGMA table_info(sales)').map((c) => c.name);
+      for (const c of ['discount_cents', 'discount_reason', 'request_id', 'receipt_opt', 'receipt_email', 'receipt_sent_at', 'receipt_token']) assert.ok(cols.includes(c), `${c}, round ${round}`);
+      assert.ok(db.all('PRAGMA table_info(sale_refunds)').map((c) => c.name).includes('kind'));
+      const s = db.get(`SELECT amount_cents, refunded_cents, discount_cents FROM sales WHERE id = 'sale_1'`);
+      assert.deepEqual([s.amount_cents, s.refunded_cents, s.discount_cents], [3000, 500, 0]);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 34 (commit e32924d, the Testing batch) to 35 (point of sale): sales gain discounts, request ids and receipts,
+// refunds get their own log, and what version 34 wrote (undoable uploads, families emailed) is kept.
+test('a version 34 database upgrades to the point-of-sale changes, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v34.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 34');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES ('loc_1', 'Facility', 'facility', 'US', 1, '${now}')`);
+    old.exec(`INSERT INTO sales (id, location_id, method, status, amount_cents, refunded_cents, created_at, completed_at) VALUES ('sale_1', 'loc_1', 'cash', 'succeeded', 4500, 0, '${now}', '${now}')`);
+    old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, notified_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}', '${now}')`);
+    old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, kind, session_id, created_at) VALUES ('imp_1', 'upload', 'combine.xlsx', 1, 1, 'upload', 'tsn_1', '${now}')`);
+    old.exec(`INSERT INTO import_batch_items (batch_id, result_id, value) VALUES ('imp_1', 'res_1', 98)`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      for (const c of ['discount_cents', 'discount_reason', 'request_id', 'receipt_opt', 'receipt_email', 'receipt_sent_at', 'receipt_token']) assert.ok(cols('sales').includes(c), `${c}, round ${round}`);
+      assert.ok(cols('sale_refunds').includes('kind'));
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
+      const s = db.get(`SELECT amount_cents, discount_cents, receipt_token FROM sales WHERE id = 'sale_1'`);
+      assert.deepEqual([s.amount_cents, s.discount_cents, s.receipt_token], [4500, 0, null]);
+      const ctx = { db, now: () => new Date().toISOString() };
+      assert.equal(getSession(ctx, 'tsn_1').notified_at, now, 'families already emailed stay marked');
+      const ups = recentUploads(ctx);
+      assert.deepEqual([ups.length, ups[0].id, ups[0].session_name], [1, 'imp_1', 'Combine'], 'an upload saved on version 34 can still be undone');
+      assert.equal(db.get(`SELECT COUNT(*) AS n FROM import_batch_items WHERE batch_id = 'imp_1'`).n, 1);
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 34;
+const SCHEMA_VERSION = 35;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -63,7 +63,9 @@ const ADDED_TABLES = {
   // ---- version 33 (batch B10): test presets and report share links
   33: ['test_presets', 'report_links'],
   // ---- Version 34: testing days, undo an upload (B9) ----
-  34: ['import_batch_items']
+  34: ['import_batch_items'],
+  // ---- version 35 (batch B5, point of sale): refunds with their own date, for the day's takings
+  35: ['sale_refunds']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -90,7 +92,9 @@ const ADDED_COLUMNS = {
   // ---- Version 34: testing days (families emailed), undo an upload (B9) ----
   perf_sessions: ['shared_at TEXT', 'parent_note TEXT', 'notified_at TEXT'],                  // shared: version 10; notified_at: version 34
   import_batches: ['kind TEXT', 'source_label TEXT', 'result_source TEXT', 'session_id TEXT', 'replaced INTEGER NOT NULL DEFAULT 0', 'unchanged INTEGER NOT NULL DEFAULT 0',
-    'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT']
+    'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT'],
+  // ---- version 35 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
+  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT']
 };
 
 function migrate(raw, schema) {

@@ -100,6 +100,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
       if (route.path === '/portal/api/public/inquiry') { rateLimit(`inquiry:${ip}`, 10, 60 * 60000); rateLimit('inquiry:all', 60, 10 * 60000); }   // per address, and overall
       if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
+      if (route.path.startsWith('/receipt-api/')) rateLimit(`receipt:${ip}`, 60, 15 * 60000);
       if (route.path.startsWith('/here-api/')) rateLimit(`here:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
       if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
@@ -273,7 +274,7 @@ async function readJson(req, limit = 1_000_000) {
 }
 
 async function serveStatic(res, pathname) {
-  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : pathname.slice(1));
+  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : /^\/receipt\/[\w-]+$/.test(pathname) ? 'receipt.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });
   try {

@@ -20,6 +20,8 @@ import * as engage from './services/engage.js';
 import * as inventory from './services/inventory.js';
 import * as shop from './services/shop.js';
 import * as leads from './services/leads.js';
+import * as contact from './services/contact.js';
+import * as tasks from './services/tasks.js';
 import * as profiles from './services/profiles.js';
 import * as portal from './services/portal.js';
 import { addDays, newId } from './util.js';
@@ -343,12 +345,43 @@ for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], 
   });
 }
 
-// Two families who asked about training: one the owner gave to Riley (coaches see only the leads given to them), one not.
+// Families who asked about training (the CRM): one the owner gave to Riley (coaches see only the leads given to them),
+// the rest worked by the owner and the front desk, across the pipeline: new, contacted (one stale), an evaluation, a
+// trial, a member and a lost lead, with calls, notes, tasks on Today and a text consent.
 {
   const quiet = { ...ctx, publicUrl: '' };
-  const given = await leads.addLead(quiet, { parent_name: 'Tanya Brooks', email: 'tanya.brooks@example.com', athlete_name: 'Jalen Brooks', athlete_age: 13, sport: 'Football', source: 'event', follow_up: false }, { name: 'Sample data' });
+  const ownerU = { ...headCoach, role: 'owner' }, deskU = { ...desk, role: 'front_desk' }, rileyU = { ...riley, role: 'coach' };
+  const back = (id, days, stage) => {             // set a lead's dates back, as if it came in days ago
+    const at = new Date(Date.now() - days * 86400000).toISOString();
+    ctx.db.run('UPDATE leads SET created_at = ?, stage_changed_at = ?, last_activity_at = ? WHERE id = ?', at, at, at, id);
+    ctx.db.run('UPDATE lead_stage_history SET at = ? WHERE lead_id = ?', at, id);
+    if (stage) ctx.db.run('UPDATE lead_stage_history SET at = ? WHERE lead_id = ? AND to_stage = ?', new Date(Date.now() - (days - 1) * 86400000).toISOString(), id, stage);
+  };
+  const given = await leads.addLead(quiet, { parent_name: 'Tanya Brooks', email: 'tanya.brooks@example.com', phone: '(512) 555-0147', athlete_name: 'Jalen Brooks', athlete_age: 13, sport: 'Football', source: 'event', follow_up: false, message: 'Met you at the spring showcase. Jalen wants to get faster for fall.' }, ownerU);
   ctx.db.run('UPDATE leads SET coach_id = ? WHERE id = ?', riley.id, given.id);
-  await leads.addLead(quiet, { parent_name: 'Omar Haddad', phone: '(512) 555-0142', athlete_name: 'Sami Haddad', athlete_age: 11, sport: 'Soccer', source: 'phone', follow_up: false }, { name: 'Sample data' });
+  back(given.id, 3);
+  await leads.updateLead(quiet, given.id, { status: 'contacted' }, { user: rileyU });
+  contact.logLeadActivity(quiet, given.id, { kind: 'call', outcome: 'voicemail', body: 'Left a message about Saturday speed class.' }, { user: rileyU });
+  tasks.createTask(quiet, { lead_id: given.id, title: 'Call Tanya back about the evaluation', due_date: localDate(new Date().toISOString(), 'America/Chicago') }, { user: rileyU });
+
+  const omar = await leads.addLead(quiet, { parent_name: 'Omar Haddad', phone: '(512) 555-0142', athlete_name: 'Sami Haddad', athlete_age: 11, sport: 'Soccer', source: 'phone', follow_up: false, texts_ok: true, texts_ok_source: 'Said yes on the phone' }, deskU);
+  back(omar.id, 1);
+  tasks.createTask(quiet, { lead_id: omar.id, title: 'Text Omar the Book now link', due_date: localDate(new Date().toISOString(), 'America/Chicago') }, { user: deskU });
+
+  const nora = await leads.addLead(quiet, { parent_name: 'Nora Castillo', email: 'nora.castillo@example.com', athlete_name: 'Diego Castillo', athlete_age: 15, sport: 'Baseball', source: 'referral', follow_up: false, notes: 'Referred by the Lopez family. Wants pitching work.' }, deskU);
+  await leads.updateLead(quiet, nora.id, { status: 'contacted' }, { user: deskU });
+  tasks.createTask(quiet, { lead_id: nora.id, title: 'Check in with Nora about pitching', due_date: addDaysToDate(localDate(new Date().toISOString(), 'America/Chicago'), -2), assignee_id: headCoach.id }, { user: deskU });
+  back(nora.id, 12, 'contacted');                  // 11 days in Contacted with nothing since: stale
+
+  const grace = await leads.addLead(quiet, { parent_name: 'Grace Kim', email: 'grace.kim@example.com', athlete_name: 'Hana Kim', athlete_age: 12, sport: 'Softball', source: 'social', follow_up: false }, ownerU);
+  back(grace.id, 20);
+  await leads.updateLead(quiet, grace.id, { status: 'lost', lost_reason: 'schedule', lost_note: 'Weekends only this season.' }, { user: ownerU });
+
+  const ben = await leads.addLead(quiet, { parent_name: 'Ben Walker', email: 'ben.walker@example.com', athlete_name: 'Eli Walker', athlete_age: 10, sport: 'Baseball', source: 'walk_in', follow_up: false }, deskU);
+  back(ben.id, 6);
+  await leads.updateLead(quiet, ben.id, { status: 'contacted' }, { user: deskU });
+  contact.logLeadActivity(quiet, ben.id, { kind: 'call', outcome: 'reached', body: 'Eli can do Tuesdays. Booking an evaluation.' }, { user: deskU });
+  await leads.updateLead(quiet, ben.id, { status: 'evaluation' }, { user: deskU });
 }
 // Parent portal (batches B12 and B13). The Jensen family: two kids, card (expiring next month) and waiver on file, booked
 // into classes, with a pack bought. Luke Jensen was already on the Westlake roster (team only, no birthday on file), so the

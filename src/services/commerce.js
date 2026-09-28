@@ -310,12 +310,38 @@ export { payerById };
 // sale back instead of charging again. The screen makes a new one for each new sale.
 export async function createSale(ctx, body, actor, opts = {}) {
   const key = v.str(body.request_id, 'request_id', { max: 64, optional: true });
-  if (!key) return createSaleNow(ctx, body, actor, opts, null);
+  if (!key) return saleForBooking(ctx, body, () => createSaleNow(ctx, body, actor, opts, null));
   return withLock(`sale-request:${key}`, async () => {
     const prev = ctx.db.get('SELECT id FROM sales WHERE request_id = ? AND COALESCE(created_by, \'\') = ?', key, actor ?? '');
     if (prev) return { ...getSale(ctx, prev.id, { withSecret: true, userId: opts.userId }), repeated: true };
-    return createSaleNow(ctx, body, actor, opts, key);
+    return saleForBooking(ctx, body, () => createSaleNow(ctx, body, actor, opts, key));
   });
+}
+// One sale for a booking at a time: two presses of Collect (or two staff at once) can't both charge for the same session.
+const saleForBooking = (ctx, body, fn) => (body.booking_id ? withLock(`booking-pay:${body.booking_id}`, fn) : fn());
+
+// What an unpaid booking costs: the camp registration for a registered camp day, otherwise the session's drop-in price.
+export function bookingPrice(ctx, bookingId) {
+  const b = ctx.db.get(`SELECT b.client_id, s.series_id, s.drop_in_cents, cs.registration_cents FROM bookings b JOIN class_sessions s ON s.id = b.session_id LEFT JOIN class_series cs ON cs.id = s.series_id WHERE b.id = ?`, bookingId);
+  if (!b) return null;
+  const reg = b.series_id && ctx.db.get(`SELECT id FROM enrollments WHERE series_id = ? AND client_id = ? AND kind = 'registration' AND status = 'active'`, b.series_id, b.client_id);
+  return { registration: !!reg, cents: (reg ? b.registration_cents : b.drop_in_cents) ?? 0 };
+}
+// A sale can pay for one unpaid booking (booking_id): the roster's Collect, or any sale at the counter. The booking must
+// be unpaid and not canceled, booked for the sale's client, and the sale must cover what it costs. (Before version 38 a
+// note 'booking:<id>' did this with no checks, so anyone could mark any booking paid by typing it in a note.)
+function bookingToCollect(ctx, bookingId, client, amount) {
+  const b = ctx.db.get('SELECT * FROM bookings WHERE id = ?', bookingId);
+  if (!b) throw notFound('Booking');
+  if (!client || b.client_id !== client.id) throw conflict('That booking is for a different client. Choose the client the session is booked for.');
+  if (['canceled', 'late_canceled'].includes(b.status)) throw conflict('That booking was canceled, so there\'s nothing to collect for it.');
+  if (b.status === 'waitlisted') throw conflict('That athlete is on the waitlist. Collect once they have a spot.');
+  if (b.coverage !== 'unpaid') throw conflict('That booking is already paid for.');
+  const price = bookingPrice(ctx, bookingId).cents;
+  if (!price) throw conflict('That session has no price set, so there\'s nothing to collect for it. Sell it as a custom item instead.');
+  if (amount < price) throw conflict(`That session costs ${money(price)}. Charge at least that to mark it paid, or take the booking off the sale.`);
+  if (ctx.db.get(`SELECT id FROM sales WHERE booking_id = ? AND status = 'pending'`, bookingId)) throw conflict('A payment for that booking is already waiting for the card. Finish or cancel it first.');
+  return b;
 }
 async function createSaleNow(ctx, body, actor, { online = false, counter = false, role, userId } = {}, requestId) {
   const method = v.oneOf(body.method, 'method', METHODS);
@@ -338,6 +364,7 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   if (subtotal <= 0) throw badRequest('The sale total must be more than $0.');
   const discount = parseDiscount(ctx, body.discount, subtotal, role);
   const amount = subtotal - discount.cents;
+  const booking = body.booking_id ? bookingToCollect(ctx, v.str(body.booking_id, 'booking_id', { max: 64 }), client, amount) : null;
 
   const wantsSave = !!body.save_card && ['tap_to_pay', 'reader'].includes(method);
   if (wantsSave && !client) throw badRequest('Choose a client to save their card.');
@@ -358,10 +385,10 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
 
   const id = newId('sale');
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token, booking_id)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, client?.id, loc.id, method, amount, wantsSave, reader?.id, v.str(body.note, 'note', { max: 200, optional: true }), actor ?? null, ctx.now(),
-      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18));
+      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18), booking?.id ?? null);
     for (const l of lines) ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('si'), id, l.product_id, l.variant_id ?? null, l.name, l.unit, l.qty, l.sessions);
   });
   const description = `${lines.map((l) => l.name).join(', ')}${discount.cents ? ` less ${money(discount.cents)} discount` : ''}`.slice(0, 200);
@@ -403,9 +430,10 @@ function failSale(ctx, id, reason) {
 }
 
 // A sale taken for an unpaid booking (at the session) marks it paid; for a camp, every day of the registration.
+// The booking was checked when the sale was made; if it got paid some other way meanwhile, nothing changes here.
 function settleBooking(ctx, bookingId, saleId) {
   const b = ctx.db.get(`SELECT b.*, s.series_id FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.id = ?`, bookingId);
-  if (!b || b.coverage !== 'unpaid') return;
+  if (!b || b.coverage !== 'unpaid' || ['canceled', 'late_canceled'].includes(b.status)) return;
   const reg = b.series_id && ctx.db.get(`SELECT id FROM enrollments WHERE series_id = ? AND client_id = ? AND kind = 'registration' AND status = 'active'`, b.series_id, b.client_id);
   if (reg) {
     ctx.db.run(`UPDATE enrollments SET sale_id = ? WHERE id = ?`, saleId, reg.id);
@@ -439,7 +467,7 @@ function completeSale(ctx, id, { card, savedCard }) {
       ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, sale_id, created_at) VALUES (?, ?, ?, ?, 'purchase', ?, ?)`, newId('cr'), s.client_id, type, byType[type], id, ctx.now());
     }
     if (s.client_id && s.save_card && savedCard) saveCard(ctx, payerFor(ctx, s.client_id), { paymentMethod: savedCard, brand: card?.brand, last4: card?.last4 });
-    if (s.note?.startsWith('booking:')) settleBooking(ctx, s.note.slice(8), id);
+    if (s.booking_id) settleBooking(ctx, s.booking_id, id);
     stockForSale(ctx, id, -1, 'sale');
     emit(ctx, 'sale.completed', {
       sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', location_id: s.location_id, location_name: s.location_name,
@@ -459,13 +487,13 @@ export function onlineLocation(ctx) {
   return id;
 }
 // A payment that already happened online (a pay link): record it as a sale so it shows in sales, reports and receipts,
-// adds any sessions from a pack, and settles an unpaid booking (note 'booking:<id>').
-export function recordOnlineSale(ctx, { clientId, productId, description, amountCents, note, paymentRef, actor }) {
+// adds any sessions from a pack, and settles the unpaid booking the link was for (bookingId; the link checked it).
+export function recordOnlineSale(ctx, { clientId, productId, description, amountCents, note, paymentRef, actor, bookingId }) {
   const id = newId('sale');
   const p = productId ? ctx.db.get('SELECT * FROM products WHERE id = ?', productId) : null;
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_by, created_at) VALUES (?, ?, ?, 'online', 'pending', ?, ?, ?, ?, ?)`,
-      id, clientId ?? null, onlineLocation(ctx), amountCents, paymentRef ?? null, note ?? null, actor ?? 'Pay link', ctx.now());
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_by, created_at, booking_id) VALUES (?, ?, ?, 'online', 'pending', ?, ?, ?, ?, ?, ?)`,
+      id, clientId ?? null, onlineLocation(ctx), amountCents, paymentRef ?? null, note ?? null, actor ?? 'Pay link', ctx.now(), bookingId ?? null);
     const sizes = p ? activeVariants(ctx, p.id) : [];
     ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', newId('si'), id, p?.id ?? null, sizes.length === 1 ? sizes[0].id : null, description.slice(0, 80), amountCents, p?.sessions ?? 0);
   });

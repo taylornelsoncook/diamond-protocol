@@ -404,7 +404,10 @@ export async function payBooking(ctx, bookingId, { method, reader_id }, actor) {
   const amount = reg ? s.registration_cents : s.drop_in_cents;
   if (!amount) throw conflict('This session has no price set. Take payment in Point of sale instead.');
   // The booking is marked paid when the sale completes: now for card on file and cash, after the tap for Tap to Pay and readers.
-  const sale = await commerce.createSale(ctx, { location_id: s.location_id, method, reader_id, client_id: b.client_id, note: `booking:${bookingId}`, custom: { description: `${s.name}${reg ? ' (registration)' : ''}`, amount_cents: amount } }, actor);
+  // Starting over after a tap that was never finished: the old payment is canceled first (if it went through after all,
+  // the booking is paid and this one is refused).
+  for (const p of ctx.db.all(`SELECT id FROM sales WHERE booking_id = ? AND status = 'pending'`, bookingId)) await commerce.cancelSale(ctx, p.id);
+  const sale = await commerce.createSale(ctx, { location_id: s.location_id, method, reader_id, client_id: b.client_id, booking_id: bookingId, custom: { description: `${s.name}${reg ? ' (registration)' : ''}`, amount_cents: amount } }, actor);
   return { sale, booking: bookingDetail(ctx, bookingId) };
 }
 // ---------- Enrollment (recurring group spots) and camp registration ----------

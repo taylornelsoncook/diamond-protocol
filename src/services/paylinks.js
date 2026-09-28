@@ -217,7 +217,7 @@ async function completeNow(ctx, id, ref) {
         ctx.db.run(`UPDATE pay_links SET status = 'settled', paid_at = NULL WHERE id = ?`, l.id);
         return refundExtra(ctx, l, ref, 'after it had already been paid');
       }
-    } else saleId = recordOnlineSale(ctx, { clientId: l.client_id, productId: l.product_id, description: l.kind === 'custom' ? l.description : l.description.replace(/ for [^,]+/, ''), amountCents: l.amount_cents, note: l.booking_id ? `booking:${l.booking_id}` : `Pay link ${l.id}`, paymentRef: ref });
+    } else saleId = recordOnlineSale(ctx, { clientId: l.client_id, productId: l.product_id, description: l.kind === 'custom' ? l.description : l.description.replace(/ for [^,]+/, ''), amountCents: l.amount_cents, note: `Pay link ${l.id}`, bookingId: l.booking_id ?? null, paymentRef: ref });
   } catch (e) {
     // Recording failed: open the link again so Stripe's retry of the webhook (or the return page) records it next time.
     ctx.db.run(`UPDATE pay_links SET status = 'open', paid_at = NULL, payment_ref = NULL WHERE id = ? AND payment_ref = ?`, l.id, ref);

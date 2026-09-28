@@ -106,30 +106,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   next_retry_at TEXT,
   payment_ref TEXT,
   paid_at TEXT,
-  created_at TEXT NOT NULL,
-  -- version 38 (batch B6, billing): what has been refunded (each refund in invoice_refunds), the last card reminder,
-  -- a void with its reason, and how a payment recorded by hand arrived (NULL = charged or paid online by card).
-  refunded_cents INTEGER NOT NULL DEFAULT 0,
-  reminded_at TEXT,
-  voided_at TEXT,
-  void_reason TEXT,
-  paid_method TEXT,
-  paid_reference TEXT
-);
-CREATE INDEX IF NOT EXISTS invoices_client ON invoices(client_id);
--- Version 38: each refund of a membership payment, dated when the money went back. source 'stripe' is a refund made in
--- the Stripe dashboard (the webhook brings the invoice up to Stripe's total).
-CREATE TABLE IF NOT EXISTS invoice_refunds (
-  id TEXT PRIMARY KEY,
-  invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-  reason TEXT,
-  source TEXT NOT NULL DEFAULT 'app' CHECK (source IN ('app','stripe')),
-  created_by TEXT,
   created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS invoice_refunds_invoice ON invoice_refunds(invoice_id);
-CREATE INDEX IF NOT EXISTS invoice_refunds_created ON invoice_refunds(created_at);
+CREATE INDEX IF NOT EXISTS invoices_client ON invoices(client_id);
 CREATE INDEX IF NOT EXISTS invoices_retry ON invoices(status, next_retry_at);
 CREATE TABLE IF NOT EXISTS exercises (
   id TEXT PRIMARY KEY,
@@ -354,10 +333,7 @@ CREATE TABLE IF NOT EXISTS sales (
   receipt_opt INTEGER,
   receipt_email TEXT,
   receipt_sent_at TEXT,
-  receipt_token TEXT,
-  -- version 38 (batch B6): the unpaid booking this sale pays for, checked when the sale is made (before, a note
-  -- 'booking:<id>' did this, so anyone could mark any booking paid by typing it in a note).
-  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL
+  receipt_token TEXT
 );
 CREATE INDEX IF NOT EXISTS sales_created ON sales(created_at);
 CREATE INDEX IF NOT EXISTS sales_ref ON sales(payment_ref);

@@ -373,8 +373,10 @@ export function getLead(ctx, id, { user, sync = false, details = false } = {}) {
       .map((h) => ({ ...h, auto: !!h.auto, from_label: STAGE_LABELS[h.from_stage] ?? null, to_label: STAGE_LABELS[h.to_stage] ?? h.to_stage })),
     duplicates: (() => {                       // its own family and client (once converted) aren't duplicates
       const d = findDuplicates(ctx, { email: l.email, phone: l.phone, exceptId: l.id, user });
-      d.families = d.families.filter((f) => f.id !== l.family_id);
-      d.clients = d.clients.filter((c) => c.id !== l.client_id);
+      // A coach can't search families and clients for duplicates (security.js), so their lead's page doesn't either:
+      // otherwise typing any email or phone on their lead would look it up.
+      d.families = isCoach(user) ? [] : d.families.filter((f) => f.id !== l.family_id);
+      d.clients = isCoach(user) ? [] : d.clients.filter((c) => c.id !== l.client_id);
       d.count = d.leads.length + d.families.length + d.clients.length;
       return d;
     })()

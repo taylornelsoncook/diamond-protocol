@@ -463,3 +463,28 @@ test('a lead\'s phone typed any way is stored one way, and the duplicate check m
   const d = (await owner('GET', '/v1/leads/duplicates?phone=512.555.0199')).body;
   assert.equal(d.leads[0].id, id);
 });
+
+test('review fixes: a coach\'s lead page doesn\'t look up families or clients; a bad report date is a 400; a group text\'s link never adds an empty opt-out', async () => {
+  // A coach can't search families and clients for duplicates, even by typing someone's phone on their own lead.
+  const fam = await owner('POST', '/v1/clients', { name: 'Finn Private', parent: { name: 'Fay Private', email: 'fay.private@example.com', phone: '512-555-0177' } });
+  assert.equal(fam.status, 201);
+  const l = await addLead(owner, { parent_name: 'Coach Probe', email: 'probe@example.com' });
+  await owner('PATCH', `/v1/leads/${l.id}`, { coach_id: coachId });
+  assert.equal((await coach('PATCH', `/v1/leads/${l.id}`, { phone: '(512) 555-0177' })).status, 200);
+  const seen = (await coach('GET', `/v1/leads/${l.id}`)).body.duplicates;
+  assert.deepEqual([seen.families.length, seen.clients.length, seen.count], [0, 0, 0]);
+  assert.ok(!JSON.stringify(seen).includes('Private'));
+  assert.equal((await owner('GET', `/v1/leads/${l.id}`)).body.duplicates.families[0].parent_name, 'Fay Private', 'the owner still sees it');
+  // An end date that isn't a date is refused, not a server error.
+  const bad = await owner('GET', '/v1/leads/report?to=someday');
+  assert.equal(bad.status, 400);
+  // A group text's recipient row has no email: its token can't stop anyone's emails (or break the opt-out list).
+  const cid = newId('cmp');
+  db().run(`INSERT INTO campaigns (id, channel, subject, body, audience, status, created_at) VALUES (?, 'text', 'x', 'x', '{"group":"everyone"}', 'sent', ?)`, cid, app.ctx.now());
+  db().run(`INSERT INTO campaign_recipients (id, campaign_id, email, phone, token, sent_at) VALUES (?, ?, NULL, '+15125550188', 'textrecipient01', ?)`, newId('cr'), cid, app.ctx.now());
+  const before = db().get('SELECT COUNT(*) AS n FROM email_optouts').n;
+  const r = await fetch(`${base}/c/textrecipient01?stop=1`, { method: 'POST' });
+  assert.equal(r.status, 200);
+  assert.equal(db().get('SELECT COUNT(*) AS n FROM email_optouts').n, before);
+  assert.equal((await owner('POST', '/v1/campaigns/preview', { audience: { group: 'everyone' } })).status, 200);
+});

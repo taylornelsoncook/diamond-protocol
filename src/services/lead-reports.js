@@ -16,8 +16,10 @@ import { STAGE_LABELS, SOURCE_LABELS, LOST_REASONS, OPEN_STAGES, STAGES, findDup
 const zone = (ctx) => getSetting(ctx, 'timezone');
 function period(ctx, q) {
   const today = todayDate(ctx);
-  const to = q.to ? String(q.to) : today, from = q.from ? String(q.from) : addDaysToDate(to, -89);
-  if (!isDate(from) || !isDate(to)) throw badRequest('from and to must be dates like 2026-09-01.');
+  const to = q.to ? String(q.to) : today;
+  if (!isDate(to)) throw badRequest('from and to must be dates like 2026-09-01.');
+  const from = q.from ? String(q.from) : addDaysToDate(to, -89);
+  if (!isDate(from)) throw badRequest('from and to must be dates like 2026-09-01.');
   if (from > to) throw badRequest('The start date is after the end date. Swap them.');
   if (daysBetween(from, to) > 3660) throw badRequest('Pick a period of ten years or less.');
   return { from, to, start: zonedToUtc(from, '00:00', zone(ctx)), end: zonedToUtc(addDaysToDate(to, 1), '00:00', zone(ctx)) };

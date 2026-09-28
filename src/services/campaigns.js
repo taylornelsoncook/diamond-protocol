@@ -82,7 +82,7 @@ function matched(ctx, a) {
 export function audienceFor(ctx, audience, channel = 'email') {
   const a = audienceInput(audience);
   v.oneOf(channel, 'channel', CHANNELS);
-  const optedOut = new Set(ctx.db.all('SELECT email FROM email_optouts').map((r) => r.email.toLowerCase()));
+  const optedOut = new Set(ctx.db.all('SELECT email FROM email_optouts').map((r) => String(r.email ?? '').toLowerCase()));
   const list = [], left = [], seen = new Set(), leftSeen = new Set();
   const leave = (p, reason) => { const k = `${p.name}|${reason}`; if (!leftSeen.has(k)) { leftSeen.add(k); left.push({ name: p.name, reason, lead_id: p.lead_id ?? null, client_id: p.client_id ?? null }); } };
   for (const p of matched(ctx, a)) {
@@ -224,6 +224,7 @@ export function followCampaignLink(ctx, tok, index, { stop = false } = {}) {
   const r = ctx.db.get('SELECT * FROM campaign_recipients WHERE token = ?', String(tok));
   if (!r) return { page: 'This link isn\'t in use any more.' };
   if (stop) {
+    if (!r.email) return { page: 'This link isn\'t in use any more.' };   // a group text: reply STOP to stop texts
     ctx.db.run('UPDATE campaign_recipients SET unsubscribed_at = COALESCE(unsubscribed_at, ?) WHERE id = ?', ctx.now(), r.id);
     ctx.db.run('INSERT INTO email_optouts (email, created_at, source) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING', r.email, ctx.now(), r.campaign_id);
     return { page: `Done. ${getSetting(ctx, 'business_name')} won't send you announcement emails any more. You'll still get receipts and booking emails.` };

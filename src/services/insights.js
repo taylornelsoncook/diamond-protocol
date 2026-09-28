@@ -4,6 +4,7 @@ import { sendEmail } from './mail.js';
 import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
+import { moneyIn } from './billing.js';
 
 // The app reading its own data: which athletes look like they're drifting away, and a Monday summary for the owner.
 
@@ -51,12 +52,8 @@ export function atRisk(ctx, { role = 'owner', asOf = ctx.now(), limit = 20 } = {
 export function buildDigest(ctx, asOf = ctx.now()) {
   const now = Date.parse(asOf);
   const iso = (days) => new Date(now + days * DAY).toISOString();
-  const takings = (from, to) => {
-    const sales = ctx.db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS c FROM sales WHERE status IN ('succeeded','partially_refunded') AND completed_at >= ? AND completed_at < ?`, from, to).c;
-    const memberships = ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?`, from, to).c;
-    const schools = ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c FROM team_invoices WHERE status = 'paid' AND paid_on >= ? AND paid_on < ?`, from.slice(0, 10), to.slice(0, 10)).c;
-    return { total: sales + memberships + schools, sales, memberships, schools };
-  };
+  // Net of refunds, counted when the money went back: the same as Today and Billing (billing.moneyIn).
+  const takings = (from, to) => { const m = moneyIn(ctx, from, to); return { total: m.total, sales: m.sales, memberships: m.members, schools: m.teams }; };
   const week = takings(iso(-7), asOf), prior = takings(iso(-14), iso(-7));
   const members = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE status IN ('active','trialing','past_due')`).n;
   const joined = ctx.db.get(`SELECT COUNT(*) AS n FROM subscriptions WHERE created_at >= ?`, iso(-7)).n;

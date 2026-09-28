@@ -4,7 +4,7 @@ import { payerFor, getSetting } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
-import { retryWithNewCard, reconcileInvoicePayment } from './billing.js';
+import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
@@ -672,7 +672,9 @@ export async function handleStripeEvent(ctx, event) {
       await reconcileInvoicePayment(ctx, obj.metadata.invoice_id, { ref: obj.id, succeeded: event.type === 'payment_intent.succeeded', error: obj.last_payment_error?.message });
     }
   } else if (event.type === 'charge.refunded') {
-    await syncRefundFromStripe(ctx, obj);
+    // A sale's payment, or else a membership payment (billing.js keeps membership refunds in step the same way).
+    const sale = syncRefundFromStripe(ctx, obj);
+    if (sale) await sale; else await syncInvoiceRefundFromStripe(ctx, obj);
   } else if (event.type === 'charge.dispute.created') {
     const s = obj.payment_intent ? ctx.db.get('SELECT id, client_id FROM sales WHERE payment_ref = ?', obj.payment_intent) : null;
     const inv = obj.payment_intent ? ctx.db.get('SELECT id, client_id FROM invoices WHERE payment_ref = ?', obj.payment_intent) : null;
@@ -720,6 +722,6 @@ export function revenueByLocation(ctx, since) {
     `SELECT l.id, l.name, l.kind, COALESCE(SUM(s.amount_cents - s.refunded_cents), 0) AS cents, COUNT(s.id) AS sales
      FROM locations l LEFT JOIN sales s ON s.location_id = l.id AND s.status IN ('succeeded','partially_refunded') AND s.completed_at >= ?
      GROUP BY l.id ORDER BY cents DESC`, since);
-  const memberships = ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS cents, COUNT(*) AS n FROM invoices WHERE status = 'paid' AND paid_at >= ?`, since);
+  const memberships = ctx.db.get(`SELECT COALESCE(SUM(amount_cents - refunded_cents), 0) AS cents, COUNT(*) AS n FROM invoices WHERE status = 'paid' AND paid_at >= ?`, since);
   return { since, locations: rows.filter((r) => r.sales > 0 || ctx.db.get('SELECT active FROM locations WHERE id = ?', r.id).active), memberships_cents: memberships.cents, membership_payments: memberships.n };
 }

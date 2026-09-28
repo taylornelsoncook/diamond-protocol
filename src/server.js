@@ -117,6 +117,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         if (!auditable && res.statusCode !== 403 && !(route.path.startsWith('/v1/backups/') && req.method === 'GET')) return;
         const actor = r.user ? { actor_type: 'staff', actor_id: r.user.id, actor_name: r.user.name, role: r.user.role }
           : r.apiKey ? { actor_type: 'api_key', actor_id: r.apiKey.id, actor_name: r.apiKey.label } : r.guardian ? { actor_type: 'parent', actor_id: r.guardian.id, actor_name: r.guardian.name }
+          : r.client ? { actor_type: 'athlete', actor_id: r.client.id, actor_name: r.client.name }
           : { actor_type: 'public', actor_name: route.path === '/auth/login' || route.path === '/auth/token' ? String(r.body?.email ?? '').slice(0, 120) : null };
         audit(ctx, { ...actor, action: route.path === '/auth/login' || route.path === '/auth/token' ? 'sign-in' : `${req.method} ${route.path}`, target: Object.values(r.params)[0] ?? null, status: res.statusCode, ip });
       });

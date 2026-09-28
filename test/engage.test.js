@@ -236,7 +236,7 @@ test('education: lessons, courses, assignments and completion, with unpublished 
   assert.equal((await coach('POST', '/v1/lessons', { title: 'Bad video', video_url: 'javascript:alert(1)' })).status, 400);
   assert.equal((await coach('POST', '/v1/lessons', { title: 'Plain video', video_url: 'http://example.com/v.mp4' })).status, 400);
   assert.equal((await coach('POST', '/v1/lessons', { summary: 'no title' })).status, 400);
-  assert.equal((await coach('POST', '/v1/lesson-assignments', { course_id: c.id, client_id: ava.id, due_date: '2026-12-01', note: 'Start here' })).status, 201);
+  assert.equal((await coach('POST', '/v1/lesson-assignments', { course_id: c.id, client_id: ava.id, due_date: addDaysToDate(localDate(new Date().toISOString(), 'America/Chicago'), 30), note: 'Start here' })).status, 201);
   assert.equal((await coach('POST', '/v1/lesson-assignments', { lesson_id: l1.id, course_id: c.id, client_id: ava.id })).status, 400);
   assert.equal((await coach('POST', '/v1/lesson-assignments', { lesson_id: hidden.id, client_id: ava.id })).status, 409);
   assert.ok(app.ctx.db.get(`SELECT 1 FROM outbox WHERE to_email = 'maria@example.com' AND subject LIKE '%Speed school%'`), 'parents hear about it');

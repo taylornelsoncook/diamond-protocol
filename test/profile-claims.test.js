@@ -183,3 +183,30 @@ test('merging is refused when both have a membership, when families differ, and 
   assert.equal((await owner('POST', `/v1/clients/${a.id}/merge`, { from: a.id, confirm: true })).status, 400);
   assert.equal(db().get('SELECT COUNT(*) AS n FROM clients WHERE id IN (?, ?, ?)', a.id, b.id, c.id).n, 3, 'nothing changed');
 });
+
+test('one sign-up listing a child several times can\'t try birthdays: after 3 misses only the owner can attach the profile', async () => {
+  resetRateLimits();
+  await owner('POST', `/v1/team-contracts/${contract.id}/roster`, { names: 'Nia Park, WR, 2027' });
+  const nia = clientByName('Nia Park');
+  await owner('PATCH', `/v1/clients/${nia.id}`, { birth_date: '2009-06-20' });
+  // The same child five times (punctuation keeps the names apart), with the right birthday last.
+  const names = ['Nia Park', 'Nia Park.', 'Nia-Park', 'Nia Park!', 'Nia Park?'];
+  const days = ['2009-06-16', '2009-06-17', '2009-06-18', '2009-06-19', '2009-06-20'];
+  const { athletes } = await signUp('guesser@example.com', 'Gus Guesser', names.map((name, i) => ({ name, birth_date: days[i], athlete_code: nia.athlete_id })));
+  assert.equal(athletes.length, 5);
+  assert.ok(!athletes.some((a) => a.id === nia.id), 'the team profile was not attached');
+  assert.equal(db().get('SELECT family_id FROM clients WHERE id = ?', nia.id).family_id, null);
+  const reasons = db().all('SELECT reason FROM profile_claims WHERE claimed_client_id = ? ORDER BY rowid', nia.id).map((r) => r.reason);
+  assert.deepEqual(reasons, ['birthday', 'birthday', 'birthday', 'too_many', 'too_many'], 'the owner is asked to check instead');
+});
+
+test('only a team-only profile joins a family on its own: a member who pays for themselves stays put', async () => {
+  resetRateLimits();
+  const sam = (await owner('POST', '/v1/clients', { name: 'Sam Adult', email: 'sam.adult@example.com', birth_date: '2001-03-03' })).body;
+  await owner('POST', `/v1/clients/${sam.id}/card/test`, {});
+  await owner('POST', `/v1/clients/${sam.id}/subscription`, { plan_id: plan.id });
+  const { athletes } = await signUp('not.sams.parent@example.com', 'Nora Stranger', [{ name: 'Sam Adult', birth_date: '2001-03-03', athlete_code: sam.athlete_id }]);
+  assert.notEqual(athletes[0].id, sam.id);
+  assert.equal(db().get('SELECT family_id FROM clients WHERE id = ?', sam.id).family_id, null, 'Sam\'s renewals stay on Sam\'s own card');
+  assert.equal(db().get('SELECT reason FROM profile_claims WHERE claimed_client_id = ?', sam.id).reason, 'not_team');
+});

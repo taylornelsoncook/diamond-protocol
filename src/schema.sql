@@ -118,7 +118,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   voided_at TEXT,
   void_reason TEXT,
   paid_method TEXT,
-  paid_reference TEXT
+  paid_reference TEXT,
+  -- version 41: tries pressed by the owner or a parent (counted in attempts too); only automatic tries count toward canceling
+  manual_attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS invoices_client ON invoices(client_id);
 -- Version 38: each refund of a membership payment, dated when the money went back. source 'stripe' is a refund made in

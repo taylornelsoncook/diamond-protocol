@@ -18,6 +18,9 @@ const norm = (s) => String(s ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').to
 const ownerEmails = (ctx) => ctx.db.all(`SELECT name, email FROM users WHERE role = 'owner' AND active = 1`);
 const tellOwners = (ctx, subject, text) => { for (const o of ownerEmails(ctx)) sendEmail(ctx, { to: o.email, subject, text: `Hi ${first(o.name)},\n\n${text}\n\n${getSetting(ctx, 'business_name')}` }).catch(() => {}); };
 
+// Claims that didn't match (wrong name or birthday) before a profile stops joining a family on its own.
+export const MAX_MISSES = 3;
+
 // The Athlete ID a parent typed: cleaned up, or null when the field was left empty. A badly shaped ID is refused (that
 // says nothing about which IDs exist).
 export function claimCode(raw) {
@@ -38,6 +41,13 @@ export function tryClaim(ctx, { code, name, birthDate, familyId, guardian, field
   if (c.family_id === familyId) return { open: null, already: c };
   if (c.family_id) return { open: 'in_family', client: c };
   if (c.archived_at) return { open: 'archived', client: c };
+  // Only a team-only profile (on a team, no membership, no card of its own) joins a family on its own: moving a member who
+  // pays for themselves would put their renewals on this family's card. The owner checks any other.
+  const onTeam = ctx.db.get('SELECT 1 FROM team_roster WHERE client_id = ? LIMIT 1', c.id);
+  if (!onTeam || c.card_payment_method || ctx.db.get(`SELECT 1 FROM subscriptions WHERE client_id = ? AND status != 'canceled' LIMIT 1`, c.id)) return { open: 'not_team', client: c };
+  // After a few claims on this profile that didn't match, only the owner can attach it: one sign-up can list several
+  // children, so otherwise birthdays could be tried one after another.
+  if (ctx.db.get(`SELECT COUNT(*) AS n FROM profile_claims WHERE claimed_client_id = ? AND status IN ('open','dismissed') AND reason IN ('name','birth_year','birthday','too_many')`, c.id).n >= MAX_MISSES) return { open: 'too_many', client: c };
   if (norm(c.name) !== norm(name)) return { open: 'name', client: c };
   if (!c.birth_date) return { open: 'no_birthday', client: c };
   if (!birthDate || String(birthDate).slice(0, 4) !== c.birth_date.slice(0, 4)) return { open: 'birth_year', client: c };
@@ -61,7 +71,7 @@ export function tryClaim(ctx, { code, name, birthDate, familyId, guardian, field
   return { attached: ctx.db.get('SELECT * FROM clients WHERE id = ?', c.id) };
 }
 // No match: the new athlete was made. The owner is asked to check (only when the ID belongs to a real profile).
-const REASONS = { birthday: 'the birthday is different (the year matches)', name: 'the name is different', no_birthday: 'the profile has no birthday to check', birth_year: 'the birth year is different', in_family: 'the profile is already in another family', archived: 'the profile is archived' };
+const REASONS = { not_team: 'the profile isn\'t a team-only profile (it has a membership or its own card, or isn\'t on a team)', too_many: 'there were several earlier claims on this profile that didn\'t match', birthday: 'the birthday is different (the year matches)', name: 'the name is different', no_birthday: 'the profile has no birthday to check', birth_year: 'the birth year is different', in_family: 'the profile is already in another family', archived: 'the profile is archived' };
 export function fileClaim(ctx, { code, familyId, guardian, claim, newClientId }) {
   if (!claim?.open || !claim.client) return null;
   const id = newId('clm');

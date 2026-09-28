@@ -111,7 +111,7 @@ const ADDED_COLUMNS = {
   sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT',
     'booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL'],        // booking_id: version 38
   // ---- Version 38: billing (batch B6): refunds, card reminders, voids and payments recorded by hand ----
-  invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT'],
+  invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT', 'manual_attempts INTEGER NOT NULL DEFAULT 0'],   // manual_attempts: version 41
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)

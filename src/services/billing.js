@@ -202,10 +202,11 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual = false, onlyIfFaile
     if (result.ok) {
       recordPaid(ctx, inv, s, { attempts, ref: result.ref });
     } else {
-      const giveUp = !manual && attempts >= MAX_ATTEMPTS;
+      // Only automatic tries count toward canceling: a retry the owner or a parent presses is kept apart in manual_attempts.
+      const giveUp = !manual && attempts - (inv.manual_attempts ?? 0) >= MAX_ATTEMPTS;
       const nextRetry = giveUp ? null : manual && inv.next_retry_at ? inv.next_retry_at : addDays(asOf, RETRY_EVERY_DAYS);
-      ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
-        attempts, result.error, nextRetry, result.ref ?? null, inv.id);
+      ctx.db.run(`UPDATE invoices SET status = 'failed', attempts = ?, manual_attempts = manual_attempts + ?, last_error = ?, next_retry_at = ?, payment_ref = COALESCE(?, payment_ref) WHERE id = ?`,
+        attempts, manual ? 1 : 0, result.error, nextRetry, result.ref ?? null, inv.id);
       emit(ctx, 'invoice.payment_failed', { invoice_id: inv.id, client_id: inv.client_id, client_name: inv.client_name, amount_cents: inv.amount_cents, attempts, error: result.error, final: giveUp });
       if (giveUp) {
         ctx.db.run(`UPDATE invoices SET status = 'void' WHERE id = ?`, inv.id);
@@ -268,7 +269,7 @@ async function reconcile(ctx, invoiceId, { ref, succeeded, error }) {
     return r.ok ? 'refunded' : 'paid_twice';
   }
   if (!succeeded && inv.status === 'paid' && !inv.paid_method && !inv.refunded_cents) {
-    const giveUp = inv.attempts >= MAX_ATTEMPTS;
+    const giveUp = inv.attempts - (inv.manual_attempts ?? 0) >= MAX_ATTEMPTS;
     ctx.db.tx(() => {
       ctx.db.run(`UPDATE invoices SET status = 'failed', paid_at = NULL, last_error = ?, next_retry_at = ? WHERE id = ?`,
         error || 'The payment failed after it was taken.', giveUp ? null : addDays(ctx.now(), RETRY_EVERY_DAYS), inv.id);
@@ -390,7 +391,7 @@ function invoiceRows(ctx, { from, to } = {}) {
   const sql = `WITH rows AS (
     SELECT 'membership' AS kind, i.id, NULL AS number, i.client_id, c.name AS client_name, c.family_id, c.archived_at AS client_archived_at,
       NULL AS contract_id, NULL AS org_name, p.name AS description, i.amount_cents, i.refunded_cents, i.status, i.created_at AS issued_at, NULL AS due_on,
-      i.paid_at, i.paid_method, i.paid_reference, i.attempts, i.next_retry_at, i.last_error, i.reminded_at, i.voided_at, i.void_reason, i.period_start, i.period_end,
+      i.paid_at, i.paid_method, i.paid_reference, i.attempts, i.manual_attempts, i.next_retry_at, i.last_error, i.reminded_at, i.voided_at, i.void_reason, i.period_start, i.period_end,
       s.id AS subscription_id, s.status AS subscription_status, ${cardSql()} AS card_last4, ${brandSql()} AS card_brand,
       CASE WHEN i.status IN ('failed','open','void') THEN i.status WHEN i.amount_cents > 0 AND i.refunded_cents >= i.amount_cents THEN 'refunded'
         WHEN i.refunded_cents > 0 THEN 'partially_refunded' ELSE 'paid' END AS state, i.created_at AS sort_at
@@ -398,7 +399,7 @@ function invoiceRows(ctx, { from, to } = {}) {
     ${mDate.length ? `WHERE ${mDate.join(' AND ')}` : ''}
     UNION ALL
     SELECT 'school', t.id, t.number, NULL, NULL, NULL, NULL, t.contract_id, o.name, tc.name, t.amount_cents, 0, t.status, t.issued_on, t.due_on,
-      t.paid_on, t.paid_method, t.paid_reference, 0, NULL, NULL, t.reminded_at, NULL, NULL, t.period_start, t.period_end,
+      t.paid_on, t.paid_method, t.paid_reference, 0, 0, NULL, NULL, t.reminded_at, NULL, NULL, t.period_start, t.period_end,
       NULL, NULL, NULL, NULL,
       CASE WHEN t.status = 'open' AND t.due_on < ? THEN 'overdue' ELSE t.status END, t.issued_on || 'T23:59:59.999Z'
     FROM team_invoices t JOIN team_contracts tc ON tc.id = t.contract_id JOIN organizations o ON o.id = t.org_id
@@ -423,7 +424,7 @@ function invoiceFilter(query = {}) {
   }
   return { view, kind, from: query.from ? String(query.from) : null, to: query.to ? String(query.to) : null, where: where.join(' AND '), params, q };
 }
-const withFlags = (r) => ({ ...r, overdue: r.state === 'overdue', retries_left: r.state === 'failed' ? Math.max(0, MAX_ATTEMPTS - r.attempts) : null, has_card: r.kind === 'membership' ? !!r.card_last4 : null });
+const withFlags = (r) => ({ ...r, overdue: r.state === 'overdue', retries_left: r.state === 'failed' ? Math.max(0, MAX_ATTEMPTS - (r.attempts - (r.manual_attempts ?? 0))) : null, has_card: r.kind === 'membership' ? !!r.card_last4 : null });
 
 // GET /v1/billing/invoices: ?view= (all, failed, unpaid, overdue, paid, refunds, void), ?kind= (membership, school),
 // ?from=/?to= (dates), ?q= (name, plan, school, team or invoice number), ?limit= (Show more). Returns the page, the count and

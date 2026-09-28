@@ -838,7 +838,7 @@ test('a version 40 database keeps its data and gains the parent portal tables an
       const db = openDb(file);
       const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
       assert.equal(db.get('PRAGMA user_version').user_version, 41, `round ${round}`);
-      for (const [t, c] of [['families', 'card_exp'], ['clients', 'card_exp'], ['guardians', 'calendar_token_hash'], ['guardians', 'calendar_created_at'], ['bookings', 'note'], ['portal_sessions', 'created_at'], ['portal_sessions', 'user_agent'], ['portal_sessions', 'last_seen_at']]) assert.ok(cols(t).includes(c), `${t}.${c}, round ${round}`);
+      for (const [t, c] of [['families', 'card_exp'], ['clients', 'card_exp'], ['guardians', 'calendar_token_hash'], ['guardians', 'calendar_created_at'], ['bookings', 'note'], ['portal_sessions', 'created_at'], ['portal_sessions', 'user_agent'], ['portal_sessions', 'last_seen_at'], ['invoices', 'manual_attempts']]) assert.ok(cols(t).includes(c), `${t}.${c}, round ${round}`);
       for (const c of ['kind', 'plan_id', 'status', 'resolution_note']) assert.ok(cols('membership_requests').includes(c));
       for (const c of ['athlete_id', 'claimed_client_id', 'new_client_id', 'reason']) assert.ok(cols('profile_claims').includes(c));
       // Earlier blocks' data: kept.

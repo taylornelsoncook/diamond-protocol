@@ -248,6 +248,24 @@ test('retry refuses a family with no card, and a declined manual retry never can
   assert.equal(r.body.membership_reactivated, true);
 });
 
+test('manual retries don\'t count toward canceling: only the automatic tries do', async () => {
+  const m = await member({ declining: true });
+  assert.equal(invoice(m.inv.id).attempts, 1);
+  for (let i = 0; i < 3; i++) await attemptCharge(app.ctx, m.inv.id, now(), { manual: true });
+  assert.deepEqual([invoice(m.inv.id).attempts, invoice(m.inv.id).manual_attempts], [4, 3]);
+  // The second automatic try (of 4) comes due: still past due, not canceled.
+  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+  assert.equal(invoice(m.inv.id).status, 'failed');
+  assert.equal(subOf(m.id).status, 'past_due');
+  assert.equal((await owner('GET', `/v1/invoices/${m.inv.id}`)).body.retries_left, 2, 'two automatic tries left');
+  // The third and fourth automatic tries: canceled after the fourth.
+  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+  assert.equal(subOf(m.id).status, 'past_due');
+  await runBilling(app.ctx, invoice(m.inv.id).next_retry_at);
+  assert.equal(invoice(m.inv.id).status, 'void');
+  assert.equal(subOf(m.id).status, 'canceled');
+});
+
 test('retry all charges every declined payment with a card and reports what happened', async () => {
   // Clear earlier failures so the numbers are this test's.
   db().run(`UPDATE invoices SET status = 'void', next_retry_at = NULL WHERE status = 'failed'`);

@@ -32,7 +32,7 @@ const fake = http.createServer((req, res) => {
     if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444' } } } });
     if (p === '/v1/payment_intents' && req.method === 'POST') {
       if (body.off_session === 'true') {
-        if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.' } });
+        if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.', payment_intent: { id: nid('pi'), status: 'requires_payment_method' } } });
         return send(200, { id: nid('pi'), status: 'succeeded' });
       }
       const pi = { id: nid('pi'), client_secret: 'pi_secret_x', status: 'requires_payment_method', body };
@@ -165,4 +165,81 @@ test('schools pay team invoices online by card or bank account', async () => {
   const paid = (await call('GET', `/v1/team-invoices/${inv.id}`)).body;
   assert.equal(paid.status, 'paid');
   assert.equal(paid.paid_reference, 'pi_ach');
+});
+
+// ---- Webhooks that settle things after the fact ----
+const invoiceOf = (id) => app.ctx.db.get('SELECT * FROM invoices WHERE id = ?', id);
+const subOf = (id) => app.ctx.db.get('SELECT * FROM subscriptions WHERE id = ?', id);
+let sub, inv;
+test('a renewal that fails after it was taken reopens the invoice; a late success closes it', async () => {
+  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
+  const plan = (await call('POST', '/v1/plans', { name: 'Monthly', price_cents: 15000, trial_days: 0 })).body;
+  sub = (await call('POST', `/v1/clients/${client.id}/subscription`, { plan_id: plan.id })).body;
+  inv = app.ctx.db.get('SELECT * FROM invoices WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1', sub.id);
+  assert.equal(inv.status, 'paid');
+  assert.match(inv.payment_ref, /^pi_/);
+  const pi = { id: inv.payment_ref, object: 'payment_intent', metadata: { invoice_id: inv.id }, last_payment_error: { message: 'Insufficient funds.' } };
+
+  assert.equal((await webhook({ type: 'payment_intent.payment_failed', data: { object: pi } })).status, 200);
+  let now = invoiceOf(inv.id);
+  assert.equal(now.status, 'failed');
+  assert.equal(now.last_error, 'Insufficient funds.');
+  assert.ok(now.next_retry_at, 'the retry job picks it up');
+  assert.equal(subOf(sub.id).status, 'past_due');
+  await webhook({ type: 'payment_intent.payment_failed', data: { object: pi } });
+  assert.equal(invoiceOf(inv.id).status, 'failed', 'a repeated event changes nothing');
+
+  await webhook({ type: 'payment_intent.succeeded', data: { object: pi } });
+  now = invoiceOf(inv.id);
+  assert.equal(now.status, 'paid');
+  assert.equal(now.next_retry_at, null);
+  assert.equal(subOf(sub.id).status, 'active');
+  assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'invoice.payment_failed' AND data LIKE ?`, `%${inv.id}%`).n, 1);
+});
+
+test('a declined renewal keeps its PaymentIntent, so a later approval marks it paid; stale ones are ignored', async () => {
+  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_declines' WHERE id = ?`, client.id);
+  const retried = (await call('POST', `/v1/invoices/${inv.id}/retry`)).status;
+  assert.equal(retried, 409, 'a paid invoice is not retried');
+  app.ctx.db.run(`UPDATE invoices SET status = 'failed' WHERE id = ?`, inv.id);
+  await call('POST', `/v1/invoices/${inv.id}/retry`);
+  const declined = invoiceOf(inv.id);
+  assert.equal(declined.status, 'failed');
+  assert.notEqual(declined.payment_ref, inv.payment_ref, 'the declined attempt is the one webhooks match');
+  await webhook({ type: 'payment_intent.succeeded', data: { object: { id: inv.payment_ref, metadata: { invoice_id: inv.id } } } });
+  assert.equal(invoiceOf(inv.id).status, 'failed', 'an older attempt does not count');
+  await webhook({ type: 'payment_intent.succeeded', data: { object: { id: declined.payment_ref, metadata: { invoice_id: inv.id } } } });
+  assert.equal(invoiceOf(inv.id).status, 'paid');
+  app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
+});
+
+test('refunds made in the Stripe dashboard show on the sale, in its refund log and in the day\'s takings', async () => {
+  const s = app.ctx.db.get(`SELECT * FROM sales WHERE method = 'tap_to_pay' AND status = 'partially_refunded'`);
+  assert.equal(s.refunded_cents, 5000);
+  const logged = () => app.ctx.db.all('SELECT amount_cents, reason FROM sale_refunds WHERE sale_id = ? ORDER BY created_at, rowid', s.id);
+  const refundedToday = async () => (await call('GET', '/v1/sales/takings')).body.refunded_cents;
+  assert.equal(logged().length, 1, 'the refund made in the app');
+  const before = await refundedToday();
+  // Stripe echoes the refund made in the app: nothing new to log.
+  await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 5000 } } });
+  assert.equal(logged().length, 1);
+  await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 7000 } } });
+  assert.equal((await call('GET', `/v1/sales/${s.id}`)).body.refunded_cents, 7000);
+  assert.deepEqual(logged()[1], { amount_cents: 2000, reason: 'Refunded in the Stripe dashboard' });
+  assert.equal(await refundedToday(), before + 2000, 'the dashboard refund counts in today\'s takings');
+  await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 7000 } } });
+  assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'sale.refunded' AND data LIKE '%stripe_dashboard%'`).n, 1);
+  assert.equal(logged().length, 2, 'a repeated webhook logs nothing');
+  await webhook({ type: 'charge.refunded', data: { object: { id: 'ch_1', payment_intent: s.payment_ref, amount_refunded: 70000 } } });
+  const after = (await call('GET', `/v1/sales/${s.id}`)).body;
+  assert.equal(after.status, 'refunded');
+  assert.equal(logged().reduce((n, r) => n + r.amount_cents, 0), after.refunded_cents, 'the refund log adds up to the sale\'s refunded total');
+});
+
+test('reissued cards and disputes', async () => {
+  await webhook({ type: 'payment_method.automatically_updated', data: { object: { id: 'pm_web', card: { brand: 'mastercard', last4: '9999' } } } });
+  assert.equal((await call('GET', `/v1/clients/${client.id}/card`)).body.last4, '9999');
+  await webhook({ type: 'charge.dispute.created', data: { object: { id: 'dp_1', payment_intent: invoiceOf(inv.id).payment_ref, amount: 15000, reason: 'fraudulent' } } });
+  const ev = app.ctx.db.get(`SELECT data FROM events WHERE type = 'payment.disputed'`);
+  assert.equal(JSON.parse(ev.data).invoice_id, inv.id);
 });

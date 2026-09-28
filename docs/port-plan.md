@@ -1,10 +1,11 @@
 # Porting the earlier version's work onto this version
 
-**Status (updated 2026-09-27):**
+**Status (updated 2026-09-28):**
 - Done and merged: **B0** bug fixes (PR #5), **B1** coaches on sessions/hours, time off, client archive, staff notes, connection check (PR #6), Today business summary (PR #6), every open class on Today + owner trial offers + Coaches panel (PR #7).
-- Also done and merged: **B7** Teams, **B10** Test library, presets, report share links (schema 33), **B4** Clients, **B9** Testing days, uploads (with undo) and devices (schema 34).
-- Also done: **one profile per athlete** (schema 36): every team roster athlete is a client; results, device links, testing days and team attendance are on the client; old roster Athlete IDs still find the profile.
-- Next: B5 Point of sale → B6 Billing (reuse thread `vrx31w`'s refund handling if it has merged) → B2 Schedule/roster/hours and B3 Today extras → B12/B13 parent portal → B8 Programs builder + athlete Workout tab → B14 API & integrations + Staff & security → B11 Education + engage tabs → B15 CRM on top of `leads.js`/`sms.js`/`campaigns.js`.
+- Also done and merged: **B7** Teams, **B10** Test library, presets, report share links (schema 34), **B4** Clients, **B9** Testing days, uploads (with undo) and devices (schema 35), **B5** Point of sale (schema 36).
+- Main's PRs #1-#3 (background job history and alerts, schema 33; encrypted off-site backups; Stripe webhooks incl. dashboard refunds, now also logged in `sale_refunds`) are merged in; our schema blocks were renumbered to follow main's 33.
+- Also done: **one profile per athlete** (schema 37): every team roster athlete is a client; results, device links, testing days and team attendance are on the client; old roster Athlete IDs still find the profile.
+- Next: B6 Billing (thread `vrx31w`'s refund handling has merged; build on it) → B2 Schedule/roster/hours and B3 Today extras → B12/B13 parent portal → B8 Programs builder + athlete Workout tab → B14 API & integrations + Staff & security → B11 Education + engage tabs → B15 CRM on top of `leads.js`/`sms.js`/`campaigns.js`.
 - The old version's code is readable with `git show d6b36a2:<path>` (commits `2342d22..d6b36a2`; each old tab has an "<Tab>: ..." commit whose body lists its improvements). Re-implement against the current code; never copy old files.
 - Owner decisions still open: whether coach-only staff notes stay out of the parent's self-service data export; whether coaches should work leads in the CRM (old version: no CRM access for coaches).
 

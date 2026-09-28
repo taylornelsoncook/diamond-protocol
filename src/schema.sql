@@ -324,7 +324,7 @@ CREATE TABLE IF NOT EXISTS sales (
   created_by TEXT,
   created_at TEXT NOT NULL,
   completed_at TEXT,
-  -- version 35 (batch B5, point of sale): a discount on the whole sale (amount_cents is what was paid after it),
+  -- version 36 (batch B5, point of sale): a discount on the whole sale (amount_cents is what was paid after it),
   -- the counter's request id (a second press of Charge returns the first sale), and the emailed receipt
   -- (receipt_opt: NULL = the automatic-receipt setting decides, 1 = send, 0 = don't; receipt_token opens the printable page).
   discount_cents INTEGER NOT NULL DEFAULT 0,
@@ -340,7 +340,7 @@ CREATE INDEX IF NOT EXISTS sales_ref ON sales(payment_ref);
 CREATE INDEX IF NOT EXISTS sales_completed ON sales(completed_at);
 CREATE INDEX IF NOT EXISTS sales_request ON sales(request_id);
 CREATE INDEX IF NOT EXISTS sales_receipt ON sales(receipt_token);
--- Version 35: each refund of a sale, so the day's takings count a refund on the day the money went back.
+-- Version 36: each refund of a sale, so the day's takings count a refund on the day the money went back.
 CREATE TABLE IF NOT EXISTS sale_refunds (
   id TEXT PRIMARY KEY,
   sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
@@ -603,7 +603,7 @@ CREATE TABLE IF NOT EXISTS team_contracts (
   notes TEXT,
   created_at TEXT NOT NULL
 );
--- One profile per athlete (version 36): every roster line links a client, and results, device links and attendance
+-- One profile per athlete (version 37): every roster line links a client, and results, device links and attendance
 -- are kept on that client. name and athlete_id are copies of the client's, kept for older integrations.
 CREATE TABLE IF NOT EXISTS team_roster (
   id TEXT PRIMARY KEY,
@@ -612,11 +612,11 @@ CREATE TABLE IF NOT EXISTS team_roster (
   athlete_id TEXT,
   position TEXT,
   grad_year INTEGER,
-  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,   -- the athlete's profile (always set since version 36)
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,   -- the athlete's profile (always set since version 37)
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
 );
--- Who was at a team session (version 36: by client; before that by roster line).
+-- Who was at a team session (version 37: by client; before that by roster line).
 CREATE TABLE IF NOT EXISTS team_attendance (
   session_id TEXT NOT NULL REFERENCES class_sessions(id) ON DELETE CASCADE,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
@@ -659,8 +659,8 @@ CREATE TABLE IF NOT EXISTS perf_tests (
   active INTEGER NOT NULL DEFAULT 1,
   sort INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  protocol TEXT,                                 -- version 33: the coach's own "how to run it" (NULL = the built-in text)
-  edited TEXT NOT NULL DEFAULT '[]'              -- version 33: fields a coach changed on a built-in test; the library refresh leaves them alone
+  protocol TEXT,                                 -- version 34: the coach's own "how to run it" (NULL = the built-in text)
+  edited TEXT NOT NULL DEFAULT '[]'              -- version 34: fields a coach changed on a built-in test; the library refresh leaves them alone
 );
 CREATE TABLE IF NOT EXISTS perf_metrics (
   test_id TEXT NOT NULL REFERENCES perf_tests(id) ON DELETE CASCADE,
@@ -671,7 +671,7 @@ CREATE TABLE IF NOT EXISTS perf_metrics (
   decimals INTEGER NOT NULL DEFAULT 2,
   aliases TEXT NOT NULL DEFAULT '[]',
   sort INTEGER NOT NULL DEFAULT 0,
-  min_value REAL,                                -- version 33: the coach's possible range (NULL = the built-in range)
+  min_value REAL,                                -- version 34: the coach's possible range (NULL = the built-in range)
   max_value REAL,
   PRIMARY KEY (test_id, key)
 );
@@ -683,18 +683,18 @@ CREATE TABLE IF NOT EXISTS perf_sessions (
   location_id TEXT REFERENCES locations(id),
   contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL,
   test_keys TEXT NOT NULL DEFAULT '[]',
-  athletes TEXT NOT NULL DEFAULT '[]',          -- [{client_id}] expected on the day (before version 36 also {roster_id})
+  athletes TEXT NOT NULL DEFAULT '[]',          -- [{client_id}] expected on the day (before version 37 also {roster_id})
   notes TEXT,
   shared_at TEXT,                               -- results become visible to parents once the coach shares the day
   parent_note TEXT,
   created_at TEXT NOT NULL,
-  notified_at TEXT                              -- when families were last emailed about this day (version 34)
+  notified_at TEXT                              -- when families were last emailed about this day (version 35)
 );
 CREATE TABLE IF NOT EXISTS perf_results (
   id TEXT PRIMARY KEY,
   session_id TEXT REFERENCES perf_sessions(id) ON DELETE SET NULL,
   client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
-  roster_id TEXT REFERENCES team_roster(id) ON DELETE CASCADE,   -- before version 36 only: results now always go to client_id
+  roster_id TEXT REFERENCES team_roster(id) ON DELETE CASCADE,   -- before version 37 only: results now always go to client_id
   test_id TEXT NOT NULL REFERENCES perf_tests(id),
   metric TEXT NOT NULL,
   side TEXT CHECK (side IN ('L','R')),
@@ -741,7 +741,7 @@ CREATE TABLE IF NOT EXISTS import_batches (
   pending TEXT NOT NULL DEFAULT '[]',           -- rows waiting for an athlete match
   errors TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
-  -- Undo an upload (version 34): what it wrote, so it can be taken back out.
+  -- Undo an upload (version 35): what it wrote, so it can be taken back out.
   kind TEXT,                                    -- upload (Upload results) or import (device file); NULL = can't be undone
   source_label TEXT,                            -- where the file came from, as the coach chose it
   result_source TEXT,                           -- perf_results.source of what it saved
@@ -753,7 +753,7 @@ CREATE TABLE IF NOT EXISTS import_batches (
   created_by TEXT,
   undone_at TEXT, undone_by TEXT, undo_summary TEXT
 );
--- One row per result an upload saved or sent to waiting (version 34). replaced = results it set aside (voided), restored on undo.
+-- One row per result an upload saved or sent to waiting (version 35). replaced = results it set aside (voided), restored on undo.
 CREATE TABLE IF NOT EXISTS import_batch_items (
   batch_id TEXT NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
   result_id TEXT,
@@ -809,6 +809,32 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip TEXT
 );
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
+
+-- ---- Background jobs ----
+-- One row per finished run (kept 30 days). The webhook sender, which runs every 15 seconds, only records failures.
+CREATE TABLE IF NOT EXISTS job_runs (
+  id TEXT PRIMARY KEY,
+  job TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'schedule' CHECK (trigger IN ('schedule','manual')),
+  status TEXT NOT NULL CHECK (status IN ('ok','skipped','failed')),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  duration_ms INTEGER,
+  result TEXT,
+  error TEXT,
+  instance TEXT
+);
+CREATE INDEX IF NOT EXISTS job_runs_job ON job_runs(job, started_at);
+CREATE INDEX IF NOT EXISTS job_runs_started ON job_runs(started_at);
+-- Per job: which server copy holds it until when (so copies sharing this database don't both run it), and alert state.
+CREATE TABLE IF NOT EXISTS job_state (
+  job TEXT PRIMARY KEY,
+  lease_until TEXT,
+  holder TEXT,
+  fail_streak INTEGER NOT NULL DEFAULT 0,
+  last_ok_at TEXT,
+  alerted_at TEXT
+);
 
 -- ---- Terms, privacy and data requests ----
 -- Each parent's acceptance of each version of the terms and privacy policy.
@@ -1094,7 +1120,7 @@ CREATE INDEX IF NOT EXISTS client_notes_client ON client_notes(client_id, create
 CREATE INDEX IF NOT EXISTS guardians_family ON guardians(family_id);
 CREATE INDEX IF NOT EXISTS team_roster_client ON team_roster(client_id);
 
--- ---------- Version 33: test library presets and progress report share links (batch B10) ----------
+-- ---------- Version 34: test library presets and progress report share links (batch B10) ----------
 -- A named set of tests to start a testing day from (Combine, Force plate...). test_keys: ordered perf_tests keys.
 CREATE TABLE IF NOT EXISTS test_presets (
   id TEXT PRIMARY KEY,
@@ -1124,13 +1150,13 @@ CREATE INDEX IF NOT EXISTS report_links_client ON report_links(client_id, create
 -- The test library's usage counts, record boards and "can it be deleted" checks look results up by test.
 CREATE INDEX IF NOT EXISTS perf_results_test ON perf_results(test_id, metric);
 
--- ---------- Version 36: one profile per athlete ----------
--- Athlete IDs that still find a profile: a team roster line's own ID from before version 36 (the athlete's profile
+-- ---------- Version 37: one profile per athlete ----------
+-- Athlete IDs that still find a profile: a team roster line's own ID from before version 37 (the athlete's profile
 -- has another ID now), so sheets and devices using the old ID keep landing on the right athlete. Never shown as an ID.
 CREATE TABLE IF NOT EXISTS athlete_id_aliases (
   athlete_id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  source TEXT NOT NULL,                         -- roster: a roster line's ID from before version 36
+  source TEXT NOT NULL,                         -- roster: a roster line's ID from before version 37
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS team_attendance_client ON team_attendance(client_id);

@@ -10,7 +10,7 @@ export const ROLES = {
   front_desk: 'Front desk: check-ins, sales, bookings, rosters, adding clients and families, and entering test results. Can view (not change) goals, messages and lessons.'
 };
 const OWNER_ONLY = [
-  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
+  /^\/v1\/(plans|subscriptions|invoices|billing|reports|organizations|team-contracts|team-invoices|team-billing|campaigns|api-keys|webhooks|webhook-deliveries|outbox|texts|digest|pay-links|shop|money-checks|staff|audit|backups|jobs)(\/|$)/, /^\/v1\/clients\/:id\/owed$/, /^\/v1\/client-export$/,
   /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/
 ];
 // Front desk: an explicit list of what it may do. Everything else is refused.

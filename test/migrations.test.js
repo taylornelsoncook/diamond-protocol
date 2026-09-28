@@ -1,4 +1,4 @@
-// Databases from earlier versions (schema 30, 31, 32, 33, 34 and 35) open with this version: new columns and tables are
+// Databases from earlier versions (schema 30, 31, 32, 33, 34, 35 and 36) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,8 +14,8 @@ import { syncLibrary, getTest, updateTest, getSession } from '../src/services/pe
 import { seedPresets } from '../src/services/library.js';
 import { recentUploads, undoUpload } from '../src/services/uploads.js';
 
-// Every database from before version 35 gains the point-of-sale pieces (version 35), and every one from before version 36
-// puts roster-only athletes on a profile of their own (version 36). These two helpers add a partly refunded cash sale and
+// Every database from before version 36 gains the point-of-sale pieces (version 36), and every one from before version 37
+// puts roster-only athletes on a profile of their own (version 37). These two helpers add a partly refunded cash sale and
 // a roster-only athlete to an old database, and check both after the upgrade.
 const POS_AT = '2026-02-01T16:00:00.000Z';
 function seedSaleAndRoster(old, { sale = true, roster = true } = {}) {
@@ -35,7 +35,7 @@ function checkSaleAndRoster(db, round, { sale = true, roster = true } = {}) {
     for (const c of ['discount_cents', 'discount_reason', 'request_id', 'receipt_opt', 'receipt_email', 'receipt_sent_at', 'receipt_token']) assert.ok(cols('sales').includes(c), `sales.${c}, round ${round}`);
     const s = db.get(`SELECT amount_cents, refunded_cents, discount_cents, receipt_token FROM sales WHERE id = 'sale_old'`);
     assert.deepEqual([s.amount_cents, s.refunded_cents, s.discount_cents], [3000, 500, 0], 'the old sale keeps its amounts');
-    assert.match(s.receipt_token, /^[0-9a-f]{36}$/, 'a sale from before version 35 gets a receipt link');
+    assert.match(s.receipt_token, /^[0-9a-f]{36}$/, 'a sale from before version 36 gets a receipt link');
     assert.deepEqual(db.all(`SELECT sale_id, amount_cents, kind, created_at FROM sale_refunds`), [{ sale_id: 'sale_old', amount_cents: 500, kind: 'refund', created_at: POS_AT }],
       'the old refund gets one row, dated when the sale was paid, and only once');
   }
@@ -72,7 +72,8 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.ok(cols('clients').includes('archived_at') && cols('clients').includes('archived_by'));
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.ok(cols('job_runs').includes('error') && cols('job_state').includes('lease_until'));   // background jobs, version 33
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       checkSaleAndRoster(db, round);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
@@ -93,7 +94,7 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 31 (commit c20ea7f) to 36: trial offers keep their special price on the offer. Existing offers stay standard.
+// Version 31 (commit c20ea7f) to 37: trial offers keep their special price on the offer. Existing offers stay standard.
 test('a version 31 database upgrades to trial-offer prices, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
@@ -113,7 +114,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       checkSaleAndRoster(db, round);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
@@ -126,7 +127,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 32 (commit 7079ba9) to 36 (B10's version 33 part; also point of sale and one profile per athlete): coach-written protocols, edits to built-in tests that survive the library refresh,
+// Version 32 (commit 7079ba9) to 37 (the test library, version 34; also background jobs, point of sale and one profile per athlete): coach-written protocols, edits to built-in tests that survive the library refresh,
 // possible ranges, presets (the standard ones added once) and report share links.
 test('a version 32 database upgrades to the test library changes, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -148,7 +149,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
       assert.ok(cols('perf_metrics').includes('min_value') && cols('perf_metrics').includes('max_value'));
       assert.ok(cols('test_presets').includes('test_keys'));
       assert.ok(cols('report_links').includes('token_hash'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       checkSaleAndRoster(db, round);
       const ctx = { db, now: () => new Date().toISOString() };
       syncLibrary(ctx);
@@ -170,7 +171,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 32 (commit 09e32ca) to 36 (B9's version 34 part): testing days remember when families were emailed, and uploads can be undone.
+// Version 32 (commit 09e32ca) to 37 (the Testing batch, version 35): testing days remember when families were emailed, and uploads can be undone.
 // Uploads saved before the upgrade can't be undone (nothing recorded what they wrote), so they aren't offered.
 test('a version 32 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
@@ -189,7 +190,7 @@ test('a version 32 database upgrades to undoable uploads and emailed-families tr
       assert.ok(cols('perf_sessions').includes('notified_at'), `round ${round}`);
       for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
       assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
       assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
@@ -200,15 +201,15 @@ test('a version 32 database upgrades to undoable uploads and emailed-families tr
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 33 (the test library, B10) to 36: the same testing-day and undo changes on a database that already has version 33,
+// Version 34 (the test library, B10) to 37: the same testing-day and undo changes on a database that already has version 34,
 // plus point of sale and one profile per athlete.
-test('a version 33 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
+test('a version 34 database upgrades to undoable uploads and emailed-families tracking, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v33.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 33');
+    old.exec(readFileSync(new URL('./fixtures/schema-v34.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 34');
     const now = new Date().toISOString();
     old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}')`);
     old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, created_at) VALUES ('imp_1', 'upload', 'old.xlsx', 4, 4, '${now}')`);
@@ -225,14 +226,14 @@ test('a version 33 database upgrades to undoable uploads and emailed-families tr
       assert.equal(db.get(`SELECT provider FROM results_queue WHERE id = 'q_1'`).provider, 'swift', 'results that waited under "Swift" join the lower-case device links');
       for (const c of ['kind', 'source_label', 'result_source', 'session_id', 'replaced', 'unchanged', 'prs', 'added_tests', 'created_by', 'undone_at', 'undone_by', 'undo_summary']) assert.ok(cols('import_batches').includes(c), c);
       assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       checkSaleAndRoster(db, round);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
       assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone, so it isn\'t listed');
       assert.throws(() => undoUpload(ctx, 'imp_1'), /not found/);
       assert.equal(db.get(`SELECT added_tests FROM import_batches WHERE id = 'imp_1'`).added_tests, '[]');
-      // What version 33 added is still there.
+      // What version 34 added is still there.
       assert.equal(db.get(`SELECT test_keys FROM test_presets WHERE id = 'tpr_1'`).test_keys, '["broad_jump"]');
       assert.deepEqual(db.get(`SELECT min_value, max_value FROM perf_metrics WHERE test_id = 'pt_1'`), { min_value: 5, max_value: 600 });
       assert.equal(db.get(`SELECT protocol FROM perf_tests WHERE id = 'pt_1'`).protocol, 'Back flat on the wall');
@@ -241,8 +242,8 @@ test('a version 33 database upgrades to undoable uploads and emailed-families tr
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ---- Version 36: one profile per athlete ----
-// A version 33 or 34 database with team roster athletes: roster-only athletes become clients with their printed IDs,
+// ---- Version 37: one profile per athlete ----
+// A version 33 (origin/main: background jobs), 34 or 35 database with team roster athletes: roster-only athletes become clients with their printed IDs,
 // a linked line's own ID keeps finding its client, results, device links, testing days and team attendance move to the
 // profile, a result that was on both is kept once, and an ID that collides with another client is resolved and logged.
 const T0 = '2026-03-01T15:00:00.000Z', T1 = '2026-03-02T15:00:00.000Z', T2 = '2026-03-10T15:00:00.000Z';
@@ -274,7 +275,7 @@ function seedTeams(old) {
   ins(`INSERT INTO team_attendance (session_id, roster_id, created_at) VALUES ('cls_t', 'tr_jalen', '${T2}'), ('cls_t', 'tr_ava', '${T2}')`);
 }
 
-for (const v of [33, 34]) {
+for (const v of [33, 34, 35]) {
   test(`a version ${v} database moves team roster athletes onto one profile each, and opening it twice is safe`, async () => {
     const { findByAthleteId } = await import('../src/services/athlete-ids.js');
     const { recordResults } = await import('../src/services/performance.js');
@@ -292,7 +293,7 @@ for (const v of [33, 34]) {
       for (const round of [1, 2]) {
         const db = openDb(file);
         const ctx = { db, now: () => new Date().toISOString() };
-        assert.equal(db.get('PRAGMA user_version').user_version, 36, `round ${round}`);
+        assert.equal(db.get('PRAGMA user_version').user_version, 37, `round ${round}`);
         checkSaleAndRoster(db, round, { roster: false });
         assert.equal(db.get('SELECT COUNT(*) AS n FROM team_roster WHERE client_id IS NULL').n, 0, 'every roster line has a profile');
         assert.equal(db.get('SELECT COUNT(*) AS n FROM clients').n, 5, 'Ava and Maya, plus Jalen, the second Jalen and the roster Maya');
@@ -331,11 +332,11 @@ for (const v of [33, 34]) {
         const day = getSession(ctx, 'tsn_1');
         assert.deepEqual(day.athletes.map((a) => [a.name, a.results.length]), [['Ava Lopez', 2], ['Jalen Brooks', 2], ['Maya Chen', 1], ['Maya Chen', 1]], 'both Maya Chens: the roster one and the client tested that day');
         // Logged for the owner, counted once.
-        const log = db.all(`SELECT action FROM audit_log WHERE actor_name = 'Upgrade to version 36'`).map((r) => r.action);
+        const log = db.all(`SELECT action FROM audit_log WHERE actor_name = 'Upgrade to version 37'`).map((r) => r.action);
         assert.ok(log.some((a) => /MAYCHE2026, which already belongs to another client/.test(a)), log.join('\n'));
         assert.ok(log.some((a) => /res_4/.test(a)));
         assert.ok(log.some((a) => /athletes named "jalen brooks"/.test(a)));
-        const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v36'`).value);
+        const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v37'`).value);
         assert.deepEqual([stats.roster_lines, stats.clients_created, stats.already_linked, stats.aliases, stats.results_moved, stats.duplicates_set_aside, stats.device_links_moved, stats.testing_days_updated, stats.attendance_moved, stats.collisions.length],
           [4, 3, 1, 1, 5, 1, 1, 1, 2, 1]);
         if (round === 1) {
@@ -349,7 +350,7 @@ for (const v of [33, 34]) {
           assert.deepEqual(up.athletes.map((a) => [a.client_id, a.athlete_id]), [['cli_ava', 'AVALOP2026'], [jalen.id, 'JALBRO2026']], 'an upload using an old roster ID lands on the profile');
         } else {
           assert.equal(db.get(`SELECT COUNT(*) AS n FROM perf_results WHERE client_id = 'cli_ava' AND value = 4.95`).n, 1, 'the second open keeps data written after the upgrade');
-          assert.equal(db.get('SELECT COUNT(*) AS n FROM audit_log WHERE actor_name = ?', 'Upgrade to version 36').n, log.length, 'the upgrade ran once');
+          assert.equal(db.get('SELECT COUNT(*) AS n FROM audit_log WHERE actor_name = ?', 'Upgrade to version 37').n, log.length, 'the upgrade ran once');
         }
         db.close();
       }
@@ -357,18 +358,70 @@ for (const v of [33, 34]) {
   });
 }
 
-// A roster line linked to a profile whose family was deleted before version 36, and one attempt with two different
+// Version 33 as origin/main shipped it (background jobs; staging already runs it) to 37: every one of our blocks still runs
+// on it: the test library (34), the Testing batch (35), point of sale (36) and one profile per athlete (37), and the job
+// history written on 33 is kept.
+test('a version 33 database from main (job tables) gains the test library, testing, point of sale and one profile per athlete, and opening it twice is safe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v33.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 33');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO job_runs (id, job, trigger, status, started_at, finished_at, duration_ms, result) VALUES ('run_1', 'billing', 'schedule', 'ok', '${now}', '${now}', 12, '{"charged":0}')`);
+    old.exec(`INSERT INTO job_state (job, lease_until, holder, fail_streak, last_ok_at) VALUES ('billing', '${now}', 'staging:1', 0, '${now}')`);
+    old.exec(`INSERT INTO perf_tests (id, key, name, category, attempts, builtin, active, created_at) VALUES ('pt_1', 'broad_jump', 'Broad jump', 'power', 2, 1, 0, '${now}')`);
+    old.exec(`INSERT INTO perf_metrics (test_id, key, name, unit, better) VALUES ('pt_1', 'distance', 'Distance', 'in', 'higher')`);
+    old.exec(`INSERT INTO perf_sessions (id, name, date, test_keys, athletes, shared_at, created_at) VALUES ('tsn_1', 'Combine', '2026-09-01', '[]', '[]', '${now}', '${now}')`);
+    old.exec(`INSERT INTO import_batches (id, provider, filename, total_rows, imported, created_at) VALUES ('imp_1', 'upload', 'old.xlsx', 4, 4, '${now}')`);
+    old.exec(`INSERT INTO results_queue (id, provider, source, identity, athlete_ref, item, status, received_at) VALUES ('q_1', 'Swift', 'api', 'id:D1', '{}', '{}', 'pending', '${now}')`);
+    seedSaleAndRoster(old);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37, `round ${round}`);
+      // Main's version 33: kept as it was.
+      assert.deepEqual({ ...db.get(`SELECT job, status, result FROM job_runs WHERE id = 'run_1'`) }, { job: 'billing', status: 'ok', result: '{"charged":0}' });
+      assert.equal(db.get(`SELECT holder FROM job_state WHERE job = 'billing'`).holder, 'staging:1');
+      // Version 34: the test library.
+      assert.ok(cols('perf_tests').includes('protocol') && cols('perf_tests').includes('edited'));
+      assert.ok(cols('perf_metrics').includes('min_value') && cols('perf_metrics').includes('max_value'));
+      assert.ok(cols('test_presets').includes('test_keys') && cols('report_links').includes('token_hash'));
+      const ctx = { db, now: () => new Date().toISOString() };
+      syncLibrary(ctx);
+      seedPresets(ctx);
+      assert.deepEqual(getTest(ctx, 'broad_jump').metrics[0].range, [30, 150]);
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM test_presets').n, 7, 'the standard presets are added once');
+      // Version 35: the Testing batch.
+      assert.ok(cols('perf_sessions').includes('notified_at'));
+      assert.deepEqual(cols('import_batch_items'), ['batch_id', 'result_id', 'value', 'replaced', 'queue_id']);
+      for (const c of ['kind', 'session_id', 'added_tests', 'undone_at']) assert.ok(cols('import_batches').includes(c), c);
+      assert.equal(db.get(`SELECT provider FROM results_queue WHERE id = 'q_1'`).provider, 'swift');
+      assert.equal(recentUploads(ctx).length, 0, 'an upload from before can\'t be undone');
+      assert.equal(getSession(ctx, 'tsn_1').notified_at, null);
+      // Versions 36 and 37: point of sale (columns, refund backfill, receipt link) and the roster athlete's own profile.
+      checkSaleAndRoster(db, round);
+      const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v37'`).value);
+      assert.deepEqual([stats.roster_lines, stats.clients_created], [1, 1]);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A roster line linked to a profile whose family was deleted before version 37, and one attempt with two different
 // values (roster and client): the deleted athlete comes off the roster with no name, ID or device link, their roster
 // results are set aside (not deleted) and nothing new can reach the nameless profile; the two values are both kept and logged.
-test('a version 34 database: a deleted family\'s roster line stays deleted, and conflicting attempts are kept and logged', async () => {
+test('a version 35 database: a deleted family\'s roster line stays deleted, and conflicting attempts are kept and logged', async () => {
   const { findByAthleteId } = await import('../src/services/athlete-ids.js');
   const { restoreRoster } = await import('../src/services/teams.js');
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v34.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 34');
+    old.exec(readFileSync(new URL('./fixtures/schema-v35.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 35');
     seedTeams(old);
     old.exec(`INSERT INTO families (id, name, created_at) VALUES ('fam_gone', 'Deleted family', '${T0}')`);
     old.exec(`INSERT INTO clients (id, family_id, name, athlete_id, access_token, created_at) VALUES ('cli_gone', 'fam_gone', 'Deleted athlete', NULL, 'gone_abc', '${T0}')`);
@@ -389,16 +442,16 @@ test('a version 34 database: a deleted family\'s roster line stays deleted, and 
       assert.equal(db.get(`SELECT 1 FROM athlete_links WHERE external_id = 'SW-K'`), undefined);
       assert.throws(() => restoreRoster(ctx, 'tc_1', 'tr_kelly'), /deleted/);
       assert.deepEqual(db.all(`SELECT id FROM perf_results WHERE id IN ('res_a3', 'res_c3') AND client_id = 'cli_ava' AND voided = 0 ORDER BY id`).map((r) => r.id), ['res_a3', 'res_c3'], 'two different values: both kept');
-      const log = db.all(`SELECT action FROM audit_log WHERE actor_name = 'Upgrade to version 36'`).map((r) => r.action);
+      const log = db.all(`SELECT action FROM audit_log WHERE actor_name = 'Upgrade to version 37'`).map((r) => r.action);
       assert.ok(log.some((a) => /res_a3/.test(a) && /res_c3/.test(a) && /different values/.test(a)), log.join('\n'));
-      const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v36'`).value);
+      const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v37'`).value);
       assert.deepEqual([stats.deleted_profiles, stats.deleted_results_set_aside, stats.slot_conflicts], [1, 1, 1]);
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 35 (batch B5, point of sale): discounts, request ids and receipts on sales, and refunds with their own date (from version 32 to 36).
+// Version 36 (batch B5, point of sale): discounts, request ids and receipts on sales, and refunds with their own date (from version 32 to 37).
 test('an older database gains the point-of-sale columns and refund log, and old sales keep their amounts', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
@@ -417,23 +470,23 @@ test('an older database gains the point-of-sale columns and refund log, and old 
       assert.ok(db.all('PRAGMA table_info(sale_refunds)').map((c) => c.name).includes('kind'));
       const s = db.get(`SELECT amount_cents, refunded_cents, discount_cents FROM sales WHERE id = 'sale_1'`);
       assert.deepEqual([s.amount_cents, s.refunded_cents, s.discount_cents], [3000, 500, 0]);
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       assert.deepEqual(db.all('SELECT sale_id, amount_cents, kind, created_at FROM sale_refunds'), [{ sale_id: 'sale_1', amount_cents: 500, kind: 'refund', created_at: now }], 'the old refund is logged once');
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 34 (commit e32924d, the Testing batch) to 36: sales gain discounts, request ids and receipts (version 35),
-// refunds get their own log, a roster-only athlete gets a profile (version 36), and what version 34 wrote
+// Version 35 (commit e32924d, the Testing batch) to 37: sales gain discounts, request ids and receipts (version 36),
+// refunds get their own log, a roster-only athlete gets a profile (version 37), and what version 35 wrote
 // (undoable uploads, families emailed) is kept.
-test('a version 34 database upgrades to the point-of-sale changes, and opening it twice is safe', () => {
+test('a version 35 database upgrades to the point-of-sale changes, and opening it twice is safe', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v34.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 34');
+    old.exec(readFileSync(new URL('./fixtures/schema-v35.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 35');
     const now = new Date().toISOString();
     old.exec(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES ('loc_1', 'Facility', 'facility', 'US', 1, '${now}')`);
     old.exec(`INSERT INTO sales (id, location_id, method, status, amount_cents, refunded_cents, created_at, completed_at) VALUES ('sale_1', 'loc_1', 'cash', 'succeeded', 4500, 0, '${now}', '${now}')`);
@@ -448,16 +501,16 @@ test('a version 34 database upgrades to the point-of-sale changes, and opening i
       const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
       for (const c of ['discount_cents', 'discount_reason', 'request_id', 'receipt_opt', 'receipt_email', 'receipt_sent_at', 'receipt_token']) assert.ok(cols('sales').includes(c), `${c}, round ${round}`);
       assert.ok(cols('sale_refunds').includes('kind'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 36);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37);
       const s = db.get(`SELECT amount_cents, discount_cents, receipt_token FROM sales WHERE id = 'sale_1'`);
       assert.deepEqual([s.amount_cents, s.discount_cents], [4500, 0]);
-      assert.match(s.receipt_token, /^[0-9a-f]{36}$/, 'sales paid before version 35 get a receipt link');
+      assert.match(s.receipt_token, /^[0-9a-f]{36}$/, 'sales paid before version 36 get a receipt link');
       // A refund made before refunds had their own rows gets one, once, so the sale's details and takings add up.
       assert.deepEqual(db.all(`SELECT sale_id, amount_cents, created_at FROM sale_refunds`), [{ sale_id: 'sale_2', amount_cents: 1000, created_at: now }]);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(getSession(ctx, 'tsn_1').notified_at, now, 'families already emailed stay marked');
       const ups = recentUploads(ctx);
-      assert.deepEqual([ups.length, ups[0].id, ups[0].session_name], [1, 'imp_1', 'Combine'], 'an upload saved on version 34 can still be undone');
+      assert.deepEqual([ups.length, ups[0].id, ups[0].session_name], [1, 'imp_1', 'Combine'], 'an upload saved on version 35 can still be undone');
       assert.equal(db.get(`SELECT COUNT(*) AS n FROM import_batch_items WHERE batch_id = 'imp_1'`).n, 1);
       checkSaleAndRoster(db, round, { sale: false });
       db.close();
@@ -465,17 +518,17 @@ test('a version 34 database upgrades to the point-of-sale changes, and opening i
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Version 35 (commit 0fec356, point of sale) to 36 (one profile per athlete): the point-of-sale data written on version 35
+// Version 36 (commit 0fec356, point of sale) to 37 (one profile per athlete): the point-of-sale data written on version 36
 // (discounts, receipt links, refunds and undos with their own rows) is kept as it was and not logged again, and a
 // roster-only athlete gets a profile of their own with the printed ID.
-test('a version 35 database with sales and refunds moves roster athletes onto one profile each, and opening it twice is safe', async () => {
+test('a version 36 database with sales and refunds moves roster athletes onto one profile each, and opening it twice is safe', async () => {
   const { findByAthleteId } = await import('../src/services/athlete-ids.js');
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(dir, 'old.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v35.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 35');
+    old.exec(readFileSync(new URL('./fixtures/schema-v36.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 36');
     const at = '2026-04-02T17:00:00.000Z', later = '2026-04-03T17:00:00.000Z';
     old.exec(`INSERT INTO locations (id, name, kind, active, created_at) VALUES ('loc_1', 'Facility', 'facility', 1, '${at}')`);
     old.exec(`INSERT INTO clients (id, name, athlete_id, access_token, created_at) VALUES ('cli_ava', 'Ava Lopez', 'AVALOP2026', 'tok-ava', '${at}')`);
@@ -492,12 +545,12 @@ test('a version 35 database with sales and refunds moves roster athletes onto on
     for (const round of [1, 2]) {
       const db = openDb(file);
       const ctx = { db, now: () => new Date().toISOString() };
-      assert.equal(db.get('PRAGMA user_version').user_version, 36, `round ${round}`);
+      assert.equal(db.get('PRAGMA user_version').user_version, 37, `round ${round}`);
       // Point of sale: unchanged.
       assert.deepEqual({ ...db.get(`SELECT client_id, amount_cents, refunded_cents, discount_cents, discount_reason, request_id, receipt_token FROM sales WHERE id = 'sale_1'`) },
         { client_id: 'cli_ava', amount_cents: 4000, refunded_cents: 1500, discount_cents: 500, discount_reason: 'Sibling discount', request_id: 'req-1', receipt_token: 'abc123receipt' });
       assert.deepEqual(db.all(`SELECT id, amount_cents, kind, created_at FROM sale_refunds WHERE id != 'ref_3' ORDER BY id`).map((r) => ({ ...r })),
-        [{ id: 'ref_1', amount_cents: 1000, kind: 'refund', created_at: at }, { id: 'ref_2', amount_cents: 500, kind: 'undo', created_at: later }], 'refunds logged on version 35 are not logged again');
+        [{ id: 'ref_1', amount_cents: 1000, kind: 'refund', created_at: at }, { id: 'ref_2', amount_cents: 500, kind: 'undo', created_at: later }], 'refunds logged on version 36 are not logged again');
       // One profile per athlete.
       assert.equal(db.get('SELECT COUNT(*) AS n FROM team_roster WHERE client_id IS NULL').n, 0, 'every roster line has a profile');
       assert.equal(db.get('SELECT COUNT(*) AS n FROM clients').n, 2, 'Ava keeps her profile; Jalen gets one');
@@ -506,7 +559,7 @@ test('a version 35 database with sales and refunds moves roster athletes onto on
       assert.equal(findByAthleteId(ctx, 'JALBRO2026').client_id, jalen.id);
       assert.equal(db.get(`SELECT client_id FROM team_roster WHERE id = 'tr_ava'`).client_id, 'cli_ava');
       assert.ok(!db.get(`SELECT 1 FROM sqlite_master WHERE name = 'roster_athlete_id'`), 'roster lines no longer need their own unique ID');
-      const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v36'`).value);
+      const stats = JSON.parse(db.get(`SELECT value FROM settings WHERE key = 'upgrade_v37'`).value);
       assert.deepEqual([stats.roster_lines, stats.clients_created, stats.already_linked], [2, 1, 1]);
       if (round === 1) {
         db.run(`INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, created_at) VALUES ('ref_3', 'sale_1', 100, 'refund', ?)`, later);

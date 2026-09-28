@@ -46,7 +46,7 @@ export function assignMissingIds(ctx) {
   return rows.length;
 }
 // Finds an athlete's profile by ID, any capitalization: their Athlete ID, or an old team roster ID from before
-// version 36 that now belongs to their profile. Always { client_id } (or null).
+// version 37 that now belongs to their profile. Always { client_id } (or null).
 export function findByAthleteId(ctx, raw) {
   const id = String(raw ?? '').trim().toUpperCase();
   if (!ID_PATTERN.test(id)) return null;
@@ -55,5 +55,5 @@ export function findByAthleteId(ctx, raw) {
   const a = aliasOf(ctx, id);
   return a ? { client_id: a.client_id } : null;
 }
-// The profile a team roster line belongs to (every line has one since version 36).
+// The profile a team roster line belongs to (every line has one since version 37).
 export const clientOfRoster = (ctx, rosterId) => (rosterId ? ctx.db.get('SELECT client_id FROM team_roster WHERE id = ?', String(rosterId))?.client_id ?? null : null);

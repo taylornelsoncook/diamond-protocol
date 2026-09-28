@@ -42,6 +42,19 @@ services:
         sync: false
       - key: SMS_ONLY_TO
         sync: false
+      # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_KEY_ID
+        sync: false
+      - key: BACKUP_S3_SECRET
+        sync: false
+      - key: BACKUP_S3_PREFIX
+        value: staging/
+      - key: BACKUP_PASSPHRASE
+        sync: false
 
   # Production: real families. Deploys only when you press Manual Deploy.
   - type: web
@@ -90,4 +103,17 @@ services:
         sync: false
       # Optional: Claude rewords progress notes for parents (coaches still approve each one).
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
+      - key: BACKUP_S3_ENDPOINT
+        sync: false
+      - key: BACKUP_S3_BUCKET
+        sync: false
+      - key: BACKUP_S3_KEY_ID
+        sync: false
+      - key: BACKUP_S3_SECRET
+        sync: false
+      - key: BACKUP_S3_PREFIX
+        value: production/
+      - key: BACKUP_PASSPHRASE
         sync: false

@@ -188,7 +188,7 @@ export function updateTest(ctx, keyOrId, body) {
 }
 
 // ---------- Athletes: one profile per athlete ----------
-// Team roster athletes are clients too (version 36), so every result, link and testing day athlete is a client.
+// Team roster athletes are clients too (version 37), so every result, link and testing day athlete is a client.
 // A roster_id sent by an older integration means that roster line's client.
 const norm = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 const athleteIdOf = (ctx, a) => (a.client_id ? ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', a.client_id)?.athlete_id : undefined);
@@ -416,7 +416,7 @@ export function parentFilter(ctx) {
 // ---------- Testing days ----------
 const whoKey = (a) => ({ client_id: a.client_id });
 const sameAthlete = (a, b) => !!a.client_id && a.client_id === b.client_id;
-// A testing day's planned athletes, as profiles (a {roster_id} left from before version 36 is that line's client).
+// A testing day's planned athletes, as profiles (a {roster_id} left from before version 37 is that line's client).
 const plannedOf = (ctx, s) => {
   const out = [];
   for (const a of JSON.parse(s.athletes)) {

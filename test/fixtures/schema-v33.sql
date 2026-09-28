@@ -630,9 +630,7 @@ CREATE TABLE IF NOT EXISTS perf_tests (
   builtin INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   sort INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  protocol TEXT,                                 -- version 33: the coach's own "how to run it" (NULL = the built-in text)
-  edited TEXT NOT NULL DEFAULT '[]'              -- version 33: fields a coach changed on a built-in test; the library refresh leaves them alone
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS perf_metrics (
   test_id TEXT NOT NULL REFERENCES perf_tests(id) ON DELETE CASCADE,
@@ -643,8 +641,6 @@ CREATE TABLE IF NOT EXISTS perf_metrics (
   decimals INTEGER NOT NULL DEFAULT 2,
   aliases TEXT NOT NULL DEFAULT '[]',
   sort INTEGER NOT NULL DEFAULT 0,
-  min_value REAL,                                -- version 33: the coach's possible range (NULL = the built-in range)
-  max_value REAL,
   PRIMARY KEY (test_id, key)
 );
 -- A testing day: a combine, an evaluation, or a team's preseason testing.
@@ -760,6 +756,32 @@ CREATE TABLE IF NOT EXISTS audit_log (
   ip TEXT
 );
 CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
+
+-- ---- Background jobs ----
+-- One row per finished run (kept 30 days). The webhook sender, which runs every 15 seconds, only records failures.
+CREATE TABLE IF NOT EXISTS job_runs (
+  id TEXT PRIMARY KEY,
+  job TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'schedule' CHECK (trigger IN ('schedule','manual')),
+  status TEXT NOT NULL CHECK (status IN ('ok','skipped','failed')),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  duration_ms INTEGER,
+  result TEXT,
+  error TEXT,
+  instance TEXT
+);
+CREATE INDEX IF NOT EXISTS job_runs_job ON job_runs(job, started_at);
+CREATE INDEX IF NOT EXISTS job_runs_started ON job_runs(started_at);
+-- Per job: which server copy holds it until when (so copies sharing this database don't both run it), and alert state.
+CREATE TABLE IF NOT EXISTS job_state (
+  job TEXT PRIMARY KEY,
+  lease_until TEXT,
+  holder TEXT,
+  fail_streak INTEGER NOT NULL DEFAULT 0,
+  last_ok_at TEXT,
+  alerted_at TEXT
+);
 
 -- ---- Terms, privacy and data requests ----
 -- Each parent's acceptance of each version of the terms and privacy policy.
@@ -1041,33 +1063,3 @@ CREATE TABLE IF NOT EXISTS client_notes (
   updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS client_notes_client ON client_notes(client_id, created_at);
-
--- ---------- Version 33: test library presets and progress report share links (batch B10) ----------
--- A named set of tests to start a testing day from (Combine, Force plate...). test_keys: ordered perf_tests keys.
-CREATE TABLE IF NOT EXISTS test_presets (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-  test_keys TEXT NOT NULL DEFAULT '[]',
-  sort INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT
-);
--- A private link to one athlete's progress report (the family view) that works without signing in until it expires
--- or is turned off. Only a hash of the link's secret is stored, so the database never holds a working link.
-CREATE TABLE IF NOT EXISTS report_links (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  token_hash TEXT NOT NULL UNIQUE,
-  label TEXT,
-  created_by_kind TEXT NOT NULL CHECK (created_by_kind IN ('staff','parent')),
-  created_by_id TEXT,
-  created_by_name TEXT,
-  created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  revoked_at TEXT,
-  views INTEGER NOT NULL DEFAULT 0,
-  last_viewed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS report_links_client ON report_links(client_id, created_at);
--- The test library's usage counts, record boards and "can it be deleted" checks look results up by test.
-CREATE INDEX IF NOT EXISTS perf_results_test ON perf_results(test_id, metric);

@@ -71,7 +71,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Point your domain at the host and confirm the padlock (HTTPS) shows.
 - [ ] Check `https://your-domain/healthz` shows `{"ok":true}`.
 - [ ] **First sign-in:** choose your own password, then remove `ADMIN_PASSWORD` from the host's settings.
-- [ ] **Stripe webhook:** add `https://your-domain/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
+- [ ] **Stripe webhook:** add `https://your-domain/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`. Put its signing secret in `STRIPE_WEBHOOK_SECRET` and redeploy.
 - [ ] **Uptime alert:** sign up for a free uptime monitor (UptimeRobot, Better Stack or similar) pointed at `/healthz`, so you get a text or email if the site goes down.
 
 ## 8. Set it up with your real business
@@ -95,7 +95,8 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Run one real session: roster check-in and collecting from someone unpaid.
 - [ ] Run one small testing day, share it, and check the parent report.
 - [ ] Send one school invoice to yourself and pay it online.
-- [ ] Download a backup and confirm it opens (Claude Code can check it with you).
+- [ ] Set up off-site backups (DEPLOY.md → Backups) and confirm Staff & security shows **Off-site: OK**.
+- [ ] Restore one off-site copy with `src/restore-backup.js` and confirm it opens (Claude Code can check it with you).
 - [ ] Write down anything confusing and send it to me.
 
 ## 10. Public launch
@@ -110,7 +111,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 ## 11. After launch: your routine
 
 - **Daily:** Today screen (failed payments, overdue invoices, results waiting to be linked, new sign-ups, deletion requests).
-- **Weekly:** download a backup and store it off the server; glance at the activity log for refused or failed sign-ins.
+- **Weekly:** check Staff & security shows **Off-site: OK** for backups; glance at the activity log for refused or failed sign-ins.
 - **Monthly:** review staff accounts (turn off anyone who left), check Stripe payouts against Billing, and ask me for updates.
 
 ## Still on my side (next builds)

@@ -323,10 +323,35 @@ CREATE TABLE IF NOT EXISTS sales (
   note TEXT,
   created_by TEXT,
   created_at TEXT NOT NULL,
-  completed_at TEXT
+  completed_at TEXT,
+  -- version 35 (batch B5, point of sale): a discount on the whole sale (amount_cents is what was paid after it),
+  -- the counter's request id (a second press of Charge returns the first sale), and the emailed receipt
+  -- (receipt_opt: NULL = the automatic-receipt setting decides, 1 = send, 0 = don't; receipt_token opens the printable page).
+  discount_cents INTEGER NOT NULL DEFAULT 0,
+  discount_reason TEXT,
+  request_id TEXT,
+  receipt_opt INTEGER,
+  receipt_email TEXT,
+  receipt_sent_at TEXT,
+  receipt_token TEXT
 );
 CREATE INDEX IF NOT EXISTS sales_created ON sales(created_at);
 CREATE INDEX IF NOT EXISTS sales_ref ON sales(payment_ref);
+CREATE INDEX IF NOT EXISTS sales_completed ON sales(completed_at);
+CREATE INDEX IF NOT EXISTS sales_request ON sales(request_id);
+CREATE INDEX IF NOT EXISTS sales_receipt ON sales(receipt_token);
+-- Version 35: each refund of a sale, so the day's takings count a refund on the day the money went back.
+CREATE TABLE IF NOT EXISTS sale_refunds (
+  id TEXT PRIMARY KEY,
+  sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  kind TEXT NOT NULL DEFAULT 'refund' CHECK (kind IN ('refund','undo')),
+  reason TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sale_refunds_created ON sale_refunds(created_at);
+CREATE INDEX IF NOT EXISTS sale_refunds_sale ON sale_refunds(sale_id);
 CREATE TABLE IF NOT EXISTS sale_items (
   id TEXT PRIMARY KEY,
   sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,

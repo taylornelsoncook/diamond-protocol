@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 36;
+const SCHEMA_VERSION = 37;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -62,14 +62,15 @@ const ADDED_TABLES = {
   29: ['money_checks'],                                                   // daily money checks
   30: ['guardian_message_reads'],                                         // parents' own read state for coach messages
   31: ['time_off', 'client_notes'],                                       // coach time off, staff notes on clients
-  // ---- version 33 (batch B10): test presets and report share links
-  33: ['test_presets', 'report_links'],
-  // ---- Version 34: testing days, undo an upload (B9) ----
-  34: ['import_batch_items'],
-  // ---- version 35 (batch B5, point of sale): refunds with their own date, for the day's takings
-  35: ['sale_refunds'],
-  // ---- Version 36: one profile per athlete (team roster athletes are clients) ----
-  36: ['athlete_id_aliases']
+  33: ['job_runs', 'job_state'],                                          // background job history and leases
+  // ---- version 34 (batch B10): test presets and report share links
+  34: ['test_presets', 'report_links'],
+  // ---- Version 35: testing days, undo an upload (B9) ----
+  35: ['import_batch_items'],
+  // ---- version 36 (batch B5, point of sale): refunds with their own date, for the day's takings
+  36: ['sale_refunds'],
+  // ---- Version 37: one profile per athlete (team roster athletes are clients) ----
+  37: ['athlete_id_aliases']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -90,14 +91,14 @@ const ADDED_COLUMNS = {
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
   spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
-  // ---- version 33 (batch B10): coach-written protocols, edits to built-in tests that survive the library refresh, possible ranges
+  // ---- version 34 (batch B10): coach-written protocols, edits to built-in tests that survive the library refresh, possible ranges
   perf_tests: ['protocol TEXT', "edited TEXT NOT NULL DEFAULT '[]'"],
   perf_metrics: ['min_value REAL', 'max_value REAL'],
-  // ---- Version 34: testing days (families emailed), undo an upload (B9) ----
-  perf_sessions: ['shared_at TEXT', 'parent_note TEXT', 'notified_at TEXT'],                  // shared: version 10; notified_at: version 34
+  // ---- Version 35: testing days (families emailed), undo an upload (B9) ----
+  perf_sessions: ['shared_at TEXT', 'parent_note TEXT', 'notified_at TEXT'],                  // shared: version 10; notified_at: version 35
   import_batches: ['kind TEXT', 'source_label TEXT', 'result_source TEXT', 'session_id TEXT', 'replaced INTEGER NOT NULL DEFAULT 0', 'unchanged INTEGER NOT NULL DEFAULT 0',
     'prs INTEGER NOT NULL DEFAULT 0', "added_tests TEXT NOT NULL DEFAULT '[]'", 'created_by TEXT', 'undone_at TEXT', 'undone_by TEXT', 'undo_summary TEXT'],
-  // ---- version 35 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
+  // ---- version 36 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
   sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT']
 };
 
@@ -116,24 +117,24 @@ function migrate(raw, schema) {
   if (version < 15) rebuild(raw, schema, ['sales']);                                  // 'online' payment method for pay links
   if (version < 23) rebuild(raw, schema, ['workout_logs']);                           // screen logs without a program assignment
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
-  // Version 34: device names are matched in lower case, so results that waited under "Swift" join "swift".
-  if (version < 34 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {
+  // Version 35: device names are matched in lower case, so results that waited under "Swift" join "swift".
+  if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {
     raw.exec('UPDATE results_queue SET provider = lower(trim(provider)) WHERE provider != lower(trim(provider))');
   }
-  // Version 35: refunds made before refunds had their own rows get one (dated when the sale was paid, the best we know),
+  // Version 36: refunds made before refunds had their own rows get one (dated when the sale was paid, the best we know),
   // so a sale's details and the day's takings add up; paid sales get a receipt link.
-  if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
+  if (version < 36 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
     raw.exec(`INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_at)
       SELECT 'ref_' || lower(hex(randomblob(8))), id, refunded_cents, 'refund', 'Refunded before refunds were logged', COALESCE(completed_at, created_at) FROM sales
       WHERE refunded_cents > 0 AND id NOT IN (SELECT sale_id FROM sale_refunds)`);
     raw.exec(`UPDATE sales SET receipt_token = lower(hex(randomblob(18))) WHERE receipt_token IS NULL AND (client_id IS NULL OR client_id NOT IN (SELECT id FROM clients WHERE name = 'Deleted athlete'))`);
   }
-  // ---- Version 36: one profile per athlete ----
-  if (version < 36) oneProfilePerAthlete(raw, schema);
+  // ---- Version 37: one profile per athlete ----
+  if (version < 37) oneProfilePerAthlete(raw, schema);
 }
 
-// ---------- Version 36: one profile per athlete ----------
-// Before version 36 a team athlete could be only a roster line with its own Athlete ID, results, device links and
+// ---------- Version 37: one profile per athlete ----------
+// Before version 37 a team athlete could be only a roster line with its own Athlete ID, results, device links and
 // attendance. Now every roster line links a client and everything is kept on that client:
 // - A line without a client gets one (name, position, grad year; the school for a school team; no family, no membership),
 //   with the line's own Athlete ID, so printed IDs keep working. If a client already has that ID (only possible in
@@ -144,7 +145,7 @@ function migrate(raw, schema) {
 //   is now on the profile twice (same test, metric, side, attempt, value, time and testing day, from the client and the
 //   line) is kept once: the extra copy is set aside (voided), never deleted, and nothing that points at it breaks.
 // Everything happens in one transaction; each collision and merged duplicate is written to the audit log, and the
-// counts to the upgrade_v36 setting.
+// counts to the upgrade_v37 setting.
 function oneProfilePerAthlete(raw, schema) {
   const has = (t) => !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
   if (!has('team_roster')) return;
@@ -156,7 +157,7 @@ function oneProfilePerAthlete(raw, schema) {
   const ctx = { db: { get, all, run }, now: () => now };
   const stats = { roster_lines: 0, clients_created: 0, already_linked: 0, deleted_profiles: 0, deleted_results_set_aside: 0, slot_conflicts: 0, aliases: 0, collisions: [], results_moved: 0, duplicates_set_aside: 0, device_links_moved: 0, testing_days_updated: 0, attendance_moved: 0, attendance_merged: 0 };
   const log = (message, target = null) => {
-    if (has('audit_log')) run('INSERT INTO audit_log (id, at, actor_type, actor_name, action, target) VALUES (?, ?, ?, ?, ?, ?)', newId('aud'), now, 'system', 'Upgrade to version 36', message, target);
+    if (has('audit_log')) run('INSERT INTO audit_log (id, at, actor_type, actor_name, action, target) VALUES (?, ?, ?, ?, ?, ?)', newId('aud'), now, 'system', 'Upgrade to version 37', message, target);
   };
   const addAlias = (id, clientId, line) => {
     const owner = get('SELECT id FROM clients WHERE athlete_id = ?', id), alias = get('SELECT client_id FROM athlete_id_aliases WHERE athlete_id = ?', id);
@@ -181,7 +182,7 @@ function oneProfilePerAthlete(raw, schema) {
       const aid = line.athlete_id ? String(line.athlete_id).trim().toUpperCase() : null;
       const client = line.client_id ? get('SELECT id, athlete_id, access_token FROM clients WHERE id = ?', line.client_id) : null;
       if (client && String(client.access_token ?? '').startsWith('gone_')) {
-        // Linked to a profile whose family was deleted (before version 36 that left the roster line alone). Do what a
+        // Linked to a profile whose family was deleted (before version 37 that left the roster line alone). Do what a
         // deletion does now: the line comes off the roster with no name or ID, its device links go, and its results are
         // set aside (voided, not deleted) on the nameless profile. Its old ID finds nobody, so nothing new lands there.
         run(`UPDATE team_roster SET name = 'Deleted athlete', athlete_id = NULL, position = NULL, grad_year = NULL, active = 0 WHERE id = ?`, line.id);
@@ -241,7 +242,7 @@ function oneProfilePerAthlete(raw, schema) {
           for (const o of origins.slice(1)) {
             for (const [i, r] of byOrigin.get(o).entries()) {
               if (i >= keep.length) { keep.push(r); continue; }
-              run(`UPDATE perf_results SET voided = 1, notes = trim(COALESCE(notes, '') || ' ' || ?) WHERE id = ?`, `(Same result as ${keep[i].id}, merged onto one profile in the version 36 upgrade.)`, r.id);
+              run(`UPDATE perf_results SET voided = 1, notes = trim(COALESCE(notes, '') || ' ' || ?) WHERE id = ?`, `(Same result as ${keep[i].id}, merged onto one profile in the version 37 upgrade.)`, r.id);
               stats.duplicates_set_aside++;
               log(`Result ${r.id} was on the athlete's profile twice (from the team roster and the client); the copy was set aside.`, r.id);
             }
@@ -281,19 +282,19 @@ function oneProfilePerAthlete(raw, schema) {
     // Team attendance: by client instead of by roster line (a client on the roster twice counts once per session).
     if (cols('team_attendance').includes('roster_id')) {
       const before = get('SELECT COUNT(*) AS n FROM team_attendance').n;
-      raw.exec(createStatement(schema, 'team_attendance').replace('CREATE TABLE IF NOT EXISTS team_attendance (', 'CREATE TABLE team_attendance_v36 ('));
-      run(`INSERT OR IGNORE INTO team_attendance_v36 (session_id, client_id, created_at) SELECT a.session_id, t.client_id, MIN(a.created_at)
+      raw.exec(createStatement(schema, 'team_attendance').replace('CREATE TABLE IF NOT EXISTS team_attendance (', 'CREATE TABLE team_attendance_v37 ('));
+      run(`INSERT OR IGNORE INTO team_attendance_v37 (session_id, client_id, created_at) SELECT a.session_id, t.client_id, MIN(a.created_at)
         FROM team_attendance a JOIN team_roster t ON t.id = a.roster_id WHERE t.client_id IS NOT NULL GROUP BY a.session_id, t.client_id`);
-      stats.attendance_moved = get('SELECT COUNT(*) AS n FROM team_attendance_v36').n;
+      stats.attendance_moved = get('SELECT COUNT(*) AS n FROM team_attendance_v37').n;
       stats.attendance_merged = before - stats.attendance_moved;
       raw.exec('DROP TABLE team_attendance');
-      raw.exec('ALTER TABLE team_attendance_v36 RENAME TO team_attendance');
+      raw.exec('ALTER TABLE team_attendance_v37 RENAME TO team_attendance');
     }
-    if (has('settings')) run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', 'upgrade_v36', JSON.stringify({ at: now, ...stats }));
+    if (has('settings')) run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', 'upgrade_v37', JSON.stringify({ at: now, ...stats }));
     raw.exec('COMMIT');
   } catch (e) { raw.exec('ROLLBACK'); throw e; }
   finally { raw.exec('PRAGMA foreign_keys = ON'); }
-  if (stats.collisions.length) console.warn(`Upgrade to version 36: ${stats.collisions.length} Athlete ID ${stats.collisions.length === 1 ? 'collision' : 'collisions'} resolved (see the audit log).`);
+  if (stats.collisions.length) console.warn(`Upgrade to version 37: ${stats.collisions.length} Athlete ID ${stats.collisions.length === 1 ? 'collision' : 'collisions'} resolved (see the audit log).`);
 }
 // SQLite can't change constraints in place: create the new table, copy shared columns, swap.
 function rebuild(raw, schema, tables, prerequisites = []) {

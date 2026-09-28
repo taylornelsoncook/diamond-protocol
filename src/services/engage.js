@@ -867,7 +867,7 @@ export function teamEngagement(ctx, contractId) {
   };
 }
 // Team names for pickers (no money).
-// Every roster athlete has a profile and the app (version 36); archived athletes aren't reached, so they aren't counted.
+// Every roster athlete has a profile and the app (version 37); archived athletes aren't reached, so they aren't counted.
 export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org_name,
     (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS roster_count,
     (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS app_athletes

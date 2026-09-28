@@ -3424,7 +3424,7 @@ function renderPasswordChange(forced) {
 
 async function viewStaff(main) {
   if (!isOwner()) return fill(main, header('Staff & security', 'Only owners can manage staff.'));
-  const [staff, audit, bk] = await Promise.all([get('/v1/staff'), get('/v1/audit?limit=100'), get('/v1/backups')]);
+  const [staff, audit, bk, jobs] = await Promise.all([get('/v1/staff'), get('/v1/audit?limit=100'), get('/v1/backups'), get('/v1/jobs')]);
   const ROLE = { owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' };
   const n = input(), e = input({ type: 'email' }), role = select(Object.keys(staff.roles).map((k) => [k, ROLE[k]]), { value: 'coach' });
   const roleHelp = h('p', { class: 'small muted' }, staff.roles.coach);
@@ -3453,11 +3453,38 @@ async function viewStaff(main) {
         h('td', { class: 'small' }, a.action === 'sign-in' ? ACT(a) : a.description ?? ACT(a)), h('td', { class: 'small muted', style: 'font-family:var(--font-mono)' }, a.target ?? ''),
         h('td', null, h('span', { class: `dp-badge dp-badge--${a.status < 300 ? 'good' : a.status === 403 || a.status === 429 || a.status === 401 ? 'warn' : 'muted'}` }, a.status < 300 ? 'OK' : a.status === 403 ? 'Refused' : a.status === 401 ? 'Denied' : a.status === 429 ? 'Blocked' : String(a.status)))))))));
   const kb = (b) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`);
-  const backupPanel = panel('Backups', { subtitle: `A full copy of everything is saved every day, and the last 30 are kept. Download one now and then and keep it somewhere safe, off this server.` },
+  const off = bk.offsite;
+  const offFailing = off.last_error && (!off.last_ok_at || off.last_error_at > off.last_ok_at);
+  const offLine = h('p', { class: 'small' + (offFailing ? '' : ' muted'), role: offFailing ? 'status' : null },
+    h('span', { class: `dp-badge dp-badge--${!off.configured || (!off.last_ok_at && !offFailing) ? 'muted' : offFailing ? 'warn' : 'good'}` },
+      !off.configured ? 'Off-site: not set up' : offFailing ? 'Off-site: failing' : off.last_ok_at ? 'Off-site: OK' : 'Off-site: waiting'), ' ',
+    !off.configured ? 'Copies stay on this server\'s disk only. Setup steps are in DEPLOY.md under Backups.'
+      : offFailing ? `${off.last_error} Last try: ${ago(off.last_error_at)}. It retries every hour.`
+      : off.last_ok_at ? `Newest encrypted copy sent and restore-checked. Last sent: ${ago(off.last_ok_at)}.` : 'The first encrypted copy goes out within the hour.');
+  const backupPanel = panel('Backups', { subtitle: `A full copy of everything is saved every day, and the last 30 are kept. ${off.configured ? 'Each day\'s copy is also encrypted, sent to off-site storage, and read back to check it restores.' : 'Download one now and then and keep it somewhere safe, off this server.'}` },
+    offLine,
     bk.data.length ? bk.data.slice(0, 7).map((b) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, new Date(b.created_at).toLocaleString()), h('span', { class: 'muted' }, kb(b.bytes)),
       btn('Download', (ev) => busy(ev.currentTarget, () => download(`/v1/backups/${b.name}`)), 'ghost'))) : h('p', { class: 'muted small' }, 'No backups yet.'),
-    h('div', null, btn('Back up now', (ev) => busy(ev.currentTarget, async () => { await post('/v1/backups'); toast('Backup saved.'); render(); }), 'secondary')),
+    h('div', null, btn('Back up now', (ev) => busy(ev.currentTarget, async () => {
+      const r = await post('/v1/backups');
+      if (r.offsite && !r.offsite.ok) toast(`Backup saved, but the off-site copy failed: ${r.offsite.error}`, 'warn');
+      else toast(r.offsite ? 'Backup saved and sent off-site.' : 'Backup saved.');
+      render();
+    }), 'secondary')),
     h('p', { class: 'small muted' }, 'Backup files contain client, family and medical information. Store them like you would paper records.'));
+  const every = (sec) => (sec < 60 ? `every ${sec} seconds` : sec < 3600 ? `every ${sec / 60} min` : sec === 3600 ? 'hourly' : `every ${sec / 3600} hours`);
+  const jobBadge = (j) => (j.running ? ['muted', 'Running'] : j.health === 'failing' ? ['warn', j.fail_streak > 1 ? `Failed ${j.fail_streak}×` : 'Failed'] : j.health === 'waiting' ? ['muted', 'Not run yet'] : j.recent[0]?.status === 'skipped' && j.recent[0].started_at === j.last_run_at ? ['muted', 'Nothing to do'] : ['good', 'OK']);
+  const jobsPanel = panel('Background jobs', { subtitle: 'The work the server does on its own: billing, school invoices, the schedule, reminders, follow-ups, money checks, webhooks, device syncs and backups. Owners get an email when a job fails and when it recovers.' },
+    jobs.data.map((j) => { const [tone, label] = jobBadge(j); return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, j.name),
+        h('span', { class: 'small muted' }, `${every(j.every_seconds)}${j.last_run_at ? ` · last ran ${ago(j.last_run_at)}` : ''}${j.health === 'failing' ? (j.last_ok_at ? ` · last worked ${ago(j.last_ok_at)}` : ' · has not worked yet') : ''}`),
+        j.last_error ? h('span', { class: 'small', style: 'font-family:var(--font-mono);word-break:break-word' }, j.last_error) : null),
+      h('span', { class: `dp-badge dp-badge--${tone}` }, label),
+      btn('Run now', (ev) => busy(ev.currentTarget, async () => {
+        const r = await post(`/v1/jobs/${encodeURIComponent(j.name)}/run`);
+        toast(r.status === 'failed' ? `${j.name} failed. The error is shown below.` : r.status === 'skipped' ? `${j.name} had nothing to do.` : `${j.name} ran.`, r.status === 'failed' ? 'warn' : 'good');
+        render();
+      }), 'ghost', j.running ? { disabled: true } : {})); }));
   const requests = await get('/v1/data-requests');
   const openReqs = requests.data.filter((r) => r.status === 'open');
   const reqPanel = panel('Data requests', { subtitle: openReqs.length ? 'Parents asking for their family\'s data to be deleted. Check with your accountant what payment records you must keep; the app keeps them without names.' : 'Parents can download their own data from the portal. Deletion requests appear here.' },
@@ -3484,7 +3511,7 @@ async function viewStaff(main) {
         h('p', { class: 'strong', style: 'margin:8px 0 0' }, c.guidance),
         ...(c.previews ?? []).map((p) => h('div', { class: 'small', style: `padding:2px 0${p.trust_proxy === c.proxies_trusted ? ';font-weight:600' : ''}` }, `With TRUST_PROXY=${p.trust_proxy} the app would pick: `, h('code', null, p.address), h('span', { class: 'muted' }, ` (${KIND[p.kind] ?? p.kind})${p.trust_proxy === c.proxies_trusted ? ' · now' : ''}`))));
     }), 'secondary')));
-  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, auditPanel);
+  fill(main, header('Staff & security', 'Who can sign in, what they can do, what happened, your backups, background jobs and data requests.'), staffPanel, openReqs.length ? reqPanel : null, h('div', { class: 'grid grid-2' }, backupPanel, openReqs.length ? connPanel : reqPanel), openReqs.length ? null : connPanel, jobsPanel, auditPanel);
 }
 
 // Waiting results: arrived without an Athlete ID or a device link. The coach links them by hand.

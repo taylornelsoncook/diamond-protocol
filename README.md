@@ -14,7 +14,7 @@ You need **Node.js 22.13 or newer** (check with `node -v`; download from nodejs.
 cp .env.example .env      # then change ADMIN_PASSWORD
 npm run seed              # creates your login plus sample plans, programs and clients
 npm start                 # open http://localhost:3000
-npm test                  # runs the full test suite (137 tests)
+npm test                  # runs the full test suite (258 tests)
 ```
 
 The seed prints your login and a sample client app link. To start over, delete the `data` folder and seed again.
@@ -107,7 +107,7 @@ curl -X POST http://localhost:3000/v1/clients \
 
 Lists return `{ "data": [...] }`. Errors return `{ "error": { "code": "...", "message": "..." } }` with a plain-English message. Money is in cents.
 
-**Webhooks** fire on `client.created`, `client.updated`, `client.card_updated`, `subscription.created`, `subscription.updated`, `invoice.paid`, `invoice.payment_failed`, `program.assigned`, `workout.completed`, `sale.completed`, `sale.failed`, `sale.refunded` and `session.checked_in`. Each request carries a `DP-Signature: t=<unix time>,v1=<signature>` header. Verify it on your side:
+**Webhooks** fire on `client.created`, `client.updated`, `client.card_updated`, `subscription.created`, `subscription.updated`, `invoice.paid`, `invoice.payment_failed`, `program.assigned`, `workout.completed`, `sale.completed`, `sale.failed`, `sale.refunded`, `payment.disputed` and `session.checked_in`. Each request carries a `DP-Signature: t=<unix time>,v1=<signature>` header. Verify it on your side:
 
 ```js
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -138,7 +138,8 @@ src/
     test-provider.js    built-in test payments (no Stripe key)
     stripe-provider.js  Stripe: customers, Tap to Pay, readers, saved cards, refunds, webhooks
   routes.js             every endpoint, its access rule and its docs
-  server.js             HTTP, auth, security headers, background jobs
+  server.js             HTTP, auth, security headers, background job list
+  services/jobs.js      job runner: run history, owner alerts, one-copy lease
 public/                 dashboard and client app (plain JavaScript, no build step)
 test/                   end-to-end tests (API, point of sale, Stripe against a stand-in Stripe server)
 ios/                    DP Coach iPhone app (SwiftUI + Stripe Terminal)
@@ -154,7 +155,7 @@ With a Stripe key, everything runs through Stripe:
 - **In person:** Tap to Pay on iPhone (in the DP Coach app) and Stripe smart readers at the front desk (sent from the dashboard, no app needed).
 - **Saved cards:** from a tap (when the client agrees), or from a secure Stripe link you send them. Card details never touch this server.
 - **Memberships:** this app runs the monthly billing clock and charges the saved card through Stripe.
-- **Stripe webhooks** go to `https://your-domain/stripe/webhook`. Subscribe to `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated` and `checkout.session.completed`.
+- **Stripe webhooks** go to `https://your-domain/stripe/webhook`. Subscribe to `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, `payment_intent.amount_capturable_updated`, `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`.
 
 Use `sk_test_...` keys until you've run real test payments end to end. The server refuses to start with a live key while `DP_TEST_MODE=true`.
 
@@ -173,7 +174,7 @@ Use `sk_test_...` keys until you've run real test payments end to end. The serve
 - **Sign-in protection:** five wrong passwords lock an account for 15 minutes; sign-in attempts and overall requests are rate-limited per address; parent sign-in codes are limited too.
 - **Activity log:** every change, refused attempt and sign-in by staff, API keys and parents: who, what, which record, when, from where. Request contents are never stored.
 - **Connection check:** Staff & security → Check my connection shows the X-Forwarded-For header your request arrived with, the connection address, the address the app decided is yours and the `TRUST_PROXY` setting, with one sentence on whether to change it. Open it on each server (staging and production) after a hosting change.
-- **Backups:** a full copy of the database every day (last 30 kept), plus "Back up now" and downloads for the owner. Keep downloaded copies off the server.
+- **Backups:** a full copy of the database every day (last 30 kept), plus "Back up now" and downloads for the owner. Once off-site storage is set up (DEPLOY.md → Backups), each day's copy is also encrypted, sent to S3-compatible storage (Cloudflare R2, Backblaze B2, AWS S3) and read back to prove it restores; Staff & security shows whether that is working, and a failed send alerts the owner like any background job.
 
 ## Parent progress reports
 

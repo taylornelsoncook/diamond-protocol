@@ -39,7 +39,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 33;
+const SCHEMA_VERSION = 35;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -61,7 +61,9 @@ const ADDED_TABLES = {
   30: ['guardian_message_reads'],                                         // parents' own read state for coach messages
   31: ['time_off', 'client_notes'],                                       // coach time off, staff notes on clients
   // ---- version 33 (batch B10): test presets and report share links. Renumber this block as one if it merges after another 33.
-  33: ['test_presets', 'report_links']
+  33: ['test_presets', 'report_links'],
+  // ---- version 35 (batch B5, point of sale): refunds with their own date, for the day's takings. (34 is the Testing batch.)
+  35: ['sale_refunds']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -85,7 +87,9 @@ const ADDED_COLUMNS = {
   spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
   // ---- version 33 (batch B10): coach-written protocols, edits to built-in tests that survive the library refresh, possible ranges
   perf_tests: ['protocol TEXT', "edited TEXT NOT NULL DEFAULT '[]'"],
-  perf_metrics: ['min_value REAL', 'max_value REAL']
+  perf_metrics: ['min_value REAL', 'max_value REAL'],
+  // ---- version 35 (batch B5, point of sale): discounts, a second press of Charge, emailed and printable receipts
+  sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT']
 };
 
 function migrate(raw, schema) {

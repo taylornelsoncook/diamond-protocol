@@ -38,7 +38,7 @@ test('a version 30 database upgrades to coaches, archive, time off and staff not
       assert.ok(cols('clients').includes('archived_at') && cols('clients').includes('archived_by'));
       assert.deepEqual(cols('time_off'), ['id', 'user_id', 'start_date', 'end_date', 'note', 'created_by', 'created_at']);
       assert.ok(cols('client_notes').includes('coach_only'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 33);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       // What was there is still there, with no coach and not archived.
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(listClients(ctx)[0].name, 'Ava Lopez');
@@ -77,7 +77,7 @@ test('a version 31 database upgrades to trial-offer prices, and opening it twice
     for (const round of [1, 2]) {
       const db = openDb(file);
       assert.ok(db.all('PRAGMA table_info(spot_offers)').some((c) => c.name === 'price_cents'), `round ${round}`);
-      assert.equal(db.get('PRAGMA user_version').user_version, 33);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const ctx = { db, now: () => new Date().toISOString() };
       assert.equal(db.get(`SELECT price_cents FROM spot_offers WHERE id = 'spot_1'`).price_cents, round === 1 ? null : 900);
       const row = openSpots(ctx).data.find((x) => x.id === 'cls_1');
@@ -110,7 +110,7 @@ test('a version 32 database upgrades to the test library changes, and opening it
       assert.ok(cols('perf_metrics').includes('min_value') && cols('perf_metrics').includes('max_value'));
       assert.ok(cols('test_presets').includes('test_keys'));
       assert.ok(cols('report_links').includes('token_hash'));
-      assert.equal(db.get('PRAGMA user_version').user_version, 33);
+      assert.equal(db.get('PRAGMA user_version').user_version, 35);
       const ctx = { db, now: () => new Date().toISOString() };
       syncLibrary(ctx);
       seedPresets(ctx);
@@ -126,6 +126,30 @@ test('a version 32 database upgrades to the test library changes, and opening it
         assert.equal(presets.length, 6, 'a deleted preset stays deleted');
         assert.equal(t.attempts, 3, 'an edit to a built-in test survives the refresh');
       }
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Version 35 (batch B5, point of sale): discounts, request ids and receipts on sales, and refunds with their own date.
+test('an older database gains the point-of-sale columns and refund log, and old sales keep their amounts', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v32.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 32');
+    const now = new Date().toISOString();
+    old.exec(`INSERT INTO locations (id, name, kind, country, active, created_at) VALUES ('loc_1', 'Facility', 'facility', 'US', 1, '${now}')`);
+    old.exec(`INSERT INTO sales (id, location_id, method, status, amount_cents, refunded_cents, created_at, completed_at) VALUES ('sale_1', 'loc_1', 'cash', 'partially_refunded', 3000, 500, '${now}', '${now}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = db.all('PRAGMA table_info(sales)').map((c) => c.name);
+      for (const c of ['discount_cents', 'discount_reason', 'request_id', 'receipt_opt', 'receipt_email', 'receipt_sent_at', 'receipt_token']) assert.ok(cols.includes(c), `${c}, round ${round}`);
+      assert.ok(db.all('PRAGMA table_info(sale_refunds)').map((c) => c.name).includes('kind'));
+      const s = db.get(`SELECT amount_cents, refunded_cents, discount_cents FROM sales WHERE id = 'sale_1'`);
+      assert.deepEqual([s.amount_cents, s.refunded_cents, s.discount_cents], [3000, 500, 0]);
       db.close();
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }

@@ -116,6 +116,7 @@ async function sell(body, outcome = 'approved') {
 await sell({ location_id: park.id, method: 'tap_to_pay', client_id: walkIn.id, items: [{ product_id: five.id }], save_card: true });
 await sell({ location_id: mobile.id, method: 'tap_to_pay', client_id: made['Priya Nair'].id, items: [{ product_id: single.id }] });
 await sell({ location_id: facility.id, method: 'cash', items: [{ product_id: shirt.id, variant_id: inventory.activeVariants(ctx, shirt.id).find((x) => x.name === 'M').id }] });
+await sell({ location_id: facility.id, method: 'cash', client_id: walkIn.id, items: [{ product_id: shirt.id, variant_id: inventory.activeVariants(ctx, shirt.id).find((x) => x.name === 'L').id }], discount: { type: 'amount', value: 500, reason: 'Returning client' }, email_receipt: true });
 commerce.checkIn(ctx, walkIn.id, { location_id: park.id, credit_type: 'private' });
 commerce.checkIn(ctx, made['Maya Okafor'].id, { location_id: facility.id });
 

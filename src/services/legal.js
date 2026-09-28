@@ -109,6 +109,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
+      ctx.db.run(`UPDATE sales SET receipt_email = NULL, receipt_token = NULL WHERE client_id = ?`, id);   // sales stay; where receipts went and their links go
       ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', archived_by = NULL, athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,
         medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, stripe_customer_id = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
     }

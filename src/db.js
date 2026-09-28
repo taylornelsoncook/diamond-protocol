@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 40;
+const SCHEMA_VERSION = 43;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -76,7 +76,9 @@ const ADDED_TABLES = {
   // ---- Version 39: Schedule and Today (batches B2 and B3): follow-ups hidden from Today for a while ----
   39: ['today_snoozes'],
   // ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
-  40: ['workout_sets']
+  40: ['workout_sets'],
+  // ---- Version 43: owner decisions (every membership charge attempt, for late approvals) ----
+  43: ['invoice_charges']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -93,7 +95,8 @@ const ADDED_COLUMNS = {
   // class_sessions: see version 39 below (workout_id: version 23 weight-room screen; coach_id: version 31)
   availability: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],                  // version 31
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL',         // version 23 (then rebuilt so assignment_id can be empty)
-    'rpe INTEGER', 'started_at TEXT', 'request_id TEXT', 'edited_at TEXT'],                 // version 40 (batch B8): effort, time taken, one save per Finish
+    'rpe INTEGER', 'started_at TEXT', 'request_id TEXT', 'edited_at TEXT',                  // version 40 (batch B8): effort, time taken, one save per Finish
+    'program_id TEXT', 'program_name TEXT', 'workout_title TEXT', 'workout_week INTEGER', 'workout_day INTEGER', 'exercises_snapshot TEXT'],   // version 43: what a deleted workout was
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
@@ -109,11 +112,15 @@ const ADDED_COLUMNS = {
   sales: ['discount_cents INTEGER NOT NULL DEFAULT 0', 'discount_reason TEXT', 'request_id TEXT', 'receipt_opt INTEGER', 'receipt_email TEXT', 'receipt_sent_at TEXT', 'receipt_token TEXT',
     'booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL'],        // booking_id: version 38
   // ---- Version 38: billing (batch B6): refunds, card reminders, voids and payments recorded by hand ----
-  invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT'],
+  invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT',
+    'auto_attempts INTEGER NOT NULL DEFAULT 0'],                          // version 43: automatic charges only (owner's retries don't count)
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
   class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
-  exercises: ['category TEXT']
+  exercises: ['category TEXT'],
+  // ---- Version 43: owner decisions: leads given to a coach (invoices.auto_attempts and the workout_logs snapshot are in
+  // those tables' lists above; workout_logs is also rebuilt so a log outlives its program)
+  leads: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL']
 };
 
 function migrate(raw, schema) {
@@ -130,6 +137,7 @@ function migrate(raw, schema) {
   if (version < 9) rebuild(raw, schema, ['users']);                                   // staff roles and sign-in protection
   if (version < 15) rebuild(raw, schema, ['sales']);                                  // 'online' payment method for pay links
   if (version < 23) rebuild(raw, schema, ['workout_logs']);                           // screen logs without a program assignment
+  if (version < 43) rebuild(raw, schema, ['workout_logs']);                           // version 43: logs outlive a deleted program or workout
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
   // Version 35: device names are matched in lower case, so results that waited under "Swift" join "swift".
   if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {
@@ -151,6 +159,14 @@ function migrate(raw, schema) {
   // booking when it's paid. The note is left as it was (it is only a note now).
   if (version < 38 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sales'`).get()) {
     raw.exec(`UPDATE sales SET booking_id = substr(note, 9) WHERE booking_id IS NULL AND note LIKE 'booking:%' AND substr(note, 9) IN (SELECT b.id FROM bookings b WHERE b.client_id = sales.client_id)`);
+  }
+  // ---- Version 43: owner decisions ----
+  if (version < 43) {
+    const has = (t) => !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
+    // Which earlier tries were the owner's isn't known, so every try so far counts as automatic (as it did before).
+    if (has('invoices')) raw.exec('UPDATE invoices SET auto_attempts = attempts WHERE auto_attempts < attempts');
+    // Only the owner gives discounts now: a limit set for staff before goes back to 0 (the owner can raise it again).
+    if (has('settings')) raw.exec(`UPDATE settings SET value = '0' WHERE key = 'staff_discount_max_pct'`);
   }
 }
 

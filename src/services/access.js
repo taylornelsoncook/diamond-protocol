@@ -7,7 +7,7 @@ import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
 import { OWNER_EVENTS, can } from './security.js';
 import { clientCounts } from './clients.js';
-import { moneyIn, todayBounds } from './billing.js';
+import { moneyIn, todayBounds, lateChargeAlerts } from './billing.js';
 
 const SESSION_DAYS = 14;
 
@@ -222,7 +222,8 @@ export function dashboard(ctx, { role = 'owner' } = {}) {
     teams: { monthly_cents: teams.monthly_cents, active_contracts: teams.active_contracts, open_cents: teams.open_cents, overdue_cents: teams.overdue.reduce((t, i) => t + i.amount_cents, 0) },
     today_sales: (() => { const t = todayBounds(ctx), m = moneyIn(ctx, t.from, t.to); return { cents: m.sales, n: m.sales_count }; })(),
     metrics: { mrr_cents: active.mrr, active_clients: counts.current, paying_clients: active.n, trialing_clients: trialing, past_due_clients: pastDue.n, archived_clients: counts.archived, at_risk_cents: pastDue.risk, workouts_last_7_days: workouts },
-    attention: [...ctx.db.all(`SELECT id AS request_id, family_id, family_name, requested_by, created_at FROM data_requests WHERE status = 'open' AND kind = 'delete'`).map((x) => ({ kind: 'deletion_request', ...x })), ...failed, ...overdueTeams, ...waiting, ...trials, ...quiet, ...pendingSales],
+    attention: [...lateChargeAlerts(ctx).map((x) => ({ kind: 'late_charge', ...x })),
+      ...ctx.db.all(`SELECT id AS request_id, family_id, family_name, requested_by, created_at FROM data_requests WHERE status = 'open' AND kind = 'delete'`).map((x) => ({ kind: 'deletion_request', ...x })), ...failed, ...overdueTeams, ...waiting, ...trials, ...quiet, ...pendingSales],
     activity: listEvents(ctx, { limit: 12 })
   };
 }

@@ -197,7 +197,7 @@ test('a renewal that fails after it was taken reopens the invoice; a late succes
   assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'invoice.payment_failed' AND data LIKE ?`, `%${inv.id}%`).n, 1);
 });
 
-test('a declined renewal keeps its PaymentIntent, so a later approval marks it paid; stale ones are ignored', async () => {
+test('every charge try is matched: an older try approved late pays the invoice, and a second late approval is refunded once and the owner told', async () => {
   app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_declines' WHERE id = ?`, client.id);
   const retried = (await call('POST', `/v1/invoices/${inv.id}/retry`)).status;
   assert.equal(retried, 409, 'a paid invoice is not retried');
@@ -205,11 +205,29 @@ test('a declined renewal keeps its PaymentIntent, so a later approval marks it p
   await call('POST', `/v1/invoices/${inv.id}/retry`);
   const declined = invoiceOf(inv.id);
   assert.equal(declined.status, 'failed');
-  assert.notEqual(declined.payment_ref, inv.payment_ref, 'the declined attempt is the one webhooks match');
+  assert.notEqual(declined.payment_ref, inv.payment_ref, 'the declined attempt is the latest');
+  const tries = app.ctx.db.all('SELECT ref, manual, status FROM invoice_charges WHERE invoice_id = ? ORDER BY created_at, rowid', inv.id);
+  assert.ok(tries.some((t) => t.ref === declined.payment_ref && t.manual === 1 && t.status === 'declined'), 'the owner\'s retry is written down as manual');
+  // The try's id went to Stripe with the charge.
+  const sent = requests.filter((r) => r.path === '/v1/payment_intents' && r.body['metadata[invoice_id]'] === inv.id).at(-1);
+  assert.match(sent.body['metadata[charge_attempt_id]'], /^ich_/);
+  const refundsBefore = requests.filter((r) => r.path === '/v1/refunds').length;
   await webhook({ type: 'payment_intent.succeeded', data: { object: { id: inv.payment_ref, metadata: { invoice_id: inv.id } } } });
-  assert.equal(invoiceOf(inv.id).status, 'failed', 'an older attempt does not count');
+  assert.equal(invoiceOf(inv.id).status, 'paid', 'an older try the bank approves pays the invoice');
+  assert.equal(invoiceOf(inv.id).payment_ref, inv.payment_ref);
+  // Now the declined try is approved too: charged twice, so it goes back, once.
   await webhook({ type: 'payment_intent.succeeded', data: { object: { id: declined.payment_ref, metadata: { invoice_id: inv.id } } } });
+  await webhook({ type: 'payment_intent.succeeded', data: { object: { id: declined.payment_ref, metadata: { invoice_id: inv.id } } } });
+  const refunds = requests.filter((r) => r.path === '/v1/refunds').slice(refundsBefore);
+  assert.deepEqual(refunds.map((r) => r.body.payment_intent), [declined.payment_ref], 'refunded exactly once');
   assert.equal(invoiceOf(inv.id).status, 'paid');
+  const dash = (await call('GET', '/v1/dashboard')).body;
+  const alert = dash.attention.find((a) => a.kind === 'late_charge' && a.invoice_id === inv.id);
+  assert.ok(alert, 'the owner sees it on Today');
+  assert.equal(alert.late_outcome, 'refunded');
+  assert.ok(app.ctx.db.get(`SELECT 1 FROM outbox WHERE subject LIKE 'Refunded a late card charge%'`), 'and gets an email');
+  assert.equal((await call('POST', `/v1/invoices/${inv.id}/charges/${alert.charge_id}/handled`)).status, 200);
+  assert.ok(!(await call('GET', '/v1/dashboard')).body.attention.some((a) => a.kind === 'late_charge' && a.invoice_id === inv.id), 'handled: off Today');
   app.ctx.db.run(`UPDATE clients SET card_payment_method = 'pm_web' WHERE id = ?`, client.id);
 });
 

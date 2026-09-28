@@ -669,7 +669,7 @@ export async function handleStripeEvent(ctx, event) {
     if (s) await syncSale(ctx, s.id);
     // Membership renewals: a charge approved or failed after the renewal ran.
     else if (obj.metadata?.invoice_id && ['payment_intent.succeeded', 'payment_intent.payment_failed'].includes(event.type)) {
-      await reconcileInvoicePayment(ctx, obj.metadata.invoice_id, { ref: obj.id, succeeded: event.type === 'payment_intent.succeeded', error: obj.last_payment_error?.message });
+      await reconcileInvoicePayment(ctx, obj.metadata.invoice_id, { ref: obj.id, attemptId: obj.metadata.charge_attempt_id, succeeded: event.type === 'payment_intent.succeeded', error: obj.last_payment_error?.message });
     }
   } else if (event.type === 'charge.refunded') {
     // A sale's payment, or else a membership payment (billing.js keeps membership refunds in step the same way).

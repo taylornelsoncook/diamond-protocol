@@ -107,6 +107,7 @@ const EVENT_TEXT = {
   'subscription.updated': (d) => d.previous_plan_name ? `${d.client_name} moved to ${d.plan_name}` : `${d.client_name}'s membership is now ${d.status.replace('_', ' ')}`,
   'invoice.paid': (d) => `Payment of ${money(d.amount_cents)} received from ${d.client_name}`,
   'invoice.payment_failed': (d) => `Payment of ${money(d.amount_cents)} failed for ${d.client_name}${d.final ? '. Membership canceled.' : ''}`,
+  'invoice.paid_twice': (d) => `A late card approval for ${d.client_name} (${money(d.amount_cents)}) came after the invoice was ${d.reason === 'void' ? 'voided' : 'already paid'}: ${d.refunded ? 'refunded automatically' : 'refund it in Stripe'}`,
   'program.assigned': (d) => `${d.client_name} started ${d.program_name}`,
   'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises${d.sets ? `, ${d.sets} ${d.sets === 1 ? 'set' : 'sets'}` : ''}${d.effort ? `, effort ${d.effort}/10` : ''})${d.bests?.length ? `. New best: ${d.bests.map((b) => `${b.name} ${b.weight} lb`).join(', ')}` : ''}`,
   'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
@@ -243,6 +244,14 @@ async function viewToday(main) {
     if (a.kind === 'team_invoice_overdue') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('a', { href: `#/teams/${a.contract_id}`, class: 'strong', style: 'color:var(--steel)' }, `${a.name} · ${a.team_name}`), h('span', { class: 'small muted' }, `Invoice ${a.number} for ${money(a.amount_cents)} was due ${date(a.due_on)}. Reminders go out weekly.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/teams/${a.contract_id}` }, 'Open team'));
+    if (a.kind === 'late_charge') return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, link,
+        h('span', { class: `small ${a.late_outcome === 'refunded' ? 'muted' : 'warn-text'}` }, a.late_outcome === 'refunded'
+          ? `The bank approved a ${money(a.amount_cents)} membership charge after ${a.late_reason}. It was refunded to the card automatically.`
+          : `The bank approved a ${money(a.amount_cents)} membership charge after ${a.late_reason}, and the automatic refund didn't work${a.refund_error ? ` (${a.refund_error})` : ''}. Refund payment ${a.ref} in the Stripe dashboard.`)),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        btn('Open invoice', () => invoiceDialog(a.invoice_id), 'ghost'),
+        btn('Mark handled', (e) => busy(e.currentTarget, async () => { await post(`/v1/invoices/${a.invoice_id}/charges/${a.charge_id}/handled`); toast('Marked handled.'); refresh(); }), 'outline')));
     if (a.kind === 'deletion_request') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.family_name} asked for their data to be deleted`), h('span', { class: 'small muted' }, `Requested by ${a.requested_by.split(' <')[0]} ${ago(a.created_at)}.`)),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/staff' }, 'Review'));
@@ -1355,6 +1364,9 @@ async function invoiceDialog(id) {
       kv('Email', d.email)),
     d.refunds.length ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Refunds'), d.refunds.map((r) => h('div', { class: 'small' },
       `${money(r.amount_cents)} on ${date(r.created_at)}${r.source === 'stripe' ? ' in the Stripe dashboard' : r.by_name ? ` by ${r.by_name}` : ''}${r.reason ? ` · ${r.reason}` : ''}`))) : null,
+    d.charges?.length ? h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:32px' }, `Card charges tried (${d.charges.length})`),
+      h('div', { class: 'stack-tight' }, d.charges.map((c) => h('div', { class: 'small' },
+        `${date(c.created_at)} · ${c.manual ? 'retry you started (doesn\'t count toward the limit)' : 'automatic'} · ${{ succeeded: 'approved', declined: 'declined', pending: 'waiting on the bank', error: 'didn\'t reach the bank' }[c.status] ?? c.status}${c.error && c.status !== 'succeeded' ? ` (${c.error})` : ''}${c.late_outcome === 'refunded' ? ` · approved late after ${c.late_reason}, refunded automatically` : c.late_outcome === 'refund_failed' ? ` · approved late after ${c.late_reason}: refund it in Stripe (${c.ref})` : ''}`)))) : null,
     d.pay_links.length ? h('p', { class: 'small muted', style: 'margin:0' }, `Pay link: ${{ open: 'open', paid: 'paid', settled: 'paid another way', canceled: 'canceled', expired: 'expired' }[d.pay_links[0].status] ?? d.pay_links[0].status}${d.pay_links[0].sent_at ? `, sent ${ago(d.pay_links[0].sent_at).toLowerCase()}` : ''}.`) : null), acts);
 }
 

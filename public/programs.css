@@ -1,0 +1,26 @@
+/* Programs page and program builder (programs-coach.js). */
+.pg-card{text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:6px}
+.pg-card:hover{border-color:var(--green-mid)}
+.pg-note{color:var(--steel);font-style:italic}
+.pg-ex{align-items:center}
+.pg-ex-body{min-height:44px;display:flex;align-items:center;gap:8px}
+button.pg-ex-body,button.pg-title{background:none;border:0;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit;border-radius:var(--radius-sm)}
+button.pg-ex-body:hover span:first-child,button.pg-title:hover{text-decoration:underline}
+button.pg-title{min-height:44px;display:flex;align-items:center}
+.pg-foot{border-top:1px solid var(--line-subtle);padding-top:12px;gap:4px}
+.pg-client{align-items:flex-start}
+.pg-pick{max-height:40vh;overflow:auto;border:1px solid var(--line-subtle);border-radius:var(--radius-sm)}
+.pg-pick-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:44px;padding:8px 12px;background:none;border:0;border-bottom:1px solid var(--line-subtle);color:inherit;text-align:left;cursor:pointer;width:100%}
+.pg-pick-item:hover{background:var(--surface-raised)}
+.pg-pick-item[aria-pressed="true"]{background:var(--surface-raised);box-shadow:inset 3px 0 0 var(--green-mid)}
+.pg-pick-new .strong{color:var(--green-bright)}
+.pg-inline{border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4);background:var(--ground)}
+@media (max-width: 760px){
+  .pg-client{flex-wrap:wrap}
+  .workouts{grid-template-columns:1fr}
+}
+div.pg-ex-body{align-items:flex-start;justify-content:center}
+@media (max-width: 760px){
+  .pg-client>.grow{flex-basis:100%}
+  .pg-client>.row{width:100%;justify-content:flex-start!important}
+}

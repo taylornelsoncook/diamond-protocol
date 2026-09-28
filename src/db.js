@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 39;
+const SCHEMA_VERSION = 40;
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -74,7 +74,9 @@ const ADDED_TABLES = {
   // ---- Version 38: billing (batch B6): membership refunds with their own rows ----
   38: ['invoice_refunds'],
   // ---- Version 39: Schedule and Today (batches B2 and B3): follow-ups hidden from Today for a while ----
-  39: ['today_snoozes']
+  39: ['today_snoozes'],
+  // ---- Version 40 (batch B8): programs builder and set-by-set workout logging ----
+  40: ['workout_sets']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31
@@ -90,7 +92,8 @@ const ADDED_COLUMNS = {
   class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],      // version 4; coach: version 31
   // class_sessions: see version 39 below (workout_id: version 23 weight-room screen; coach_id: version 31)
   availability: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],                  // version 31
-  workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL'],        // version 23 (then rebuilt so assignment_id can be empty)
+  workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL',         // version 23 (then rebuilt so assignment_id can be empty)
+    'rpe INTEGER', 'started_at TEXT', 'request_id TEXT', 'edited_at TEXT'],                 // version 40 (batch B8): effort, time taken, one save per Finish
   lessons: ['quiz TEXT'],                                                                     // version 24: lesson quizzes
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
@@ -108,7 +111,9 @@ const ADDED_COLUMNS = {
   // ---- Version 38: billing (batch B6): refunds, card reminders, voids and payments recorded by hand ----
   invoices: ['refunded_cents INTEGER NOT NULL DEFAULT 0', 'reminded_at TEXT', 'voided_at TEXT', 'void_reason TEXT', 'paid_method TEXT', 'paid_reference TEXT'],
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
-  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT']
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
+  // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
+  exercises: ['category TEXT']
 };
 
 function migrate(raw, schema) {

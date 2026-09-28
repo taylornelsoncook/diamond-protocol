@@ -41,7 +41,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 43;
+const SCHEMA_VERSION = 45;   // 44 is Education (merged separately); 45 the CRM
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -82,7 +82,9 @@ const ADDED_TABLES = {
   // ---- Version 42 (batch B14): API key request log, staff "forgot password" links ----
   42: ['api_requests', 'password_resets'],
   // ---- Version 43: owner decisions (every membership charge attempt, for late approvals) ----
-  43: ['invoice_charges']
+  43: ['invoice_charges'],
+  // ---- Version 45 (batch B15, CRM): stage history, contact log, follow-up tasks, message templates ----
+  45: ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates']
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT'],   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41
@@ -133,7 +135,11 @@ const ADDED_COLUMNS = {
   outbox: ['sensitive INTEGER NOT NULL DEFAULT 0'],
   // ---- Version 43: owner decisions: leads given to a coach (invoices.auto_attempts and the workout_logs snapshot are in
   // those tables' lists above; workout_logs is also rebuilt so a log outlives its program)
-  leads: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL']
+  leads: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL',
+    // ---- Version 45 (batch B15, CRM): days in stage, stale leads, the client a lead became, lost reasons, text consent's source
+    'stage_changed_at TEXT', 'last_activity_at TEXT', 'client_id TEXT REFERENCES clients(id) ON DELETE SET NULL', 'lost_note TEXT', 'texts_ok_source TEXT', 'texts_ok_at TEXT'],
+  campaigns: ["channel TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','text'))"],   // version 45: group texts
+  campaign_recipients: ['phone TEXT']                                                          // version 45 (then rebuilt: email can be empty)
 };
 
 function migrate(raw, schema) {
@@ -195,6 +201,43 @@ function migrate(raw, schema) {
     // Only the owner gives discounts now: a limit set for staff before goes back to 0 (the owner can raise it again).
     if (has('settings')) raw.exec(`UPDATE settings SET value = '0' WHERE key = 'staff_discount_max_pct'`);
   }
+  // ---- Version 45 (batch B15, CRM) ----
+  if (version < 45) crmUpgrade(raw, schema);
+}
+
+// ---------- Version 45: CRM ----------
+// Leads gain a trial stage and more sources, so the table is rebuilt (rows copied as they are); a group text has no email,
+// so campaign_recipients is rebuilt too. Every lead gets a stage history: New when it came in and, if it has moved on,
+// its current stage when it was last changed (the best we know). Phones typed before numbers were cleaned up are stored
+// as +15125550100 where they can be. A free-text reason for a lost lead becomes the note, under the reason "other".
+const LOST_KEYS = ['price', 'schedule', 'distance', 'elsewhere', 'no_response', 'not_ready', 'other'];
+function crmUpgrade(raw, schema) {
+  const has = (t) => !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(t);
+  rebuild(raw, schema, ['leads', 'campaign_recipients']);
+  if (!has('leads')) return;
+  const e164 = (p) => {
+    const s = String(p ?? '').trim(), d = s.replace(/\D/g, '');
+    if (!s) return null;
+    if (s.startsWith('+')) return d.length >= 8 && d.length <= 15 ? `+${d}` : null;
+    if (d.length === 10) return `+1${d}`;
+    if (d.length === 11 && d.startsWith('1')) return `+${d}`;
+    return null;
+  };
+  raw.exec('BEGIN');
+  try {
+    for (const l of raw.prepare('SELECT id, phone, status, lost_reason, lost_note, created_at, updated_at, stage_changed_at, last_activity_at, last_contacted_at FROM leads').all().map((r) => ({ ...r }))) {
+      const phone = l.phone ? e164(l.phone) ?? l.phone : null;
+      const lost = l.status === 'lost' && l.lost_reason && !LOST_KEYS.includes(l.lost_reason);
+      const changed = l.stage_changed_at ?? (l.status === 'new' ? l.created_at : l.updated_at);
+      raw.prepare(`UPDATE leads SET phone = ?, stage_changed_at = ?, last_activity_at = COALESCE(last_activity_at, last_contacted_at, updated_at),
+        lost_reason = ?, lost_note = ? WHERE id = ?`).run(phone, changed, lost ? 'other' : l.lost_reason, lost ? (l.lost_note ?? l.lost_reason) : l.lost_note, l.id);
+      if (raw.prepare('SELECT 1 FROM lead_stage_history WHERE lead_id = ?').get(l.id)) continue;
+      const add = raw.prepare('INSERT INTO lead_stage_history (id, lead_id, from_stage, to_stage, auto, reason, by_name, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      add.run(newId('lsh'), l.id, null, 'new', 1, 'Came in', null, l.created_at);
+      if (l.status !== 'new') add.run(newId('lsh'), l.id, 'new', l.status, 1, 'Moved before stage history was kept', null, changed);
+    }
+    raw.exec('COMMIT');
+  } catch (e) { raw.exec('ROLLBACK'); throw e; }
 }
 
 // ---------- Version 37: one profile per athlete ----------

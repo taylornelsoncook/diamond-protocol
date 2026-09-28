@@ -1,4 +1,4 @@
-// Databases from earlier versions (schema 30 to 42) open with this version: new columns and tables are
+// Databases from earlier versions (schema 30 to 43) open with this version: new columns and tables are
 // added, nothing is lost, and opening it again changes nothing.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,7 +14,7 @@ import { syncLibrary, getTest, updateTest, getSession } from '../src/services/pe
 import { seedPresets } from '../src/services/library.js';
 import { recentUploads, undoUpload } from '../src/services/uploads.js';
 
-const LATEST = 43;   // the schema version every upgrade ends on
+const LATEST = 45;   // the schema version every upgrade ends on
 
 // Every database from before version 36 gains the point-of-sale pieces (version 36), and every one from before version 37
 // puts roster-only athletes on a profile of their own (version 37). These two helpers add a partly refunded cash sale and
@@ -1062,8 +1062,59 @@ test('a version 42 database keeps keys, devices, webhooks and portal data and ga
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// Upgraded from 40, 41 or 42, a database has the same tables and columns as a brand-new one.
-test('databases upgraded from versions 40, 41 and 42 have the same tables and columns as a new one', () => {
+// ---- Version 45 (batch B15, CRM): a version 43 database (the schema at 0c15914) gains the trial stage, stage history,
+// the contact log, tasks, templates and group texts; its leads, their lost reasons and campaign recipients are kept.
+test('a version 43 database gains the CRM: leads keep their data, get a stage history, and take the trial stage; opened twice', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(dir, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v43.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 43');
+    const at = '2026-09-01T17:00:00.000Z', later = '2026-09-10T17:00:00.000Z';
+    old.exec(`INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES ('usr_c', 'c@test.dev', 'Carl', 'x', 'coach', '${at}')`);
+    old.exec(`INSERT INTO families (id, name, created_at) VALUES ('fam_1', 'Lopez family', '${at}')`);
+    old.exec(`INSERT INTO leads (id, parent_name, email, phone, source, status, texts_ok, lost_reason, coach_id, created_at, updated_at) VALUES
+      ('lead_new', 'Gia', 'gia@example.com', '(512) 555-0101', 'inquiry', 'new', 1, NULL, 'usr_c', '${at}', '${at}'),
+      ('lead_lost', 'Hal', 'hal@example.com', NULL, 'phone', 'lost', 0, 'Went with a travel team', NULL, '${at}', '${later}'),
+      ('lead_mem', 'Ida', 'ida@example.com', '5125550102', 'manual', 'member', 0, NULL, NULL, '${at}', '${later}')`);
+    old.exec(`UPDATE leads SET family_id = 'fam_1', converted_at = '${later}' WHERE id = 'lead_mem'`);
+    old.exec(`INSERT INTO campaigns (id, subject, body, audience, status, created_at, sent_at) VALUES ('cmp_1', 'Camp', 'Hi', '{"group":"leads"}', 'sent', '${at}', '${at}')`);
+    old.exec(`INSERT INTO campaign_recipients (id, campaign_id, email, name, lead_id, token, sent_at) VALUES ('cr_1', 'cmp_1', 'gia@example.com', 'Gia', 'lead_new', 'tok_cr_1', '${at}')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const db = openDb(file);
+      const cols = (t) => db.all(`PRAGMA table_info(${t})`).map((c) => c.name);
+      assert.equal(db.get('PRAGMA user_version').user_version, LATEST, `round ${round}`);
+      assert.equal(db.get('PRAGMA integrity_check').integrity_check, 'ok');
+      assert.equal(db.get('PRAGMA foreign_key_check'), undefined, 'no broken links');
+      for (const c of ['stage_changed_at', 'last_activity_at', 'client_id', 'lost_note', 'texts_ok_source', 'texts_ok_at', 'coach_id']) assert.ok(cols('leads').includes(c), `leads.${c}`);
+      for (const t of ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates']) assert.ok(cols(t).length, t);
+      const g = db.get(`SELECT * FROM leads WHERE id = 'lead_new'`);
+      assert.deepEqual([g.phone, g.texts_ok, g.coach_id, g.stage_changed_at], ['+15125550101', 1, 'usr_c', at], 'the phone is cleaned up; the coach and text OK stay');
+      const h = db.get(`SELECT * FROM leads WHERE id = 'lead_lost'`);
+      assert.deepEqual([h.lost_reason, h.lost_note, h.stage_changed_at], ['other', 'Went with a travel team', later], 'a reason in words becomes the note');
+      assert.equal(db.get(`SELECT family_id FROM leads WHERE id = 'lead_mem'`).family_id, 'fam_1');
+      assert.deepEqual(db.all(`SELECT from_stage, to_stage, at FROM lead_stage_history WHERE lead_id = 'lead_mem' ORDER BY at`).map((r) => ({ ...r })),
+        [{ from_stage: null, to_stage: 'new', at }, { from_stage: 'new', to_stage: 'member', at: later }], 'one history, not one per open');
+      assert.equal(db.get('SELECT COUNT(*) AS n FROM lead_stage_history').n, 5);
+      assert.equal(db.get(`SELECT channel FROM campaigns WHERE id = 'cmp_1'`).channel, 'email');
+      assert.deepEqual({ ...db.get(`SELECT email, phone, lead_id FROM campaign_recipients WHERE id = 'cr_1'`) }, { email: 'gia@example.com', phone: null, lead_id: 'lead_new' });
+      assert.equal(db.all('PRAGMA table_info(campaign_recipients)').find((c) => c.name === 'email').notnull, 0, 'a group text has no email');
+      if (round === 1) {
+        // The rebuilt table takes the new stage and sources.
+        db.run(`UPDATE leads SET status = 'trial' WHERE id = 'lead_new'`);
+        db.run(`INSERT INTO leads (id, parent_name, source, status, created_at, updated_at) VALUES ('lead_imp', 'Imp', 'import', 'new', '${at}', '${at}')`);
+        assert.throws(() => db.run(`UPDATE leads SET status = 'maybe' WHERE id = 'lead_new'`), /CHECK/);
+      }
+      assert.equal(db.get(`SELECT status FROM leads WHERE id = 'lead_new'`).status, 'trial', `round ${round}`);
+      db.close();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// Upgraded from 40, 41, 42 or 43, a database has the same tables and columns as a new one.
+test('databases upgraded from versions 40, 41, 42 and 43 have the same tables and columns as a new one', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   try {
     const shape = (db) => Object.fromEntries(db.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
@@ -1071,7 +1122,7 @@ test('databases upgraded from versions 40, 41 and 42 have the same tables and co
     const fresh = openDb(join(dir, 'new.db'));
     const want = shape(fresh);
     fresh.close();
-    for (const v of [40, 41, 42]) {
+    for (const v of [40, 41, 42, 43]) {
       const file = join(dir, `v${v}.db`);
       const old = new DatabaseSync(file);
       old.exec(readFileSync(new URL(`./fixtures/schema-v${v}.sql`, import.meta.url), 'utf8'));

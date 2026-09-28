@@ -64,7 +64,7 @@ async function load() {
   let home;
   try { home = await api('GET', '/app/api/home'); }
   catch (e) {
-    const cached = store.get('dp_wo_home');
+    const cached = store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`);
     if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
     home = cached.home;                           // offline: the last workout this phone saw
   }
@@ -85,16 +85,18 @@ function message(text, extra) {
 // { token, workout_id, log_id (a reopened workout), title, request_id, started_at, sets: { [exercise]: [{ weight, reps, done }] }, notes, rpe }.
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 let draft = null;
-const saveDraft = () => store.set('dp_wo_draft', draft);
+// One draft per athlete link, so siblings sharing a phone never overwrite each other's sets.
+const DRAFT_KEY = () => `dp_wo_draft_${String(tokenValue).slice(0, 16)}`;
+const saveDraft = () => store.set(DRAFT_KEY(), draft);
 const editing = () => !!draft?.log_id;
 function draftFor(workout) {
-  const kept = store.get('dp_wo_draft');
+  const kept = store.get(DRAFT_KEY());
   if (kept && kept.token === tokenValue && !kept.log_id && kept.workout_id === workout.id) return (draft = kept);
   return (draft = { token: tokenValue, workout_id: workout.id, log_id: null, title: workout.title, request_id: newId(), started_at: null, sets: {}, notes: '', rpe: null });
 }
 const hasSets = (d) => !!d && Object.values(d.sets).some((rows) => rows.some((r) => r.done));
 // A draft for another workout (the coach changed the program, or it was logged on the weight-room screen).
-const strayDraft = () => { const d = store.get('dp_wo_draft'); return d && d.token === tokenValue && !d.log_id && d.workout_id !== state.home?.workout?.id && hasSets(d) ? d : null; };
+const strayDraft = () => { const d = store.get(DRAFT_KEY()); return d && d.token === tokenValue && !d.log_id && d.workout_id !== state.home?.workout?.id && hasSets(d) ? d : null; };
 
 // ---------- Sending, with retries when there's no signal ----------
 // Finished workouts wait in an outbox on the phone until the server has them. Each Finish carries a request id, so a
@@ -119,7 +121,7 @@ function flush() {
       } catch (e) {
         if (!e.status || e.status >= 500 || e.status === 429) { scheduleRetry(); break; }
         results.set(next.request_id, { error: e.message });
-        toast(`${next.title} couldn't be saved: ${e.message}`, 'warn');
+        if (next.token === tokenValue) toast(`${next.title} couldn't be saved: ${e.message}`, 'warn');   // never another athlete's workout
       }
       setOutbox(outbox().filter((x) => x.request_id !== next.request_id));
       retryDelay = 5000;
@@ -190,10 +192,10 @@ const top = () => h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diam
 
 function render() {
   const home = state.home;
-  store.set('dp_wo_home', { token: tokenValue, home });
+  store.set(`dp_wo_home_${String(tokenValue).slice(0, 16)}`, { token: tokenValue, home });
   drawPending();
   if (state.done) return renderDone(state.done);
-  const kept = store.get('dp_wo_draft');
+  const kept = store.get(DRAFT_KEY());
   if (kept?.token === tokenValue && kept.log_id && kept.workout) { draft = kept; return renderLogger(kept.workout); }
   if (home.locked || !home.workout) {
     stopRest();
@@ -218,7 +220,7 @@ function strayPanel() {
   if (!d) return null;
   return h('div', { class: 'c-note stack' }, h('span', null, `You logged sets in ${d.title} but didn't finish it.`),
     h('div', { class: 'row wrap' }, btn('Finish it now', (e) => busy(e.currentTarget, async () => { await finish(d, null); }), 'secondary'),
-      btn('Discard', () => { if (confirm(`Throw away the sets you logged in ${d.title}?`)) { store.set('dp_wo_draft', null); draft = null; render(); } }, 'ghost')));
+      btn('Discard', () => { if (confirm(`Throw away the sets you logged in ${d.title}?`)) { store.set(DRAFT_KEY(), null); draft = null; render(); } }, 'ghost')));
 }
 
 // The sets to show for an exercise: the target number, or more if the athlete added some.
@@ -354,7 +356,7 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title)),
     pendingBox,
-    reopened ? h('div', { class: 'c-note row' }, h('span', { class: 'grow' }, 'Fix what you logged, then save. Your coach sees the changes.'), btn('Cancel', () => { store.set('dp_wo_draft', null); draft = null; render(); }, 'ghost')) : null,
+    reopened ? h('div', { class: 'c-note row' }, h('span', { class: 'grow' }, 'Fix what you logged, then save. Your coach sees the changes.'), btn('Cancel', () => { store.set(DRAFT_KEY(), null); draft = null; render(); }, 'ghost')) : null,
     reopened ? null : h('div', { class: 'stack-tight' }, h('div', { class: 'c-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': 'Program progress' }, h('div', { style: `width:${pct}%` })),
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
@@ -380,7 +382,7 @@ async function finish(d, w) {
   if (d.log_id) delete body.finished_at;
   const entry = { token: d.token, kind: d.log_id ? 'edit' : 'finish', workout_id: d.workout_id, log_id: d.log_id, request_id: d.request_id, title: d.title, body };
   setOutbox([...outbox().filter((x) => x.request_id !== entry.request_id), entry]);
-  store.set('dp_wo_draft', null);
+  store.set(DRAFT_KEY(), null);
   draft = null; state.open = null; state.details.clear();
   stopRest();
   await flush();
@@ -416,7 +418,7 @@ function renderDone(f) {
 
 // Reopen: the latest finished workout, within 2 hours, before the next one is started.
 async function reopen(logId) {
-  const d = store.get('dp_wo_draft');
+  const d = store.get(DRAFT_KEY());
   if (d && d.token === tokenValue && !d.log_id && hasSets(d)) throw new Error('You\'ve started your next workout, so this one can\'t be reopened. Put anything you missed in a note.');
   const log = await api('GET', `/app/api/logs/${logId}`);
   if (!log.can_reopen) throw new Error('This workout can\'t be reopened any more. Put anything you missed in a note next time.');

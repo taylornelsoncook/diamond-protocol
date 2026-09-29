@@ -80,6 +80,16 @@ test('the live view: who is here, what each athlete is on today with their own n
   const b2 = after1.athletes.find((x) => x.client_id === ben.id);
   assert.deepEqual([b2.here, b2.logged, b2.on_screen, b2.exercises_done], [true, true, true, 2]);
   assert.deepEqual(after1.counts, { athletes: 2, here: 1, logged: 1, started: 0 });
+  // A workout Ben logged earlier today in another session (a different program) doesn't take his row over here.
+  const other = (await coach('POST', '/v1/programs', { name: 'Speed block', weeks: 1 })).body;
+  const ow = (await coach('POST', `/v1/programs/${other.id}/workouts`, { week: 1, day: 1, title: 'Sprints' })).body;
+  const morning = newId('cls');
+  app.ctx.db.run(`INSERT INTO class_sessions (id, name, kind, location_id, starts_at, ends_at, capacity, status, created_at) VALUES (?, 'Morning speed', 'group', 'loc_f', ?, ?, 10, 'scheduled', ?)`, morning, new Date(Date.now() - 3 * 3600000).toISOString(), new Date(Date.now() - 2 * 3600000).toISOString(), app.ctx.now());
+  app.ctx.db.run(`INSERT INTO workout_logs (id, client_id, workout_id, completed_at, session_id) VALUES (?, ?, ?, ?, ?)`, newId('wlog'), ben.id, ow.id, new Date(Date.now() - 2.5 * 3600000).toISOString(), morning);
+  const b3 = (await coach('GET', `/v1/sessions/${session}/live`)).body.athletes.find((x) => x.client_id === ben.id);
+  assert.deepEqual([b3.workout.title, b3.logged, b3.on_screen], ['Upper body', true, true], 'this session\'s own log wins');
+  const a3 = (await coach('GET', `/v1/sessions/${morning}/live`)).body.athletes;
+  assert.equal(a3.length, 0, 'nobody is booked on the morning session, so the stray log shows nowhere');
 });
 
 test('a swap for one athlete: the app, the screen, the live view and the log follow it; the plan does not change', async () => {
@@ -108,6 +118,24 @@ test('a swap for one athlete: the app, the screen, the live view and the log fol
   const after1 = (await coach('GET', `/v1/sessions/${session}/live`)).body.athletes.find((a) => a.client_id === ava.id);
   assert.deepEqual([after1.logged, after1.on_screen, after1.sets_logged, after1.exercises_done, after1.workout.title], [true, false, 5, 1, 'Lower body'], 'today\'s log stays on the day\'s workout');
   assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM events WHERE type = 'exercise.swapped'`).n, 1);
+  // Her history reads as what she did, with what it replaced.
+  const detail = await athlete('GET', `/app/api/logs/${fin.id}`);
+  assert.deepEqual([detail.exercises[0].name, detail.exercises[0].exercise_id, detail.exercises[0].swapped_from, detail.exercises[0].sets.length, detail.exercises[1].swapped_from], ['Goblet squat', goblet.id, 'Back squat', 5, undefined]);
+});
+
+test('a deleted workout keeps the swapped exercise in the log it left behind', async () => {
+  // A throwaway program: swap, log, delete the workout, and the kept log still says goblet squat.
+  const p = (await coach('POST', '/v1/programs', { name: 'One-off', weeks: 1 })).body;
+  const w = (await coach('POST', `/v1/programs/${p.id}/workouts`, { week: 1, day: 1, title: 'Test day' })).body;
+  const slot = (await coach('POST', `/v1/workouts/${w.id}/exercises`, { exercise_id: squat.id, sets: 3, reps: '5' })).body.exercises[0];
+  await coach('POST', `/v1/clients/${ben.id}/swaps`, { workout_exercise_id: slot.id, exercise_id: goblet.id, reason: 'Knee' });
+  const logId = newId('wlog');
+  app.ctx.db.run(`INSERT INTO workout_logs (id, client_id, workout_id, completed_at) VALUES (?, ?, ?, ?)`, logId, ben.id, w.id, app.ctx.now());
+  app.ctx.db.run(`INSERT INTO exercise_logs (workout_log_id, workout_exercise_id) VALUES (?, ?)`, logId, slot.id);
+  const gone = await coach('DELETE', `/v1/workouts/${w.id}`, { confirm: true });
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  const kept = JSON.parse(app.ctx.db.get('SELECT exercises_snapshot FROM workout_logs WHERE id = ?', logId).exercises_snapshot);
+  assert.deepEqual([kept[0].name, kept[0].exercise_id, kept[0].swapped_from, kept[0].done], ['Goblet squat', goblet.id, 'Back squat', true]);
 });
 
 test('scope program covers the rest of the program but never a workout already logged; Undo puts the plan back; the export lists swaps', async () => {

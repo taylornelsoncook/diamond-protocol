@@ -268,6 +268,9 @@ td .dp-badge{white-space:nowrap}
 .sf-field .dp-input,.sf-field .select{width:100%;min-width:0}
 .sf-group{font:600 12px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--green-bright);margin-top:6px}
 .sf-in-group{border-left:3px solid var(--green);padding-left:10px}
+/* The Live panel's athlete rows open like a list, without the browser's triangle. */
+.dp-live-sum{list-style:none}
+.dp-live-sum::-webkit-details-marker{display:none}
 .sf-tag{font:700 13px/1 var(--font-display);color:var(--green-bright);min-width:2em;flex-shrink:0}
 /* Form checks (services/formchecks.js): the send progress and the coach's answer, on every page that shows them. */
 .fc-progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden}

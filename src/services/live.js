@@ -9,10 +9,10 @@ import { emit } from './events.js';
 // else the one on the weight-room screen), what they've logged so far, and a swap for an athlete who can't do an
 // exercise today. Nothing here is money, so every staff role may look; swapping is for owners and coaches.
 
-function workoutOf(ctx, workoutId) {
+function workoutOf(ctx, workoutId, program) {
   const w = ctx.db.get('SELECT program_id FROM workouts WHERE id = ?', workoutId);
   if (!w) return null;
-  const p = getProgram(ctx, w.program_id);
+  const p = program(w.program_id);
   const full = p.workouts.find((x) => x.id === workoutId);
   return full ? { ...full, program_name: p.name, program_id: p.id } : null;
 }
@@ -20,20 +20,27 @@ function workoutOf(ctx, workoutId) {
 export function liveSession(ctx, sessionId) {
   const s = ctx.db.get('SELECT id, name, kind, starts_at, ends_at, status, workout_id FROM class_sessions WHERE id = ?', sessionId);
   if (!s) throw notFound('Session');
-  const onScreen = s.workout_id ? workoutOf(ctx, s.workout_id) : null;
-  const athletes = athletesIn(ctx, s).filter((a) => !ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', a.client_id)?.archived_at).map((a) => athleteLive(ctx, s, a, onScreen));
+  // Each program is read once for the whole class (most of a class is on one or two), every 20 seconds per open screen.
+  const programs = new Map();
+  const program = (id) => { if (!programs.has(id)) programs.set(id, getProgram(ctx, id)); return programs.get(id); };
+  const onScreen = s.workout_id ? workoutOf(ctx, s.workout_id, program) : null;
+  const athletes = athletesIn(ctx, s).filter((a) => !ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', a.client_id)?.archived_at).map((a) => athleteLive(ctx, s, a, onScreen, program));
   return { session_id: s.id, name: s.name, starts_at: s.starts_at, ends_at: s.ends_at, status: s.status,
     screen_workout: onScreen ? { id: onScreen.id, title: onScreen.title, program_name: onScreen.program_name } : null,
     counts: { athletes: athletes.length, here: athletes.filter((a) => a.here).length, logged: athletes.filter((a) => a.logged).length, started: athletes.filter((a) => !a.logged && a.sets_logged > 0).length },
     athletes };
 }
 
-function athleteLive(ctx, s, a, onScreen) {
-  const own = nextWorkoutFor(ctx, a.client_id);
-  // What they logged today (in this session, or earlier today in the app) stays their workout for the day; otherwise
-  // it's their program's next workout, else the one on the screen.
-  const log = ctx.db.get(`SELECT id, workout_id, completed_at, session_id, rpe FROM workout_logs WHERE client_id = ? AND workout_id IS NOT NULL AND (session_id = ? OR completed_at >= ?) ORDER BY completed_at DESC, rowid DESC LIMIT 1`, a.client_id, s.id, startOfToday(ctx));
-  const logged = log ? workoutOf(ctx, log.workout_id) : null;
+function athleteLive(ctx, s, a, onScreen, program) {
+  const own = nextWorkoutFor(ctx, a.client_id, program);
+  // What they logged in this session, or earlier today from the workouts this session is about (the one on the screen,
+  // or their own program's), stays their workout for the day. A log of something else today (a morning session's
+  // workout) doesn't take the row over. Otherwise it's their program's next workout, else the one on the screen.
+  const mine = [s.workout_id, ...(own ? own.program.workouts.map((w) => w.id) : [])].filter(Boolean);
+  const log = ctx.db.get(`SELECT id, workout_id, completed_at, session_id, rpe FROM workout_logs WHERE client_id = ? AND workout_id IS NOT NULL
+    AND (session_id = ? OR (completed_at >= ? AND workout_id IN (${mine.length ? mine.map(() => '?').join(', ') : 'NULL'})))
+    ORDER BY (session_id = ?) DESC, completed_at DESC, rowid DESC LIMIT 1`, a.client_id, s.id, startOfToday(ctx), ...mine, s.id);
+  const logged = log ? workoutOf(ctx, log.workout_id, program) : null;
   const w = logged ? { ...logged, source: own && logged.program_id === own.program.id ? 'program' : 'screen' }
     : own?.next ? { ...own.next, program_name: own.program.name, source: 'program' } : onScreen ? { ...onScreen, source: 'screen' } : null;
   const readiness = readinessToday(ctx, a.client_id);
@@ -94,8 +101,12 @@ export function removeSwap(ctx, id, { all = false } = {}) {
 }
 // One athlete's swaps, newest first, for the client page.
 export function listSwaps(ctx, clientId) {
+  if (!ctx.db.get('SELECT id FROM clients WHERE id = ?', String(clientId))) throw notFound('Athlete');
+  return swapRows(ctx, clientId);
+}
+function swapRows(ctx, clientId) {
   return ctx.db.all(`SELECT s.id, s.reason, s.created_by, s.created_at, s.workout_exercise_id, e.name AS exercise_name, e0.name AS instead_of, w.id AS workout_id, w.title AS workout_title, w.week, w.day, p.name AS program_name
     FROM exercise_swaps s JOIN exercises e ON e.id = s.exercise_id JOIN workout_exercises we ON we.id = s.workout_exercise_id JOIN exercises e0 ON e0.id = we.exercise_id
     JOIN workouts w ON w.id = we.workout_id JOIN programs p ON p.id = w.program_id WHERE s.client_id = ? ORDER BY s.created_at DESC, w.week, w.day`, clientId);
 }
-export const forExport = (ctx, clientId) => listSwaps(ctx, clientId).map(({ id, workout_exercise_id, workout_id, ...r }) => r);
+export const forExport = (ctx, clientId) => swapRows(ctx, clientId).map(({ id, workout_exercise_id, workout_id, ...r }) => r);

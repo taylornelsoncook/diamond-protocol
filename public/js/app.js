@@ -2669,14 +2669,16 @@ function livePanel(id, st, canSwap) {
     const progress = a.logged ? h('span', { class: 'dp-badge dp-badge--good' }, `Logged${a.on_screen ? ' on the screen' : ''}${a.sets_logged ? ` · ${a.sets_logged} sets` : ''}${a.effort ? ` · effort ${a.effort}` : ''}`)
       : a.sets_logged ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${a.exercises_done} of ${a.exercises.length} exercises`) : w ? h('span', { class: 'small muted' }, 'Not logged yet') : null;
     return h('details', { class: 'list-item', style: 'display:block' },
-      h('summary', { class: 'row wrap', style: 'gap:8px;align-items:center;cursor:pointer;list-style:none' },
+      h('summary', { class: 'row wrap dp-live-sum', style: 'gap:8px;align-items:center;cursor:pointer' },
         h('span', { class: `dp-badge dp-badge--${a.here ? 'good' : 'muted'}`, style: 'min-width:56px;text-align:center' }, a.here ? 'Here' : 'Not yet'),
         h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, h('a', { href: `#/clients/${a.client_id}`, class: 'strong', style: 'color:var(--steel)' }, a.name), a.team ? h('span', { class: 'small muted' }, ' · team') : null), what),
         level(a.readiness), progress),
       w ? h('div', { class: 'stack-tight', style: 'margin:8px 0 0 64px' }, a.exercises.map((e) => exLine(a, e))) : null);
   };
-  async function draw() {
+  async function draw(fromTimer = false) {
     if (!box.isConnected && timer) { clearInterval(timer); timer = null; return; }
+    // A timed refresh waits while the coach is typing a swap (or has a hand on the panel), so nothing typed is lost.
+    if (fromTimer && (swapping || box.contains(document.activeElement))) return;
     let live;
     try { live = await get(`/v1/sessions/${id}/live`); } catch (e) { return fill(box, h('p', { class: 'small warn-text', style: 'margin:0' }, e.message)); }
     const open = new Set([...box.querySelectorAll('details[open]')].map((d) => d.dataset.client));
@@ -2684,7 +2686,7 @@ function livePanel(id, st, canSwap) {
     fill(box, h('p', { class: 'small muted', style: 'margin:0' }, live.athletes.length ? `${live.counts.here} of ${live.counts.athletes} here · ${live.counts.logged} logged${live.counts.started ? ` · ${live.counts.started} started` : ''}${live.screen_workout ? ` · on the screen: ${live.screen_workout.title}` : ''}. Open an athlete to see their exercises${canSwap ? ' and swap one' : ''}.` : 'Nobody is booked yet.'), rows);
   }
   draw();
-  if (st === 'live') timer = setInterval(draw, 20000);
+  if (st === 'live') timer = setInterval(() => draw(true), 20000);
   return panel('Live', { subtitle: st === 'live' ? 'Who\'s here, what each athlete is on today with their own weights and sets, and what they\'ve logged. Updates every 20 seconds.' : st === 'done' ? 'What each athlete did in this session.' : 'Each athlete\'s workout for the session, with their own weights and sets.' }, box);
 }
 

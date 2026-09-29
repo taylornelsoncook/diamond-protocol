@@ -78,11 +78,12 @@ export function screenAthlete(ctx, key, body = {}, asOf = ctx.now()) {
   const { s, a, client } = pickAthlete(ctx, key, body, asOf);
   const readiness = readinessToday(ctx, client.id);
   const w = getProgram(ctx, ctx.db.get('SELECT program_id FROM workouts WHERE id = ?', s.workout_id).program_id).workouts.find((x) => x.id === s.workout_id);
+  const swaps = swapsFor(ctx, client.id, w.id);
   return {
     name: client.name.split(' ')[0], logged: loggedIn(ctx, s.id).has(client.id),
     readiness: readiness?.level ? { level: readiness.level, headline: readiness.headline } : null,
     // The same numbers as the athlete's phone: today's weight (lighter on a rough day, plus approved steps) and sets.
-    weights: w.exercises.map((x) => appExercise(ctx, client.id, x, readiness, swapsFor(ctx, client.id, w.id))).filter((x) => x.load || x.progression || x.planned_sets || x.swapped).map((x) => {
+    weights: w.exercises.map((x) => appExercise(ctx, client.id, x, readiness, swaps)).filter((x) => x.load || x.progression || x.planned_sets || x.swapped).map((x) => {
       const l = x.load;
       const weight = !l ? null : l.missing ? `Test your ${l.lift} max first` : `${l.lb} lb${l.planned_pct ? ' (lighter today)' : ''}${x.progression?.weight_lb ? ` (with your +${x.progression.weight_lb} lb step)` : ''}`;
       const sets = x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : x.progression?.sets || x.progression?.reps ? `${x.target_sets} × ${x.target_reps ?? x.reps} (your progression)` : null;

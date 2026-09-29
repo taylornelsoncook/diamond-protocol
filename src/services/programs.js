@@ -177,10 +177,11 @@ function keepLogsOf(ctx, workoutIds) {
     const w = ctx.db.get('SELECT w.*, p.name AS program_name FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ?', wid);
     if (!w) continue;
     const items = tagGroups(ctx.db.all(`SELECT we.id, we.exercise_id, e.name, we.prescription, ${SLOT_COLS.map((c) => `we.${c}`).join(', ')} FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position`, wid));
-    for (const l of ctx.db.all('SELECT id FROM workout_logs WHERE workout_id = ?', wid)) {
+    for (const l of ctx.db.all('SELECT id, client_id FROM workout_logs WHERE workout_id = ?', wid)) {
       const done = new Set(ctx.db.all('SELECT workout_exercise_id FROM exercise_logs WHERE workout_log_id = ?', l.id).map((r) => r.workout_exercise_id));
+      const swaps = swapsFor(ctx, l.client_id, wid);   // the snapshot keeps the exercise this athlete actually did
       ctx.db.run('UPDATE workout_logs SET program_id = ?, program_name = ?, workout_title = ?, workout_week = ?, workout_day = ?, exercises_snapshot = ? WHERE id = ?',
-        w.program_id, w.program_name, w.title, w.week, w.day, JSON.stringify(items.map((i) => ({ ...i, done: done.has(i.id) }))), l.id);
+        w.program_id, w.program_name, w.title, w.week, w.day, JSON.stringify(items.map((i) => { const { swapped, ...x } = slotFor(i, swaps.get(i.id)); return { ...x, ...(swapped ? { swapped_from: swapped.from } : {}), done: done.has(i.id) }; })), l.id);
     }
   }
 }
@@ -678,10 +679,10 @@ export function appExercise(ctx, clientId, x0, readiness, swaps = null) {
 }
 
 // The athlete's active program and the workouts left in it (the next one is what the app opens on).
-export function nextWorkoutFor(ctx, clientId) {
+export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)) {
   const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', clientId);
   if (!a) return null;
-  const program = getProgram(ctx, a.program_id);
+  const program = load(a.program_id);
   const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', a.id).map((r) => r.workout_id));
   const left = program.workouts.filter((w) => !done.has(w.id));
   return { assignment: a, program, left, next: left[0] ?? null };
@@ -789,7 +790,10 @@ export function logDetail(ctx, client, logId) {
   // A deleted workout's exercises come from what was kept on the log, with whether each was done.
   const kept = l.workout_id ? null : (() => { try { return JSON.parse(ctx.db.get('SELECT exercises_snapshot FROM workout_logs WHERE id = ?', l.id).exercises_snapshot || '[]'); } catch { return []; } })();
   if (kept) for (const k of kept) if (k.done) done.add(k.id);
-  const items = tagGroups(kept ?? ctx.db.all(`SELECT we.id, we.prescription, ${SLOT_COLS.map((c) => `we.${c}`).join(', ')}, e.name, e.id AS exercise_id FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position`, l.workout_id));
+  // A swapped exercise shows as what the athlete did (the sets are under it), with what it replaced.
+  const swaps = l.workout_id ? swapsFor(ctx, client.id, l.workout_id) : null;
+  const items = tagGroups(kept ?? ctx.db.all(`SELECT we.id, we.prescription, ${SLOT_COLS.map((c) => `we.${c}`).join(', ')}, e.name, e.id AS exercise_id FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position`, l.workout_id)
+    .map((i) => { const { swapped, ...x } = slotFor(i, swaps.get(i.id)); return swapped ? { ...x, swapped_from: swapped.from } : x; }));
   // Sets of exercises the coach has since taken out of the workout still show.
   const gone = ctx.db.all('SELECT DISTINCT workout_exercise_id AS id, exercise_name AS name FROM workout_sets WHERE workout_log_id = ?', l.id).filter((g) => !items.some((i) => i.id === g.id));
   const strip = ({ workout_exercise_id, ...s }) => s;
@@ -799,7 +803,7 @@ export function logDetail(ctx, client, logId) {
     id: l.id, title: l.workout_title, week: l.week, day: l.day, program_name: l.program_name, completed_at: l.completed_at, rpe: l.rpe, notes: l.notes,
     minutes: minutesOf(l), on_screen: !!l.session_id, bests: bestsOf(ctx, l.id), can_reopen: !!l.workout_id && !reopenBlock(ctx, client.id, l),
     workout_id: l.workout_id, program_deleted: !l.workout_id,
-    exercises: [...items.map((i) => ({ id: i.id, exercise_id: i.exercise_id, name: i.name, prescription: i.prescription, ...slot(i), ...rxOf(i), done: done.has(i.id), sets: sets.filter((s) => s.workout_exercise_id === i.id).map(strip) })),
+    exercises: [...items.map((i) => ({ id: i.id, exercise_id: i.exercise_id, name: i.name, prescription: i.prescription, ...(i.swapped_from ? { swapped_from: i.swapped_from } : {}), ...slot(i), ...rxOf(i), done: done.has(i.id), sets: sets.filter((s) => s.workout_exercise_id === i.id).map(strip) })),
       ...gone.map((g) => ({ id: g.id, name: g.name, prescription: null, done: true, removed: true, sets: sets.filter((s) => s.workout_exercise_id === g.id).map(strip) }))]
   };
 }

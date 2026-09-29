@@ -563,8 +563,8 @@ async function securityTab(box) {
 }
 
 async function backupsTab(box) {
-  const [s, bk, jobs] = await Promise.all([get('/v1/staff/summary'), get('/v1/backups'), get('/v1/jobs')]);
-  fill(box, backupsPanel(bk, s), jobsPulldown(jobs));
+  const [s, bk, jobs, fc] = await Promise.all([get('/v1/staff/summary'), get('/v1/backups'), get('/v1/jobs'), get('/v1/form-checks/status')]);
+  fill(box, backupsPanel(bk, s), formChecksPanel(fc), jobsPulldown(jobs));
 }
 
 function addStaffDialog(roles) {
@@ -693,6 +693,22 @@ async function handOverDialog(u) {
   preview();
 }
 
+// Form-check clips: where they're kept and for how long (services/formchecks.js). The bucket is the owner's, private, and its own.
+function formChecksPanel(fc) {
+  const keep = input({ type: 'number', min: '30', max: '365', step: '1', value: String(fc.keep_days), inputmode: 'numeric', style: 'max-width:120px', 'aria-label': 'Days to keep clips' });
+  const setup = h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, fc.ready ? 'How it\'s set up' : 'How to set it up'),
+    h('ol', { class: 'small stack-tight', style: 'margin:0;padding-left:20px' },
+      h('li', null, 'In Cloudflare R2, make a new bucket for the clips (like ', h('code', null, 'dp-athlete-videos'), '). Keep it private: no public access, no custom domain. Never the backups bucket, never the public exercise-video bucket.'),
+      h('li', null, 'On that bucket\'s Settings → CORS policy, allow ', h('code', null, 'PUT'), ' and ', h('code', null, 'GET'), ' from ', fc.cors_origins.map((o, i) => [i ? ' and ' : '', h('code', { style: 'user-select:all' }, o)]), ', with ', h('code', null, 'content-type'), ' as an allowed header and ', h('code', null, 'etag'), ' exposed.'),
+      h('li', null, 'Make an R2 API token with object read and write on that bucket (or widen the backups\' token to it), then add ', h('code', null, 'FORMCHECK_S3_BUCKET'), ' in Render, plus ', h('code', null, 'FORMCHECK_S3_ENDPOINT'), ', ', h('code', null, 'FORMCHECK_S3_KEY_ID'), ' and ', h('code', null, 'FORMCHECK_S3_SECRET'), ' when they differ from the backups\'. DEPLOY.md has the same steps.')));
+  return panel('Form-check videos', { subtitle: 'Athletes film a set in the app and send it; coaches watch and answer on the client page and from Today. The clips are videos of minors, so they live only in a private bucket of yours, are played through short-lived links, and are removed after the keep time.' },
+    h('p', { class: 'small', style: 'margin:0' }, tag(fc.ready ? 'good' : 'muted', fc.ready ? 'Set up' : 'Not set up'), ' ',
+      fc.ready ? `Bucket ${fc.bucket}. ${fc.stored.n} ${fc.stored.n === 1 ? 'clip' : 'clips'} on file (${kb(fc.stored.bytes)}), ${fc.waiting} waiting for an answer. Clips up to ${fc.max_seconds} seconds and ${fc.max_mb} MB, ten a day per athlete.` : 'Athletes don\'t see the Send a form check button until the bucket is set up.'),
+    fc.problems.length ? h('ul', { class: 'small warn-text', style: 'margin:0;padding-left:20px' }, fc.problems.map((p) => h('li', null, p))) : null,
+    setup,
+    h('div', { class: 'row wrap', style: 'gap:8px;align-items:flex-end' }, field('Keep clips for (days)', keep, '30 to 365. Clips already sent keep the time they were given.'),
+      btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { form_check_keep_days: keep.value }); toast(`New clips are kept ${keep.value} days.`); }), 'secondary')));
+}
 function backupsPanel(bk, s) {
   const off = bk.offsite;
   const offFailing = off.last_error && (!off.last_ok_at || off.last_error_at > off.last_ok_at);

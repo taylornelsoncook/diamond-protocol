@@ -13,6 +13,7 @@ import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
 import { cardFee, feeSettings } from './services/fees.js';
 import * as wearables from './services/wearables.js';
+import * as formchecks from './services/formchecks.js';
 import * as sms from './services/sms.js';
 import * as leads from './services/leads.js';
 import * as shop from './services/shop.js';
@@ -185,6 +186,9 @@ export const portalRoutes = [
   ['POST', '/portal/api/data-imports/:id/undo', 'guardian', 'Undo a file brought in for one of your athletes.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'parent', name: r.guardian.name }, { familyId: r.guardian.family_id })],
   ['GET', '/portal/api/athletes/:id/wearables', 'guardian', 'Your athlete\'s linked wearables (WHOOP, Oura): status and last pull, and which providers can be connected.', (ctx, r) => ({ data: wearables.listConnections(ctx, athleteOf(ctx, r, r.params.id).id), providers: wearables.status(ctx).providers.filter((p) => p.ready).map(({ key, label }) => ({ key, label })) })],
   ['POST', '/portal/api/athletes/:id/wearables/:provider/connect', 'guardian', 'Link your athlete\'s WHOOP or Oura account: answers the provider\'s sign-in link to open. It works once, for 20 minutes.', (ctx, r) => wearables.connectUrl(ctx, athleteOf(ctx, r, r.params.id).id, r.params.provider, { kind: 'parent', id: r.guardian.id }), 201],
+  ['GET', '/portal/api/athletes/:id/form-checks', 'guardian', 'The form-check clips your athlete sent their coach, with the coach\'s answers.', (ctx, r) => ({ data: formchecks.listForClient(ctx, athleteOf(ctx, r, r.params.id).id) })],
+  ['GET', '/portal/api/form-checks/:id/video', 'guardian', 'A short-lived address to play one of your athlete\'s clips (which=clip or reply).', (ctx, r) => formchecks.playUrl(ctx, r.params.id, r.query.which === 'reply' ? 'reply' : 'clip', { familyId: r.guardian.family_id })],
+  ['DELETE', '/portal/api/form-checks/:id', 'guardian', 'Remove one of your athlete\'s clips and the coach\'s answer to it.', (ctx, r) => formchecks.remove(ctx, r.params.id, { familyId: r.guardian.family_id })],
   ['DELETE', '/portal/api/wearables/:id', 'guardian', 'Disconnect one of your athletes\' wearables. The data already pulled stays.', (ctx, r) => wearables.disconnect(ctx, r.params.id, { familyId: r.guardian.family_id })],
   ['GET', '/portal/api/athletes/:id/report-links', 'guardian', 'Working share links to your athlete\'s progress report: who made each, when it expires and how often it was opened.', (ctx, r) => ({ data: reports.listReportLinks(ctx, athleteOf(ctx, r, r.params.id).id) })],
   ['POST', '/portal/api/athletes/:id/report-links', 'guardian', 'Make a link to your athlete\'s progress report that works without signing in (for a grandparent or a recruiter): days (7, 30, 90 or 365), optional label. The response has the url once.', (ctx, r) => reports.createReportLink(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { kind: 'parent', id: r.guardian.id, name: `${r.guardian.name} (parent)` }, r.baseUrl), 201],

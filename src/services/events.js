@@ -18,7 +18,8 @@ export const EVENT_TYPES = [
   'family.signed_up', 'family.deletion_requested', 'family.deleted', 'clients.imported',
   'lead.created', 'lead.updated', 'pay_link.created', 'pay_link.paid', 'stock.changed', 'badge.awarded', 'course.completed', 'purchase.completed', 'spots.offered', 'progress_note.approved', 'session.messaged',
   'subscription.change_requested', 'client.merged', 'client.claimed',
-  'lead.stage_changed', 'lead.converted', 'leads.imported'   // version 45 (CRM)
+  'lead.stage_changed', 'lead.converted', 'leads.imported',   // version 45 (CRM)
+  'form_check.sent', 'form_check.answered'   // version 53 (form checks)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -84,6 +85,8 @@ const INFO = {
   'session.messaged': ['Staff email the families booked in a session.', { ...S, families: 9, by: 'Head Coach' }],
   'subscription.change_requested': ['A parent asks to switch plans, pause or cancel a membership in the parent portal (nothing changes until the owner does it).', { request_id: 'mrq_sample', ...C, kind: 'pause', plan_name: 'Performance membership', requested_plan_name: null, guardian_name: 'Maria Lopez' }],
   'client.merged': ['The owner merges two profiles of one athlete (the other Athlete ID keeps finding this one).', { ...C, athlete_id: 'AVALOP2026', merged_client_id: 'cli_sample2', merged_athlete_id: 'AVALOP2026-2' }],
+  'form_check.sent': ['An athlete sends a form-check clip from the app.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', bytes: 24000000 }],
+  'form_check.answered': ['A coach answers a form check.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', coach_name: 'Head Coach' }],
   'client.claimed': ['A parent adds a team athlete to their family with the Athlete ID (name and birthday matched).', { ...C, athlete_id: 'AVALOP2026', family_id: 'fam_sample', guardian_name: 'Maria Lopez' }]
 };
 export const EVENT_INFO = Object.fromEntries(EVENT_TYPES.map((t) => [t, { about: INFO[t]?.[0] ?? '', sample: INFO[t]?.[1] ?? {} }]));

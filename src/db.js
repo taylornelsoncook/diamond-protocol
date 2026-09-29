@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 52;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync
+const SCHEMA_VERSION = 53;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -90,7 +90,8 @@ const ADDED_TABLES = {
   45: ['lead_stage_history', 'lead_activity', 'crm_tasks', 'message_templates'],
   47: ['data_imports', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced'],                 // outside data: wearables and spreadsheets brought in by hand
   50: ['program_phases'],                                                                             // the mesocycle planner's phases
-  52: ['wearable_connections', 'wearable_auth_states']                                                // WHOOP and Oura accounts linked for automatic pulls
+  52: ['wearable_connections', 'wearable_auth_states'],                                               // WHOOP and Oura accounts linked for automatic pulls
+  53: ['form_checks']                                                                                 // form-check clips sent from the athlete app
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',

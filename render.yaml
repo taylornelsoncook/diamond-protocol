@@ -54,6 +54,9 @@ services:
         sync: false
       - key: OURA_CLIENT_SECRET
         sync: false
+      # Optional: a private bucket for athletes' form-check clips (see DEPLOY.md, Form-check videos). Never the backups bucket.
+      - key: FORMCHECK_S3_BUCKET
+        sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT
         sync: false
@@ -124,6 +127,9 @@ services:
       - key: OURA_CLIENT_ID
         sync: false
       - key: OURA_CLIENT_SECRET
+        sync: false
+      # Optional: a private bucket for athletes' form-check clips (see DEPLOY.md, Form-check videos). Never the backups bucket.
+      - key: FORMCHECK_S3_BUCKET
         sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT

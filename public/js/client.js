@@ -1,6 +1,7 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 import { detailsOf, groupTag, withGroups } from './set-fields.js';
+import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 const params = new URLSearchParams(location.search);
@@ -209,7 +210,7 @@ function render() {
   if (home.locked || !home.workout) {
     stopRest();
     fill(view, top(), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox, h('div', { class: 'dp-panel' }, h('p', null, home.message)),
-      strayPanel(), historyPanel(home), h('p', { class: 'small muted' }, 'Check in, see your goals, results and lessons with the tabs below.'));
+      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, 'Check in, see your goals, results and lessons with the tabs below.'));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.
@@ -221,6 +222,31 @@ function render() {
   }
   draftFor(home.workout);
   renderLogger(home.workout);
+}
+
+// Send a clip of a set to the coach (formchecks-ui.js). Hidden until the owner has set the private bucket up.
+let formChecksReady = null;   // null = not asked yet
+function formCheckSend(x) {
+  if (formChecksReady === false) return null;
+  const holder = h('div', { class: 'stack-tight' });
+  const draw = () => fill(holder, clipPicker('Send a form check', async (file, progress) => {
+    const fc = await sendClip({ file, start: (b) => api('POST', '/app/api/form-checks', b), finish: (id) => api('POST', `/app/api/form-checks/${id}/done`), extra: { workout_exercise_id: x.id }, onProgress: progress });
+    say(`Form check sent for ${fc.exercise_name}.`); toast(`Sent. Your coach will answer in the app; you'll see it under Form checks.`);
+    formChecksPanel.draw?.();
+  }, { variant: 'ghost', capture: true }), h('span', { class: 'small muted' }, 'Film one set (up to 60 seconds) and your coach will answer with what to change.'));
+  if (formChecksReady === true) draw();
+  else api('GET', '/app/api/form-checks').then((d) => { formChecksReady = !!d.ready; if (d.ready) draw(); }).catch(() => {});
+  return holder;
+}
+// The clips sent and the coach's answers, under the workout.
+const formChecksPanel = { el: null, draw: null };
+function formChecksSection() {
+  if (formChecksReady === false) return null;
+  const block = formChecksBlock({ who: 'athlete', first: state.home?.client?.first_name, list: async () => { const d = await api('GET', '/app/api/form-checks'); formChecksReady = !!d.ready; if (!d.ready) section.hidden = true; else if (d.data.length) section.hidden = false; return d; },
+    play: (id, which) => api('GET', `/app/api/form-checks/${id}/video?which=${which}`), seen: (id) => api('POST', `/app/api/form-checks/${id}/seen`), empty: '' });
+  const section = h('section', { class: 'dp-panel stack', hidden: true }, h('h2', { class: 'dp-panel-title' }, 'Form checks'), h('p', { class: 'small muted', style: 'margin:0' }, 'Clips you sent and what your coach said. Clips are kept for a while, then removed.'), block.el);
+  formChecksPanel.el = section; formChecksPanel.draw = block.draw;
+  return section;
 }
 
 // A draft left for a workout that isn't next any more.
@@ -276,7 +302,8 @@ function renderLogger(w) {
         x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
         x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
-        x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null));
+        x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null,
+        formCheckSend(x)));
       const setsBox = h('div', { class: 'c-sets' });
       box.append(setsBox);
       drawSets(x, setsBox);
@@ -379,6 +406,7 @@ function renderLogger(w) {
         w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null)),
     finishBtn,
     reopened ? null : comingUp(home.upcoming),
+    reopened ? null : formChecksSection(),
     reopened ? null : historyPanel(home),
     restBar);
 }

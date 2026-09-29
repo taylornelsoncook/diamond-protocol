@@ -1605,33 +1605,3 @@ CREATE TABLE IF NOT EXISTS wearable_auth_states (
   return_to TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
--- Version 53: form checks (services/formchecks.js). An athlete films a set and sends it to the coach; the clip itself
--- lives in the owner's private bucket under object_key (never on this disk), and goes after expires_at.
-CREATE TABLE IF NOT EXISTS form_checks (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  exercise_id TEXT REFERENCES exercises(id) ON DELETE SET NULL,
-  exercise_name TEXT NOT NULL,
-  workout_exercise_id TEXT,
-  workout_title TEXT,
-  note TEXT,
-  object_key TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  bytes INTEGER,
-  duration_s REAL,
-  status TEXT NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading','sent','answered')),
-  created_at TEXT NOT NULL,
-  sent_at TEXT,
-  answered_at TEXT,
-  coach_id TEXT,
-  coach_name TEXT,
-  reply TEXT,
-  reply_object_key TEXT,
-  reply_content_type TEXT,
-  reply_bytes INTEGER,
-  reply_status TEXT CHECK (reply_status IN ('uploading','sent')),
-  seen_by_athlete_at TEXT,
-  expires_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_form_checks_client ON form_checks(client_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_form_checks_status ON form_checks(status, sent_at);

@@ -175,8 +175,6 @@ CREATE TABLE IF NOT EXISTS workouts (
   week INTEGER NOT NULL,
   day INTEGER NOT NULL,
   title TEXT NOT NULL,
-  warmup_id TEXT REFERENCES routines(id) ON DELETE SET NULL,     -- version 58: the warm-up block attached to this workout
-  cooldown_id TEXT REFERENCES routines(id) ON DELETE SET NULL,   -- version 58: the cool-down block
   UNIQUE (program_id, week, day)
 );
 CREATE TABLE IF NOT EXISTS workout_exercises (
@@ -1692,22 +1690,4 @@ CREATE TABLE IF NOT EXISTS exercise_alternatives (
   note TEXT,
   created_at TEXT NOT NULL,
   UNIQUE (exercise_id, alt_exercise_id)
-);
--- Version 58: warm-up and cool-down blocks (services/routines.js), written once and attached to workouts by
--- workouts.warmup_id / cooldown_id. Shown with the workout everywhere; nothing in a block is logged.
-CREATE TABLE IF NOT EXISTS routines (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('warmup','cooldown')),
-  note TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS routine_exercises (
-  id TEXT PRIMARY KEY,
-  routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
-  exercise_id TEXT NOT NULL REFERENCES exercises(id),
-  position INTEGER NOT NULL,
-  prescription TEXT NOT NULL,
-  note TEXT
 );

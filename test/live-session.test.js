@@ -185,7 +185,7 @@ test('a version 55 database gains the swaps table, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 57, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 58, `round ${round}`);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'exercise_swaps'`).n, 1);
       d.close();
     }

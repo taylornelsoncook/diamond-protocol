@@ -44,6 +44,11 @@ function workoutList(w) {
     x.load || x.details ? h('span', { class: 'tv-ex-load' }, [x.load, x.details].filter(Boolean).join(' · ')) : null),
   (x) => h('li', { class: 'tv-ex-group' }, groupTitle(x))));
 }
+// A warm-up or cool-down block on the board: one line, small, so the workout stays the big thing.
+function routineLine(r, label) {
+  if (!r?.exercises?.length) return null;
+  return h('p', { class: 'tv-routine' }, h('span', { class: 'tv-routine-label' }, `${label}: ${r.name}`), ' ', r.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · '));
+}
 function render() {
   const sessions = board.sessions.filter((s) => s.workout);
   const s = sessions.find((x) => x.id === picked) ?? sessions[0] ?? null;
@@ -69,7 +74,7 @@ function render() {
       : h('p', { class: 'muted' }, 'Nobody is booked yet.'));
   fill(root, h('main', { class: 'tv-wrap' }, head,
     h('div', { class: 'tv-grid' },
-      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), workoutList(w)),
+      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), routineLine(w.warmup, 'Warm-up'), workoutList(w), routineLine(w.cooldown, 'Cool-down')),
       h('aside', { class: 'tv-side' }, side))));
 }
 

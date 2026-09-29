@@ -37,3 +37,5 @@ body{background:var(--black)}
 .tv-ex li.tv-ex-group{display:block;counter-increment:none;padding:4px 20px 0;border:0;background:none;font:600 clamp(14px,1.2vw,20px)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright)}
 .tv-ex li.tv-ex-group::before{content:none}
 .tv-ex li.tv-ex--grouped{border-left:4px solid var(--green)}
+.tv-routine{margin:0 0 12px;font-size:clamp(16px,1.4vw,24px);line-height:1.4;color:var(--steel-muted)}
+.tv-routine-label{font:600 clamp(14px,1.2vw,20px)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright);margin-right:8px}

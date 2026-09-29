@@ -67,7 +67,7 @@ async function sendLink(c) {
 const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '' };
 
 export async function viewPrograms(main) {
-  const [progs, exs, act, shop] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null]);
+  const [progs, exs, act, shop, blocks] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] }))]);
   const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
@@ -111,7 +111,7 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, search), h('div', { style: 'width:180px' }, levelSel)),
-        cards, checkOn, feed, shop ? storePanel(shop) : null),
+        cards, routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
@@ -566,15 +566,73 @@ function workoutCard(p, w, exs, edit, reload) {
       body(x), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit'))
       : h('div', { class: 'grow pg-ex-body' }, body(x)),
   ));
+  const blocks = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
+    h('span', { class: w.warmup || w.cooldown ? 'muted' : 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
+    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', () => blocksDialog(w, reload), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
   return h('div', { class: 'workout' },
     h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
       edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title))),
+    blocks,
     rows.length ? rows : h('p', { class: 'small muted' }, 'No exercises yet.'),
     edit ? h('div', { class: 'row wrap pg-foot' },
       btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'secondary'),
       h('span', { class: 'grow' }),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost', { 'aria-label': `Copy ${w.title}` }),
       btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
+}
+// Attach a warm-up and a cool-down to a workout, from the blocks written on the Programs page.
+async function blocksDialog(w, reload) {
+  const all = (await get('/v1/routines')).data;
+  const pick = (kind, cur) => select([['', 'None'], ...all.filter((r) => r.kind === kind).map((r) => [r.id, `${r.name} (${plural(r.exercises.length, 'move')})`])], { value: cur ?? '' });
+  const warm = pick('warmup', w.warmup?.id), cool = pick('cooldown', w.cooldown?.id);
+  dialog(`Warm-up and cool-down for ${w.title}`, h('div', { class: 'stack' },
+    all.length ? null : h('p', { class: 'small muted' }, 'No blocks yet. Write one under Warm-ups and cool-downs on the Programs page, then attach it here.'),
+    h('div', { class: 'form-grid' }, field('Warm-up', warm), field('Cool-down', cool)),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'The block shows with this workout in the app, on the weight-room screen and on the session\'s Live panel. Nothing in it is logged.')), [
+    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workouts/${w.id}`, { warmup_id: warm.value || null, cooldown_id: cool.value || null }); toast('Saved.'); reload(); } },
+    { label: 'Cancel', variant: 'ghost' }]);
+}
+// Warm-ups and cool-downs, written once. A block is a name and a short list of moves with what to do.
+function routinesPanel(list, exs, edit) {
+  const row = (r) => h('div', { class: 'list-item' },
+    h('div', { class: 'grow stack-tight' }, h('span', null, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, ` · ${r.kind_label}`)),
+      h('span', { class: 'small muted' }, `${r.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${r.used_in ? ` · on ${plural(r.used_in, 'workout')}` : ' · not on a workout yet'}`)),
+    edit ? btn('Edit', () => routineDialog(r, r.kind, exs), 'ghost', { 'aria-label': `Edit ${r.name}` }) : null);
+  return panel('Warm-ups and cool-downs', { subtitle: 'Write a block once and attach it to workouts from the builder. It shows with the workout in the app, on the weight-room screen and on the Live panel.',
+    action: edit ? h('div', { class: 'row wrap' }, btn('New warm-up', () => routineDialog(null, 'warmup', exs), 'secondary'), btn('New cool-down', () => routineDialog(null, 'cooldown', exs), 'secondary')) : null },
+    list.length ? list.map(row) : h('p', { class: 'small muted' }, 'No blocks yet.'));
+}
+function routineDialog(r, kind, exs) {
+  const name = input({ value: r?.name ?? '', placeholder: kind === 'warmup' ? 'Dynamic warm-up' : 'Stretch out', required: true });
+  const note = input({ value: r?.note ?? '', maxlength: '500', placeholder: 'A line for the athlete (optional)' });
+  const datalist = h('datalist', { id: 'dp-rtn-list' }, exs.map((e) => h('option', { value: e.name })));
+  const rowsBox = h('div', { class: 'stack-tight' });
+  const rows = (r?.exercises ?? []).map((x) => ({ name: x.name, prescription: x.prescription, note: x.note ?? '' }));
+  if (!rows.length) rows.push({ name: '', prescription: '', note: '' });
+  const draw = () => fill(rowsBox, rows.map((x, i) => {
+    const nm = input({ list: 'dp-rtn-list', value: x.name, placeholder: 'Exercise', 'aria-label': `Move ${i + 1}`, autocomplete: 'off', onInput: (e) => { x.name = e.target.value; } });
+    const rx = input({ value: x.prescription, maxlength: '80', placeholder: '2 × 10, 30 sec each side', 'aria-label': `What to do, move ${i + 1}`, onInput: (e) => { x.prescription = e.target.value; } });
+    const nt = input({ value: x.note, maxlength: '200', placeholder: 'Cue (optional)', 'aria-label': `Cue, move ${i + 1}`, onInput: (e) => { x.note = e.target.value; } });
+    return h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' }, h('span', { class: 'small muted', style: 'width:20px' }, `${i + 1}.`), h('div', { class: 'grow', style: 'min-width:160px' }, nm), h('div', { style: 'flex:0 1 180px' }, rx), h('div', { class: 'grow', style: 'min-width:120px' }, nt),
+      rows.length > 1 ? btn('Remove', () => { rows.splice(i, 1); draw(); }, 'ghost', { 'aria-label': `Remove move ${i + 1}` }) : null);
+  }), h('div', { class: 'row' }, rows.length < 20 ? btn('Add a move', () => { rows.push({ name: '', prescription: '', note: '' }); draw(); }, 'ghost') : null));
+  draw();
+  const body = () => ({ name: name.value.trim(), kind, note: note.value.trim() || null, exercises: rows.map((x, i) => {
+    const e = exs.find((ex) => ex.name.toLowerCase() === x.name.trim().toLowerCase());
+    if (!e) throw new Error(`Move ${i + 1}: pick an exercise from the library (type a few letters of its name).`);
+    return { exercise_id: e.id, prescription: x.prescription.trim(), note: x.note.trim() || null };
+  }) });
+  const actions = [{ label: r ? 'Save block' : `Add ${kind === 'warmup' ? 'warm-up' : 'cool-down'}`, variant: 'primary', onClick: async () => {
+    if (r) await patch(`/v1/routines/${r.id}`, body()); else await post('/v1/routines', body());
+    toast(r ? 'Block saved. Every workout it\'s on shows the change.' : 'Block added. Attach it to a workout from the builder.'); deps.render();
+  } }, { label: 'Cancel', variant: 'ghost' }];
+  if (r) actions.push({ label: 'Delete block', variant: 'ghost', onClick: async () => {
+    if (!confirm(`Delete ${r.name}?${r.used_in ? ` It comes off ${plural(r.used_in, 'workout')}.` : ''}`)) return false;
+    await del(`/v1/routines/${r.id}`, { confirm: true }); toast(`${r.name} deleted.`); deps.render();
+  } });
+  dialog(r ? `Edit ${r.name}` : kind === 'warmup' ? 'New warm-up' : 'New cool-down', h('div', { class: 'stack' }, datalist, h('div', { class: 'form-grid' }, field('Name', name), field('Note for the athlete', note)),
+    h('div', { class: 'dp-label' }, 'Moves, in order'), rowsBox), actions);
+  name.focus();
 }
 function renameDialog(w, reload) {
   const title = input({ value: w.title });

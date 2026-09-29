@@ -512,6 +512,7 @@ async function importTab(box) {
     athlete: () => { const c = clients.find((x) => x.id === pick.value); return c ? { id: c.id, name: c.name } : null; },
     preview: (b) => post('/v1/data-imports/preview', b),
     commit: (b) => post('/v1/data-imports', b),
+    sources: () => get('/v1/data-imports/sources'),
     onSaved: () => loadRecent()
   });
   // Wearables that connect on their own (WHOOP, Oura): what's set up, and how the owner sets one up.
@@ -523,7 +524,7 @@ async function importTab(box) {
         p.ready ? null : h('span', { class: 'small muted' }, p.help),
         h('span', { class: 'small muted' }, 'Redirect address to register with them: ', h('code', { style: 'user-select:all' }, p.redirect_uri))))),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Apple Health and Garmin don\'t offer this kind of link, so their exports still come in as files below.')));
-  fill(box, wearPanel, panel('Bring in data', { subtitle: 'An athlete\'s numbers from a wearable or another app: WHOOP exports are recognized; any other table you match up once. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },
+  fill(box, wearPanel, panel('Bring in data', { subtitle: 'An athlete\'s numbers from any system: pick where the file comes from (WHOOP, Oura, Garmin, Apple Health, Fitbit, Strava, TrainingPeaks) and the menu says how to get the export; any other spreadsheet you match up once, saving its columns as the measures we track. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },
     h('div', { class: 'form-grid' }, field('Athlete', h('div', { class: 'stack-tight' }, find, pick))), form),
     panel('Recently brought in', { subtitle: 'Undo removes what that import saved.' }, recentBox));
   await loadRecent();

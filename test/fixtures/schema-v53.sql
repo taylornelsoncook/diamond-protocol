@@ -1510,8 +1510,8 @@ CREATE INDEX IF NOT EXISTS leads_client ON leads(client_id);
 CREATE TABLE IF NOT EXISTS data_imports (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  source TEXT NOT NULL,                          -- a dataimport.js FORMATS key: whoop_cycles, oura_daily, garmin_activities, apple_health, fitbit, custom...
-  file_kind TEXT NOT NULL,                       -- csv, xlsx, sheet, pdf, apple_health, fitbit (version 54 dropped the fixed list, so a new kind needs no migration)
+  source TEXT NOT NULL,                          -- whoop_cycles, whoop_sleeps, whoop_workouts or custom (dataimport.js FORMATS)
+  file_kind TEXT NOT NULL CHECK (file_kind IN ('csv','xlsx','sheet','pdf')),
   filename TEXT,
   rows INTEGER NOT NULL DEFAULT 0,
   days INTEGER NOT NULL DEFAULT 0,

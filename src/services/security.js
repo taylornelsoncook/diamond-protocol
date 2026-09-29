@@ -19,7 +19,7 @@ const OWNER_ONLY = [
 const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/];
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|wearables|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|exercises|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],

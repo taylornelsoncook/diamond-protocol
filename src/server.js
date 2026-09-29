@@ -114,7 +114,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       const r = { params: url.pathname.match(route.regex).groups ?? {}, query: Object.fromEntries(url.searchParams), body: {}, baseUrl };
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview', '/v1/leads/import', '/v1/data-imports/preview', '/v1/data-imports', '/v1/programs/import/draft', '/v1/exercises/import/preview', '/v1/exercises/import'].includes(url.pathname)
-        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? 30_000_000 : 1_000_000);   // files come base64-encoded
+        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? (/data-imports/.test(url.pathname) ? 90_000_000 : 30_000_000) : 1_000_000);   // files come base64-encoded; Apple Health and Fitbit zips are big
       const ip = clientIp(req);
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };

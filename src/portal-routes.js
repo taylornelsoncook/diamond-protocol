@@ -181,6 +181,7 @@ export const portalRoutes = [
     const a = athleteOf(ctx, r, r.params.id);
     return { ...dataimport.athleteData(ctx, a.id, { days: r.query.days }), recent: dataimport.listImports(ctx, { clientId: a.id, limit: 10 }).map(({ id, format_label, filename, file_kind, days, workouts, from_day, to_day, created_at, created_by, created_by_kind, undone_at }) => ({ id, format_label, filename, file_kind, days, workouts, from_day, to_day, created_at, created_by, created_by_kind, undone_at })) };
   }],
+  ['GET', '/portal/api/data-imports/sources', 'guardian', 'The systems a file can come from, with where to find each export.', (ctx) => ({ data: dataimport.sources() })],
   ['POST', '/portal/api/athletes/:id/data-imports/preview', 'guardian', 'Check a file for your athlete before saving: file { name, csv | xlsx_base64 | pdf_base64 } or sheet_url, and mapping for a table we don\'t recognize. Nothing is saved.', (ctx, r) => dataimport.previewImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body)],
   ['POST', '/portal/api/athletes/:id/data-imports', 'guardian', 'Save a checked file for your athlete (the same body as the preview). All or nothing.', (ctx, r) => dataimport.commitImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { kind: 'parent', name: r.guardian.name }), 201],
   ['POST', '/portal/api/data-imports/:id/undo', 'guardian', 'Undo a file brought in for one of your athletes.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'parent', name: r.guardian.name }, { familyId: r.guardian.family_id })],

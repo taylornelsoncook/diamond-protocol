@@ -2,22 +2,27 @@
 
 Everything that needs your identity, your money, your hardware or your decisions. Work top to bottom: the first section has the longest waits, so start it today.
 
-## Next up (updated September 28, 2026)
+## Next up (updated September 29, 2026)
 
-The app is built: every tab from the earlier version has been brought over, plus the CRM, off-site backups, Stripe webhooks and background job alerts. All of it is on `main` and on staging. Production changes only when you press Manual Deploy. Do these in order:
+Done on September 28: production runs the newest version (schema 48), off-site backups show **Off-site: OK**, the Anthropic key is in Render on both services, the `dp-videos` bucket serves `videos.diamondprotocol.org`, and the first 196 exercise videos are uploaded. The sections below this one are the long list; this section is the next two weeks.
 
-- [x] **Look over staging.** Sign in as `coach@diamondprotocol.local` / `change-me-now` and click through each tab, especially the new ones: Today (check-in list, birthdays, open spots, trial offers), Leads (the pipeline board and lead pages), Education, Billing and the parent portal (`/parent`, sign in as `maria.lopez@example.com`). Also sign in as `riley@diamondprotocol.local` (coach) and `desk@diamondprotocol.local` (front desk) and confirm you see no dollar amounts. Write down anything that looks wrong.
-- [ ] **Look over your improvements on staging** once they're merged: Settings (exercise library first; background jobs fold away; Activity report runs when you press Show report), client tags (Hybrid athlete, In-facility, Remote client), Billing → Change plan and Refunds, Education's five tabs and the public page `/learn`, and the payment lockout (sign in to the parent portal as `linh.nguyen@example.com`).
-- [x] **Decide when a declined payment locks a family out:** after the first charge and 3 retries decline (about 9 days); the membership cancels after one more retry. Change it any time on Billing → Needs attention.
-- [ ] **Turn on Build from a PDF:** get an API key at console.anthropic.com (Settings → API keys; add a payment method and set a monthly spend limit there, for example $20; a typical program costs well under a dollar to read), then in Render add `ANTHROPIC_API_KEY` with that key to **diamond-protocol-staging** (to try it) and **diamond-protocol** (for real). On staging, go to Programs → Build from a PDF, choose one of your program PDFs, press Read the file, check the draft and save it.
-- [ ] **Try Data import on staging** once it's merged: Settings → Data import, pick an athlete, choose your WHOOP files one at a time and press Check the file, then Save. To get WHOOP files: in the WHOOP app, More → App settings → Data export; WHOOP emails a zip with `physiological_cycles.csv`, `sleeps.csv` and `workouts.csv` (unzip it first). Then open that athlete's client page (Recovery & sleep) and the parent portal's Progress tab. Staging is sample data, so use a sample athlete, and press Undo when you're done if you'd rather not leave your own numbers there.
-- [x] **Render → diamond-protocol → Environment:** `TRUST_PROXY` is `2` and `ADMIN_PASSWORD` is deleted.
-- [ ] **Video library (your 5,000 videos):** follow DEPLOY.md → Video library: a Cloudflare R2 bucket with your own video address, then one command on your Mac that converts and uploads every video (overnight), then Settings → Exercise library → Import a list. Do the practice run (`--dry-run`) first and read the report.
-- [ ] **Off-site backups:** follow DEPLOY.md → Backups (a Cloudflare R2 bucket, then five settings in Render). Save the passphrase in your password manager.
-- [ ] **Press Manual Deploy** on `diamond-protocol`. The database upgrades itself on start (a backup is made first).
-- [ ] **On production:** Staff & security → Check my connection (it should show your own internet address), then Back up now (it should say the backup was sent off-site).
-- [ ] **On production:** add your real coaches and front desk under Staff & security.
-- [ ] **Stripe webhook:** when Stripe is live, add the three new events listed in section 7 (`charge.refunded`, `charge.dispute.created`, `payment_method.automatically_updated`).
+### This week: finish what's in motion
+- [ ] **Let the video run finish.** It's `caffeinate -dis node tools/upload-videos.mjs … --free-space --jobs 3` in Terminal on your Mac (a day or two; Ctrl+C and rerun the same line any time). Any evening: Settings → Exercise library → **Import a list** → `Desktop/DiamondProtocol/video-library.csv`. Do a final import when it says Done.
+- [ ] **Play a couple of videos** on the site after the first import: they should start within a second or two and show a still picture first.
+- [ ] **Fix the typo names** in the library (Settings → Exercise library → search → Edit): "Sandbah Side Bends", "SL Snap to Down to Rapid Fire Vertical Jump", "8 Point Jop for Height". Skim the rest once.
+- [ ] **Try Build from a PDF on staging** (Programs → Build from a PDF) with one of your programs. Press **Use it** on the close matches that are right, fix anything off, Save, compare with the PDF, and tell me what it misread.
+- [ ] **Try Data import on staging** (Settings → Data import) with your WHOOP files on a sample athlete; press Undo afterwards. Optional.
+- [ ] **Look over the earlier improvements on staging:** Settings tabs, client training tags, Billing → Change plan and Refunds, Education's five tabs and `/learn`, the lockout as `linh.nguyen@example.com` in the portal.
+- [ ] **Tidy the Mac:** trash the leftover zips and folders in Downloads (the diamond-protocol ones, the ffmpeg zip, the Node installer). Keep `Desktop/DiamondProtocol`; the upload tool lives there.
+
+### Start this week: the two that unblock the most
+- [ ] **Stripe:** finish business verification, add your bank account, turn on Stripe Terminal (section 1). Nothing real can be charged until this is done.
+- [ ] **Lawyer:** waiver, terms of service, privacy policy and card-saving consent wording (sections 2 and 5). Nobody can sign up until these are real.
+
+### Kept from before
+- [ ] **Staff:** add your real coaches and front desk under Settings → Staff. You chose to do this last, before the soft launch.
+- [ ] **Stripe webhook:** when Stripe is live, add the events listed in section 7, including `charge.refunded`, `charge.dispute.created` and `payment_method.automatically_updated`.
+- [ ] **Staging backups (optional):** the same five `BACKUP_*` settings on `diamond-protocol-staging`; `render.yaml` already keeps its copies apart in the bucket.
 
 ## 1. Start today (these involve waiting on others)
 
@@ -49,7 +54,7 @@ The app is built: every tab from the earlier version has been brought over, plus
 
 ## 3. Equipment
 
-- [ ] **A Mac** with Xcode 16 or newer to build the iPhone app. Any recent Mac works; a Mac mini is the cheapest option.
+- [ ] **Xcode 16 or newer on your Mac** to build the iPhone app (you have the Mac; Xcode needs about 15 GB free, so clear space first).
 - [ ] **An iPhone that supports Tap to Pay** (check Stripe's supported-device list), on the latest iOS.
 - [ ] **Optional: a front-desk smart reader** (Stripe Reader S710 or WisePOS E), ordered from the Stripe Dashboard under Terminal. The facility can also use your iPhone.
 
@@ -100,7 +105,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Staff & security: add your coaches and front desk.
 - [ ] Clients: bring in your current families and athletes with Clients → Import from a spreadsheet (download the template, fill it in, upload). Decide whether to send welcome emails with it; the import can send them.
 - [ ] Teams: your school and club contracts, with billing emails.
-- [ ] Programs: your exercise library with demo videos, and your programs.
+- [ ] Programs: your programs (the exercise library and videos come from the upload above; Build from a PDF turns an existing program PDF into one athletes can follow).
 - [ ] Enter Athlete IDs as names in OVR Connect and any other testing app.
 - [ ] Hours & settings → Automatic emails: choose which to send (welcome, receipts, trial reminders, failed payments). All are on by default.
 - [ ] Sign yourself up at `/join` as a pretend family to see what parents see, then delete that family (client profile → Delete family data).
@@ -112,7 +117,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] Run one real session: roster check-in and collecting from someone unpaid.
 - [ ] Run one small testing day, share it, and check the parent report.
 - [ ] Send one school invoice to yourself and pay it online.
-- [ ] Set up off-site backups (DEPLOY.md → Backups) and confirm Staff & security shows **Off-site: OK**.
+- [x] Set up off-site backups (DEPLOY.md → Backups) and confirm Settings → Backups shows **Off-site: OK**.
 - [ ] Restore one off-site copy with `src/restore-backup.js` and confirm it opens (Claude Code can check it with you).
 - [ ] Write down anything confusing and send it to me.
 

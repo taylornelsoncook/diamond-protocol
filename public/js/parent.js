@@ -885,6 +885,7 @@ async function viewFamily(main) {
   // Payments and receipts.
   const payRow = (x) => h('div', { class: 'p-row' },
     h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong p-wrap-text' }, x.description), h('span', { class: 'small muted' }, [fmt(x.date, { month: 'short', day: 'numeric', year: 'numeric' }), x.athlete_name, x.method].filter(Boolean).join(' · ')),
+      x.fee_cents ? h('span', { class: 'small muted' }, `Includes a ${money(x.fee_cents)} ${x.fee_label.toLowerCase()}`) : null,
       x.refunded_cents ? h('span', { class: 'small good-text' }, `${money(x.refunded_cents)} refunded`) : null),
     h('span', { class: 'strong' }, money(x.amount_cents)),
     x.receipt_url ? h('a', { class: 'dp-btn dp-btn--ghost', href: x.receipt_url, target: '_blank', rel: 'noopener' }, 'Receipt') : x.kind === 'membership' ? btn('Receipt', () => membershipReceipt(x.id), 'ghost') : null);
@@ -959,6 +960,7 @@ async function membershipReceipt(id) {
     h('strong', null, r.business_name), r.business_address ? h('span', { class: 'small muted', style: 'white-space:pre-wrap' }, r.business_address) : null,
     h('span', null, `${r.description} for ${r.athlete_name}`), h('span', { class: 'small muted' }, `${date(r.period_start)} to ${date(r.period_end)}`),
     h('span', { class: 'strong' }, `Paid ${money(r.amount_cents)} on ${date(r.paid_at)} (${r.method})`),
+    r.fee_cents ? h('span', { class: 'small muted' }, `Includes a ${money(r.fee_cents)} ${r.fee_label.toLowerCase()}`) : null,
     r.refunded_cents ? h('span', null, `Refunded ${money(r.refunded_cents)}`) : null, h('span', { class: 'small muted' }, `Receipt ${r.id}`))],
   [btn('Print', () => window.print(), 'secondary')]);
 }

@@ -4,6 +4,7 @@ import { payerFor, getSetting } from './families.js';
 import { membershipReceipt, paymentFailed, trialReminders, cardReminder, invoiceRefundReceipt } from './notify.js';
 import { csvCell } from './clients.js';
 import { sendEmail } from './mail.js';
+import { cardFee } from './fees.js';
 
 export const MAX_ATTEMPTS = 5;        // after the 5th failed automatic charge (the first charge and 4 retries) the subscription is canceled (owner decision: one more retry after the lockout)
 export const RETRY_EVERY_DAYS = 3;
@@ -153,8 +154,9 @@ export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
   let charged = null;
   if (diff >= MIN_CHARGE_CENTS) {
     const id = newId('inv');
-    ctx.db.run(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, note)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, diff, ctx.now(), s.current_period_end, ctx.now(), `Plan change: ${s.plan_name} to ${plan.name}, the rest of this month`);
+    const fee = cardFee(ctx, diff, 'memberships').cents;
+    ctx.db.run(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, note, fee_cents)
+      VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?, ?)`, id, subId, s.client_id, diff + fee, ctx.now(), s.current_period_end, ctx.now(), `Plan change: ${s.plan_name} to ${plan.name}, the rest of this month`, fee);
     try {
       const inv = await attemptCharge(ctx, id, ctx.now());
       charged = { invoice_id: id, amount_cents: diff, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null };
@@ -173,7 +175,7 @@ function differenceCents(ctx, s, newPrice) {
   const now = Date.parse(ctx.now()), end = Date.parse(s.current_period_end), start = Date.parse(s.current_period_start);
   if (!(end > now) || !(end > start)) return 0;
   const owed = (newPrice * (end - now)) / (end - start);
-  const paid = ctx.db.all(`SELECT amount_cents - refunded_cents AS net, period_start, period_end FROM invoices WHERE subscription_id = ? AND status = 'paid' AND period_end = ?`, s.id, s.current_period_end)
+  const paid = ctx.db.all(`SELECT amount_cents - fee_cents - refunded_cents AS net, period_start, period_end FROM invoices WHERE subscription_id = ? AND status = 'paid' AND period_end = ?`, s.id, s.current_period_end)   // a card fee isn't payment toward the time
     .reduce((t, i) => { const a = Date.parse(i.period_start), b = Date.parse(i.period_end); return b > a ? t + (Math.max(0, i.net) * Math.min(1, (b - now) / (b - a))) : t; }, 0);
   return Math.round(owed - paid);
 }
@@ -241,9 +243,10 @@ export function getInvoice(ctx, id) {
 async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
   const s = getSubscription(ctx, subId);
   const id = newId('inv');
+  const fee = cardFee(ctx, s.price_cents, 'memberships').cents;      // owner setting: a card fee on membership charges, its own line
   ctx.db.run(
-    `INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at)
-     VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?)`, id, subId, s.client_id, s.price_cents, periodStart, periodEnd, ctx.now());
+    `INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, fee_cents)
+     VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, s.price_cents + fee, periodStart, periodEnd, ctx.now(), fee);
   return attemptCharge(ctx, id, asOf);
 }
 
@@ -550,7 +553,7 @@ function invoiceRows(ctx, { from, to } = {}) {
   const sArgs = [...(from ? [from] : []), ...(to ? [to] : [])];
   const sql = `WITH rows AS (
     SELECT 'membership' AS kind, i.id, NULL AS number, i.client_id, c.name AS client_name, c.family_id, c.archived_at AS client_archived_at,
-      NULL AS contract_id, NULL AS org_name, COALESCE(i.note, p.name) AS description, i.amount_cents, i.refunded_cents, i.status, i.created_at AS issued_at, NULL AS due_on,
+      NULL AS contract_id, NULL AS org_name, COALESCE(i.note, p.name) AS description, i.amount_cents, i.fee_cents, i.refunded_cents, i.status, i.created_at AS issued_at, NULL AS due_on,
       i.paid_at, i.paid_method, i.paid_reference, i.attempts, i.auto_attempts, i.next_retry_at, i.last_error, i.reminded_at, i.voided_at, i.void_reason, i.period_start, i.period_end,
       s.id AS subscription_id, s.status AS subscription_status, ${cardSql()} AS card_last4, ${brandSql()} AS card_brand,
       CASE WHEN i.status IN ('failed','open','void') THEN i.status WHEN i.amount_cents > 0 AND i.refunded_cents >= i.amount_cents THEN 'refunded'
@@ -558,7 +561,7 @@ function invoiceRows(ctx, { from, to } = {}) {
     FROM invoices i JOIN clients c ON c.id = i.client_id LEFT JOIN families f ON f.id = c.family_id JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id
     ${mDate.length ? `WHERE ${mDate.join(' AND ')}` : ''}
     UNION ALL
-    SELECT 'school', t.id, t.number, NULL, NULL, NULL, NULL, t.contract_id, o.name, tc.name, t.amount_cents, 0, t.status, t.issued_on, t.due_on,
+    SELECT 'school', t.id, t.number, NULL, NULL, NULL, NULL, t.contract_id, o.name, tc.name, t.amount_cents, 0, 0, t.status, t.issued_on, t.due_on,
       t.paid_on, t.paid_method, t.paid_reference, 0, 0, NULL, NULL, t.reminded_at, NULL, NULL, t.period_start, t.period_end,
       NULL, NULL, NULL, NULL,
       CASE WHEN t.status = 'open' AND t.due_on < ? THEN 'overdue' ELSE t.status END, t.issued_on || 'T23:59:59.999Z'
@@ -747,6 +750,8 @@ export function recordInvoicePaymentByHand(ctx, id, body = {}) {
     if (inv.status === 'void') throw conflict('This invoice was voided. There\'s nothing to collect.');
     const s = getSubscription(ctx, inv.subscription_id);
     const before = s.status;
+    // Cash and check never carry the card fee: it comes off before the payment is recorded.
+    if (inv.fee_cents) { ctx.db.run('UPDATE invoices SET amount_cents = amount_cents - fee_cents, fee_cents = 0 WHERE id = ?', id); inv.amount_cents -= inv.fee_cents; inv.fee_cents = 0; }
     ctx.db.tx(() => recordPaid(ctx, inv, s, { ref: null, method, reference }));
     await membershipReceipt(ctx, id, { how: `${HAND_METHODS[method].toLowerCase()}${reference ? ` (${method === 'check' ? 'check ' : ''}${reference})` : ''}` });
     return { ...invoiceDetail(ctx, id), membership_reactivated: before === 'past_due' && getSubscription(ctx, s.id).status === 'active' };

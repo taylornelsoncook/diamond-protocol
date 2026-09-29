@@ -7,6 +7,7 @@ import { saleReceipt } from './notify.js';
 import { notifyFamily } from './mail.js';
 import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
+import { cardFee, feeSettings, CARD_METHODS } from './fees.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
 const hasAddress = (l) => !!(l.address_line1 && l.city && l.state && l.postal_code);
@@ -249,7 +250,9 @@ export function getSale(ctx, id, { withSecret = false, userId } = {}) {
   if (!s) throw notFound('Sale');
   s.items = ctx.db.all('SELECT id, product_id, variant_id, name, unit_price_cents, quantity, sessions FROM sale_items WHERE sale_id = ?', id);
   s.save_card = !!s.save_card;
-  s.subtotal_cents = s.amount_cents + s.discount_cents;
+  s.fee_cents = s.fee_cents ?? 0;
+  s.fee_label = s.fee_cents ? feeSettings(ctx).label : null;
+  s.subtotal_cents = s.amount_cents - s.fee_cents + s.discount_cents;     // the items before the discount and any card fee
   s.method_label = METHOD_LABEL[s.method] ?? s.method;
   s.refunds = ctx.db.all('SELECT r.amount_cents, r.kind, r.reason, r.created_at, u.name AS by_name FROM sale_refunds r LEFT JOIN users u ON u.id = r.created_by WHERE r.sale_id = ? ORDER BY r.created_at', id);
   // The printable receipt: a private link, only once the sale is paid.
@@ -369,8 +372,11 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   const subtotal = lines.reduce((t, l) => t + l.unit * l.qty, 0);
   if (subtotal <= 0) throw badRequest('The sale total must be more than $0.');
   const discount = parseDiscount(ctx, body.discount, subtotal, role);
-  const amount = subtotal - discount.cents;
-  const booking = body.booking_id ? bookingToCollect(ctx, v.str(body.booking_id, 'booking_id', { max: 64 }), client, amount) : null;
+  const price = subtotal - discount.cents;
+  const booking = body.booking_id ? bookingToCollect(ctx, v.str(body.booking_id, 'booking_id', { max: 64 }), client, price) : null;
+  // Owner setting (services/fees.js): a card processing fee on card payments, its own line on the receipt. Cash never carries it.
+  const fee = CARD_METHODS.includes(method) ? cardFee(ctx, price, online ? 'store' : 'counter') : { cents: 0 };
+  const amount = price + fee.cents;
 
   const wantsSave = !!body.save_card && ['tap_to_pay', 'reader'].includes(method);
   if (wantsSave && !client) throw badRequest('Choose a client to save their card.');
@@ -391,13 +397,13 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
 
   const id = newId('sale');
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token, booking_id)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token, booking_id, fee_cents)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, client?.id, loc.id, method, amount, wantsSave, reader?.id, v.str(body.note, 'note', { max: 200, optional: true }), actor ?? null, ctx.now(),
-      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18), booking?.id ?? null);
+      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18), booking?.id ?? null, fee.cents);
     for (const l of lines) ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('si'), id, l.product_id, l.variant_id ?? null, l.name, l.unit, l.qty, l.sessions);
   });
-  const description = `${lines.map((l) => l.name).join(', ')}${discount.cents ? ` less ${money(discount.cents)} discount` : ''}`.slice(0, 200);
+  const description = `${lines.map((l) => l.name).join(', ')}${discount.cents ? ` less ${money(discount.cents)} discount` : ''}${fee.cents ? ` plus ${money(fee.cents)} ${fee.label.toLowerCase()}` : ''}`.slice(0, 200);
   const metadata = { sale_id: id, location: loc.name, ...(client ? { client_id: client.id } : {}) };
 
   if (method === 'cash') {
@@ -477,7 +483,7 @@ function completeSale(ctx, id, { card, savedCard }) {
     stockForSale(ctx, id, -1, 'sale');
     emit(ctx, 'sale.completed', {
       sale_id: id, client_id: s.client_id, client_name: s.client_name ?? 'Walk-in', location_id: s.location_id, location_name: s.location_name,
-      amount_cents: s.amount_cents, discount_cents: s.discount_cents, method: s.method, items: s.items.map((i) => ({ name: i.name, quantity: i.quantity })), sessions_added: sessions
+      amount_cents: s.amount_cents, discount_cents: s.discount_cents, fee_cents: s.fee_cents, method: s.method, items: s.items.map((i) => ({ name: i.name, quantity: i.quantity })), sessions_added: sessions
     });
   });
   if (completed) saleReceipt(ctx, id).catch((e) => console.error('receipt', e.message));
@@ -494,12 +500,13 @@ export function onlineLocation(ctx) {
 }
 // A payment that already happened online (a pay link): record it as a sale so it shows in sales, reports and receipts,
 // adds any sessions from a pack, and settles the unpaid booking the link was for (bookingId; the link checked it).
-export function recordOnlineSale(ctx, { clientId, productId, description, amountCents, note, paymentRef, actor, bookingId }) {
+// feeCents: the card fee the pay link carried, kept as its own line (amount_cents is the whole payment).
+export function recordOnlineSale(ctx, { clientId, productId, description, amountCents, feeCents = 0, note, paymentRef, actor, bookingId }) {
   const id = newId('sale');
   const p = productId ? ctx.db.get('SELECT * FROM products WHERE id = ?', productId) : null;
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_by, created_at, booking_id) VALUES (?, ?, ?, 'online', 'pending', ?, ?, ?, ?, ?, ?)`,
-      id, clientId ?? null, onlineLocation(ctx), amountCents, paymentRef ?? null, note ?? null, actor ?? 'Pay link', ctx.now(), bookingId ?? null);
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, payment_ref, note, created_by, created_at, booking_id, fee_cents) VALUES (?, ?, ?, 'online', 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+      id, clientId ?? null, onlineLocation(ctx), amountCents + (feeCents || 0), paymentRef ?? null, note ?? null, actor ?? 'Pay link', ctx.now(), bookingId ?? null, feeCents || 0);
     const sizes = p ? activeVariants(ctx, p.id) : [];
     ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', newId('si'), id, p?.id ?? null, sizes.length === 1 ? sizes[0].id : null, description.slice(0, 80), amountCents, p?.sessions ?? 0);
   });
@@ -619,7 +626,7 @@ export function publicReceipt(ctx, receiptToken) {
     id: sale.id, business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address') || null, timezone: getSetting(ctx, 'timezone'),
     paid_at: sale.completed_at ?? sale.created_at, location_name: sale.location_name, client_name: sale.client_name ?? null, method_label: sale.method_label, card_last4: sale.card_last4 ?? null,
     items: sale.items.map((i) => ({ name: i.name, quantity: i.quantity, unit_price_cents: i.unit_price_cents })),
-    subtotal_cents: sale.subtotal_cents, discount_cents: sale.discount_cents, discount_reason: sale.discount_reason, amount_cents: sale.amount_cents, refunded_cents: sale.refunded_cents, status: sale.status
+    subtotal_cents: sale.subtotal_cents, discount_cents: sale.discount_cents, discount_reason: sale.discount_reason, fee_cents: sale.fee_cents, fee_label: sale.fee_label, amount_cents: sale.amount_cents, refunded_cents: sale.refunded_cents, status: sale.status
   };
 }
 
@@ -637,11 +644,11 @@ export function takings(ctx, { date, locationId } = {}) {
   }
   const from = startOfLocalDay(zonedToUtc(day, '12:00', zone), zone), to = startOfLocalDay(zonedToUtc(addDaysToDate(day, 1), '12:00', zone), zone);
   const at = loc ? 'AND s.location_id = ?' : '', p = loc ? [loc.id] : [];
-  const sales = ctx.db.all(`SELECT s.method, s.amount_cents, s.discount_cents FROM sales s WHERE s.status IN ('succeeded','partially_refunded','refunded') AND s.completed_at >= ? AND s.completed_at < ? ${at}`, from, to, ...p);
+  const sales = ctx.db.all(`SELECT s.method, s.amount_cents, s.discount_cents, s.fee_cents FROM sales s WHERE s.status IN ('succeeded','partially_refunded','refunded') AND s.completed_at >= ? AND s.completed_at < ? ${at}`, from, to, ...p);
   const refunds = ctx.db.all(`SELECT s.method, r.amount_cents FROM sale_refunds r JOIN sales s ON s.id = r.sale_id WHERE r.created_at >= ? AND r.created_at < ? ${at}`, from, to, ...p);
   const by = Object.fromEntries(Object.keys(METHOD_LABEL).map((m) => [m, { method: m, label: METHOD_LABEL[m], sales: 0, taken_cents: 0, refunds: 0, refunded_cents: 0, net_cents: 0 }]));
-  const out = { date: day, timezone: zone, from, to, location_id: loc?.id ?? null, location_name: loc?.name ?? null, sales: 0, taken_cents: 0, discount_cents: 0, discounted_sales: 0, refunds: 0, refunded_cents: 0, net_cents: 0 };
-  for (const s of sales) { const m = by[s.method]; m.sales++; m.taken_cents += s.amount_cents; out.sales++; out.taken_cents += s.amount_cents; out.discount_cents += s.discount_cents; if (s.discount_cents) out.discounted_sales++; }
+  const out = { date: day, timezone: zone, from, to, location_id: loc?.id ?? null, location_name: loc?.name ?? null, sales: 0, taken_cents: 0, discount_cents: 0, discounted_sales: 0, fee_cents: 0, refunds: 0, refunded_cents: 0, net_cents: 0 };
+  for (const s of sales) { const m = by[s.method]; m.sales++; m.taken_cents += s.amount_cents; out.sales++; out.taken_cents += s.amount_cents; out.discount_cents += s.discount_cents; if (s.discount_cents) out.discounted_sales++; out.fee_cents += s.fee_cents ?? 0; }
   for (const r of refunds) { const m = by[r.method]; m.refunds++; m.refunded_cents += r.amount_cents; out.refunds++; out.refunded_cents += r.amount_cents; }
   for (const m of Object.values(by)) m.net_cents = m.taken_cents - m.refunded_cents;
   out.net_cents = out.taken_cents - out.refunded_cents;

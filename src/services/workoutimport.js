@@ -1,4 +1,5 @@
-// Building a program from a PDF (or a photo of one). Claude reads the file the way a coach would and fills in a draft
+// Building a program from a PDF (or a photo of one), or from what a coach types or dictates (Programs → Dictate a
+// workout: the same draft, checked the same way). Claude reads the file the way a coach would and fills in a draft
 // in the program builder's format: weeks, days, exercises, sets and reps, and a weight as a percent of a tested max
 // where the file says so. Nothing is saved from the draft: the coach checks and edits it, chooses a library exercise
 // for every line (or adds a new one), and only then saves it, all at once, as a new program or as weeks added to one.
@@ -10,6 +11,7 @@ import { CATEGORIES, LOAD_TESTS, GROUP_KINDS, getProgram, loadInput, slotFields,
 import { rateLimit } from './security.js';
 
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;      // Anthropic takes up to 32 MB a request; base64 adds a third
+export const MAX_TEXT_CHARS = 20000;                  // dictated or typed: a whole program fits with room to spare
 const MAX_IMAGE_BYTES = 3.7 * 1024 * 1024;            // Anthropic's 5 MB image limit counts the base64 text
 const MAX_PAGES = 100;
 const MAX_LIBRARY_NAMES = 1500;                         // a bigger library isn't listed for Claude; names are matched here
@@ -73,19 +75,24 @@ const DRAFT_SCHEMA = {
     unclear: { type: 'array', items: { type: 'string' } }
   }
 };
-function instructions(library) {
-  return `You turn a strength and conditioning program (a PDF or a photo) into a draft for a youth sports-performance coaching app. A coach checks every line before anything is saved, so copy what the file says and never invent exercises, sets, reps or weights.
+function instructions(library, source = 'file') {
+  const spoken = source === 'text';
+  return `${spoken
+    ? 'You turn a coach\'s typed or dictated description of a workout or program into a draft for a youth sports-performance coaching app. The text may be rough speech-to-text: spelled-out numbers ("three by eight"), "times" or "by" for ×, "at" for a load or percent, "super set" or "then" for a superset, and exercise names run together. Read it as a coach would; the coach checks every line before anything is saved, so keep to what they said and never invent exercises, sets, reps or weights.'
+    : 'You turn a strength and conditioning program (a PDF or a photo) into a draft for a youth sports-performance coaching app. A coach checks every line before anything is saved, so copy what the file says and never invent exercises, sets, reps or weights.'}`.replace(/\n\n\$/, '') + `
+
+The app's format:
 
 The app's format:
 - A program has weeks (1 to 52). Each week has days (1 to 7). Each day is one workout with a short title (for example "Lower body" or "Day 1"). A workout has exercises in order.
-- Each exercise has separate fields: sets (a whole number, 1 to 12; 0 when the file gives none), reps as short text exactly as the file means it ("8", "8-10", "5/side", "30 sec", "20 yd", "max"; "" when none), tempo ("3-1-1", "" when none), rest_seconds (the rest after each set in seconds, 0 when none is given), rpe (the target RPE 1 to 10, 0 when none), and load_text (a load written as text, like "135 lb", "BW", "moderate", "60% 1RM" for a lift that isn't below; "" when none).
+- Each exercise has separate fields: sets (a whole number, 1 to 12; 0 when the ${spoken ? 'coach gives' : 'file gives'} none), reps as short text exactly as the file means it ("8", "8-10", "5/side", "30 sec", "20 yd", "max"; "" when none), tempo ("3-1-1", "" when none), rest_seconds (the rest after each set in seconds, 0 when none is given), rpe (the target RPE 1 to 10, 0 when none), and load_text (a load written as text, like "135 lb", "BW", "moderate", "60% 1RM" for a lift that isn't below; "" when none).
 - When the file gives a weight as a percent of a tested max of the back squat, bench press or power clean, set load_lift to squat_1rm, bench_1rm or power_clean_1rm and load_pct to the whole-number percent (30 to 110). Otherwise load_lift is "" and load_pct is 0. Coaching cues go in note (short).
 - If the file says a workout repeats (for example "weeks 1-4" or "repeat for 3 weeks"), list it once for every week it covers. If weeks change the sets or percents, use each week's own numbers.
-- If the file has no weeks, everything is week 1. Number days in the order they appear (Day 1, Day 2...), or by weekday (Monday = 1).
+- If the ${spoken ? 'coach names no weeks' : 'file has no weeks'}, everything is week 1. Number days in the order they appear (Day 1, Day 2...), or by weekday (Monday = 1).${spoken ? ' A single workout with no day is week 1, day 1; give it a short title from what the coach said ("Lower body", "Speed day").' : ''}
 - Supersets, circuits and blocks: list each exercise on its own in order, and give every exercise in the same group the same letter in group ("A" for the first group of the workout, "B" for the next...) with group_kind superset, circuit or block (a block is a section like a warm-up or a finisher). An exercise on its own has group "" and group_kind "". A1/A2/B1 labels in the file mean group A, group B.
 - name is the exercise exactly as the file writes it. library_match is the exact name of the same exercise from the coach's library below, only when it is clearly the same movement (abbreviations like RDL = Romanian deadlift, DB = dumbbell, KB = kettlebell count); otherwise "".
-- Anything you can't place or read clearly goes in unclear as one short sentence each, in plain English, saying where it is in the file.
-- If the file isn't a training program, set is_program to false and leave workouts empty.
+- Anything you can't place or read clearly goes in unclear as one short sentence each, in plain English, saying where it is in the ${spoken ? 'text' : 'file'}.
+- If the ${spoken ? 'text' : 'file'} isn't a training program or workout at all, set is_program to false and leave workouts empty.
 
 ${library.length > MAX_LIBRARY_NAMES ? 'The coach\'s library is too big to list here, so leave library_match as "".' : `The coach's exercise library (one per line):
 ${library.length ? library.map((e) => e.name).join('\n') : '(empty)'}`}`;
@@ -93,7 +100,7 @@ ${library.length ? library.map((e) => e.name).join('\n') : '(empty)'}`}`;
 
 // Calls the Messages API with the file and asks for the draft as JSON. Tests and local runs can set ctx.readWorkoutFile.
 async function askClaude(ctx, file, library) {
-  const system = instructions(library);
+  const system = instructions(library, file.source);
   if (ctx.readWorkoutFile) return ctx.readWorkoutFile({ block: file.block, system, schema: DRAFT_SCHEMA });
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new HttpError(503, 'ai_not_set_up', 'Reading a PDF needs the Anthropic key. The owner adds ANTHROPIC_API_KEY in Render (see CHECKLIST.md), then this works.');
@@ -102,7 +109,7 @@ async function askClaude(ctx, file, library) {
   // out of a file needs care, not long reasoning, and it keeps the coach's wait short.
   const body = { model, max_tokens: 64000, stream: true, system,
     thinking: { type: 'adaptive' }, output_config: { effort: 'medium', format: { type: 'json_schema', schema: DRAFT_SCHEMA } },
-    messages: [{ role: 'user', content: [file.block, { type: 'text', text: 'Read this program and fill in the draft.' }] }] };
+    messages: [{ role: 'user', content: [file.block, { type: 'text', text: file.source === 'text' ? 'Turn what the coach said above into the draft.' : 'Read this program and fill in the draft.' }] }] };
   const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
   if (model === 'claude-opus-5') { body.fallbacks = 'default'; headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; }   // a declined read is retried on another model
   let res;
@@ -185,13 +192,22 @@ function matchExercise(name, claudeMatch, library) {
 // ---------- The draft ----------
 const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 export async function draftFromFile(ctx, body, user) {
+  return draft(ctx, fileBlock(body), user);
+}
+// Programs → Dictate a workout: what the coach typed or spoke (speech-to-text on their device) goes to Claude as text.
+export async function draftFromText(ctx, body, user) {
+  const text = v.str(body?.text, 'text', { max: MAX_TEXT_CHARS }).replace(/\r\n?/g, '\n');
+  if (text.length < 8) throw badRequest('Say or type the workout first, like "Lower body: back squat 4 by 5 at 75 percent, then RDL 3 by 8".');
+  return draft(ctx, { name: 'your notes', source: 'text', block: { type: 'text', text } }, user);
+}
+async function draft(ctx, file, user) {
   if (user?.id) rateLimit(`workout-import:${user.id}`, 20, 60 * 60000);   // each read costs a little; 20 an hour is plenty
   rateLimit('workout-import:all', DAILY_READS, 24 * 60 * 60000);
-  const file = fileBlock(body);
+  const spoken = file.source === 'text';
   const library = ctx.db.all('SELECT id, name, category FROM exercises ORDER BY name COLLATE NOCASE');
   const raw = await askClaude(ctx, file, library);
-  if (!raw || typeof raw !== 'object') throw badRequest('We couldn\'t read that file. Try again.');
-  if (raw.is_program === false || !Array.isArray(raw.workouts) || !raw.workouts.length) throw badRequest('We didn\'t find a training program in that file (exercises with sets and reps). Check it\'s the right file.');
+  if (!raw || typeof raw !== 'object') throw badRequest(spoken ? 'We couldn\'t turn that into a workout. Try again.' : 'We couldn\'t read that file. Try again.');
+  if (raw.is_program === false || !Array.isArray(raw.workouts) || !raw.workouts.length) throw badRequest(spoken ? 'We didn\'t find a workout in that (exercises with sets and reps). Say the exercises with their sets and reps, like "back squat 4 by 5".' : 'We didn\'t find a training program in that file (exercises with sets and reps). Check it\'s the right file.');
   const notes = (Array.isArray(raw.unclear) ? raw.unclear : []).map((x) => clean(x, 300)).filter(Boolean).slice(0, 50);
   const seen = new Set();
   const workouts = [];
@@ -212,12 +228,12 @@ export async function draftFromFile(ctx, body, user) {
     workouts.push({ week, day, title: clean(w.title, 120) || `Day ${day}`, exercises });
   }
   if (raw.workouts.length > MAX_WORKOUTS) notes.push(`The file has more than ${MAX_WORKOUTS} workouts; only the first ${MAX_WORKOUTS} are in the draft.`);
-  if (!workouts.length) throw badRequest('We couldn\'t place any workouts from that file in weeks and days. Check it\'s the right file, or try a clearer copy.');
+  if (!workouts.length) throw badRequest(spoken ? 'We couldn\'t place what you said in weeks and days. Say which day each workout is, or leave days out for one workout.' : 'We couldn\'t place any workouts from that file in weeks and days. Check it\'s the right file, or try a clearer copy.');
   workouts.sort((a, b) => a.week - b.week || a.day - b.day);
   const lines = workouts.flatMap((w) => w.exercises);
   return {
-    filename: file.name,
-    program: { name: clean(raw.program?.name, 120) || file.name.replace(/\.[a-z0-9]+$/i, ''), description: clean(raw.program?.description, 2000), level: LEVELS.includes(raw.program?.level) ? raw.program.level : '' },
+    filename: file.name, source: file.source ?? 'file',
+    program: { name: clean(raw.program?.name, 120) || (spoken ? 'Dictated workout' : file.name.replace(/\.[a-z0-9]+$/i, '')), description: clean(raw.program?.description, 2000), level: LEVELS.includes(raw.program?.level) ? raw.program.level : '' },
     weeks: workouts.reduce((n, w) => Math.max(n, w.week), 1),
     workouts, notes,
     counts: { workouts: workouts.length, exercises: lines.length, exact: lines.filter((x) => x.how === 'exact').length, suggested: lines.filter((x) => x.how === 'suggested').length, new: lines.filter((x) => !x.how).length }

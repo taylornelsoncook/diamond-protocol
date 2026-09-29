@@ -1711,20 +1711,3 @@ CREATE TABLE IF NOT EXISTS routine_exercises (
   prescription TEXT NOT NULL,
   note TEXT
 );
--- Version 59: monthly progress reports for parents (services/monthly.js): written once a month ends from what the
--- athlete logged, a coach's line added, then emailed and shown in the portal. No money in them.
-CREATE TABLE IF NOT EXISTS monthly_reports (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  month TEXT NOT NULL,                           -- YYYY-MM in the business time zone
-  data TEXT NOT NULL,                            -- the month's facts as JSON (monthly.facts)
-  coach_note TEXT,
-  note_by TEXT,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','skipped')),
-  sent_at TEXT,
-  sent_to TEXT,                                  -- JSON list of the parent emails it went to
-  sent_by TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT,
-  UNIQUE (client_id, month)
-);

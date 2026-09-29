@@ -4,6 +4,7 @@ import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgram
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
+import { viewMonthlyReports } from './monthly-coach.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
@@ -90,7 +91,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -286,6 +287,10 @@ async function viewToday(main) {
     if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
+    if (a.kind === 'monthly_reports') return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, `${a.count === 1 ? `${a.items[0].name}'s` : a.count} monthly ${a.count === 1 ? 'report is' : 'reports are'} ready to send`),
+        h('span', { class: 'small muted' }, `${new Date(`${a.month}-15T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })}: read it, add your line, send it to the parents.`)),
+      h('a', { class: 'dp-btn dp-btn--outline', href: `#/programs/monthly?month=${a.month}` }, 'Review'));
     if (a.kind === 'progressions') return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
       h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is ready for ${a.items[0].text} on ${a.items[0].exercise_name}` : `${a.count} progression steps are waiting for your OK`),
         h('span', { class: 'small muted' }, a.count === 1 ? 'Two workouts in a row hit every set at the top of the range.' : a.items.map((x) => `${x.name}: ${x.text} ${x.exercise_name}`).join(' · '))),
@@ -2981,8 +2986,13 @@ async function viewScheduleSetup(main) {
       btn('Preview this week', (e) => busy(e.currentTarget, async () => { digestOut.textContent = (await get('/v1/digest')).text; }), 'outline'),
       btn('Email it to me now', (e) => busy(e.currentTarget, async () => { await post('/v1/digest/send'); toast('Sent. It\'s also in the email outbox.'); }), 'ghost')),
     digestOut);
+  const monthlyMode = select([['review', 'Coaches review each report, then send it'], ['auto', 'Send on its own in the first week of the month'], ['off', 'Off']], { value: settings.monthly_reports ?? 'review', 'aria-label': 'Monthly parent reports' });
+  const monthlyPanel = panel('Monthly parent reports', { subtitle: 'Once a month ends, a report is written for each athlete from what they logged: workouts against the program\'s pace, sessions attended, check-ins, the strength trend, steps approved. No money in it. Coaches add a line and send it from Programs → Monthly reports, or let them go on their own.' },
+    h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:260px' }, monthlyMode),
+      btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { monthly_reports: monthlyMode.value }); toast('Saved.'); }), 'secondary'),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs/monthly' }, 'Open the reports')));
   fill(main, header('Hours & settings', 'Hours, policies, sign-up, terms, emails and texts.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule')), hours, timeOffPanel(timeOff.data, coaches), checkinPanel(locs.data, kiosks.data), setPanel, rankingsPanel(settings), readinessPanel(settings),
-    isOwner() ? [signupPanel, legalPanel, digestPanel, emailPanel, textPanel] : null);
+    isOwner() ? [signupPanel, legalPanel, digestPanel, monthlyPanel, emailPanel, textPanel] : null);
 }
 
 // ---------- Teams (school and club contracts) ----------

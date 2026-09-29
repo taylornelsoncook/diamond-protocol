@@ -306,6 +306,11 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
     const ps = db.all(`SELECT p.id, p.client_id, c.name, e.name AS exercise_name, p.kind, p.amount FROM progressions p JOIN clients c ON c.id = p.client_id JOIN exercises e ON e.id = p.exercise_id WHERE p.status = 'suggested' AND c.archived_at IS NULL ORDER BY p.created_at`);
     if (ps.length) waiting.unshift({ kind: 'progressions', count: ps.length, items: ps.slice(0, 4).map((x) => ({ id: x.id, client_id: x.client_id, name: x.name, exercise_name: x.exercise_name, text: x.kind === 'weight' ? `+${x.amount} lb` : x.kind === 'reps' ? `+${x.amount} rep${x.amount === 1 ? '' : 's'} a set` : `+${x.amount} set${x.amount === 1 ? '' : 's'}` })) });
   }
+  // Monthly parent reports written and waiting for a coach's line and Send.
+  if (role !== 'front_desk') {
+    const mr = db.all(`SELECT r.id, r.month, r.client_id, c.name FROM monthly_reports r JOIN clients c ON c.id = r.client_id WHERE r.status = 'draft' AND c.archived_at IS NULL ORDER BY r.month DESC, c.name`);
+    if (mr.length) waiting.push({ kind: 'monthly_reports', count: mr.length, month: mr[0].month, items: mr.slice(0, 4).map((x) => ({ id: x.id, client_id: x.client_id, name: x.name, month: x.month })) });
+  }
   // Form checks waiting for an answer: owners and coaches answer them (front desk can't watch the clips).
   if (role !== 'front_desk') {
     const fcs = db.all(`SELECT f.id, f.client_id, c.name, f.exercise_name, f.sent_at FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE f.status = 'sent' AND c.archived_at IS NULL ORDER BY f.sent_at`);

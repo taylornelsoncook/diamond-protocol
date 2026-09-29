@@ -38,6 +38,7 @@ const DEFAULTS = {
   emails_off: '',                         // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
   texts_off: '',                          // comma list of automatic texts turned off: reminder, waitlist, canceled, payment_failed
   weekly_digest: 'on',                    // Monday summary email to the owners
+  monthly_reports: 'review',              // monthly parent reports: review (coaches send), auto (sent on the 1st), off
   lead_follow_up: 'on',                   // automatic follow-up emails (and texts, if they asked) to new leads
   public_schedule: 'on',                  // the public Book now page (/book) and website widget
   review_url: '',                         // Google review link; review requests stay off until it's set
@@ -115,6 +116,7 @@ export function updateSettings(ctx, body) {
   }
   if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';
+  if (body.monthly_reports !== undefined) next.monthly_reports = v.oneOf(body.monthly_reports, 'monthly_reports', ['review', 'auto', 'off']);
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';
   if (body.emails_off !== undefined) {
     const list = (Array.isArray(body.emails_off) ? body.emails_off : String(body.emails_off).split(',')).map((x) => String(x).trim()).filter(Boolean);

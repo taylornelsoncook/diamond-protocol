@@ -514,7 +514,16 @@ async function importTab(box) {
     commit: (b) => post('/v1/data-imports', b),
     onSaved: () => loadRecent()
   });
-  fill(box, panel('Bring in data', { subtitle: 'An athlete\'s numbers from a wearable or another app: WHOOP exports are recognized; any other table you match up once. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },
+  // Wearables that connect on their own (WHOOP, Oura): what's set up, and how the owner sets one up.
+  const wear = await get('/v1/wearables/status');
+  const wearPanel = panel('Wearables that connect on their own', { subtitle: 'Once a provider is set up, parents see a Connect button on the Progress tab and coaches one on the client page; the athlete\'s numbers then arrive every few hours without files.' },
+    h('div', { class: 'stack' }, wear.providers.map((p) => h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:240px' }, h('span', { class: 'strong' }, p.label),
+        h('span', { class: `small ${p.ready ? 'good-text' : 'muted'}` }, p.ready ? 'Set up. Families can connect.' : 'Not set up yet.'),
+        p.ready ? null : h('span', { class: 'small muted' }, p.help),
+        h('span', { class: 'small muted' }, 'Redirect address to register with them: ', h('code', { style: 'user-select:all' }, p.redirect_uri))))),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Apple Health and Garmin don\'t offer this kind of link, so their exports still come in as files below.')));
+  fill(box, wearPanel, panel('Bring in data', { subtitle: 'An athlete\'s numbers from a wearable or another app: WHOOP exports are recognized; any other table you match up once. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },
     h('div', { class: 'form-grid' }, field('Athlete', h('div', { class: 'stack-tight' }, find, pick))), form),
     panel('Recently brought in', { subtitle: 'Undo removes what that import saved.' }, recentBox));
   await loadRecent();

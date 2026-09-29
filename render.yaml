@@ -45,6 +45,15 @@ services:
       # Optional: Claude reads program PDFs (Programs > Build from a PDF) and rewords progress notes.
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Optional: wearable sync (WHOOP, Oura). See DEPLOY.md.
+      - key: WHOOP_CLIENT_ID
+        sync: false
+      - key: WHOOP_CLIENT_SECRET
+        sync: false
+      - key: OURA_CLIENT_ID
+        sync: false
+      - key: OURA_CLIENT_SECRET
+        sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT
         sync: false
@@ -106,6 +115,15 @@ services:
         sync: false
       # Optional: Claude reads program PDFs (Programs > Build from a PDF) and rewords progress notes for parents.
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Optional: wearable sync (WHOOP, Oura). See DEPLOY.md.
+      - key: WHOOP_CLIENT_ID
+        sync: false
+      - key: WHOOP_CLIENT_SECRET
+        sync: false
+      - key: OURA_CLIENT_ID
+        sync: false
+      - key: OURA_CLIENT_SECRET
         sync: false
       # Off-site backups: see DEPLOY.md → Backups. Secret values are set in the dashboard.
       - key: BACKUP_S3_ENDPOINT

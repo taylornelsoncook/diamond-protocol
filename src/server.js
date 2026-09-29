@@ -29,6 +29,7 @@ import { runFollowUps } from './services/leads.js';
 import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
+import { syncAll as syncWearables } from './services/wearables.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
 import { calendarFeed } from './services/portal.js';
@@ -176,6 +177,8 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/portal/api/logout') res.setHeader('set-cookie', cookie('dp_family', '', 0, url.protocol === 'https:'));
       const out = await route.handler(ctx, r);
       if (route.path === '/auth/reset') r.auditName = out?.email ?? null;
+      // A public route that hands the person on (a wearable's sign-in coming back): a redirect instead of JSON.
+      if (out?.__redirect && route.auth === 'public') { res.writeHead(302, { location: out.__redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
       if (out?.__file) {
         res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': `attachment; filename="${out.__file.filename}"`, 'cache-control': 'no-store' });
         if (out.__file.stream) return out.__file.stream.pipe(res);
@@ -213,6 +216,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('review-requests', HOUR, () => runReviewRequests(ctx));
   runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
+  runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };

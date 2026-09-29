@@ -16,9 +16,9 @@ export function clipDuration(file) {
     const v = document.createElement('video'), url = URL.createObjectURL(file);
     const done = (d) => { URL.revokeObjectURL(url); resolve(d); };
     v.preload = 'metadata';
-    v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
-    v.onerror = () => done(null);
-    setTimeout(() => done(null), 8000);
+    const timer = setTimeout(() => done(null), 8000);
+    v.onloadedmetadata = () => { clearTimeout(timer); done(Number.isFinite(v.duration) ? v.duration : null); };
+    v.onerror = () => { clearTimeout(timer); done(null); };
     v.src = url;
   });
 }
@@ -43,11 +43,16 @@ export async function sendClip({ file, start, finish, extra = {}, onProgress }) 
   const s = await start({ content_type: file.type, bytes: file.size, duration_s: duration, ...extra });
   onProgress?.(0);
   await putClip(s.upload, file, onProgress);
-  return finish(s.id);
+  // The server checks the clip is there. If the store can't be reached for a moment, ask again a few times.
+  for (let i = 0; ; i++) {
+    try { return await finish(s.id); }
+    catch (e) { if (i >= 3 || !(e.status === 503 || e.status === 502)) throw e; await new Promise((r) => setTimeout(r, 2000 * (i + 1))); }
+  }
 }
-// A file picker for one video and a progress line; onFile(file, progress) does the sending.
-export function clipPicker(label, onFile, { variant = 'secondary', capture = false } = {}) {
-  const input = h('input', { type: 'file', accept: CLIP_TYPES, class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true', ...(capture ? { capture: 'environment' } : {}) });
+// A file picker for one video and a progress line; onFile(file, progress) does the sending. No capture attribute: the
+// phone then offers both "Take video" and the camera roll, and a clip a partner filmed can be sent.
+export function clipPicker(label, onFile, { variant = 'secondary' } = {}) {
+  const input = h('input', { type: 'file', accept: CLIP_TYPES, class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true' });
   const bar = h('div', { class: 'fc-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0', hidden: true }, h('div', { style: 'width:0%' }));
   const word = h('span', { class: 'small muted', hidden: true });
   const button = btn(label, () => input.click(), variant);
@@ -62,6 +67,7 @@ export function clipPicker(label, onFile, { variant = 'secondary', capture = fal
 }
 
 const STATUS = { sent: ['Waiting for your coach', 'muted'], answered: ['Answered', 'good-text'] };
+const when = (iso) => { const t = ago(iso); return /^[A-Z][a-z]+ \d/.test(t) ? `on ${t}` : t.toLowerCase(); };   // "3 hr ago", "yesterday", "on Sep 12, 2026"
 export function formChecksBlock(opts) {
   const box = h('div', { class: 'stack' });
   const player = (fc, which, holder) => async (e) => busy(e.currentTarget, async () => {
@@ -82,7 +88,7 @@ export function formChecksBlock(opts) {
       const head = h('div', { class: 'row wrap', style: 'gap:8px;align-items:flex-start' },
         h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
           h('span', { class: 'strong' }, opts.who === 'staff' && fc.client_name ? `${fc.client_name} · ${fc.exercise_name}` : fc.exercise_name),
-          h('span', { class: 'small muted' }, [fc.workout_title, fc.sent_at ? `sent ${ago(fc.sent_at).toLowerCase()}` : null, secs(fc.duration_s), mb(fc.bytes), `kept ${fc.days_left} more ${fc.days_left === 1 ? 'day' : 'days'}`].filter(Boolean).join(' · ')),
+          h('span', { class: 'small muted' }, [fc.workout_title, fc.sent_at ? `sent ${when(fc.sent_at)}` : null, secs(fc.duration_s), mb(fc.bytes), `kept ${fc.days_left} more ${fc.days_left === 1 ? 'day' : 'days'}`].filter(Boolean).join(' · ')),
           fc.note ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, `${opts.who === 'athlete' ? 'You wrote' : first(fc, opts) + ' wrote'}: ${fc.note}`) : null,
           h('span', { class: `small ${cls}` }, opts.who === 'staff' && fc.status === 'sent' ? 'Waiting for an answer' : opts.who === 'parent' && fc.status === 'sent' ? 'Waiting for the coach' : word)),
         h('div', { class: 'row wrap', style: 'gap:6px' },
@@ -91,7 +97,7 @@ export function formChecksBlock(opts) {
       // The answer: the coach's note and clip; on the client page, a box to write one.
       if (answered) {
         replyBox.append(h('div', { class: 'fc-note stack-tight' },
-          h('span', { class: 'small strong' }, `${fc.coach_name ?? 'Your coach'} answered ${fc.answered_at ? ago(fc.answered_at).toLowerCase() : ''}`),
+          h('span', { class: 'small strong' }, `${fc.coach_name ?? 'Your coach'} answered ${fc.answered_at ? when(fc.answered_at) : ''}`),
           fc.reply ? h('p', { style: 'margin:0;white-space:pre-wrap' }, fc.reply) : null,
           fc.has_reply_video ? h('div', { class: 'row wrap', style: 'gap:8px' }, btn('Play the coach\'s clip', player(fc, 'reply', replyHolder), 'outline')) : null, replyHolder));
       }

@@ -5,7 +5,7 @@
 // are removed after form_check_keep_days (owner setting, 90 by default). Parents see their own athlete's checks and
 // the coach's answers in the portal and can remove a clip; owners and coaches see them on the client page and on Today.
 import { createHash, createHmac } from 'node:crypto';
-import { newId, v, notFound, conflict, badRequest, HttpError } from '../util.js';
+import { newId, token, v, notFound, conflict, badRequest, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { rateLimit } from './security.js';
 import { emit } from './events.js';
@@ -33,8 +33,9 @@ const keepDays = (ctx) => Math.min(365, Math.max(30, Number(getSetting(ctx, 'for
 export function status(ctx) {
   const c = config();
   return { ready: c.ready, problems: c.problems, bucket: c.bucket || null, storage_origin: storageOrigin(), keep_days: keepDays(ctx), max_mb: MAX_BYTES / 1024 / 1024, max_seconds: MAX_SECONDS,
-    cors_origins: [ctx.publicUrl].filter(Boolean), waiting: ctx.db.get(`SELECT COUNT(*) AS n FROM form_checks WHERE status = 'sent'`).n,
-    stored: ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) + COALESCE(SUM(reply_bytes), 0) AS bytes FROM form_checks WHERE status != 'uploading'`) };
+    cors_origins: [ctx.publicUrl].filter(Boolean), waiting: ctx.db.get(`SELECT COUNT(*) AS n FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE f.status = 'sent' AND c.archived_at IS NULL`).n,
+    stored: ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) + COALESCE(SUM(CASE WHEN reply_status = 'sent' THEN reply_bytes END), 0) AS bytes FROM form_checks WHERE status != 'uploading'`),
+    orphans: ctx.db.get('SELECT COUNT(*) AS n FROM form_check_orphans').n };
 }
 
 // ---------- Signing (AWS Signature Version 4) ----------
@@ -69,7 +70,15 @@ async function s3(ctx, method, key) {
   delete headers.host;
   return (ctx.s3Fetch ?? fetch)(url, { method, headers, signal: AbortSignal.timeout(20000) });
 }
-const removeObject = async (ctx, key) => { try { const r = await s3(ctx, 'DELETE', key); return r.ok || r.status === 404; } catch (e) { console.error('form check delete:', e.message); return false; } };
+const removeObject = async (ctx, key) => { try { const r = await s3(ctx, 'DELETE', key); return r.ok || r.status === 404 ? { ok: true } : { ok: false, error: `storage answered ${r.status}` }; } catch (e) { return { ok: false, error: e.message }; } };
+// Delete an object, and when the store won't, remember the key so the daily job tries again: a clip whose row is
+// gone must never be left sitting in the bucket.
+async function forget(ctx, key) {
+  if (!key) return true;
+  const r = await removeObject(ctx, key);
+  if (!r.ok) { console.error('form check delete:', key, r.error); ctx.db.run('INSERT INTO form_check_orphans (object_key, created_at, last_error) VALUES (?, ?, ?) ON CONFLICT (object_key) DO UPDATE SET last_error = excluded.last_error', key, ctx.now(), String(r.error).slice(0, 200)); }
+  return r.ok;
+}
 
 // ---------- Sending (the athlete) ----------
 const needReady = () => { const c = config(); if (!c.ready) throw new HttpError(503, 'form_checks_not_set_up', 'Form checks aren\'t set up yet. Ask your coach.'); return c; };
@@ -78,6 +87,7 @@ const uploadFor = (ctx, key, contentType) => { const c = config(); return { meth
 // Step 1: the app says what it's about to send; it gets a one-time address to PUT the clip to.
 export function startUpload(ctx, client, body = {}) {
   needReady();
+  if (client.archived_at) throw conflict('This profile is archived, so clips can\'t be sent from it. Ask your coach.');
   const contentType = typeOf(body.content_type);
   const bytes = v.int(body.bytes, 'bytes', { min: 1, max: MAX_BYTES * 4 });
   if (bytes > MAX_BYTES) throw badRequest(`That clip is ${(bytes / 1024 / 1024).toFixed(0)} MB. Keep clips under ${MAX_BYTES / 1024 / 1024} MB: a shorter clip, or a lower quality setting.`);
@@ -100,26 +110,35 @@ export function startUpload(ctx, client, body = {}) {
   return { id, exercise_name: exerciseName, upload: uploadFor(ctx, key, contentType), max_bytes: MAX_BYTES, max_seconds: MAX_SECONDS };
 }
 // Step 2: the clip is up. The server looks at what arrived (size and type) before anyone can see it.
+// The row goes only when we know the object isn't there (or was just removed); when the store can't be reached the
+// row stays 'uploading' and the app asks again, and the daily job removes what's left after a day.
 export async function finishUpload(ctx, client, id) {
   const fc = ctx.db.get('SELECT * FROM form_checks WHERE id = ? AND client_id = ?', id, client.id);
   if (!fc) throw notFound('Form check');
   if (fc.status !== 'uploading') return shape(ctx, fc);
   const head = await checkObject(ctx, fc.object_key, fc.content_type);
-  if (!head.ok) { ctx.db.run('DELETE FROM form_checks WHERE id = ?', id); throw badRequest(head.why); }
-  ctx.db.run(`UPDATE form_checks SET status = 'sent', sent_at = ?, bytes = ? WHERE id = ?`, ctx.now(), head.bytes, id);
+  if (!head.ok) {
+    if (head.kind === 'store') throw new HttpError(503, 'storage_unavailable', head.why);
+    if (head.kind === 'missing' || head.removed) ctx.db.run('DELETE FROM form_checks WHERE id = ?', id);
+    throw badRequest(head.why);
+  }
+  const done = ctx.db.run(`UPDATE form_checks SET status = 'sent', sent_at = ?, bytes = ?, etag = ? WHERE id = ? AND status = 'uploading'`, ctx.now(), head.bytes, head.etag, id);
   const out = shape(ctx, ctx.db.get('SELECT * FROM form_checks WHERE id = ?', id));
-  emit(ctx, 'form_check.sent', { form_check_id: id, client_id: client.id, client_name: client.name, exercise_name: fc.exercise_name, bytes: head.bytes });
+  if (done.changes === 1) emit(ctx, 'form_check.sent', { form_check_id: id, client_id: client.id, client_name: client.name, exercise_name: fc.exercise_name, bytes: head.bytes });
   return out;
 }
+// What's in the bucket under key: { ok, bytes, etag }, or why not (kind: 'store' = couldn't ask, 'missing', 'bad' =
+// there but not what was declared, removed when we managed to delete it).
 async function checkObject(ctx, key, contentType) {
   let res;
-  try { res = await s3(ctx, 'HEAD', key); } catch (e) { return { ok: false, why: `We couldn't check the clip (${e.message}). Try sending it again.` }; }
-  if (res.status === 404) return { ok: false, why: 'The clip didn\'t arrive. Check your signal and send it again.' };
-  if (!res.ok) return { ok: false, why: `The clip couldn't be checked (storage answered ${res.status}). Try again in a minute.` };
+  try { res = await s3(ctx, 'HEAD', key); } catch (e) { return { ok: false, kind: 'store', why: `We couldn't check the clip (${e.message}). Try again in a minute.` }; }
+  if (res.status === 404) return { ok: false, kind: 'missing', why: 'The clip didn\'t arrive. Check your signal and send it again.' };
+  if (!res.ok) return { ok: false, kind: 'store', why: `The clip couldn't be checked (storage answered ${res.status}). Try again in a minute.` };
   const bytes = Number(res.headers.get('content-length')) || 0, type = String(res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
-  if (!bytes || bytes > MAX_BYTES) { await removeObject(ctx, key); return { ok: false, why: bytes ? `That clip is ${(bytes / 1024 / 1024).toFixed(0)} MB; the limit is ${MAX_BYTES / 1024 / 1024} MB.` : 'The clip came through empty. Send it again.' }; }
-  if (type && type !== contentType) { await removeObject(ctx, key); return { ok: false, why: 'That file isn\'t the video you chose. Send it again.' }; }
-  return { ok: true, bytes };
+  const etag = String(res.headers.get('etag') ?? '').replace(/^W\//, '').replace(/"/g, '') || null;
+  if (!bytes || bytes > MAX_BYTES) return { ok: false, kind: 'bad', removed: (await removeObject(ctx, key)).ok, why: bytes ? `That clip is ${(bytes / 1024 / 1024).toFixed(0)} MB; the limit is ${MAX_BYTES / 1024 / 1024} MB.` : 'The clip came through empty. Send it again.' };
+  if (type && type !== contentType) return { ok: false, kind: 'bad', removed: (await removeObject(ctx, key)).ok, why: 'That file isn\'t the video you chose. Send it again.' };
+  return { ok: true, bytes, etag };
 }
 
 // ---------- Watching ----------
@@ -146,10 +165,22 @@ function rowFor(ctx, id, { clientId = null, familyId = null } = {}) {
   return fc;
 }
 // A short-lived address to play the clip (which: 'clip' or 'reply'). Who may ask is decided by the route that calls this.
-export function playUrl(ctx, id, which = 'clip', scope = {}) {
+// The upload address works for 15 minutes, so before anyone watches, the object is checked against what was
+// verified at /done (its ETag): a clip swapped after the check is refused and removed.
+export async function playUrl(ctx, id, which = 'clip', scope = {}) {
   const fc = rowFor(ctx, id, scope), c = needReady();
-  const key = which === 'reply' ? fc.reply_object_key : fc.object_key, type = which === 'reply' ? fc.reply_content_type : fc.content_type;
+  const key = which === 'reply' ? fc.reply_object_key : fc.object_key, type = which === 'reply' ? fc.reply_content_type : fc.content_type, etag = which === 'reply' ? fc.reply_etag : fc.etag;
   if (!key || (which === 'reply' ? fc.reply_status !== 'sent' : fc.status === 'uploading')) throw notFound('Video');
+  if (etag) {
+    const head = await checkObject(ctx, key, type);
+    if (!head.ok && head.kind === 'store') throw new HttpError(503, 'storage_unavailable', 'The video can\'t be reached right now. Try again in a minute.');
+    if (!head.ok || head.etag !== etag) {
+      await forget(ctx, key);
+      if (which === 'reply') ctx.db.run('UPDATE form_checks SET reply_object_key = NULL, reply_content_type = NULL, reply_bytes = NULL, reply_status = NULL, reply_etag = NULL WHERE id = ?', id);
+      else ctx.db.run('DELETE FROM form_checks WHERE id = ?', id);
+      throw conflict('This clip isn\'t the one that was checked when it was sent, so it was removed. Ask for it to be sent again.');
+    }
+  }
   return { ...presign({ method: 'GET', url: objectUrl(c, key), region: c.region, keyId: c.keyId, secret: c.secret, expires: PLAY_MINUTES * 60, now: new Date(ctx.now()) }), content_type: type };
 }
 export function markSeen(ctx, client, id) {
@@ -170,48 +201,71 @@ export function reply(ctx, id, body = {}, user) {
   emit(ctx, 'form_check.answered', { form_check_id: id, client_id: fc.client_id, client_name: fc.client_name, exercise_name: fc.exercise_name, coach_name: user?.name ?? null });
   return shape(ctx, ctx.db.get('SELECT * FROM form_checks WHERE id = ?', id));
 }
+// A coach's clip uploads under its own key (reply_pending_*) while any earlier clip stays watchable; it takes over
+// only once it's checked, and the earlier object is then removed. An upload that never finishes is cleared by the job.
 export function startReplyUpload(ctx, id, body = {}) {
   needReady();
   const fc = rowFor(ctx, id);
+  if (fc.status === 'uploading') throw conflict('That clip hasn\'t finished uploading.');
   const contentType = typeOf(body.content_type);
   const bytes = v.int(body.bytes, 'bytes', { min: 1, max: MAX_BYTES * 4 });
   if (bytes > MAX_BYTES) throw badRequest(`Keep the clip under ${MAX_BYTES / 1024 / 1024} MB.`);
-  const key = `form-checks/${fc.client_id}/${fc.id}-reply.${TYPES[contentType]}`;
-  ctx.db.run(`UPDATE form_checks SET reply_object_key = ?, reply_content_type = ?, reply_bytes = ?, reply_status = 'uploading' WHERE id = ?`, key, contentType, bytes, id);
+  if (fc.reply_pending_key) forget(ctx, fc.reply_pending_key).catch(() => {});   // a coach who started over: the earlier try is dropped
+  const key = `form-checks/${fc.client_id}/${fc.id}-reply-${token(6)}.${TYPES[contentType]}`;
+  ctx.db.run(`UPDATE form_checks SET reply_pending_key = ?, reply_pending_type = ?, reply_pending_bytes = ?, reply_pending_at = ? WHERE id = ?`, key, contentType, bytes, ctx.now(), id);
   return { id, upload: uploadFor(ctx, key, contentType) };
 }
 export async function finishReplyUpload(ctx, id, user) {
   const fc = rowFor(ctx, id);
-  if (fc.reply_status !== 'uploading') return shape(ctx, fc);
-  const head = await checkObject(ctx, fc.reply_object_key, fc.reply_content_type);
-  if (!head.ok) { ctx.db.run('UPDATE form_checks SET reply_object_key = NULL, reply_content_type = NULL, reply_bytes = NULL, reply_status = NULL WHERE id = ?', id); throw badRequest(head.why); }
-  ctx.db.run(`UPDATE form_checks SET reply_status = 'sent', reply_bytes = ?, status = 'answered', answered_at = COALESCE(answered_at, ?), coach_id = COALESCE(coach_id, ?), coach_name = COALESCE(coach_name, ?), seen_by_athlete_at = NULL WHERE id = ?`, head.bytes, ctx.now(), user?.id ?? null, user?.name ?? null, id);
+  if (!fc.reply_pending_key) return shape(ctx, fc);
+  const head = await checkObject(ctx, fc.reply_pending_key, fc.reply_pending_type);
+  if (!head.ok) {
+    if (head.kind === 'store') throw new HttpError(503, 'storage_unavailable', head.why);
+    if (head.kind === 'missing' || head.removed) ctx.db.run('UPDATE form_checks SET reply_pending_key = NULL, reply_pending_type = NULL, reply_pending_bytes = NULL, reply_pending_at = NULL WHERE id = ?', id);
+    throw badRequest(head.why);
+  }
+  const old = fc.reply_status === 'sent' ? fc.reply_object_key : null;
+  ctx.db.run(`UPDATE form_checks SET reply_object_key = reply_pending_key, reply_content_type = reply_pending_type, reply_bytes = ?, reply_etag = ?, reply_status = 'sent',
+    reply_pending_key = NULL, reply_pending_type = NULL, reply_pending_bytes = NULL, reply_pending_at = NULL,
+    status = 'answered', answered_at = COALESCE(answered_at, ?), coach_id = COALESCE(coach_id, ?), coach_name = COALESCE(coach_name, ?), seen_by_athlete_at = NULL WHERE id = ?`,
+    head.bytes, head.etag, ctx.now(), user?.id ?? null, user?.name ?? null, id);
+  if (old && old !== fc.reply_pending_key) await forget(ctx, old);
   return shape(ctx, ctx.db.get('SELECT * FROM form_checks WHERE id = ?', id));
 }
 // Remove a clip and its answer: a coach, or the athlete's parent.
+// The objects go (or are parked for the job when the store won't), then the row: a removal always finishes.
+const keysOf = (fc) => [fc.object_key, fc.reply_object_key, fc.reply_pending_key].filter(Boolean);
 export async function remove(ctx, id, scope = {}) {
   const fc = rowFor(ctx, id, scope);
-  for (const key of [fc.object_key, fc.reply_object_key].filter(Boolean)) await removeObject(ctx, key);
+  for (const key of keysOf(fc)) await forget(ctx, key);
   ctx.db.run('DELETE FROM form_checks WHERE id = ?', id);
   return { id, deleted: true };
 }
 // Every clip of an athlete (deleting a family): objects first, then the rows go with the client.
 export async function removeAllFor(ctx, clientId) {
-  for (const fc of ctx.db.all('SELECT object_key, reply_object_key FROM form_checks WHERE client_id = ?', clientId)) for (const key of [fc.object_key, fc.reply_object_key].filter(Boolean)) await removeObject(ctx, key);
+  for (const fc of ctx.db.all('SELECT object_key, reply_object_key, reply_pending_key FROM form_checks WHERE client_id = ?', clientId)) for (const key of keysOf(fc)) await forget(ctx, key);
   ctx.db.run('DELETE FROM form_checks WHERE client_id = ?', clientId);
 }
-// The daily job: clips past their keep date go, and uploads that never finished (a phone that gave up) after a day.
-// A clip the store won't delete stays listed and is tried again tomorrow.
+// The daily job: clips past their keep date go, uploads that never finished (a phone that gave up, a coach's reply
+// clip) after a day, and objects the store refused to delete earlier are tried again. A clip the store still won't
+// delete stays listed and is tried again tomorrow.
 export async function cleanup(ctx) {
   if (!config().ready) return { skipped: true };
   const now = ctx.now(), dayAgo = new Date(Date.parse(now) - 86400000).toISOString();
   const rows = ctx.db.all(`SELECT * FROM form_checks WHERE expires_at < ? OR (status = 'uploading' AND created_at < ?)`, now, dayAgo);
-  let removed = 0, kept = 0;
+  let removed = 0, kept = 0, orphans = 0;
   for (const fc of rows) {
-    const gone = (await Promise.all([fc.object_key, fc.reply_object_key].filter(Boolean).map((k) => removeObject(ctx, k)))).every(Boolean);
+    const gone = (await Promise.all(keysOf(fc).map((k) => removeObject(ctx, k)))).every((r) => r.ok);
     if (gone) { ctx.db.run('DELETE FROM form_checks WHERE id = ?', fc.id); removed++; } else kept++;
   }
-  return { removed, kept };
+  for (const fc of ctx.db.all(`SELECT id, reply_pending_key FROM form_checks WHERE reply_pending_key IS NOT NULL AND reply_pending_at < ?`, dayAgo)) {
+    if ((await removeObject(ctx, fc.reply_pending_key)).ok) { ctx.db.run('UPDATE form_checks SET reply_pending_key = NULL, reply_pending_type = NULL, reply_pending_bytes = NULL, reply_pending_at = NULL WHERE id = ?', fc.id); removed++; } else kept++;
+  }
+  for (const o of ctx.db.all('SELECT object_key FROM form_check_orphans')) {
+    const r = await removeObject(ctx, o.object_key);
+    if (r.ok) { ctx.db.run('DELETE FROM form_check_orphans WHERE object_key = ?', o.object_key); orphans++; } else { ctx.db.run('UPDATE form_check_orphans SET last_error = ? WHERE object_key = ?', String(r.error).slice(0, 200), o.object_key); kept++; }
+  }
+  return { removed, kept, orphans };
 }
 export function forExport(ctx, clientId) {
   return ctx.db.all(`SELECT exercise_name, workout_title, note, sent_at, status, coach_name, reply, answered_at, expires_at FROM form_checks WHERE client_id = ? AND status != 'uploading' ORDER BY sent_at`, clientId);

@@ -1630,8 +1630,20 @@ CREATE TABLE IF NOT EXISTS form_checks (
   reply_content_type TEXT,
   reply_bytes INTEGER,
   reply_status TEXT CHECK (reply_status IN ('uploading','sent')),
+  reply_etag TEXT,
+  reply_pending_key TEXT,
+  reply_pending_type TEXT,
+  reply_pending_bytes INTEGER,
+  reply_pending_at TEXT,
+  etag TEXT,
   seen_by_athlete_at TEXT,
   expires_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_form_checks_client ON form_checks(client_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_form_checks_status ON form_checks(status, sent_at);
+-- Objects the store wouldn't delete when their form check went (a removed clip, a deleted family): the daily job tries again.
+CREATE TABLE IF NOT EXISTS form_check_orphans (
+  object_key TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  last_error TEXT
+);

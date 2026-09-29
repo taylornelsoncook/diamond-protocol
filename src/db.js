@@ -91,7 +91,7 @@ const ADDED_TABLES = {
   47: ['data_imports', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced'],                 // outside data: wearables and spreadsheets brought in by hand
   50: ['program_phases'],                                                                             // the mesocycle planner's phases
   52: ['wearable_connections', 'wearable_auth_states'],                                               // WHOOP and Oura accounts linked for automatic pulls
-  53: ['form_checks']                                                                                 // form-check clips sent from the athlete app
+  53: ['form_checks', 'form_check_orphans']                                                                               // form-check clips sent from the athlete app
 };
 const ADDED_COLUMNS = {
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',

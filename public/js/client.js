@@ -225,7 +225,8 @@ function render() {
 }
 
 // Send a clip of a set to the coach (formchecks-ui.js). Hidden until the owner has set the private bucket up.
-let formChecksReady = null;   // null = not asked yet
+let formChecksReady = null, formChecksAsk = null;   // null = not asked yet; one request is shared by every card
+const askFormChecks = () => (formChecksAsk ??= api('GET', '/app/api/form-checks').then((d) => { formChecksReady = !!d.ready; return d; }).catch((e) => { formChecksAsk = null; throw e; }));
 function formCheckSend(x) {
   if (formChecksReady === false) return null;
   const holder = h('div', { class: 'stack-tight' });
@@ -233,16 +234,16 @@ function formCheckSend(x) {
     const fc = await sendClip({ file, start: (b) => api('POST', '/app/api/form-checks', b), finish: (id) => api('POST', `/app/api/form-checks/${id}/done`), extra: { workout_exercise_id: x.id }, onProgress: progress });
     say(`Form check sent for ${fc.exercise_name}.`); toast(`Sent. Your coach will answer in the app; you'll see it under Form checks.`);
     formChecksPanel.draw?.();
-  }, { variant: 'ghost', capture: true }), h('span', { class: 'small muted' }, 'Film one set (up to 60 seconds) and your coach will answer with what to change.'));
+  }, { variant: 'ghost' }), h('span', { class: 'small muted' }, 'Film one set (up to 60 seconds) and your coach will answer with what to change.'));
   if (formChecksReady === true) draw();
-  else api('GET', '/app/api/form-checks').then((d) => { formChecksReady = !!d.ready; if (d.ready) draw(); }).catch(() => {});
+  else askFormChecks().then((d) => { if (d.ready) draw(); }).catch(() => {});
   return holder;
 }
 // The clips sent and the coach's answers, under the workout.
 const formChecksPanel = { el: null, draw: null };
 function formChecksSection() {
   if (formChecksReady === false) return null;
-  const block = formChecksBlock({ who: 'athlete', first: state.home?.client?.first_name, list: async () => { const d = await api('GET', '/app/api/form-checks'); formChecksReady = !!d.ready; if (!d.ready) section.hidden = true; else if (d.data.length) section.hidden = false; return d; },
+  const block = formChecksBlock({ who: 'athlete', first: state.home?.client?.first_name, list: async () => { const d = await (formChecksAsk ? askFormChecks() : api('GET', '/app/api/form-checks')); formChecksAsk = null; formChecksReady = !!d.ready; if (!d.ready) section.hidden = true; else if (d.data.length) section.hidden = false; return d; },
     play: (id, which) => api('GET', `/app/api/form-checks/${id}/video?which=${which}`), seen: (id) => api('POST', `/app/api/form-checks/${id}/seen`), empty: '' });
   const section = h('section', { class: 'dp-panel stack', hidden: true }, h('h2', { class: 'dp-panel-title' }, 'Form checks'), h('p', { class: 'small muted', style: 'margin:0' }, 'Clips you sent and what your coach said. Clips are kept for a while, then removed.'), block.el);
   formChecksPanel.el = section; formChecksPanel.draw = block.draw;

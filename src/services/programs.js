@@ -76,6 +76,8 @@ export function deleteExercise(ctx, id) {
   const e = getExercise(ctx, id);
   const used = ctx.db.all(`SELECT DISTINCT p.name FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id JOIN programs p ON p.id = w.program_id WHERE we.exercise_id = ? ORDER BY p.name`, id).map((r) => r.name);
   if (used.length) throw conflict(`${e.name} is in ${used.join(', ')}. Remove it from ${used.length === 1 ? 'that program' : 'those programs'} first.`);
+  const swapped = ctx.db.get('SELECT COUNT(DISTINCT client_id) AS n FROM exercise_swaps WHERE exercise_id = ?', id).n;
+  if (swapped) throw conflict(`${e.name} is swapped in for ${swapped === 1 ? 'an athlete' : `${swapped} athletes`} right now. Undo those swaps first.`);
   ctx.db.run('DELETE FROM exercises WHERE id = ?', id);
   return { id, deleted: true };
 }

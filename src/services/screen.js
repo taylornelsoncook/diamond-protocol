@@ -29,6 +29,7 @@ export function workoutView(ctx, workoutId) {
   const block = (r) => (r ? { id: r.id, name: r.name, note: r.note, exercises: r.exercises.map((x) => ({ name: x.name, prescription: x.prescription, note: x.note, video_url: x.video_url, poster_url: x.poster_url })) } : null);
   return { id: w.id, title: w.title, week: w.week, day: w.day, program_id: p.id, program_name: p.name, warmup: block(full.warmup), cooldown: block(full.cooldown),
     exercises: full.exercises.map((x) => ({ id: x.id, name: x.name, prescription: x.prescription, instructions: x.instructions, details: x.details, note: x.note,
+      video_url: x.video_url ?? null, poster_url: x.poster_url ?? null,   // the screen plays the demos in turn
       group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag,
       load: x.load_test ? `${x.load_pct}% of ${LOAD_TESTS[x.load_test]} max` : null })) };
 }

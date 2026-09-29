@@ -53,3 +53,9 @@
 .c-rtn-sum::-webkit-details-marker{display:none}
 .c-rtn-row{display:flex;align-items:center;gap:12px;min-height:52px}
 .c-ex-mark--dot{background:none;color:var(--steel-muted);font-size:24px}
+/* The exercise's still on the collapsed card, and the demo that plays when it opens. */
+.c-ex-mark--still{position:relative;overflow:hidden;background:var(--black)}
+.c-ex-mark--still img{width:100%;height:100%;object-fit:cover;display:block;opacity:.85}
+.c-ex-mark-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--steel);text-shadow:0 0 6px rgba(0,0,0,.8)}
+.c-demo{position:relative}
+.c-demo-tag{position:absolute;left:8px;top:8px;padding:2px 8px;border-radius:var(--radius-pill);background:rgba(0,0,0,.6);color:var(--steel);font:600 11px/18px var(--font-sans);letter-spacing:.04em;text-transform:uppercase;pointer-events:none}

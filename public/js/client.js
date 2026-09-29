@@ -225,6 +225,16 @@ function render() {
   renderLogger(home.workout);
 }
 
+// The exercise's demo. A video file of ours plays muted and looping as soon as the card opens, with the still first, so
+// the athlete sees the movement without a tap; the controls unmute it. YouTube and Vimeo links keep their own player.
+const isVideoFile = (url) => /\.(mp4|m4v|mov|webm)(\?|$)/i.test(String(url ?? ''));
+function demoVideo(x) {
+  if (!x.video_url || !isVideoFile(x.video_url)) return videoEmbed(x.video_url, x.name, 'Demo video coming soon. Follow the cues below.', x.poster_url);
+  const video = h('video', { src: x.video_url, controls: true, playsinline: true, muted: true, loop: true, autoplay: true, preload: 'metadata', ...(x.poster_url ? { poster: x.poster_url } : {}), 'aria-label': `${x.name} demo video` });
+  video.muted = true;   // the attribute alone isn't enough for autoplay in every browser
+  video.play?.().catch(() => {});
+  return h('div', { class: 'video-frame c-demo' }, video, h('span', { class: 'c-demo-tag' }, 'Demo · tap for sound'));
+}
 // Send a clip of a set to the coach (formchecks-ui.js). Hidden until the owner has set the private bucket up.
 let formChecksReady = null, formChecksAsk = null;   // null = not asked yet; one request is shared by every card
 const askFormChecks = () => (formChecksAsk ??= api('GET', '/app/api/form-checks').then((d) => { formChecksReady = !!d.ready; return d; }).catch((e) => { formChecksAsk = null; throw e; }));
@@ -326,7 +336,7 @@ function renderLogger(w) {
     const isOpen = x.id === state.open;
     const logged = (draft.sets[x.id] ?? []).filter((r) => r.done).length;
     return h('button', { type: 'button', class: 'c-ex-head', 'aria-expanded': String(isOpen), onClick: () => { state.open = isOpen ? null : x.id; redrawCards(); if (!isOpen) cards.get(x.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
-      h('span', { class: 'c-ex-mark', 'aria-hidden': 'true' }, exDone(x) ? '✓' : playIcon()),
+      h('span', { class: `c-ex-mark${x.poster_url && !exDone(x) ? ' c-ex-mark--still' : ''}`, 'aria-hidden': 'true' }, exDone(x) ? '✓' : x.poster_url ? [h('img', { src: x.poster_url, alt: '', loading: 'lazy' }), h('span', { class: 'c-ex-mark-play' }, playIcon())] : playIcon()),
       h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
         h('span', { class: 'dp-ex-sets' }, [detailsOf(x), x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
         x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason.toLowerCase()})` : ''}` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
@@ -339,14 +349,15 @@ function renderLogger(w) {
     const isOpen = x.id === state.open;
     box.append(headOf(x));
     if (isOpen) {
+      // The demo plays on its own, muted and looping, the moment the card opens (tap it for sound); Send a form check sits right under it.
       box.append(h('div', { class: 'stack c-ex-media' },
-        x.video_url !== undefined ? videoEmbed(x.video_url, x.name, 'Demo video coming soon. Follow the cues below.', x.poster_url) : null,
+        x.video_url !== undefined ? demoVideo(x) : null,
+        formCheckSend(x),
         x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
         x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
         x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null,
-        altBlock(x),
-        formCheckSend(x)));
+        altBlock(x)));
       const setsBox = h('div', { class: 'c-sets' });
       box.append(setsBox);
       drawSets(x, setsBox);

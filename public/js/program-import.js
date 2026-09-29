@@ -1,6 +1,7 @@
-// Programs → Build from a PDF. Choose a PDF (or a photo) of a program; Claude reads it into a draft; the coach checks
-// every line (which library exercise, sets and reps, weight from a max), fixes what's off and saves it as a new program
-// or as weeks added to one. Nothing is saved until Save, and the server checks everything again then.
+// Programs → Build from a PDF, and Programs → Dictate a workout (the same page in 'dictate' mode: type or speak the
+// workout instead of choosing a file). Claude reads it into a draft; the coach checks every line (which library
+// exercise, sets and reps, weight from a max), fixes what's off and saves it as a new program or as weeks added to one.
+// Nothing is saved until Save, and the server checks everything again then.
 import { h, fill, toast, busy, btn, field, input, select, panel } from './ui.js';
 import { setFields } from './set-fields.js';
 
@@ -23,39 +24,60 @@ function readFile(file) {
   });
 }
 
-export async function importView(main, deps) {
+export async function importView(main, deps, mode = 'file') {
+  const spoken = mode === 'dictate';
   const get = (p) => deps.api('GET', p), post = (p, b) => deps.api('POST', p, b);
   const [status, progs, exs] = await Promise.all([get('/v1/programs/import/status'), get('/v1/programs'), get('/v1/exercises')]);
   const box = h('div', { class: 'stack', style: 'gap:24px' });
-  fill(main, deps.header('Build from a PDF', 'Turn a program you already have into one athletes can follow in the app.', h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'Back to programs')), box);
+  fill(main, deps.header(spoken ? 'Dictate a workout' : 'Build from a PDF', spoken ? 'Say or type a workout the way you\'d tell an athlete; it comes back in the builder\'s format for you to check.' : 'Turn a program you already have into one athletes can follow in the app.',
+    h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'Back to programs')), box);
 
   if (!status.ready) {
-    fill(box, panel('Almost ready', { subtitle: 'Reading a PDF uses Claude, from Anthropic, and needs a key.' },
+    fill(box, panel('Almost ready', { subtitle: `${spoken ? 'Turning your words into a workout' : 'Reading a PDF'} uses Claude, from Anthropic, and needs a key.` },
       h('p', { class: 'small' }, deps.role() === 'owner'
         ? 'Get a key at console.anthropic.com (API keys), then in Render open diamond-protocol, Environment, and add ANTHROPIC_API_KEY with the key as its value. Save, and this page works after the restart. A typical program costs well under a dollar to read; a long PDF costs more.'
         : 'Ask the owner to add the Anthropic key in Render. Then this page works.')));
     return;
   }
 
-  // Step 1: the file and where it goes.
+  // Step 1: the file (or the words) and where it goes.
   const file = h('input', { type: 'file', class: 'dp-input', accept: '.pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/*', 'aria-label': 'The program file' });
+  const text = textarea('', { rows: '8', maxlength: '20000', 'aria-label': 'The workout, in your words', placeholder: 'Lower body. Back squat 4 by 5 at 75 percent of their max, 2 minutes rest. Superset RDL 3 by 8 with split squats 3 by 8 each side. Finish with 3 rounds of plank 40 seconds and dead bugs 10 each side, no rest.' });
   const where = select([['', 'A new program'], ...progs.data.map((p) => [p.id, `Add to ${p.name}`])], { 'aria-label': 'Where it goes' });
   const draftBox = h('div', { class: 'stack' });
-  const readBtn = btn('Read the file', (e) => busy(e.currentTarget, async () => {
-    if (!file.files[0]) throw new Error('Choose the file first.');
-    fill(draftBox, h('p', { class: 'small muted', role: 'status' }, 'Reading the file. A long program can take a few minutes; keep this page open…'));
+  const readBtn = btn(spoken ? 'Build the workout' : 'Read the file', (e) => busy(e.currentTarget, async () => {
+    if (spoken ? !text.value.trim() : !file.files[0]) throw new Error(spoken ? 'Say or type the workout first.' : 'Choose the file first.');
+    fill(draftBox, h('p', { class: 'small muted', role: 'status' }, spoken ? 'Building the workout from your words…' : 'Reading the file. A long program can take a few minutes; keep this page open…'));
     try {
-      const f = await readFile(file.files[0]);
-      const d = await post('/v1/programs/import/draft', { file: f });
+      const d = spoken ? await post('/v1/programs/dictate/draft', { text: text.value }) : await post('/v1/programs/import/draft', { file: await readFile(file.files[0]) });
       editor(d);
     } catch (x) { fill(draftBox, h('div', { class: 'dp-error', role: 'alert' }, x.message)); }
   }), 'primary');
+  // Speaking: the browser's own speech recognition where it has one (Chrome, Edge, Safari); words land in the box as
+  // they're heard, after what's already there. Elsewhere the device's keyboard dictation types into the box.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  const speak = spoken && SR ? btn('Speak', () => {
+    if (rec) { rec.stop(); return; }
+    rec = new SR(); rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+    const base = text.value.trimEnd();
+    rec.onresult = (e) => { let heard = ''; for (const r of e.results) heard += r[0].transcript + (r.isFinal ? ' ' : ''); text.value = (base ? base + ' ' : '') + heard; };
+    rec.onerror = (e) => toast(e.error === 'not-allowed' ? 'Allow the microphone in your browser to speak the workout, or type it.' : 'Listening stopped. Press Speak to go again.', 'warn');
+    rec.onend = () => { rec = null; speak.textContent = 'Speak'; speak.setAttribute('aria-pressed', 'false'); text.focus(); };
+    rec.start(); speak.textContent = 'Stop listening'; speak.setAttribute('aria-pressed', 'true');
+  }, 'secondary', { 'aria-pressed': 'false' }) : null;
   // While a draft is open, where it goes is fixed (it was set up for that); Start over frees it.
-  const lock = (on) => { where.disabled = on; file.disabled = on; readBtn.disabled = on; };
-  fill(box, panel('Your program file', { subtitle: 'A PDF of the program, or a clear photo of a printed one. Claude reads it into a draft; you check every line before anything is saved.' },
-    h('div', { class: 'form-grid' }, field('File', file, `PDF up to ${MAX_MB} MB, or a photo up to ${MAX_PHOTO_MB} MB.`), field('Save it as', where)),
-    h('p', { class: 'small muted' }, 'The file is sent to Anthropic (Claude) to be read. Leave athletes\' personal details out of it.'),
-    h('div', null, readBtn)), draftBox);
+  const lock = (on) => { where.disabled = on; file.disabled = on; text.disabled = on; readBtn.disabled = on; if (speak) speak.disabled = on; };
+  fill(box, spoken
+    ? panel('Your workout, in your words', { subtitle: 'Say the exercises with their sets and reps, and anything else you\'d tell the athlete: tempo, rest, effort, a load, and which ones go together. Claude turns it into a draft; you check every line before anything is saved.' },
+      field('The workout', text, SR ? 'Press Speak and talk, or type. Numbers can be words ("three by eight"). "Superset" or "then" groups exercises.' : 'Type it, or use your keyboard\'s microphone key to dictate into this box (an iPhone, iPad or Mac has one).'),
+      h('div', { class: 'row wrap' }, speak, h('div', { style: 'width:260px' }, field('Save it as', where))),
+      h('p', { class: 'small muted' }, 'What you write is sent to Anthropic (Claude). Leave athletes\' names out of it.'),
+      h('div', null, readBtn))
+    : panel('Your program file', { subtitle: 'A PDF of the program, or a clear photo of a printed one. Claude reads it into a draft; you check every line before anything is saved.' },
+      h('div', { class: 'form-grid' }, field('File', file, `PDF up to ${MAX_MB} MB, or a photo up to ${MAX_PHOTO_MB} MB.`), field('Save it as', where)),
+      h('p', { class: 'small muted' }, 'The file is sent to Anthropic (Claude) to be read. Leave athletes\' personal details out of it.'),
+      h('div', null, readBtn)), draftBox);
 
   // Step 2: the draft to check.
   function editor(d) {
@@ -164,11 +186,11 @@ export async function importView(main, deps) {
       panel(`Check the draft from ${d.filename}`, { subtitle: `${plural(c.workouts, 'workout')} over ${plural(d.weeks, 'week')} · ${plural(c.exercises, 'exercise')}: ${c.exact} matched to your library, ${c.suggested} to check, ${c.new} new.` },
         target ? h('p', { class: 'small' }, `These workouts are added to ${target.name}, after its ${plural(target.weeks, 'week')} (from week ${target.weeks + 1}). Change the weeks if you want them somewhere else; days it already has are refused.`)
           : h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Program name', name), field('Level', level)), field('Description', desc)),
-        d.notes.length ? h('div', { class: 'stack-tight' }, h('strong', { class: 'small warn-text' }, 'Claude wasn\'t sure about these. Check them against the file:'), h('ul', null, d.notes.map((n) => h('li', { class: 'small' }, n)))) : null,
+        d.notes.length ? h('div', { class: 'stack-tight' }, h('strong', { class: 'small warn-text' }, `Claude wasn't sure about these. Check them against ${spoken ? 'what you said' : 'the file'}:`), h('ul', null, d.notes.map((n) => h('li', { class: 'small' }, n)))) : null,
         h('p', { class: 'small muted' }, 'Check each exercise: "Matched" is the same name as in your library. A closest match is only offered: press Use it, or type to choose another. Anything not in your library can be added as a new one. Sets and reps read like 3 × 8.'),
         useAll ? h('div', null, useAll) : null, datalist),
       list, problems,
-      h('div', { class: 'row wrap' }, save, btn('Start over', () => { fill(draftBox); file.value = ''; lock(false); }, 'ghost')));
+      h('div', { class: 'row wrap' }, save, btn(spoken ? 'Change the words and try again' : 'Start over', () => { fill(draftBox); file.value = ''; lock(false); if (spoken) text.focus(); }, 'ghost')));
     draftBox.scrollIntoView({ block: 'start' });
   }
 }

@@ -105,7 +105,8 @@ export function readinessFrom(c, wear, rules = DEFAULT_RULES) {
     const w = wear.source ?? 'wearable';
     sources.push(`your ${w}`);
     if (wear.recovery != null && wear.recovery < rules.recovery_yellow) { reasons.push(`${wear.recovery_kind} ${Math.round(wear.recovery)}% (${w})`); if (wear.recovery < rules.recovery_red) hard.push('recovery'); }
-    if (wear.sleep_min != null && wear.sleep_min < rules.sleep_yellow_min) { reasons.push(`Slept ${hm(wear.sleep_min)} (${w})`); if (wear.sleep_min < rules.sleep_red_min) hard.push('sleep'); }
+    // The athlete's own sleep answer speaks for the night; the band's sleep counts only when the check-in has none.
+    if (wear.sleep_min != null && wear.sleep_min < rules.sleep_yellow_min && !(c && c.sleep_hours != null)) { reasons.push(`Slept ${hm(wear.sleep_min)} (${w})`); if (wear.sleep_min < rules.sleep_red_min) hard.push('sleep'); }
     if (rules.hrv_drop_pct && wear.hrv != null && wear.hrv_avg && wear.hrv < wear.hrv_avg * (1 - rules.hrv_drop_pct / 100)) reasons.push(`HRV ${Math.round(wear.hrv)} ms, ${Math.round((1 - wear.hrv / wear.hrv_avg) * 100)}% under your usual (${w})`);
   }
   const from = sources.join(' and ');

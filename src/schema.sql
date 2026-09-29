@@ -1660,7 +1660,7 @@ CREATE TABLE IF NOT EXISTS progressions (
   kind TEXT NOT NULL CHECK (kind IN ('weight','reps','sets')),
   amount REAL NOT NULL,
   basis TEXT,
-  status TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','approved','dismissed')),
+  status TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','approved','dismissed','removed')),   -- removed: an approved step the coach took back out
   created_at TEXT NOT NULL,
   decided_at TEXT,
   decided_by TEXT

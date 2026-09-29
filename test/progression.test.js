@@ -41,8 +41,8 @@ before(async () => {
   squat = (await coach('POST', '/v1/exercises', { name: 'Back squat', category: 'Lower body' })).body;
   pushup = (await coach('POST', '/v1/exercises', { name: 'Push-up', category: 'Upper body' })).body;
   const program = (await coach('POST', '/v1/programs', { name: 'Strength block', weeks: 2 })).body;
-  for (let d = 1; d <= 8; d++) {
-    const w = (await coach('POST', `/v1/programs/${program.id}/workouts`, { week: d > 6 ? 2 : 1, day: d > 6 ? d - 6 : d, title: `Day ${d}` })).body;
+  for (let d = 1; d <= 14; d++) {
+    const w = (await coach('POST', `/v1/programs/${program.id}/workouts`, { week: d > 7 ? 2 : 1, day: d > 7 ? d - 7 : d, title: `Day ${d}` })).body;
     await coach('POST', `/v1/workouts/${w.id}/exercises`, { exercise_id: squat.id, sets: 5, reps: '5', load_test: 'squat_1rm', load_pct: 75 });
     await coach('POST', `/v1/workouts/${w.id}/exercises`, { exercise_id: pushup.id, sets: 3, reps: '8-10' });
   }
@@ -98,6 +98,24 @@ test('two hits in a row suggest a step: pounds where a weight is lifted, a rep a
   assert.deepEqual(fifth.finished.progressions, []);
   const sixth = await finish(workouts[5], { squatLb: 160 });
   assert.deepEqual(sixth.finished.progressions.map((p) => [p.exercise_name, p.text, p.status]).sort(), [['Back squat', '+10 lb', 'suggested'], ['Push-up', '+1 rep a set', 'suggested']]);
+  // An approved step raises the bar: with +1 rep approved on 8-10, only 11s count as hits from now on.
+  const pu2 = (await coach('GET', `/v1/progressions?status=suggested&client_id=${ava.id}`)).body.data.find((p) => p.kind === 'reps');
+  await coach('POST', `/v1/progressions/${pu2.id}/approve`);
+  assert.equal((await home()).workout.exercises.find((x) => x.exercise_id === pushup.id).target_reps, 9);
+  for (const i of [6, 7]) assert.deepEqual((await finish(workouts[i], { squatLb: 160 })).finished.progressions, [], 'the old top no longer earns a step');
+  await finish(workouts[8], { squatLb: 160, pushReps: 11 });
+  const tenth = await finish(workouts[9], { squatLb: 160, pushReps: 11 });
+  assert.deepEqual(tenth.finished.progressions.map((p) => [p.exercise_name, p.text]), [['Push-up', '+1 rep a set']], 'reaching the new bar twice does');
+  // Undo of an approved step is a decision too: the next suggestion still needs two hits after it.
+  const pu3 = (await coach('GET', `/v1/progressions?status=suggested&client_id=${ava.id}`)).body.data.find((p) => p.kind === 'reps');
+  await coach('POST', `/v1/progressions/${pu3.id}/approve`);
+  const repSteps = (await coach('GET', `/v1/progressions?status=approved&client_id=${ava.id}`)).body.data.filter((p) => p.kind === 'reps');
+  assert.equal(repSteps.length, 2);
+  assert.equal((await coach('DELETE', `/v1/progressions/${pu3.id}`)).body.deleted, true);
+  assert.equal((await coach('GET', `/v1/progressions?status=removed&client_id=${ava.id}`)).body.data.length, 1, 'kept as removed');
+  assert.equal((await home()).workout.exercises.find((x) => x.exercise_id === pushup.id).target_reps, 9, 'back to one step');
+  assert.deepEqual((await finish(workouts[10], { squatLb: 160, pushReps: 11 })).finished.progressions, [], 'one hit after the undo isn\'t enough');
+  assert.deepEqual((await finish(workouts[11], { squatLb: 160, pushReps: 11 })).finished.progressions.map((p) => p.exercise_name), ['Push-up']);
 });
 
 test('by hand and on its own: a coach adds or takes back a step; auto mode approves at once; the export lists them; front desk can\'t', async () => {
@@ -105,7 +123,7 @@ test('by hand and on its own: a coach adds or takes back a step; auto mode appro
   assert.equal(add.status, 201, JSON.stringify(add.body)); assert.deepEqual([add.body.status, add.body.text, add.body.decided_by], ['approved', '+1 set', 'Riley']);
   let h = await home();
   let p = h.workout.exercises.find((x) => x.exercise_id === pushup.id);
-  assert.deepEqual([p.target_sets, p.progression.text], [4, '+1 set']);
+  assert.deepEqual([p.target_sets, p.progression.text], [4, '+1 rep a set, +1 set']);
   assert.equal((await coach('POST', `/v1/clients/${ava.id}/progressions`, { exercise_id: pushup.id, kind: 'weight', amount: 0 })).status, 400);
   assert.equal((await desk('POST', `/v1/clients/${ava.id}/progressions`, { exercise_id: pushup.id, kind: 'sets', amount: 1 })).status, 403);
   assert.equal((await coach('DELETE', `/v1/progressions/${add.body.id}`)).body.deleted, true);
@@ -116,7 +134,7 @@ test('by hand and on its own: a coach adds or takes back a step; auto mode appro
   const openSq = (await coach('GET', `/v1/progressions?status=suggested&client_id=${ava.id}`)).body.data.find((x) => x.kind === 'weight');
   await coach('POST', `/v1/progressions/${openSq.id}/dismiss`);
   const applied = (await coach('GET', `/v1/progressions?status=approved&client_id=${ava.id}`)).body.data;
-  assert.equal(applied.length, 1, 'the first approved step');
+  assert.equal(applied.length, 2, 'the squat step and the push-up step still in force; the removed one and the undone one by hand are not');
   assert.equal((await coach('PATCH', '/v1/engagement/settings', { progression_mode: 'sometimes' })).status, 400);
   const exp = (await signIn('coach@test.dev'))('GET', `/v1/families/${ava.family.id}/export`);
   assert.equal((await exp).status, 403, 'the export is the owner\'s');

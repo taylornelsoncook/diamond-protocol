@@ -646,12 +646,12 @@ function reopenId(ctx, clientId) {
 // One exercise as the app shows it: today's weight from a tested max, sets and reps to log, last time and best weight.
 // One exercise as the app shows it: the plan, today's weight (lighter on a rough day), an easy day's sets taken off
 // (never below one), and the coach-approved steps for this athlete on top (progression.js).
-function appExercise(ctx, clientId, x, readiness) {
+export function appExercise(ctx, clientId, x, readiness) {
   const drop = readiness?.drop ?? 0, setsOff = readiness?.sets_off ?? 0;
   const rx = parseRx(x);
   const step = appliedFor(ctx, clientId, x.exercise_id);
   const load = loadFor(ctx, clientId, x, { visibleOnly: true, drop });
-  if (load && load.lb != null && step?.weight_lb) { load.lb = Math.max(5, load.lb + step.weight_lb); load.text = `${load.lb} lb (${load.text.replace(/^\d+ lb \(/, '')}, ${step.weight_lb > 0 ? '+' : ''}${step.weight_lb} lb from your progression)`; }
+  if (load && load.lb != null && step?.weight_lb) { load.lb = Math.max(5, load.lb + step.weight_lb); load.text = `${load.lb} lb (${load.text.replace(/^\d+ lb \((.*)\)$/, '$1')}, ${step.weight_lb > 0 ? '+' : ''}${step.weight_lb} lb from your progression)`; }
   const planned = Math.min(MAX_SETS, rx.sets + (step?.sets ?? 0));
   const targetSets = Math.max(1, planned - setsOff);
   return { ...x, load, target_sets: targetSets, ...(targetSets < planned ? { planned_sets: planned } : {}), target_reps: rx.reps == null ? null : Math.max(1, rx.reps + (step?.reps ?? 0)),

@@ -79,6 +79,11 @@ test('an athlete taps their name, sees their weights, and logs the workout', asy
   const me = (await tv('POST', '/kiosk-api/screen/athlete', { session_id: s.id, ref: a.ref })).body;
   assert.deepEqual(me.weights, [{ exercise_id: squat.id, name: 'Back squat', text: '150 lb' }]);
   assert.equal((await tv('POST', '/kiosk-api/screen/athlete', { session_id: s.id, ref: b.ref })).body.weights[0].text, 'Test your back squat max first');
+  // The screen says what the phone says: an approved step is in the weight, and a set count that changed shows too.
+  const step = (await coach('POST', `/v1/clients/${ava.id}/progressions`, { exercise_id: squat.exercise_id, kind: 'weight', amount: 10 })).body;
+  assert.equal((await tv('POST', '/kiosk-api/screen/athlete', { session_id: s.id, ref: a.ref })).body.weights[0].text, '160 lb (with your +10 lb step)');
+  await coach('DELETE', `/v1/progressions/${step.id}`);
+  assert.equal((await tv('POST', '/kiosk-api/screen/athlete', { session_id: s.id, ref: a.ref })).body.weights[0].text, '150 lb');
 
   const log = await tv('POST', '/kiosk-api/screen/log', { session_id: s.id, ref: a.ref, exercise_ids: [squat.id, plank.id] });
   assert.deepEqual([log.status, log.body.name, log.body.exercises_logged], [201, 'Ava', 2]);

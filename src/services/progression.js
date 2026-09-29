@@ -22,10 +22,13 @@ export function topReps(reps) {
   return m ? Math.max(Number(m[1]), Number(m[2])) : low;
 }
 // Did every set of this exercise in a log reach the target: at least the planned sets, each at or over the top reps?
-export function hit(sets, slot) {
+export function hit(sets, slot, applied = null) {
   const rx = parseRx(slot), top = topReps(slot.reps ?? null) ?? (slot.reps == null ? repCount(String(rx.reps ?? '')) : null);
-  const target = top ?? rx.reps;
-  if (target == null || !sets.length || sets.length < rx.sets) return false;
+  const base = top ?? rx.reps;
+  if (base == null || !sets.length) return false;
+  // Steps already approved raise the bar: the athlete is asked for them, so a hit means reaching them.
+  const target = base + (applied?.reps ?? 0), planned = Math.min(MAX_SETS, rx.sets + (applied?.sets ?? 0));
+  if (sets.length < planned) return false;
   return sets.every((s) => s.reps != null && s.reps >= target);
 }
 
@@ -38,9 +41,10 @@ export function suggestAfterLog(ctx, client, logId) {
     const slot = ctx.db.get('SELECT sets, reps, load_test, load_pct, load_text, prescription FROM workout_exercises WHERE id = ?', r.workout_exercise_id);
     if (!slot) continue;
     const these = ctx.db.all('SELECT set_no, weight, reps FROM workout_sets WHERE workout_log_id = ? AND exercise_id = ? ORDER BY set_no', logId, r.exercise_id);
-    if (!hit(these, slot)) continue;
+    const applied = appliedFor(ctx, client.id, r.exercise_id);
+    if (!hit(these, slot, applied)) continue;
     // The log before this one for the same exercise, and only since the coach's last decision on it.
-    const since = ctx.db.get(`SELECT MAX(decided_at) AS t FROM progressions WHERE client_id = ? AND exercise_id = ? AND status IN ('approved', 'dismissed')`, client.id, r.exercise_id)?.t ?? '';
+    const since = ctx.db.get(`SELECT MAX(decided_at) AS t FROM progressions WHERE client_id = ? AND exercise_id = ? AND status IN ('approved', 'dismissed', 'removed')`, client.id, r.exercise_id)?.t ?? '';
     const open = ctx.db.get(`SELECT id FROM progressions WHERE client_id = ? AND exercise_id = ? AND status = 'suggested'`, client.id, r.exercise_id);
     if (open) continue;
     const thisLog = ctx.db.get('SELECT completed_at FROM workout_logs WHERE id = ?', logId);
@@ -50,11 +54,11 @@ export function suggestAfterLog(ctx, client, logId) {
     const prevSlotId = ctx.db.get('SELECT workout_exercise_id FROM workout_sets WHERE workout_log_id = ? AND exercise_id = ? LIMIT 1', prev.id, r.exercise_id)?.workout_exercise_id;
     const prevSlot = prevSlotId ? ctx.db.get('SELECT sets, reps, load_test, load_pct, load_text, prescription FROM workout_exercises WHERE id = ?', prevSlotId) : null;
     const before = ctx.db.all('SELECT set_no, weight, reps FROM workout_sets WHERE workout_log_id = ? AND exercise_id = ? ORDER BY set_no', prev.id, r.exercise_id);
-    if (!hit(before, prevSlot ?? slot)) continue;
+    if (!hit(before, prevSlot ?? slot, applied)) continue;
     const weighted = these.some((s) => s.weight > 0);
     const top = topReps(slot.reps) ?? parseRx(slot).reps;
     const kind = weighted ? 'weight' : top >= 20 ? 'sets' : 'reps';
-    if (kind === 'sets' && parseRx(slot).sets >= MAX_SETS) continue;
+    if (kind === 'sets' && parseRx(slot).sets + (applied?.sets ?? 0) >= MAX_SETS) continue;
     const amount = kind === 'weight' ? stepLb(ctx, r.category) : 1;
     const basis = { logs: [prev.id, logId], sets: these.map((s) => ({ weight: s.weight, reps: s.reps })), target: `${parseRx(slot).sets} × ${slot.reps ?? parseRx(slot).reps}` };
     const p = insert(ctx, client.id, r.exercise_id, kind, amount, basis, mode(ctx) === 'auto' ? { status: 'approved', by: 'automatic' } : {});
@@ -89,7 +93,7 @@ export function appliedFor(ctx, clientId, exerciseId) {
 // ---------- The coach's side ----------
 export function list(ctx, { status: st, clientId, limit = 50 } = {}) {
   const where = ['c.archived_at IS NULL'], p = [];
-  if (st && ['suggested', 'approved', 'dismissed'].includes(st)) { where.push('p.status = ?'); p.push(st); }
+  if (st && ['suggested', 'approved', 'dismissed', 'removed'].includes(st)) { where.push('p.status = ?'); p.push(st); }
   if (clientId) { where.push('p.client_id = ?'); p.push(clientId); }
   return ctx.db.all(`SELECT p.*, e.name AS exercise_name, c.name AS client_name FROM progressions p JOIN exercises e ON e.id = p.exercise_id JOIN clients c ON c.id = p.client_id WHERE ${where.join(' AND ')} ORDER BY p.created_at DESC LIMIT ?`, ...p, Math.min(Math.max(Number(limit) || 50, 1), 200)).map((r) => shape(ctx, r));
 }
@@ -116,9 +120,13 @@ export function add(ctx, clientId, body = {}, user) {
   return insert(ctx, c.id, e.id, kind, amount, { by_hand: true }, { status: 'approved', by: user?.name ?? null });
 }
 // Take an approved step back out (or drop a suggestion the athlete outgrew).
-export function remove(ctx, id) {
-  if (!ctx.db.get('SELECT id FROM progressions WHERE id = ?', id)) throw notFound('Suggestion');
-  ctx.db.run('DELETE FROM progressions WHERE id = ?', id);
+// Take a step back out. An approved step is kept as 'removed' (a decision, so the next suggestion still needs two hits
+// after it); a suggestion nobody decided on is dropped.
+export function remove(ctx, id, user) {
+  const p = ctx.db.get('SELECT id, status FROM progressions WHERE id = ?', id);
+  if (!p) throw notFound('Suggestion');
+  if (p.status === 'approved') ctx.db.run(`UPDATE progressions SET status = 'removed', decided_at = ?, decided_by = ? WHERE id = ?`, ctx.now(), user?.name ?? null, id);
+  else ctx.db.run('DELETE FROM progressions WHERE id = ?', id);
   return { id, deleted: true };
 }
 export const forExport = (ctx, clientId) => ctx.db.all('SELECT e.name AS exercise, p.kind, p.amount, p.status, p.created_at, p.decided_at, p.decided_by FROM progressions p JOIN exercises e ON e.id = p.exercise_id WHERE p.client_id = ? ORDER BY p.created_at', clientId);

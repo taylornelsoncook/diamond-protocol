@@ -204,7 +204,7 @@ export async function draftFromFile(ctx, body, user) {
       const name = clean(x?.name, 120);
       const lift = Object.hasOwn(LOAD_TESTS, x?.load_lift) ? x.load_lift : '';
       const pct = Math.trunc(Number(x?.load_pct));
-      const f = draftFields(x);
+      const f = draftFields(x, (what) => notes.push(`Week ${week}, day ${day}, ${name || 'an exercise'}: ${what}`));
       return { name, ...matchExercise(name, x?.library_match, library), ...f, prescription: rxText(f),
         load_test: lift && pct >= 30 && pct <= 110 ? lift : null, load_pct: lift && pct >= 30 && pct <= 110 ? pct : null, note: clean(x?.note, 200) };
     }).filter((x) => x.name);
@@ -226,15 +226,20 @@ export async function draftFromFile(ctx, body, user) {
 
 // The set details of one exercise in Claude's draft, within the builder's limits (anything outside them is dropped, the
 // coach fills it in). A draft with only a prescription (an older draft) is split into sets and reps.
-function draftFields(x) {
+function draftFields(x, dropped = () => {}) {
   const sets = Math.trunc(Number(x?.sets));
   const rest = Math.trunc(Number(x?.rest_seconds));
   const rpe = Number(x?.rpe);
   const group = clean(x?.group, 5).toUpperCase();   // one letter; "ZZ" or "A1" is dropped
-  const f = { sets: sets >= 1 && sets <= 12 ? sets : null, reps: clean(x?.reps, 40) || null, tempo: clean(x?.tempo, 20) || null,
+  const reps = clean(x?.reps, 80) || null;
+  const f = { sets: sets >= 1 && sets <= 12 ? sets : null, reps, tempo: clean(x?.tempo, 20) || null,
     rest_seconds: Number.isInteger(rest) && rest > 0 && rest <= 1800 ? rest : null,
     target_rpe: rpe >= 1 && rpe <= 10 && Math.round(rpe * 2) === rpe * 2 ? rpe : null, load_text: clean(x?.load_text, 40) || null,
     group_label: /^[A-Z]$/.test(group) ? group : null, group_kind: null };
+  if (sets > 12) { f.reps = [sets, reps].filter(Boolean).join(' × ') || null; dropped(`${sets} sets is more than the ${12} an athlete logs, so "${f.reps}" is kept as text.`); }   // like splitRx
+  if (rest > 1800) dropped(`a rest of ${rest} seconds is more than 30 minutes, so it was left blank.`);
+  if (x?.rpe && f.target_rpe === null) dropped(`an RPE of ${x.rpe} isn't 1 to 10 in halves, so it was left blank.`);
+  if (group && !f.group_label) dropped(`the group "${group}" isn't one letter, so the exercise is on its own.`);
   f.group_kind = f.group_label ? (Object.hasOwn(GROUP_KINDS, x?.group_kind) ? x.group_kind : 'superset') : null;
   if (f.sets === null && f.reps === null && x?.prescription) {
     const s = splitRx(clean(x.prescription, 80));
@@ -303,6 +308,13 @@ export function saveImport(ctx, body = {}) {
         out.push({ new_name: name.toLowerCase(), rx, load });
       } else problems.push(`${where(w, i)}: choose an exercise from the library, or add it as a new one.`);
     });
+    // A group is one kind (the first line's) and sits together: "A, B, A" is a mistake to fix, not two groups.
+    const kinds = new Map();
+    for (const x of out) if (x.rx?.group_label) { if (!kinds.has(x.rx.group_label)) kinds.set(x.rx.group_label, x.rx.group_kind); x.rx.group_kind = kinds.get(x.rx.group_label); }
+    for (const label of kinds.keys()) {
+      const at = out.map((x, i) => (x.rx?.group_label === label ? i : -1)).filter((i) => i >= 0);
+      if (at.at(-1) - at[0] + 1 !== at.length) problems.push(`${where(w)}: the exercises in group ${label} (${at.map((i) => i + 1).join(', ')}) need to be next to each other.`);
+    }
     workouts.push({ week, day, title, exercises: out });
   }
   if (lines > MAX_LINES) problems.push(`That's ${lines} exercise lines; save up to ${MAX_LINES} at a time.`);

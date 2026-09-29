@@ -301,8 +301,9 @@ export function addWorkoutExercise(ctx, workoutId, body) {
   const load = loadInput(body);
   const f = adoptKind(ctx, workoutId, slotFields(body), body);
   // No position given: last, or right after the group it joins (a superset's second exercise goes under its first).
-  const groupEnd = f.group_label && body.position == null ? ctx.db.get('SELECT MAX(position) AS n FROM workout_exercises WHERE workout_id = ? AND group_label = ?', workoutId, f.group_label).n : null;
-  const at = body.position === undefined || body.position === null ? (groupEnd ? groupEnd + 1 : last + 1) : Math.min(v.int(body.position, 'position', { min: 1, max: 1000 }), last + 1);
+  const group = f.group_label ? ctx.db.get('SELECT MIN(position) AS lo, MAX(position) AS hi FROM workout_exercises WHERE workout_id = ? AND group_label = ?', workoutId, f.group_label) : null;
+  let at = body.position === undefined || body.position === null ? (group?.hi ? group.hi + 1 : last + 1) : Math.min(v.int(body.position, 'position', { min: 1, max: 1000 }), last + 1);
+  if (group?.hi) at = Math.min(Math.max(at, group.lo), group.hi + 1);   // a given place still keeps the group together
   const id = newId('wex');
   ctx.db.tx(() => {
     if (at <= last) ctx.db.run('UPDATE workout_exercises SET position = position + 1 WHERE workout_id = ? AND position >= ?', workoutId, at);
@@ -326,11 +327,11 @@ export function slotFields(body = {}, cur = null) {
   const has = (k) => body[k] !== undefined;
   const blankOr = (k, fn) => (body[k] === null || body[k] === '' ? null : fn());
   if (has('sets')) f.sets = blankOr('sets', () => v.int(body.sets, 'sets', { min: 1, max: MAX_SETS }));
-  if (has('reps')) f.reps = blankOr('reps', () => v.str(body.reps, 'reps', { max: 40 }));
+  if (has('reps')) f.reps = blankOr('reps', () => v.str(body.reps, 'reps', { max: 80 }));
   if (has('tempo')) f.tempo = blankOr('tempo', () => v.str(body.tempo, 'tempo', { max: 20 }));
   if (has('rest_seconds')) f.rest_seconds = blankOr('rest_seconds', () => v.int(body.rest_seconds, 'rest_seconds', { min: 0, max: REST_MAX }));
   if (has('target_rpe')) f.target_rpe = blankOr('target_rpe', () => {
-    const n = Number(body.target_rpe);
+    const n = typeof body.target_rpe === 'number' || typeof body.target_rpe === 'string' ? Number(body.target_rpe) : NaN;
     if (!Number.isFinite(n) || n < 1 || n > 10 || Math.round(n * 2) !== n * 2) throw badRequest('Enter the target RPE from 1 to 10, in halves (like 7 or 7.5).');
     return n;
   });
@@ -341,11 +342,12 @@ export function slotFields(body = {}, cur = null) {
     const s = splitRx(body.prescription);
     if (String(body.prescription ?? '').trim().length > 80) throw badRequest('Keep the sets and reps to 80 characters.');
     f.sets = s.sets; f.reps = s.reps;
-    if (!has('load_text') && s.load_text) f.load_text = s.load_text;
-    if (!has('target_rpe') && s.target_rpe) f.target_rpe = s.target_rpe;
+    if (!has('load_text')) f.load_text = s.load_text;       // the text is the whole story: a load or RPE it no longer has goes too
+    if (!has('target_rpe')) f.target_rpe = s.target_rpe;
   }
   if (has('group_label')) {
-    const label = blankOr('group_label', () => String(body.group_label).trim().toUpperCase());
+    if (body.group_label !== null && typeof body.group_label !== 'string') throw badRequest('Name the group with one letter, A to Z.');
+    const label = blankOr('group_label', () => body.group_label.trim().toUpperCase());
     if (label !== null && !/^[A-Z]$/.test(label)) throw badRequest('Name the group with one letter, A to Z.');
     f.group_label = label;
     f.group_kind = label === null ? null : has('group_kind') && body.group_kind ? v.oneOf(body.group_kind, 'group_kind', Object.keys(GROUP_KINDS)) : f.group_kind ?? 'superset';
@@ -354,8 +356,8 @@ export function slotFields(body = {}, cur = null) {
     if (f.group_kind && !f.group_label) throw badRequest('Give the group a letter too (A, B, C...), so the exercises in it go together.');
     if (!f.group_kind) f.group_label = null;
   }
+  if (f.sets == null && !f.reps) throw badRequest('Add the sets and reps, like 3 × 8.');
   f.prescription = rxText(f);
-  if (!f.prescription) throw badRequest('Add the sets and reps, like 3 × 8.');
   return f;
 }
 // Weights from test results: an exercise can be prescribed as a percent of the athlete's latest tested max

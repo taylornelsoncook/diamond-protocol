@@ -437,7 +437,7 @@ async function reopen(logId) {
   draft = { token: tokenValue, workout_id: log.workout_id, log_id: log.id, title: log.title, request_id: `edit-${log.id}-${newId()}`, started_at: null, notes: log.notes ?? '', rpe: log.rpe ?? null,
     sets: Object.fromEntries(exercises.map((x) => [x.id, x.sets.map((s) => ({ weight: s.weight, reps: s.reps, done: true }))])) };
   saveDraft();
-  draft.workout = { id: log.workout_id, title: log.title, week: log.week, day: log.day, program_name: log.program_name, exercises: exercises.map((x) => ({ id: x.id, exercise_id: x.exercise_id, name: x.name, prescription: x.prescription, details: x.details, note: x.note, group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag, target_sets: Math.max(x.target_sets, x.sets.at(-1)?.set_no ?? 0), target_reps: x.target_reps })) };
+  draft.workout = { id: log.workout_id, title: log.title, week: log.week, day: log.day, program_name: log.program_name, exercises: exercises.map((x) => ({ id: x.id, exercise_id: x.exercise_id, name: x.name, prescription: x.prescription, details: x.details, note: x.note, rest_seconds: x.rest_seconds, group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag, target_sets: Math.max(x.target_sets, x.sets.at(-1)?.set_no ?? 0), target_reps: x.target_reps })) };
   // Fill gaps: a set logged as number 3 with no 1 and 2 still shows in its place.
   for (const x of exercises) { const rows = []; for (const s of x.sets) rows[s.set_no - 1] = { weight: s.weight, reps: s.reps, done: true }; draft.sets[x.id] = Array.from(rows, (r) => r ?? { weight: '', reps: '', done: false }); }
   saveDraft();

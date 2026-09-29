@@ -10,7 +10,7 @@ export function setFields(x = null, { hint = true } = {}) {
   const num = (i) => (i.value === '' ? null : Number(i.value));
   const txt = (i) => i.value.trim() || null;
   const sets = input({ type: 'number', min: '1', max: '12', inputmode: 'numeric', placeholder: '3', value: x?.sets ? String(x.sets) : '', 'aria-label': 'Sets' });
-  const reps = input({ maxlength: '40', placeholder: '8, 8-10, 5/side, 40 sec', value: x?.reps ?? '', 'aria-label': 'Reps' });
+  const reps = input({ maxlength: '80', placeholder: '8, 8-10, 5/side, 40 sec', value: x?.reps ?? '', 'aria-label': 'Reps' });
   const loadT = input({ maxlength: '40', placeholder: '135 lb, BW', value: x?.load_text ?? '', 'aria-label': 'Load' });
   const tempo = input({ maxlength: '20', placeholder: '3-1-1', value: x?.tempo ?? '', 'aria-label': 'Tempo' });
   const rest = input({ type: 'number', min: '0', max: '1800', step: '5', inputmode: 'numeric', placeholder: 'sec', value: x?.rest_seconds != null ? String(x.rest_seconds) : '', 'aria-label': 'Rest in seconds' });

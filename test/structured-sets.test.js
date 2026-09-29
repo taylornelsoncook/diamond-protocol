@@ -87,7 +87,7 @@ test('an exercise is added with its fields; the text is built from them; older c
   const c = await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, prescription: 'Hold as long as you can' });
   assert.deepEqual([c.body.exercises[2].prescription, c.body.exercises[2].sets, c.body.exercises[2].reps], ['Hold as long as you can', null, 'Hold as long as you can'], 'free text stays whole');
   // Every problem says what to fix.
-  const bad = async (body, re) => { const res = await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, ...body }); assert.equal(res.status, 400, JSON.stringify(body)); assert.match(res.body.error.message, re); };
+  const bad = async (body, re, why) => { const res = await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, ...body }); assert.equal(res.status, 400, why ?? JSON.stringify(body)); assert.match(res.body.error.message, re); };
   await bad({}, /Add the sets and reps/);
   await bad({ sets: 13, reps: '5' }, /between 1 and 12/);
   await bad({ sets: 3, reps: '5', target_rpe: 7.3 }, /in halves/);
@@ -95,8 +95,21 @@ test('an exercise is added with its fields; the text is built from them; older c
   await bad({ sets: 3, reps: '5', group_label: 'AA' }, /one letter/);
   await bad({ sets: 3, reps: '5', group_kind: 'superset' }, /Give the group a letter/);
   await bad({ sets: 3, reps: '5', group_label: 'A', group_kind: 'pyramid' }, /group_kind must be one of/);
-  await bad({ sets: 3, reps: 'x'.repeat(41) }, /40 characters or fewer/);
+  await bad({ sets: 3, reps: 'x'.repeat(81) }, /80 characters or fewer/);
   await bad({ prescription: 42 }, /must be text/);
+  await bad({ load_text: 'BW' }, /Add the sets and reps/, 'a load on its own is not a prescription');
+  await bad({ sets: 3, reps: '5', target_rpe: true }, /in halves/);
+  await bad({ sets: 3, reps: '5', group_label: ['a'] }, /one letter/);
+  // Text over 40 characters that doesn't split stays whole and can be saved again.
+  const long = await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, prescription: 'Warm-up: 5 min bike, then hip mobility flow, 2 rounds easy' });
+  assert.equal(long.status, 201);
+  const lx = long.body.exercises.at(-1);
+  assert.equal((await coach('PATCH', `/v1/workout-exercises/${lx.id}`, { note: 'Easy' })).status, 200);
+  // Text sent again is the whole story: a load it no longer has goes too.
+  const re = (await coach('PATCH', `/v1/workout-exercises/${lx.id}`, { prescription: '3 × 8 @ 135 lb' })).body;
+  assert.deepEqual([re.prescription, re.load_text], ['3 × 8 @ 135 lb', '135 lb']);
+  assert.deepEqual((await coach('PATCH', `/v1/workout-exercises/${lx.id}`, { prescription: '3 × 8' })).body.load_text, null);
+  await coach('DELETE', `/v1/workout-exercises/${lx.id}`);
   assert.equal((await desk('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, sets: 3, reps: '5' })).status, 403, 'front desk can\'t build');
 });
 
@@ -137,6 +150,10 @@ test('remove and undo, and copying a workout, keep every field', async () => {
   await coach('POST', `/v1/workouts/${workout_id}/exercises`, back);
   list = slots(await detail(program.id), w1.id);
   assert.deepEqual(list.map((x) => [x.name, x.position, x.group_tag, x.tempo]), [['Back squat', 1, 'A1', '3-1-1'], ['Bent-over row', 2, 'A2', null], ['Plank', 3, null, null], ['Romanian deadlift', 4, null, '2-0-2']]);
+  // A place given outside the group is pulled back to the group's edge, so a group is never split.
+  const stray = (await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, sets: 2, reps: '10', group_label: 'A', position: 4 })).body.exercises;
+  assert.deepEqual(stray.map((x) => x.group_tag), ['A1', 'A2', 'A3', null, null]);
+  await coach('DELETE', `/v1/workout-exercises/${stray[2].id}`);
   const copy = (await coach('POST', `/v1/workouts/${w1.id}/copy`, { week: 2, day: 1 })).body;
   const copied = slots(await detail(program.id), copy.id);
   assert.deepEqual(copied.map((x) => [x.name, x.prescription, x.group_tag, x.rest_seconds, x.note]), list.map((x) => [x.name, x.prescription, x.group_tag, x.rest_seconds, x.note]));
@@ -179,14 +196,21 @@ test('Build from a PDF: the draft carries the fields and saving keeps them', asy
     ['Back squat', '5 × 3', 5, '3', '2-1-X', 180, 8.5, 'A', 'superset'],
     ['Bent-over row', '5 × 6', 5, '6', null, null, null, 'A', 'superset'],
     ['Plank', '3 × 45 sec', 3, '45 sec', null, null, null, null, null],
-    ['Sled push', '20 yd @ moderate', null, '20 yd', null, null, null, null, null]], 'an older draft\'s prescription is split; out-of-range values are dropped for the coach to fill in');
+    ['Sled push', '20 × 20 yd @ moderate', null, '20 × 20 yd', null, null, null, null, null]], 'an older draft\'s prescription is split; out-of-range values are dropped for the coach to fill in');
+  assert.deepEqual(read.body.notes.filter((n) => /Plank|Sled/.test(n)).length, 4, read.body.notes.join('\n'));
+  assert.ok(read.body.notes.some((n) => /Sled push: 20 sets is more than the 12/.test(n)));
+  assert.ok(read.body.notes.some((n) => /Plank: a rest of 5000 seconds/.test(n)) && read.body.notes.some((n) => /Plank: an RPE of 11/.test(n)) && read.body.notes.some((n) => /Plank: the group "ZZ"/.test(n)));
+  const split = await coach('POST', '/v1/programs/import', { program: { name: 'Split group' }, workouts: [{ week: 1, day: 1, title: 'Day 1', exercises: [
+    { exercise_id: squat.id, sets: 3, reps: '5', group_label: 'A', group_kind: 'superset' }, { exercise_id: plank.id, sets: 3, reps: '30 sec' }, { exercise_id: row.id, sets: 3, reps: '8', group_label: 'A', group_kind: 'circuit' }] }] });
+  assert.equal(split.status, 400);
+  assert.deepEqual(split.body.error.details.problems, ['Week 1, day 1: the exercises in group A (1, 3) need to be next to each other.']);
   const bad = await coach('POST', '/v1/programs/import', { program: { name: 'From the file' }, workouts: [{ week: 1, day: 1, title: 'Day 1', exercises: [
     { exercise_id: squat.id, sets: 13, reps: '3' }, { exercise_id: rdl.id, sets: 3, reps: '8', group_kind: 'circuit' }, { exercise_id: plank.id }] }] });
   assert.equal(bad.status, 400);
   assert.deepEqual(bad.body.error.details.problems, ['Week 1, day 1, exercise 1: sets must be a whole number between 1 and 12.', 'Week 1, day 1, exercise 2: give the group a letter too (A, B, C...), so the exercises in it go together.', 'Week 1, day 1, exercise 3: add the sets and reps, like 3 × 8.']);
   const ok = await coach('POST', '/v1/programs/import', { program: { name: 'From the file' }, workouts: [{ week: 1, day: 1, title: 'Day 1', exercises: [
     { exercise_id: squat.id, sets: 5, reps: '3', tempo: '2-1-X', rest_seconds: 180, target_rpe: 8.5, group_label: 'A', group_kind: 'superset' },
-    { exercise_id: row.id, sets: 5, reps: '6', group_label: 'A', group_kind: 'superset', note: 'Elbows in' },
+    { exercise_id: row.id, sets: 5, reps: '6', group_label: 'A', group_kind: 'circuit', note: 'Elbows in' },
     { exercise_id: plank.id, prescription: '3 × 45 sec' }] }] });
   assert.equal(ok.status, 201, JSON.stringify(ok.body));
   const saved = slots(await detail(ok.body.program_id), (await detail(ok.body.program_id)).workouts[0].id);

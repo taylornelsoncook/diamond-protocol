@@ -613,12 +613,16 @@ async function viewProgress(main) {
     const d = await get(`athletes/${a.id}/outside-data`);
     const reload = () => drawOutside(a, box);
     const form = importForm({ athlete: () => ({ id: a.id, name: a.name }), preview: (b) => post(`athletes/${a.id}/data-imports/preview`, b), commit: (b) => post(`athletes/${a.id}/data-imports`, b), onSaved: reload });
-    const wear = wearablesBlock({ first: a.first_name, canConnect: true, list: () => get(`athletes/${a.id}/wearables`), connect: (p) => post(`athletes/${a.id}/wearables/${p}/connect`), disconnect: (id) => api('DELETE', `wearables/${id}`), afterChange: reload });
+    const linked = await get(`athletes/${a.id}/wearables`).catch(() => ({ data: [] }));
+    const active = (linked.data ?? []).filter((w) => w.status === 'active').map((w) => w.label);
+    const wear = wearablesBlock({ first: a.first_name, canConnect: true, list: async () => linked, connect: (p) => post(`athletes/${a.id}/wearables/${p}/connect`), disconnect: (id) => api('DELETE', `wearables/${id}`), afterChange: reload });
     fill(box, dataSummary(d, { title: `${a.first_name}'s recovery and sleep`, empty: `Connect ${a.first_name}'s WHOOP or Oura below, or bring in a file, and see recovery, heart rate variability, sleep and strain here. Our coaches see it too.` }),
       h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Linked wearables'), wear.el),
-      h('details', { class: 'dp-panel', open: d.has_data ? null : true },
-        h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `Bring in a file for ${a.first_name}`),
-        h('p', { class: 'small muted' }, 'From WHOOP: open the WHOOP app, go to More → App settings → Data export, and upload the files it emails you (physiological_cycles.csv, sleeps.csv, workouts.csv). Other apps: a CSV, Excel file, Google Sheets link or PDF with a date column.'),
+      h('details', { class: 'dp-panel', open: d.has_data || active.length ? null : true },
+        h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, active.length ? 'Bring in a file from another app' : `Bring in a file for ${a.first_name}`),
+        h('p', { class: 'small muted' }, active.length
+          ? `${active.join(' and ')} ${active.length === 1 ? 'is' : 'are'} linked and pull on their own, so there's nothing to upload from ${active.length === 1 ? 'it' : 'them'}. Use this for another app: a CSV, Excel file, Google Sheets link or PDF with a date column.`
+          : 'From WHOOP: open the WHOOP app, go to More → App settings → Data export, and upload the files it emails you (physiological_cycles.csv, sleeps.csv, workouts.csv). Other apps: a CSV, Excel file, Google Sheets link or PDF with a date column.'),
         form,
         d.recent?.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Brought in'), importsList(d.recent, { canUndo: (x) => x.created_by_kind === 'parent', undo: async (id) => { await post(`data-imports/${id}/undo`); toast('Undone.'); reload(); } })) : null));
   }

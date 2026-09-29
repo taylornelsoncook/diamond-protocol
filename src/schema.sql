@@ -1593,6 +1593,10 @@ CREATE TABLE IF NOT EXISTS wearable_connections (
   last_sync_at TEXT,
   last_sync_days INTEGER,
   last_error TEXT,
+  history_from TEXT,                                  -- how far back the history walk has reached (wearables.js pullHistory)
+  history_empty INTEGER NOT NULL DEFAULT 0,           -- empty chunks in a row so far
+  history_found INTEGER NOT NULL DEFAULT 0,           -- something has come back at some point (empties count toward stopping only after that)
+  history_done INTEGER NOT NULL DEFAULT 0,
   UNIQUE (client_id, provider)
 );
 -- The one-time code a sign-in was started with, so the provider's answer can only land on the athlete it was for (20 minutes).

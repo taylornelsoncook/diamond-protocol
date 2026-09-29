@@ -33,13 +33,37 @@ async function parentSignIn(email) {
   };
 }
 const pub = async (path) => { const r = await fetch(base + path, { redirect: 'manual' }); return { status: r.status, location: r.headers.get('location') }; };
+// The history walk runs on after a connect; tests wait for it so its calls don't land in the next test.
+const settled = async () => { for (const p of [...(app.ctx.wearableHistory?.values() ?? [])]) await p; };
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json' } });
 
 // A WHOOP that has one scored cycle (yesterday, Chicago time), its recovery, one night's sleep, a nap and a workout.
-function whoopStub({ tokenStatus = 200, apiStatus = 200, refreshStatus = 200 } = {}) {
+// Records come back only when the asked-for window (start/end) covers them, like the real API; `older` adds one scored
+// cycle on that day (for the history walk), and nothing before it.
+function whoopStub({ tokenStatus = 200, apiStatus = 200, refreshStatus = 200, older = null } = {}) {
   return async (url, init = {}) => {
     calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ?? null, auth: init.headers?.authorization ?? null });
     const u = String(url);
+    const q = new URL(u).searchParams, start = q.get('start') ? Date.parse(q.get('start')) : -Infinity, end = q.get('end') ? Date.parse(q.get('end')) : Infinity;
+    const covers = (iso) => { const t = Date.parse(iso); return t >= start && t <= end; };
+    if (u.includes('/developer/v2/cycle') || u.includes('/recovery') || u.includes('/activity/')) {
+      if (apiStatus !== 200) return json({ error: 'nope' }, apiStatus);
+      const rows = [];
+      if (u.includes('/cycle') && covers('2026-09-28T11:30:00.000Z')) rows.push({ id: 501, start: '2026-09-28T11:30:00.000Z', end: '2026-09-29T11:10:00.000Z', timezone_offset: '-05:00', score_state: 'SCORED', score: { strain: 12.345, kilojoule: 8368, average_heart_rate: 71, max_heart_rate: 182 } },
+        { id: 502, start: '2026-09-29T11:10:00.000Z', end: null, timezone_offset: '-05:00', score_state: 'PENDING_SCORE', score: null });
+      if (u.includes('/cycle') && older && covers(`${older}T11:00:00.000Z`)) rows.push({ id: 400, start: `${older}T11:00:00.000Z`, end: null, timezone_offset: '-05:00', score_state: 'SCORED', score: { strain: 8.1, kilojoule: 7000, average_heart_rate: 68, max_heart_rate: 160 } });
+      if (u.includes('/recovery') && covers('2026-09-28T11:30:00.000Z')) rows.push({ cycle_id: 501, sleep_id: 'a1', score_state: 'SCORED', score: { user_calibrating: false, recovery_score: 67, resting_heart_rate: 52, hrv_rmssd_milli: 88.6, spo2_percentage: 97.2, skin_temp_celsius: 33.4 } },
+        { cycle_id: 502, sleep_id: 'a2', score_state: 'PENDING_SCORE', score: null });
+      if (u.includes('/recovery') && older && covers(`${older}T11:00:00.000Z`)) rows.push({ cycle_id: 400, sleep_id: 'a0', score_state: 'SCORED', score: { user_calibrating: false, recovery_score: 44, resting_heart_rate: 55, hrv_rmssd_milli: 60, spo2_percentage: 96, skin_temp_celsius: 33 } });
+      if (u.includes('/activity/sleep') && covers('2026-09-28T03:20:00.000Z')) rows.push(
+        { id: 'a1', start: '2026-09-28T03:20:00.000Z', end: '2026-09-28T11:30:00.000Z', timezone_offset: '-05:00', nap: false, score_state: 'SCORED',
+          score: { stage_summary: { total_in_bed_time_milli: 29400000, total_awake_time_milli: 2400000, total_light_sleep_time_milli: 13800000, total_slow_wave_sleep_time_milli: 6600000, total_rem_sleep_time_milli: 6000000 },
+            sleep_needed: { baseline_milli: 28800000, need_from_sleep_debt_milli: 1800000, need_from_recent_strain_milli: 600000, need_from_recent_nap_milli: 0 },
+            respiratory_rate: 15.62, sleep_performance_percentage: 91, sleep_consistency_percentage: 80, sleep_efficiency_percentage: 91.8 } },
+        { id: 'n1', start: '2026-09-28T19:00:00.000Z', end: '2026-09-28T19:40:00.000Z', timezone_offset: '-05:00', nap: true, score_state: 'SCORED', score: { stage_summary: { total_in_bed_time_milli: 2400000, total_awake_time_milli: 0, total_light_sleep_time_milli: 2400000, total_slow_wave_sleep_time_milli: 0, total_rem_sleep_time_milli: 0 } } });
+      if (u.includes('/activity/workout') && covers('2026-09-28T21:00:00.000Z')) rows.push({ id: 'w1', start: '2026-09-28T21:00:00.000Z', end: '2026-09-28T22:15:00.000Z', timezone_offset: '-05:00', sport_name: 'weightlifting', score_state: 'SCORED', score: { strain: 9.87, kilojoule: 2092, average_heart_rate: 128, max_heart_rate: 171 } });
+      return json({ records: rows, next_token: null });
+    }
     if (u.includes('/oauth/oauth2/token')) {
       const form = new URLSearchParams(init.body);
       if (form.get('grant_type') === 'refresh_token') return refreshStatus === 200 ? json({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600, scope: 'offline read:recovery' }) : json({ error: 'invalid_grant' }, refreshStatus);
@@ -47,18 +71,6 @@ function whoopStub({ tokenStatus = 200, apiStatus = 200, refreshStatus = 200 } =
     }
     if (apiStatus !== 200) return json({ error: 'nope' }, apiStatus);
     if (u.includes('/user/profile/basic')) return json({ user_id: 77001, email: 'maya@example.com', first_name: 'Maya' });
-    if (u.includes('/cycle')) return json({ records: [
-      { id: 501, start: '2026-09-28T11:30:00.000Z', end: '2026-09-29T11:10:00.000Z', timezone_offset: '-05:00', score_state: 'SCORED', score: { strain: 12.345, kilojoule: 8368, average_heart_rate: 71, max_heart_rate: 182 } },
-      { id: 502, start: '2026-09-29T11:10:00.000Z', end: null, timezone_offset: '-05:00', score_state: 'PENDING_SCORE', score: null }], next_token: null });
-    if (u.includes('/recovery')) return json({ records: [{ cycle_id: 501, sleep_id: 'a1', score_state: 'SCORED', score: { user_calibrating: false, recovery_score: 67, resting_heart_rate: 52, hrv_rmssd_milli: 88.6, spo2_percentage: 97.2, skin_temp_celsius: 33.4 } },
-      { cycle_id: 502, sleep_id: 'a2', score_state: 'PENDING_SCORE', score: null }], next_token: null });
-    if (u.includes('/activity/sleep')) return json({ records: [
-      { id: 'a1', start: '2026-09-28T03:20:00.000Z', end: '2026-09-28T11:30:00.000Z', timezone_offset: '-05:00', nap: false, score_state: 'SCORED',
-        score: { stage_summary: { total_in_bed_time_milli: 29400000, total_awake_time_milli: 2400000, total_light_sleep_time_milli: 13800000, total_slow_wave_sleep_time_milli: 6600000, total_rem_sleep_time_milli: 6000000 },
-          sleep_needed: { baseline_milli: 28800000, need_from_sleep_debt_milli: 1800000, need_from_recent_strain_milli: 600000, need_from_recent_nap_milli: 0 },
-          respiratory_rate: 15.62, sleep_performance_percentage: 91, sleep_consistency_percentage: 80, sleep_efficiency_percentage: 91.8 } },
-      { id: 'n1', start: '2026-09-28T19:00:00.000Z', end: '2026-09-28T19:40:00.000Z', timezone_offset: '-05:00', nap: true, score_state: 'SCORED', score: { stage_summary: { total_in_bed_time_milli: 2400000, total_awake_time_milli: 0, total_light_sleep_time_milli: 2400000, total_slow_wave_sleep_time_milli: 0, total_rem_sleep_time_milli: 0 } } }], next_token: null });
-    if (u.includes('/activity/workout')) return json({ records: [{ id: 'w1', start: '2026-09-28T21:00:00.000Z', end: '2026-09-28T22:15:00.000Z', timezone_offset: '-05:00', sport_name: 'weightlifting', score_state: 'SCORED', score: { strain: 9.87, kilojoule: 2092, average_heart_rate: 128, max_heart_rate: 171 } }], next_token: null });
     if (u.includes('/user/access')) return new Response(null, { status: 204 });
     return json({ error: `unexpected ${u}` }, 500);
   };
@@ -118,6 +130,9 @@ test('the provider sends the parent back: the code is exchanged, the account lin
   const back = await pub(`/wearables/whoop/callback?code=abc123&state=${state}`);
   assert.equal(back.status, 302);
   assert.equal(back.location, '/parent?tab=progress&wearable=connected&provider=whoop', 'the parent lands on the Progress tab');
+  await settled();
+  const hist = app.ctx.db.get('SELECT history_done, history_from FROM wearable_connections WHERE client_id = ?', maya.id);
+  assert.deepEqual([hist.history_done, hist.history_from.slice(0, 10)], [1, '2026-03-03'], 'the history walk went back two empty chunks (180 days) past the first pull and stopped');
   assert.equal((await pub(`/wearables/whoop/callback?code=abc123&state=${state}`)).location, '/parent?tab=progress&wearable=expired&provider=whoop', 'a state works once');
   const tokenCall = calls.find((c) => c.url.includes('/oauth/oauth2/token'));
   const form = new URLSearchParams(tokenCall.body);
@@ -164,6 +179,7 @@ test('later pulls refresh an expired token, replace changed values and mark a re
   // Connecting again from the client page (a coach with the athlete's phone) makes it active and comes back to the client page.
   const link = (await coach('POST', `/v1/clients/${maya.id}/wearables/whoop/connect`)).body;
   const back = await pub(`/wearables/whoop/callback?code=again&state=${new URL(link.url).searchParams.get('state')}`);
+  await settled();
   assert.equal(back.location, `/?back=&wearable=connected&provider=whoop#/clients/${maya.id}`, 'the query comes before the # so the client page reads it');
   const again = app.ctx.db.get('SELECT status, connected_by_kind, last_error FROM wearable_connections WHERE id = ?', conn.id);
   assert.deepEqual([again.status, again.connected_by_kind, again.last_error], ['active', 'staff', null]);
@@ -182,7 +198,34 @@ test('a refresh the provider refuses (access revoked in the WHOOP app) waits for
   const link = (await parent('POST', `athletes/${maya.id}/wearables/whoop/connect`)).body;
   app.ctx.wearableFetch = whoopStub();
   await pub(`/wearables/whoop/callback?code=back&state=${new URL(link.url).searchParams.get('state')}`);
+  await settled();
   assert.equal(app.ctx.db.get('SELECT status FROM wearable_connections WHERE id = ?', conn.id).status, 'active');
+});
+
+test('the whole history comes in after connecting: chunks of 90 days walk back until half a year brings nothing, and the job finishes an unfinished walk', async () => {
+  const conn = app.ctx.db.get('SELECT id FROM wearable_connections WHERE client_id = ?', maya.id);
+  // A year and a half of data: the older cycle sits in February 2025.
+  app.ctx.wearableFetch = whoopStub({ older: '2025-02-10' });
+  app.ctx.db.run('UPDATE wearable_connections SET history_from = NULL, history_empty = 0, history_found = 0, history_done = 0 WHERE id = ?', conn.id);
+  app.ctx.db.run(`DELETE FROM athlete_metrics WHERE client_id = ? AND day < '2026-09-01'`, maya.id);
+  calls = [];
+  const { pullHistory, startHistory } = await import('../src/services/wearables.js');
+  // The job's share: four chunks (a year) per run, then it stops for this run with the walk unfinished.
+  const first = await pullHistory(app.ctx, conn.id);
+  assert.deepEqual([first.chunks, first.done], [4, false]);
+  const windows = calls.filter((c) => c.url.includes('/developer/v2/cycle')).map((c) => { const q = new URL(c.url).searchParams; return [q.get('start').slice(0, 10), q.get('end').slice(0, 10)]; });
+  assert.deepEqual(windows, [['2026-06-01', '2026-08-30'], ['2026-03-03', '2026-06-01'], ['2025-12-03', '2026-03-03'], ['2025-09-04', '2025-12-03']], 'each chunk ends where the one before began');
+  let row = app.ctx.db.get('SELECT history_from, history_empty, history_done FROM wearable_connections WHERE id = ?', conn.id);
+  assert.deepEqual([row.history_from.slice(0, 10), row.history_empty, row.history_done], ['2025-09-04', 4, 0], 'four empty chunks so far; the walk only stops on empties once it has found something (or at the floor)');
+  // Connecting again starts the background walk, which runs to the end: it finds February 2025, then two empty chunks, and stops.
+  await startHistory(app.ctx, conn.id);
+  row = app.ctx.db.get('SELECT history_from, history_done FROM wearable_connections WHERE id = ?', conn.id);
+  assert.equal(row.history_done, 1);
+  assert.equal(app.ctx.db.get(`SELECT value FROM athlete_metrics WHERE client_id = ? AND metric = 'recovery_pct' AND day = '2025-02-10'`, maya.id)?.value, 44, 'the old day is on file');
+  assert.ok(row.history_from.slice(0, 10) < '2024-09-01' && row.history_from.slice(0, 10) > '2024-05-01', `stopped about half a year before the oldest data (${row.history_from})`);
+  assert.deepEqual(await syncAll(app.ctx), { connections: 1, synced: 1, changed: 0, needs_reconnect: 0, failed: 0 }, 'a finished history is left alone by the job');
+  const mine = (await parent('GET', `athletes/${maya.id}/wearables`)).body.data[0];
+  assert.deepEqual([mine.history_done, typeof mine.history_from], [true, 'string']);
 });
 
 test('a provider that keeps answering 429 is given up on after a few tries, not retried forever', async () => {
@@ -217,6 +260,7 @@ test('deleting a family revokes and forgets its wearable connections, so the job
   const ines = await parentSignIn('ines@example.com');
   const link = (await ines('POST', `athletes/${kid.id}/wearables/whoop/connect`)).body;
   await pub(`/wearables/whoop/callback?code=t1&state=${new URL(link.url).searchParams.get('state')}`);
+  await settled();
   await ines('POST', `athletes/${kid.id}/wearables/whoop/connect`);   // a sign-in started and never finished
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM wearable_connections WHERE client_id = ?', kid.id).n, 1);
   calls = [];

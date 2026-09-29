@@ -234,10 +234,11 @@ function exerciseFields(x, cats) {
 // The swaps an athlete may pick on their own for this exercise ("Can't do this today?" in the app).
 function alternativesBlock(x) {
   const listBox = h('div', { class: 'stack-tight' });
-  const pick = input({ list: 'dp-alt-list', placeholder: 'Type an exercise from the library', 'aria-label': `A swap for ${x.name}`, autocomplete: 'off' });
+  const listId = `dp-alt-list-${x.id}`;
+  const pick = input({ list: listId, placeholder: 'Type an exercise from the library', 'aria-label': `A swap for ${x.name}`, autocomplete: 'off' });
   const tag = select([], { 'aria-label': 'When' });
   const note = input({ maxlength: '200', placeholder: 'Note (optional)', 'aria-label': 'Note' });
-  const datalist = h('datalist', { id: 'dp-alt-list' });
+  const datalist = h('datalist', { id: listId });
   let library = null, tags = {};
   const draw = async () => {
     const r = await get(`/v1/exercises/${x.id}/alternatives`);

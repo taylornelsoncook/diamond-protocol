@@ -140,6 +140,11 @@ test('a deleted workout keeps the swapped exercise in the log it left behind', a
 
 test('scope program covers the rest of the program but never a workout already logged; Undo puts the plan back; the export lists swaps', async () => {
   const slot2 = workouts[1].exercises[0];
+  // Asked from day 3's slot: the answer (and the Undo it gives the coach) is day 3's row, not the earliest one.
+  const fromDay3 = (await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: workouts[2].exercises[0].id, exercise_id: goblet.id, reason: 'Knee', scope: 'program' })).body;
+  assert.equal(fromDay3.workouts, 2);
+  assert.equal(app.ctx.db.get('SELECT workout_exercise_id FROM exercise_swaps WHERE id = ?', fromDay3.id).workout_exercise_id, workouts[2].exercises[0].id);
+  assert.equal((await coach('DELETE', `/v1/swaps/${fromDay3.id}`)).body.removed, 1, 'Undo from the Live panel puts only day 3 back');
   const sw = (await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: slot2.id, exercise_id: goblet.id, reason: 'Knee', scope: 'program' })).body;
   assert.equal(sw.workouts, 2, 'day 2 and day 3; day 1 is already logged');
   const list = (await coach('GET', `/v1/clients/${ava.id}/swaps`)).body.data;
@@ -173,6 +178,9 @@ test('who may swap, and what a swap refuses', async () => {
   await coach('POST', `/v1/clients/${cal.id}/archive`, {});
   assert.equal((await coach('POST', `/v1/clients/${cal.id}/swaps`, { workout_exercise_id: slot.id, exercise_id: goblet.id })).status, 409, 'archived');
   assert.equal((await coach('GET', '/v1/sessions/cls_nope/live')).status, 404);
+  const spare = (await coach('POST', '/v1/exercises', { name: 'Box squat' })).body;
+  await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: slot.id, exercise_id: spare.id });
+  assert.equal((await coach('DELETE', `/v1/exercises/${spare.id}`)).status, 409, 'swapped in for an athlete: not deleted under her');
 });
 
 test('a version 55 database gains the swaps table, opened twice', () => {

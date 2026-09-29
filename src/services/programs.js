@@ -4,6 +4,7 @@ import { emit } from './events.js';
 import { parentFilter } from './performance.js';
 import { readinessToday } from './engage.js';
 import { suggestAfterLog, appliedFor } from './progression.js';
+import { blocksFor, attachFields as routineFields } from './routines.js';
 import { getSetting } from './families.js';
 import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
@@ -101,8 +102,10 @@ export function getProgram(ctx, id) {
        e.id AS exercise_id, e.name, e.video_url, e.poster_url, e.instructions, e.category
      FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id
      JOIN workouts w ON w.id = we.workout_id WHERE w.program_id = ? ORDER BY we.position`, id);
-  p.workouts = ctx.db.all('SELECT * FROM workouts WHERE program_id = ? ORDER BY week, day', id).map((w) => ({
-    ...w, exercises: tagGroups(items.filter((i) => i.workout_id === w.id).map(({ workout_id, ...rest }) => rest))
+  const rows = ctx.db.all('SELECT * FROM workouts WHERE program_id = ? ORDER BY week, day', id);
+  const blocks = blocksFor(ctx, rows);   // every warm-up and cool-down the program uses, read once
+  p.workouts = rows.map((w) => ({
+    ...w, warmup: blocks.get(w.warmup_id) ?? null, cooldown: blocks.get(w.cooldown_id) ?? null, exercises: tagGroups(items.filter((i) => i.workout_id === w.id).map(({ workout_id, ...rest }) => rest))
   }));
   p.clients = ctx.db.all(
     `SELECT c.id, c.name FROM assignments a JOIN clients c ON c.id = a.client_id WHERE a.program_id = ? AND a.active = 1 AND c.archived_at IS NULL ORDER BY c.name`, id);
@@ -126,7 +129,7 @@ const setWeeks = (ctx, programId, weeks) => { ctx.db.run('UPDATE programs SET we
 // adjust (the planner's progression) changes each exercise's fields on the way.
 function copyWorkoutInto(ctx, src, programId, week, day, title, adjust = null) {
   const id = newId('wo');
-  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title) VALUES (?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title);
+  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title, src.warmup_id ?? null, src.cooldown_id ?? null);
   for (const x of ctx.db.all('SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY position', src.id)) insertSlot(ctx, id, x.exercise_id, x.position, adjust ? adjust(x) : x);
   return id;
 }
@@ -226,12 +229,16 @@ export function addWorkout(ctx, programId, body) {
   const week = v.int(body.week, 'week', { min: 1, max: p.weeks });
   const day = freeDay(ctx, programId, week, body.day);
   const id = newId('wo');
-  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title) VALUES (?, ?, ?, ?, ?)', id, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? `Day ${day}`);
+  const blocks = routineFields(ctx, {}, body);
+  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? `Day ${day}`, blocks.warmup_id ?? null, blocks.cooldown_id ?? null);
   return getProgram(ctx, programId).workouts.find((w) => w.id === id);
 }
-export function updateWorkout(ctx, workoutId, body) {
+// Rename a workout, or attach or clear its warm-up and cool-down blocks (warmup_id / cooldown_id, null clears).
+export function updateWorkout(ctx, workoutId, body = {}) {
   const w = workoutRow(ctx, workoutId);
-  ctx.db.run('UPDATE workouts SET title = ? WHERE id = ?', v.str(body.title, 'title', { max: 120 }), workoutId);
+  const title = body.title !== undefined ? v.str(body.title, 'title', { max: 120 }) : w.title;
+  const blocks = routineFields(ctx, w, body);
+  ctx.db.run('UPDATE workouts SET title = ?, warmup_id = ?, cooldown_id = ? WHERE id = ?', title, blocks.warmup_id, blocks.cooldown_id, workoutId);
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
 // Like clearing a week, removing a workout athletes logged needs confirm: true (their logs stay in their history).

@@ -37,6 +37,8 @@ body{background:var(--black)}
 .tv-ex li.tv-ex-group{display:block;counter-increment:none;padding:4px 20px 0;border:0;background:none;font:600 clamp(14px,1.2vw,20px)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright)}
 .tv-ex li.tv-ex-group::before{content:none}
 .tv-ex li.tv-ex--grouped{border-left:4px solid var(--green)}
+.tv-routine{margin:0 0 12px;font-size:clamp(16px,1.4vw,24px);line-height:1.4;color:var(--steel-muted)}
+.tv-routine-label{font:600 clamp(14px,1.2vw,20px)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright);margin-right:8px}
 /* The demo pane: the exercise's clip, muted and looping, with its name over it; the list marks which one is showing. */
 .tv-demo{position:relative;width:100%;max-height:42vh;aspect-ratio:16/9;margin:0 0 16px;border-radius:var(--radius-md);overflow:hidden;background:var(--black);border:1px solid var(--line)}
 .tv-demo video{width:100%;height:100%;object-fit:cover;display:block}

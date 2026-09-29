@@ -56,7 +56,7 @@ function athleteLive(ctx, s, a, onScreen, program) {
   }) : [];
   return { client_id: a.client_id, name: a.name, booking_id: a.booking_id ?? null, team: !!a.team, here: !!a.here,
     readiness: readiness?.level ? { level: readiness.level, headline: readiness.headline, sets_off: readiness.sets_off, drop: readiness.drop } : null,
-    workout: w ? { id: w.id, title: w.title, week: w.week, day: w.day, program_name: w.program_name, source: w.source } : null,
+    workout: w ? { id: w.id, title: w.title, week: w.week, day: w.day, program_name: w.program_name, source: w.source, warmup: w.warmup?.name ?? null, cooldown: w.cooldown?.name ?? null } : null,
     program_progress: own ? { completed: own.program.workouts.length - own.left.length, total: own.program.workouts.length, name: own.program.name } : null,
     logged: !!log, logged_at: log?.completed_at ?? null, on_screen: !!log?.session_id, effort: log?.rpe ?? null,
     exercises_done: exercises.filter((e) => e.done).length, sets_logged: [...setsBySlot.values()].reduce((t, n) => t + n, 0), exercises };

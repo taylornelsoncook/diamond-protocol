@@ -307,6 +307,22 @@ function altBlock(x) {
   return box;
 }
 
+// A warm-up or cool-down block the coach attached to the workout: what to do, with a demo a tap away. Not logged.
+function routineBlock(r, label) {
+  if (!r?.exercises?.length) return null;
+  const rows = r.exercises.map((x) => {
+    const media = h('div');
+    let open = false;
+    const row = h('div', { class: 'c-rtn-row' },
+      x.video_url ? h('button', { type: 'button', class: 'c-ex-mark', 'aria-label': `${open ? 'Hide' : 'Watch'} ${x.name} demo`, 'aria-expanded': 'false', onClick: (e) => { open = !open; e.currentTarget.setAttribute('aria-expanded', String(open)); fill(media, open ? videoEmbed(x.video_url, x.name, undefined, x.poster_url) : null); } }, playIcon()) : h('span', { class: 'c-ex-mark c-ex-mark--dot', 'aria-hidden': 'true' }, '·'),
+      h('span', { class: 'stack-tight grow' }, h('span', { class: 'dp-ex-name' }, x.name), h('span', { class: 'dp-ex-sets' }, [x.prescription, x.note].filter(Boolean).join(' · '))));
+    return h('div', null, row, media);
+  });
+  return h('details', { class: 'c-rtn', open: label === 'Warm-up' ? '' : null },
+    h('summary', { class: 'c-rtn-sum' }, h('span', { class: 'dp-label', style: 'margin:0' }, label), h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, `${r.exercises.length} ${r.exercises.length === 1 ? 'move' : 'moves'}`)),
+    r.note ? h('p', { class: 'c-cue', style: 'margin:0 0 6px' }, r.note) : null, rows);
+}
+
 function renderLogger(w) {
   const home = state.home;
   const reopened = !!draft.log_id;
@@ -468,7 +484,9 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
     reopened ? null : readinessCard(home.readiness),
+    reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,
+    reopened ? null : routineBlock(w.cooldown, 'Cool-down'),
     h('div', { class: 'dp-panel stack' },
       h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
       h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),

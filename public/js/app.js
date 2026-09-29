@@ -2626,6 +2626,70 @@ function messageDialog(x) {
   msg.focus();
 }
 
+// The coach's live view of a session: every athlete's workout for today with their own numbers, what they've logged,
+// and a swap on the spot for an athlete who can't do an exercise. Refreshes itself every 20 seconds while the session
+// is on. Front desk sees it too (no money in it) but doesn't swap.
+function livePanel(id, st, canSwap) {
+  const box = h('div', { class: 'stack-tight', 'aria-live': 'polite' }, h('p', { class: 'small muted', style: 'margin:0' }, 'Loading…'));
+  let library = null, swapping = null, timer = null;
+  const exercises = async () => library ?? (library = (await get('/v1/exercises')).data);
+  const level = (r) => (r ? h('span', { class: `dp-badge dp-badge--${r.level === 'red' ? 'warn' : r.level === 'yellow' ? 'neutral' : 'good'}`, title: r.headline }, r.level === 'red' ? 'Easy day' : r.level === 'yellow' ? 'Lighter' : 'Ready') : null);
+  const swapForm = (a, e) => {
+    const pick = input({ list: 'dp-swap-list', placeholder: 'Type the exercise they do instead', 'aria-label': `Exercise instead of ${e.name}`, autocomplete: 'off', style: 'min-width:220px' });
+    const reason = input({ placeholder: 'Why (knee, no rack…)', maxlength: '200', 'aria-label': 'Reason', style: 'min-width:160px' });
+    const scope = select([['workout', 'This workout only'], ['program', 'The rest of the program']], { 'aria-label': 'How far the swap reaches' });
+    const list = h('datalist', { id: 'dp-swap-list' });
+    exercises().then((all) => fill(list, all.filter((x) => x.id !== e.exercise_id).map((x) => h('option', { value: x.name }))));
+    const form = h('form', { class: 'row wrap', style: 'gap:6px;align-items:center;width:100%', onSubmit: (ev) => { ev.preventDefault(); busy(ev.submitter, async () => {
+      const name = pick.value.trim().toLowerCase(), all = await exercises();
+      const to = all.find((x) => x.name.toLowerCase() === name);
+      if (!to) throw new Error('Pick an exercise from the list (type a few letters of its name).');
+      const r = await post(`/v1/clients/${a.client_id}/swaps`, { workout_exercise_id: e.id, exercise_id: to.id, reason: reason.value.trim(), scope: scope.value, session_id: id });
+      toast(`${a.name.split(' ')[0]} does ${r.exercise_name} instead of ${r.instead_of}${r.workouts > 1 ? ` in ${r.workouts} workouts` : ''}. Their app shows it now.`);
+      swapping = null; draw();
+    }); } }, list, pick, reason, scope, btn('Swap', null, 'secondary', { type: 'submit' }), btn('Cancel', () => { swapping = null; draw(); }, 'ghost'));
+    setTimeout(() => pick.focus(), 0);
+    return form;
+  };
+  const exLine = (a, e) => {
+    const isSwapping = swapping === `${a.client_id}:${e.id}`;
+    const setsText = e.done ? `${e.sets_logged || e.target_sets} of ${e.target_sets} sets ✓` : e.sets_logged ? `${e.sets_logged} of ${e.target_sets} sets` : `${e.target_sets} ${e.target_sets === 1 ? 'set' : 'sets'}${e.planned_sets ? ` today (${e.planned_sets} planned)` : ''}`;
+    return h('div', { class: 'list-item small', style: 'flex-wrap:wrap;padding:6px 0' },
+      h('span', { class: e.done ? 'good-text' : 'muted', style: 'width:18px', 'aria-hidden': 'true' }, e.done ? '✓' : e.sets_logged ? '·' : ''),
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('span', null, h('span', { class: 'strong' }, `${e.group_tag ? `${e.group_tag} ` : ''}${e.name}`), e.swapped ? h('span', { class: 'muted' }, ` instead of ${e.swapped.from}${e.swapped.reason ? ` (${e.swapped.reason})` : ''}`) : null),
+        h('span', { class: 'muted' }, [e.prescription, e.details, e.load ? (e.load.missing ? 'No tested max yet' : e.load.text) : null, e.progression ? `progression ${e.progression}` : null, setsText].filter(Boolean).join(' · '))),
+      canSwap && !a.logged && !isSwapping ? (e.swapped ? btn('Undo swap', (ev) => busy(ev.currentTarget, async () => { await del(`/v1/swaps/${e.swapped.id}`); toast(`Back to ${e.swapped.from}.`); draw(); }), 'ghost') : btn('Swap', () => { swapping = `${a.client_id}:${e.id}`; draw(); }, 'ghost', { 'aria-label': `Swap ${e.name} for ${a.name}` })) : null,
+      isSwapping ? swapForm(a, e) : null);
+  };
+  const row = (a) => {
+    const w = a.workout;
+    const what = !w ? h('span', { class: 'small warn-text' }, a.program_progress ? 'Program complete: nothing left to do. Put a workout on the screen.' : 'No program, and no workout on the screen.')
+      : h('span', { class: 'small muted' }, `${w.source === 'screen' ? 'From the screen: ' : ''}${w.title} · ${w.program_name}, week ${w.week} day ${w.day}${a.program_progress ? ` · ${a.program_progress.completed} of ${a.program_progress.total} done` : ''}`);
+    const progress = a.logged ? h('span', { class: 'dp-badge dp-badge--good' }, `Logged${a.on_screen ? ' on the screen' : ''}${a.sets_logged ? ` · ${a.sets_logged} sets` : ''}${a.effort ? ` · effort ${a.effort}` : ''}`)
+      : a.sets_logged ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${a.exercises_done} of ${a.exercises.length} exercises`) : w ? h('span', { class: 'small muted' }, 'Not logged yet') : null;
+    return h('details', { class: 'list-item', style: 'display:block' },
+      h('summary', { class: 'row wrap dp-live-sum', style: 'gap:8px;align-items:center;cursor:pointer' },
+        h('span', { class: `dp-badge dp-badge--${a.here ? 'good' : 'muted'}`, style: 'min-width:56px;text-align:center' }, a.here ? 'Here' : 'Not yet'),
+        h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, h('a', { href: `#/clients/${a.client_id}`, class: 'strong', style: 'color:var(--steel)' }, a.name), a.team ? h('span', { class: 'small muted' }, ' · team') : null), what),
+        level(a.readiness), progress),
+      w ? h('div', { class: 'stack-tight', style: 'margin:8px 0 0 64px' }, a.exercises.map((e) => exLine(a, e))) : null);
+  };
+  async function draw(fromTimer = false) {
+    if (!box.isConnected && timer) { clearInterval(timer); timer = null; return; }
+    // A timed refresh waits while the coach is typing a swap (or has a hand on the panel), so nothing typed is lost.
+    if (fromTimer && (swapping || box.contains(document.activeElement))) return;
+    let live;
+    try { live = await get(`/v1/sessions/${id}/live`); } catch (e) { return fill(box, h('p', { class: 'small warn-text', style: 'margin:0' }, e.message)); }
+    const open = new Set([...box.querySelectorAll('details[open]')].map((d) => d.dataset.client));
+    const rows = live.athletes.map((a) => { const d = row(a); d.dataset.client = a.client_id; if (open.has(a.client_id) || swapping?.startsWith(`${a.client_id}:`)) d.open = true; return d; });
+    fill(box, h('p', { class: 'small muted', style: 'margin:0' }, live.athletes.length ? `${live.counts.here} of ${live.counts.athletes} here · ${live.counts.logged} logged${live.counts.started ? ` · ${live.counts.started} started` : ''}${live.screen_workout ? ` · on the screen: ${live.screen_workout.title}` : ''}. Open an athlete to see their exercises${canSwap ? ' and swap one' : ''}.` : 'Nobody is booked yet.'), rows);
+  }
+  draw();
+  if (st === 'live') timer = setInterval(() => draw(true), 20000);
+  return panel('Live', { subtitle: st === 'live' ? 'Who\'s here, what each athlete is on today with their own weights and sets, and what they\'ve logged. Updates every 20 seconds.' : st === 'done' ? 'What each athlete did in this session.' : 'Each athlete\'s workout for the session, with their own weights and sets.' }, box);
+}
+
 async function viewSession(main, id) {
   const [x, settings, progs, coachList, locs] = await Promise.all([get(`/v1/sessions/${id}`), get('/v1/settings'), get('/v1/programs'), get('/v1/coaches'), get('/v1/locations')]);
   tzName = settings.timezone;
@@ -2741,6 +2805,7 @@ async function viewSession(main, id) {
     header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.coach_name ? ` · ${x.coach_name}` : ''}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: lastScheduleHash }, 'Schedule')),
     panel(null, {}, h('div', { class: 'stack', style: 'gap:12px' }, h('div', { class: 'row wrap', style: 'gap:8px' }, stateBadge(st), kindBadge(x.kind), full && st !== 'done' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Full') : null, st !== 'later' ? checkinBar(x) : null),
       coachLine, x.staff_note ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'dp-label', style: 'margin:0 8px 0 0' }, 'Staff note'), x.staff_note) : null, tools)),
+    st !== 'canceled' && (st !== 'later' || Date.parse(x.starts_at) - Date.parse(now) < 60 * 60000) ? livePanel(id, st, canPick && x.status === 'scheduled') : null,
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
         x.team.athletes.some((a) => !a.present) ? btn('Everyone\'s here', (e) => busy(e.currentTarget, async () => {
           for (const a of x.team.athletes.filter((t) => !t.present)) await post(`/v1/sessions/${id}/team-attendance`, { client_id: a.client_id, present: true });

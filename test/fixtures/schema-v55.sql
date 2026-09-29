@@ -1666,16 +1666,3 @@ CREATE TABLE IF NOT EXISTS progressions (
   decided_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_progressions_client ON progressions(client_id, exercise_id, status);
--- Version 56: a coach swapped one athlete's exercise in one slot of a workout (an injury, no equipment), from the live
--- session view (services/live.js). The plan itself doesn't change; the app, the screen and the log follow the swap.
-CREATE TABLE IF NOT EXISTS exercise_swaps (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  workout_exercise_id TEXT NOT NULL REFERENCES workout_exercises(id) ON DELETE CASCADE,
-  exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
-  reason TEXT,
-  session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,
-  created_by TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE (client_id, workout_exercise_id)
-);

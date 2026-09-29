@@ -594,11 +594,22 @@ async function viewProgress(main) {
     const period = store.get('dp_progress_period') ?? 'all', since = store.get('dp-report-since') ?? 'first';
     const from = period === 'year' ? minusOneYear() : period.startsWith('day:') ? period.slice(4) : '';
     const r = await get(`athletes/${a.id}/report${from ? `?from=${from}` : ''}`);
-    const outsideBox = h('div', { class: 'stack' }), fcBox = h('div', { class: 'stack' });
-    fill(where, drawReport(a, r, { period, since, from }), fcBox, outsideBox);
+    const outsideBox = h('div', { class: 'stack' }), fcBox = h('div', { class: 'stack' }), monthlyBox = h('div', { class: 'stack' });
+    fill(where, drawReport(a, r, { period, since, from }), monthlyBox, fcBox, outsideBox);
     window.scrollTo(0, y);
     drawOutside(a, outsideBox).catch(() => fill(outsideBox));
     drawFormChecks(a, fcBox);
+    drawMonthly(a, monthlyBox).catch(() => fill(monthlyBox));
+  }
+  // Monthly reports the coaches sent: what the athlete did that month and the coach's line.
+  async function drawMonthly(a, box) {
+    const d = await get(`athletes/${a.id}/monthly-reports`);
+    if (!d.data.length) return fill(box);
+    fill(box, h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Monthly reports'),
+      h('p', { class: 'small muted', style: 'margin:0' }, `A note from the coaches at the end of each month: what ${a.first_name} did and how the numbers are moving.`),
+      d.data.map((r, i) => h('details', { class: 'p-month', open: i === 0 ? '' : null },
+        h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center;gap:8px' }, r.label, h('span', { class: 'small muted' }, `· ${r.data.workouts} ${r.data.workouts === 1 ? 'workout' : 'workouts'}, ${r.data.attended} ${r.data.attended === 1 ? 'session' : 'sessions'}`)),
+        h('div', { class: 'stack-tight small', style: 'padding:0 0 8px' }, r.lines.map((l) => h('p', { style: `margin:0${l.startsWith('- ') ? ';padding-left:12px' : ''}${l.startsWith('From ') ? ';font-weight:600' : ''}` }, l)))))));
   }
   // Form checks: clips the athlete sent their coach from the app, and the answers. Parents can watch and remove them.
   function drawFormChecks(a, box) {

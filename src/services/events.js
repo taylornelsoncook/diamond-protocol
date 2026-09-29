@@ -21,7 +21,8 @@ export const EVENT_TYPES = [
   'lead.stage_changed', 'lead.converted', 'leads.imported',   // version 45 (CRM)
   'form_check.sent', 'form_check.answered',   // version 53 (form checks)
   'progression.suggested', 'progression.approved',   // version 55 (progression steps)
-  'exercise.swapped'   // version 56 (the live session view)
+  'exercise.swapped',   // version 56 (the live session view)
+  'monthly_report.sent'   // version 59 (monthly parent reports)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -90,6 +91,7 @@ const INFO = {
   'progression.suggested': ['Two workouts hit every set at the top of the range: a step up is suggested for the coach.', { progression_id: 'prog_sample', ...C, exercise_id: 'ex_sample', exercise_name: 'Back squat', kind: 'weight', amount: 10, by: null }],
   'progression.approved': ['A coach approves a step (or one is added by hand, or approved automatically).', { progression_id: 'prog_sample', ...C, exercise_id: 'ex_sample', exercise_name: 'Back squat', kind: 'weight', amount: 10, by: 'Head Coach' }],
   'exercise.swapped': ['A coach swapped one athlete\'s exercise in the live session view, or the athlete picked a swap the coach listed (by_kind): the app and the screen show the new one.', { swap_id: 'swap_sample', ...C, exercise_id: 'ex_sample2', exercise_name: 'Goblet squat', instead_of: 'Back squat', reason: 'Knee', workouts: 1, scope: 'workout', by: 'Riley', by_kind: 'coach' }],
+  'monthly_report.sent': ['A monthly progress report was emailed to an athlete\'s parents (by a coach, or on its own in auto mode).', { report_id: 'mrep_sample', ...C, month: '2026-08', parents: 2, by: 'Riley' }],
   'form_check.sent': ['An athlete sends a form-check clip from the app.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', bytes: 24000000 }],
   'form_check.answered': ['A coach answers a form check.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', coach_name: 'Head Coach' }],
   'client.claimed': ['A parent adds a team athlete to their family with the Athlete ID (name and birthday matched).', { ...C, athlete_id: 'AVALOP2026', family_id: 'fam_sample', guardian_name: 'Maria Lopez' }]

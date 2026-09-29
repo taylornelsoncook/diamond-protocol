@@ -8,6 +8,7 @@ import * as progression from './services/progression.js';
 import * as live from './services/live.js';
 import * as substitutions from './services/substitutions.js';
 import * as routines from './services/routines.js';
+import * as monthly from './services/monthly.js';
 import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
@@ -450,6 +451,14 @@ export const routes = [
   ['POST', '/v1/sessions/:id/message', 'any', 'Schedule', 'Email the families of everyone booked: message (up to 1,000 characters), include_waitlist. A team session reaches every family on the team roster. One email per family, signed with your name; the same message twice within 10 minutes is refused.', (ctx, r) => schedule.messageSession(ctx, r.params.id, r.body, r.user ?? { name: r.apiKey?.label })],
   ['GET', '/v1/sessions/:id/live', 'any', 'Schedule', 'The coach\'s live view of a session: every athlete booked or on the team\'s roster (archived left out), whether they\'re here, today\'s readiness, the workout they\'re on (their program\'s next one, else the one on the weight-room screen) with their own weights and sets, and what they\'ve logged so far today. No money in it, so every staff role may look.', (ctx, r) => live.liveSession(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/swaps', 'any', 'Training', 'Swap one athlete\'s exercise (owner and coach): workout_exercise_id (the slot), exercise_id (what they do instead), reason (up to 200 characters), scope workout (this slot) or program (every slot in the program with that exercise in a workout they haven\'t logged yet), session_id (where it happened). The plan itself doesn\'t change; the app, the screen and the log follow the swap.', (ctx, r) => live.swapExercise(ctx, r.params.id, r.body, r.user), 201],
+  ['GET', '/v1/monthly-reports', 'any', 'Training', 'Monthly progress reports for parents: ?month=YYYY-MM, ?status=draft|sent|skipped. months lists the months on file. Owners and coaches.', (ctx, r) => ({ data: monthly.list(ctx, { month: r.query.month, status: r.query.status }), months: monthly.months(ctx), mode: families.getSetting(ctx, 'monthly_reports'), current_month: monthly.monthOf(ctx), last_month: monthly.prevMonth(monthly.monthOf(ctx)) })],
+  ['POST', '/v1/monthly-reports/generate', 'any', 'Training', 'Write the reports for a month that has ended: month (YYYY-MM; default last month). Athletes who already have one are left alone.', (ctx, r) => monthly.generateMonth(ctx, r.body?.month ?? monthly.prevMonth(monthly.monthOf(ctx))), 201],
+  ['POST', '/v1/monthly-reports/send-all', 'any', 'Training', 'Email every draft of a month to the parents: month. Reports with no parent email stay drafts and are named.', (ctx, r) => monthly.sendAll(ctx, r.body?.month ?? monthly.prevMonth(monthly.monthOf(ctx)), r.user)],
+  ['GET', '/v1/monthly-reports/:id', 'any', 'Training', 'One report with its facts, the coach\'s line and the email text.', (ctx, r) => { const x = monthly.get(ctx, r.params.id); return { ...x, lines: monthly.reportLines(ctx, x), text: monthly.reportText(ctx, x) }; }],
+  ['PATCH', '/v1/monthly-reports/:id', 'any', 'Training', 'The coach\'s line for a report (coach_note, up to 1,500 characters; empty clears it). Not after it was sent.', (ctx, r) => monthly.updateNote(ctx, r.params.id, r.body, r.user)],
+  ['POST', '/v1/monthly-reports/:id/send', 'any', 'Training', 'Email this report to the athlete\'s parents now.', (ctx, r) => monthly.send(ctx, r.params.id, r.user)],
+  ['POST', '/v1/monthly-reports/:id/skip', 'any', 'Training', 'Don\'t send this one.', (ctx, r) => monthly.skip(ctx, r.params.id)],
+  ['POST', '/v1/monthly-reports/:id/unskip', 'any', 'Training', 'Bring a skipped report back to the drafts.', (ctx, r) => monthly.unskip(ctx, r.params.id)],
   ['GET', '/v1/routines', 'any', 'Training', 'Warm-up and cool-down blocks (?kind=warmup|cooldown), each with its exercises and how many workouts use it.', (ctx, r) => ({ data: routines.listRoutines(ctx, { kind: r.query.kind }), kinds: routines.KINDS })],
   ['POST', '/v1/routines', 'any', 'Training', 'Write a block once (owner and coach): name, kind (warmup or cooldown), note, exercises [{ exercise_id, prescription (what to do, up to 80 characters), note }] (1 to 20). Checked as one: nothing is saved with a problem in it.', (ctx, r) => routines.createRoutine(ctx, r.body), 201],
   ['GET', '/v1/routines/:id', 'any', 'Training', 'One block.', (ctx, r) => routines.getRoutine(ctx, r.params.id)],

@@ -25,6 +25,7 @@ import { handleStripeEvent } from './services/commerce.js';
 import { createJobRunner } from './services/jobs.js';
 import { sendReminders, smsMode, verifyTwilio, handleInbound } from './services/sms.js';
 import { weeklyDigest } from './services/insights.js';
+import { runMonthly } from './services/monthly.js';
 import { runFollowUps } from './services/leads.js';
 import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
@@ -222,6 +223,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
   runner.define('form-check-cleanup', 24 * HOUR, () => cleanupFormChecks(ctx));
+  runner.define('monthly-reports', HOUR, () => runMonthly(ctx));
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };

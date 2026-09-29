@@ -195,17 +195,6 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   note TEXT                                      -- a cue for this slot
 );
 CREATE INDEX IF NOT EXISTS workout_exercises_exercise ON workout_exercises(exercise_id);   -- the library's use counts (a big video library)
-CREATE TABLE IF NOT EXISTS program_phases (           -- version 50: the planner's phases (base, build, peak, deload...) as bands across weeks
-  id TEXT PRIMARY KEY,
-  program_id TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('base','build','peak','deload','test','other')),
-  start_week INTEGER NOT NULL,
-  end_week INTEGER NOT NULL,
-  note TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS program_phases_program ON program_phases(program_id, start_week);
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

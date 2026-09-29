@@ -24,3 +24,22 @@ div.pg-ex-body{align-items:flex-start;justify-content:center}
   .pg-client>.grow{flex-basis:100%}
   .pg-client>.row{width:100%;justify-content:flex-start!important}
 }
+/* The planner (Whole plan): weeks down, days across, phases as bands, a volume bar per week. */
+.pl-wrap{overflow:auto;padding-bottom:4px}
+.pl-grid{display:grid;gap:4px;min-width:720px;align-items:stretch}
+.pl-head{font:600 12px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--steel-muted);padding:6px}
+.pl-week{display:flex;align-items:center;justify-content:center;min-height:56px;font:700 16px var(--font-display);background:none;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);color:var(--steel);cursor:pointer}
+.pl-week:hover,.pl-cell:hover{border-color:var(--green-mid)}
+.pl-cell{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;padding:8px;min-height:56px;background:var(--ground);border:1px solid var(--line);border-radius:var(--radius-sm);color:inherit;font:inherit;cursor:pointer}
+.pl-empty{border:1px dashed var(--line-subtle);border-radius:var(--radius-sm);min-height:56px}
+.pl-vol{display:flex;flex-direction:column;gap:6px;justify-content:center;padding:4px 6px}
+.pl-gap{display:flex;align-items:center;justify-content:center;border:1px dashed var(--line-subtle);border-radius:var(--radius-sm)}
+.pl-phase{display:flex;flex-direction:column;justify-content:center;gap:2px;padding:8px;border:0;border-left:4px solid var(--green);border-radius:var(--radius-sm);color:var(--steel);font:inherit;text-align:left;cursor:default}
+button.pl-phase{cursor:pointer}
+button.pl-phase:hover{filter:brightness(1.15)}
+.pl-phase--base{background:var(--green-deep)}
+.pl-phase--build{background:#24462a;border-left-color:var(--green-bright)}
+.pl-phase--peak{background:var(--amber-deep);border-left-color:var(--amber)}
+.pl-phase--deload{background:var(--surface-raised);border-left-color:var(--steel-muted)}
+.pl-phase--test{background:#1f2d3a;border-left-color:#7DB0E8}
+.pl-phase--other{background:var(--surface-raised);border-left-color:var(--line)}

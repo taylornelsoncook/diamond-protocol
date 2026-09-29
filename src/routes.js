@@ -1,6 +1,7 @@
 import * as billing from './services/billing.js';
 import * as refunds from './services/refunds.js';
 import * as dataimport from './services/dataimport.js';
+import * as planner from './services/planner.js';
 import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
@@ -226,6 +227,11 @@ export const routes = [
   ['POST', '/v1/programs/:id/duplicate', 'any', 'Training', 'Copy a program with all its weeks and workouts. Optional name (default "<name> (copy)").', (ctx, r) => programs.duplicateProgram(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/workouts', 'any', 'Training', 'Add a workout: week, day (default: the next free day, up to 7), title (default "Day N").', (ctx, r) => programs.addWorkout(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/weeks/:week/copy', 'any', 'Training', 'Copy every workout in a week to week to (default the next week), or to each week from to through through. Weeks that have workouts need replace: true; replacing logged workouts needs confirm: true. The program grows to the last week copied to.', (ctx, r) => programs.copyWeek(ctx, r.params.id, r.params.week, r.body)],
+  ['GET', '/v1/programs/:id/plan', 'any', 'Training', 'The planner: every week with its workouts by day (exercises, sets to log, average percent of a max and RPE), the week\'s totals, the program\'s phases, and days (the most days any week has).', (ctx, r) => planner.planOf(ctx, r.params.id)],
+  ['POST', '/v1/programs/:id/phases', 'any', 'Training', 'Add a training phase as a band across weeks: kind (base, build, peak, deload, test, other), start_week, end_week (within the program), optional name (defaults to the kind) and note. Phases don\'t overlap. A phase is a label for the coach; it never changes a workout.', (ctx, r) => planner.addPhase(ctx, r.params.id, r.body), 201],
+  ['PATCH', '/v1/phases/:id', 'any', 'Training', 'Change a phase\'s name, kind, weeks or note.', (ctx, r) => planner.updatePhase(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/phases/:id', 'any', 'Training', 'Remove a phase (the workouts stay).', (ctx, r) => planner.deletePhase(ctx, r.params.id)],
+  ['POST', '/v1/programs/:id/progress', 'any', 'Training', 'Progression: copy week from to weeks to..through, changing every exercise by a step for each week of distance: sets_step (-3 to 3 sets), pct_step (-20 to 20 percent of a tested max), rpe_step (-2 to 2 in halves). Fields an exercise doesn\'t have are left alone; results stay within 1 to 12 sets, 30 to 110 percent and RPE 1 to 10. Like copying a week: replace: true replaces weeks that have workouts, confirm: true when athletes logged them.', (ctx, r) => planner.progressWeeks(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/programs/:id/weeks/:week', 'any', 'Training', 'Clear a week\'s workouts (confirm: true when athletes logged any of them). The last week also comes off the program.', (ctx, r) => programs.deleteWeek(ctx, r.params.id, r.params.week, r.body)],
   ['POST', '/v1/programs/:id/assign', 'any', 'Training', 'Put client_id on this program. Replaces their current program (previous_program says which). Refused for archived clients and for a client already on it.', (ctx, r) => programs.assign(ctx, r.params.id, v.str(r.body.client_id, 'client_id'), r.body.start_date), 201],
   ['DELETE', '/v1/programs/:id/clients/:clientId', 'any', 'Training', 'Take a client off this program. Their logged workouts stay.', (ctx, r) => programs.unassign(ctx, r.params.id, r.params.clientId)],

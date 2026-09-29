@@ -19,14 +19,18 @@
 //   VIDEO_PUBLIC_URL=https://videos.diamondprotocol.org   (the bucket's public address)
 // Options: --dry-run (list what it would do; no settings needed), --no-convert (upload the files as they are; only
 // .mp4, .m4v, .mov and .webm up to 1 GB, and no still pictures), --out <file> (default video-library.csv), --jobs <n> (2),
-// --skip-check (don't test the public address first).
+// --skip-check (don't test the public address first), --free-space (videos kept in iCloud: fetch each one just before
+// its turn and hand the original back to iCloud after it's uploaded, so a library bigger than the Mac's disk still goes up).
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync } from 'node:fs';
+import fsp from 'node:fs/promises';
 import { join, basename, extname, relative, dirname, sep, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sign } from '../src/services/offsite.js';
+
+process.env.UV_THREADPOOL_SIZE ??= '16';   // waits on iCloud files use helper threads; keep enough for every worker
 
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.wmv', '.webm', '.mts', '.m2ts', '.3gp', '.mpg', '.mpeg']);
 const AS_IS = new Set(['.mp4', '.m4v', '.mov', '.webm']);     // formats phones play without converting
@@ -133,7 +137,32 @@ function run(cmd, args) {
     p.on('close', (code) => (code === 0 ? ok() : fail(new Error(`ffmpeg couldn't convert it: ${err.trim().split('\n').at(-1) || `it stopped with code ${code}`}`))));
   });
 }
+// A video kept in iCloud (Desktop and Documents synced, "Optimize Mac Storage") is only a placeholder on the Mac until
+// it's opened, and ffmpeg gives up waiting ("Error opening input files: Operation timed out"). Ask iCloud for the file
+// (brctl download, macOS) and wait for it, up to a few minutes, before giving up on it.
+const CLOUD_WAIT_MS = 5 * 60000;
+const isCloudTimeout = (e) => /Operation timed out|Resource deadlock|Input\/output error|didn't download in time/i.test(e?.message ?? '');
+const onMac = () => process.platform === 'darwin' || !!process.env.DP_TEST_CLOUD;   // the test pretends to be a Mac
+const brctl = (verb, path) => { if (onMac()) spawnSync('brctl', [verb, path], { stdio: 'ignore' }); };
+const asked = new Set();
+const askCloud = (path) => { if (!asked.has(path)) { asked.add(path); brctl('download', path); } };
+async function localCopy(path, log) {
+  if (!onMac()) return false;
+  const started = Date.now();
+  askCloud(path);
+  let told = false;
+  while (Date.now() - started < CLOUD_WAIT_MS) {
+    // Reading the first bytes only works once the file is really here; a placeholder blocks, then errors. Read on a
+    // helper thread (fs.promises) so a slow download never stalls the other videos being converted.
+    try { const fh = await fsp.open(path, 'r'); try { await fh.read(Buffer.alloc(16), 0, 16, 0); } finally { await fh.close(); } return true; }
+    catch { /* still downloading */ }
+    if (!told) { log(`  … ${basename(path)} is in iCloud; waiting for it to download`); told = true; }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  return false;
+}
 // Up to 1280 pixels on the long side (phones held either way), H.264 + AAC, "faststart" so playback begins at once.
+export { isCloudTimeout };
 export const convertArgs = (src, out) => ['-y', '-v', 'error', '-i', src,
   '-vf', "scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))',scale=trunc(iw/2)*2:trunc(ih/2)*2",   // even sizes, which H.264 needs
   '-c:v', 'libx264', '-preset', 'medium', '-crf', '26', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'aac', '-b:a', '96k', '-ac', '2', out];
@@ -149,7 +178,7 @@ const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 export async function main(argv = process.argv.slice(2), { env = process.env, log = console.log, cwd = process.cwd() } = {}) {
   // --flag, --option value or --option=value. A mistyped option stops the run (a typo in --dry-run must not upload).
-  const FLAGS = ['--dry-run', '--no-convert', '--skip-check'], OPTS = ['--out', '--jobs'];
+  const FLAGS = ['--dry-run', '--no-convert', '--skip-check', '--free-space'], OPTS = ['--out', '--jobs'];
   const flags = new Set(), opts = {}, roots = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -168,6 +197,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
   const stateFile = resolve(cwd, 'video-upload-state.json'), reportFile = resolve(cwd, 'video-upload-report.txt');
   const jobs = Math.min(Math.max(Number(opt('--jobs', 2)) || 2, 1), 8);
   const convert = !flags.has('--no-convert');
+  const freeSpace = flags.has('--free-space');
 
   const { found, duplicates, skipped } = scan(roots);
   const total = found.reduce((n, f) => n + f.size, 0);
@@ -202,8 +232,14 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
     const tmpVideo = join(work, `${n}-${Math.random().toString(36).slice(2)}.mp4`), tmpPoster = tmpVideo.replace(/\.mp4$/, '.jpg');
     try {
       let videoFile = f.path, poster = null;
+      // --free-space: make sure this one is on the Mac before converting, and ask iCloud for the next few meanwhile.
+      if (freeSpace) { todo.slice(next, next + jobs * 2).forEach((g) => askCloud(g.path)); if (!(await localCopy(f.path, log))) throw new Error('it\'s in iCloud and didn\'t download in time'); }
       if (convert) {
-        await run('ffmpeg', convertArgs(f.path, tmpVideo));
+        try { await run('ffmpeg', convertArgs(f.path, tmpVideo)); }
+        catch (e) {
+          if (!isCloudTimeout(e) || !(await localCopy(f.path, log))) throw e;
+          await run('ffmpeg', convertArgs(f.path, tmpVideo));     // once more, now that the file is here
+        }
         videoFile = tmpVideo;
         // The still from the first second, or the very start of a shorter clip; a video without one still goes up.
         for (const at of ['1', '0']) {
@@ -220,6 +256,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
       state[f.path] = { size: f.size, mtime: f.mtime, video_url: `${c.publicUrl}/${stem}${vExt}`, poster_url: poster ? `${c.publicUrl}/${stem}.jpg` : null };
       saveState();
       sent += video.length + (poster?.length ?? 0);
+      if (freeSpace) brctl('evict', f.path);         // the original goes back to being an iCloud placeholder; the copy is safe in the bucket
     } catch (e) {
       if (e.fatal) { stop = true; throw e; }
       failed++; failures.push(`${f.path}: ${e.message}`);
@@ -236,6 +273,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
     writeCsv(outFile, rows());
     rmSync(work, { recursive: true, force: true });
     if (failures.length) writeFileSync(reportFile, `${readFileSync(reportFile, 'utf8')}\nFailed this run (run again to retry them, ${failures.length}):\n${failures.join('\n')}\n`);
+    if (failures.some((x) => isCloudTimeout({ message: x }))) log(`Some videos couldn't be read from the Mac: they're kept in iCloud and didn't download in time. In Finder, right-click the folder → Download Now (or run: brctl download "<folder>"), wait for the cloud icons to disappear, then run the same command again.`);
   };
   // Ctrl+C: save the list so far and tidy up; the next run carries on.
   const onStop = () => { stop = true; try { finish(); } catch { /* best effort */ } log('\nStopped. Run the same command again to carry on.'); process.exit(130); };

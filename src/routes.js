@@ -6,6 +6,7 @@ import * as wearables from './services/wearables.js';
 import * as formchecks from './services/formchecks.js';
 import * as progression from './services/progression.js';
 import * as live from './services/live.js';
+import * as substitutions from './services/substitutions.js';
 import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
@@ -448,6 +449,9 @@ export const routes = [
   ['POST', '/v1/sessions/:id/message', 'any', 'Schedule', 'Email the families of everyone booked: message (up to 1,000 characters), include_waitlist. A team session reaches every family on the team roster. One email per family, signed with your name; the same message twice within 10 minutes is refused.', (ctx, r) => schedule.messageSession(ctx, r.params.id, r.body, r.user ?? { name: r.apiKey?.label })],
   ['GET', '/v1/sessions/:id/live', 'any', 'Schedule', 'The coach\'s live view of a session: every athlete booked or on the team\'s roster (archived left out), whether they\'re here, today\'s readiness, the workout they\'re on (their program\'s next one, else the one on the weight-room screen) with their own weights and sets, and what they\'ve logged so far today. No money in it, so every staff role may look.', (ctx, r) => live.liveSession(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/swaps', 'any', 'Training', 'Swap one athlete\'s exercise (owner and coach): workout_exercise_id (the slot), exercise_id (what they do instead), reason (up to 200 characters), scope workout (this slot) or program (every slot in the program with that exercise in a workout they haven\'t logged yet), session_id (where it happened). The plan itself doesn\'t change; the app, the screen and the log follow the swap.', (ctx, r) => live.swapExercise(ctx, r.params.id, r.body, r.user), 201],
+  ['GET', '/v1/exercises/:id/alternatives', 'any', 'Training', 'The swaps an athlete may pick on their own for this exercise, each with a tag (no_barbell, no_equipment, at_home, knee, shoulder, back, easier, harder, other) and a note.', (ctx, r) => ({ data: substitutions.listAlternatives(ctx, r.params.id), tags: substitutions.TAGS })],
+  ['POST', '/v1/exercises/:id/alternatives', 'any', 'Training', 'List a swap for this exercise (owner and coach): exercise_id (the stand-in), tag, note (up to 200 characters). Listing the same one again changes its tag and note.', (ctx, r) => substitutions.addAlternative(ctx, r.params.id, r.body), 201],
+  ['DELETE', '/v1/exercise-alternatives/:id', 'any', 'Training', 'Take a swap off an exercise\'s list.', (ctx, r) => substitutions.removeAlternative(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/swaps', 'any', 'Training', 'The exercises swapped for this athlete, newest first.', (ctx, r) => ({ data: live.listSwaps(ctx, r.params.id) })],
   ['DELETE', '/v1/swaps/:id', 'any', 'Training', 'Put the plan\'s exercise back. ?all=true also undoes the same swap in the rest of the program.', (ctx, r) => live.removeSwap(ctx, r.params.id, { all: r.query?.all === 'true' })],
   ['PUT', '/v1/sessions/:id/workout', 'any', 'Schedule', 'Pick the workout the weight-room screen shows during this session: workout_id (null clears it).', (ctx, r) => screen.setSessionWorkout(ctx, r.params.id, r.body)],
@@ -677,6 +681,8 @@ export const routes = [
   ['POST', '/app/api/form-checks/:id/seen', 'client', 'Client app', 'You read the coach\'s answer.', (ctx, r) => formchecks.markSeen(ctx, r.client, r.params.id)],
   ['GET', '/app/api/home', 'client', 'Client app', 'The client\'s next workout and progress.', (ctx, r) => programs.clientHome(ctx, r.client)],
   ['POST', '/app/api/workouts/:id/complete', 'client', 'Client app', 'Log a finished workout: exercise_ids done, sets (workout_exercise_id, set_no 1-12, weight lb, reps), rpe (effort 1-10), notes, started_at and finished_at (from the phone; kept when within the last 72 hours). request_id (the phone\'s id for this Finish) returns the first save for a resend. If the workout was logged on the weight-room screen, the sets join that log.', (ctx, r) => programs.completeWorkout(ctx, r.client, r.params.id, r.body), 201],
+  ['POST', '/app/api/swaps', 'client', 'Client app', 'Can\'t do an exercise today? Pick one of the swaps your coach listed: workout_exercise_id, alternative_id. This workout only; your coach sees it.', (ctx, r) => substitutions.athleteSwap(ctx, r.client, r.body), 201],
+  ['DELETE', '/app/api/swaps/:id', 'client', 'Client app', 'Back to the plan\'s exercise (a swap you picked yourself, before you log the workout).', (ctx, r) => substitutions.athleteUnswap(ctx, r.client, r.params.id)],
   ['GET', '/app/api/logs/:id', 'client', 'Client app', 'One of your finished workouts: each exercise, done or not, its sets, effort and note, and whether it can still be reopened.', (ctx, r) => programs.logDetail(ctx, r.client, r.params.id)],
   ['PUT', '/app/api/logs/:id', 'client', 'Client app', 'Save a reopened workout again (your latest one, within 2 hours of finishing): the same fields as finishing. Replaces what was logged.', (ctx, r) => programs.editLog(ctx, r.client, r.params.id, r.body)],
   ['GET', '/app/api/engage', 'client', 'Client app', 'Accountability, performance and education for the athlete.', (ctx, r) => engage.athleteView(ctx, r.client.id, { parentView: true })],

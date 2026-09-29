@@ -11,6 +11,8 @@ export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
 // Categories for finding exercises in the library. An exercise can have none.
+// The reasons a coach lists a swap under (services/substitutions.js); the app shows the label.
+export const ALT_TAGS = { no_barbell: 'No barbell', no_equipment: 'No equipment', at_home: 'At home', knee: 'Knee', shoulder: 'Shoulder', back: 'Back', easier: 'Easier', harder: 'Harder', other: 'Other' };
 export const CATEGORIES = ['Speed', 'Power', 'Lower body', 'Upper body', 'Core', 'Arm care', 'Mobility', 'Conditioning'];
 const category = (val) => {
   if (val === undefined || val === null || val === '') return null;
@@ -566,7 +568,7 @@ function workoutItems(ctx, workoutId, clientId = null) {
 }
 // Version 56: the exercises a coach swapped for this athlete in one workout, by slot (services/live.js writes them).
 export function swapsFor(ctx, clientId, workoutId) {
-  const rows = ctx.db.all(`SELECT s.id, s.workout_exercise_id, s.reason, s.created_by, s.created_at, e.id AS exercise_id, e.name, e.video_url, e.poster_url, e.instructions, e.category
+  const rows = ctx.db.all(`SELECT s.id, s.workout_exercise_id, s.reason, s.created_by, s.by_kind, s.created_at, e.id AS exercise_id, e.name, e.video_url, e.poster_url, e.instructions, e.category
     FROM exercise_swaps s JOIN exercises e ON e.id = s.exercise_id JOIN workout_exercises we ON we.id = s.workout_exercise_id WHERE s.client_id = ? AND we.workout_id = ?`, clientId, workoutId);
   return new Map(rows.map((r) => [r.workout_exercise_id, r]));
 }
@@ -575,7 +577,7 @@ export function swapsFor(ctx, clientId, workoutId) {
 export function slotFor(x, swap) {
   if (!swap) return x;
   return { ...x, exercise_id: swap.exercise_id, name: swap.name, video_url: swap.video_url, poster_url: swap.poster_url, instructions: swap.instructions, category: swap.category,
-    load_test: null, load_pct: null, swapped: { id: swap.id, from: x.name, reason: swap.reason, by: swap.created_by } };
+    load_test: null, load_pct: null, swapped: { id: swap.id, from: x.name, reason: swap.reason, by: swap.created_by, by_kind: swap.by_kind ?? 'coach' } };
 }
 const blank = (x) => x === undefined || x === null || x === '';
 
@@ -687,6 +689,11 @@ export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)
   const left = program.workouts.filter((w) => !done.has(w.id));
   return { assignment: a, program, left, next: left[0] ?? null };
 }
+// The swaps the coach listed for a slot's planned exercise, for the app's "Can't do this today?".
+function alternativesFor(ctx, x) {
+  return ctx.db.all(`SELECT a.id, a.alt_exercise_id AS exercise_id, e.name, a.tag, a.note FROM exercise_alternatives a JOIN exercises e ON e.id = a.alt_exercise_id WHERE a.exercise_id = ? ORDER BY e.name COLLATE NOCASE`, x.exercise_id)
+    .map((a) => ({ ...a, tag_label: ALT_TAGS[a.tag] ?? a.tag }));
+}
 export function clientHome(ctx, client) {
   const access = appAccess(ctx, client);
   const base = { client: { name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status };
@@ -702,7 +709,7 @@ export function clientHome(ctx, client) {
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: program.workouts.length - left.length, total: program.workouts.length },
     readiness,
-    workout: next && { ...next, exercises: next.exercises.map((x) => appExercise(ctx, client.id, x, readiness, swaps)) },
+    workout: next && { ...next, exercises: next.exercises.map((x) => ({ ...appExercise(ctx, client.id, x, readiness, swaps), alternatives: alternativesFor(ctx, x) })) },
     upcoming: left.slice(1, 4).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, exercises: w.exercises.map((x) => x.name) })),
     history, reopen_id,
     message: next ? null : 'Program complete. Your coach will set your next block.'

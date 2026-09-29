@@ -78,15 +78,22 @@ export function swapExercise(ctx, clientId, body = {}, user) {
   const sessionId = body.session_id ? ctx.db.get('SELECT id FROM class_sessions WHERE id = ?', String(body.session_id))?.id ?? null : null;
   const slots = scope === 'workout' ? [slot.id] : ctx.db.all(`SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id
     WHERE w.program_id = ? AND we.exercise_id = ? AND (we.id = ? OR NOT EXISTS (SELECT 1 FROM workout_logs l WHERE l.client_id = ? AND l.workout_id = w.id)) ORDER BY w.week, w.day, we.position`, slot.program_id, slot.exercise_id, slot.id, c.id).map((r) => r.id);
-  const now = ctx.now(), by = user?.name ?? null;
+  const id = insertSwaps(ctx, { client: c, slotIds: slots, to, insteadOf: slot.name, reason, sessionId, by: user?.name ?? null, byKind: 'coach', scope });
+  const row = ctx.db.get('SELECT created_at FROM exercise_swaps WHERE id = ?', id);
+  return { id, client_id: c.id, workout_exercise_id: slot.id, exercise_id: to.id, exercise_name: to.name, instead_of: slot.name, reason, scope, workouts: slots.length, by: user?.name ?? null, created_at: row.created_at };
+}
+// Write the swap rows (one per slot; a slot swapped again is replaced) and tell webhooks. Returns the first slot's row id.
+// Coaches swap from the live view (by_kind coach); athletes pick from the coach's list (substitutions.js, by_kind athlete).
+export function insertSwaps(ctx, { client, slotIds, to, insteadOf, reason, sessionId = null, by = null, byKind = 'coach', scope = 'workout' }) {
+  const now = ctx.now();
   ctx.db.tx(() => {
-    for (const id of slots) ctx.db.run(`INSERT INTO exercise_swaps (id, client_id, workout_exercise_id, exercise_id, reason, session_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (client_id, workout_exercise_id) DO UPDATE SET exercise_id = excluded.exercise_id, reason = excluded.reason, session_id = excluded.session_id, created_by = excluded.created_by, created_at = excluded.created_at`,
-      newId('swap'), c.id, id, to.id, reason, sessionId, by, now);
+    for (const id of slotIds) ctx.db.run(`INSERT INTO exercise_swaps (id, client_id, workout_exercise_id, exercise_id, reason, session_id, created_by, created_at, by_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (client_id, workout_exercise_id) DO UPDATE SET exercise_id = excluded.exercise_id, reason = excluded.reason, session_id = excluded.session_id, created_by = excluded.created_by, created_at = excluded.created_at, by_kind = excluded.by_kind`,
+      newId('swap'), client.id, id, to.id, reason, sessionId, by, now, byKind);
   });
-  const row = ctx.db.get('SELECT id FROM exercise_swaps WHERE client_id = ? AND workout_exercise_id = ?', c.id, slot.id);
-  emit(ctx, 'exercise.swapped', { swap_id: row.id, client_id: c.id, client_name: c.name, exercise_id: to.id, exercise_name: to.name, instead_of: slot.name, reason, workouts: slots.length, scope, by, ...(sessionId ? { session_id: sessionId } : {}) });
-  return { id: row.id, client_id: c.id, workout_exercise_id: slot.id, exercise_id: to.id, exercise_name: to.name, instead_of: slot.name, reason, scope, workouts: slots.length, by, created_at: now };
+  const row = ctx.db.get('SELECT id FROM exercise_swaps WHERE client_id = ? AND workout_exercise_id = ?', client.id, slotIds[0]);
+  emit(ctx, 'exercise.swapped', { swap_id: row.id, client_id: client.id, client_name: client.name, exercise_id: to.id, exercise_name: to.name, instead_of: insteadOf, reason, workouts: slotIds.length, scope, by, by_kind: byKind, ...(sessionId ? { session_id: sessionId } : {}) });
+  return row.id;
 }
 // Put the plan's exercise back (this slot only; a program-wide swap is undone slot by slot or from the athlete's list).
 export function removeSwap(ctx, id, { all = false } = {}) {
@@ -105,7 +112,7 @@ export function listSwaps(ctx, clientId) {
   return swapRows(ctx, clientId);
 }
 function swapRows(ctx, clientId) {
-  return ctx.db.all(`SELECT s.id, s.reason, s.created_by, s.created_at, s.workout_exercise_id, e.name AS exercise_name, e0.name AS instead_of, w.id AS workout_id, w.title AS workout_title, w.week, w.day, p.name AS program_name
+  return ctx.db.all(`SELECT s.id, s.reason, s.created_by, s.by_kind, s.created_at, s.workout_exercise_id, e.name AS exercise_name, e0.name AS instead_of, w.id AS workout_id, w.title AS workout_title, w.week, w.day, p.name AS program_name
     FROM exercise_swaps s JOIN exercises e ON e.id = s.exercise_id JOIN workout_exercises we ON we.id = s.workout_exercise_id JOIN exercises e0 ON e0.id = we.exercise_id
     JOIN workouts w ON w.id = we.workout_id JOIN programs p ON p.id = w.program_id WHERE s.client_id = ? ORDER BY s.created_at DESC, w.week, w.day`, clientId);
 }

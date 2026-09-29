@@ -5,6 +5,7 @@
 import { h, fill, toast, busy, btn, field, input, select, panel, ago, money, videoEmbed, playIcon } from './ui.js';
 import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
+import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
 
 let deps = null;     // { api, render, header, role, pulseTile }
 export function initPrograms(d) { deps = d; }
@@ -409,12 +410,13 @@ function copyWeekDialog(p, week, reload) {
 }
 
 function workoutCard(p, w, exs, edit, reload) {
-  const rows = w.exercises.map((x) => h('div', { class: 'row pg-ex' },
-    playBtn(x),
-    edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${x.prescription}: change, swap or remove`, onClick: () => slotDialog(x, { p, exs, reload }) },
-      h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, [x.prescription, loadText(x)].filter(Boolean).join(' · '))),
-      h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit'))
-      : h('div', { class: 'grow stack-tight pg-ex-body' }, h('span', null, x.name), h('span', { class: 'small muted' }, [x.prescription, loadText(x)].filter(Boolean).join(' · '))),
+  const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
+  const body = (x) => h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, line(x)), x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
+  const rows = withGroups(w.exercises, (x) => h('div', { class: `row pg-ex${x.group_label ? ' sf-in-group' : ''}` },
+    groupTag(x), playBtn(x),
+    edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${line(x)}: change, swap or remove`, onClick: () => slotDialog(x, { p, exs, reload }) },
+      body(x), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit'))
+      : h('div', { class: 'grow pg-ex-body' }, body(x)),
   ));
   return h('div', { class: 'workout' },
     h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
@@ -452,10 +454,10 @@ function loadFields(x) {
 // One exercise in a workout: change its sets and weight, swap it for another exercise in the same slot, or remove it
 // (with Undo, which puts it back in the same place).
 function slotDialog(x, { p, exs, reload }) {
-  const rx = input({ value: x.prescription, 'aria-label': 'Sets and reps' });
+  const sf = setFields(x);
   const load = loadFields(x);
-  dialog(x.name, h('div', { class: 'stack' }, field('Sets × reps', rx, 'Like 3 × 10, 3 × 8-10, 4 × 5/side or 3 × 40 sec. Athletes log each set.'), load.el), [
-    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workout-exercises/${x.id}`, { prescription: rx.value, ...load.body() }); toast('Saved.'); reload(); } },
+  dialog(x.name, h('div', { class: 'stack' }, sf.el, load.el), [
+    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workout-exercises/${x.id}`, { ...sf.body(), ...load.body() }); toast('Saved.'); reload(); } },
     { label: 'Swap exercise', onClick: (d) => { d.addEventListener('close', () => setTimeout(() => pickExercise({ title: `Swap ${x.name}`, exs, program: p, onPick: async (ex) => { await patch(`/v1/workout-exercises/${x.id}`, { exercise_id: ex.id }); toast(`${x.name} swapped for ${ex.name}. Sets and weight stay.`); reload(); } })), { once: true }); } },
     { label: 'Remove', variant: 'ghost', onClick: async () => {
       const r = await del(`/v1/workout-exercises/${x.id}`);
@@ -463,7 +465,7 @@ function slotDialog(x, { p, exs, reload }) {
       undoToast(`${x.name} removed.`, () => busy(null, async () => { const { workout_id, ...back } = r.restore; await post(`/v1/workouts/${workout_id}/exercises`, back); toast(`${x.name} is back.`); reload(); }));
     } },
     { label: 'Cancel', variant: 'ghost' }]);
-  rx.select();
+  sf.focus();
 }
 
 // Find an exercise in the library: search, category, and add a new one on the spot. For adding (workout) it then asks for
@@ -498,23 +500,24 @@ function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
       }), 'secondary'), btn('Cancel', () => fill(chosen), 'ghost'))));
     f.name.focus();
   };
-  let rx, load;
+  let sf, load;
   const choose = (x) => {
     picked = x; drawResults();
     if (onPick) return;
     const prev = lastRx(x.id);
-    rx = input({ value: prev?.prescription ?? '', placeholder: 'Sets × reps, e.g. 3 × 10', 'aria-label': 'Sets and reps' });
+    sf = setFields(prev ? { ...prev, group_label: null, group_kind: null } : null);
     load = loadFields(prev);
+    const from = prev && program.workouts.find((w) => w.exercises.includes(prev));
     fill(chosen, h('div', { class: 'stack pg-inline' }, h('div', { class: 'strong' }, x.name),
-      field('Sets × reps', rx, prev ? `Filled in from week ${program.workouts.find((w) => w.exercises.includes(prev)).week}.` : 'Like 3 × 10, 3 × 8-10, 4 × 5/side or 3 × 40 sec.'), load.el));
-    rx.focus();
+      from ? h('span', { class: 'small muted' }, `Filled in from week ${from.week}.`) : null, sf.el, load.el));
+    sf.focus();
   };
   const add = async (again) => {
     if (!picked) throw new Error('Choose an exercise from the list first.');
-    await post(`/v1/workouts/${workout.id}/exercises`, { exercise_id: picked.id, prescription: rx.value, ...(load.body().load_test ? load.body() : {}) });
+    await post(`/v1/workouts/${workout.id}/exercises`, { exercise_id: picked.id, ...sf.body(), ...(load.body().load_test ? load.body() : {}) });
     added++;
     toast(`${picked.name} added to ${workout.title}.`);
-    workout.exercises.push({ exercise_id: picked.id, prescription: rx.value, name: picked.name });
+    workout.exercises.push({ exercise_id: picked.id, name: picked.name, ...sf.body() });
     if (!again) return;                  // closing the dialog reloads the builder
     picked = null; q.value = ''; fill(chosen); drawResults(); q.focus();
     return false;

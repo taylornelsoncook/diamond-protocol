@@ -262,3 +262,10 @@ td .dp-badge{white-space:nowrap}
 .crm-bar{height:8px;background:var(--surface-raised);border-radius:var(--radius-pill);overflow:hidden}
 .crm-bar span{display:block;height:100%;background:var(--green-mid)}
 @media (max-width: 760px){ .crm-board{grid-auto-flow:row;grid-auto-columns:auto;overflow-x:visible} }
+/* Set details (set-fields.js): the fields, group headings and A1/A2 tags. */
+.sf-row{gap:8px;align-items:flex-end}
+.sf-field{display:flex;flex-direction:column;gap:2px;min-width:0}
+.sf-field .dp-input,.sf-field .select{width:100%;min-width:0}
+.sf-group{font:600 12px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--green-bright);margin-top:6px}
+.sf-in-group{border-left:3px solid var(--green);padding-left:10px}
+.sf-tag{font:700 13px/1 var(--font-display);color:var(--green-bright);min-width:2em;flex-shrink:0}

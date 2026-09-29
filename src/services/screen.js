@@ -27,7 +27,8 @@ export function workoutView(ctx, workoutId) {
   const p = getProgram(ctx, w.program_id);
   const full = p.workouts.find((x) => x.id === w.id);
   return { id: w.id, title: w.title, week: w.week, day: w.day, program_id: p.id, program_name: p.name,
-    exercises: full.exercises.map((x) => ({ id: x.id, name: x.name, prescription: x.prescription, instructions: x.instructions,
+    exercises: full.exercises.map((x) => ({ id: x.id, name: x.name, prescription: x.prescription, instructions: x.instructions, details: x.details, note: x.note,
+      group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag,
       load: x.load_test ? `${x.load_pct}% of ${LOAD_TESTS[x.load_test]} max` : null })) };
 }
 

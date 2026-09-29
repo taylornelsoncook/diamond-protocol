@@ -1,4 +1,5 @@
 import { h, fill } from './ui.js';
+import { withGroups, groupTitle } from './set-fields.js';
 
 // The weight-room screen. Opened once with a check-in tablet's link, ending in /tv#<key> instead of /kiosk#<key>;
 // the key is kept on this screen. It shows the workout a coach picked for each session running now, and athletes
@@ -38,8 +39,10 @@ async function log() {
 }
 
 function workoutList(w) {
-  return h('ol', { class: 'tv-ex' }, w.exercises.map((x) => h('li', null,
-    h('span', { class: 'tv-ex-name' }, x.name), h('span', { class: 'tv-ex-rx' }, x.prescription || ''), x.load ? h('span', { class: 'tv-ex-load' }, x.load) : null)));
+  return h('ol', { class: 'tv-ex' }, withGroups(w.exercises, (x) => h('li', { class: x.group_label ? 'tv-ex--grouped' : null },
+    h('span', { class: 'tv-ex-name' }, x.group_tag ? `${x.group_tag} · ${x.name}` : x.name), h('span', { class: 'tv-ex-rx' }, x.prescription || ''),
+    x.load || x.details ? h('span', { class: 'tv-ex-load' }, [x.load, x.details].filter(Boolean).join(' · ')) : null),
+  (x) => h('li', { class: 'tv-ex-group' }, groupTitle(x))));
 }
 function render() {
   const sessions = board.sessions.filter((s) => s.workout);

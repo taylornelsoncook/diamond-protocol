@@ -216,3 +216,17 @@ test('a version 53 database is upgraded: data_imports takes any file kind and ke
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 });
+
+test('hostile or broken archives get a plain answer, fast: a truncated zip, a file with no line breaks, a zip with nothing in it', async () => {
+  const good = zipOf({ 'apple_health_export/export.xml': '<HealthData/>' });
+  assert.throws(() => zipEntries(good.subarray(0, 40)), /isn't a zip file we can open/);
+  assert.throws(() => zipEntries(Buffer.alloc(0)), /isn't a zip file we can open/);
+  const t0 = Date.now();
+  await assert.rejects(readAppleHealth(Buffer.concat([Buffer.from('<?xml'), Buffer.alloc(8 * 1024 * 1024, 0x61)]), 'export.xml'), /lines far longer than an export/);
+  assert.ok(Date.now() - t0 < 5000, 'refused without chewing through it');
+  await assert.rejects(readAppleHealth(zipOf({ 'apple_health_export/export.xml': 'x'.repeat(2 * 1024 * 1024) }), 'export.zip'), /lines far longer/);
+  await assert.rejects(readAppleHealth(zipOf({ 'readme.txt': 'hi' }), 'export.zip'), /export\.xml/);
+  await assert.rejects(readFitbit(zipOf({ 'readme.txt': 'hi' }), 'takeout.zip'), /doesn't look like a Fitbit export/);
+  const r = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, file: { name: 'broken.zip', zip_base64: good.subarray(0, 40).toString('base64') } });
+  assert.equal(r.status, 400); assert.match(r.body.error.message, /isn't a zip file/);
+});

@@ -8,39 +8,59 @@ import { badRequest, HttpError } from '../util.js';
 
 export const MAX_ARCHIVE_BYTES = 60 * 1024 * 1024;       // the upload
 const MAX_INFLATED = 3 * 1024 * 1024 * 1024;              // what export.xml may unpack to
-const MAX_LINES = 40_000_000, MAX_DAYS = 4000, MAX_WORKOUTS = 20000;
+const MAX_LINES = 40_000_000, MAX_DAYS = 4000, MAX_WORKOUTS = 20000, MAX_LINE_BYTES = 1024 * 1024;   // a real export line is a few hundred bytes
 
 // ---------- Zip entries (central directory), inflated on demand ----------
 export function zipEntries(buf) {
-  let eocd = -1;
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw badRequest('That isn\'t a zip file we can open. Upload the export exactly as the app gave it to you.');
-  const count = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
-  const out = [];
-  for (let i = 0; i < count && p + 46 <= buf.length; i++) {
-    if (buf.readUInt32LE(p) !== 0x02014b50) break;
-    const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20), rawSize = buf.readUInt32LE(p + 24), nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), commentLen = buf.readUInt16LE(p + 32), local = buf.readUInt32LE(p + 42);
-    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
-    if (!name.endsWith('/') && local + 30 <= buf.length) {
-      const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
-      out.push({ name, method, size, rawSize, start });
+  const notZip = () => badRequest('That isn\'t a zip file we can open. Upload the export exactly as the app gave it to you.');
+  try {
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw notZip();
+    const count = buf.readUInt16LE(eocd + 10);
+    let p = buf.readUInt32LE(eocd + 16);
+    const out = [];
+    for (let i = 0; i < count && p + 46 <= buf.length; i++) {
+      if (buf.readUInt32LE(p) !== 0x02014b50) break;
+      const method = buf.readUInt16LE(p + 10), size = buf.readUInt32LE(p + 20), rawSize = buf.readUInt32LE(p + 24), nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), commentLen = buf.readUInt16LE(p + 32), local = buf.readUInt32LE(p + 42);
+      if (p + 46 + nameLen > buf.length) break;
+      const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+      if (!name.endsWith('/') && local + 30 <= buf.length) {
+        const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+        if (start + size <= buf.length) out.push({ name, method, size, rawSize, start });   // an entry pointing past the file is a broken zip: left out
+      }
+      p += 46 + nameLen + extraLen + commentLen;
     }
-    p += 46 + nameLen + extraLen + commentLen;
-  }
-  return out;
+    return out;
+  } catch (e) { if (e instanceof HttpError) throw e; throw notZip(); }   // a truncated or made-up file: a plain answer, never a crash
 }
 // Feed an entry to onLine(line) as text, a line at a time, inflating as it goes.
 async function streamLines(buf, entry, onLine, { maxBytes = MAX_INFLATED } = {}) {
   const data = buf.subarray(entry.start, entry.start + entry.size);
-  let carry = '', total = 0, lines = 0;
+  // Only the unfinished line is carried between chunks, and a "line" longer than MAX_LINE_BYTES (no newline for a
+  // megabyte: not an export, or a file made to stall us) is refused, so the work stays linear and memory flat.
+  let carry = [], carryBytes = 0, total = 0, lines = 0;
   const take = (chunk) => {
     total += chunk.length;
     if (total > maxBytes) throw new HttpError(413, 'too_large', 'That export unpacks to more than we can read. Export a shorter range from the app.');
-    const text = carry + chunk.toString('utf8');
-    const parts = text.split('\n');
-    carry = parts.pop();
-    for (const line of parts) { if (++lines > MAX_LINES) throw new HttpError(413, 'too_large', 'That export has more records than we can read.'); onLine(line); }
+    let from = 0;
+    for (;;) {
+      const nl = chunk.indexOf(10, from);
+      if (nl < 0) break;
+      const piece = chunk.subarray(from, nl);
+      if (carryBytes + piece.length > MAX_LINE_BYTES) throw badRequest('That file has lines far longer than an export\'s. Upload the export exactly as the app made it.');
+      const line = carry.length ? Buffer.concat([...carry, piece]).toString('utf8') : piece.toString('utf8');
+      carry = []; carryBytes = 0;
+      if (++lines > MAX_LINES) throw new HttpError(413, 'too_large', 'That export has more records than we can read.');
+      onLine(line);
+      from = nl + 1;
+    }
+    if (from < chunk.length) {
+      const rest = chunk.subarray(from);
+      carryBytes += rest.length;
+      if (carryBytes > MAX_LINE_BYTES) throw badRequest('That file has lines far longer than an export\'s. Upload the export exactly as the app made it.');
+      carry.push(Buffer.from(rest));
+    }
   };
   if (entry.method === 0) { take(data); }
   else if (entry.method === 8) {
@@ -51,7 +71,7 @@ async function streamLines(buf, entry, onLine, { maxBytes = MAX_INFLATED } = {})
       inf.end(data);
     });
   } else throw badRequest('That zip uses a compression we can\'t read. Re-zip it with the usual settings.');
-  if (carry) onLine(carry);
+  if (carry.length) onLine(Buffer.concat(carry).toString('utf8'));
 }
 const readEntry = async (buf, entry, max = 64 * 1024 * 1024) => { const parts = []; let n = 0; await streamLines(buf, entry, (l) => { n += l.length + 1; if (n > max) throw new HttpError(413, 'too_large', 'A file inside that export is too large to read.'); parts.push(l); }, { maxBytes: max }); return parts.join('\n'); };
 

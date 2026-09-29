@@ -3,7 +3,7 @@
 // (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
 // team goals, messages and reading reach its roster athletes (every one has a client profile).
 import { newId, token, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
-import { getSetting } from './families.js';
+import { updateSettings, getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
 import { emit } from './events.js';
@@ -70,22 +70,66 @@ export function flagsOf(c) {
   if (c.hydration != null && c.hydration <= 2) f.push(`Hydration ${c.hydration} of 5`);
   return f;
 }
-// Readiness from a check-in: train as written, go a little lighter, or take it easy. Weights set from a tested
-// max drop by 10 or 20 percentage points; the athlete and coach see why.
-export function readinessOf(c) {
-  if (!c) return null;
-  const reasons = flagsOf(c);
-  const red = reasons.length >= 2 || (c.sleep_hours != null && c.sleep_hours < 5) || c.soreness === 5;
-  if (red) return { level: 'red', drop: 20, reasons, headline: 'Take it easy today', advice: 'Weights from your max come down 20 points (75% becomes 55%). Do one set less of each exercise, and stop and tell your coach if anything hurts.' };
-  if (reasons.length) return { level: 'yellow', drop: 10, reasons, headline: 'Go a little lighter today', advice: 'Weights from your max come down 10 points (75% becomes 65%). Keep your form sharp.' };
-  return { level: 'green', drop: 0, reasons, headline: 'Ready to go', advice: 'Train as written.' };
+// The owner's readiness rules (Programs → Hours & settings): how much comes off on a lighter or an easy day, and what
+// the wearable's numbers have to look like to count.
+export const DEFAULT_RULES = { yellow_drop: 10, red_drop: 20, red_sets: 1, recovery_yellow: 50, recovery_red: 34, sleep_yellow_min: 360, sleep_red_min: 300, hrv_drop_pct: 20, wearable: true };
+export function readinessRules(ctx) {
+  const n = (k, d) => { const x = Number(getSetting(ctx, k)); return Number.isFinite(x) ? x : d; };
+  return { yellow_drop: n('readiness_yellow_drop', 10), red_drop: n('readiness_red_drop', 20), red_sets: n('readiness_red_sets', 1), recovery_yellow: n('readiness_recovery_yellow', 50), recovery_red: n('readiness_recovery_red', 34),
+    sleep_yellow_min: n('readiness_sleep_yellow_min', 360), sleep_red_min: n('readiness_sleep_red_min', 300), hrv_drop_pct: n('readiness_hrv_drop_pct', 20), wearable: getSetting(ctx, 'readiness_wearable') !== 'off' };
 }
+// What the athlete's wearable saw for a day (from athlete_metrics, whether pulled or imported): recovery or readiness
+// score, sleep, and HRV against their own 30-day average. A WHOOP day is the morning they woke up, so today's row is
+// last night. Null when nothing is on file for the day.
+export function wearableDay(ctx, clientId, day) {
+  const rows = ctx.db.all(`SELECT metric, value, source FROM athlete_metrics WHERE client_id = ? AND day = ? AND metric IN ('recovery_pct', 'readiness_pct', 'sleep_min', 'hrv_ms')`, clientId, day);
+  if (!rows.length) return null;
+  const get = (m) => rows.find((r) => r.metric === m) ?? null;
+  const rec = get('recovery_pct') ?? get('readiness_pct');
+  const src = (r) => (r ? /oura/i.test(r.source) ? 'Oura' : /whoop/i.test(r.source) ? 'WHOOP' : /apple/i.test(r.source) ? 'Apple Watch' : /fitbit/i.test(r.source) ? 'Fitbit' : /garmin/i.test(r.source) ? 'Garmin' : 'wearable' : null);
+  const hrv = get('hrv_ms');
+  const avg = hrv ? ctx.db.get(`SELECT AVG(value) AS a, COUNT(*) AS n FROM athlete_metrics WHERE client_id = ? AND metric = 'hrv_ms' AND day < ? AND day >= date(?, '-30 days')`, clientId, day, day) : null;
+  return { day, recovery: rec ? rec.value : null, recovery_kind: rec ? (rec.metric === 'readiness_pct' ? 'Readiness' : 'Recovery') : null, sleep_min: get('sleep_min')?.value ?? null, hrv: hrv?.value ?? null,
+    hrv_avg: avg && avg.n >= 7 ? Math.round(avg.a * 10) / 10 : null, source: src(rec ?? get('sleep_min') ?? hrv) };
+}
+const hm = (min) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, '0')}m`;
+// Readiness from the check-in and the wearable together, under the rules: train as written, go a little lighter, or
+// take it easy. reasons say why (each with where it came from); the athlete and coach both see them.
+export function readinessFrom(c, wear, rules = DEFAULT_RULES) {
+  if (!c && !wear) return null;
+  const reasons = flagsOf(c), hard = [];
+  if (c && ((c.sleep_hours != null && c.sleep_hours < 5) || c.soreness === 5)) hard.push('check-in');
+  const sources = [];
+  if (c) sources.push('your check-in');
+  if (wear && rules.wearable) {
+    const w = wear.source ?? 'wearable';
+    sources.push(`your ${w}`);
+    if (wear.recovery != null && wear.recovery < rules.recovery_yellow) { reasons.push(`${wear.recovery_kind} ${Math.round(wear.recovery)}% (${w})`); if (wear.recovery < rules.recovery_red) hard.push('recovery'); }
+    // The athlete's own sleep answer speaks for the night; the band's sleep counts only when the check-in has none.
+    if (wear.sleep_min != null && wear.sleep_min < rules.sleep_yellow_min && !(c && c.sleep_hours != null)) { reasons.push(`Slept ${hm(wear.sleep_min)} (${w})`); if (wear.sleep_min < rules.sleep_red_min) hard.push('sleep'); }
+    if (rules.hrv_drop_pct && wear.hrv != null && wear.hrv_avg && wear.hrv < wear.hrv_avg * (1 - rules.hrv_drop_pct / 100)) reasons.push(`HRV ${Math.round(wear.hrv)} ms, ${Math.round((1 - wear.hrv / wear.hrv_avg) * 100)}% under your usual (${w})`);
+  }
+  const from = sources.join(' and ');
+  const dropText = (d) => (d ? `Weights from your max come down ${d} points (75% becomes ${75 - d}%).` : 'Weights stay as written.');
+  const red = hard.length > 0 || reasons.length >= 2;
+  if (red) return { level: 'red', drop: rules.red_drop, sets_off: rules.red_sets, reasons, sources, from, headline: 'Take it easy today',
+    advice: `${dropText(rules.red_drop)}${rules.red_sets ? ` Do ${rules.red_sets === 1 ? 'one set' : `${rules.red_sets} sets`} less of each exercise.` : ''} Stop and tell your coach if anything hurts.` };
+  if (reasons.length) return { level: 'yellow', drop: rules.yellow_drop, sets_off: 0, reasons, sources, from, headline: 'Go a little lighter today', advice: `${dropText(rules.yellow_drop)} Keep your form sharp.` };
+  return { level: 'green', drop: 0, sets_off: 0, reasons, sources, from, headline: 'Ready to go', advice: 'Train as written.' };
+}
+// From a check-in alone, with the default rules (the check-in's own row in lists).
+export const readinessOf = (c) => readinessFrom(c, null);
 export const readinessOn = (ctx) => getSetting(ctx, 'readiness_adjust') !== 'off';
-// Today's readiness for one athlete, or a nudge to check in first. Null when coaches turned it off.
+// Today's readiness for one athlete: the check-in and the wearable together; with only the wearable, the level still
+// shows and the app nudges the check-in; with neither, a nudge to check in first. Null when coaches turned it off.
 export function readinessToday(ctx, clientId) {
   if (!readinessOn(ctx)) return null;
-  const c = ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, today(ctx));
-  return c ? readinessOf(c) : { level: null, drop: 0, reasons: [], headline: 'Check in first', advice: 'Answer today\'s check-in to see if your workout should be lighter.' };
+  const day = today(ctx), rules = readinessRules(ctx);
+  const c = ctx.db.get('SELECT * FROM daily_checkins WHERE client_id = ? AND date = ?', clientId, day);
+  const wear = rules.wearable ? wearableDay(ctx, clientId, day) : null;
+  const r = readinessFrom(c, wear, rules);
+  if (!r) return { level: null, drop: 0, sets_off: 0, reasons: [], sources: [], headline: 'Check in first', advice: 'Answer today\'s check-in to see if your workout should be lighter.' };
+  return { ...r, checkin_missing: !c };
 }
 const shapeCheckin = (c) => (c ? { id: c.id, date: c.date, sleep_hours: c.sleep_hours, hydration: c.hydration, soreness: c.soreness, energy: c.energy, mood: c.mood, note: c.note, updated_at: c.updated_at, flags: flagsOf(c), readiness: readinessOf(c)?.level ?? null } : null);
 const blank = (x) => x === undefined || x === null || x === '';
@@ -1230,15 +1274,18 @@ export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org
     (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS app_athletes
   FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.status = 'active' ORDER BY o.name, t.name`).map((t) => ({ ...t, label: `${t.org_name} ${t.name}` }));
 
+const RULE_KEYS = ['readiness_wearable', 'readiness_yellow_drop', 'readiness_red_drop', 'readiness_red_sets', 'readiness_recovery_yellow', 'readiness_recovery_red', 'readiness_sleep_yellow_min', 'readiness_sleep_red_min', 'readiness_hrv_drop_pct', 'progression_mode', 'progression_upper_lb', 'progression_lower_lb'];
 export function setRankings(ctx, body = {}) {
   const put = (key, on) => ctx.db.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, on ? 'on' : 'off');
   const flag = (x) => x === 'on' || x === true;
-  if (body.rankings === undefined && body.rankings_enabled === undefined && body.readiness_adjust === undefined) throw badRequest('Send rankings or readiness_adjust: "on" or "off".');
+  const rules = Object.fromEntries(RULE_KEYS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]]));
+  if (body.rankings === undefined && body.rankings_enabled === undefined && body.readiness_adjust === undefined && !Object.keys(rules).length) throw badRequest('Send rankings or readiness_adjust ("on" or "off"), or the readiness and progression rules.');
   if (body.rankings !== undefined || body.rankings_enabled !== undefined) put('rankings', flag(body.rankings) || body.rankings_enabled === true);
   if (body.readiness_adjust !== undefined) put('readiness_adjust', flag(body.readiness_adjust));
+  if (Object.keys(rules).length) updateSettings(ctx, rules);   // checked like every other setting (ranges, red below yellow)
   return engagementSettings(ctx);
 }
-export const engagementSettings = (ctx) => ({ rankings: rankingsOn(ctx) ? 'on' : 'off', readiness_adjust: readinessOn(ctx) ? 'on' : 'off' });
+export const engagementSettings = (ctx) => ({ rankings: rankingsOn(ctx) ? 'on' : 'off', readiness_adjust: readinessOn(ctx) ? 'on' : 'off', ...Object.fromEntries(RULE_KEYS.map((k) => [k, getSetting(ctx, k)])) });
 
 // Who can be given reading, for assigning to several athletes at once: every athlete who isn't archived (members and
 // team-only athletes), with the active teams they're on and the programs they're following, so a coach can pick by team,

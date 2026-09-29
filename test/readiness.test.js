@@ -75,6 +75,46 @@ test('coaches can turn it off', async () => {
   const h = await home();
   assert.equal(h.readiness, null);
   assert.equal(h.workout.exercises[0].load.lb, 150);
-  assert.deepEqual((await coach('GET', '/v1/engagement/settings')).body, { rankings: 'off', readiness_adjust: 'off' });
+  const s = (await coach('GET', '/v1/engagement/settings')).body;
+  assert.deepEqual([s.rankings, s.readiness_adjust, s.readiness_wearable, s.progression_mode], ['off', 'off', 'on', 'suggest']);
   assert.equal((await coach('GET', '/v1/daily-check-ins/flags')).body.data[0].readiness, null, 'no suggestion shown to coaches either');
+});
+
+test('the wearable counts too: a rough night the band saw makes a lighter day before the check-in, and the owner sets the numbers', async () => {
+  await coach('PATCH', '/v1/engagement/settings', { readiness_adjust: 'on' });
+  const { today } = await import('../src/services/engage.js');
+  const day = today(app.ctx), minus = (n) => new Date(Date.parse(`${day}T12:00:00Z`) - n * 86400000).toISOString().slice(0, 10);
+  app.ctx.db.run('DELETE FROM daily_checkins WHERE client_id = ?', ava.id);
+  const put = (metric, value, d = day) => app.ctx.db.run(`INSERT INTO athlete_metrics (client_id, day, metric, value, source, updated_at) VALUES (?, ?, ?, ?, 'whoop_sync', ?) ON CONFLICT (client_id, metric, day) DO UPDATE SET value = excluded.value`, ava.id, d, metric, value, new Date().toISOString());
+  put('recovery_pct', 41); put('sleep_min', 330);
+  let h = await home();
+  assert.deepEqual([h.readiness.level, h.readiness.drop, h.readiness.sets_off, h.readiness.checkin_missing, h.readiness.from], ['red', 20, 1, true, 'your WHOOP'], 'two reasons from the band: an easy day, with a nudge to check in');
+  assert.deepEqual(h.readiness.reasons, ['Recovery 41% (WHOOP)', 'Slept 5h 30m (WHOOP)']);
+  assert.deepEqual([h.workout.exercises[0].load.lb, h.workout.exercises[0].target_sets, h.workout.exercises[0].planned_sets], [110, 4, 5], '55% of 200, and one set off');
+  // The owner's rules: recovery under 40 counts, sleep under 320, an easy day takes 30 points and two sets off.
+  const r = await coach('PATCH', '/v1/engagement/settings', { readiness_recovery_yellow: 40, readiness_red_drop: 30, readiness_red_sets: 2, readiness_sleep_yellow_min: 320 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  h = await home();
+  assert.equal(h.readiness.level, 'green', 'neither number is a reason under the new rules');
+  put('recovery_pct', 30);
+  h = await home();
+  assert.deepEqual([h.readiness.level, h.readiness.drop, h.readiness.sets_off, h.workout.exercises[0].target_sets, h.workout.exercises[0].load.lb], ['red', 30, 2, 3, 90], 'under the easy-day recovery score on its own');
+  // HRV against their own 30-day average (at least 7 days of it).
+  put('recovery_pct', 70);
+  for (let i = 1; i <= 8; i++) put('hrv_ms', 80, minus(i));
+  put('hrv_ms', 56);
+  h = await home();
+  assert.deepEqual([h.readiness.level, h.readiness.reasons], ['yellow', ['HRV 56 ms, 30% under your usual (WHOOP)']]);
+  assert.equal((await coach('PATCH', '/v1/engagement/settings', { readiness_recovery_red: 60 })).status, 400, 'the easy-day score has to sit below the lighter-day one');
+  assert.equal((await coach('PATCH', '/v1/engagement/settings', { readiness_hrv_drop_pct: 3 })).status, 400);
+  // The wearable switched off: nothing to go on until the check-in.
+  await coach('PATCH', '/v1/engagement/settings', { readiness_wearable: 'off' });
+  h = await home(); assert.equal(h.readiness.level, null);
+  await coach('PATCH', '/v1/engagement/settings', { readiness_wearable: 'on' });
+  // Check-in and band together.
+  await checkIn({ sleep_hours: 8, soreness: 4, energy: 4, mood: 4, hydration: 4 });
+  h = await home();
+  assert.deepEqual([h.readiness.level, h.readiness.from, h.readiness.checkin_missing, h.readiness.reasons.length], ['red', 'your check-in and your WHOOP', false, 2]);
+  const flags = (await coach('GET', '/v1/daily-check-ins/flags')).body.data.find((x) => x.client_id === ava.id);
+  assert.equal(flags?.readiness ?? 'yellow', 'yellow', 'the check-in on its own is one reason');
 });

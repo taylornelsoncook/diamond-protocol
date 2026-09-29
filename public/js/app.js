@@ -286,6 +286,13 @@ async function viewToday(main) {
     if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
+    if (a.kind === 'progressions') return h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} is ready for ${a.items[0].text} on ${a.items[0].exercise_name}` : `${a.count} progression steps are waiting for your OK`),
+        h('span', { class: 'small muted' }, a.count === 1 ? 'Two workouts in a row hit every set at the top of the range.' : a.items.map((x) => `${x.name}: ${x.text} ${x.exercise_name}`).join(' · '))),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        a.count === 1 ? btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/approve`); toast(`${first(a.items[0].name)} steps up ${a.items[0].text} on ${a.items[0].exercise_name}.`); refresh(); }), 'outline') : null,
+        a.count === 1 ? btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/dismiss`); toast('Dismissed. Two more good workouts bring it back.'); refresh(); }), 'ghost') : null,
+        h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}?tab=training` }, a.count === 1 ? 'Open' : 'Review')));
     if (a.kind === 'form_checks') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} sent a form check (${a.items[0].exercise_name})` : `${a.count} form checks are waiting for an answer`),
         h('span', { class: 'small muted' }, a.count === 1 ? `Sent ${ago(a.items[0].sent_at).toLowerCase()}. Watch it and answer on their client page.` : a.items.map((x) => `${x.name}: ${x.exercise_name}`).join(' · '))),
@@ -789,7 +796,8 @@ async function viewClient(main, id) {
       btn('Copy app link', async () => { await navigator.clipboard.writeText(appUrl); toast('App link copied.'); }, 'outline'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
       role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
-    logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null);
+    logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null,
+    role === 'front_desk' ? null : progressionsBlock(id, first));
 
   // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
   // leaving the page asks first.
@@ -1091,6 +1099,35 @@ async function viewClient(main, id) {
   // Today's "Watch" link lands on the section it names (#/clients/<id>?tab=form-checks).
   const wanted = hashQuery().get('tab');
   if (wanted) requestAnimationFrame(() => document.getElementById(`cl-${wanted}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+
+// Progression steps for one athlete (services/progression.js): suggestions to approve or dismiss, the steps applied
+// with Undo, and a step added by hand. Owners and coaches; front desk doesn't see it.
+function progressionsBlock(clientId, first) {
+  const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
+  const draw = async () => {
+    const [{ data }, exercises] = await Promise.all([get(`/v1/progressions?client_id=${clientId}`), get('/v1/exercises?limit=2000').catch(() => ({ data: [] }))]);
+    const open = data.filter((p) => p.status === 'suggested'), applied = data.filter((p) => p.status === 'approved');
+    const exSel = select([['', 'Choose an exercise'], ...(exercises.data ?? exercises).map((e) => [e.id, e.name])], { 'aria-label': 'Exercise' });
+    const kind = select([['weight', 'pounds'], ['reps', 'reps a set'], ['sets', 'sets']], { value: 'weight', 'aria-label': 'What to step' });
+    const amount = input({ type: 'number', value: '5', step: '1', min: '-100', max: '100', style: 'max-width:90px', 'aria-label': 'How much' });
+    fill(box, h('span', { class: 'dp-label' }, 'Progression'),
+      h('span', { class: 'small muted' }, `Two workouts in a row hitting every set at the top of the rep range suggest a step for ${first} alone; the plan itself doesn't change. Approved steps show in the app on top of the plan.`),
+      open.map((p) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+        h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, `${p.exercise_name}: ${p.text}`), h('span', { class: 'small muted' }, `Hit ${p.basis?.target ?? 'the target'} twice${p.basis?.sets?.length ? `, last time ${p.basis.sets.map((s) => (s.weight ? `${s.weight}×${s.reps}` : s.reps)).join(', ')}` : ''}. Suggested ${ago(p.created_at).toLowerCase()}.`)),
+        h('div', { class: 'row wrap', style: 'gap:6px' }, btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${p.id}/approve`); toast(`${first} steps up ${p.text} on ${p.exercise_name}.`); draw(); }), 'primary'),
+          btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${p.id}/dismiss`); toast('Dismissed.'); draw(); }), 'ghost')))),
+      applied.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Applied'), applied.map((p) => h('div', { class: 'list-item small' },
+        h('span', { class: 'grow' }, `${p.exercise_name}: ${p.text}`), h('span', { class: 'muted' }, `${p.decided_by ?? 'coach'}, ${ago(p.decided_at).toLowerCase()}`),
+        btn('Undo', (e) => { if (!confirm(`Take the ${p.text} on ${p.exercise_name} back out of ${first}'s workouts?`)) return; busy(e.currentTarget, async () => { await del(`/v1/progressions/${p.id}`); toast('Taken out.'); draw(); }); }, 'ghost')))) : null,
+      h('details', null, h('summary', { class: 'small muted', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add a step by hand'),
+        h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, exSel, amount, kind, btn('Add', (e) => busy(e.currentTarget, async () => {
+          if (!exSel.value) throw new Error('Choose the exercise.');
+          await post(`/v1/clients/${clientId}/progressions`, { exercise_id: exSel.value, kind: kind.value, amount: Number(amount.value) }); toast('Added. It shows in the app from now on.'); draw();
+        }), 'secondary'))));
+  };
+  draw().catch((e) => fill(box, h('p', { class: 'small muted' }, e.message)));
+  return box;
 }
 
 // Staff notes: dated, with the author. Anyone on staff adds; authors change their own; owners delete any and pin any.

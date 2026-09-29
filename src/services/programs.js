@@ -3,6 +3,7 @@ import { clientLock, athleteLockMessage } from './lockout.js';
 import { emit } from './events.js';
 import { parentFilter } from './performance.js';
 import { readinessToday } from './engage.js';
+import { suggestAfterLog, appliedFor } from './progression.js';
 import { getSetting } from './families.js';
 import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
@@ -643,10 +644,18 @@ function reopenId(ctx, clientId) {
   return l && l.workout_id && !reopenBlock(ctx, clientId, l) ? l.id : null;      // a removed workout can't be reopened
 }
 // One exercise as the app shows it: today's weight from a tested max, sets and reps to log, last time and best weight.
-function appExercise(ctx, clientId, x, drop) {
+// One exercise as the app shows it: the plan, today's weight (lighter on a rough day), an easy day's sets taken off
+// (never below one), and the coach-approved steps for this athlete on top (progression.js).
+export function appExercise(ctx, clientId, x, readiness) {
+  const drop = readiness?.drop ?? 0, setsOff = readiness?.sets_off ?? 0;
   const rx = parseRx(x);
-  return { ...x, load: loadFor(ctx, clientId, x, { visibleOnly: true, drop }), target_sets: rx.sets, target_reps: rx.reps,
-    last: lastTime(ctx, clientId, x.exercise_id), best_weight: bestWeight(ctx, clientId, x.exercise_id) };
+  const step = appliedFor(ctx, clientId, x.exercise_id);
+  const load = loadFor(ctx, clientId, x, { visibleOnly: true, drop });
+  if (load && load.lb != null && step?.weight_lb) { load.lb = Math.max(5, load.lb + step.weight_lb); load.text = `${load.lb} lb (${load.text.replace(/^\d+ lb \((.*)\)$/, '$1')}, ${step.weight_lb > 0 ? '+' : ''}${step.weight_lb} lb from your progression)`; }
+  const planned = Math.min(MAX_SETS, rx.sets + (step?.sets ?? 0));
+  const targetSets = Math.max(1, planned - setsOff);
+  return { ...x, load, target_sets: targetSets, ...(targetSets < planned ? { planned_sets: planned } : {}), target_reps: rx.reps == null ? null : Math.max(1, rx.reps + (step?.reps ?? 0)),
+    progression: step, last: lastTime(ctx, clientId, x.exercise_id), best_weight: bestWeight(ctx, clientId, x.exercise_id) };
 }
 
 export function clientHome(ctx, client) {
@@ -666,7 +675,7 @@ export function clientHome(ctx, client) {
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: program.workouts.length - left.length, total: program.workouts.length },
     readiness,
-    workout: next && { ...next, exercises: next.exercises.map((x) => appExercise(ctx, client.id, x, readiness?.drop ?? 0)) },
+    workout: next && { ...next, exercises: next.exercises.map((x) => appExercise(ctx, client.id, x, readiness)) },
     upcoming: left.slice(1, 4).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, exercises: w.exercises.map((x) => x.name) })),
     history, reopen_id,
     message: next ? null : 'Program complete. Your coach will set your next block.'
@@ -720,7 +729,9 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
     saveSets(ctx, id, data);
     announce(ctx, client, id);
   });
-  return { id, finished: finishedSummary(ctx, id), next: clientHome(ctx, client) };
+  let progressions = [];
+  try { progressions = suggestAfterLog(ctx, client, id); } catch (e) { console.error('progression check:', e.message); }   // a suggestion is never worth failing the save
+  return { id, finished: { ...finishedSummary(ctx, id), progressions: progressions.map((p) => ({ exercise_name: p.exercise_name, text: p.text, status: p.status })) }, next: clientHome(ctx, client) };
 }
 
 // Save a reopened workout again: the whole log is replaced with what was sent (sending it twice changes nothing).

@@ -152,9 +152,29 @@ export function rankingsPanel(settings) {
 }
 export function readinessPanel(settings) {
   const on = h('input', { type: 'checkbox', checked: settings.readiness_adjust !== 'off', disabled: !canManage() });
+  const wear = h('input', { type: 'checkbox', checked: settings.readiness_wearable !== 'off', disabled: !canManage() });
+  const num = (key, attrs) => input({ type: 'number', step: '1', value: String(settings[key] ?? ''), disabled: !canManage(), style: 'max-width:110px', ...attrs });
+  const yellow = num('readiness_yellow_drop', { min: '0', max: '40' }), red = num('readiness_red_drop', { min: '0', max: '50' }), redSets = num('readiness_red_sets', { min: '0', max: '3' });
+  const recY = num('readiness_recovery_yellow', { min: '1', max: '99' }), recR = num('readiness_recovery_red', { min: '1', max: '99' });
+  const slpY = num('readiness_sleep_yellow_min', { min: '60', max: '720' }), slpR = num('readiness_sleep_red_min', { min: '60', max: '720' }), hrv = num('readiness_hrv_drop_pct', { min: '0', max: '60' });
+  const mode = select([['suggest', 'Suggest it to the coach'], ['auto', 'Apply it on its own'], ['off', 'Off']], { value: settings.progression_mode ?? 'suggest', disabled: !canManage() });
+  const upper = num('progression_upper_lb', { min: '1', max: '50' }), lower = num('progression_lower_lb', { min: '1', max: '50' });
+  const rules = () => ({ readiness_wearable: wear.checked ? 'on' : 'off', readiness_yellow_drop: yellow.value, readiness_red_drop: red.value, readiness_red_sets: redSets.value, readiness_recovery_yellow: recY.value, readiness_recovery_red: recR.value,
+    readiness_sleep_yellow_min: slpY.value, readiness_sleep_red_min: slpR.value, readiness_hrv_drop_pct: hrv.value, progression_mode: mode.value, progression_upper_lb: upper.value, progression_lower_lb: lower.value });
+  const rulesPanel = h('div', { class: 'stack' },
+    h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, wear, h('span', null, 'Count the athlete\'s wearable too (recovery or readiness score, sleep and HRV from a linked or imported WHOOP, Oura, Apple Watch...)')),
+    h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(200px,1fr))' },
+      field('Lighter day: points off the max', yellow), field('Easy day: points off the max', red), field('Easy day: sets off each exercise', redSets),
+      field('Recovery under this is a reason', recY, 'Percent'), field('Recovery under this alone makes an easy day', recR, 'Percent, below the one above'),
+      field('Sleep under this is a reason', slpY, 'Minutes (360 = 6 hours)'), field('Sleep under this alone makes an easy day', slpR, 'Minutes (300 = 5 hours)'), field('HRV this far under their 30-day average is a reason', hrv, 'Percent; 0 ignores HRV')),
+    h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Progression'),
+      h('span', { class: 'small muted' }, 'After two workouts in a row hitting every set at the top of the rep range, a step up for that athlete: more weight where they lift one, otherwise a rep a set (or a set at 20+ reps). Approved steps show in their app on top of the plan; the plan itself never changes.'),
+      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(200px,1fr))' }, field('When a step is earned', mode), field('Upper-body step (lb)', upper), field('Lower-body and power step (lb)', lower))),
+    canManage() ? h('div', null, btn('Save the rules', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', rules()); toast('Rules saved. They apply from the next workout.'); }), 'secondary')) : null);
   return panel('Lighter days after a rough check-in', { subtitle: 'When an athlete\'s daily check-in shows short sleep, high soreness, or low energy, mood or water, their app says so above the workout. One problem takes weights set from a tested max down 10 points (75% becomes 65%). Two or more, under 5 hours of sleep, or soreness 5 of 5 makes it an easy day: down 20 points and one set less.' },
     h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, on, h('span', null, 'Adjust workouts from daily check-ins')),
-    canManage() ? h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', { readiness_adjust: on.checked ? 'on' : 'off' }); toast(on.checked ? 'Workouts adjust to check-ins.' : 'Workouts no longer adjust to check-ins.'); }), 'secondary')) : null);
+    canManage() ? h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/engagement/settings', { readiness_adjust: on.checked ? 'on' : 'off' }); toast(on.checked ? 'Workouts adjust to check-ins.' : 'Workouts no longer adjust to check-ins.'); }), 'secondary')) : null,
+    h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'The rules: the wearable, how much comes off, and progression'), rulesPanel));
 }
 
 // ---------- Team page ----------

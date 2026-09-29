@@ -114,11 +114,11 @@ test('the provider sends the parent back: the code is exchanged, the account lin
   const link = (await parent('POST', `athletes/${maya.id}/wearables/whoop/connect`)).body;
   const state = new URL(link.url).searchParams.get('state');
   // A made-up state, or one used twice, goes nowhere.
-  assert.equal((await pub('/wearables/whoop/callback?code=abc&state=nope')).location, '/parent?wearable=expired&provider=whoop#progress');
+  assert.equal((await pub('/wearables/whoop/callback?code=abc&state=nope')).location, '/parent?tab=progress&wearable=expired&provider=whoop');
   const back = await pub(`/wearables/whoop/callback?code=abc123&state=${state}`);
   assert.equal(back.status, 302);
-  assert.equal(back.location, '/parent?wearable=connected&provider=whoop#progress');
-  assert.equal((await pub(`/wearables/whoop/callback?code=abc123&state=${state}`)).location, '/parent?wearable=expired&provider=whoop#progress', 'a state works once');
+  assert.equal(back.location, '/parent?tab=progress&wearable=connected&provider=whoop', 'the parent lands on the Progress tab');
+  assert.equal((await pub(`/wearables/whoop/callback?code=abc123&state=${state}`)).location, '/parent?tab=progress&wearable=expired&provider=whoop', 'a state works once');
   const tokenCall = calls.find((c) => c.url.includes('/oauth/oauth2/token'));
   const form = new URLSearchParams(tokenCall.body);
   assert.deepEqual([form.get('grant_type'), form.get('code'), form.get('redirect_uri'), form.get('client_id'), form.get('client_secret')], ['authorization_code', 'abc123', 'https://app.example.org/wearables/whoop/callback', 'whoop-client-test', 'whoop-secret-test']);
@@ -164,17 +164,42 @@ test('later pulls refresh an expired token, replace changed values and mark a re
   // Connecting again from the client page (a coach with the athlete's phone) makes it active and comes back to the client page.
   const link = (await coach('POST', `/v1/clients/${maya.id}/wearables/whoop/connect`)).body;
   const back = await pub(`/wearables/whoop/callback?code=again&state=${new URL(link.url).searchParams.get('state')}`);
-  assert.equal(back.location, `/#/clients/${maya.id}?wearable=connected&provider=whoop`);
+  assert.equal(back.location, `/?back=&wearable=connected&provider=whoop#/clients/${maya.id}`, 'the query comes before the # so the client page reads it');
   const again = app.ctx.db.get('SELECT status, connected_by_kind, last_error FROM wearable_connections WHERE id = ?', conn.id);
   assert.deepEqual([again.status, again.connected_by_kind, again.last_error], ['active', 'staff', null]);
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM wearable_connections WHERE client_id = ?', maya.id).n, 1, 'one connection per provider');
   assert.deepEqual(await syncAll(app.ctx), { connections: 1, synced: 1, changed: 0, needs_reconnect: 0, failed: 0 });
 });
 
-test('declined, then disconnected: the token is revoked, the data stays; a locked-out family can\'t connect', async () => {
+test('a refresh the provider refuses (access revoked in the WHOOP app) waits for a reconnect instead of failing the job forever', async () => {
+  const conn = app.ctx.db.get('SELECT id FROM wearable_connections WHERE client_id = ?', maya.id);
+  app.ctx.db.run(`UPDATE wearable_connections SET expires_at = '2026-09-29T13:00:00Z' WHERE id = ?`, conn.id);
+  app.ctx.wearableFetch = whoopStub({ refreshStatus: 400 });
+  assert.deepEqual(await syncAll(app.ctx), { connections: 1, synced: 0, changed: 0, needs_reconnect: 1, failed: 0 });
+  const row = app.ctx.db.get('SELECT status, last_error FROM wearable_connections WHERE id = ?', conn.id);
+  assert.equal(row.status, 'needs_reconnect'); assert.match(row.last_error, /refresh refused.*invalid_grant/);
+  // Connected again so the next tests have an active connection.
+  const link = (await parent('POST', `athletes/${maya.id}/wearables/whoop/connect`)).body;
+  app.ctx.wearableFetch = whoopStub();
+  await pub(`/wearables/whoop/callback?code=back&state=${new URL(link.url).searchParams.get('state')}`);
+  assert.equal(app.ctx.db.get('SELECT status FROM wearable_connections WHERE id = ?', conn.id).status, 'active');
+});
+
+test('a provider that keeps answering 429 is given up on after a few tries, not retried forever', async () => {
+  const conn = app.ctx.db.get('SELECT id FROM wearable_connections WHERE client_id = ?', maya.id);
+  const plain = whoopStub();
+  let n = 0;
+  app.ctx.wearableFetch = async (url, init) => (String(url).includes('/developer/') ? (n++, new Response('{"error":"slow down"}', { status: 429, headers: { 'retry-after': '0' } })) : plain(url, init));
+  const r = await owner('POST', `/v1/wearables/${conn.id}/sync`, {});
+  assert.equal(r.status, 502, JSON.stringify(r.body)); assert.match(r.body.error.message, /rate limited/);
+  assert.equal(n, 16, 'four feeds, each one call and three retries');
+  assert.equal(app.ctx.db.get('SELECT status FROM wearable_connections WHERE id = ?', conn.id).status, 'active', 'still active: it was the provider\'s day, not the sign-in');
+});
+
+test('declined, then disconnected: the token is revoked, the data stays', async () => {
   const link = (await parent('POST', `athletes/${maya.id}/wearables/whoop/connect`)).body;
   const state = new URL(link.url).searchParams.get('state');
-  assert.equal((await pub(`/wearables/whoop/callback?error=access_denied&state=${state}`)).location, '/parent?wearable=denied&provider=whoop#progress');
+  assert.equal((await pub(`/wearables/whoop/callback?error=access_denied&state=${state}`)).location, '/parent?tab=progress&wearable=denied&provider=whoop');
   const conn = app.ctx.db.get('SELECT id FROM wearable_connections WHERE client_id = ?', maya.id);
   const gina = await parentSignIn('gina@example.com');
   assert.equal((await gina('DELETE', `wearables/${conn.id}`)).status, 404, 'another family can\'t touch it');
@@ -184,7 +209,25 @@ test('declined, then disconnected: the token is revoked, the data stays; a locke
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM wearable_connections').n, 0);
   assert.ok(app.ctx.db.get('SELECT COUNT(*) AS n FROM athlete_metrics WHERE client_id = ?', maya.id).n > 10, 'what was pulled stays');
   const exp = (await owner('GET', `/v1/families/${maya.family.id}/export`)).body;
-  assert.ok(exp.athletes?.[0] ? 'wearables_linked' in exp.athletes[0] : JSON.stringify(exp).includes('wearables_linked'), 'the family export lists linked wearables');
+  assert.ok(Array.isArray(exp.athletes[0].wearables_linked), 'the family export lists linked wearables');
+});
+
+test('deleting a family revokes and forgets its wearable connections, so the job never pulls for it again', async () => {
+  const kid = (await owner('POST', '/v1/clients', { name: 'Tomas Reyes', parent: { name: 'Ines Reyes', email: 'ines@example.com' } })).body;
+  const ines = await parentSignIn('ines@example.com');
+  const link = (await ines('POST', `athletes/${kid.id}/wearables/whoop/connect`)).body;
+  await pub(`/wearables/whoop/callback?code=t1&state=${new URL(link.url).searchParams.get('state')}`);
+  await ines('POST', `athletes/${kid.id}/wearables/whoop/connect`);   // a sign-in started and never finished
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM wearable_connections WHERE client_id = ?', kid.id).n, 1);
+  calls = [];
+  const del = await owner('DELETE', `/v1/families/${kid.family.id}`, { confirm: 'Reyes family' });
+  assert.equal(del.status, 200, JSON.stringify(del.body));
+  assert.ok(calls.some((c) => c.method === 'DELETE' && c.url.includes('/user/access')), 'WHOOP was told to revoke');
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM wearable_connections WHERE client_id = ?', kid.id).n, 0);
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM wearable_auth_states WHERE client_id = ?', kid.id).n, 0);
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM athlete_metrics WHERE client_id = ?', kid.id).n, 0, 'the pulled data went with the family');
+  await syncAll(app.ctx);
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM athlete_metrics WHERE client_id = ?', kid.id).n, 0, 'nothing comes back');
 });
 
 test('a version 51 database gains the wearable tables, opened twice', () => {

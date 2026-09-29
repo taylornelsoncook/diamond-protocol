@@ -41,7 +41,8 @@ export function wearableReturnNotice() {
   const what = q.get('wearable');
   if (!what) return;
   const label = { whoop: 'WHOOP', oura: 'Oura' }[q.get('provider')] ?? 'The wearable';
-  const msg = { connected: `${label} is connected. The first pull is running; check back in a minute.`, denied: `${label} wasn't connected: access was declined.`, expired: 'That sign-in link expired. Press Connect again.', error: `${label} couldn't be connected. Try again in a minute.` }[what];
+  const msg = { connected: `${label} is connected. The last 30 days are in under Recovery & sleep.`, denied: `${label} wasn't connected: access was declined.`, expired: 'That sign-in link expired. Press Connect again.', error: `${label} couldn't be connected. Try again in a minute.` }[what];
   if (msg) toast(msg, what === 'connected' ? 'good' : 'warn');
-  history.replaceState(null, '', location.pathname + location.hash);
+  q.delete('wearable'); q.delete('provider'); q.delete('back');
+  history.replaceState(null, '', location.pathname + (q.size ? `?${q}` : '') + location.hash);
 }

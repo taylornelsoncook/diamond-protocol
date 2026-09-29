@@ -2,6 +2,7 @@ import { newId, v, notFound, conflict, badRequest, HttpError } from '../util.js'
 import { getSetting, getFamily } from './families.js';
 import { emit } from './events.js';
 import { sendEmail } from './mail.js';
+import { forgetFamily as forgetWearables } from './wearables.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -121,6 +122,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
   if (String(confirm ?? '').trim().toLowerCase() !== fam.name.toLowerCase()) throw badRequest(`Type the family name exactly (${fam.name}) to confirm.`);
   const parents = fam.guardians.map((g) => g.email);
   const kids = ctx.db.all('SELECT id FROM clients WHERE family_id = ?', familyId).map((k) => k.id);
+  await forgetWearables(ctx, familyId);   // tokens revoked and forgotten first, so no pull lands after the data is gone
   ctx.db.tx(() => {
     for (const id of kids) {
       ctx.db.run(`UPDATE subscriptions SET status = 'canceled', canceled_at = COALESCE(canceled_at, ?) WHERE client_id = ? AND status != 'canceled'`, ctx.now(), id);

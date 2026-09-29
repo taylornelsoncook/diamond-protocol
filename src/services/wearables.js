@@ -5,7 +5,7 @@
 // Tokens live in wearable_connections. A token the provider refuses marks the connection "needs reconnecting" and stops
 // the pulls until someone connects again; disconnecting revokes the token and keeps the data already pulled.
 // Apple Health has no cloud service and Garmin opens its feed to approved partners only, so those stay file imports.
-import { newId, token, v, notFound, conflict, badRequest } from '../util.js';
+import { newId, token, v, notFound, conflict, badRequest, HttpError } from '../util.js';
 import { METRICS } from './dataimport.js';
 import { rateLimit } from './security.js';
 
@@ -52,18 +52,24 @@ export function connectUrl(ctx, clientId, provider, by = {}) {
   const state = token(24);
   ctx.db.run('DELETE FROM wearable_auth_states WHERE created_at < ?', new Date(Date.parse(ctx.now()) - STATE_MINUTES * 60000).toISOString());
   ctx.db.run('INSERT INTO wearable_auth_states (state, client_id, provider, by_kind, by_id, return_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    state, c.id, p, by.kind === 'staff' ? 'staff' : 'parent', by.id ?? null, by.kind === 'staff' ? `/#/clients/${c.id}` : '/parent', ctx.now());
+    state, c.id, p, by.kind === 'staff' ? 'staff' : 'parent', by.id ?? null, by.kind === 'staff' ? `/?back=#/clients/${c.id}` : '/parent?tab=progress', ctx.now());
   const q = new URLSearchParams({ client_id: creds(p).id, redirect_uri: redirectUri(ctx, p), response_type: 'code', scope: PROVIDERS[p].scopes, state });
   return { url: `${PROVIDERS[p].authorize}?${q}`, provider: p, label: PROVIDERS[p].label, expires_in_minutes: STATE_MINUTES };
 }
 // Back from the provider's sign-in page. Always answers with somewhere to go: the portal's Progress tab or the client
-// page, with ?wearable= saying what happened (connected, denied, expired, error).
+// page, with ?wearable= saying what happened (connected, denied, expired, error). The query goes before the # so the
+// page's own script can read it (the client page lives at /#/clients/<id>).
 export async function callback(ctx, provider, query = {}) {
   const p = Object.hasOwn(PROVIDERS, String(provider)) ? String(provider) : null;
-  const back = (to, what, extra = {}) => ({ __redirect: `${to}${to.includes('?') ? '&' : '?'}${new URLSearchParams({ wearable: what, provider: p ?? '', ...extra })}${to.startsWith('/parent') ? '#progress' : ''}` });
-  if (!p) return back('/parent', 'error');
+  const back = (to, what) => {
+    const [path, hash = ''] = String(to || '/parent?tab=progress').split('#');
+    const [pathname, query = ''] = path.split('?');
+    const q = new URLSearchParams(query); q.set('wearable', what); q.set('provider', p ?? '');
+    return { __redirect: `${pathname}?${q}${hash ? `#${hash}` : ''}` };
+  };
+  if (!p) return back('/parent?tab=progress', 'error');
   const row = query.state ? ctx.db.get('SELECT * FROM wearable_auth_states WHERE state = ? AND provider = ?', String(query.state), p) : null;
-  if (!row || Date.parse(row.created_at) < Date.parse(ctx.now()) - STATE_MINUTES * 60000) return back('/parent', 'expired');
+  if (!row || Date.parse(row.created_at) < Date.parse(ctx.now()) - STATE_MINUTES * 60000) return back('/parent?tab=progress', 'expired');
   ctx.db.run('DELETE FROM wearable_auth_states WHERE state = ?', row.state);
   const to = row.return_to;
   if (query.error || !query.code) return back(to, 'denied');
@@ -96,11 +102,18 @@ async function exchange(ctx, p, form) {
   if (!d.access_token) throw new ProviderError(res.status, 'no access token');
   return d;
 }
-async function apiGet(ctx, p, accessToken, path, params = {}) {
+const MAX_429_RETRIES = 3;                                  // a provider that keeps saying "slow down" is given up on
+async function apiGet(ctx, p, accessToken, path, params = {}, attempt = 0) {
   const url = new URL(`${PROVIDERS[p].api}${path}`);
   for (const [k, val] of Object.entries(params)) if (val !== undefined && val !== null && val !== '') url.searchParams.set(k, String(val));
   const res = await http(ctx)(url.toString(), { headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' }, signal: AbortSignal.timeout(20000) });
-  if (res.status === 429) { const wait = Number(res.headers?.get?.('retry-after')) || 2; await new Promise((r) => setTimeout(r, Math.min(wait, 10) * 1000)); return apiGet(ctx, p, accessToken, path, params); }
+  if (res.status === 429) {
+    if (attempt >= MAX_429_RETRIES) throw new ProviderError(429, 'rate limited; try again later');
+    const raw = res.headers?.get?.('retry-after'), ra = raw == null || raw === '' ? 2 : Number(raw);
+    const wait = Number.isFinite(ra) && ra >= 0 ? ra : 2;             // seconds; an HTTP-date Retry-After counts as 2 seconds
+    await new Promise((r) => setTimeout(r, Math.min(wait, 10) * 1000));
+    return apiGet(ctx, p, accessToken, path, params, attempt + 1);
+  }
   const text = await res.text();
   if (!res.ok) throw new ProviderError(res.status, text);
   try { return JSON.parse(text); } catch { throw new ProviderError(res.status, 'not JSON'); }
@@ -218,7 +231,12 @@ export async function syncConnection(ctx, id, { days = SYNC_DAYS } = {}) {
   try {
     if (!conn.expires_at || Date.parse(conn.expires_at) < now + 120000) {
       if (!conn.refresh_token) throw new ProviderError(401, 'no refresh token');
-      const tok = await exchange(ctx, p, { grant_type: 'refresh_token', refresh_token: conn.refresh_token, ...(p === 'whoop' ? { scope: 'offline' } : {}) });
+      let tok;
+      try { tok = await exchange(ctx, p, { grant_type: 'refresh_token', refresh_token: conn.refresh_token, ...(p === 'whoop' ? { scope: 'offline' } : {}) }); }
+      catch (e) {   // 400 invalid_grant (access revoked in the WHOOP or Oura app, or a refresh token already used) or 401: the sign-in is gone
+        if (e instanceof ProviderError && (e.status === 400 || e.status === 401)) throw new ProviderError(401, `refresh refused: ${String(e.message).replace(/^the provider answered \d+:? ?/, '')}`);
+        throw e;
+      }
       conn.access_token = tok.access_token; conn.refresh_token = tok.refresh_token ?? conn.refresh_token; conn.expires_at = expiry(ctx, tok);
       ctx.db.run('UPDATE wearable_connections SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = ?', conn.access_token, conn.refresh_token, conn.expires_at, id);
     }
@@ -229,11 +247,16 @@ export async function syncConnection(ctx, id, { days = SYNC_DAYS } = {}) {
     ctx.db.run('UPDATE wearable_connections SET last_sync_at = ?, last_sync_days = ?, last_error = NULL WHERE id = ?', ctx.now(), saved.days, id);
     return { id, provider: p, ...saved };
   } catch (e) {
-    const refused = e instanceof ProviderError && (e.status === 401 || e.status === 403 || (e.status === 400 && /refresh/i.test(e.message)));
+    const refused = e instanceof ProviderError && (e.status === 401 || e.status === 403);
     ctx.db.run('UPDATE wearable_connections SET last_error = ?, status = ? WHERE id = ?', String(e.message).slice(0, 300), refused ? 'needs_reconnect' : conn.status, id);
     if (refused) return { id, provider: p, needs_reconnect: true, error: e.message };
     throw e;
   }
+}
+// Pull now, from a button: a provider that errors is answered as 502 with what it said, not a bare server error.
+export async function syncNow(ctx, id, opts) {
+  try { return await syncConnection(ctx, id, opts); }
+  catch (e) { if (e instanceof ProviderError) throw new HttpError(502, 'provider_error', `The pull didn't finish: ${e.message}. Try again in a few minutes.`); throw e; }
 }
 // One value per athlete, metric and day, like a file import: the same value stays, a different one is replaced (a pull is
 // the freshest word from the device). Values outside what's possible, and a 0 where 0 can't be measured, are skipped.
@@ -291,6 +314,14 @@ export async function disconnect(ctx, id, { familyId = null } = {}) {
   } catch (e) { console.error('wearable revoke:', e.message); }
   ctx.db.run('DELETE FROM wearable_connections WHERE id = ?', id);
   return { id, deleted: true, provider: w.provider, label: p.label };
+}
+// A family's data is deleted: every connection of its athletes is revoked (best effort) and forgotten, and any sign-in
+// still in flight is dropped, so the job never pulls for them again. The data already pulled goes with the family's data.
+export async function forgetFamily(ctx, familyId) {
+  const rows = ctx.db.all('SELECT w.id FROM wearable_connections w JOIN clients c ON c.id = w.client_id WHERE c.family_id = ?', familyId);
+  for (const r of rows) { try { await disconnect(ctx, r.id); } catch (e) { console.error('wearable forget:', e.message); ctx.db.run('DELETE FROM wearable_connections WHERE id = ?', r.id); } }
+  ctx.db.run('DELETE FROM wearable_auth_states WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?)', familyId);
+  return rows.length;
 }
 export function connectionFor(ctx, id, { familyId = null } = {}) {
   const w = ctx.db.get('SELECT w.*, c.family_id FROM wearable_connections w JOIN clients c ON c.id = w.client_id WHERE w.id = ?', id);

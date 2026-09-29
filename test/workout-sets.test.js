@@ -73,7 +73,10 @@ test('sets and reps come from the prescription', () => {
   assert.deepEqual(parseRx('8 × 30 sec hard, 60 sec easy'), { sets: 8, reps: null });
   assert.deepEqual(parseRx('10'), { sets: 1, reps: 10 });
   assert.deepEqual(parseRx('Easy jog'), { sets: 1, reps: null });
-  assert.deepEqual(parseRx('20 × 3'), { sets: 10, reps: 3 }, 'never more than 10 rows to start with');
+  assert.deepEqual(parseRx('20 × 3'), { sets: 12, reps: 3 }, 'never more than 12 rows to start with');
+  // The fields win over the text; a kept snapshot without them falls back to the text.
+  assert.deepEqual(parseRx({ sets: 4, reps: '6-8', prescription: '3 × 10' }), { sets: 4, reps: 6 });
+  assert.deepEqual(parseRx({ sets: null, reps: null, prescription: '3 × 10' }), { sets: 3, reps: 10 });
 });
 
 test('home: today\'s workout with sets to log and weights from the tested max, and the next three coming up', async () => {

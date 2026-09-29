@@ -121,7 +121,8 @@ test('copy a workout, swap an exercise, remove one and undo it back into place, 
   await coach('PATCH', `/v1/workout-exercises/${exercises[0].id}`, { exercise_id: a.id });
 
   const removed = (await coach('DELETE', `/v1/workout-exercises/${exercises[1].id}`)).body;
-  assert.deepEqual(removed.restore, { workout_id: w.id, exercise_id: b.id, prescription: '3 × 40 sec', load_test: null, load_pct: null, position: 2 });
+  assert.deepEqual(removed.restore, { workout_id: w.id, exercise_id: b.id, prescription: '3 × 40 sec', load_test: null, load_pct: null, position: 2,
+    sets: 3, reps: '40 sec', tempo: null, rest_seconds: null, target_rpe: null, load_text: null, group_label: null, group_kind: null, note: null });
   exercises = (await coach('GET', `/v1/programs/${p.id}`)).body.workouts[0].exercises;
   assert.deepEqual(exercises.map((x) => [x.name, x.position]), [['Push-up', 1], ['Row', 2]]);
   const { workout_id, ...back } = removed.restore;

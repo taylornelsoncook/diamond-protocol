@@ -6,7 +6,7 @@
 // suggested (the coach presses Use it), anything else is offered as a new exercise.
 // Needs ANTHROPIC_API_KEY (the owner adds it in Render). The file goes to Anthropic to be read and nothing else.
 import { newId, v, badRequest, notFound, HttpError } from '../util.js';
-import { CATEGORIES, LOAD_TESTS, getProgram, loadInput } from './programs.js';
+import { CATEGORIES, LOAD_TESTS, GROUP_KINDS, getProgram, loadInput, slotFields, insertSlot, rxText, splitRx } from './programs.js';
 import { rateLimit } from './security.js';
 
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;      // Anthropic takes up to 32 MB a request; base64 adds a third
@@ -65,8 +65,10 @@ const DRAFT_SCHEMA = {
     workouts: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['week', 'day', 'title', 'exercises'], properties: {
       week: { type: 'integer' }, day: { type: 'integer' }, title: { type: 'string' },
       exercises: { type: 'array', items: { type: 'object', additionalProperties: false,
-        required: ['name', 'library_match', 'prescription', 'load_lift', 'load_pct', 'note'], properties: {
-          name: { type: 'string' }, library_match: { type: 'string' }, prescription: { type: 'string' },
+        required: ['name', 'library_match', 'sets', 'reps', 'tempo', 'rest_seconds', 'rpe', 'load_text', 'group', 'group_kind', 'load_lift', 'load_pct', 'note'], properties: {
+          name: { type: 'string' }, library_match: { type: 'string' },
+          sets: { type: 'integer' }, reps: { type: 'string' }, tempo: { type: 'string' }, rest_seconds: { type: 'integer' }, rpe: { type: 'number' }, load_text: { type: 'string' },
+          group: { type: 'string' }, group_kind: { type: 'string', enum: [...Object.keys(GROUP_KINDS), ''] },
           load_lift: { type: 'string', enum: [...Object.keys(LOAD_TESTS), ''] }, load_pct: { type: 'integer' }, note: { type: 'string' } } } } } } },
     unclear: { type: 'array', items: { type: 'string' } }
   }
@@ -76,11 +78,11 @@ function instructions(library) {
 
 The app's format:
 - A program has weeks (1 to 52). Each week has days (1 to 7). Each day is one workout with a short title (for example "Lower body" or "Day 1"). A workout has exercises in order.
-- Each exercise has a prescription, at most 80 characters, written like "3 × 8", "4 × 5/side", "3 × 8-10", "3 × 30 sec", "2 × 20 yd" or "3 × max". Use the × sign. Put sets first.
-- When the file gives a weight as a percent of a tested max of the back squat, bench press or power clean, set load_lift to squat_1rm, bench_1rm or power_clean_1rm and load_pct to the whole-number percent (30 to 110). Otherwise load_lift is "" and load_pct is 0. Percents of any other lift, RPE, tempo, rest times and coaching cues go in note (short), not in the prescription.
+- Each exercise has separate fields: sets (a whole number, 1 to 12; 0 when the file gives none), reps as short text exactly as the file means it ("8", "8-10", "5/side", "30 sec", "20 yd", "max"; "" when none), tempo ("3-1-1", "" when none), rest_seconds (the rest after each set in seconds, 0 when none is given), rpe (the target RPE 1 to 10, 0 when none), and load_text (a load written as text, like "135 lb", "BW", "moderate", "60% 1RM" for a lift that isn't below; "" when none).
+- When the file gives a weight as a percent of a tested max of the back squat, bench press or power clean, set load_lift to squat_1rm, bench_1rm or power_clean_1rm and load_pct to the whole-number percent (30 to 110). Otherwise load_lift is "" and load_pct is 0. Coaching cues go in note (short).
 - If the file says a workout repeats (for example "weeks 1-4" or "repeat for 3 weeks"), list it once for every week it covers. If weeks change the sets or percents, use each week's own numbers.
 - If the file has no weeks, everything is week 1. Number days in the order they appear (Day 1, Day 2...), or by weekday (Monday = 1).
-- Supersets, circuits and warm-ups: list each exercise on its own in order, and say "Superset with the next" or "Warm-up" in note.
+- Supersets, circuits and blocks: list each exercise on its own in order, and give every exercise in the same group the same letter in group ("A" for the first group of the workout, "B" for the next...) with group_kind superset, circuit or block (a block is a section like a warm-up or a finisher). An exercise on its own has group "" and group_kind "". A1/A2/B1 labels in the file mean group A, group B.
 - name is the exercise exactly as the file writes it. library_match is the exact name of the same exercise from the coach's library below, only when it is clearly the same movement (abbreviations like RDL = Romanian deadlift, DB = dumbbell, KB = kettlebell count); otherwise "".
 - Anything you can't place or read clearly goes in unclear as one short sentence each, in plain English, saying where it is in the file.
 - If the file isn't a training program, set is_program to false and leave workouts empty.
@@ -202,7 +204,8 @@ export async function draftFromFile(ctx, body, user) {
       const name = clean(x?.name, 120);
       const lift = Object.hasOwn(LOAD_TESTS, x?.load_lift) ? x.load_lift : '';
       const pct = Math.trunc(Number(x?.load_pct));
-      return { name, ...matchExercise(name, x?.library_match, library), prescription: clean(x?.prescription, 80),
+      const f = draftFields(x);
+      return { name, ...matchExercise(name, x?.library_match, library), ...f, prescription: rxText(f),
         load_test: lift && pct >= 30 && pct <= 110 ? lift : null, load_pct: lift && pct >= 30 && pct <= 110 ? pct : null, note: clean(x?.note, 200) };
     }).filter((x) => x.name);
     if (Array.isArray(w.exercises) && w.exercises.length > MAX_EXERCISES) notes.push(`Week ${week}, day ${day} has more than ${MAX_EXERCISES} exercises; only the first ${MAX_EXERCISES} are in the draft.`);
@@ -221,9 +224,29 @@ export async function draftFromFile(ctx, body, user) {
   };
 }
 
+// The set details of one exercise in Claude's draft, within the builder's limits (anything outside them is dropped, the
+// coach fills it in). A draft with only a prescription (an older draft) is split into sets and reps.
+function draftFields(x) {
+  const sets = Math.trunc(Number(x?.sets));
+  const rest = Math.trunc(Number(x?.rest_seconds));
+  const rpe = Number(x?.rpe);
+  const group = clean(x?.group, 5).toUpperCase();   // one letter; "ZZ" or "A1" is dropped
+  const f = { sets: sets >= 1 && sets <= 12 ? sets : null, reps: clean(x?.reps, 40) || null, tempo: clean(x?.tempo, 20) || null,
+    rest_seconds: Number.isInteger(rest) && rest > 0 && rest <= 1800 ? rest : null,
+    target_rpe: rpe >= 1 && rpe <= 10 && Math.round(rpe * 2) === rpe * 2 ? rpe : null, load_text: clean(x?.load_text, 40) || null,
+    group_label: /^[A-Z]$/.test(group) ? group : null, group_kind: null };
+  f.group_kind = f.group_label ? (Object.hasOwn(GROUP_KINDS, x?.group_kind) ? x.group_kind : 'superset') : null;
+  if (f.sets === null && f.reps === null && x?.prescription) {
+    const s = splitRx(clean(x.prescription, 80));
+    f.sets = s.sets; f.reps = s.reps; f.load_text ??= s.load_text; f.target_rpe ??= s.target_rpe;
+  }
+  return f;
+}
+
 // ---------- Saving ----------
 // body: { program_id (add to this program) or program: { name, description, level }, workouts: [{ week, day, title,
-// exercises: [{ exercise_id } or { new_exercise: { name, category } }, prescription, load_test, load_pct] }] }.
+// exercises: [{ exercise_id } or { new_exercise: { name, category } }, the set fields (sets, reps, tempo, rest_seconds,
+// target_rpe, load_text, group_label, group_kind, note) or a prescription, load_test, load_pct] }] }.
 // Every line is checked first; any problem and nothing is saved. New exercises with the same name are added once.
 export function saveImport(ctx, body = {}) {
   const problems = [];
@@ -262,10 +285,8 @@ export function saveImport(ctx, body = {}) {
     const out = [];
     exs.slice(0, MAX_EXERCISES).forEach((x, i) => {
       lines++;
-      if (text(x?.prescription) === null) { problems.push(`${where(w, i)}: the sets and reps must be text, like 3 × 8.`); return; }
-      const rx = clean(x?.prescription, 200);
-      if (!rx) problems.push(`${where(w, i)}: add the sets and reps, like 3 × 8.`);
-      else if (rx.length > 80) problems.push(`${where(w, i)}: the sets and reps are ${rx.length} characters; keep them to 80.`);
+      let rx = null;
+      try { rx = slotFields(x && typeof x === 'object' ? x : {}); } catch (e) { problems.push(`${where(w, i)}: ${e.message.charAt(0).toLowerCase()}${e.message.slice(1)}`); }
       let load = { test: null, pct: null };
       try { load = loadInput(x ?? {}); } catch (e) { problems.push(`${where(w, i)}: ${e.message}`); }
       if (x?.exercise_id) {
@@ -305,8 +326,7 @@ export function saveImport(ctx, body = {}) {
     for (const w of workouts) {
       const wid = newId('wo');
       ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title) VALUES (?, ?, ?, ?, ?)', wid, programId, w.week, w.day, w.title);
-      w.exercises.forEach((x, i) => ctx.db.run('INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription, load_test, load_pct) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        newId('wex'), wid, x.exercise_id ?? ids.get(x.new_name), i + 1, x.rx, x.load.test, x.load.pct));
+      w.exercises.forEach((x, i) => insertSlot(ctx, wid, x.exercise_id ?? ids.get(x.new_name), i + 1, { ...x.rx, load_test: x.load.test, load_pct: x.load.pct }));
     }
   });
   const p = getProgram(ctx, programId);

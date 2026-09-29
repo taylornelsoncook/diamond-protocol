@@ -2,6 +2,7 @@
 // every line (which library exercise, sets and reps, weight from a max), fixes what's off and saves it as a new program
 // or as weeks added to one. Nothing is saved until Save, and the server checks everything again then.
 import { h, fill, toast, busy, btn, field, input, select, panel } from './ui.js';
+import { setFields } from './set-fields.js';
 
 const MAX_MB = 20, MAX_PHOTO_MB = 3.7;
 const LOAD_OPTIONS = [['', 'Weight: coach sets it'], ['squat_1rm', '% of back squat max'], ['bench_1rm', '% of bench press max'], ['power_clean_1rm', '% of power clean max']];
@@ -98,7 +99,7 @@ export async function importView(main, deps) {
       };
       pick.addEventListener('input', sync); newName.addEventListener('input', sync); sync();
       const useSuggestion = () => { if (x.how === 'suggested' && mode === 'library' && !chosen()) { pick.value = x.exercise_name; sync(); return 1; } return 0; };
-      const rx = input({ value: x.prescription, maxlength: '80', placeholder: '3 × 8', 'aria-label': `Sets and reps for ${x.name}` });
+      const sf = setFields(x, { hint: false });
       const lt = select(LOAD_OPTIONS, { value: x.load_test ?? '', 'aria-label': 'Weight from a tested max' });
       const lp = input({ type: 'number', min: '30', max: '110', inputmode: 'numeric', placeholder: '%', value: x.load_pct ? String(x.load_pct) : '', 'aria-label': 'Percent of max' });
       const syncLoad = () => { lp.disabled = !lt.value; };
@@ -109,11 +110,11 @@ export async function importView(main, deps) {
             h('div', { class: 'grow row wrap', style: 'gap:8px;align-items:center' }, h('span', { class: 'small muted' }, 'In the file: ', h('strong', null, x.name)), badge),
             btn('Remove', () => remove(), 'ghost', { 'aria-label': `Remove ${x.name}` })),
           libBox, newBox,
-          h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { style: 'flex:1 1 120px;min-width:0' }, rx), h('div', { style: 'flex:1 1 180px;min-width:0' }, lt), h('div', { style: 'flex:0 0 5.5rem' }, lp)),
-          x.note ? h('span', { class: 'small pg-note' }, `Note from the file: ${x.note}`) : null));
+          sf.el,
+          h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { style: 'flex:1 1 180px;min-width:0' }, lt), h('div', { style: 'flex:0 0 5.5rem' }, lp))));
       return { el, useSuggestion, value: () => ({
         ...(mode === 'new' ? { new_exercise: { name: newName.value.trim(), category: cat.value || null } } : { exercise_id: chosen()?.id ?? null }),
-        prescription: rx.value.trim(), ...(lt.value ? { load_test: lt.value, load_pct: Number(lp.value) } : { load_test: null }) }) };
+        ...sf.body(), ...(lt.value ? { load_test: lt.value, load_pct: Number(lp.value) } : { load_test: null }) }) };
     }
 
     function dayFor(w) {

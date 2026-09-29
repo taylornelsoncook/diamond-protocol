@@ -183,16 +183,7 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   position INTEGER NOT NULL,
   prescription TEXT NOT NULL,
   load_test TEXT,                                -- version 21: weight as a percent of this tested max (squat_1rm...)
-  load_pct INTEGER,
-  sets INTEGER,                                  -- version 49: structured set details; prescription is the short text built from them
-  reps TEXT,                                     -- "8", "8-10", "5/side", "40 sec", "max"
-  tempo TEXT,
-  rest_seconds INTEGER,
-  target_rpe REAL,
-  load_text TEXT,                                -- a load the coach types ("135 lb", "BW"), beside the percent of a tested max
-  group_label TEXT,                              -- A, B, C: exercises sharing a label in one workout are one group
-  group_kind TEXT CHECK (group_kind IN ('superset','circuit','block')),
-  note TEXT                                      -- a cue for this slot
+  load_pct INTEGER
 );
 CREATE INDEX IF NOT EXISTS workout_exercises_exercise ON workout_exercises(exercise_id);   -- the library's use counts (a big video library)
 CREATE TABLE IF NOT EXISTS assignments (

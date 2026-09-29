@@ -1,5 +1,6 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
+import { detailsOf, groupTag, withGroups } from './set-fields.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 const params = new URLSearchParams(location.search);
@@ -157,11 +158,14 @@ const savePrefs = () => store.set('dp_wo_prefs', prefs);
 const restBar = h('div', { class: 'c-rest', hidden: true, role: 'timer', 'aria-label': 'Rest timer' });
 let rest = null;
 const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-function startRest() {
+// The coach's rest for the exercise wins over the athlete's own setting; a rest of 0 (a circuit) means no timer.
+function startRest(x = null) {
   if (!prefs.rest) return;
   stopRest();
-  rest = { ends: Date.now() + prefs.rest_sec * 1000, tick: setInterval(drawRest, 250) };
-  say(`Rest ${clock(prefs.rest_sec)}.`);
+  const secs = x?.rest_seconds != null ? x.rest_seconds : prefs.rest_sec;
+  if (!secs) return;
+  rest = { ends: Date.now() + secs * 1000, tick: setInterval(drawRest, 250) };
+  say(`Rest ${clock(secs)}.`);
   drawRest();
 }
 function stopRest() { if (rest) clearInterval(rest.tick); rest = null; restBar.hidden = true; document.body.classList.remove('c-resting'); }
@@ -257,18 +261,19 @@ function renderLogger(w) {
     const logged = (draft.sets[x.id] ?? []).filter((r) => r.done).length;
     return h('button', { type: 'button', class: 'c-ex-head', 'aria-expanded': String(isOpen), onClick: () => { state.open = isOpen ? null : x.id; redrawCards(); if (!isOpen) cards.get(x.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
       h('span', { class: 'c-ex-mark', 'aria-hidden': 'true' }, exDone(x) ? '✓' : playIcon()),
-      h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, x.name),
-        h('span', { class: 'dp-ex-sets' }, [x.prescription, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
+      h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
+        h('span', { class: 'dp-ex-sets' }, [detailsOf(x), logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
         x.load ? h('span', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : `color:var(${x.load.planned_pct ? '--amber' : '--green-bright'})` }, x.load.text) : null),
       h('span', { class: 'sr-only' }, exDone(x) ? ' (done)' : ''));
   }
   function card(x) {
-    const box = h('div', { class: `c-ex${x.id === state.open ? ' c-ex--open' : ''}${exDone(x) ? ' c-ex--done' : ''}` });
+    const box = h('div', { class: `c-ex${x.id === state.open ? ' c-ex--open' : ''}${exDone(x) ? ' c-ex--done' : ''}${x.group_label ? ' sf-in-group' : ''}` });
     const isOpen = x.id === state.open;
     box.append(headOf(x));
     if (isOpen) {
       box.append(h('div', { class: 'stack c-ex-media' },
         x.video_url !== undefined ? videoEmbed(x.video_url, x.name, 'Demo video coming soon. Follow the cues below.', x.poster_url) : null,
+        x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
         x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
         x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null));
@@ -319,17 +324,17 @@ function renderLogger(w) {
       say(next ? `${x.name} done. Next: ${next.name}.` : `${x.name} done. That's every exercise. Finish when you're ready.`);
       state.open = next?.id ?? null;
       redrawCards();
-      if (next) { startRest(); cards.get(next.id)?.querySelector('.c-tick')?.focus(); cards.get(next.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      if (next) { startRest(x); cards.get(next.id)?.querySelector('.c-tick')?.focus(); cards.get(next.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
       else finishBtn.focus();
     } else {
       drawSets(x, setsBox, all.findIndex((s) => !s.done));
       redrawHead(x);
-      startRest();
+      startRest(x);
     }
     drawCount();
   }
   const list = h('div', { class: 'stack', style: 'gap:8px' });
-  const redrawCards = () => { cards.clear(); fill(list, w.exercises.map((x) => { const c = card(x); cards.set(x.id, c); return c; })); drawCount(); };
+  const redrawCards = () => { cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; })); drawCount(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
   const redrawHead = (x) => { const box = cards.get(x.id); if (!box) return; box.querySelector('.c-ex-head').replaceWith(headOf(x)); box.classList.toggle('c-ex--done', exDone(x)); };
 
@@ -370,7 +375,8 @@ function renderLogger(w) {
     h('div', { class: 'dp-panel stack' },
       h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
       h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
-      h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen)),
+      h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen,
+        w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null)),
     finishBtn,
     reopened ? null : comingUp(home.upcoming),
     reopened ? null : historyPanel(home),
@@ -431,7 +437,7 @@ async function reopen(logId) {
   draft = { token: tokenValue, workout_id: log.workout_id, log_id: log.id, title: log.title, request_id: `edit-${log.id}-${newId()}`, started_at: null, notes: log.notes ?? '', rpe: log.rpe ?? null,
     sets: Object.fromEntries(exercises.map((x) => [x.id, x.sets.map((s) => ({ weight: s.weight, reps: s.reps, done: true }))])) };
   saveDraft();
-  draft.workout = { id: log.workout_id, title: log.title, week: log.week, day: log.day, program_name: log.program_name, exercises: exercises.map((x) => ({ id: x.id, exercise_id: x.exercise_id, name: x.name, prescription: x.prescription, target_sets: Math.max(x.target_sets, x.sets.at(-1)?.set_no ?? 0), target_reps: x.target_reps })) };
+  draft.workout = { id: log.workout_id, title: log.title, week: log.week, day: log.day, program_name: log.program_name, exercises: exercises.map((x) => ({ id: x.id, exercise_id: x.exercise_id, name: x.name, prescription: x.prescription, details: x.details, note: x.note, group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag, target_sets: Math.max(x.target_sets, x.sets.at(-1)?.set_no ?? 0), target_reps: x.target_reps })) };
   // Fill gaps: a set logged as number 3 with no 1 and 2 still shows in its place.
   for (const x of exercises) { const rows = []; for (const s of x.sets) rows[s.set_no - 1] = { weight: s.weight, reps: s.reps, done: true }; draft.sets[x.id] = Array.from(rows, (r) => r ?? { weight: '', reps: '', done: false }); }
   saveDraft();

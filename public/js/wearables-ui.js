@@ -15,6 +15,7 @@ export function wearablesBlock(opts) {
       return h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
         h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, w.label),
           h('span', { class: `small ${cls}` }, `${word}${w.last_sync_at ? ` · last pulled ${ago(w.last_sync_at).toLowerCase()}` : ' · nothing pulled yet'}`),
+          w.status === 'active' ? h('span', { class: 'small muted' }, w.history_done ? 'Everything on the account is in, and new days arrive a few times a day.' : w.history_from ? `Bringing in the history: back to ${new Date(`${w.history_from}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })} so far; the rest follows over the next day.` : 'The account\'s whole history is being brought in; it follows over the next day.') : null,
           w.status === 'needs_reconnect' ? h('span', { class: 'small muted' }, `${w.label} stopped accepting our access${w.last_error ? ` (${w.last_error})` : ''}. Connect it again below.`) : null),
         opts.sync && w.status === 'active' ? btn('Pull now', (e) => busy(e.currentTarget, async () => { const r = await opts.sync(w.id); toast(r.needs_reconnect ? `${w.label} needs reconnecting.` : `Pulled ${r.days ?? 0} ${r.days === 1 ? 'day' : 'days'} from ${w.label}.`); draw(); opts.afterChange?.(); }), 'ghost') : null,
         btn('Disconnect', (e) => { if (!confirm(`Disconnect ${w.label}? What's already on file stays.`)) return; busy(e.currentTarget, async () => { await opts.disconnect(w.id); toast(`${w.label} disconnected.`); draw(); opts.afterChange?.(); }); }, 'ghost'));
@@ -27,7 +28,7 @@ export function wearablesBlock(opts) {
         toast(`Opening ${p.label}'s sign-in. Sign in with ${opts.first}'s ${p.label} account and allow access.`);
         location.href = r.url;
       }), linked.length ? 'ghost' : 'secondary')),
-      h('span', { class: 'small muted' }, `Sign in with ${opts.first}'s ${connectable.map((p) => p.label).join(' or ')} account; the password stays with them. Recovery, sleep, strain and workouts then arrive on their own, a few times a day.`)) : null;
+      h('span', { class: 'small muted' }, `Sign in with ${opts.first}'s ${connectable.map((p) => p.label).join(' or ')} account; the password stays with them. Everything on the account, back to the first day, comes in over the next day, and new days arrive on their own a few times a day.`)) : null;
     fill(box, rows.length ? rows : null,
       !rows.length && !connectable.length ? h('p', { class: 'small muted', style: 'margin:0' }, providers.length ? '' : 'No wearable is set up for connecting yet.') : null,
       connectBtns);

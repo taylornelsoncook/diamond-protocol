@@ -11,6 +11,11 @@ import { rateLimit } from './security.js';
 
 const DAY = 86400000;
 export const FIRST_SYNC_DAYS = 30, SYNC_DAYS = 7, STATE_MINUTES = 20, PAGE_LIMIT = 25, MAX_PAGES = 40;
+// The athlete's whole history comes in after connecting, in chunks walking back from the first pull: HISTORY_CHUNK_DAYS
+// per call; once anything has come back, HISTORY_EMPTY_STOP empty chunks in a row (half a year with nothing) means done,
+// and HISTORY_MAX_YEARS back means done whatever came (an account that's been empty for months is still walked, so a
+// band that broke in the spring doesn't hide the years before it).
+export const HISTORY_CHUNK_DAYS = 90, HISTORY_EMPTY_STOP = 2, HISTORY_MAX_YEARS = 6, HISTORY_JOB_CHUNKS = 4;
 
 // Where each provider signs people in and hands out data. Field names follow the providers' published APIs (WHOOP
 // developer API v2, Oura API v2); anything missing or unscored in a record is skipped, never guessed.
@@ -84,7 +89,10 @@ export async function callback(ctx, provider, query = {}) {
     ON CONFLICT (client_id, provider) DO UPDATE SET provider_user_id = excluded.provider_user_id, access_token = excluded.access_token, refresh_token = excluded.refresh_token,
       expires_at = excluded.expires_at, scopes = excluded.scopes, status = 'active', connected_by_kind = excluded.connected_by_kind, connected_by = excluded.connected_by, connected_at = excluded.connected_at, last_error = NULL`,
     id, row.client_id, p, providerUserId, tok.access_token, tok.refresh_token ?? null, expiry(ctx, tok), tok.scope ?? PROVIDERS[p].scopes, row.by_kind, row.by_id, ctx.now());
-  try { await syncConnection(ctx, id, { days: FIRST_SYNC_DAYS }); } catch (e) { console.error('wearable first sync:', e.message); }
+  ctx.db.run('UPDATE wearable_connections SET history_from = NULL, history_empty = 0, history_found = 0, history_done = 0 WHERE id = ?', id);   // connected again: the history is walked once more (what's on file stays)
+  try { const first = await syncConnection(ctx, id, { days: FIRST_SYNC_DAYS }); if (first.values + first.workouts > 0) ctx.db.run('UPDATE wearable_connections SET history_found = 1 WHERE id = ?', id); }
+  catch (e) { console.error('wearable first sync:', e.message); }
+  startHistory(ctx, id);   // the rest of the athlete's history follows on its own (not awaited: the parent lands back at once)
   return back(to, 'connected');
 }
 const expiry = (ctx, tok) => new Date(Date.parse(ctx.now()) + Math.max(60, Number(tok.expires_in) || 3600) * 1000).toISOString();
@@ -221,7 +229,8 @@ async function pullOura(ctx, conn, from, to) {
 }
 
 // Pull the last days for one connection and save what's new. A refused token marks the connection for reconnecting.
-export async function syncConnection(ctx, id, { days = SYNC_DAYS } = {}) {
+// window: { from, to } (Dates) pulls that span instead of the last days, for the history walk.
+export async function syncConnection(ctx, id, { days = SYNC_DAYS, window = null } = {}) {
   const conn = ctx.db.get('SELECT w.*, c.archived_at FROM wearable_connections w JOIN clients c ON c.id = w.client_id WHERE w.id = ?', id);
   if (!conn) throw notFound('Wearable connection');
   if (conn.archived_at) return { id, skipped: 'archived' };
@@ -241,10 +250,11 @@ export async function syncConnection(ctx, id, { days = SYNC_DAYS } = {}) {
       ctx.db.run('UPDATE wearable_connections SET access_token = ?, refresh_token = ?, expires_at = ? WHERE id = ?', conn.access_token, conn.refresh_token, conn.expires_at, id);
     }
     const span = Math.min(Math.max(Number(days) || SYNC_DAYS, 1), 90);
-    const from = new Date(now - span * DAY), to = new Date(now);
+    const from = window?.from ?? new Date(now - span * DAY), to = window?.to ?? new Date(now);
     const pulled = p === 'whoop' ? await pullWhoop(ctx, conn, from, to, zone) : await pullOura(ctx, conn, from, to);
     const saved = save(ctx, conn, pulled);
-    ctx.db.run('UPDATE wearable_connections SET last_sync_at = ?, last_sync_days = ?, last_error = NULL WHERE id = ?', ctx.now(), saved.days, id);
+    if (window) ctx.db.run('UPDATE wearable_connections SET last_error = NULL WHERE id = ?', id);
+    else ctx.db.run('UPDATE wearable_connections SET last_sync_at = ?, last_sync_days = ?, last_error = NULL WHERE id = ?', ctx.now(), saved.days, id);
     return { id, provider: p, ...saved };
   } catch (e) {
     const refused = e instanceof ProviderError && (e.status === 401 || e.status === 403);
@@ -258,12 +268,56 @@ export async function syncNow(ctx, id, opts) {
   try { return await syncConnection(ctx, id, opts); }
   catch (e) { if (e instanceof ProviderError) throw new HttpError(502, 'provider_error', `The pull didn't finish: ${e.message}. Try again in a few minutes.`); throw e; }
 }
+// ---------- The athlete's history ----------
+// Walks back from where the pulls started (history_from, else the first pull's start) HISTORY_CHUNK_DAYS at a time,
+// saving each chunk, until HISTORY_EMPTY_STOP chunks in a row bring nothing or HISTORY_MAX_YEARS are covered. Up to
+// maxChunks per call, so one run stays well under the providers' rate limits; the job carries on where it left off.
+export async function pullHistory(ctx, id, { maxChunks = HISTORY_JOB_CHUNKS } = {}) {
+  const conn = ctx.db.get('SELECT w.*, c.archived_at FROM wearable_connections w JOIN clients c ON c.id = w.client_id WHERE w.id = ?', id);
+  if (!conn || conn.archived_at || conn.status !== 'active' || conn.history_done) return { id, chunks: 0, done: !!conn?.history_done };
+  const now = Date.parse(ctx.now()), floor = now - HISTORY_MAX_YEARS * 365 * DAY;
+  let to = conn.history_from ? Date.parse(conn.history_from) : now - FIRST_SYNC_DAYS * DAY;
+  let empty = conn.history_empty ?? 0, found = !!conn.history_found, chunks = 0, changed = 0;
+  while (chunks < maxChunks) {
+    if (to <= floor) { ctx.db.run('UPDATE wearable_connections SET history_done = 1, history_from = ? WHERE id = ?', new Date(to).toISOString(), id); return { id, chunks, changed, done: true }; }
+    const from = new Date(Math.max(floor, to - HISTORY_CHUNK_DAYS * DAY));
+    const r = await syncConnection(ctx, id, { window: { from, to: new Date(to) } });
+    if (r.skipped || r.needs_reconnect) return { id, chunks, changed, done: false, ...r };
+    chunks++; changed += r.changed;
+    if (r.values + r.workouts === 0) empty++; else { empty = 0; found = true; }
+    to = from.getTime();
+    const done = found && empty >= HISTORY_EMPTY_STOP;
+    ctx.db.run('UPDATE wearable_connections SET history_from = ?, history_empty = ?, history_found = ?, history_done = ? WHERE id = ?', from.toISOString(), empty, found ? 1 : 0, done ? 1 : 0, id);
+    if (done) return { id, chunks, changed, done: true };
+  }
+  return { id, chunks, changed, done: false };
+}
+// Right after connecting: keep pulling chunks until the history is complete, pausing between chunks so the provider
+// isn't hammered. Runs in the background; ctx.wearableHistory holds the promise so tests (and Pull now) can wait on it.
+const HISTORY_PAUSE_MS = 2500;
+export function startHistory(ctx, id) {
+  ctx.wearableHistory ??= new Map();
+  if (ctx.wearableHistory.has(id)) return ctx.wearableHistory.get(id);
+  const run = (async () => {
+    try {
+      for (let i = 0; i < 40; i++) {
+        const r = await pullHistory(ctx, id, { maxChunks: 1 });
+        if (r.done || r.chunks === 0) break;
+        if (!ctx.testMode) await new Promise((res) => setTimeout(res, HISTORY_PAUSE_MS));
+      }
+    } catch (e) { console.error('wearable history:', e.message); }   // the job picks it up from history_from
+    finally { ctx.wearableHistory.delete(id); }
+  })();
+  ctx.wearableHistory.set(id, run);
+  return run;
+}
 // One value per athlete, metric and day, like a file import: the same value stays, a different one is replaced (a pull is
 // the freshest word from the device). Values outside what's possible, and a 0 where 0 can't be measured, are skipped.
 function save(ctx, conn, { metrics, workouts }) {
   const source = `${conn.provider}_sync`, now = ctx.now();
   let changed = 0; const days = new Set();
   ctx.db.tx(() => {
+    if (!ctx.db.get('SELECT 1 AS ok FROM wearable_connections WHERE id = ?', conn.id)) return;   // disconnected (or the family deleted) while this chunk was in flight: nothing lands
     for (const m of metrics) {
       const def = METRICS[m.metric];
       if (!def || !/^\d{4}-\d{2}-\d{2}$/.test(m.day) || m.value < def.min || m.value > def.max) continue;
@@ -287,8 +341,14 @@ export async function syncAll(ctx) {
   const rows = ctx.db.all(`SELECT w.id FROM wearable_connections w JOIN clients c ON c.id = w.client_id WHERE w.status = 'active' AND c.archived_at IS NULL ORDER BY w.last_sync_at`);
   const out = { connections: rows.length, synced: 0, changed: 0, needs_reconnect: 0, failed: 0 };
   for (const r of rows) {
-    try { const s = await syncConnection(ctx, r.id); if (s.needs_reconnect) out.needs_reconnect++; else if (!s.skipped) { out.synced++; out.changed += s.changed; } }
-    catch (e) { out.failed++; console.error(`wearable sync ${r.id}:`, e.message); }
+    try {
+      const s = await syncConnection(ctx, r.id);
+      if (s.needs_reconnect) { out.needs_reconnect++; continue; }
+      if (s.skipped) continue;
+      out.synced++; out.changed += s.changed;
+      const h = await pullHistory(ctx, r.id);   // an unfinished history walks back a year per run
+      out.changed += h.changed ?? 0;
+    } catch (e) { out.failed++; console.error(`wearable sync ${r.id}:`, e.message); }
   }
   if (out.failed && out.failed === rows.length) throw new Error(`Every wearable pull failed (${out.failed}).`);
   return out;
@@ -296,7 +356,8 @@ export async function syncAll(ctx) {
 
 // ---------- Listing and disconnecting ----------
 const shape = (w) => ({ id: w.id, client_id: w.client_id, provider: w.provider, label: PROVIDERS[w.provider]?.label ?? w.provider, status: w.status, connected_by_kind: w.connected_by_kind,
-  connected_at: w.connected_at, last_sync_at: w.last_sync_at, last_sync_days: w.last_sync_days, last_error: w.last_error });
+  connected_at: w.connected_at, last_sync_at: w.last_sync_at, last_sync_days: w.last_sync_days, last_error: w.last_error,
+  history_done: !!w.history_done, history_from: w.history_from ? w.history_from.slice(0, 10) : null });
 export function listConnections(ctx, clientId) {
   return ctx.db.all('SELECT * FROM wearable_connections WHERE client_id = ? ORDER BY provider', clientId).map(shape);
 }

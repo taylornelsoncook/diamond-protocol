@@ -1,4 +1,4 @@
-import { newId, v, notFound, conflict, badRequest, localDate, zonedToUtc } from '../util.js';
+import { newId, v, notFound, conflict, badRequest, localDate, zonedToUtc, HttpError } from '../util.js';
 import { getSetting } from './families.js';
 import { sendEmail } from './mail.js';
 import { emailOptedOut } from './leads.js';
@@ -33,8 +33,10 @@ export function facts(ctx, clientId, month) {
   const minutes = logs.reduce((t, l) => t + (l.started_at ? Math.min(240, Math.max(0, Math.round((Date.parse(l.completed_at) - Date.parse(l.started_at)) / 60000))) : 0), 0);
   const efforts = logs.map((l) => l.rpe).filter((x) => x != null);
   // The program's pace (its workouts over its weeks) across the weeks of the month, while on a program.
-  const a = ctx.db.get(`SELECT p.name, p.weeks, (SELECT COUNT(*) FROM workouts w WHERE w.program_id = p.id) AS n FROM assignments a JOIN programs p ON p.id = a.program_id WHERE a.client_id = ? AND a.active = 1`, clientId);
-  const weeksIn = (Date.parse(to) - Date.parse(from)) / (7 * 86400000);
+  // Only a program the athlete was on during the month, and only for the part of the month from when they joined it.
+  const a = ctx.db.get(`SELECT p.name, p.weeks, a.start_date, (SELECT COUNT(*) FROM workouts w WHERE w.program_id = p.id) AS n FROM assignments a JOIN programs p ON p.id = a.program_id WHERE a.client_id = ? AND a.active = 1 AND a.start_date < ?`, clientId, to);
+  const onFrom = a ? Math.max(Date.parse(from), Date.parse(a.start_date) || Date.parse(from)) : Date.parse(from);
+  const weeksIn = (Date.parse(to) - onFrom) / (7 * 86400000);
   const expected = a && a.weeks && a.n ? Math.max(1, Math.round((a.n / a.weeks) * weeksIn)) : null;
   const workoutsPrev = ctx.db.get('SELECT COUNT(*) AS n FROM workout_logs WHERE client_id = ? AND completed_at >= ? AND completed_at < ?', clientId, prev.from, prev.to).n;
   const attended = ctx.db.get(`SELECT (SELECT COUNT(*) FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?)
@@ -135,17 +137,24 @@ export async function send(ctx, id, user) {
   const parents = ctx.db.all('SELECT name, email FROM guardians WHERE family_id = ? AND email IS NOT NULL AND email != \'\' ORDER BY is_primary DESC', r.family_id).filter((g) => !emailOptedOut(ctx, g.email));
   if (!parents.length) throw conflict(`${first(r.client_name)}'s family has no parent email to send to (or they unsubscribed).`);
   const text = reportText(ctx, r);
-  for (const g of parents) await sendEmail(ctx, { to: g.email, subject: `${first(r.client_name)}'s ${r.label} at ${getSetting(ctx, 'business_name')}`, text: `Hi ${first(g.name)},\n\n${text}` });
-  ctx.db.run(`UPDATE monthly_reports SET status = 'sent', sent_at = ?, sent_to = ?, sent_by = ?, updated_at = ? WHERE id = ?`, ctx.now(), JSON.stringify(parents.map((g) => g.email)), user?.name ?? 'automatic', ctx.now(), r.id);
-  emit(ctx, 'monthly_report.sent', { report_id: r.id, client_id: r.client_id, client_name: r.client_name, month: r.month, parents: parents.length, by: user?.name ?? 'automatic' });
+  // The report counts as sent only where the email left (or was logged in test mode / held by EMAIL_ONLY_TO); a mail
+  // service that refuses every address leaves the draft for another try.
+  const went = [];
+  for (const g of parents) {
+    const out = await sendEmail(ctx, { to: g.email, subject: `${first(r.client_name)}'s ${r.label} at ${getSetting(ctx, 'business_name')}`, text: `Hi ${first(g.name)},\n\n${text}` });
+    if (out.status !== 'failed') went.push(g.email);
+  }
+  if (!went.length) throw new HttpError(502, 'email_failed', `The email to ${first(r.client_name)}'s parents didn't go out. Check the email outbox, then try again.`);
+  ctx.db.run(`UPDATE monthly_reports SET status = 'sent', sent_at = ?, sent_to = ?, sent_by = ?, updated_at = ? WHERE id = ?`, ctx.now(), JSON.stringify(went), user?.name ?? 'automatic', ctx.now(), r.id);
+  emit(ctx, 'monthly_report.sent', { report_id: r.id, client_id: r.client_id, client_name: r.client_name, month: r.month, parents: went.length, by: user?.name ?? 'automatic' });
   return get(ctx, id);
 }
 // Send every draft of a month. A report with no parent email stays a draft and is named in the answer.
 export async function sendAll(ctx, month, user) {
   const drafts = list(ctx, { month, status: 'draft' });
-  const out = { month, sent: 0, no_email: [] };
+  const out = { month, sent: 0, no_email: [], failed: [] };
   for (const r of drafts) {
-    try { await send(ctx, r.id, user); out.sent++; } catch (e) { if (e.status === 409) out.no_email.push(r.client_name); else throw e; }
+    try { await send(ctx, r.id, user); out.sent++; } catch (e) { if (e.status === 409) out.no_email.push(r.client_name); else if (e.status === 502) out.failed.push(r.client_name); else throw e; }
   }
   return out;
 }
@@ -166,8 +175,10 @@ export async function runMonthly(ctx, asOf = ctx.now()) {
   if (Number(parts.day) > 7 || Number(parts.hour) < 7) return null;
   const target = prevMonth(monthOf(ctx, asOf));
   if (getSetting(ctx, 'monthly_generated') === target) return null;
-  ctx.db.run(`INSERT INTO settings (key, value) VALUES ('monthly_generated', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, target);
   const r = generateMonth(ctx, target, { asOf });
+  // Marked done only once the reports are written, so a failure here is tried again next hour. A send that fails
+  // leaves that report a draft for the coaches (sendAll never throws for a refused address).
+  ctx.db.run(`INSERT INTO settings (key, value) VALUES ('monthly_generated', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, target);
   if (mode === 'auto') r.sent = (await sendAll(ctx, target)).sent;
   return r;
 }

@@ -62,6 +62,7 @@ before(async () => {
     if (w === 1 && d === 1) { workoutId = wo.id; slot = full.exercises[0]; }
   }
   await coach('POST', `/v1/programs/${program.id}/assign`, { client_id: ava.id });
+  app.ctx.db.run(`UPDATE assignments SET start_date = '2026-07-01T00:00:00Z' WHERE client_id = ?`, ava.id);   // on the program since July
   // July: one workout at 135. August: three at 155 (Epley: 135×5 → 157.5; 155×5 → 180.8).
   logged(ava, '2026-07-20T16:00:00Z', 135);
   for (const d of ['2026-08-03', '2026-08-10', '2026-08-24']) logged(ava, `${d}T16:00:00Z`, 155);
@@ -87,6 +88,12 @@ test('the month\'s facts, written once the month ends: members and anyone who di
   const again = (await coach('POST', '/v1/monthly-reports/generate', { month: '2026-08' })).body;
   assert.deepEqual([again.drafts, again.skipped, again.already], [0, 0, 2], 'running it twice changes nothing');
   assert.equal(facts(app.ctx, ben.id, '2026-08').quiet, true);
+  // A program joined mid-month counts only from then; one joined after the month doesn't count at all.
+  app.ctx.db.run(`UPDATE assignments SET start_date = '2026-08-17T00:00:00Z' WHERE client_id = ?`, ava.id);
+  assert.deepEqual([facts(app.ctx, ava.id, '2026-08').expected, facts(app.ctx, ava.id, '2026-08').program], [4, 'Strength block'], 'about two weeks at two a week');
+  app.ctx.db.run(`UPDATE assignments SET start_date = '2026-09-05T00:00:00Z' WHERE client_id = ?`, ava.id);
+  assert.deepEqual([facts(app.ctx, ava.id, '2026-08').expected, facts(app.ctx, ava.id, '2026-08').program], [null, null]);
+  app.ctx.db.run(`UPDATE assignments SET start_date = '2026-07-01T00:00:00Z' WHERE client_id = ?`, ava.id);
   assert.equal((await desk('GET', '/v1/monthly-reports')).status, 403, 'front desk has no part in it');
   const today = (await coach('GET', '/v1/dashboard')).body.attention.find((a) => a.kind === 'monthly_reports');
   assert.deepEqual([today.count, today.month, today.items[0].name], [1, '2026-08', 'Ava Lopez']);
@@ -148,6 +155,16 @@ test('the job: in the first week of a month, from 7 am, last month is written on
   const left = (await coach('GET', '/v1/monthly-reports?month=2026-09&status=draft')).body.data;
   assert.deepEqual(left.map((x) => x.client_name), ['Dee Cruz']);
   assert.equal((await coach('POST', `/v1/monthly-reports/${left[0].id}/send`)).status, 409, 'no one to send to');
+  // A mail service that refuses the email leaves the report a draft instead of calling it sent.
+  app.ctx.db.run(`DELETE FROM email_optouts WHERE email = 'sam@example.com'`);
+  const realMail = app.ctx.mail; app.ctx.mail = { ...realMail, resendKey: 're_test', onlyTo: '' };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => (String(url).includes('resend') ? new Response(JSON.stringify({ message: 'refused' }), { status: 500 }) : realFetch(url, opts));
+  try {
+    const bad = await coach('POST', `/v1/monthly-reports/${left[0].id}/send`);
+    assert.deepEqual([bad.status, bad.body.error.code], [502, 'email_failed']);
+    assert.equal((await coach('GET', `/v1/monthly-reports/${left[0].id}`)).body.status, 'draft', 'still a draft');
+  } finally { globalThis.fetch = realFetch; app.ctx.mail = realMail; }
   await owner('PATCH', '/v1/settings', { monthly_reports: 'off' });
   assert.equal(await runMonthly(app.ctx, '2026-11-01T15:00:00Z'), null);
 });

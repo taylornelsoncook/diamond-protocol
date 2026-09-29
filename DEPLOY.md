@@ -100,6 +100,8 @@ Your exercise videos live in your own Cloudflare R2 bucket, played from your own
 
 **3. In the app:** Settings → Exercise library → **Import a list** (owner), choose `video-library.csv`, press **Check the list**, then **Bring them in**. Exercises already in the library are left as they are unless you choose to add or replace their video.
 
+**Videos kept in iCloud** (a Desktop or Documents folder with "Optimize Mac Storage" on) are only placeholders on the Mac until opened. The tool asks iCloud for each one and waits up to five minutes, but it's much faster to download the folder first: right-click it in Finder → **Download Now**, or `brctl download "/path/to/folder"`, and wait for the cloud icons to disappear. The tool also takes every video inside subfolders, so move out any folder you don't want in the library before running it (a `--dry-run` shows the count).
+
 Names come from the file names ("Back_squat.mp4" is Back squat; "(1)" and "copy" are dropped). A video in a folder called Lower body, Core, Speed… gets that category; other folder names are ignored. Rename files before the upload if a name should change; a renamed file uploads again on the next run.
 
 ## Updating

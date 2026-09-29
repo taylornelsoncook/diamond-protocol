@@ -12,7 +12,7 @@ import { createApp } from '../src/server.js';
 import { openDb } from '../src/db.js';
 import { createUser } from '../src/services/access.js';
 import { resetRateLimits } from '../src/services/security.js';
-import { main as upload, exerciseName, scan } from '../tools/upload-videos.mjs';
+import { main as upload, exerciseName, scan, isCloudTimeout } from '../tools/upload-videos.mjs';
 
 let app, base, owner, coach, dir, s3, s3url;
 const puts = [];
@@ -65,6 +65,7 @@ before(async () => {
 if [ "$1" = "-version" ]; then exit 0; fi
 for a in "$@"; do out="$a"; done
 prev=""; src=""; for a in "$@"; do if [ "$prev" = "-i" ]; then src="$a"; fi; prev="$a"; done
+case "$src" in *[Nn]evercloud*) echo "Error opening input files: Operation timed out" >&2; exit 1 ;; *[Cc]loudy*) if [ ! -f "$src.seen" ]; then touch "$src.seen"; echo "Error opening input files: Operation timed out" >&2; exit 1; fi ;; esac
 case "$*" in *"-ss 1 "*short*) exit 0 ;; *-frames:v*) printf 'JPEG' > "$out" ;; *) cp "$src" "$out" ;; esac
 `);
   chmodSync(join(bin, 'ffmpeg'), 0o755);
@@ -203,4 +204,22 @@ test('a version 47 database gains the still-picture column, opened twice', () =>
       d.close();
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('a video still in iCloud is waited for and tried again; one that never arrives is named with the fix', async () => {
+  assert.ok(isCloudTimeout(new Error('ffmpeg couldn\'t convert it: Error opening input files: Operation timed out')));
+  assert.ok(!isCloudTimeout(new Error('ffmpeg couldn\'t convert it: width not divisible by 2')));
+  const folder = join(dir, 'cloud'); mkdirSync(folder);
+  writeFileSync(join(folder, 'Cloudy squat.mp4'), 'arrives after the first try');
+  writeFileSync(join(folder, 'Nevercloud lunge.mp4'), 'never arrives');
+  const lines = [];
+  const cwd = mkdtempSync(join(tmpdir(), 'dp-cloud-'));
+  process.env.DP_TEST_CLOUD = '1';
+  try {
+    const r = await upload([folder, '--skip-check'], { env: ENV(), log: (l) => lines.push(l), cwd });
+    assert.deepEqual([r.found, r.uploaded, r.failed], [2, 1, 1]);
+    assert.ok(readFileSync(join(cwd, 'video-library.csv'), 'utf8').includes('Cloudy squat,'), 'the one that arrived is in the list');
+    assert.ok(lines.some((l) => /kept in iCloud/.test(l)), 'the report says how to fix the other');
+    assert.match(readFileSync(join(cwd, 'video-upload-report.txt'), 'utf8'), /Nevercloud lunge\.mp4: .*Operation timed out/);
+  } finally { delete process.env.DP_TEST_CLOUD; rmSync(cwd, { recursive: true, force: true }); }
 });

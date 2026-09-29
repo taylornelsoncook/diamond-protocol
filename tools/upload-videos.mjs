@@ -20,7 +20,7 @@
 // Options: --dry-run (list what it would do; no settings needed), --no-convert (upload the files as they are; only
 // .mp4, .m4v, .mov and .webm up to 1 GB, and no still pictures), --out <file> (default video-library.csv), --jobs <n> (2),
 // --skip-check (don't test the public address first).
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync } from 'node:fs';
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, basename, extname, relative, dirname, sep, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -133,7 +133,29 @@ function run(cmd, args) {
     p.on('close', (code) => (code === 0 ? ok() : fail(new Error(`ffmpeg couldn't convert it: ${err.trim().split('\n').at(-1) || `it stopped with code ${code}`}`))));
   });
 }
+// A video kept in iCloud (Desktop and Documents synced, "Optimize Mac Storage") is only a placeholder on the Mac until
+// it's opened, and ffmpeg gives up waiting ("Error opening input files: Operation timed out"). Ask iCloud for the file
+// (brctl download, macOS) and wait for it, up to a few minutes, before giving up on it.
+const CLOUD_WAIT_MS = 5 * 60000;
+const isCloudTimeout = (e) => /Operation timed out|Resource deadlock|Input\/output error/i.test(e?.message ?? '');
+async function localCopy(path, log) {
+  if (process.platform !== 'darwin' && !process.env.DP_TEST_CLOUD) return false;   // the test pretends to be a Mac
+  const started = Date.now();
+  spawnSync('brctl', ['download', path], { stdio: 'ignore' });
+  let told = false;
+  while (Date.now() - started < CLOUD_WAIT_MS) {
+    try {
+      // Reading the first bytes only works once the file is really here; a placeholder blocks, then errors.
+      const fd = openSync(path, 'r'); const buf = Buffer.alloc(16); readSync(fd, buf, 0, 16, 0); closeSync(fd);
+      return true;
+    } catch { /* still downloading */ }
+    if (!told) { log(`  … ${basename(path)} is in iCloud; waiting for it to download`); told = true; }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  return false;
+}
 // Up to 1280 pixels on the long side (phones held either way), H.264 + AAC, "faststart" so playback begins at once.
+export { isCloudTimeout };
 export const convertArgs = (src, out) => ['-y', '-v', 'error', '-i', src,
   '-vf', "scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))',scale=trunc(iw/2)*2:trunc(ih/2)*2",   // even sizes, which H.264 needs
   '-c:v', 'libx264', '-preset', 'medium', '-crf', '26', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-c:a', 'aac', '-b:a', '96k', '-ac', '2', out];
@@ -203,7 +225,11 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
     try {
       let videoFile = f.path, poster = null;
       if (convert) {
-        await run('ffmpeg', convertArgs(f.path, tmpVideo));
+        try { await run('ffmpeg', convertArgs(f.path, tmpVideo)); }
+        catch (e) {
+          if (!isCloudTimeout(e) || !(await localCopy(f.path, log))) throw e;
+          await run('ffmpeg', convertArgs(f.path, tmpVideo));     // once more, now that the file is here
+        }
         videoFile = tmpVideo;
         // The still from the first second, or the very start of a shorter clip; a video without one still goes up.
         for (const at of ['1', '0']) {
@@ -236,6 +262,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
     writeCsv(outFile, rows());
     rmSync(work, { recursive: true, force: true });
     if (failures.length) writeFileSync(reportFile, `${readFileSync(reportFile, 'utf8')}\nFailed this run (run again to retry them, ${failures.length}):\n${failures.join('\n')}\n`);
+    if (failures.some((x) => isCloudTimeout({ message: x }))) log(`Some videos couldn't be read from the Mac: they're kept in iCloud and didn't download in time. In Finder, right-click the folder → Download Now (or run: brctl download "<folder>"), wait for the cloud icons to disappear, then run the same command again.`);
   };
   // Ctrl+C: save the list so far and tidy up; the next run carries on.
   const onStop = () => { stop = true; try { finish(); } catch { /* best effort */ } log('\nStopped. Run the same command again to carry on.'); process.exit(130); };

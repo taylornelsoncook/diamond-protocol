@@ -101,7 +101,7 @@ test('session rows on Home: coach, address with directions, how it is paid, the 
   assert.equal((await owner('POST', `/v1/sessions/${s}/bookings`, { client_id: cole.id })).status, 201);
   const b = await maria('POST', '/portal/api/bookings', { session_id: s, athlete_id: ava.id, pay: 'card_on_file' });
   assert.equal(b.body.status, 'waitlisted');
-  await maria('POST', '/portal/api/bookings', { session_id: session('Power', 72, { coachId: riley.id }), athlete_id: ava.id, pay: 'card_on_file' });
+  await maria('POST', '/portal/api/bookings', { session_id: session('Power', 72), athlete_id: ava.id, pay: 'card_on_file' });   // no coach: Riley's private hours 3 days out must stay clear whatever the time of day
   const me = (await maria('GET', '/portal/api/me')).body;
   const rows = me.athletes.find((a) => a.id === ava.id).upcoming;
   const wait = rows.find((r) => r.session_id === s), paid = rows.find((r) => r.session_name === 'Power');
@@ -182,8 +182,7 @@ test('families can\'t book an athlete into two sessions at once (a waitlist spot
 
 test('privates: each time has its coach, a note goes to the coach, and cancelling reopens the time and returns the credit exactly once', async () => {
   const today = localDate(new Date().toISOString(), TZ), day = addDaysToDate(today, 3);
-  // confirm: an earlier test books Riley for a class 72 hours from now, which clashes with these hours when the suite runs mid-afternoon Chicago time (a coach clash is only a warning).
-  await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekday: weekdayOf(day), start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: riley.id, price_cents: 8000, confirm: true });
+  await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekday: weekdayOf(day), start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: riley.id, price_cents: 8000 });
   await owner('POST', `/v1/clients/${ben.id}/credits`, { delta: 1, credit_type: 'private', note: 'Pack' });
   const slots = (await maria('GET', '/portal/api/slots?kind=private')).body;
   assert.ok(slots.coaches.some((c) => c.name === 'Riley Brooks'));

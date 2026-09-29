@@ -82,6 +82,14 @@ test('an Oura daily export is recognized by its columns; durations in seconds be
   const wrong = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, source: 'whoop', ...csv('oura.csv', text) });
   assert.equal(wrong.status, 400); assert.match(wrong.body.error.message, /doesn't look like a WHOOP export \(it looks like Oura daily export\)/);
   assert.equal((await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, source: 'oura', ...csv('oura.csv', text) })).body.format, 'oura_daily');
+  // Durations written in hours (7, 8) become minutes too; and a coach's own wellness sheet is never claimed as Oura or Garmin.
+  const hours = (await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('oura2.csv', 'date,Readiness Score,Average HRV,Total Sleep Duration,Lowest Resting Heart Rate\n2026-09-29,80,50,7,48\n2026-09-30,75,47,8,50\n') })).body;
+  assert.equal(hours.format, 'oura_daily');
+  await owner('POST', '/v1/data-imports', { client_id: ava.id, ...csv('oura2.csv', 'date,Readiness Score,Average HRV,Total Sleep Duration,Lowest Resting Heart Rate\n2026-09-29,80,50,7,48\n2026-09-30,75,47,8,50\n') });
+  assert.equal(metricsOf(ava.id)['sleep_min|2026-09-29'], 420);
+  for (const sheet of ['Date,Sleep,Stress\n2026-09-01,7,3\n', 'Date,Sleep,Stress,Soreness,Energy\n2026-09-01,7,3,2,4\n', 'Date,Steps,Sleep Score\n2026-09-01,8000,80\n', 'Date,Resting,Weight\n2026-09-01,55,140\n']) {
+    assert.equal((await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('wellness.csv', sheet) })).body.format, 'custom', sheet.split('\n')[0]);
+  }
 });
 
 test('Garmin: the Health Stats daily export and Activities.csv (clock times, average and max heart rate)', async () => {
@@ -110,6 +118,8 @@ test('Strava (seconds, "Sep 28, 2026, 6:00:00 PM") and TrainingPeaks (hours, met
   await owner('POST', '/v1/data-imports', { client_id: ava.id, ...csv('activities.csv', strava) });
   const w = app.ctx.db.all('SELECT activity, minutes, started_at, avg_hr FROM athlete_workouts WHERE client_id = ? AND source = ? ORDER BY started_at', ava.id, 'strava_activities');
   assert.deepEqual(w, [{ activity: 'Workout: Lift', minutes: 45, started_at: '2026-09-26T07:30:00.000Z', avg_hr: 120 }, { activity: 'Run: Evening Run', minutes: 60, started_at: '2026-09-28T18:00:00.000Z', avg_hr: 152 }]);
+  const byHand = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('activities.csv', strava), mapping: { date_column: 'Activity Date', metrics: [{ column: 'Calories', metric: 'calories_kcal' }] } });
+  assert.equal(byHand.body.format, 'custom', 'columns matched by hand win over the Strava guess');
   const tp = 'Title,WorkoutType,WorkoutDay,PlannedDuration,TimeTotalInHours,DistanceInMeters,CaloriesSpent,HeartRateAverage,HeartRateMax,TSS\nSpeed day,Run,2026-09-25,1,0.75,6000,480,150,185,62\n';
   const t = (await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('workouts.csv', tp) })).body;
   assert.deepEqual([t.format, t.workouts, t.ready], ['trainingpeaks_workouts', 1, true]);
@@ -139,6 +149,8 @@ test('Apple Health: export.zip is read as a stream; days add up, the Watch\'s sl
     + rec('HKQuantityTypeIdentifierHeartRateVariabilitySDNN', '2026-09-28 06:12:00', '2026-09-28 06:13:00', 44) + '\n' + rec('HKQuantityTypeIdentifierHeartRateVariabilitySDNN', '2026-09-28 22:12:00', '2026-09-28 22:13:00', 52) + '\n'
     + rec('HKQuantityTypeIdentifierRestingHeartRate', '2026-09-28 00:00:00', '2026-09-28 23:59:00', 51) + '\n'
     + rec('HKQuantityTypeIdentifierStepCount', '2026-09-28 08:00:00', '2026-09-28 08:10:00', 500, 'iPhone') + '\n' + rec('HKQuantityTypeIdentifierStepCount', '2026-09-28 09:00:00', '2026-09-28 09:10:00', 700, 'iPhone') + '\n'
+    + rec('HKQuantityTypeIdentifierStepCount', '2026-09-28 08:00:00', '2026-09-28 08:10:00', 450, 'Apple Watch') + '\n' + rec('HKQuantityTypeIdentifierStepCount', '2026-09-28 09:00:00', '2026-09-28 09:10:00', 300, 'Apple Watch') + '\n'
+    + rec('HKQuantityTypeIdentifierHeartRate', '2026-09-28 16:20:00', '2026-09-28 16:20:00', 999) + '\n'
     + rec('HKQuantityTypeIdentifierOxygenSaturation', '2026-09-28 03:00:00', '2026-09-28 03:00:00', 0.97) + '\n' + rec('HKQuantityTypeIdentifierVO2Max', '2026-09-27 10:00:00', '2026-09-27 10:00:00', 44.2) + '\n'
     + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-09-27 22:30:00', '2026-09-28 00:30:00', 'HKCategoryValueSleepAnalysisAsleepCore') + '\n' + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-09-28 00:30:00', '2026-09-28 05:30:00', 'HKCategoryValueSleepAnalysisAsleepDeep') + '\n'
     + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-09-28 05:30:00', '2026-09-28 06:30:00', 'HKCategoryValueSleepAnalysisAsleepREM') + '\n' + rec('HKCategoryTypeIdentifierSleepAnalysis', '2026-09-28 06:30:00', '2026-09-28 06:40:00', 'HKCategoryValueSleepAnalysisAwake') + '\n'
@@ -146,17 +158,20 @@ test('Apple Health: export.zip is read as a stream; days add up, the Watch\'s sl
     + rec('HKQuantityTypeIdentifierBodyMass', '2026-09-28 08:00:00', '2026-09-28 08:00:00', 60, 'Scale') + '\n'
     + `<Workout workoutActivityType="HKWorkoutActivityTypeTraditionalStrengthTraining" duration="45.5" durationUnit="min" sourceName="Apple Watch" startDate="2026-09-28 16:00:00 -0500" endDate="2026-09-28 16:45:30 -0500">\n`
     + ` <WorkoutStatistics type="HKQuantityTypeIdentifierActiveEnergyBurned" sum="312.4" unit="Cal"/>\n <WorkoutStatistics type="HKQuantityTypeIdentifierHeartRate" average="128" minimum="90" maximum="171" unit="count/min"/>\n</Workout>\n</HealthData>\n`;
-  const zip = zipOf({ 'apple_health_export/export.xml': xml, 'apple_health_export/export_cda.xml': '<ClinicalDocument/>' });
-  assert.deepEqual(zipEntries(zip).map((e) => e.name), ['apple_health_export/export.xml', 'apple_health_export/export_cda.xml']);
+  // Hundreds of workout routes come before export.xml in a real export; it's still found.
+  const routes = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`apple_health_export/workout-routes/route_${i}.gpx`, '<gpx/>']));
+  const zip = zipOf({ ...routes, 'apple_health_export/export.xml': xml, 'apple_health_export/export_cda.xml': '<ClinicalDocument/>' });
+  assert.equal(zipEntries(zip).length, 302);
   const t = await readAppleHealth(zip, 'export.zip');
-  assert.deepEqual(t.rows, [{ Day: '2026-09-27', vo2max: 44.2 }, { Day: '2026-09-28', hrv_ms: 48, rhr_bpm: 51, steps: 1200, spo2_pct: 97, sleep_min: 480, light_min: 120, deep_min: 300, rem_min: 60, awake_min: 10, in_bed_min: 490 }]);
+  assert.deepEqual(t.rows, [{ Day: '2026-09-27', vo2max: 44.2 }, { Day: '2026-09-28', hrv_ms: 48, rhr_bpm: 51, steps: 1200, max_hr_bpm: 999, spo2_pct: 97, sleep_min: 480, light_min: 120, deep_min: 300, rem_min: 60, awake_min: 10, in_bed_min: 490 }], 'steps from the phone and the Watch aren\'t added together: the source with the most counts');
   assert.deepEqual(t.workouts[0], { started_at: '2026-09-28T21:00:00.000Z', ended_at: '2026-09-28T21:45:30.000Z', day: '2026-09-28', minutes: 46, activity: 'Traditional Strength Training', strain: null, calories: 312, avg_hr: 128, max_hr: 171 });
-  assert.match(t.notes.join(' '), /13 records read.*Left out: BodyMass \(1\)/);
+  assert.match(t.notes.join(' '), /16 records read.*Left out: BodyMass \(1\)/);
   // Through the API: recognized from the zip without choosing a source, checked, saved, and listed under Apple Health.
   const body = { client_id: leo.id, file: { name: 'export.zip', zip_base64: zip.toString('base64') } };
   const p = await owner('POST', '/v1/data-imports/preview', body);
   assert.equal(p.status, 200, JSON.stringify(p.body));
   assert.deepEqual([p.body.format, p.body.source_label, p.body.file_kind, p.body.days, p.body.workouts, p.body.ready, p.body.problem_count], ['apple_health', 'Apple Health (Apple Watch)', 'apple_health', 2, 1, true, 0]);
+  assert.match(p.body.notes.join(' '), /1 value outside what's possible .* left out/, 'a 999 heart rate is dropped with a note, never a problem the family can\'t fix');
   const c = await owner('POST', '/v1/data-imports', body);
   assert.equal(c.status, 201, JSON.stringify(c.body));
   const m = metricsOf(leo.id);
@@ -204,12 +219,14 @@ test('a version 53 database is upgraded: data_imports takes any file kind and ke
     old.exec('PRAGMA user_version = 53');
     old.exec(`INSERT INTO clients (id, name, athlete_id, access_token, created_at) VALUES ('cli_1', 'Ava Lopez', 'AVALOP2026', 'tok1', '2026-01-01T00:00:00Z')`);
     old.exec(`INSERT INTO data_imports (id, client_id, source, file_kind, filename, rows, days, workouts, created_at) VALUES ('dim_1', 'cli_1', 'whoop_cycles', 'csv', 'cycles.csv', 10, 10, 0, '2026-09-01T00:00:00Z')`);
+    old.exec(`INSERT INTO data_import_replaced (import_id, client_id, metric, day, value, label, unit, source, prior_import_id, updated_at) VALUES ('dim_1', 'cli_1', 'hrv_ms', '2026-08-30', 60, NULL, NULL, 'custom', NULL, '2026-08-31T00:00:00Z')`);
     assert.throws(() => old.exec(`INSERT INTO data_imports (id, client_id, source, file_kind, rows, days, workouts, created_at) VALUES ('dim_2', 'cli_1', 'fitbit', 'fitbit', 1, 1, 0, '2026-09-02T00:00:00Z')`), /CHECK/);
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
       assert.equal(d.get('PRAGMA user_version').user_version, 54, `round ${round}`);
       assert.deepEqual(d.get('SELECT source, file_kind, filename, rows FROM data_imports WHERE id = ?', 'dim_1'), { source: 'whoop_cycles', file_kind: 'csv', filename: 'cycles.csv', rows: 10 });
+      assert.equal(d.get(`SELECT COUNT(*) AS n FROM data_import_replaced WHERE import_id = 'dim_1'`).n, 1, 'what the import replaced still points at it');
       if (round === 1) d.run(`INSERT INTO data_imports (id, client_id, source, file_kind, rows, days, workouts, created_at) VALUES ('dim_2', 'cli_1', 'fitbit', 'fitbit', 1, 1, 0, '2026-09-02T00:00:00Z')`);
       assert.equal(d.get('SELECT COUNT(*) AS n FROM data_imports').n, 2);
       d.close();
@@ -229,4 +246,17 @@ test('hostile or broken archives get a plain answer, fast: a truncated zip, a fi
   await assert.rejects(readFitbit(zipOf({ 'readme.txt': 'hi' }), 'takeout.zip'), /doesn't look like a Fitbit export/);
   const r = await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, file: { name: 'broken.zip', zip_base64: good.subarray(0, 40).toString('base64') } });
   assert.equal(r.status, 400); assert.match(r.body.error.message, /isn't a zip file/);
+});
+
+test('archives are paced: a very long export keeps its newest days, and one athlete gets six archive checks an hour', async () => {
+  const many = (await owner('POST', '/v1/clients', { name: 'Noor Haddad', parent: { name: 'Sami Haddad', email: 'sami@example.com' } })).body;
+  const lines = [];
+  for (let i = 0; i < 4010; i++) { const d = new Date(Date.UTC(2015, 0, 1) + i * 86400000).toISOString().slice(0, 10); lines.push(`<Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Apple Watch" startDate="${d} 08:00:00 -0500" endDate="${d} 08:00:00 -0500" value="55"/>`); }
+  const t = await readAppleHealth(Buffer.from(`<?xml version="1.0"?>\n<HealthData>\n${lines.join('\n')}\n</HealthData>\n`), 'export.xml');
+  assert.equal(t.rows.length, 4000); assert.equal(t.rows[0].Day, '2015-01-11', 'the oldest ten days went'); assert.match(t.notes.join(' '), /goes back 4,010 days; the newest 4,000 are kept/);
+  const zip = zipOf({ 'apple_health_export/export.xml': '<HealthData>\n<Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Apple Watch" startDate="2026-09-28 08:00:00 -0500" endDate="2026-09-28 08:00:00 -0500" value="55"/>\n</HealthData>' });
+  const body = { client_id: many.id, file: { name: 'export.zip', zip_base64: zip.toString('base64') } };
+  for (let i = 0; i < 6; i++) assert.equal((await owner('POST', '/v1/data-imports/preview', body)).status, 200, `check ${i + 1}`);
+  assert.equal((await owner('POST', '/v1/data-imports/preview', body)).status, 429, 'the seventh waits');
+  assert.equal((await owner('POST', '/v1/data-imports/preview', { client_id: ava.id, ...csv('s.csv', 'Day,HRV\n2026-09-22,50\n'), mapping: { date_column: 'Day', metrics: [{ column: 'HRV', metric: 'hrv_ms' }] } })).status, 200, 'plain files aren\'t paced this way');
 });

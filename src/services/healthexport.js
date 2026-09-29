@@ -7,8 +7,12 @@ import { createInflateRaw } from 'node:zlib';
 import { badRequest, HttpError } from '../util.js';
 
 export const MAX_ARCHIVE_BYTES = 60 * 1024 * 1024;       // the upload
-const MAX_INFLATED = 3 * 1024 * 1024 * 1024;              // what export.xml may unpack to
+const MAX_INFLATED = 1.5 * 1024 * 1024 * 1024;            // what export.xml may unpack to (read as a stream, never held)
+const MAX_FITBIT_TOTAL = 256 * 1024 * 1024;               // everything read out of a Fitbit zip, in all
 const MAX_LINES = 40_000_000, MAX_DAYS = 4000, MAX_WORKOUTS = 20000, MAX_LINE_BYTES = 1024 * 1024;   // a real export line is a few hundred bytes
+// One archive unpacks at a time per server: two 60 MB zips inflating side by side could run a small instance out of memory.
+let inflating = Promise.resolve();
+export function oneAtATime(fn) { const run = inflating.then(fn, fn); inflating = run.catch(() => {}); return run; }
 
 // ---------- Zip entries (central directory), inflated on demand ----------
 export function zipEntries(buf) {
@@ -77,19 +81,23 @@ const readEntry = async (buf, entry, max = 64 * 1024 * 1024) => { const parts = 
 
 // ---------- Daily table helpers ----------
 class Days {
-  constructor() { this.days = new Map(); this.skipped = new Map(); }
-  at(day) { if (!this.days.has(day)) { if (this.days.size >= MAX_DAYS) throw new HttpError(413, 'too_large', `That export covers more than ${MAX_DAYS.toLocaleString()} days; export a shorter range.`); this.days.set(day, {}); } return this.days.get(day); }
-  add(day, key, value) { const d = this.at(day); d[key] = (d[key] ?? 0) + value; }
+  constructor() { this.days = new Map(); this.skipped = new Map(); this.dropped = 0; }
+  at(day) { if (!this.days.has(day)) { if (this.days.size >= MAX_DAYS * 2) throw new HttpError(413, 'too_large', `That export covers more than ${(MAX_DAYS * 2).toLocaleString()} days.`); this.days.set(day, {}); } return this.days.get(day); }
+  // A total for the day, kept per source (iPhone, Watch, an app all log the same steps): the source with the most counts, once.
+  add(day, key, value, source = '') { const d = this.at(day); const per = d[`_src_${key}`] ?? {}; per[source] = (per[source] ?? 0) + value; d[`_src_${key}`] = per; d[key] = Math.max(...Object.values(per)); }
   avg(day, key, value) { const d = this.at(day); const a = d[`_${key}`] ?? { sum: 0, n: 0 }; a.sum += value; a.n++; d[`_${key}`] = a; d[key] = a.sum / a.n; }
   max(day, key, value) { const d = this.at(day); d[key] = d[key] == null ? value : Math.max(d[key], value); }
   skip(type) { this.skipped.set(type, (this.skipped.get(type) ?? 0) + 1); }
   table() {
-    const rows = [...this.days.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([day, d]) => ({ Day: day, ...Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith('_')).map(([k, x]) => [k, Math.round(x * 100) / 100])) }));
+    let all = [...this.days.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+    if (all.length > MAX_DAYS) { this.dropped = all.length - MAX_DAYS; all = all.slice(-MAX_DAYS); }   // the newest days win; an iPhone can hold a decade of steps
+    const rows = all.map(([day, d]) => ({ Day: day, ...Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith('_')).map(([k, x]) => [k, Math.round(x * 100) / 100])) }));
     const keys = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => k !== 'Day')))];
     return { headers: ['Day', ...keys], rows };
   }
 }
-const attr = (tag, name) => { const m = tag.match(new RegExp(`\\s${name}="([^"]*)"`)); return m ? m[1] : null; };
+const ATTR_RE = new Map();   // one pattern per attribute name, for tens of millions of lines
+const attr = (tag, name) => { let re = ATTR_RE.get(name); if (!re) { re = new RegExp(`\\s${name}="([^"]*)"`); ATTR_RE.set(name, re); } const m = tag.match(re); return m ? m[1] : null; };
 const localDay = (s) => (s ? String(s).slice(0, 10) : null);                     // "2026-09-28 06:12:00 -0500" → the day as the phone saw it
 const minutesBetween = (a, b) => { const t0 = Date.parse(a), t1 = Date.parse(b); return Number.isFinite(t0) && Number.isFinite(t1) && t1 > t0 ? (t1 - t0) / 60000 : 0; };
 const words = (type) => String(type).replace(/^HKWorkoutActivityType/, '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').trim() || 'Workout';
@@ -143,7 +151,7 @@ export async function readAppleHealth(buf, filename = 'export.zip') {
       if (!Number.isFinite(value)) return;
       const day = localDay(attr(t, 'startDate'));
       if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
-      if (def[1] === 'avg') days.avg(day, def[0], value); else if (def[1] === 'sum') days.add(day, def[0], value); else days.max(day, def[0], value);
+      if (def[1] === 'avg') days.avg(day, def[0], value); else if (def[1] === 'sum') days.add(day, def[0], value, attr(t, 'sourceName') ?? ''); else days.max(day, def[0], value);
       return;
     }
     if (t.startsWith('<Workout ')) {
@@ -183,6 +191,7 @@ export async function readAppleHealth(buf, filename = 'export.zip') {
   if (!records && !workouts.length) throw badRequest('That file has no Health records in it. In the Health app, tap your picture → Export All Health Data, and upload the export.zip it makes.');
   const table = days.table();
   const notes = [`${records.toLocaleString()} records read.`];
+  if (days.dropped) notes.push(`The export goes back ${(table.rows.length + days.dropped).toLocaleString()} days; the newest ${MAX_DAYS.toLocaleString()} are kept.`);
   if (days.skipped.size) notes.push(`Left out: ${[...days.skipped.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k.replace(/^HK(Quantity|Category)TypeIdentifier|^HKCategoryValueSleepAnalysis/, '')} (${n.toLocaleString()})`).join(', ')}${days.skipped.size > 6 ? ' and more' : ''}: kinds of record we don't keep.`);
   return { ...table, workouts, notes, kind: 'apple_health', filename };
 }
@@ -196,8 +205,8 @@ const fitbitTime = (s) => { const m = String(s ?? '').match(/^(\d{1,2})\/(\d{1,2
 export async function readFitbit(buf, filename = 'takeout.zip') {
   const entries = zipEntries(buf).filter((e) => /fitbit/i.test(e.name) || /(^|\/)(sleep|resting_heart_rate|steps|calories|exercise)-\d{4}-\d{2}-\d{2}\.json$/i.test(e.name) || /Daily (Heart Rate Variability|SpO2|Respiratory Rate)/i.test(e.name));
   if (!entries.length) throw badRequest('That zip doesn\'t look like a Fitbit export. In Google Takeout (takeout.google.com), choose only Fitbit, create the export, and upload the zip it gives you.');
-  const days = new Days(), workouts = [];
-  let files = 0;
+  const days = new Days(), workouts = [], seenStarts = new Set();
+  let files = 0, totalBytes = 0;
   const csvRows = (text) => { const lines = text.split(/\r?\n/).filter((l) => l.trim()); if (lines.length < 2) return []; const head = lines[0].split(',').map((s) => s.trim()); return lines.slice(1).map((l) => Object.fromEntries(l.split(',').map((c, i) => [head[i], c.trim()]))); };
   for (const e of entries) {
     if (files >= 3000) break;
@@ -207,6 +216,10 @@ export async function readFitbit(buf, filename = 'takeout.zip') {
     else if (/^calories-.*\.json$/i.test(base)) kind = 'calories'; else if (/^exercise-.*\.json$/i.test(base)) kind = 'exercise';
     else if (/^Daily Heart Rate Variability Summary/i.test(base)) kind = 'hrv'; else if (/^Daily SpO2/i.test(base)) kind = 'spo2'; else if (/^Daily Respiratory Rate Summary/i.test(base)) kind = 'resp';
     if (!kind) { days.skip(base.replace(/[- ]\d{4}-\d{2}-\d{2}.*$/, '')); continue; }
+    if (seenStarts.has(e.start)) continue;   // two names pointing at one stream: a made-up zip, read once
+    seenStarts.add(e.start);
+    totalBytes += e.rawSize;
+    if (totalBytes > MAX_FITBIT_TOTAL) throw new HttpError(413, 'too_large', 'That export unpacks to more than we can read at once. In Takeout, export a shorter date range.');
     files++;
     const text = await readEntry(buf, e);
     try {
@@ -234,7 +247,7 @@ export async function readFitbit(buf, filename = 'takeout.zip') {
         } else if (kind === 'rhr') {
           const day = fitbitDay(item.dateTime); const x = Number(item.value?.value ?? item.value); if (day && Number.isFinite(x) && x > 0) days.avg(day, 'rhr_bpm', x);
         } else if (kind === 'steps' || kind === 'calories') {
-          const day = fitbitDay(item.dateTime); const x = Number(item.value); if (day && Number.isFinite(x)) days.add(day, kind === 'steps' ? 'steps' : 'calories_kcal', x);
+          const day = fitbitDay(item.dateTime); const x = Number(item.value); if (day && Number.isFinite(x)) days.add(day, kind === 'steps' ? 'steps' : 'calories_kcal', x, 'fitbit');
         } else if (kind === 'exercise') {
           const start = fitbitTime(item.startTime); if (!start || workouts.length >= MAX_WORKOUTS) continue;
           const minutes = Number.isFinite(item.duration) ? Math.round(item.duration / 60000) : null;
@@ -247,6 +260,7 @@ export async function readFitbit(buf, filename = 'takeout.zip') {
   if (!files) throw badRequest('That zip has no Fitbit files we read (sleep, resting heart rate, steps, calories, exercise, HRV, SpO2, respiratory rate).');
   const table = days.table();
   const notes = [`${files} Fitbit files read.`];
+  if (days.dropped) notes.push(`The export goes back ${(table.rows.length + days.dropped).toLocaleString()} days; the newest ${MAX_DAYS.toLocaleString()} are kept.`);
   if (days.skipped.size) notes.push(`Left out: ${[...days.skipped.entries()].slice(0, 6).map(([k, n]) => `${k} (${n})`).join(', ')}${days.skipped.size > 6 ? ' and more' : ''}: files we don't keep.`);
   return { ...table, workouts, notes, kind: 'fitbit', filename };
 }

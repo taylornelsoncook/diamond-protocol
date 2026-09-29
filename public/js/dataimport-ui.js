@@ -28,7 +28,7 @@ function readFile(file) {
     reject(new Error('Choose a CSV, Excel (.xlsx) or PDF file, or an Apple Health or Fitbit export zip.'));
   });
 }
-// The metrics a spreadsheet column can be saved as (for the mapping form), from the server's list when it gives one.
+// The metrics a spreadsheet column can be saved as (for the mapping form): the keys of the server's METRICS.
 const KNOWN = [['', 'Keep under its own name'], ['hrv_ms', 'Heart rate variability (ms)'], ['rhr_bpm', 'Resting heart rate (bpm)'], ['recovery_pct', 'Recovery (%)'], ['readiness_pct', 'Readiness (%)'], ['sleep_score_pct', 'Sleep score (%)'],
   ['sleep_min', 'Sleep'], ['in_bed_min', 'In bed'], ['deep_min', 'Deep sleep'], ['rem_min', 'REM sleep'], ['light_min', 'Light sleep'], ['awake_min', 'Awake in bed'], ['sleep_efficiency_pct', 'Sleep efficiency (%)'],
   ['day_strain', 'Day strain'], ['steps', 'Steps'], ['calories_kcal', 'Energy burned (cal)'], ['active_cal_kcal', 'Active burn (cal)'], ['avg_hr_bpm', 'Average heart rate (bpm)'], ['max_hr_bpm', 'Max heart rate (bpm)'],
@@ -85,7 +85,10 @@ export function importForm(opts) {
       p.sample?.length && (p.needs_mapping || p.problem_count) ? h('details', null, h('summary', { class: 'small muted', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'The first rows of the file'),
         h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('thead', null, h('tr', null, p.headers.map((c) => h('th', { class: 'small' }, c)))),
           h('tbody', null, p.sample.map((r) => h('tr', null, p.headers.map((c) => h('td', { class: 'small' }, r[c] ?? '')))))))) : null,
-      p.ready ? h('div', { class: 'row wrap' }, saveBtn, btn('Cancel', () => { fill(out); body = null; mapping = null; }, 'ghost')) : null));
+      p.ready ? h('div', { class: 'row wrap' }, saveBtn, btn('Cancel', () => { fill(out); body = null; mapping = null; }, 'ghost')) : null,
+      // A file recognized as some system's that isn't: match its columns by hand instead.
+      p.format !== 'custom' && !/^(whoop_|apple_health$|fitbit$)/.test(p.format) && sourcesList.some((s) => s.key === 'other') ? h('p', { class: 'small muted', style: 'margin:0' }, `Not a ${p.source_label ?? ''} file? `,
+        btn('Match the columns by hand instead', (e) => { sourceSel.value = 'other'; showHelp(); mapping = null; busy(e.currentTarget, async () => { try { await check(); } catch (x) { toast(x.message, 'warn'); } }); }, 'ghost')) : null));
   }
   // A table we don't recognize: pick the date column and the columns to keep, each with a name and unit.
   function mappingForm(p) {

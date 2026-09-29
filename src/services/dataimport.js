@@ -12,7 +12,8 @@ import { newId, v, badRequest, notFound, conflict, HttpError } from '../util.js'
 import { readXlsx } from './xlsx.js';
 import { parseCsv } from './perf-import.js';
 import { pdfTable } from './pdftext.js';
-import { readAppleHealth, readFitbit, MAX_ARCHIVE_BYTES } from './healthexport.js';
+import { readAppleHealth, readFitbit, zipEntries, oneAtATime, MAX_ARCHIVE_BYTES } from './healthexport.js';
+import { rateLimit } from './security.js';
 
 export const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_ROWS = 20000, MAX_CUSTOM_METRICS = 20;
@@ -97,8 +98,8 @@ export const FORMATS = {
   whoop_sleeps: { label: 'WHOOP sleeps (sleeps.csv)', needs: ['Sleep onset', 'Wake onset', 'Asleep duration (min)', 'Nap'], cols: SLEEP_COLS },
   whoop_workouts: { label: 'WHOOP workouts (workouts.csv)', needs: ['Workout start time', 'Activity name', 'Activity Strain'], workouts: true },
   // Other systems: a day column plus columns matched by pattern (needsAny: at least this many of them match).
-  oura_daily: { label: 'Oura daily export', source: 'oura', matched: true, day: [/^date$/i, /^day$/i, /^summary date$/i], cols: OURA_COLS, needsAny: 2, marks: [/^readiness score$/i, /^sleep score$/i, /^average hrv$/i, /^total burn$/i] },
-  garmin_daily: { label: 'Garmin Connect daily numbers', source: 'garmin', matched: true, day: [/^date$/i, /^day$/i, /^calendar date$/i], cols: GARMIN_DAILY_COLS, needsAny: 2, marks: [/body battery/i, /^stress/i, /^resting( heart rate| hr)?$/i, /^sleep score$/i, /^pulse ox/i, /respiration/i] },
+  oura_daily: { label: 'Oura daily export', source: 'oura', matched: true, day: [/^date$/i, /^day$/i, /^summary date$/i], cols: OURA_COLS, needsAny: 3, marks: [/^readiness score$/i, /^average hrv$/i, /^total burn$/i, /^lowest resting heart rate$/i] },
+  garmin_daily: { label: 'Garmin Connect daily numbers', source: 'garmin', matched: true, day: [/^date$/i, /^day$/i, /^calendar date$/i], cols: GARMIN_DAILY_COLS, needsAny: 3, marks: [/body battery/i, /^pulse ox/i, /respiration/i] },   // marks are columns only Garmin names this way; a coach's wellness sheet (Date, Sleep, Stress) stays a spreadsheet
   garmin_activities: { label: 'Garmin Connect activities (Activities.csv)', source: 'garmin', workoutsMatched: true, needsAll: [/^activity type$/i, /^date$/i], marks: [/^aerobic te$/i, /^avg hr$/i, /^title$/i],
     cols: { start: /^date$/i, name: /^title$/i, type: /^activity type$/i, minutes: [/^(moving )?time$/i, /^elapsed time$/i], calories: /^calories$/i, avg_hr: /^avg hr$/i, max_hr: /^max hr$/i, distance: /^distance$/i } },
   strava_activities: { label: 'Strava activities (activities.csv)', source: 'strava', workoutsMatched: true, needsAll: [/^activity date$/i, /^activity type$/i], marks: [/^activity name$/i, /^elapsed time$/i],
@@ -173,10 +174,9 @@ export async function readTable(ctx, body) {
     const buf = Buffer.from(v.str(f.zip_base64 ?? f.xml_base64, 'file', { max: Math.ceil(MAX_ARCHIVE_BYTES * 1.4) }), 'base64');
     if (buf.length > MAX_ARCHIVE_BYTES) throw new HttpError(413, 'too_large', `That export is bigger than ${MAX_ARCHIVE_BYTES / 1024 / 1024} MB. Ask us about bringing it in another way.`);
     const source = body.source && body.source !== 'auto' ? String(body.source) : null;
-    let t;
-    if (f.xml_base64 || source === 'apple_health' || (!source && looksApple(buf))) t = await readAppleHealth(buf, name);
-    else if (source === 'fitbit' || !source) t = await readFitbit(buf, name);
-    else throw badRequest(`A zip only works for Apple Health or Fitbit exports. For ${SOURCES[source]?.label ?? 'that app'}, unzip it and upload the CSV inside.`);
+    if (source && !['apple_health', 'fitbit'].includes(source)) throw badRequest(`A zip only works for Apple Health or Fitbit exports. For ${SOURCES[source]?.label ?? 'that app'}, unzip it and upload the CSV inside.`);
+    rateLimit(`archive-import:${body.client_id ?? 'x'}`, 6, 60 * 60000);   // an athlete's archive is checked and saved: a few goes an hour is plenty
+    const t = await oneAtATime(async () => (f.xml_base64 || source === 'apple_health' || (!source && looksApple(buf))) ? readAppleHealth(buf, name) : readFitbit(buf, name));
     return { ...t, note: t.notes.join(' ') };
   }
   if (f.pdf_base64) {
@@ -197,8 +197,8 @@ export async function readTable(ctx, body) {
   }
   throw badRequest('Choose a file (CSV, Excel, PDF, or an Apple Health or Fitbit zip) or paste a Google Sheets link.');
 }
-// An Apple Health export.zip has export.xml inside; the central directory near the end names it.
-const looksApple = (buf) => buf.subarray(Math.max(0, buf.length - 200000)).includes('export.xml');
+// An Apple Health export.zip has export.xml inside (however many workout routes come before it).
+const looksApple = (buf) => { try { return zipEntries(buf).some((e) => /(^|\/)export\.xml$/i.test(e.name)); } catch { return false; } };
 
 // ---------- Values ----------
 // Commas: 1,234 or 12,345.6 are thousands; 65,3 is a decimal comma (spreadsheets outside the US); anything else is refused.
@@ -262,7 +262,10 @@ function build(table, format, mapping) {
     const def = METRICS[key];
     let val = convert(x, from, sample);
     if (val === 0 && def.min > 0) { out.unmeasured = (out.unmeasured ?? 0) + 1; return; }
-    if (Number.isNaN(val) || val < def.min || val > def.max) { problem(rowNo, col, `"${x}" isn't a possible ${def.label.toLowerCase()} (${def.min} to ${def.max}${def.unit ? ` ${def.unit}` : ''}).`); return; }
+    if (Number.isNaN(val) || val < def.min || val > def.max) {
+      if (f.direct) { out.impossible = (out.impossible ?? 0) + 1; return; }   // an archive can't be edited: the value is left out and counted
+      problem(rowNo, col, `"${x}" isn't a possible ${def.label.toLowerCase()} (${def.min} to ${def.max}${def.unit ? ` ${def.unit}` : ''}).`); return;
+    }
     put(rowNo, day, key, Math.round(val * 100) / 100, null, null);
   };
   const cols = f.matched ? matchedCols(table.headers, f) : [];
@@ -347,6 +350,7 @@ function build(table, format, mapping) {
     if (out.naps) out.notes.push(`${out.naps} ${out.naps === 1 ? 'nap was' : 'naps were'} left out (only the night's sleep counts for the day).`);
     if (out.unmeasured) out.notes.push(`${out.unmeasured} ${out.unmeasured === 1 ? 'value was' : 'values were'} 0, which means the device didn't measure it that day; ${out.unmeasured === 1 ? 'it was' : 'they were'} left out.`);
     if (out.dupes) out.notes.push(`${out.dupes} ${out.dupes === 1 ? 'value was' : 'values were'} for a day already in the file; the ${keepFirst ? 'most recent' : 'later row'} counts.`);
+    if (out.impossible) out.notes.push(`${out.impossible} ${out.impossible === 1 ? 'value' : 'values'} outside what's possible (a heart rate over 250, say) ${out.impossible === 1 ? 'was' : 'were'} left out.`);
     if (f.matched && cols.length) out.notes.push(`Recognized columns: ${cols.map((m) => `${m.column} → ${METRICS[m.key].label}`).join(', ')}.`);
     return out;
   }
@@ -354,10 +358,10 @@ function build(table, format, mapping) {
 // Unit conversions for matched columns. auto_min: a duration column written in seconds (most values over 1,440) or
 // hours (all under 24 with decimals) is turned into minutes; auto_kg: pounds (typical values over 120) into kilograms.
 function convert(x, from, sample) {
-  if (from === 'auto_min') {
+  if (from === 'auto_min') {   // a night's sleep is never under 24 minutes or over 1,440: below 24 the column is hours, above 1,440 seconds
     const s = sample ?? []; const med = s.length ? [...s].sort((a, b) => a - b)[Math.floor(s.length / 2)] : x;
     if (med > 1440) return x / 60;
-    if (med < 24 && s.some((n) => !Number.isInteger(n))) return x * 60;
+    if (med <= 24) return x * 60;
     return x;
   }
   if (from === 'auto_kg') { const s = sample ?? []; const med = s.length ? [...s].sort((a, b) => a - b)[Math.floor(s.length / 2)] : x; return med > 120 ? x * 0.45359237 : x; }
@@ -374,7 +378,7 @@ function anyTime(s) {
   if (iso) return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] ?? 12), Number(iso[5] ?? 0), Number(iso[6] ?? 0))).toISOString();
   const us = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:[ ,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?)?/);
   if (us) { let h = Number(us[4] ?? 12); if (us[7]) { h = h % 12 + (/p/i.test(us[7]) ? 12 : 0); } return new Date(Date.UTC(Number(us[3].length === 2 ? `20${us[3]}` : us[3]), Number(us[1]) - 1, Number(us[2]), h, Number(us[5] ?? 0), Number(us[6] ?? 0))).toISOString(); }
-  const parsed = Date.parse(t.replace(/(\d),(\s+\d)/, '$1$2'));   // "Sep 28, 2026, 6:00:00 PM"
+  const parsed = Date.parse(`${t.replace(/(\d),(\s+\d)/, '$1$2')} UTC`);   // "Sep 28, 2026, 6:00:00 PM": Strava writes UTC; read as such whatever zone the server runs in
   if (Number.isFinite(parsed) && !/^\d+(\.\d+)?$/.test(t)) return new Date(parsed).toISOString();
   return null;
 }
@@ -422,9 +426,9 @@ function customMapping(table, mapping) {
 // For a spreadsheet we don't recognize: which known metric a column looks like, from its name.
 const KNOWN_NAMES = [
   [/hrv|heart rate variability|rmssd|sdnn/i, 'hrv_ms'], [/resting (heart rate|hr)|\brhr\b/i, 'rhr_bpm'], [/recovery/i, 'recovery_pct'], [/readiness/i, 'readiness_pct'], [/sleep score/i, 'sleep_score_pct'],
-  [/deep/i, 'deep_min'], [/\brem\b/i, 'rem_min'], [/light sleep/i, 'light_min'], [/awake/i, 'awake_min'], [/in bed|bedtime/i, 'in_bed_min'], [/sleep (efficiency)/i, 'sleep_efficiency_pct'], [/sleep|asleep/i, 'sleep_min'],
-  [/strain/i, 'day_strain'], [/steps/i, 'steps'], [/active (cal|burn|energy)/i, 'active_cal_kcal'], [/calor|energy|burn/i, 'calories_kcal'], [/max(imum)? (hr|heart)/i, 'max_hr_bpm'], [/av(era)?g(e)? (hr|heart)/i, 'avg_hr_bpm'],
-  [/spo2|oxygen/i, 'spo2_pct'], [/skin temp|wrist temp/i, 'skin_temp_c'], [/resp/i, 'resp_rate'], [/vo2/i, 'vo2max'], [/body battery/i, 'body_battery'], [/stress/i, 'stress_score'], [/load|tss/i, 'training_load'], [/distance/i, 'distance_km'], [/weight|mass/i, 'weight_kg']];
+  [/sleep (need|debt|consist|perform)/i, null], [/deep/i, 'deep_min'], [/\brem\b/i, 'rem_min'], [/light sleep/i, 'light_min'], [/awake/i, 'awake_min'], [/in bed|bedtime/i, 'in_bed_min'], [/sleep efficiency/i, 'sleep_efficiency_pct'], [/sleep|asleep/i, 'sleep_min'],
+  [/strain/i, 'day_strain'], [/steps/i, 'steps'], [/active (cal|burn|energy)/i, 'active_cal_kcal'], [/calor|kcal|energy burn|\bburn/i, 'calories_kcal'], [/max(imum)? (hr|heart)/i, 'max_hr_bpm'], [/av(era)?g(e)? (hr|heart)/i, 'avg_hr_bpm'],
+  [/spo2|oxygen/i, 'spo2_pct'], [/skin temp|wrist temp/i, 'skin_temp_c'], [/respir|resp(\.|iratory)? rate|breath/i, 'resp_rate'], [/vo2/i, 'vo2max'], [/body battery/i, 'body_battery'], [/stress/i, 'stress_score'], [/training load|\btss\b/i, 'training_load'], [/distance/i, 'distance_km'], [/weight|body mass/i, 'weight_kg']];
 export const guessMetric = (column) => KNOWN_NAMES.find(([re]) => re.test(String(column)))?.[1] ?? null;
 // What a custom file looks like, to map it: which column looks like dates, and which look like numbers.
 function suggest(table) {
@@ -451,7 +455,7 @@ async function prepare(ctx, clientId, body) {
   const table = await readTable(ctx, body);
   const source = typeof body.source === 'string' && Object.hasOwn(SOURCES, body.source) ? body.source : 'auto';
   let format = typeof body.format === 'string' && Object.hasOwn(FORMATS, body.format) ? body.format : detectFormat(table.headers, table);
-  if (body.mapping && source === 'auto' && !body.format && FORMATS[format].matched) format = 'custom';   // columns matched by hand win over a guess
+  if (body.mapping && source === 'auto' && !body.format && (FORMATS[format].matched || FORMATS[format].workoutsMatched)) format = 'custom';   // columns matched by hand win over a guess
   // A source chosen in the menu: the file has to be one of its; a table nobody recognizes under "another app" is matched by hand.
   if (source !== 'auto' && !(SOURCES[source].formats ?? []).includes(format)) {
     if (source === 'other') format = 'custom';

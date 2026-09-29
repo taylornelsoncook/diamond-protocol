@@ -301,6 +301,11 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
   if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
   const replies = unreadReplies(ctx);
   if (replies.length) waiting.unshift({ kind: 'replies', count: replies.length, items: replies.slice(0, 4).map((x) => ({ client_id: x.client_id, name: x.name, author: x.author, count: x.count, last_at: x.last_at })) });
+  // Form checks waiting for an answer: owners and coaches answer them (front desk can't watch the clips).
+  if (role !== 'front_desk') {
+    const fcs = db.all(`SELECT f.id, f.client_id, c.name, f.exercise_name, f.sent_at FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE f.status = 'sent' AND c.archived_at IS NULL ORDER BY f.sent_at`);
+    if (fcs.length) waiting.unshift({ kind: 'form_checks', count: fcs.length, items: fcs.slice(0, 4).map((x) => ({ id: x.id, client_id: x.client_id, name: x.name, exercise_name: x.exercise_name, sent_at: x.sent_at })) });
+  }
   const low = inventory(ctx).low;
   if (low.length) waiting.push({ kind: 'low_stock', count: low.length, items: low.slice(0, 4).map((x) => ({ name: x.name, on_hand: x.on_hand })) });
   if (role !== 'owner') {

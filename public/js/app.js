@@ -3,6 +3,7 @@ import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, vie
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, workoutRow } from './programs-coach.js';
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
+import { formChecksBlock } from './formchecks-ui.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
@@ -285,6 +286,10 @@ async function viewToday(main) {
     if (a.kind === 'new_leads') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.name} asked about training` : `${a.count} families asked about training this week`), h('span', { class: 'small muted' }, 'They got an automatic thank-you with the sign-up link. A personal call or text wins most of them.')),
       h('a', { class: 'dp-btn dp-btn--outline', href: '#/leads' }, 'See leads'));
+    if (a.kind === 'form_checks') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} sent a form check (${a.items[0].exercise_name})` : `${a.count} form checks are waiting for an answer`),
+        h('span', { class: 'small muted' }, a.count === 1 ? `Sent ${ago(a.items[0].sent_at).toLowerCase()}. Watch it and answer on their client page.` : a.items.map((x) => `${x.name}: ${x.exercise_name}`).join(' · '))),
+      h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}?tab=form-checks` }, a.count === 1 ? 'Watch' : 'Start'));
     if (a.kind === 'replies') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].author ?? a.items[0].name} wrote back about ${first(a.items[0].name)}` : `${a.count} athletes have new replies`), h('span', { class: 'small muted' }, a.items.map((x) => `${x.name} (${x.count})`).join(' · '))),
       h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}` }, 'Read'));
@@ -1064,7 +1069,13 @@ async function viewClient(main, id) {
   const outsidePanel = outside ? h('div', { class: 'stack' }, dataSummary(outside, { title: 'Recovery & sleep', action: ['owner', 'coach'].includes(role) ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/settings?tab=import&client=${id}` }, 'Import') : null,
     empty: `Nothing on file yet. Connect ${first}'s WHOOP or Oura below (parents can too, from the portal), or import a file from Settings → Data import.` }),
     panel('Linked wearables', { subtitle: 'Recovery, sleep, strain and workouts pulled a few times a day from the athlete\'s own account.' }, wear.el)) : null;
-  const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(contactHistoryPanel(id, c), 'contact'), 'Contact history'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [sectionId(outsidePanel, 'outside'), 'Recovery & sleep'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
+  // Form checks (services/formchecks.js): clips the athlete sent from the app; owners and coaches watch and answer here.
+  const canAnswer = ['owner', 'coach'].includes(role);
+  const fcBlock = canAnswer ? formChecksBlock({ who: 'staff', first, list: () => get(`/v1/form-checks?client_id=${id}`), play: (f, which) => get(`/v1/form-checks/${f}/video?which=${which}`),
+    reply: (f, text) => post(`/v1/form-checks/${f}/reply`, { text }), replyVideo: { start: (f, b) => post(`/v1/form-checks/${f}/reply-video`, b), finish: (f) => post(`/v1/form-checks/${f}/reply-video/done`) },
+    remove: (f) => del(`/v1/form-checks/${f}`), empty: `${first} hasn't sent a form check yet. In the app, each exercise has a Send a form check button once the private clips bucket is set up (Settings → Backups & jobs).` }) : null;
+  const formChecksPanel = canAnswer ? panel('Form checks', { subtitle: 'Clips sent from the app. Your answer goes to the athlete as a message too; add a clip of your own if it helps.' }, fcBlock.el) : null;
+  const right = [[sectionId(formChecksPanel, 'form-checks'), 'Form checks'], [sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(contactHistoryPanel(id, c), 'contact'), 'Contact history'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [sectionId(outsidePanel, 'outside'), 'Recovery & sleep'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,
     header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), trainingTag(c), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
@@ -1077,6 +1088,9 @@ async function viewClient(main, id) {
     h('nav', { class: 'tm-jump', 'aria-label': 'Sections' }, jumps.map(([el, label]) => h('button', { type: 'button', onClick: () => el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
     h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, left.map(([el]) => el)), h('div', { class: 'stack', style: 'gap:24px' }, right.map(([el]) => el))));
   if (openAdd) sibName.focus();
+  // Today's "Watch" link lands on the section it names (#/clients/<id>?tab=form-checks).
+  const wanted = hashQuery().get('tab');
+  if (wanted) requestAnimationFrame(() => document.getElementById(`cl-${wanted}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
 
 // Staff notes: dated, with the author. Anyone on staff adds; authors change their own; owners delete any and pin any.

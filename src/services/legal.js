@@ -3,6 +3,7 @@ import { getSetting, getFamily } from './families.js';
 import { emit } from './events.js';
 import { sendEmail } from './mail.js';
 import { forgetFamily as forgetWearables } from './wearables.js';
+import { forExport as formChecksOf, removeAllFor as removeFormChecks } from './formchecks.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -80,6 +81,7 @@ export function exportFamily(ctx, familyId) {
       // Outside data brought in from wearables and other apps (version 47).
       outside_data: per(`SELECT day, metric, value, label, unit, source FROM athlete_metrics WHERE client_id = ? ORDER BY day, metric`, k.id),
       outside_workouts: per(`SELECT started_at, ended_at, minutes, activity, strain, calories, avg_hr, max_hr, source FROM athlete_workouts WHERE client_id = ? ORDER BY started_at`, k.id),
+      form_checks: formChecksOf(ctx, k.id),   // the notes around the clips; the clips themselves are removed with the family
       wearables_linked: per(`SELECT provider, status, connected_by_kind, connected_at, last_sync_at FROM wearable_connections WHERE client_id = ? ORDER BY provider`, k.id),
       outside_data_imports: per(`SELECT source, file_kind, filename, days, workouts, from_day, to_day, created_by, created_by_kind, created_at, undone_at FROM data_imports WHERE client_id = ? ORDER BY created_at`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
@@ -123,6 +125,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
   const parents = fam.guardians.map((g) => g.email);
   const kids = ctx.db.all('SELECT id FROM clients WHERE family_id = ?', familyId).map((k) => k.id);
   await forgetWearables(ctx, familyId);   // tokens revoked and forgotten first, so no pull lands after the data is gone
+  for (const id of kids) await removeFormChecks(ctx, id);   // the clips in the private bucket, before the rows go
   ctx.db.tx(() => {
     for (const id of kids) {
       ctx.db.run(`UPDATE subscriptions SET status = 'canceled', canceled_at = COALESCE(canceled_at, ?) WHERE client_id = ? AND status != 'canceled'`, ctx.now(), id);

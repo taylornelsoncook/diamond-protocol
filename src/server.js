@@ -30,6 +30,7 @@ import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
+import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
 import { calendarFeed } from './services/portal.js';
@@ -37,7 +38,7 @@ import { calendarFeed } from './services/portal.js';
 // What was typed as the email on the sign-in and forgot-password forms, for the activity log: only if it looks like an
 // email, so a password typed into the wrong box is never stored.
 const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(0, 120); return /^[^\s@]+@[^\s@]+$/.test(t) ? t : t ? '(not an email address)' : null; };
-const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret)$/;
+const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
 const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
@@ -46,6 +47,9 @@ const CSP = [
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
   "frame-src https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
+// The athlete app and the client page upload form-check clips straight to the owner's private bucket, so that one
+// address is allowed for connections when it's set up.
+const csp = () => { const o = formCheckStorage(); return o ? CSP.replace("connect-src 'self'", `connect-src 'self' ${o}`) : CSP; };
 
 // allowPrivateWebhooks: webhooks may go to addresses inside a private network (this computer, the office network). Only
 // for local development and the tests: on by default in test mode without a PUBLIC_URL, off everywhere else.
@@ -83,7 +87,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         rateLimit(`link:${clientIp(req)}`, 60, 15 * 60000);
         const stop = url.searchParams.has('stop') || (camp && camp[2] === undefined) || !!unsub;
         const page = (text, form = '') => {
-          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store' });
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': csp(), 'cache-control': 'no-store' });
           return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your emails</title><link rel="stylesheet" href="/styles.css"><body style="padding:48px 16px;text-align:center"><p style="font-size:18px">${text.replace(/[<>&]/g, '')}</p>${form}</body>`);
         };
         // Stopping takes a button press, so email scanners that open every link can't unsubscribe anyone.
@@ -217,6 +221,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
+  runner.define('form-check-cleanup', 24 * HOUR, () => cleanupFormChecks(ctx));
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };
@@ -335,8 +340,8 @@ async function serveStatic(res, pathname) {
     const type = MIME[extname(full)] || 'application/octet-stream';
     // The Book now page is made to sit inside the business's own website, so any site may frame it. It only shows
     // public information and every button opens the parent portal in a new tab.
-    const csp = file === 'book.html' ? CSP.replace("frame-ancestors 'none'", 'frame-ancestors *') : CSP;
-    res.writeHead(200, { 'content-type': type, 'content-security-policy': csp, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : 'public, max-age=300' });
+    const policy = file === 'book.html' ? csp().replace("frame-ancestors 'none'", 'frame-ancestors *') : csp();
+    res.writeHead(200, { 'content-type': type, 'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : 'public, max-age=300' });
     res.end(body);
   } catch {
     json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });

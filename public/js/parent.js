@@ -3,6 +3,7 @@ import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 import { importForm, importsList, dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
+import { formChecksBlock } from './formchecks-ui.js';
 wearableReturnNotice();
 
 // ---------- API ----------
@@ -593,10 +594,19 @@ async function viewProgress(main) {
     const period = store.get('dp_progress_period') ?? 'all', since = store.get('dp-report-since') ?? 'first';
     const from = period === 'year' ? minusOneYear() : period.startsWith('day:') ? period.slice(4) : '';
     const r = await get(`athletes/${a.id}/report${from ? `?from=${from}` : ''}`);
-    const outsideBox = h('div', { class: 'stack' });
-    fill(where, drawReport(a, r, { period, since, from }), outsideBox);
+    const outsideBox = h('div', { class: 'stack' }), fcBox = h('div', { class: 'stack' });
+    fill(where, drawReport(a, r, { period, since, from }), fcBox, outsideBox);
     window.scrollTo(0, y);
     drawOutside(a, outsideBox).catch(() => fill(outsideBox));
+    drawFormChecks(a, fcBox);
+  }
+  // Form checks: clips the athlete sent their coach from the app, and the answers. Parents can watch and remove them.
+  function drawFormChecks(a, box) {
+    const block = formChecksBlock({ who: 'parent', first: a.first_name, list: async () => { const d = await get(`athletes/${a.id}/form-checks`); box.hidden = !d.data.length; return d; },
+      play: (id, which) => get(`form-checks/${id}/video?which=${which}`), remove: (id) => api('DELETE', `form-checks/${id}`), empty: '' });
+    box.hidden = true;
+    fill(box, h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Form checks'),
+      h('p', { class: 'small muted', style: 'margin:0' }, `Clips ${a.first_name} sent to the coach from the app, with the coach's answer. Only our coaches and your family can watch them, and they're removed after a while. Remove one any time.`), block.el));
   }
   // Recovery and sleep from a wearable or another app: what's on file, bringing in a file, and undoing one.
   async function drawOutside(a, box) {

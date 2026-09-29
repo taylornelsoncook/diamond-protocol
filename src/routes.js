@@ -3,6 +3,7 @@ import * as refunds from './services/refunds.js';
 import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
 import * as wearables from './services/wearables.js';
+import * as formchecks from './services/formchecks.js';
 import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
@@ -132,6 +133,14 @@ export const routes = [
   ['POST', '/v1/clients/:id/wearables/:provider/connect', 'any', 'Clients', 'Start linking an athlete\'s WHOOP or Oura account: answers the provider\'s sign-in link (open it on the phone that\'s signed in to the wearable). The link works once, for 20 minutes.', (ctx, r) => wearables.connectUrl(ctx, r.params.id, r.params.provider, { kind: 'staff', id: r.user?.id ?? null }), 201],
   ['POST', '/v1/wearables/:id/sync', 'any', 'Clients', 'Pull the last 7 days now (days: up to 90).', (ctx, r) => wearables.syncNow(ctx, r.params.id, { days: r.body?.days })],
   ['DELETE', '/v1/wearables/:id', 'any', 'Clients', 'Disconnect a wearable: the token is revoked and forgotten; the data already pulled stays.', (ctx, r) => wearables.disconnect(ctx, r.params.id)],
+  // Form checks (version 53): owners and coaches watch and answer, signed in only (never an API key; front desk isn't on the allow-list). The clips live in a private bucket.
+  ['GET', '/v1/form-checks/status', 'session', 'Clients', 'Whether form-check clips are set up (the private bucket), how long clips are kept, and how many are waiting.', (ctx) => formchecks.status(ctx)],
+  ['GET', '/v1/form-checks', 'session', 'Clients', 'Form checks athletes sent: status=waiting|answered, client_id, limit.', (ctx, r) => ({ data: formchecks.listAll(ctx, { status: r.query.status, clientId: r.query.client_id, limit: r.query.limit }) })],
+  ['GET', '/v1/form-checks/:id/video', 'session', 'Clients', 'A short-lived address to play the clip (which=clip or reply).', (ctx, r) => formchecks.playUrl(ctx, r.params.id, r.query.which === 'reply' ? 'reply' : 'clip')],
+  ['POST', '/v1/form-checks/:id/reply', 'session', 'Clients', 'Answer a form check: text (what you saw and what to change). The athlete gets it as a coach message too.', (ctx, r) => formchecks.reply(ctx, r.params.id, r.body, r.user)],
+  ['POST', '/v1/form-checks/:id/reply-video', 'session', 'Clients', 'Add a clip of your own to an answer: content_type, bytes. Answers a one-time address to upload it to; then call /done.', (ctx, r) => formchecks.startReplyUpload(ctx, r.params.id, r.body), 201],
+  ['POST', '/v1/form-checks/:id/reply-video/done', 'session', 'Clients', 'The reply clip is uploaded: it is checked and shown to the athlete.', (ctx, r) => formchecks.finishReplyUpload(ctx, r.params.id, r.user)],
+  ['DELETE', '/v1/form-checks/:id', 'session', 'Clients', 'Remove a form check and its clips.', (ctx, r) => formchecks.remove(ctx, r.params.id)],
   ['GET', '/wearables/:provider/callback', 'public', 'Clients', 'Where the wearable provider sends the parent back after signing in. Redirects to the portal or the client page.', (ctx, r) => wearables.callback(ctx, r.params.provider, r.query)],
   ['POST', '/v1/data-imports/:id/undo', 'session', 'Clients', 'Undo an import: removes the values and workouts it saved.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'staff', name: r.user.name })],
   ['GET', '/v1/clients/:id/attendance', 'any', 'Clients', 'Attendance: visits (roster and walk-in check-ins), no-shows and late cancels in the last 30 days, visits in 90 days, the last visit, and the 12 most recent outcomes (attended, walk_in, no_show, late_cancel, in_progress). A booking in a session that is still running isn\'t a no-show yet.', (ctx, r) => clients.attendance(ctx, r.params.id)],
@@ -648,6 +657,11 @@ export const routes = [
 
   // Client app (authenticated by the client's private link token)
   ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => r.client.archived_at ? { has_data: false, metrics: [], workouts: [], imports: 0 } : dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
+  ['GET', '/app/api/form-checks', 'client', 'Client app', 'Your form checks and the coach\'s answers, newest first, and whether sending is set up.', (ctx, r) => ({ data: formchecks.listForClient(ctx, r.client.id), ready: formchecks.config().ready, max_bytes: formchecks.MAX_BYTES, max_seconds: formchecks.MAX_SECONDS })],
+  ['POST', '/app/api/form-checks', 'client', 'Client app', 'Send a form check, step 1: content_type, bytes, duration_s, note, and workout_exercise_id or exercise_id. Answers a one-time address to upload the clip to (PUT, 15 minutes); then call /done.', (ctx, r) => formchecks.startUpload(ctx, r.client, r.body), 201],
+  ['POST', '/app/api/form-checks/:id/done', 'client', 'Client app', 'Send a form check, step 2: the clip is uploaded. It is checked and the coach is told.', (ctx, r) => formchecks.finishUpload(ctx, r.client, r.params.id)],
+  ['GET', '/app/api/form-checks/:id/video', 'client', 'Client app', 'A short-lived address to play your clip (which=clip or reply).', (ctx, r) => formchecks.playUrl(ctx, r.params.id, r.query.which === 'reply' ? 'reply' : 'clip', { clientId: r.client.id })],
+  ['POST', '/app/api/form-checks/:id/seen', 'client', 'Client app', 'You read the coach\'s answer.', (ctx, r) => formchecks.markSeen(ctx, r.client, r.params.id)],
   ['GET', '/app/api/home', 'client', 'Client app', 'The client\'s next workout and progress.', (ctx, r) => programs.clientHome(ctx, r.client)],
   ['POST', '/app/api/workouts/:id/complete', 'client', 'Client app', 'Log a finished workout: exercise_ids done, sets (workout_exercise_id, set_no 1-12, weight lb, reps), rpe (effort 1-10), notes, started_at and finished_at (from the phone; kept when within the last 72 hours). request_id (the phone\'s id for this Finish) returns the first save for a resend. If the workout was logged on the weight-room screen, the sets join that log.', (ctx, r) => programs.completeWorkout(ctx, r.client, r.params.id, r.body), 201],
   ['GET', '/app/api/logs/:id', 'client', 'Client app', 'One of your finished workouts: each exercise, done or not, its sets, effort and note, and whether it can still be reopened.', (ctx, r) => programs.logDetail(ctx, r.client, r.params.id)],

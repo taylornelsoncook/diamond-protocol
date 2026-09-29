@@ -104,6 +104,20 @@ Your exercise videos live in your own Cloudflare R2 bucket, played from your own
 
 Names come from the file names ("Back_squat.mp4" is Back squat; "(1)" and "copy" are dropped). A video in a folder called Lower body, Core, Speed… gets that category; other folder names are ignored. Rename files before the upload if a name should change; a renamed file uploads again on the next run.
 
+## Form-check videos
+Athletes film a set in the app and send it to their coach. These are videos of minors, so they never sit on the app's server or in the public exercise-video bucket: the phone uploads each clip straight into a **private** R2 bucket of yours with a one-time signed address, everyone who may watch gets a 10-minute link, and clips are removed after the keep time (Settings → Backups & jobs, 90 days by default). Until the bucket is set up the app simply doesn't show the Send a form check button.
+
+1. Cloudflare dashboard → **R2 Object Storage → Create bucket**, e.g. `dp-athlete-videos`. Location: automatic. **No custom domain, no public access**: this bucket stays private. It must be its own bucket, not the backups bucket and not `dp-videos`.
+2. In the bucket: **Settings → CORS policy → Add CORS policy** and paste, with your app's address (the staging one too if you set it up there):
+   ```json
+   [{ "AllowedOrigins": ["https://app.diamondprotocol.org"], "AllowedMethods": ["PUT", "GET", "HEAD"], "AllowedHeaders": ["content-type"], "ExposeHeaders": ["etag"], "MaxAgeSeconds": 3600 }]
+   ```
+3. An API token with **Object Read & Write** on this bucket. The simplest is to edit the backups token so it covers both buckets; then only `FORMCHECK_S3_BUCKET` is needed in Render. Otherwise make a new token and set `FORMCHECK_S3_ENDPOINT` (the same `https://<account id>.r2.cloudflarestorage.com` as the backups), `FORMCHECK_S3_KEY_ID` and `FORMCHECK_S3_SECRET` too.
+4. In Render → **diamond-protocol → Environment**, add `FORMCHECK_S3_BUCKET=dp-athlete-videos` (and the three others if you made a new token). Save; Render restarts. Settings → Backups & jobs → **Form-check videos** should say **Set up** and list the exact addresses the CORS rule needs.
+5. Optional: **Settings → Object lifecycle rules** on the bucket, delete objects 400 days after upload, as a backstop behind the app's own daily clean-up.
+
+Storage costs about $0.015 per GB a month; a 60-second phone clip is 20 to 60 MB, so a hundred clips on file is under a dollar.
+
 ## Updating
 Push changes to the repository. GitHub runs the full test suite and checks the Docker image builds (the **Tests** check, `.github/workflows/tests.yml`). Staging deploys only after that check passes; production still waits for Manual Deploy. If staging was set up by hand rather than from the Blueprint, set it yourself: staging service → Settings → Auto-Deploy → **After CI Checks Pass**. The database upgrades itself on start, and a backup is made on start before anything else runs each day.
 
@@ -123,6 +137,7 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | `RESEND_API_KEY`, `EMAIL_FROM` | Email. |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | Text messages (see section 4). Without them texts are only logged. |
 | `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` | Optional. Lets parents (and coaches) link an athlete's WHOOP account so recovery, sleep, strain and workouts arrive on their own (Settings → Data import shows the setup and the redirect address to register at developer.whoop.com). Without them the Connect WHOOP button doesn't show and files can still be imported. |
+| `FORMCHECK_S3_BUCKET` (and `FORMCHECK_S3_ENDPOINT`, `FORMCHECK_S3_KEY_ID`, `FORMCHECK_S3_SECRET` when they differ from the backups') | Optional. A private bucket for athletes' form-check clips (see Form-check videos below). Until it's set, the app doesn't offer Send a form check. Never the backups bucket. |
 | `OURA_CLIENT_ID`, `OURA_CLIENT_SECRET` | Optional. The same for Oura rings (an application at cloud.ouraring.com/oauth/applications). |
 | `ANTHROPIC_API_KEY` | Optional. Claude reads program PDFs and photos into a draft (Programs → Build from a PDF; without the key that page says it needs one) and rewords the drafted progress notes for parents; coaches check and approve both. Without it the plain note drafts are used. `DP_AI_MODEL` picks the notes model, `DP_WORKOUT_MODEL` the PDF reader's (default `claude-opus-5`). |
 | `SMS_ONLY_TO` | Staging: only these phone numbers (comma list) are really texted; the rest are held in the log. |

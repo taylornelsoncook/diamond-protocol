@@ -36,7 +36,8 @@ const DEFAULTS = {
   card_fee_pct: '0',                      // a card processing fee passed to the payer (services/fees.js): percent of the amount (0 to 4, tenths)...
   card_fee_flat: '0',                     // ...plus a flat amount in whole cents (0 to 100; not named _cents so the counter, which staff run, can read it)...
   card_fee_label: 'Card processing fee',  // ...shown as its own line under this name...
-  card_fee_on: ''                         // ...on these card payments: a comma list of memberships, counter, pay_links, store (empty = off everywhere, the default)
+  card_fee_on: '',                        // ...on these card payments: a comma list of memberships, counter, pay_links, store (empty = off everywhere, the default)
+  form_check_keep_days: '90'              // how long an athlete's form-check clip is kept in the private bucket (30 to 365 days; services/formchecks.js)
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
 export function getSettings(ctx) { return Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, getSetting(ctx, k)])); }
@@ -78,6 +79,7 @@ export function updateSettings(ctx, body) {
     if (!Number.isFinite(n) || n < 0 || n > 4 || Math.round(n * 10) !== n * 10) throw badRequest('Enter the card fee percent from 0 to 4, in tenths (like 2.9).');
     next.card_fee_pct = String(n);
   }
+  if (body.form_check_keep_days !== undefined) next.form_check_keep_days = String(v.int(body.form_check_keep_days, 'form_check_keep_days', { min: 30, max: 365 }));
   if (body.card_fee_flat !== undefined) next.card_fee_flat = String(v.int(body.card_fee_flat, 'card_fee_flat', { min: 0, max: 100 }));
   if (body.card_fee_label !== undefined) next.card_fee_label = v.str(body.card_fee_label, 'card_fee_label', { max: 40, optional: true }) ?? 'Card processing fee';
   if (body.card_fee_on !== undefined) {

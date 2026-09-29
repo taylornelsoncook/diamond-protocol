@@ -28,6 +28,7 @@ export function workoutView(ctx, workoutId) {
   const full = p.workouts.find((x) => x.id === w.id);
   return { id: w.id, title: w.title, week: w.week, day: w.day, program_id: p.id, program_name: p.name,
     exercises: full.exercises.map((x) => ({ id: x.id, name: x.name, prescription: x.prescription, instructions: x.instructions, details: x.details, note: x.note,
+      video_url: x.video_url ?? null, poster_url: x.poster_url ?? null,   // the screen plays the demos in turn
       group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag,
       load: x.load_test ? `${x.load_pct}% of ${LOAD_TESTS[x.load_test]} max` : null })) };
 }

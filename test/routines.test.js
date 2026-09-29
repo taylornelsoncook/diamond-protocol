@@ -90,6 +90,8 @@ test('attached to a workout, the block follows it: the builder, the app, the scr
   assert.deepEqual([home.workout.warmup.name, home.workout.warmup.exercises[0].name, home.workout.cooldown.exercises[0].prescription], ['Dynamic 12', 'Easy jog', '2 × 30 sec']);
   const board = (await tv('GET', '/kiosk-api/screen')).sessions[0];
   assert.deepEqual([board.workout.warmup.name, board.workout.cooldown.exercises.map((x) => x.name)], ['Dynamic 12', ['Hamstring stretch']]);
+  const live = (await coach('GET', `/v1/sessions/${board.id}/live`)).body.athletes[0];
+  assert.deepEqual([live.workout.warmup, live.workout.cooldown], ['Dynamic 12', 'Stretch out'], 'the Live panel names them too');
   // A copy of the workout, and a copy of the program, carry the blocks.
   const copy = (await coach('POST', `/v1/workouts/${w.id}/copy`, { week: 1, day: 3 })).body;
   assert.deepEqual([copy.warmup.id, copy.cooldown.id], [warm.id, cool.id]);

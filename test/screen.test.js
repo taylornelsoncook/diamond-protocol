@@ -40,7 +40,7 @@ before(async () => {
   await member(ava); await member(ben);
   program = (await coach('POST', '/v1/programs', { name: 'Strength block', weeks: 4 })).body;
   workout = (await coach('POST', `/v1/programs/${program.id}/workouts`, { week: 1, day: 1, title: 'Lower body' })).body;
-  const ex = (await coach('POST', '/v1/exercises', { name: 'Back squat' })).body;
+  const ex = (await coach('POST', '/v1/exercises', { name: 'Back squat', video_url: 'https://videos.example.org/back-squat.mp4', poster_url: 'https://videos.example.org/back-squat.jpg' })).body;
   const ex2 = (await coach('POST', '/v1/exercises', { name: 'Front plank' })).body;
   let w = (await coach('POST', `/v1/workouts/${workout.id}/exercises`, { exercise_id: ex.id, prescription: '5 × 5', load_test: 'squat_1rm', load_pct: 75 })).body;
   w = (await coach('POST', `/v1/workouts/${workout.id}/exercises`, { exercise_id: ex2.id, prescription: '3 × 40 sec' })).body;
@@ -69,6 +69,7 @@ test('coaches put a workout on the screen for a session', async () => {
   board = (await tv('GET', '/kiosk-api/screen')).body;
   const s = board.sessions[0];
   assert.deepEqual(s.workout.exercises.map((x) => [x.name, x.prescription, x.load]), [['Back squat', '5 × 5', '75% of back squat max'], ['Front plank', '3 × 40 sec', null]]);
+  assert.deepEqual(s.workout.exercises.map((x) => [x.video_url, x.poster_url]), [['https://videos.example.org/back-squat.mp4', 'https://videos.example.org/back-squat.jpg'], [null, null]], 'the screen plays the demos in turn');
   assert.deepEqual(s.athletes.map((a) => a.name), ['Ava L.', 'Ben P.'], 'first name and last initial only');
   assert.equal(JSON.stringify(board).includes('Lopez'), false);
 });

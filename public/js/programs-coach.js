@@ -234,10 +234,11 @@ function exerciseFields(x, cats) {
 // The swaps an athlete may pick on their own for this exercise ("Can't do this today?" in the app).
 function alternativesBlock(x) {
   const listBox = h('div', { class: 'stack-tight' });
-  const pick = input({ list: 'dp-alt-list', placeholder: 'Type an exercise from the library', 'aria-label': `A swap for ${x.name}`, autocomplete: 'off' });
+  const listId = `dp-alt-list-${x.id}`;
+  const pick = input({ list: listId, placeholder: 'Type an exercise from the library', 'aria-label': `A swap for ${x.name}`, autocomplete: 'off' });
   const tag = select([], { 'aria-label': 'When' });
   const note = input({ maxlength: '200', placeholder: 'Note (optional)', 'aria-label': 'Note' });
-  const datalist = h('datalist', { id: 'dp-alt-list' });
+  const datalist = h('datalist', { id: listId });
   let library = null, tags = {};
   const draw = async () => {
     const r = await get(`/v1/exercises/${x.id}/alternatives`);
@@ -567,8 +568,8 @@ function workoutCard(p, w, exs, edit, reload) {
       : h('div', { class: 'grow pg-ex-body' }, body(x)),
   ));
   const blocks = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
-    h('span', { class: w.warmup || w.cooldown ? 'muted' : 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
-    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', () => blocksDialog(w, reload), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
+    h('span', { class: 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
+    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
   return h('div', { class: 'workout' },
     h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
       edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title))),

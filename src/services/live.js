@@ -56,7 +56,7 @@ function athleteLive(ctx, s, a, onScreen, program) {
   }) : [];
   return { client_id: a.client_id, name: a.name, booking_id: a.booking_id ?? null, team: !!a.team, here: !!a.here,
     readiness: readiness?.level ? { level: readiness.level, headline: readiness.headline, sets_off: readiness.sets_off, drop: readiness.drop } : null,
-    workout: w ? { id: w.id, title: w.title, week: w.week, day: w.day, program_name: w.program_name, source: w.source } : null,
+    workout: w ? { id: w.id, title: w.title, week: w.week, day: w.day, program_name: w.program_name, source: w.source, warmup: w.warmup?.name ?? null, cooldown: w.cooldown?.name ?? null } : null,
     program_progress: own ? { completed: own.program.workouts.length - own.left.length, total: own.program.workouts.length, name: own.program.name } : null,
     logged: !!log, logged_at: log?.completed_at ?? null, on_screen: !!log?.session_id, effort: log?.rpe ?? null,
     exercises_done: exercises.filter((e) => e.done).length, sets_logged: [...setsBySlot.values()].reduce((t, n) => t + n, 0), exercises };
@@ -78,20 +78,20 @@ export function swapExercise(ctx, clientId, body = {}, user) {
   const sessionId = body.session_id ? ctx.db.get('SELECT id FROM class_sessions WHERE id = ?', String(body.session_id))?.id ?? null : null;
   const slots = scope === 'workout' ? [slot.id] : ctx.db.all(`SELECT we.id FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id
     WHERE w.program_id = ? AND we.exercise_id = ? AND (we.id = ? OR NOT EXISTS (SELECT 1 FROM workout_logs l WHERE l.client_id = ? AND l.workout_id = w.id)) ORDER BY w.week, w.day, we.position`, slot.program_id, slot.exercise_id, slot.id, c.id).map((r) => r.id);
-  const id = insertSwaps(ctx, { client: c, slotIds: slots, to, insteadOf: slot.name, reason, sessionId, by: user?.name ?? null, byKind: 'coach', scope });
+  const id = insertSwaps(ctx, { client: c, slotIds: slots, slotId: slot.id, to, insteadOf: slot.name, reason, sessionId, by: user?.name ?? null, byKind: 'coach', scope });
   const row = ctx.db.get('SELECT created_at FROM exercise_swaps WHERE id = ?', id);
   return { id, client_id: c.id, workout_exercise_id: slot.id, exercise_id: to.id, exercise_name: to.name, instead_of: slot.name, reason, scope, workouts: slots.length, by: user?.name ?? null, created_at: row.created_at };
 }
-// Write the swap rows (one per slot; a slot swapped again is replaced) and tell webhooks. Returns the first slot's row id.
+// Write the swap rows (one per slot; a slot swapped again is replaced) and tell webhooks. Returns the row id of slotId (the slot asked for).
 // Coaches swap from the live view (by_kind coach); athletes pick from the coach's list (substitutions.js, by_kind athlete).
-export function insertSwaps(ctx, { client, slotIds, to, insteadOf, reason, sessionId = null, by = null, byKind = 'coach', scope = 'workout' }) {
+export function insertSwaps(ctx, { client, slotIds, slotId = slotIds[0], to, insteadOf, reason, sessionId = null, by = null, byKind = 'coach', scope = 'workout' }) {
   const now = ctx.now();
   ctx.db.tx(() => {
     for (const id of slotIds) ctx.db.run(`INSERT INTO exercise_swaps (id, client_id, workout_exercise_id, exercise_id, reason, session_id, created_by, created_at, by_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (client_id, workout_exercise_id) DO UPDATE SET exercise_id = excluded.exercise_id, reason = excluded.reason, session_id = excluded.session_id, created_by = excluded.created_by, created_at = excluded.created_at, by_kind = excluded.by_kind`,
       newId('swap'), client.id, id, to.id, reason, sessionId, by, now, byKind);
   });
-  const row = ctx.db.get('SELECT id FROM exercise_swaps WHERE client_id = ? AND workout_exercise_id = ?', client.id, slotIds[0]);
+  const row = ctx.db.get('SELECT id FROM exercise_swaps WHERE client_id = ? AND workout_exercise_id = ?', client.id, slotId);   // the slot the coach clicked, not the program's first
   emit(ctx, 'exercise.swapped', { swap_id: row.id, client_id: client.id, client_name: client.name, exercise_id: to.id, exercise_name: to.name, instead_of: insteadOf, reason, workouts: slotIds.length, scope, by, by_kind: byKind, ...(sessionId ? { session_id: sessionId } : {}) });
   return row.id;
 }

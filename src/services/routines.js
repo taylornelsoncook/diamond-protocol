@@ -74,6 +74,18 @@ export function deleteRoutine(ctx, id, body = {}) {
   });
   return { id: r.id, deleted: true, workouts_cleared: r.used_in };
 }
+// The blocks a set of workout rows use, by id, in two queries (getProgram: a long program reads its blocks once).
+export function blocksFor(ctx, workouts) {
+  const ids = [...new Set(workouts.flatMap((w) => [w.warmup_id, w.cooldown_id]).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const marks = ids.map(() => '?').join(', ');
+  const out = new Map(ctx.db.all(`SELECT * FROM routines WHERE id IN (${marks})`, ...ids).map((r) => [r.id, { ...r, kind_label: KINDS[r.kind], exercises: [] }]));
+  for (const x of ctx.db.all(`SELECT re.routine_id, re.id, re.exercise_id, e.name, re.prescription, re.note, e.video_url, e.poster_url, e.instructions FROM routine_exercises re JOIN exercises e ON e.id = re.exercise_id WHERE re.routine_id IN (${marks}) ORDER BY re.routine_id, re.position`, ...ids)) {
+    const { routine_id, ...rest } = x;
+    out.get(routine_id)?.exercises.push(rest);
+  }
+  return out;
+}
 // The blocks on a workout row, for every screen that shows the workout (null where none).
 export function forWorkout(ctx, w) {
   const light = (id) => { if (!id) return null; const r = ctx.db.get('SELECT * FROM routines WHERE id = ?', id); return r ? shape(ctx, r) : null; };

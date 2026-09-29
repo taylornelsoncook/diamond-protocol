@@ -11,6 +11,10 @@ if (location.hash.length > 1) { memoryKey = location.hash.slice(1); store.set(me
 const key = store.get() ?? memoryKey ?? '';
 const time = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 let board = null, picked = null, athlete = null, message = null, timer = null;
+// The demo pane: one exercise's clip at a time, muted and looping, moving on every DEMO_SECONDS; tapping an exercise in
+// the list jumps to it and holds there a minute. The <video> is kept between refreshes so a clip isn't restarted every 30 s.
+const DEMO_SECONDS = 20, isVideoFile = (url) => /\.(mp4|m4v|mov|webm)(\?|$)/i.test(String(url ?? ''));
+let demo = { workoutId: null, index: 0, holdUntil: 0, video: null, src: null, timer: null };
 
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { 'x-kiosk-key': key, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -39,10 +43,30 @@ async function log() {
 }
 
 function workoutList(w) {
-  return h('ol', { class: 'tv-ex' }, withGroups(w.exercises, (x) => h('li', { class: x.group_label ? 'tv-ex--grouped' : null },
+  const clips = w.exercises.filter((x) => isVideoFile(x.video_url));
+  const showing = clips[demo.index % Math.max(1, clips.length)];
+  return h('ol', { class: 'tv-ex' }, withGroups(w.exercises, (x) => h('li', { class: [x.group_label ? 'tv-ex--grouped' : null, showing && x.id === showing.id ? 'tv-ex--showing' : null, isVideoFile(x.video_url) ? 'tv-ex--clip' : null].filter(Boolean).join(' ') || null,
+    onClick: isVideoFile(x.video_url) ? () => { demo.index = clips.findIndex((c) => c.id === x.id); demo.holdUntil = Date.now() + 60000; render(); } : null },
     h('span', { class: 'tv-ex-name' }, x.group_tag ? `${x.group_tag} · ${x.name}` : x.name), h('span', { class: 'tv-ex-rx' }, x.prescription || ''),
     x.load || x.details ? h('span', { class: 'tv-ex-load' }, [x.load, x.details].filter(Boolean).join(' · ')) : null),
   (x) => h('li', { class: 'tv-ex-group' }, groupTitle(x))));
+}
+// The clip playing now, with the exercise's name and set details over it.
+function demoPane(w) {
+  const clips = w.exercises.filter((x) => isVideoFile(x.video_url));
+  if (!clips.length) { demo.video = null; demo.src = null; clearTimeout(demo.timer); return null; }
+  if (demo.workoutId !== w.id) { demo.workoutId = w.id; demo.index = 0; demo.holdUntil = 0; }
+  const x = clips[demo.index % clips.length];
+  if (!demo.video || demo.src !== x.video_url) {
+    demo.src = x.video_url;
+    demo.video = h('video', { src: x.video_url, muted: true, loop: true, autoplay: true, playsinline: true, preload: 'auto', ...(x.poster_url ? { poster: x.poster_url } : {}), 'aria-label': `${x.name} demo` });
+    demo.video.muted = true; demo.video.play?.().catch(() => {});
+  }
+  clearTimeout(demo.timer);
+  if (clips.length > 1) demo.timer = setTimeout(() => { if (Date.now() >= demo.holdUntil) { demo.index = (demo.index + 1) % clips.length; if (!athlete && !message) render(); } else demoPane(w); }, DEMO_SECONDS * 1000);
+  return h('div', { class: 'tv-demo' }, demo.video,
+    h('div', { class: 'tv-demo-label' }, h('span', { class: 'tv-demo-name' }, x.group_tag ? `${x.group_tag} · ${x.name}` : x.name), h('span', { class: 'tv-demo-rx' }, [x.prescription, x.details].filter(Boolean).join(' · '))),
+    clips.length > 1 ? h('div', { class: 'tv-demo-dots' }, clips.map((c, i) => h('span', { class: i === demo.index % clips.length ? 'on' : null }))) : null);
 }
 function render() {
   const sessions = board.sessions.filter((s) => s.workout);
@@ -69,7 +93,7 @@ function render() {
       : h('p', { class: 'muted' }, 'Nobody is booked yet.'));
   fill(root, h('main', { class: 'tv-wrap' }, head,
     h('div', { class: 'tv-grid' },
-      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), workoutList(w)),
+      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), demoPane(w), workoutList(w)),
       h('aside', { class: 'tv-side' }, side))));
 }
 

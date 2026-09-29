@@ -37,3 +37,14 @@ body{background:var(--black)}
 .tv-ex li.tv-ex-group{display:block;counter-increment:none;padding:4px 20px 0;border:0;background:none;font:600 clamp(14px,1.2vw,20px)/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright)}
 .tv-ex li.tv-ex-group::before{content:none}
 .tv-ex li.tv-ex--grouped{border-left:4px solid var(--green)}
+/* The demo pane: the exercise's clip, muted and looping, with its name over it; the list marks which one is showing. */
+.tv-demo{position:relative;width:100%;max-height:42vh;aspect-ratio:16/9;margin:0 0 16px;border-radius:var(--radius-md);overflow:hidden;background:var(--black);border:1px solid var(--line)}
+.tv-demo video{width:100%;height:100%;object-fit:cover;display:block}
+.tv-demo-label{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:baseline;gap:16px;padding:14px 20px;background:linear-gradient(transparent,rgba(0,0,0,.85))}
+.tv-demo-name{font:700 clamp(22px,2.2vw,40px)/1.1 var(--font-display);color:var(--steel);text-transform:uppercase}
+.tv-demo-rx{font:600 clamp(16px,1.5vw,26px)/1.1 var(--font-display);color:var(--green-bright);white-space:nowrap}
+.tv-demo-dots{position:absolute;top:12px;right:16px;display:flex;gap:6px}
+.tv-demo-dots span{width:10px;height:10px;border-radius:50%;background:rgba(228,231,229,.35)}
+.tv-demo-dots span.on{background:var(--green-bright)}
+.tv-ex li.tv-ex--clip{cursor:pointer}
+.tv-ex li.tv-ex--showing{border-color:var(--green-bright);box-shadow:inset 0 0 0 1px var(--green-bright)}

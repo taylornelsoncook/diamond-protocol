@@ -112,6 +112,9 @@ test('progression builds a run of weeks from one, stepping sets, percent and RPE
   assert.equal(none.status, 400); assert.match(none.body.error.message, /at least one change/);
   const odd = await coach('POST', `/v1/programs/${p.id}/progress`, { from: 1, to: 2, rpe_step: 0.3, replace: true });
   assert.equal(odd.status, 400); assert.match(odd.body.error.message, /rpe_step must be a number in halves from -2 to 2/);
+  const back = await coach('POST', `/v1/programs/${p.id}/progress`, { from: 4, to: 2, pct_step: 5, replace: true });
+  assert.equal(back.status, 400); assert.match(back.body.error.message, /Build forward from week 4/);
+  assert.deepEqual((await coach('POST', `/v1/programs/${p.id}/progress`, { from: 1, to: 2, through: '', pct_step: 5, replace: true })).body.progressed, { from: 1, to: 2, through: 2, sets_step: 0, pct_step: 5, rpe_step: 0 }, 'an empty through means one week');
   const empty = await coach('POST', `/v1/programs/${p.id}/progress`, { from: 7, to: 8, pct_step: 5 });
   assert.equal(empty.status, 400); assert.match(empty.body.error.message, /Week 7 has no workouts to build from/);
   assert.equal((await desk('POST', `/v1/programs/${p.id}/progress`, { from: 1, to: 2, pct_step: 5, replace: true })).status, 403);

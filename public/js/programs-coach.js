@@ -20,7 +20,7 @@ const LOAD_LIFT = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_cle
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced', 'All levels'];
 const loadText = (x) => (x.load_test ? `${x.load_pct}% of ${LOAD_LIFT[x.load_test]} max` : null);
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', ...attrs }); t.value = value ?? ''; return t; };
-const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
+const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(pct)), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
 
 // A dialog with a title, a body and buttons. An action's onClick returns false to keep the dialog open; errors show in it.
 function dialog(title, body, actions) {
@@ -331,10 +331,10 @@ const weekRange = (a, b) => (a === b ? `week ${a}` : `weeks ${a} to ${b}`);
 const weekSel = (p, value, attrs = {}) => select(Array.from({ length: p.weeks }, (_, i) => [String(i + 1), `Week ${i + 1}`]), { value: String(value), ...attrs });
 function planPanel(p, plan, edit, { openWeek, reload }) {
   const days = Array.from({ length: plan.days }, (_, i) => i + 1);
-  const grid = h('div', { class: 'pl-grid', role: 'table', 'aria-label': 'The whole plan', style: `grid-template-columns:130px 60px repeat(${plan.days}, minmax(120px, 1fr)) 170px` });
+  const grid = h('div', { class: 'pl-grid', role: 'group', 'aria-label': 'The whole plan: weeks down, days across', style: `grid-template-columns:130px 60px repeat(${plan.days}, minmax(120px, 1fr)) 170px` });
   const at = (col, row, el) => { el.style.gridColumn = String(col); el.style.gridRow = String(row); return el; };
   const volCol = plan.days + 3;
-  [['Phase'], ['Week'], ...days.map((d) => [`Day ${d}`]), ['Volume · intensity']].forEach(([t], i) => grid.append(at(i + 1, 1, h('div', { class: 'pl-head', role: 'columnheader' }, t))));
+  [['Phase'], ['Week'], ...days.map((d) => [`Day ${d}`]), ['Volume · intensity']].forEach(([t], i) => grid.append(at(i + 1, 1, h('div', { class: 'pl-head' }, t))));
   // Phase bands span their weeks; the first week of each gap offers Add phase.
   for (const f of plan.phases) {
     const band = h(edit ? 'button' : 'div', { class: `pl-phase pl-phase--${f.kind}`, ...(edit ? { type: 'button', onClick: () => phaseDialog(p, plan, f, reload) } : {}), 'aria-label': `${f.name}, ${weekRange(f.start_week, f.end_week)}${edit ? ': change or remove' : ''}` },
@@ -403,6 +403,9 @@ function progressDialog(p, plan, reload) {
     preview.textContent = parts.length ? `Week ${th} ends up at ${parts.join(', ')} over week ${f}; the weeks between step up evenly. Exercises without that field are left as they are.` : 'Choose at least one change a week.';
   };
   for (const el of [from, to, through, sets, pct, rpe]) el.addEventListener('input', say); say();
+  // Progression only runs forward: the weeks after the one it builds from.
+  const forward = () => { const f = Number(from.value); to.min = String(Math.min(f + 1, 52)); if (Number(to.value) <= f) to.value = String(Math.min(f + 1, 52)); if (Number(through.value) < Number(to.value)) through.value = to.value; say(); };
+  from.addEventListener('change', forward); to.addEventListener('change', forward); forward();
   const send = async (extra = {}) => {
     try { return await post(`/v1/programs/${p.id}/progress`, { from: Number(from.value), to: Number(to.value), through: Number(through.value), sets_step: Number(sets.value), pct_step: Number(pct.value), rpe_step: Number(rpe.value), ...extra }); }
     catch (e) {

@@ -158,12 +158,13 @@ export function updateProgram(ctx, id, body) {
   const weeks = body.weeks !== undefined ? v.int(body.weeks, 'weeks', { min: 1, max: 52 }) : p.weeks;
   const last = lastWeekOf(ctx, id);
   if (weeks < last) throw conflict(`Week ${last} still has workouts. Delete week ${last} first, or keep ${last} weeks.`);
-  ctx.db.run('UPDATE programs SET name = ?, description = ?, level = ?, weeks = ? WHERE id = ?',
-    body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : p.name,
-    body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : p.description,
-    body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : p.level,
-    weeks, id);
-  if (weeks < p.weeks) trimPhases(ctx, id, weeks);       // a shorter program cuts its phases back too
+  const name = body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : p.name;
+  const description = body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : p.description;
+  const level = body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : p.level;
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE programs SET name = ?, description = ?, level = ?, weeks = ? WHERE id = ?', name, description, level, weeks, id);
+    if (weeks < p.weeks) trimPhases(ctx, id, weeks);       // a shorter program cuts its phases back too
+  });
   return getProgram(ctx, id);
 }
 // Owner decision: deleting a program or workout keeps every athlete's logged workouts (and their sets) in their history.

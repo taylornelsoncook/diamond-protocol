@@ -3,7 +3,7 @@
 // tested max and the average target RPE), and a progression that copies one week across a run of weeks changing
 // the sets, percents or RPE by a step each week. Phases are labels for the coach: they never change a workout.
 import { newId, v, badRequest, notFound } from '../util.js';
-import { getProgram, programDetail, copyWeek, rxText } from './programs.js';
+import { programDetail, copyWeek, rxText } from './programs.js';
 
 export const PHASE_KINDS = { base: 'Base', build: 'Build', peak: 'Peak', deload: 'Deload', test: 'Testing', other: 'Other' };
 const MAX_SETS = 12;
@@ -31,7 +31,12 @@ export function planOf(ctx, programId) {
 }
 
 // ---- Phases ----
-function phaseInput(body, p, cur = null, exceptId = null) {
+function programRow(ctx, id) {
+  const p = ctx.db.get('SELECT id, name, weeks FROM programs WHERE id = ?', id);
+  if (!p) throw notFound('Program');
+  return p;
+}
+function phaseInput(ctx, p, body, cur = null, exceptId = null) {
   const kind = body.kind === undefined ? cur?.kind : v.oneOf(body.kind, 'kind', Object.keys(PHASE_KINDS));
   if (!kind) throw badRequest(`Choose what kind of phase it is: ${Object.values(PHASE_KINDS).join(', ')}.`);
   const start = body.start_week === undefined ? cur?.start_week : v.int(body.start_week, 'start_week', { min: 1, max: 52 });
@@ -41,17 +46,12 @@ function phaseInput(body, p, cur = null, exceptId = null) {
   if (end > p.weeks) throw badRequest(`The program is ${p.weeks} ${p.weeks === 1 ? 'week' : 'weeks'} long. Add weeks first, or end the phase by week ${p.weeks}.`);
   const name = body.name === undefined ? cur?.name ?? PHASE_KINDS[kind] : v.str(body.name, 'name', { max: 60, optional: true }) ?? PHASE_KINDS[kind];
   const note = body.note === undefined ? cur?.note ?? null : v.str(body.note, 'note', { max: 500, optional: true });
-  const clash = phasesOf(ctx_(p), p.id).find((f) => f.id !== exceptId && start <= f.end_week && end >= f.start_week);
+  const clash = phasesOf(ctx, p.id).find((f) => f.id !== exceptId && start <= f.end_week && end >= f.start_week);
   if (clash) throw badRequest(`Weeks ${start === end ? start : `${start} to ${end}`} overlap ${clash.name} (weeks ${clash.start_week === clash.end_week ? clash.start_week : `${clash.start_week} to ${clash.end_week}`}). Phases don't overlap: shorten one of them.`);
   return { name, kind, start_week: start, end_week: end, note };
 }
-// phaseInput needs the database for the overlap check; the program row carries it along.
-const ctx_ = (p) => p.__ctx;
-const withCtx = (ctx, p) => Object.defineProperty(p, '__ctx', { value: ctx, enumerable: false });
-
 export function addPhase(ctx, programId, body = {}) {
-  const p = withCtx(ctx, getProgram(ctx, programId));
-  const f = phaseInput(body, p);
+  const f = phaseInput(ctx, programRow(ctx, programId), body);
   const id = newId('ph');
   ctx.db.run('INSERT INTO program_phases (id, program_id, name, kind, start_week, end_week, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, programId, f.name, f.kind, f.start_week, f.end_week, f.note, ctx.now());
   return phasesOf(ctx, programId).find((x) => x.id === id);
@@ -59,8 +59,7 @@ export function addPhase(ctx, programId, body = {}) {
 export function updatePhase(ctx, id, body = {}) {
   const cur = ctx.db.get('SELECT * FROM program_phases WHERE id = ?', id);
   if (!cur) throw notFound('Phase');
-  const p = withCtx(ctx, getProgram(ctx, cur.program_id));
-  const f = phaseInput(body, p, cur, id);
+  const f = phaseInput(ctx, programRow(ctx, cur.program_id), body, cur, id);
   ctx.db.run('UPDATE program_phases SET name = ?, kind = ?, start_week = ?, end_week = ?, note = ? WHERE id = ?', f.name, f.kind, f.start_week, f.end_week, f.note, id);
   return phasesOf(ctx, cur.program_id).find((x) => x.id === id);
 }
@@ -96,8 +95,11 @@ const step = (val, name, min, max, halves = false) => {
 };
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 export function progressWeeks(ctx, programId, body = {}) {
-  const p = getProgram(ctx, programId);
+  const p = programDetail(ctx, programId);
   const from = v.int(body.from, 'from', { min: 1, max: 52 });
+  const to = v.int(body.to ?? from + 1, 'to', { min: 1, max: 52 });
+  const through = body.through === undefined || body.through === null || body.through === '' ? to : v.int(body.through, 'through', { min: to, max: 52 });
+  if (to <= from) throw badRequest(`Build forward from week ${from}: choose a week after it to progress into.`);
   const sets = step(body.sets_step, 'sets_step', -3, 3), pct = step(body.pct_step, 'pct_step', -20, 20), rpe = step(body.rpe_step, 'rpe_step', -2, 2, true);
   if (!sets && !pct && !rpe) throw badRequest('Choose at least one change each week: sets, percent of max, or RPE.');
   if (!p.workouts.some((w) => w.week === from)) throw badRequest(`Week ${from} has no workouts to build from.`);
@@ -112,7 +114,6 @@ export function progressWeeks(ctx, programId, body = {}) {
       return out;
     };
   };
-  const out = copyWeek(ctx, programId, from, { to: body.to, through: body.through, replace: body.replace, confirm: body.confirm }, adjust);
-  const to = Number(body.to ?? from + 1), through = Number(body.through ?? to);
+  const out = copyWeek(ctx, programId, from, { to, through, replace: body.replace, confirm: body.confirm }, adjust);
   return { ...out, progressed: { from, to, through, sets_step: sets, pct_step: pct, rpe_step: rpe } };
 }

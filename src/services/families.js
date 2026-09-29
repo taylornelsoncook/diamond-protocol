@@ -23,6 +23,18 @@ const DEFAULTS = {
   public_signup: 'on',
   rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
   readiness_adjust: 'on',                 // lighter weights in the athlete app after a rough daily check-in
+  readiness_wearable: 'on',               // ...and after a rough night the athlete's wearable saw (recovery, sleep, HRV from athlete_metrics)
+  readiness_yellow_drop: '10',            // points of the tested max taken off on a "go a little lighter" day (0 to 40)
+  readiness_red_drop: '20',               // ...and on a "take it easy" day (0 to 50)
+  readiness_red_sets: '1',                // sets taken off each exercise on a "take it easy" day (0 to 3)
+  readiness_recovery_yellow: '50',        // a wearable recovery or readiness score under this is a reason to go lighter (1 to 99)...
+  readiness_recovery_red: '34',           // ...and under this, an easy day on its own (1 to 99, below the yellow one)
+  readiness_sleep_yellow_min: '360',      // wearable sleep under this many minutes is a reason (6 hours)...
+  readiness_sleep_red_min: '300',         // ...and under this, an easy day on its own (5 hours)
+  readiness_hrv_drop_pct: '20',           // HRV this many percent under the athlete's 30-day average is a reason (5 to 60; 0 = ignore HRV)
+  progression_mode: 'suggest',            // after two workouts hitting every set at the top of the range: suggest a step to the coach, auto (approve at once) or off
+  progression_upper_lb: '5',              // the step for an upper-body (or uncategorized) exercise lifted with a weight...
+  progression_lower_lb: '10',             // ...and for lower body and power exercises
   emails_off: '',                         // comma list of automatic emails turned off: welcome, receipts, trial_ending, payment_failed
   texts_off: '',                          // comma list of automatic texts turned off: reminder, waitlist, canceled, payment_failed
   weekly_digest: 'on',                    // Monday summary email to the owners
@@ -62,6 +74,20 @@ export function updateSettings(ctx, body) {
     const text = v.str(body[`${kind}_text`], `${kind}_text`, { max: 100000 });
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version
   }
+  if (body.readiness_wearable !== undefined) next.readiness_wearable = body.readiness_wearable === true || body.readiness_wearable === 'on' ? 'on' : 'off';
+  if (body.readiness_yellow_drop !== undefined) next.readiness_yellow_drop = String(v.int(body.readiness_yellow_drop, 'readiness_yellow_drop', { min: 0, max: 40 }));
+  if (body.readiness_red_drop !== undefined) next.readiness_red_drop = String(v.int(body.readiness_red_drop, 'readiness_red_drop', { min: 0, max: 50 }));
+  if (body.readiness_red_sets !== undefined) next.readiness_red_sets = String(v.int(body.readiness_red_sets, 'readiness_red_sets', { min: 0, max: 3 }));
+  if (body.readiness_recovery_yellow !== undefined) next.readiness_recovery_yellow = String(v.int(body.readiness_recovery_yellow, 'readiness_recovery_yellow', { min: 1, max: 99 }));
+  if (body.readiness_recovery_red !== undefined) next.readiness_recovery_red = String(v.int(body.readiness_recovery_red, 'readiness_recovery_red', { min: 1, max: 99 }));
+  if (Number(next.readiness_recovery_red ?? cur.readiness_recovery_red) >= Number(next.readiness_recovery_yellow ?? cur.readiness_recovery_yellow)) throw badRequest('The easy-day recovery score has to be below the lighter-day one.');
+  if (body.readiness_sleep_yellow_min !== undefined) next.readiness_sleep_yellow_min = String(v.int(body.readiness_sleep_yellow_min, 'readiness_sleep_yellow_min', { min: 60, max: 720 }));
+  if (body.readiness_sleep_red_min !== undefined) next.readiness_sleep_red_min = String(v.int(body.readiness_sleep_red_min, 'readiness_sleep_red_min', { min: 60, max: 720 }));
+  if (Number(next.readiness_sleep_red_min ?? cur.readiness_sleep_red_min) >= Number(next.readiness_sleep_yellow_min ?? cur.readiness_sleep_yellow_min)) throw badRequest('The easy-day sleep has to be shorter than the lighter-day sleep.');
+  if (body.readiness_hrv_drop_pct !== undefined) { const n = v.int(body.readiness_hrv_drop_pct, 'readiness_hrv_drop_pct', { min: 0, max: 60 }); if (n && n < 5) throw badRequest('The HRV drop is 5 to 60 percent, or 0 to ignore HRV.'); next.readiness_hrv_drop_pct = String(n); }
+  if (body.progression_mode !== undefined) next.progression_mode = v.oneOf(String(body.progression_mode), 'progression_mode', ['suggest', 'auto', 'off']);
+  if (body.progression_upper_lb !== undefined) next.progression_upper_lb = String(v.int(body.progression_upper_lb, 'progression_upper_lb', { min: 1, max: 50 }));
+  if (body.progression_lower_lb !== undefined) next.progression_lower_lb = String(v.int(body.progression_lower_lb, 'progression_lower_lb', { min: 1, max: 50 }));
   if (body.readiness_adjust !== undefined) next.readiness_adjust = body.readiness_adjust === true || body.readiness_adjust === 'on' ? 'on' : 'off';
   if (body.rankings !== undefined) next.rankings = body.rankings === true || body.rankings === 'on' ? 'on' : 'off';
   if (body.review_url !== undefined) {

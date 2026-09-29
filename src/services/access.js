@@ -301,6 +301,11 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
   if (fresh.n) waiting.unshift({ kind: 'new_leads', count: fresh.n, name: fresh.name });
   const replies = unreadReplies(ctx);
   if (replies.length) waiting.unshift({ kind: 'replies', count: replies.length, items: replies.slice(0, 4).map((x) => ({ client_id: x.client_id, name: x.name, author: x.author, count: x.count, last_at: x.last_at })) });
+  // Progression steps suggested from logged sets: owners and coaches approve them.
+  if (role !== 'front_desk') {
+    const ps = db.all(`SELECT p.id, p.client_id, c.name, e.name AS exercise_name, p.kind, p.amount FROM progressions p JOIN clients c ON c.id = p.client_id JOIN exercises e ON e.id = p.exercise_id WHERE p.status = 'suggested' AND c.archived_at IS NULL ORDER BY p.created_at`);
+    if (ps.length) waiting.unshift({ kind: 'progressions', count: ps.length, items: ps.slice(0, 4).map((x) => ({ id: x.id, client_id: x.client_id, name: x.name, exercise_name: x.exercise_name, text: x.kind === 'weight' ? `+${x.amount} lb` : x.kind === 'reps' ? `+${x.amount} rep${x.amount === 1 ? '' : 's'} a set` : `+${x.amount} set${x.amount === 1 ? '' : 's'}` })) });
+  }
   // Form checks waiting for an answer: owners and coaches answer them (front desk can't watch the clips).
   if (role !== 'front_desk') {
     const fcs = db.all(`SELECT f.id, f.client_id, c.name, f.exercise_name, f.sent_at FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE f.status = 'sent' AND c.archived_at IS NULL ORDER BY f.sent_at`);

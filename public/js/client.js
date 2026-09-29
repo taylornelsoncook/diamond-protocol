@@ -188,9 +188,10 @@ function readinessCard(r) {
   if (!r) return null;
   if (!r.level) return h('div', { class: 'c-ready' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.headline), h('span', { class: 'small muted' }, r.advice)), btn('Check in', () => show('accountability'), 'secondary'));
   return h('div', { class: `c-ready c-ready--${r.level}`, role: 'status' },
-    h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, r.headline),
-      r.reasons.length ? h('span', { class: 'small' }, `From your check-in: ${r.reasons.join(', ').toLowerCase()}.`) : null,
-      h('span', { class: 'small muted' }, r.advice)));
+    h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.headline),
+      r.reasons.length ? h('span', { class: 'small' }, `From ${r.from ?? 'your check-in'}: ${r.reasons.map((x) => x.charAt(0).toLowerCase() + x.slice(1)).join(', ')}.`) : null,
+      h('span', { class: 'small muted' }, r.advice)),
+    r.checkin_missing ? btn('Check in', () => show('accountability'), 'ghost') : null);
 }
 
 // ---------- Workout tab ----------
@@ -269,7 +270,10 @@ function rowsFor(x) {
 // weight for that set; blank reps use the target.
 const defaultWeight = (x, i) => {
   const before = (draft?.sets[x.id] ?? []).slice(0, i).reverse().find((r) => r.done && r.weight != null && r.weight !== '');
-  return (before ? Number(before.weight) : null) ?? x.load?.lb ?? x.last?.sets?.[i]?.weight ?? x.last?.sets?.at(-1)?.weight ?? null;
+  if (before) return Number(before.weight);
+  if (x.load?.lb != null) return x.load.lb;                                  // a step is already in the weight from the max
+  const last = x.last?.sets?.[i]?.weight ?? x.last?.sets?.at(-1)?.weight ?? null;
+  return last != null && x.progression?.weight_lb ? Math.max(0, last + x.progression.weight_lb) : last;   // last time's weight plus the coach-approved step
 };
 const exDone = (x) => { const rows = rowsFor(x); return rows.length > 0 && rows.every((r) => r.done); };
 const exStarted = (x) => (draft.sets[x.id] ?? []).some((r) => r.done);
@@ -289,7 +293,8 @@ function renderLogger(w) {
     return h('button', { type: 'button', class: 'c-ex-head', 'aria-expanded': String(isOpen), onClick: () => { state.open = isOpen ? null : x.id; redrawCards(); if (!isOpen) cards.get(x.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
       h('span', { class: 'c-ex-mark', 'aria-hidden': 'true' }, exDone(x) ? '✓' : playIcon()),
       h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
-        h('span', { class: 'dp-ex-sets' }, [detailsOf(x), logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
+        h('span', { class: 'dp-ex-sets' }, [detailsOf(x), x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
+        x.progression?.text ? h('span', { class: 'small strong', style: 'color:var(--green-bright)' }, `Your progression: ${x.progression.text} on the plan`) : null,
         x.load ? h('span', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : `color:var(${x.load.planned_pct ? '--amber' : '--green-bright'})` }, x.load.text) : null),
       h('span', { class: 'sr-only' }, exDone(x) ? ' (done)' : ''));
   }

@@ -4,6 +4,7 @@ import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
 import * as wearables from './services/wearables.js';
 import * as formchecks from './services/formchecks.js';
+import * as progression from './services/progression.js';
 import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
@@ -134,6 +135,12 @@ export const routes = [
   ['POST', '/v1/clients/:id/wearables/:provider/connect', 'any', 'Clients', 'Start linking an athlete\'s WHOOP or Oura account: answers the provider\'s sign-in link (open it on the phone that\'s signed in to the wearable). The link works once, for 20 minutes.', (ctx, r) => wearables.connectUrl(ctx, r.params.id, r.params.provider, { kind: 'staff', id: r.user?.id ?? null }), 201],
   ['POST', '/v1/wearables/:id/sync', 'any', 'Clients', 'Pull the last 7 days now (days: up to 90).', (ctx, r) => wearables.syncNow(ctx, r.params.id, { days: r.body?.days })],
   ['DELETE', '/v1/wearables/:id', 'any', 'Clients', 'Disconnect a wearable: the token is revoked and forgotten; the data already pulled stays.', (ctx, r) => wearables.disconnect(ctx, r.params.id)],
+  // Progression steps (version 55): suggested from logged sets, approved by owners and coaches (front desk isn't on the allow-list).
+  ['GET', '/v1/progressions', 'session', 'Training', 'Progression steps: status=suggested|approved|dismissed, client_id. A suggestion comes after two workouts hitting every set at the top of the rep range.', (ctx, r) => ({ data: progression.list(ctx, { status: r.query.status, clientId: r.query.client_id, limit: r.query.limit }) })],
+  ['POST', '/v1/progressions/:id/approve', 'session', 'Training', 'Approve a suggested step: it applies to that athlete\'s workouts from now on, on top of the plan.', (ctx, r) => progression.decide(ctx, r.params.id, 'approve', r.user)],
+  ['POST', '/v1/progressions/:id/dismiss', 'session', 'Training', 'Dismiss a suggested step (a new one needs two more good workouts).', (ctx, r) => progression.decide(ctx, r.params.id, 'dismiss', r.user)],
+  ['POST', '/v1/clients/:id/progressions', 'session', 'Training', 'Add a step by hand for one athlete: exercise_id, kind (weight, reps, sets), amount (pounds, reps a set or sets; a minus takes some off). Applies at once.', (ctx, r) => progression.add(ctx, r.params.id, r.body, r.user), 201],
+  ['DELETE', '/v1/progressions/:id', 'session', 'Training', 'Take a step back out (or drop a suggestion).', (ctx, r) => progression.remove(ctx, r.params.id)],
   // Form checks (version 53): owners and coaches watch and answer, signed in only (never an API key; front desk isn't on the allow-list). The clips live in a private bucket.
   ['GET', '/v1/form-checks/status', 'session', 'Clients', 'Whether form-check clips are set up (the private bucket), how long clips are kept, and how many are waiting.', (ctx) => formchecks.status(ctx)],
   ['GET', '/v1/form-checks', 'session', 'Clients', 'Form checks athletes sent: status=waiting|answered, client_id, limit.', (ctx, r) => ({ data: formchecks.listAll(ctx, { status: r.query.status, clientId: r.query.client_id, limit: r.query.limit }) })],

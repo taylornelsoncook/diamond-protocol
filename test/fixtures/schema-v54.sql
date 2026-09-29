@@ -1651,18 +1651,3 @@ CREATE TABLE IF NOT EXISTS form_check_orphans (
   created_at TEXT NOT NULL,
   last_error TEXT
 );
--- Version 55: progression steps for one athlete on one exercise (services/progression.js): suggested after two workouts
--- hitting every set at the top of the range, approved or dismissed by a coach; approved steps add up in the app.
-CREATE TABLE IF NOT EXISTS progressions (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('weight','reps','sets')),
-  amount REAL NOT NULL,
-  basis TEXT,
-  status TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','approved','dismissed')),
-  created_at TEXT NOT NULL,
-  decided_at TEXT,
-  decided_by TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_progressions_client ON progressions(client_id, exercise_id, status);

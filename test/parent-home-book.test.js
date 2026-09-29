@@ -182,7 +182,11 @@ test('families can\'t book an athlete into two sessions at once (a waitlist spot
 
 test('privates: each time has its coach, a note goes to the coach, and cancelling reopens the time and returns the credit exactly once', async () => {
   const today = localDate(new Date().toISOString(), TZ), day = addDaysToDate(today, 3);
-  await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekday: weekdayOf(day), start_time: '15:00', end_time: '17:00', slot_minutes: 60, coach_id: riley.id, price_cents: 8000 });
+  // The earlier tests put classes at this clock time 2 to 4 days out, and a session at the place blocks private hours,
+  // so the hours go on the other half of the day from now.
+  const hourNow = Number(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
+  const [startT, endT] = hourNow < 12 ? ['15:00', '17:00'] : ['03:00', '05:00'];
+  await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekday: weekdayOf(day), start_time: startT, end_time: endT, slot_minutes: 60, coach_id: riley.id, price_cents: 8000 });
   await owner('POST', `/v1/clients/${ben.id}/credits`, { delta: 1, credit_type: 'private', note: 'Pack' });
   const slots = (await maria('GET', '/portal/api/slots?kind=private')).body;
   assert.ok(slots.coaches.some((c) => c.name === 'Riley Brooks'));

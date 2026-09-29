@@ -6,6 +6,7 @@ import { v, notFound, conflict, badRequest, HttpError, newId, token, sha256, loc
 import { getSetting, getFamily, cardExpiry, addGuardian, updateGuardian, payerFor } from './families.js';
 import * as billing from './billing.js';
 import * as commerce from './commerce.js';
+import { feeSettings, cardFee } from './fees.js';
 import { attendance } from './clients.js';
 import { education } from './engage.js';
 import { getTest } from './performance.js';
@@ -140,7 +141,7 @@ export function membershipPanel(ctx, clientId) {
     clientId, new Date(Date.parse(ctx.now()) - 30 * 86400000).toISOString()) ?? null;
   const pastDue = s ? ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS n FROM invoices WHERE subscription_id = ? AND status = 'failed'`, s.id).n : 0;
   return {
-    membership: s ? { status: s.status, plan_id: s.plan_id, plan_name: s.plan_name, price_cents: s.price_cents, trial_ends_at: s.status === 'trialing' ? s.trial_ends_at : null,
+    membership: s ? { status: s.status, plan_id: s.plan_id, plan_name: s.plan_name, price_cents: s.price_cents, fee_cents: cardFee(ctx, s.price_cents, 'memberships').cents, fee_label: feeSettings(ctx).label, trial_ends_at: s.status === 'trialing' ? s.trial_ends_at : null,
       next_charge_at: ['active', 'trialing', 'past_due'].includes(s.status) ? s.current_period_end : null, renews: s.current_period_end, past_due_cents: pastDue,
       pending_plan_name: s.pending_plan_name ?? null, pending_price_cents: s.pending_price_cents ?? null,   // the owner set a change for the renewal
       can_ask: s.status === 'paused' ? ['switch', 'cancel'] : REQUEST_KINDS } : null,
@@ -215,15 +216,16 @@ export function resolveMembershipRequest(ctx, id, body = {}, actor) {
 const PAID_SALE = ['succeeded', 'partially_refunded', 'refunded'];
 export function familyPayments(ctx, familyId, { all = false } = {}) {
   const zone = tz(ctx), year = localDate(ctx.now(), zone).slice(0, 4);
-  const sales = ctx.db.all(`SELECT s.id, s.status, s.amount_cents, s.refunded_cents, s.method, s.card_last4, s.completed_at, s.created_at, s.receipt_token, c.name AS athlete_name,
+  const feeLabel = feeSettings(ctx).label;
+  const sales = ctx.db.all(`SELECT s.id, s.status, s.amount_cents, s.fee_cents, s.refunded_cents, s.method, s.card_last4, s.completed_at, s.created_at, s.receipt_token, c.name AS athlete_name,
       (SELECT GROUP_CONCAT(CASE WHEN quantity > 1 THEN quantity || ' × ' || name ELSE name END, ', ') FROM sale_items i WHERE i.sale_id = s.id) AS description
     FROM sales s JOIN clients c ON c.id = s.client_id WHERE c.family_id = ? AND s.status IN ('succeeded','partially_refunded','refunded')`, familyId)
-    .map((s) => ({ kind: 'sale', id: s.id, date: s.completed_at ?? s.created_at, description: s.description || 'Payment', athlete_name: first(s.athlete_name), amount_cents: s.amount_cents, refunded_cents: s.refunded_cents,
+    .map((s) => ({ kind: 'sale', id: s.id, date: s.completed_at ?? s.created_at, description: s.description || 'Payment', athlete_name: first(s.athlete_name), amount_cents: s.amount_cents, fee_cents: s.fee_cents ?? 0, fee_label: s.fee_cents ? feeLabel : null, refunded_cents: s.refunded_cents,
       method: commerce.METHOD_LABEL[s.method] ?? s.method, card_last4: s.card_last4, receipt_url: s.receipt_token ? `/receipt/${s.receipt_token}` : null }));
-  const invoices = ctx.db.all(`SELECT i.id, i.amount_cents, i.refunded_cents, i.paid_at, i.paid_method, i.period_start, i.period_end, i.note, p.name AS plan_name, c.name AS athlete_name
+  const invoices = ctx.db.all(`SELECT i.id, i.amount_cents, i.fee_cents, i.refunded_cents, i.paid_at, i.paid_method, i.period_start, i.period_end, i.note, p.name AS plan_name, c.name AS athlete_name
     FROM invoices i JOIN clients c ON c.id = i.client_id JOIN subscriptions s ON s.id = i.subscription_id JOIN plans p ON p.id = s.plan_id
     WHERE c.family_id = ? AND i.status = 'paid' AND i.amount_cents > 0`, familyId)
-    .map((i) => ({ kind: 'membership', id: i.id, date: i.paid_at, description: i.note ?? `${i.plan_name} membership`, athlete_name: first(i.athlete_name), amount_cents: i.amount_cents, refunded_cents: i.refunded_cents,
+    .map((i) => ({ kind: 'membership', id: i.id, date: i.paid_at, description: i.note ?? `${i.plan_name} membership`, athlete_name: first(i.athlete_name), amount_cents: i.amount_cents, fee_cents: i.fee_cents ?? 0, fee_label: i.fee_cents ? feeLabel : null, refunded_cents: i.refunded_cents,
       method: i.paid_method ? billing.HAND_METHODS[i.paid_method] ?? 'Other' : 'Card on file', card_last4: null, receipt_url: null }));
   const rows = [...sales, ...invoices].filter((x) => x.date).sort((a, b) => b.date.localeCompare(a.date));
   const paidThisYear = rows.filter((x) => localDate(x.date, zone).slice(0, 4) === year).reduce((n, x) => n + x.amount_cents - (x.refunded_cents ?? 0), 0);
@@ -241,7 +243,7 @@ export function membershipReceipt(ctx, familyId, invoiceId) {
     WHERE i.id = ? AND c.family_id = ? AND i.status = 'paid'`, String(invoiceId ?? ''), familyId);
   if (!i) throw notFound('Receipt');
   return { id: i.id, business_name: biz(ctx), business_address: getSetting(ctx, 'business_address') || null, timezone: tz(ctx), athlete_name: i.athlete_name, description: `${i.plan_name} membership`,
-    period_start: i.period_start, period_end: i.period_end, paid_at: i.paid_at, amount_cents: i.amount_cents, refunded_cents: i.refunded_cents,
+    period_start: i.period_start, period_end: i.period_end, paid_at: i.paid_at, amount_cents: i.amount_cents, fee_cents: i.fee_cents ?? 0, fee_label: i.fee_cents ? feeSettings(ctx).label : null, refunded_cents: i.refunded_cents,
     method: i.paid_method ? billing.HAND_METHODS[i.paid_method] ?? 'Other' : 'Card on file' };
 }
 // Try a declined membership payment again on the card on file, while the payment has had fewer than 8 tries in all

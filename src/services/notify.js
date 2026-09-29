@@ -3,6 +3,7 @@ import { clientLock, lockTries } from './lockout.js';
 import { sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
 import { invoicePayLink } from './paylinks.js';
+import { feeSettings } from './fees.js';
 
 // Automatic emails. Each kind can be turned off in Hours & settings; everything lands in the outbox either way.
 export const EMAIL_KINDS = {
@@ -79,7 +80,8 @@ export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   const how = s.method === 'cash' ? 'cash' : s.method === 'online' ? 'card online' : card ? `card ending ${card}` : 'card';
   const lines = [
     ...items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`),
-    ...(s.discount_cents ? [`Subtotal  ${money(s.amount_cents + s.discount_cents)}`, `Discount${s.discount_reason ? ` (${s.discount_reason})` : ''}  ${signed(-s.discount_cents)}`] : [])
+    ...(s.discount_cents ? [`Subtotal  ${money(s.amount_cents - (s.fee_cents ?? 0) + s.discount_cents)}`, `Discount${s.discount_reason ? ` (${s.discount_reason})` : ''}  ${signed(-s.discount_cents)}`] : []),
+    ...(s.fee_cents ? [`${feeSettings(ctx).label}  ${money(s.fee_cents)}`] : [])
   ];
   await send(ctx, address, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
     `Thanks! Here's your receipt.\n\n${lines.join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how} on ${day(ctx, s.completed_at ?? s.created_at)}\n` +
@@ -94,7 +96,7 @@ export async function membershipReceipt(ctx, invoiceId, { how } = {}) {
   if (!inv || inv.status !== 'paid' || !inv.amount_cents) return;
   const payer = payerFor(ctx, inv.client_id);
   await send(ctx, payer.email, `Receipt from ${biz(ctx)}: ${money(inv.amount_cents)} membership`,
-    `Thanks! ${inv.client_name}'s ${inv.plan_name} is paid through ${day(ctx, inv.period_end)}.\n\nAmount: ${money(inv.amount_cents)}\nPaid by ${how ?? `card ending ${payer.card_last4 ?? ''}`} on ${day(ctx, inv.paid_at)}\nReceipt ${inv.id}\n\n${biz(ctx)}`);
+    `Thanks! ${inv.client_name}'s ${inv.plan_name} is paid through ${day(ctx, inv.period_end)}.\n\nAmount: ${money(inv.amount_cents)}${inv.fee_cents ? ` (includes a ${money(inv.fee_cents)} ${feeSettings(ctx).label.toLowerCase()})` : ''}\nPaid by ${how ?? `card ending ${payer.card_last4 ?? ''}`} on ${day(ctx, inv.paid_at)}\nReceipt ${inv.id}\n\n${biz(ctx)}`);
 }
 
 // ---------- Trial ending ----------

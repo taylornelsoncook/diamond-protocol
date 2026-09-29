@@ -32,7 +32,11 @@ const DEFAULTS = {
   review_requests: 'on',                  // ask happy families for a review after a 10th session or a personal best
   staff_discount_max_pct: '0',            // the biggest discount coaches and front desk may give at the counter, as a percent of the sale. Owner decision: 0 (only the owner gives discounts)
   payment_lock_tries: '4',                // lock a family out (but for fixing the card) once a membership payment declined on this many automatic tries; owner decision: 4 = the first charge and 3 retries; 0 = never (lockout.js)
-  open_spot_offers: 'suggest'             // light classes: 'suggest' shows them on Today to send offers by hand, 'auto' sends them, 'off' hides them
+  open_spot_offers: 'suggest',            // light classes: 'suggest' shows them on Today to send offers by hand, 'auto' sends them, 'off' hides them
+  card_fee_pct: '0',                      // a card processing fee passed to the payer (services/fees.js): percent of the amount (0 to 4, tenths)...
+  card_fee_flat: '0',                     // ...plus a flat amount in whole cents (0 to 100; not named _cents so the counter, which staff run, can read it)...
+  card_fee_label: 'Card processing fee',  // ...shown as its own line under this name...
+  card_fee_on: ''                         // ...on these card payments: a comma list of memberships, counter, pay_links, store (empty = off everywhere, the default)
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
 export function getSettings(ctx) { return Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, getSetting(ctx, k)])); }
@@ -69,6 +73,18 @@ export function updateSettings(ctx, body) {
   if (body.open_spot_offers !== undefined) next.open_spot_offers = v.oneOf(body.open_spot_offers, 'open_spot_offers', ['off', 'suggest', 'auto']);
   if (body.payment_lock_tries !== undefined) next.payment_lock_tries = String(v.int(body.payment_lock_tries, 'payment_lock_tries', { min: 0, max: 4 }));
   if (body.staff_discount_max_pct !== undefined) next.staff_discount_max_pct = String(v.int(body.staff_discount_max_pct, 'staff_discount_max_pct', { min: 0, max: 100 }));
+  if (body.card_fee_pct !== undefined) {
+    const n = Number(body.card_fee_pct);
+    if (!Number.isFinite(n) || n < 0 || n > 4 || Math.round(n * 10) !== n * 10) throw badRequest('Enter the card fee percent from 0 to 4, in tenths (like 2.9).');
+    next.card_fee_pct = String(n);
+  }
+  if (body.card_fee_flat !== undefined) next.card_fee_flat = String(v.int(body.card_fee_flat, 'card_fee_flat', { min: 0, max: 100 }));
+  if (body.card_fee_label !== undefined) next.card_fee_label = v.str(body.card_fee_label, 'card_fee_label', { max: 40, optional: true }) ?? 'Card processing fee';
+  if (body.card_fee_on !== undefined) {
+    const list = (Array.isArray(body.card_fee_on) ? body.card_fee_on : String(body.card_fee_on).split(',')).map((x) => String(x).trim()).filter(Boolean);
+    for (const x of list) v.oneOf(x, 'card_fee_on', ['memberships', 'counter', 'pay_links', 'store']);
+    next.card_fee_on = [...new Set(list)].join(',');
+  }
   if (body.lead_follow_up !== undefined) next.lead_follow_up = body.lead_follow_up === true || body.lead_follow_up === 'on' ? 'on' : 'off';
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';

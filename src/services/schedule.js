@@ -611,7 +611,7 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPrice
   if (type === 'group' && isMember(ctx, client.id)) return { coverage: 'membership' };
   if (offerPriceCents != null) {
     if (offerPriceCents === 0) return { coverage: 'none' };
-    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))} (trial offer)`, amount_cents: offerPriceCents } }, actor);
+    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))} (trial offer)`, amount_cents: offerPriceCents } }, actor, { fee: false });
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
     return { coverage: 'paid', sale_id: sale.id };
   }
@@ -620,7 +620,7 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPrice
     return { coverage: 'credit', credit_type: type };
   }
   if (pay === 'card_on_file' && session.drop_in_cents) {
-    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))}`, amount_cents: session.drop_in_cents } }, actor);
+    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))}`, amount_cents: session.drop_in_cents } }, actor, { fee: false });
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
     return { coverage: 'paid', sale_id: sale.id };
   }
@@ -804,7 +804,7 @@ export async function payBooking(ctx, bookingId, { method, reader_id }, actor) {
   // Starting over after a tap that was never finished: the old payment is canceled first (if it went through after all,
   // the booking is paid and this one is refused).
   for (const p of ctx.db.all(`SELECT id FROM sales WHERE booking_id = ? AND status = 'pending'`, bookingId)) await commerce.cancelSale(ctx, p.id);
-  const sale = await commerce.createSale(ctx, { location_id: s.location_id, method, reader_id, client_id: b.client_id, booking_id: bookingId, custom: { description: `${s.name}${reg ? ' (registration)' : ''}`, amount_cents: amount } }, actor);
+  const sale = await commerce.createSale(ctx, { location_id: s.location_id, method, reader_id, client_id: b.client_id, booking_id: bookingId, custom: { description: `${s.name}${reg ? ' (registration)' : ''}`, amount_cents: amount } }, actor, { fee: false });
   return { sale, booking: bookingDetail(ctx, bookingId) };
 }
 // ---------- Enrollment (recurring group spots) and camp registration ----------
@@ -864,7 +864,7 @@ export async function registerCamp(ctx, seriesId, clientId, { pay, actor, isCoac
   if (!isCoach) for (const x of sessions) { const clash = clashText(ctx, clientId, x.id, c.name); if (clash) throw conflict(clash); }
   let saleId = null;
   if (pay === 'card_on_file' && s.registration_cents > 0) {
-    const sale = await commerce.createSale(ctx, { location_id: s.location_id, method: 'card_on_file', client_id: clientId, custom: { description: `${s.name} registration`, amount_cents: s.registration_cents } }, actor);
+    const sale = await commerce.createSale(ctx, { location_id: s.location_id, method: 'card_on_file', client_id: clientId, custom: { description: `${s.name} registration`, amount_cents: s.registration_cents } }, actor, { fee: false });
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
     saleId = sale.id;
     if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) { await undoCover(ctx, clientId, { sale_id: saleId }); notArchived({ ...c, archived_at: true }, isCoach); }

@@ -1385,7 +1385,8 @@ async function invoiceDialog(id) {
     { label: 'Close', variant: 'ghost' }
   ].filter(Boolean);
   teamDialog(`${d.description} · ${d.client_name}`, h('div', { class: 'stack' },
-    h('div', { class: 'row wrap', style: 'gap:12px' }, h('span', { style: 'font:600 32px/1.1 var(--font-display)' }, money(d.amount_cents)), blBadge(d.state)),
+    h('div', { class: 'row wrap', style: 'gap:12px' }, h('span', { style: 'font:600 32px/1.1 var(--font-display)' }, money(d.amount_cents)), blBadge(d.state),
+      d.fee_cents ? h('span', { class: 'small muted' }, `includes a ${money(d.fee_cents)} card processing fee`) : null),
     h('dl', { class: 'dl' },
       kv('Client', h('a', { href: `#/clients/${d.client_id}`, onClick: () => document.getElementById('dialog').close() }, d.client_name)), kv('Period', period), kv('Made', date(d.issued_at)),
       kv('Card', d.card ? `${cardText({ card_brand: d.card.brand, card_last4: d.card.last4 })}${d.card.declining ? ' (declining)' : ''}` : 'No card on file'),
@@ -1459,6 +1460,28 @@ async function viewBilling(main) {
   lockSel.addEventListener('change', () => busy(lockSel, async () => { await patch('/v1/settings', { payment_lock_tries: Number(lockSel.value) }); toast(lockSel.value === '0' ? 'Families are never locked out.' : 'Saved. Locked families can only update the card and pay until it goes through.'); render(); }));
   const lockRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Declined payments:'), lockSel,
     h('span', { class: 'muted' }, 'A locked family can only update the card and pay in the parent portal; the app, online booking and self check-in wait until it\'s paid.'));
+  // The card processing fee passed to the payer: off by default, the owner's call, with the caution that surcharge rules differ.
+  const feePanel = (() => {
+    const places = [['memberships', 'Membership charges'], ['counter', 'Card sales at the counter'], ['pay_links', 'Pay links'], ['store', 'Online store']];
+    const on = new Set(String(settings.card_fee_on ?? '').split(',').filter(Boolean));
+    const boxes = places.map(([k, label]) => { const cb = h('input', { type: 'checkbox', checked: on.has(k), 'aria-label': label }); return { k, el: h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, cb, label), cb }; });
+    const pct = input({ type: 'number', min: '0', max: '4', step: '0.1', inputmode: 'decimal', value: String(settings.card_fee_pct ?? '0'), 'aria-label': 'Percent of the payment', style: 'width:6rem' });
+    const flat = input({ type: 'number', min: '0', max: '1', step: '0.01', inputmode: 'decimal', value: (Number(settings.card_fee_flat || 0) / 100).toFixed(2), 'aria-label': 'Flat amount in dollars', style: 'width:6rem' });
+    const label = input({ value: settings.card_fee_label || 'Card processing fee', maxlength: '40', 'aria-label': 'What the fee is called on receipts' });
+    const example = h('p', { class: 'small muted', style: 'margin:0' });
+    const say = () => { const p = Number(pct.value) || 0, f = Math.round((Number(flat.value) || 0) * 100); const fee = Math.round(15000 * p / 100) + f; example.textContent = boxes.some((b) => b.cb.checked) && fee ? `On a $150 payment the family pays ${money(15000 + fee)}: $150 plus a ${money(fee)} ${(label.value || 'card processing fee').toLowerCase()}. Cash and check never carry it.` : 'Off: families pay the price and nothing more.'; };
+    for (const el of [pct, flat, label, ...boxes.map((b) => b.cb)]) el.addEventListener('input', say); say();
+    const save = btn('Save', (e) => busy(e.currentTarget, async () => {
+      await patch('/v1/settings', { card_fee_pct: Number(pct.value) || 0, card_fee_flat: Math.round((Number(flat.value) || 0) * 100), card_fee_label: label.value.trim() || null, card_fee_on: boxes.filter((b) => b.cb.checked).map((b) => b.k) });
+      toast(boxes.some((b) => b.cb.checked) ? 'Saved. New card payments carry the fee; payments already made or invoiced don\'t change.' : 'Saved. No card fee is added.');
+    }), 'primary');
+    return panel('Card processing fee', { subtitle: 'Pass some of the card cost on to the payer as its own line on receipts. Off unless you turn it on.' },
+      h('div', { class: 'stack' },
+        h('div', { class: 'dp-error', role: 'note', style: 'background:var(--amber-deep);color:var(--steel)' }, h('strong', null, 'Check the rules first. '), 'Passing card costs to the payer is regulated: some states limit or ban surcharges on credit cards, card networks don\'t allow them on debit cards and cap them at your actual cost (3 to 4% depending on the network), and the fee has to be shown before payment. Many businesses charge a small "service fee" on every payment method instead. Ask your accountant or lawyer before turning this on. This only adds the line and the amount here; it doesn\'t register a surcharge with your card processor.'),
+        h('div', { class: 'row wrap', style: 'gap:8px 24px' }, boxes.map((b) => b.el)),
+        h('div', { class: 'row wrap', style: 'gap:8px;align-items:flex-end' }, field('Percent of the payment', pct), field('Plus a flat amount ($)', flat), h('div', { class: 'grow', style: 'min-width:200px' }, field('Called', label))),
+        example, h('div', null, save)));
+  })();
   const attPanel = h('div', { id: 'bl-att' }, panel('Needs attention', {
     subtitle: attN ? [att.failed.length ? `${plural(att.failed.length, 'declined charge')} (${money(att.failed_cents)})` : null, att.overdue.length ? `${plural(att.overdue.length, 'overdue school invoice')} (${money(att.overdue_cents)})` : null].filter(Boolean).join(' and ') + `. Declined charges retry on their own every ${att.retry_every_days} days, up to ${att.max_attempts} tries; a failed-payment email with a pay link goes out each time.` : null,
     action: attTools },
@@ -1575,7 +1598,7 @@ async function viewBilling(main) {
     numbers, monthNote,
     h('nav', { class: 'tm-jump', 'aria-label': 'Billing sections' }, jumps.map(([id, label, n]) => h('button', { type: 'button', onClick: () => jumpTo(id) }, label, n ? h('span', { class: 'warn-text', style: 'margin-left:6px' }, String(n)) : null))),
     checks.needs_look ? checksPanel : null,
-    attPanel, invPanel, memPanel, refundsPanel(), planPanel, linksPanel,
+    attPanel, feePanel, invPanel, memPanel, refundsPanel(), planPanel, linksPanel,
     checks.needs_look ? null : checksPanel,
     testPanel);
 }
@@ -1723,6 +1746,7 @@ async function viewSell(main) {
     const c = client(), sub = c?.subscription && c.subscription.status !== 'canceled' ? c.subscription : null;
     fill(planGrid, planList.map((p) => h('button', { type: 'button', class: 'dp-panel pos-tile', disabled: !!sub, title: sub ? `${firstName(c)} already has ${sub.plan_name}` : null, onClick: () => startMembership(p) },
       h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
+      String(settings.card_fee_on ?? '').split(',').includes('memberships') && (Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0)) ? h('span', { class: 'small muted' }, `plus a ${money(Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0))} ${(settings.card_fee_label || 'card processing fee').toLowerCase()}`) : null,
       h('span', { class: 'small muted' }, sub ? `${firstName(c)} already has ${sub.plan_name}` : p.trial_days ? `${p.trial_days}-day free trial` : 'Billed monthly'))));
   }
   function startMembership(p) {
@@ -1753,7 +1777,11 @@ async function viewSell(main) {
   // ----- The sale -----
   const subtotal = () => sale.cart.reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (sale.custom?.amount_cents || 0);
   const discountCents = () => { const d = sale.discount; if (!d || !(d.value > 0)) return 0; return d.type === 'percent' ? Math.round(subtotal() * d.value / 100) : d.value; };
-  const total = () => Math.max(subtotal() - discountCents(), 0);
+  const priceTotal = () => Math.max(subtotal() - discountCents(), 0);
+  // The owner's card fee (settings card_fee_*) shows before the charge; the server adds the same amount to the sale.
+  const feeOn = String(settings.card_fee_on ?? '').split(',').includes('counter');
+  const feeCents = () => (feeOn && method.value !== 'cash' && priceTotal() > 0 ? Math.round((priceTotal() * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0) : 0);
+  const total = () => priceTotal() + feeCents();
   const itemCount = () => sale.cart.reduce((n, [, q]) => n + q, 0) + (sale.custom ? 1 : 0);
   const method = { value: remember.get('dp_method') || 'tap_to_pay' };
   const saveCard = h('input', { type: 'checkbox', checked: true });
@@ -1820,6 +1848,7 @@ async function viewSell(main) {
     fill(totalsBox, h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:12px' },
       cents ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, 'Subtotal'), h('span', null, money(subtotal()))) : null,
       cents ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, `Discount${sale.discount.type === 'percent' ? ` ${sale.discount.value}%` : ''}`), h('span', null, signedMoney(-cents))) : null,
+      feeCents() ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, settings.card_fee_label || 'Card processing fee'), h('span', null, money(feeCents()))) : null,
       h('div', { class: 'row' }, h('span', { class: 'grow muted' }, 'Total'), h('span', { style: 'font:600 44px/1 var(--font-display)' }, money(total())))));
     charge.textContent = !total() ? 'Charge' : method.value === 'cash' ? `Record ${money(total())} cash` : `Charge ${money(total())}`;
     charge.disabled = !total() || !!clash;
@@ -1963,6 +1992,7 @@ async function viewSell(main) {
       h('div', { class: 'stack-tight' },
         s.items.map((i) => row(`${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}`, i.unit_price_cents * i.quantity)),
         s.discount_cents ? [row('Subtotal', s.subtotal_cents, 'small muted'), row(`Discount (${s.discount_reason})`, -s.discount_cents, 'small muted')] : null,
+        s.fee_cents ? row(s.fee_label || 'Card processing fee', s.fee_cents, 'small muted') : null,
         h('div', { class: 'row strong', style: 'border-top:1px solid var(--line-subtle);padding-top:8px' }, h('span', { class: 'grow' }, 'Paid'), h('span', null, money(s.amount_cents))),
         s.refunds.map((r) => row(`${r.kind === 'undo' ? 'Undone' : 'Refunded'} ${new Date(r.created_at).toLocaleDateString('en-US', { timeZone: tzName, month: 'short', day: 'numeric' })}${r.by_name ? ` by ${r.by_name}` : ''}${r.reason && r.kind !== 'undo' ? ` · ${r.reason}` : ''}`, -r.amount_cents, 'small muted'))),
       s.status === 'failed' && s.failure_reason ? h('p', { class: 'warn-text', style: 'margin:0' }, s.failure_reason) : null,

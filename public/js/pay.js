@@ -17,7 +17,9 @@ async function load() {
 
 function render(p, back) {
   document.title = `Pay ${p.business_name}`;
-  const amount = h('div', { style: 'font:700 44px/1 var(--font-display);color:var(--steel)' }, money(p.amount_cents));
+  const total = p.total_cents ?? p.amount_cents;
+  const amount = h('div', null, h('div', { style: 'font:700 44px/1 var(--font-display);color:var(--steel)' }, money(total)),
+    p.fee_cents ? h('div', { class: 'small muted', style: 'margin-top:4px' }, p.fee_included ? `Includes a ${money(p.fee_cents)} ${p.fee_label.toLowerCase()}` : `${money(p.amount_cents)} plus a ${money(p.fee_cents)} ${p.fee_label.toLowerCase()}`) : null);
   if (p.status === 'paid') return shell(h('h1', { class: 'p-title' }, 'Paid. Thank you!'), amount, h('p', { class: 'muted', style: 'margin:0' }, `${p.description}. Paid ${fmt(p.paid_at)}. A receipt is on its way by email.`));
   if (back && p.status === 'open') return shell(h('h1', { class: 'p-title' }, 'Thanks! Confirming your payment'), amount, h('p', { class: 'muted', style: 'margin:0' }, 'This usually takes a few seconds. Refresh this page to check, and look for a receipt by email.'), btn('Refresh', () => location.reload(), 'secondary'));
   const closed = { settled: 'This was already paid, so there\'s nothing to pay here.', canceled: 'This link was canceled. If you still owe something, ask us for a new link.', expired: 'This link has expired. Ask us for a new one.' }[p.status];
@@ -26,7 +28,7 @@ function render(p, back) {
     h('p', { class: 'small muted', style: 'margin:0;letter-spacing:.08em;text-transform:uppercase' }, `Pay ${p.business_name}`),
     amount,
     h('p', { style: 'margin:0' }, p.description),
-    p.can_pay_online ? btn(`Pay ${money(p.amount_cents)} by card`, (e) => busy(e.currentTarget, async () => {
+    p.can_pay_online ? btn(`Pay ${money(total)} by card`, (e) => busy(e.currentTarget, async () => {
       const r = await fetch(`/pay-api/${tok}/checkout`, { method: 'POST' }).then((x) => x.json());
       if (r.url) location.href = r.url; else toast(r.error?.message ?? 'Paying online isn\'t available right now.', 'warn');
     }), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block' }) : null,

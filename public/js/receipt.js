@@ -30,6 +30,7 @@ function render(r) {
         h('tbody', null,
           r.items.map((i) => h('tr', null, h('td', null, `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}`), h('td', { class: 'amt' }, money(i.unit_price_cents * i.quantity)))),
           r.discount_cents ? [row('Subtotal', r.subtotal_cents), row(`Discount${r.discount_reason ? ` (${r.discount_reason})` : ''}`, -r.discount_cents)] : null,
+          r.fee_cents ? row(r.fee_label || 'Card processing fee', r.fee_cents) : null,
           r.refunded_cents ? row('Refunded', -r.refunded_cents) : null)),
       h('div', { class: 'inv-total' }, h('span', { class: 'muted' }, `Paid by ${paidBy}`), h('b', null, money(r.amount_cents))),
       h('p', { class: 'inv-note' }, `${r.business_name}${r.business_address ? ` · ${r.business_address}` : ''}. Questions about this receipt? Reply to the email it came with.`)),

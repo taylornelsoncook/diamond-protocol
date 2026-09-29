@@ -33,3 +33,7 @@ This code follows Stripe Terminal iOS SDK 5.x but hasn't been compiled yet. If X
 ## Talking to your computer while testing
 
 If the server runs on your Mac, use its local address on the same Wi-Fi, like `http://192.168.1.20:3000`. The app allows local-network addresses for testing. Everywhere else it requires https.
+
+## Card processing fee
+
+If the owner turns on the card processing fee (Billing → Card processing fee) for card sales at the counter, the server adds it to every card sale the app starts through `POST /v1/sales`: the sale's `amount_cents` is what the card is charged and `fee_cents` says how much of that is the fee. The app's Charge screen adds up product prices, so show `fee_cents` from the sale's answer (or read `card_fee_pct`, `card_fee_flat` and `card_fee_on` from `GET /v1/settings`) before the tap, so the payer sees the total first. Cash sales never carry it.

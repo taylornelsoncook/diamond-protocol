@@ -5,6 +5,11 @@ import { sendText, familyPhones } from './sms.js';
 import { emit } from './events.js';
 import { markInvoicePaid } from './billing.js';
 import { recordOnlineSale } from './commerce.js';
+import { cardFee, feeSettings } from './fees.js';
+// What the payer pays: the amount plus the card fee the link carries (a membership's fee is already in its amount).
+const totalOf = (l) => l.amount_cents + (l.fee_cents ?? 0);
+// The fee to show: a link's own (added to the total), or the fee already inside a membership invoice's amount.
+const feeShown = (ctx, l) => (l.kind === 'invoice' ? { cents: ctx.db.get('SELECT fee_cents FROM invoices WHERE id = ?', l.invoice_id)?.fee_cents ?? 0, included: true } : { cents: l.fee_cents ?? 0, included: false });
 
 // Pay links: a page (/pay/<token>) a parent opens from an email or text to pay one thing by card without signing in:
 // a membership payment that didn't go through, an unpaid session, a pack, or a set amount. With Stripe the parent pays on
@@ -78,9 +83,10 @@ export async function createPayLink(ctx, body, actor) {
     : t.bookingId ? ctx.db.get(`SELECT id FROM pay_links WHERE booking_id = ? AND status = 'open' AND expires_at > ?`, t.bookingId, ctx.now()) : null;
   const id = same?.id ?? newId('pl');
   if (!same) {
-    ctx.db.run(`INSERT INTO pay_links (id, token, client_id, kind, invoice_id, booking_id, product_id, description, amount_cents, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, token(18), t.clientId, t.kind, t.invoiceId ?? null, t.bookingId ?? null, t.productId ?? null, t.description, t.amount, addDays(ctx.now(), DAYS_OPEN), actor ?? null, ctx.now());
-    emit(ctx, 'pay_link.created', { pay_link_id: id, client_id: t.clientId, kind: t.kind, amount_cents: t.amount });
+    const fee = t.kind === 'invoice' ? 0 : cardFee(ctx, t.amount, 'pay_links').cents;    // a membership's amount already carries its fee
+    ctx.db.run(`INSERT INTO pay_links (id, token, client_id, kind, invoice_id, booking_id, product_id, description, amount_cents, expires_at, created_by, created_at, fee_cents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, token(18), t.clientId, t.kind, t.invoiceId ?? null, t.bookingId ?? null, t.productId ?? null, t.description, t.amount, addDays(ctx.now(), DAYS_OPEN), actor ?? null, ctx.now(), fee);
+    emit(ctx, 'pay_link.created', { pay_link_id: id, client_id: t.clientId, kind: t.kind, amount_cents: t.amount, fee_cents: fee });
   }
   return body.send === true ? sendPayLink(ctx, id) : getPayLink(ctx, id);
 }
@@ -122,9 +128,10 @@ export async function sendPayLink(ctx, id) {
   const emails = l.family_id ? ctx.db.all('SELECT email FROM guardians WHERE family_id = ? AND email IS NOT NULL', l.family_id).map((g) => g.email) : [payer.email].filter(Boolean);
   const phones = l.family_id ? familyPhones(ctx, l.family_id) : [];
   if (!emails.length && !phones.length) throw conflict('There\'s no email or texting number for this family. Copy the link and send it yourself.');
-  for (const to of emails) await sendEmail(ctx, { to, subject: `Pay ${money(l.amount_cents)} to ${biz(ctx)}`,
-    text: `Hi ${first(payer.name)},\n\nHere's a secure link to pay ${money(l.amount_cents)} for ${l.description}:\n\n${l.url}\n\nNo sign-in needed. The link works for ${DAYS_OPEN} days.\n\n${biz(ctx)}` });
-  for (const to of phones) await sendText(ctx, { to, kind: 'pay_link', familyId: l.family_id, body: `${biz(ctx)}: Pay ${money(l.amount_cents)} for ${l.description}: ${l.url}` }).catch((e) => console.error('text', e.message));
+  const total = totalOf(l), shown = feeShown(ctx, l), feeNote = shown.cents ? ` (includes a ${money(shown.cents)} ${feeSettings(ctx).label.toLowerCase()})` : '';
+  for (const to of emails) await sendEmail(ctx, { to, subject: `Pay ${money(total)} to ${biz(ctx)}`,
+    text: `Hi ${first(payer.name)},\n\nHere's a secure link to pay ${money(total)} for ${l.description}${feeNote}:\n\n${l.url}\n\nNo sign-in needed. The link works for ${DAYS_OPEN} days.\n\n${biz(ctx)}` });
+  for (const to of phones) await sendText(ctx, { to, kind: 'pay_link', familyId: l.family_id, body: `${biz(ctx)}: Pay ${money(total)} for ${l.description}: ${l.url}` }).catch((e) => console.error('text', e.message));
   const sentTo = [...emails, ...phones].join(', ');
   ctx.db.run('UPDATE pay_links SET sent_to = ?, sent_at = ? WHERE id = ?', sentTo.slice(0, 500), ctx.now(), id);
   return { ...getPayLink(ctx, id), emailed: emails.length, texted: phones.length };
@@ -161,7 +168,7 @@ export function publicPayLink(ctx, tok) {
   const status = l.status === 'open' && l.expires_at <= ctx.now() ? 'expired' : l.status;
   const open = status === 'open';
   return {
-    business_name: biz(ctx), description: l.description, amount_cents: l.amount_cents, status, paid_at: l.paid_at, athlete: first(l.client_name),
+    business_name: biz(ctx), description: l.description, amount_cents: l.amount_cents, fee_cents: feeShown(ctx, l).cents, fee_included: feeShown(ctx, l).included, fee_label: feeShown(ctx, l).cents ? feeSettings(ctx).label : null, total_cents: totalOf(l), status, paid_at: l.paid_at, athlete: first(l.client_name),
     can_pay_online: open && ctx.payments.name === 'stripe' && typeof ctx.payments.checkoutPayment === 'function',
     can_simulate: open && !!ctx.payments.simulate
   };
@@ -174,7 +181,7 @@ export async function checkoutPayLink(ctx, tok) {
   const url = payUrl(ctx, l);
   // Only one Stripe page per link at a time: close the last one, so a second tab can't pay again.
   if (l.checkout_ref && ctx.payments.expireCheckoutSession) await ctx.payments.expireCheckoutSession(l.checkout_ref);
-  const s = await ctx.payments.checkoutPayment({ amountCents: l.amount_cents, description: `${biz(ctx)}: ${l.description}`, email, cardOnly: true,
+  const s = await ctx.payments.checkoutPayment({ amountCents: totalOf(l), description: `${biz(ctx)}: ${l.description}${l.fee_cents ? ` (includes ${money(l.fee_cents)} ${feeSettings(ctx).label.toLowerCase()})` : ''}`, email, cardOnly: true,
     metadata: { pay_link_id: l.id }, successUrl: `${url}?paid=1`, cancelUrl: url, idempotencyKey: `pay-link-${l.id}-${Date.now().toString(36)}` });
   ctx.db.run('UPDATE pay_links SET checkout_ref = ?, checkout_started_at = ? WHERE id = ?', s.id, ctx.now(), l.id);
   return { url: s.url };
@@ -217,20 +224,21 @@ async function completeNow(ctx, id, ref) {
         ctx.db.run(`UPDATE pay_links SET status = 'settled', paid_at = NULL WHERE id = ?`, l.id);
         return refundExtra(ctx, l, ref, 'after it had already been paid');
       }
-    } else saleId = recordOnlineSale(ctx, { clientId: l.client_id, productId: l.product_id, description: l.kind === 'custom' ? l.description : l.description.replace(/ for [^,]+/, ''), amountCents: l.amount_cents, note: `Pay link ${l.id}`, bookingId: l.booking_id ?? null, paymentRef: ref });
+    } else saleId = recordOnlineSale(ctx, { clientId: l.client_id, productId: l.product_id, description: l.kind === 'custom' ? l.description : l.description.replace(/ for [^,]+/, ''), amountCents: l.amount_cents, feeCents: l.fee_cents ?? 0, note: `Pay link ${l.id}`, bookingId: l.booking_id ?? null, paymentRef: ref });
   } catch (e) {
     // Recording failed: open the link again so Stripe's retry of the webhook (or the return page) records it next time.
     ctx.db.run(`UPDATE pay_links SET status = 'open', paid_at = NULL, payment_ref = NULL WHERE id = ? AND payment_ref = ?`, l.id, ref);
     throw e;
   }
   if (saleId) ctx.db.run('UPDATE pay_links SET sale_id = ? WHERE id = ?', saleId, l.id);
-  emit(ctx, 'pay_link.paid', { pay_link_id: l.id, client_id: l.client_id, kind: l.kind, amount_cents: l.amount_cents, sale_id: saleId, invoice_id: l.invoice_id });
+  emit(ctx, 'pay_link.paid', { pay_link_id: l.id, client_id: l.client_id, kind: l.kind, amount_cents: l.amount_cents, fee_cents: l.fee_cents ?? 0, sale_id: saleId, invoice_id: l.invoice_id });
 }
 async function refundExtra(ctx, l, ref, when) {
-  const r = await ctx.payments.refund({ paymentRef: ref, amountCents: l.amount_cents, idempotencyKey: `pay-link-refund-${l.id}-${ref}` });
+  const total = totalOf(l);
+  const r = await ctx.payments.refund({ paymentRef: ref, amountCents: total, idempotencyKey: `pay-link-refund-${l.id}-${ref}` });
   for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
-    sendEmail(ctx, { to: o.email, subject: r.ok ? `Refunded a double payment: ${money(l.amount_cents)}` : `Refund needed: ${money(l.amount_cents)} paid twice`,
-      text: `${l.description} was paid by pay link ${when}.\n\n${r.ok ? `The ${money(l.amount_cents)} was refunded automatically.` : `The automatic refund didn't work (${r.error}). Refund payment ${ref} in Stripe.`}` }).catch(() => {});
+    sendEmail(ctx, { to: o.email, subject: r.ok ? `Refunded a double payment: ${money(total)}` : `Refund needed: ${money(total)} paid twice`,
+      text: `${l.description} was paid by pay link ${when}.\n\n${r.ok ? `The ${money(total)} was refunded automatically.` : `The automatic refund didn't work (${r.error}). Refund payment ${ref} in Stripe.`}` }).catch(() => {});
   }
 }
 // Stripe webhook for a pay link's checkout. Returns false when the session isn't a pay link's.

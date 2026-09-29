@@ -108,7 +108,6 @@ CREATE INDEX IF NOT EXISTS subscriptions_client ON subscriptions(client_id);
 CREATE INDEX IF NOT EXISTS subscriptions_due ON subscriptions(status, current_period_end);
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
-  fee_cents INTEGER NOT NULL DEFAULT 0,             -- version 51: a card processing fee passed to the payer, inside amount_cents
   subscription_id TEXT NOT NULL REFERENCES subscriptions(id) ON DELETE CASCADE,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   amount_cents INTEGER NOT NULL,
@@ -400,7 +399,6 @@ CREATE TABLE IF NOT EXISTS email_optouts (
 );
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY,
-  fee_cents INTEGER NOT NULL DEFAULT 0,             -- version 51: a card processing fee passed to the payer, inside amount_cents
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
   location_id TEXT NOT NULL REFERENCES locations(id),
   method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash','online')),   -- online: paid through a pay link (version 15)
@@ -656,7 +654,6 @@ CREATE INDEX IF NOT EXISTS leads_email ON leads(email);
 -- that didn't go through, an unpaid session, a pack, or a set amount. The link is the token; it expires after 30 days.
 CREATE TABLE IF NOT EXISTS pay_links (
   id TEXT PRIMARY KEY,
-  fee_cents INTEGER NOT NULL DEFAULT 0,             -- version 51: a card processing fee passed to the payer, inside amount_cents
   token TEXT NOT NULL UNIQUE,
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
   kind TEXT NOT NULL CHECK (kind IN ('invoice','booking','product','custom')),

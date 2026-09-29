@@ -14,7 +14,7 @@ import { syncLibrary, getTest, updateTest, getSession } from '../src/services/pe
 import { seedPresets } from '../src/services/library.js';
 import { recentUploads, undoUpload } from '../src/services/uploads.js';
 
-const LATEST = 50;   // the schema version every upgrade ends on
+const LATEST = 51;   // the schema version every upgrade ends on
 
 // Every database from before version 36 gains the point-of-sale pieces (version 36), and every one from before version 37
 // puts roster-only athletes on a profile of their own (version 37). These two helpers add a partly refunded cash sale and

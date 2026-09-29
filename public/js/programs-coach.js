@@ -21,7 +21,7 @@ const LOAD_LIFT = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_cle
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced', 'All levels'];
 const loadText = (x) => (x.load_test ? `${x.load_pct}% of ${LOAD_LIFT[x.load_test]} max` : null);
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', ...attrs }); t.value = value ?? ''; return t; };
-const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
+const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(pct)), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
 
 // A dialog with a title, a body and buttons. An action's onClick returns false to keep the dialog open; errors show in it.
 function dialog(title, body, actions) {
@@ -253,7 +253,8 @@ export async function viewProgram(main, id) {
   const edit = canEdit();
   const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
   let week = Math.min(Math.max(Number(qs.get('week')) || 1, 1), p.weeks);
-  const go = (n) => { history.replaceState(null, '', `#/programs/${id}?week=${n}`); };
+  let mode = qs.get('view') === 'plan' ? 'plan' : 'week';     // one week at a time, or the whole plan (the planner)
+  const go = (n) => { history.replaceState(null, '', `#/programs/${id}?week=${n}${mode === 'plan' ? '&view=plan' : ''}`); };
   const reload = (n = week) => { go(n); deps.render(); };
   const daysIn = (n) => p.workouts.filter((w) => w.week === n);
 
@@ -275,7 +276,22 @@ export async function viewProgram(main, id) {
     }), 'ghost') : null);
     if (builder.focusTab) { builder.focusTab = false; tabs.querySelector('[aria-selected="true"]')?.focus(); }
   };
-  const draw = () => { drawTabs(); drawWeek(); };
+  // The planner: weeks down, days across, phases as bands, each week's volume and intensity.
+  const planBox = h('section', { class: 'stack', 'aria-label': 'Whole plan' });
+  const modeBar = h('div', { class: 'row wrap', role: 'group', 'aria-label': 'How to see the program' });
+  const drawMode = () => fill(modeBar, [['week', 'Week by week'], ['plan', 'Whole plan']].map(([m, label]) => btn(label, () => { if (mode === m) return; mode = m; go(week); draw(); }, mode === m ? 'secondary' : 'ghost', { 'aria-pressed': String(mode === m) })));
+  const drawPlan = async () => {
+    fill(planBox, h('p', { class: 'muted small' }, 'Loading the plan…'));
+    const plan = await get(`/v1/programs/${id}/plan`);
+    fill(planBox, planPanel(p, plan, edit, { openWeek: (n) => { mode = 'week'; week = n; go(n); draw(); }, reload }));
+  };
+  const draw = () => {
+    drawMode();
+    tabsBox.hidden = weekBox.hidden = mode === 'plan';
+    planBox.hidden = mode !== 'plan';
+    if (mode === 'plan') drawPlan().catch((e) => fill(planBox, h('div', { class: 'dp-error', role: 'alert' }, e.message)));
+    else { drawTabs(); drawWeek(); }
+  };
 
   const drawWeek = () => {
     weekBox.setAttribute('aria-labelledby', `pg-week-${week}`);
@@ -302,12 +318,115 @@ export async function viewProgram(main, id) {
     p.description ? h('p', { class: 'muted', style: 'margin-top:-12px' }, p.description) : null,
     edit ? h('div', { class: 'row wrap' }, btn('Edit details', () => detailsDialog(p), 'ghost'), btn('Duplicate program', () => duplicateDialog(p), 'ghost')) : null,
     clientsPanel(p, edit),
-    tabsBox, weekBox,
+    modeBar, tabsBox, weekBox, planBox,
     shop ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render())) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
       edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
   go(week);
   draw();
+}
+
+// ---- The planner ----
+const PHASE_KINDS = { base: 'Base', build: 'Build', peak: 'Peak', deload: 'Deload', test: 'Testing', other: 'Other' };
+const weekRange = (a, b) => (a === b ? `week ${a}` : `weeks ${a} to ${b}`);
+const weekSel = (p, value, attrs = {}) => select(Array.from({ length: p.weeks }, (_, i) => [String(i + 1), `Week ${i + 1}`]), { value: String(value), ...attrs });
+function planPanel(p, plan, edit, { openWeek, reload }) {
+  const days = Array.from({ length: plan.days }, (_, i) => i + 1);
+  const grid = h('div', { class: 'pl-grid', role: 'group', 'aria-label': 'The whole plan: weeks down, days across', style: `grid-template-columns:130px 60px repeat(${plan.days}, minmax(120px, 1fr)) 170px` });
+  const at = (col, row, el) => { el.style.gridColumn = String(col); el.style.gridRow = String(row); return el; };
+  const volCol = plan.days + 3;
+  [['Phase'], ['Week'], ...days.map((d) => [`Day ${d}`]), ['Volume · intensity']].forEach(([t], i) => grid.append(at(i + 1, 1, h('div', { class: 'pl-head' }, t))));
+  // Phase bands span their weeks; the first week of each gap offers Add phase.
+  for (const f of plan.phases) {
+    const band = h(edit ? 'button' : 'div', { class: `pl-phase pl-phase--${f.kind}`, ...(edit ? { type: 'button', onClick: () => phaseDialog(p, plan, f, reload) } : {}), 'aria-label': `${f.name}, ${weekRange(f.start_week, f.end_week)}${edit ? ': change or remove' : ''}` },
+      h('span', { class: 'strong small' }, f.name), h('span', { class: 'small muted' }, `${PHASE_KINDS[f.kind]} · ${weekRange(f.start_week, f.end_week)}`), f.note ? h('span', { class: 'small pg-note' }, f.note) : null);
+    band.style.gridColumn = '1'; band.style.gridRow = `${f.start_week + 1} / ${f.end_week + 2}`;
+    grid.append(band);
+  }
+  let gapStart = null;
+  for (const w of plan.weeks) {
+    const row = w.week + 1;
+    if (!w.phase_id && gapStart === null) gapStart = w.week;
+    if (!w.phase_id && (plan.weeks[w.week]?.phase_id || w.week === p.weeks)) {
+      const cell = at(1, gapStart + 1, h('div', { class: 'pl-gap' }, edit ? btn('Add phase', () => phaseDialog(p, plan, { start_week: gapStart, end_week: w.week }, reload), 'ghost', { 'aria-label': `Add a phase for ${weekRange(gapStart, w.week)}` }) : h('span', { class: 'small muted' }, 'No phase')));
+      cell.style.gridRow = `${gapStart + 1} / ${w.week + 2}`;
+      grid.append(cell); gapStart = null;
+    }
+    grid.append(at(2, row, h('button', { type: 'button', class: 'pl-week', onClick: () => openWeek(w.week), 'aria-label': `Open week ${w.week}` }, String(w.week))));
+    for (const d of days) {
+      const wo = w.workouts.find((x) => x.day === d);
+      grid.append(at(d + 2, row, wo
+        ? h('button', { type: 'button', class: 'pl-cell', onClick: () => openWeek(w.week), 'aria-label': `${wo.title}, week ${w.week} day ${d}: open` },
+          h('span', { class: 'strong small' }, wo.title),
+          h('span', { class: 'small muted' }, [`${wo.exercises} ex · ${wo.sets} sets`, wo.groups ? `${wo.groups} ${wo.groups === 1 ? 'group' : 'groups'}` : null, wo.avg_pct ? `${wo.avg_pct}%` : null, wo.avg_rpe ? `RPE ${wo.avg_rpe}` : null].filter(Boolean).join(' · ')),
+          wo.logs ? h('span', { class: 'small', style: 'color:var(--green-bright)' }, `logged ${plural(wo.logs, 'time')}`) : null)
+        : h('div', { class: 'pl-empty', 'aria-hidden': 'true' })));
+    }
+    grid.append(at(volCol, row, h('div', { class: 'pl-vol' },
+      bar(w.sets / plan.max_sets * 100, `Week ${w.week}: ${plural(w.sets, 'set')}`),
+      h('span', { class: 'small muted' }, [plural(w.sets, 'set'), w.avg_pct ? `${w.avg_pct}% of max` : null, w.avg_rpe ? `RPE ${w.avg_rpe}` : null].filter(Boolean).join(' · ') || 'Nothing planned'))));
+  }
+  return panel('Whole plan', { subtitle: 'Weeks down, days across. Phases are bands on the left; the bar is each week\'s sets, with its average percent of a tested max and target RPE. Press a week or a workout to open it.',
+    action: edit ? h('div', { class: 'row wrap' }, btn('Progress weeks', () => progressDialog(p, plan, reload), 'secondary'), btn('Add phase', () => phaseDialog(p, plan, null, reload), 'ghost')) : null },
+    h('div', { class: 'pl-wrap' }, grid));
+}
+// Add or change a phase: a label across a run of weeks. Phases don't overlap; the server checks too.
+function phaseDialog(p, plan, f, reload) {
+  const kind = select(Object.entries(PHASE_KINDS), { value: f?.kind ?? 'base' });
+  const name = input({ value: f?.name ?? '', maxlength: '60', placeholder: 'Same as the kind' });
+  const from = weekSel(p, f?.start_week ?? 1), to = weekSel(p, f?.end_week ?? f?.start_week ?? Math.min(p.weeks, 4));
+  const note = input({ value: f?.note ?? '', maxlength: '500', placeholder: 'What this phase is for' });
+  const body = () => ({ kind: kind.value, name: name.value.trim() || null, start_week: Number(from.value), end_week: Number(to.value), note: note.value.trim() || null });
+  const actions = [
+    { label: f?.id ? 'Save' : 'Add phase', variant: 'primary', onClick: async () => { if (Number(to.value) < Number(from.value)) to.value = from.value; if (f?.id) await patch(`/v1/phases/${f.id}`, body()); else await post(`/v1/programs/${p.id}/phases`, body()); toast(f?.id ? 'Phase saved.' : 'Phase added.'); reload(); } }];
+  if (f?.id) actions.push({ label: 'Remove', variant: 'ghost', onClick: async () => { await del(`/v1/phases/${f.id}`); toast(`${f.name} removed. The workouts stay.`); reload(); } });
+  actions.push({ label: 'Cancel', variant: 'ghost' });
+  dialog(f?.id ? f.name : 'Add a phase', h('div', { class: 'stack' },
+    h('div', { class: 'form-grid' }, field('Kind', kind), field('Name', name, 'Optional, like "Strength block 1".'), field('First week', from), field('Last week', to)),
+    field('Note', note),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'A phase is a label for you and other coaches. It never changes the workouts.')), actions);
+  from.addEventListener('change', () => { if (Number(to.value) < Number(from.value)) to.value = from.value; });
+}
+// Progression: copy one week across a run of weeks, changing sets, percent of max or RPE by a step each week.
+function progressDialog(p, plan, reload) {
+  const withWork = plan.weeks.filter((w) => w.workouts.length).map((w) => w.week);
+  if (!withWork.length) return toast('Build one week first, then progress it across the others.', 'warn');
+  const from = select(withWork.map((n) => [String(n), `Week ${n}`]), { value: String(withWork[0]) });
+  const to = input({ type: 'number', min: '1', max: '52', value: String(Math.min(withWork[0] + 1, 52)), inputmode: 'numeric' });
+  const through = input({ type: 'number', min: '1', max: '52', value: String(Math.min(Math.max(withWork[0] + 3, p.weeks), 52)), inputmode: 'numeric' });
+  const sets = select([-2, -1, 0, 1, 2].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n} ${Math.abs(n) === 1 ? 'set' : 'sets'} a week` : 'Sets: no change']), { value: '0' });
+  const pct = select([-10, -5, -3, 0, 3, 5, 10].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n}% of max a week` : 'Percent of max: no change']), { value: '5' });
+  const rpe = select([-1, -0.5, 0, 0.5, 1].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n} RPE a week` : 'RPE: no change']), { value: '0' });
+  const preview = h('p', { class: 'small muted', style: 'margin:0' });
+  const say = () => {
+    const f = Number(from.value), t = Number(to.value), th = Math.max(Number(through.value), t);
+    const parts = [Number(sets.value) ? `${Number(sets.value) > 0 ? '+' : ''}${Number(sets.value) * (th - f)} sets` : null, Number(pct.value) ? `${Number(pct.value) > 0 ? '+' : ''}${Number(pct.value) * (th - f)}% of max` : null, Number(rpe.value) ? `${Number(rpe.value) > 0 ? '+' : ''}${Number(rpe.value) * (th - f)} RPE` : null].filter(Boolean);
+    preview.textContent = parts.length ? `Week ${th} ends up at ${parts.join(', ')} over week ${f}; the weeks between step up evenly. Exercises without that field are left as they are.` : 'Choose at least one change a week.';
+  };
+  for (const el of [from, to, through, sets, pct, rpe]) el.addEventListener('input', say); say();
+  // Progression only runs forward: the weeks after the one it builds from.
+  const forward = () => { const f = Number(from.value); to.min = String(Math.min(f + 1, 52)); if (Number(to.value) <= f) to.value = String(Math.min(f + 1, 52)); if (Number(through.value) < Number(to.value)) through.value = to.value; say(); };
+  from.addEventListener('change', forward); to.addEventListener('change', forward); forward();
+  const send = async (extra = {}) => {
+    try { return await post(`/v1/programs/${p.id}/progress`, { from: Number(from.value), to: Number(to.value), through: Number(through.value), sets_step: Number(sets.value), pct_step: Number(pct.value), rpe_step: Number(rpe.value), ...extra }); }
+    catch (e) {
+      if (e.code === 'replace_needed' && confirm(`${e.message.replace(' Replace them to copy.', '')} Replace them with the progression from week ${from.value}?`)) return send({ ...extra, replace: true });
+      if (e.code === 'confirm_needed' && confirm(e.message.replace(' Send confirm: true to go ahead.', ' Replace anyway?'))) return send({ ...extra, confirm: true });
+      if (['replace_needed', 'confirm_needed'].includes(e.code)) return null;
+      throw e;
+    }
+  };
+  dialog('Progress weeks', h('div', { class: 'stack' },
+    h('p', { class: 'muted', style: 'margin:0' }, 'Copies one week across a run of weeks, changing the numbers a step each week: the way a block builds up, or drops for a deload.'),
+    h('div', { class: 'form-grid' }, field('Build from', from), field('To week', to), field('Through week', through)),
+    h('div', { class: 'form-grid' }, field('Sets', sets), field('Percent of max', pct), field('Target RPE', rpe)), preview), [
+    { label: 'Progress weeks', variant: 'primary', onClick: async () => {
+      if (Number(through.value) < Number(to.value)) through.value = to.value;
+      const r = await send();
+      if (!r) return false;
+      toast(`Weeks ${to.value} to ${through.value} built from week ${from.value}.`); reload();
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
 }
 
 function clientsPanel(p, edit) {

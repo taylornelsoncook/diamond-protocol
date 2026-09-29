@@ -5,6 +5,7 @@ import { parentFilter } from './performance.js';
 import { readinessToday } from './engage.js';
 import { getSetting } from './families.js';
 import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
+import { trimPhases, copyPhases } from './planner.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -115,12 +116,13 @@ export function programDetail(ctx, id) {
   return p;
 }
 const lastWeekOf = (ctx, programId) => ctx.db.get('SELECT COALESCE(MAX(week), 0) AS w FROM workouts WHERE program_id = ?', programId).w;
-const setWeeks = (ctx, programId, weeks) => ctx.db.run('UPDATE programs SET weeks = ? WHERE id = ?', weeks, programId);
+const setWeeks = (ctx, programId, weeks) => { ctx.db.run('UPDATE programs SET weeks = ? WHERE id = ?', weeks, programId); trimPhases(ctx, programId, weeks); };
 
-function copyWorkoutInto(ctx, src, programId, week, day, title) {
+// adjust (the planner's progression) changes each exercise's fields on the way.
+function copyWorkoutInto(ctx, src, programId, week, day, title, adjust = null) {
   const id = newId('wo');
   ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title) VALUES (?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title);
-  for (const x of ctx.db.all('SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY position', src.id)) insertSlot(ctx, id, x.exercise_id, x.position, x);
+  for (const x of ctx.db.all('SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY position', src.id)) insertSlot(ctx, id, x.exercise_id, x.position, adjust ? adjust(x) : x);
   return id;
 }
 // The set-detail columns of workout_exercises, and one row written with them (the builder, a copy, a program read from a PDF).
@@ -141,7 +143,7 @@ export function createProgram(ctx, body) {
       body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : src?.description ?? null,
       body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : src?.level ?? null,
       weeks, ctx.now());
-    if (src) for (const w of src.workouts.filter((x) => x.week <= weeks)) copyWorkoutInto(ctx, w, id, w.week, w.day);
+    if (src) { for (const w of src.workouts.filter((x) => x.week <= weeks)) copyWorkoutInto(ctx, w, id, w.week, w.day); copyPhases(ctx, src.id, id, weeks); }
   });
   return getProgram(ctx, id);
 }
@@ -156,11 +158,13 @@ export function updateProgram(ctx, id, body) {
   const weeks = body.weeks !== undefined ? v.int(body.weeks, 'weeks', { min: 1, max: 52 }) : p.weeks;
   const last = lastWeekOf(ctx, id);
   if (weeks < last) throw conflict(`Week ${last} still has workouts. Delete week ${last} first, or keep ${last} weeks.`);
-  ctx.db.run('UPDATE programs SET name = ?, description = ?, level = ?, weeks = ? WHERE id = ?',
-    body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : p.name,
-    body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : p.description,
-    body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : p.level,
-    weeks, id);
+  const name = body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : p.name;
+  const description = body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : p.description;
+  const level = body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : p.level;
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE programs SET name = ?, description = ?, level = ?, weeks = ? WHERE id = ?', name, description, level, weeks, id);
+    if (weeks < p.weeks) trimPhases(ctx, id, weeks);       // a shorter program cuts its phases back too
+  });
   return getProgram(ctx, id);
 }
 // Owner decision: deleting a program or workout keeps every athlete's logged workouts (and their sets) in their history.
@@ -252,7 +256,7 @@ function guardLogged(ctx, ids, confirm, what) {
 }
 // Copy every workout in a week to another week, or to a run of weeks (to ... through). Weeks that already have workouts
 // are replaced only with replace: true. The program grows to the last week copied to.
-export function copyWeek(ctx, programId, fromWeek, body = {}) {
+export function copyWeek(ctx, programId, fromWeek, body = {}, adjustFor = null) {
   const p = getProgram(ctx, programId);
   const from = v.int(fromWeek, 'week', { min: 1, max: 52 });
   const to = v.int(body.to ?? from + 1, 'to', { min: 1, max: 52 });
@@ -273,7 +277,7 @@ export function copyWeek(ctx, programId, fromWeek, body = {}) {
   guardLogged(ctx, replaced, body.confirm, taken.length === 1 ? `Week ${taken[0]}` : `Weeks ${taken.join(', ')}`);
   ctx.db.tx(() => {
     deleteWorkouts(ctx, replaced);
-    for (const w of targets) for (const s of src) copyWorkoutInto(ctx, s, programId, w, s.day);
+    for (const w of targets) for (const s of src) copyWorkoutInto(ctx, s, programId, w, s.day, undefined, adjustFor?.(w));
     if (through > p.weeks) setWeeks(ctx, programId, through);
   });
   return programDetail(ctx, programId);

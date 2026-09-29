@@ -1,6 +1,6 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
-import { detailsOf, groupTag, withGroups } from './set-fields.js';
+import { detailsOf, groupTag, groupTitle, withGroups } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
@@ -363,6 +363,19 @@ function renderLogger(w) {
     if (!draft.started_at) draft.started_at = new Date().toISOString();
     saveDraft();
     say(`Set ${i + 1} of ${x.name} logged${counted && wv != null ? `: ${lb(wv)}` : ''}${counted && rv != null ? ` for ${rv}` : ''}.`);
+    // A superset or circuit flows: straight on to the partner exercise, and rest only when the round is over.
+    const flow = nextInFlow(x);
+    if (flow?.next) {
+      const next = flow.next;
+      if (next.id !== x.id) { state.open = next.id; redrawCards(); }
+      else { drawSets(x, setsBox, all.findIndex((s) => !s.done)); redrawHead(x); }
+      say(flow.round_over ? `Round done. Rest, then ${next.name}.` : `Now ${next.name}.`);
+      if (flow.round_over) startRest(restOfGroup(flowOf(x)));
+      const target = cards.get(next.id)?.querySelector('.c-tick[aria-pressed="false"]') ?? cards.get(next.id)?.querySelector('.c-tick');
+      if (next.id !== x.id) { target?.focus(); cards.get(next.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      drawCount();
+      return;
+    }
     if (exDone(x)) {
       // The last set marks the exercise done and opens the next one.
       const next = w.exercises.find((e) => !exDone(e));
@@ -378,8 +391,27 @@ function renderLogger(w) {
     }
     drawCount();
   }
+  // The exercises that run together with x as one flow (a superset or circuit; a block is only a heading), in order.
+  function flowOf(x) {
+    if (!x.group_label || (x.group_kind !== 'superset' && x.group_kind !== 'circuit')) return null;
+    const g = w.exercises.filter((e) => e.group_label === x.group_label);
+    return g.length > 1 ? g : null;
+  }
+  // After a set of x: the next partner with a set left (round and round), and whether reaching it ends a round. Null
+  // when x isn't in a flow; next null when the whole group is done.
+  function nextInFlow(x) {
+    const g = flowOf(x);
+    if (!g) return null;
+    const i = g.indexOf(x), order = [...g.slice(i + 1), ...g.slice(0, i + 1)];   // the partners after x, then round to x itself
+    const next = order.find((e) => !exDone(e)) ?? null;
+    return { next, round_over: !next || order.indexOf(next) >= g.length - 1 - i };
+  }
+  // The rest between rounds: the longest rest a coach set on the group (0 = none, a circuit), else the athlete's own.
+  const restOfGroup = (g) => { const secs = g.map((e) => e.rest_seconds).filter((s) => s != null); return secs.length ? { rest_seconds: Math.max(...secs) } : null; };
+  const groupHeading = (x) => h('div', { class: 'sf-group' }, groupTitle(x),
+    flowOf(x) ? h('span', { style: 'text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)' }, ` · one set of each${x.group_kind === 'circuit' ? ' in turn' : ''}, then rest`) : null);
   const list = h('div', { class: 'stack', style: 'gap:8px' });
-  const redrawCards = () => { cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; })); drawCount(); };
+  const redrawCards = () => { cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
   const redrawHead = (x) => { const box = cards.get(x.id); if (!box) return; box.querySelector('.c-ex-head').replaceWith(headOf(x)); box.classList.toggle('c-ex--done', exDone(x)); };
 

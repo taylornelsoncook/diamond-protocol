@@ -2665,7 +2665,7 @@ function livePanel(id, st, canSwap) {
   const row = (a) => {
     const w = a.workout;
     const what = !w ? h('span', { class: 'small warn-text' }, a.program_progress ? 'Program complete: nothing left to do. Put a workout on the screen.' : 'No program, and no workout on the screen.')
-      : h('span', { class: 'small muted' }, `${w.source === 'screen' ? 'From the screen: ' : ''}${w.title} · ${w.program_name}, week ${w.week} day ${w.day}${a.program_progress ? ` · ${a.program_progress.completed} of ${a.program_progress.total} done` : ''}`);
+      : h('span', { class: 'small muted' }, `${w.source === 'screen' ? 'From the screen: ' : ''}${w.title} · ${w.program_name}, week ${w.week} day ${w.day}${a.program_progress ? ` · ${a.program_progress.completed} of ${a.program_progress.total} done` : ''}${w.warmup || w.cooldown ? ` · ${[w.warmup ? `warm-up ${w.warmup}` : null, w.cooldown ? `cool-down ${w.cooldown}` : null].filter(Boolean).join(', ')}` : ''}`);
     const progress = a.logged ? h('span', { class: 'dp-badge dp-badge--good' }, `Logged${a.on_screen ? ' on the screen' : ''}${a.sets_logged ? ` · ${a.sets_logged} sets` : ''}${a.effort ? ` · effort ${a.effort}` : ''}`)
       : a.sets_logged ? h('span', { class: 'dp-badge dp-badge--neutral' }, `${a.exercises_done} of ${a.exercises.length} exercises`) : w ? h('span', { class: 'small muted' }, 'Not logged yet') : null;
     return h('details', { class: 'list-item', style: 'display:block' },

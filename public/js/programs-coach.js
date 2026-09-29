@@ -567,8 +567,8 @@ function workoutCard(p, w, exs, edit, reload) {
       : h('div', { class: 'grow pg-ex-body' }, body(x)),
   ));
   const blocks = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
-    h('span', { class: w.warmup || w.cooldown ? 'muted' : 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
-    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', () => blocksDialog(w, reload), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
+    h('span', { class: 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
+    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
   return h('div', { class: 'workout' },
     h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
       edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title))),

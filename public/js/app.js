@@ -2,6 +2,8 @@ import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, selec
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, workoutRow } from './programs-coach.js';
 import { dataSummary } from './dataimport-ui.js';
+import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
+wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
 
@@ -1057,8 +1059,11 @@ async function viewClient(main, id) {
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
   const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(requestsPanel, 'requests'), 'Requests'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks], [mergePanel]];
   // Outside data (wearables and spreadsheets): owners and coaches bring more in from Settings → Data import.
-  const outsidePanel = outside ? dataSummary(outside, { title: 'Recovery & sleep', action: ['owner', 'coach'].includes(role) ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/settings?tab=import&client=${id}` }, 'Import') : null,
-    empty: `Nothing brought in yet. Import ${first}'s WHOOP export or another app's data from Settings → Data import; parents can add it from the parent portal.` }) : null;
+  const wear = outside ? wearablesBlock({ first, canConnect: ['owner', 'coach'].includes(role), list: async () => ({ ...(await get(`/v1/clients/${id}/wearables`)), providers: (await get('/v1/wearables/status')).providers.filter((p) => p.ready) }),
+    connect: (p) => post(`/v1/clients/${id}/wearables/${p}/connect`), disconnect: (w) => del(`/v1/wearables/${w}`), sync: ['owner', 'coach'].includes(role) ? (w) => post(`/v1/wearables/${w}/sync`) : null, afterChange: () => render() }) : null;
+  const outsidePanel = outside ? h('div', { class: 'stack' }, dataSummary(outside, { title: 'Recovery & sleep', action: ['owner', 'coach'].includes(role) ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/settings?tab=import&client=${id}` }, 'Import') : null,
+    empty: `Nothing on file yet. Connect ${first}'s WHOOP or Oura below (parents can too, from the portal), or import a file from Settings → Data import.` }),
+    panel('Linked wearables', { subtitle: 'Recovery, sleep, strain and workouts pulled a few times a day from the athlete\'s own account.' }, wear.el)) : null;
   const right = [[sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(contactHistoryPanel(id, c), 'contact'), 'Contact history'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [sectionId(outsidePanel, 'outside'), 'Recovery & sleep'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
   const jumps = [...left, ...right].filter(([el, label]) => el && label);
   fill(main,

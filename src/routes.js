@@ -2,6 +2,7 @@ import * as billing from './services/billing.js';
 import * as refunds from './services/refunds.js';
 import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
+import * as wearables from './services/wearables.js';
 import * as exerciseimport from './services/exerciseimport.js';
 import * as workoutimport from './services/workoutimport.js';
 import * as clients from './services/clients.js';
@@ -125,6 +126,13 @@ export const routes = [
   ['POST', '/v1/data-imports/preview', 'session', 'Clients', 'Check a file for one athlete before saving: client_id, and file { name, csv | xlsx_base64 | pdf_base64 } or sheet_url (a Google Sheets link shared as "anyone with the link"). WHOOP cycles, sleeps and workouts exports are recognized; for any other table send mapping { date_column, metrics: [{ column, label, unit }] } (the answer suggests one). Returns what would be saved, what it replaces, and every problem by row and column. Nothing is saved.', (ctx, r) => dataimport.previewImport(ctx, r.body.client_id, r.body)],
   ['POST', '/v1/data-imports', 'session', 'Clients', 'Save a file checked with /v1/data-imports/preview (the same body). It is checked again and saved all or nothing; a day already on file for a metric is replaced.', async (ctx, r) => dataimport.commitImport(ctx, r.body.client_id, r.body, { kind: 'staff', name: r.user.name }), 201],
   ['GET', '/v1/data-imports', 'session', 'Clients', 'Recent imports (?client_id= for one athlete): who, when, which file, how many days and workouts, and whether it was undone.', (ctx, r) => ({ data: dataimport.listImports(ctx, { clientId: r.query.client_id }) })],
+  // Wearable sync (version 52): WHOOP and Oura accounts linked for automatic pulls. Owners and coaches; front desk can look.
+  ['GET', '/v1/wearables/status', 'any', 'Clients', 'Which wearable providers are set up (WHOOP, Oura), and the redirect address to register with each.', (ctx) => wearables.status(ctx)],
+  ['GET', '/v1/clients/:id/wearables', 'any', 'Clients', 'The wearable accounts linked for one athlete: provider, status (active or needs_reconnect), when it was connected and last pulled.', (ctx, r) => ({ data: wearables.listConnections(ctx, r.params.id) })],
+  ['POST', '/v1/clients/:id/wearables/:provider/connect', 'any', 'Clients', 'Start linking an athlete\'s WHOOP or Oura account: answers the provider\'s sign-in link (open it on the phone that\'s signed in to the wearable). The link works once, for 20 minutes.', (ctx, r) => wearables.connectUrl(ctx, r.params.id, r.params.provider, { kind: 'staff', id: r.user?.id ?? null }), 201],
+  ['POST', '/v1/wearables/:id/sync', 'any', 'Clients', 'Pull the last 7 days now (days: up to 90).', (ctx, r) => wearables.syncConnection(ctx, r.params.id, { days: r.body?.days })],
+  ['DELETE', '/v1/wearables/:id', 'any', 'Clients', 'Disconnect a wearable: the token is revoked and forgotten; the data already pulled stays.', (ctx, r) => wearables.disconnect(ctx, r.params.id)],
+  ['GET', '/wearables/:provider/callback', 'public', 'Clients', 'Where the wearable provider sends the parent back after signing in. Redirects to the portal or the client page.', (ctx, r) => wearables.callback(ctx, r.params.provider, r.query)],
   ['POST', '/v1/data-imports/:id/undo', 'session', 'Clients', 'Undo an import: removes the values and workouts it saved.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'staff', name: r.user.name })],
   ['GET', '/v1/clients/:id/attendance', 'any', 'Clients', 'Attendance: visits (roster and walk-in check-ins), no-shows and late cancels in the last 30 days, visits in 90 days, the last visit, and the 12 most recent outcomes (attended, walk_in, no_show, late_cancel, in_progress). A booking in a session that is still running isn\'t a no-show yet.', (ctx, r) => clients.attendance(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/merge-preview', 'any', 'Clients', 'Owner: what merging another profile (?from=) into this one would do: both profiles side by side, and anything that stops it (both have a membership, different families, both booked for one session).', (ctx, r) => profiles.mergePreview(ctx, r.params.id, r.query.from)],

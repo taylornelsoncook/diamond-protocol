@@ -2,6 +2,8 @@ import { h, fill, toast, money, busy, btn, field, input, select, panel, videoEmb
 import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 import { importForm, importsList, dataSummary } from './dataimport-ui.js';
+import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
+wearableReturnNotice();
 
 // ---------- API ----------
 async function api(method, path, body) {
@@ -601,7 +603,9 @@ async function viewProgress(main) {
     const d = await get(`athletes/${a.id}/outside-data`);
     const reload = () => drawOutside(a, box);
     const form = importForm({ athlete: () => ({ id: a.id, name: a.name }), preview: (b) => post(`athletes/${a.id}/data-imports/preview`, b), commit: (b) => post(`athletes/${a.id}/data-imports`, b), onSaved: reload });
-    fill(box, dataSummary(d, { title: `${a.first_name}'s recovery and sleep`, empty: `Bring in ${a.first_name}'s WHOOP export (or another app's) below, and see recovery, heart rate variability, sleep and strain here. Our coaches see it too.` }),
+    const wear = wearablesBlock({ first: a.first_name, canConnect: true, list: () => get(`athletes/${a.id}/wearables`), connect: (p) => post(`athletes/${a.id}/wearables/${p}/connect`), disconnect: (id) => api('DELETE', `wearables/${id}`), afterChange: reload });
+    fill(box, dataSummary(d, { title: `${a.first_name}'s recovery and sleep`, empty: `Connect ${a.first_name}'s WHOOP or Oura below, or bring in a file, and see recovery, heart rate variability, sleep and strain here. Our coaches see it too.` }),
+      h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Linked wearables'), wear.el),
       h('details', { class: 'dp-panel', open: d.has_data ? null : true },
         h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, `Bring in a file for ${a.first_name}`),
         h('p', { class: 'small muted' }, 'From WHOOP: open the WHOOP app, go to More → App settings → Data export, and upload the files it emails you (physiological_cycles.csv, sleeps.csv, workouts.csv). Other apps: a CSV, Excel file, Google Sheets link or PDF with a date column.'),

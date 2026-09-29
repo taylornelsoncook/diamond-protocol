@@ -1575,33 +1575,3 @@ CREATE TABLE IF NOT EXISTS athlete_workouts (
 );
 CREATE INDEX IF NOT EXISTS athlete_workouts_client ON athlete_workouts(client_id, started_at);
 CREATE INDEX IF NOT EXISTS athlete_workouts_import ON athlete_workouts(import_id);
--- Version 52: wearable accounts linked for automatic pulls (services/wearables.js). Tokens for the provider's API; the
--- data pulled lands in athlete_metrics and athlete_workouts with source whoop_sync / oura_sync.
-CREATE TABLE IF NOT EXISTS wearable_connections (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('whoop','oura')),
-  provider_user_id TEXT,
-  access_token TEXT NOT NULL,
-  refresh_token TEXT,
-  expires_at TEXT,
-  scopes TEXT,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','needs_reconnect')),
-  connected_by_kind TEXT NOT NULL DEFAULT 'parent' CHECK (connected_by_kind IN ('staff','parent')),
-  connected_by TEXT,
-  connected_at TEXT NOT NULL,
-  last_sync_at TEXT,
-  last_sync_days INTEGER,
-  last_error TEXT,
-  UNIQUE (client_id, provider)
-);
--- The one-time code a sign-in was started with, so the provider's answer can only land on the athlete it was for (20 minutes).
-CREATE TABLE IF NOT EXISTS wearable_auth_states (
-  state TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  by_kind TEXT NOT NULL,
-  by_id TEXT,
-  return_to TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);

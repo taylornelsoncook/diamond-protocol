@@ -39,7 +39,12 @@ export const METRICS = {
   sleep_debt_min: { label: 'Sleep debt', unit: 'min', min: 0, max: 1440, better: 'lower' },
   sleep_performance_pct: { label: 'Sleep performance', unit: '%', min: 0, max: 100, better: 'higher' },
   sleep_efficiency_pct: { label: 'Sleep efficiency', unit: '%', min: 0, max: 100, better: 'higher' },
-  sleep_consistency_pct: { label: 'Sleep consistency', unit: '%', min: 0, max: 100, better: 'higher' }
+  sleep_consistency_pct: { label: 'Sleep consistency', unit: '%', min: 0, max: 100, better: 'higher' },
+  // From a linked Oura ring (services/wearables.js): its own daily scores, steps and active burn.
+  readiness_pct: { label: 'Readiness', unit: '%', min: 0, max: 100, better: 'higher' },
+  sleep_score_pct: { label: 'Sleep score', unit: '%', min: 0, max: 100, better: 'higher' },
+  steps: { label: 'Steps', unit: '', min: 0, max: 200000, better: null },
+  active_cal_kcal: { label: 'Active burn', unit: 'cal', min: 0, max: 20000, better: null }
 };
 // The ones a family and a coach look at first.
 export const HEADLINE = ['recovery_pct', 'hrv_ms', 'rhr_bpm', 'sleep_min', 'day_strain'];

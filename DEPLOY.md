@@ -122,5 +122,7 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CURRENCY` | Payments. |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Email. |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` | Text messages (see section 4). Without them texts are only logged. |
+| `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` | Optional. Lets parents (and coaches) link an athlete's WHOOP account so recovery, sleep, strain and workouts arrive on their own (Settings → Data import shows the setup and the redirect address to register at developer.whoop.com). Without them the Connect WHOOP button doesn't show and files can still be imported. |
+| `OURA_CLIENT_ID`, `OURA_CLIENT_SECRET` | Optional. The same for Oura rings (an application at cloud.ouraring.com/oauth/applications). |
 | `ANTHROPIC_API_KEY` | Optional. Claude reads program PDFs and photos into a draft (Programs → Build from a PDF; without the key that page says it needs one) and rewords the drafted progress notes for parents; coaches check and approve both. Without it the plain note drafts are used. `DP_AI_MODEL` picks the notes model, `DP_WORKOUT_MODEL` the PDF reader's (default `claude-opus-5`). |
 | `SMS_ONLY_TO` | Staging: only these phone numbers (comma list) are really texted; the rest are held in the log. |

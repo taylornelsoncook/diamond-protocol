@@ -231,8 +231,37 @@ function exerciseFields(x, cats) {
   return { name, url, cat, cue, body: () => ({ name: name.value, video_url: url.value || null, instructions: cue.value || null, category: cat.value || null }),
     el: h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('Category', cat)), field('Demo video link', url, 'YouTube, Vimeo or a direct .mp4 link.'), field('Coaching cues', cue)) };
 }
+// The swaps an athlete may pick on their own for this exercise ("Can't do this today?" in the app).
+function alternativesBlock(x) {
+  const listBox = h('div', { class: 'stack-tight' });
+  const listId = `dp-alt-list-${x.id}`;
+  const pick = input({ list: listId, placeholder: 'Type an exercise from the library', 'aria-label': `A swap for ${x.name}`, autocomplete: 'off' });
+  const tag = select([], { 'aria-label': 'When' });
+  const note = input({ maxlength: '200', placeholder: 'Note (optional)', 'aria-label': 'Note' });
+  const datalist = h('datalist', { id: listId });
+  let library = null, tags = {};
+  const draw = async () => {
+    const r = await get(`/v1/exercises/${x.id}/alternatives`);
+    tags = r.tags;
+    if (!tag.options.length) fill(tag, Object.entries(tags).map(([k, label]) => h('option', { value: k }, label)));
+    fill(listBox, r.data.length ? r.data.map((a) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, h('span', { class: 'strong' }, a.name), ` · ${a.tag_label}${a.note ? ` · ${a.note}` : ''}`),
+      btn('Remove', (e) => busy(e.currentTarget, async () => { await del(`/v1/exercise-alternatives/${a.id}`); draw(); }), 'ghost', { 'aria-label': `Remove ${a.name}` }))) : h('p', { class: 'small muted', style: 'margin:0' }, 'None yet. Athletes can only do what\'s written until you list a swap.'));
+  };
+  draw().catch((e) => fill(listBox, h('p', { class: 'small warn-text' }, e.message)));
+  get('/v1/exercises').then((r) => { library = r.data; fill(datalist, library.filter((e) => e.id !== x.id).map((e) => h('option', { value: e.name }))); }).catch(() => {});
+  const add = h('form', { class: 'row wrap', style: 'gap:6px;align-items:center', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+    const name = pick.value.trim().toLowerCase();
+    const to = (library ?? []).find((e) => e.name.toLowerCase() === name);
+    if (!to) throw new Error('Pick an exercise from the list (type a few letters of its name).');
+    await post(`/v1/exercises/${x.id}/alternatives`, { exercise_id: to.id, tag: tag.value, note: note.value.trim() });
+    pick.value = ''; note.value = ''; toast(`${to.name} listed as a swap for ${x.name}.`); draw();
+  }); } }, datalist, h('div', { class: 'grow', style: 'min-width:180px' }, pick), tag, h('div', { class: 'grow', style: 'min-width:140px' }, note), btn('Add swap', null, 'secondary', { type: 'submit' }));
+  return h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line);padding-top:12px' }, h('div', { class: 'dp-label' }, 'Swaps athletes may pick'),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'In the app, "Can\'t do this today?" offers these for this exercise. The pick is for that workout only and you see it on the session\'s Live panel.'), listBox, add);
+}
 function exerciseDialog(x, cats) {
   const f = exerciseFields(x, cats);
+  if (x) f.el.append(alternativesBlock(x));
   const actions = [{ label: x ? 'Save exercise' : 'Add exercise', variant: 'primary', onClick: async () => {
     if (x) await patch(`/v1/exercises/${x.id}`, f.body()); else await post('/v1/exercises', { ...f.body(), video_url: f.url.value || undefined });
     toast(x ? 'Exercise saved.' : 'Exercise added to the library.'); deps.render();

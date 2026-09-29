@@ -99,7 +99,7 @@ test('a swap for one athlete: the app, the screen, the live view and the log fol
   assert.deepEqual([sw.body.exercise_name, sw.body.instead_of, sw.body.reason, sw.body.scope, sw.body.workouts, sw.body.by], ['Goblet squat', 'Back squat', 'Knee', 'workout', 1, 'Riley']);
   const home = await athlete('GET', '/app/api/home');
   const x = home.workout.exercises[0];
-  assert.deepEqual([x.id, x.exercise_id, x.name, x.instructions, x.load, x.target_sets, x.swapped], [slot.id, goblet.id, 'Goblet squat', 'Elbows inside the knees.', null, 5, { id: sw.body.id, from: 'Back squat', reason: 'Knee', by: 'Riley' }]);
+  assert.deepEqual([x.id, x.exercise_id, x.name, x.instructions, x.load, x.target_sets, x.swapped], [slot.id, goblet.id, 'Goblet squat', 'Elbows inside the knees.', null, 5, { id: sw.body.id, from: 'Back squat', reason: 'Knee', by: 'Riley', by_kind: 'coach' }]);
   assert.equal(home.workout.exercises[1].swapped, undefined);
   assert.equal((await coach('GET', `/v1/programs/${program.id}`)).body.workouts[0].exercises[0].name, 'Back squat', 'the plan itself is untouched');
   const live = (await coach('GET', `/v1/sessions/${session}/live`)).body.athletes.find((a) => a.client_id === ava.id);
@@ -140,6 +140,11 @@ test('a deleted workout keeps the swapped exercise in the log it left behind', a
 
 test('scope program covers the rest of the program but never a workout already logged; Undo puts the plan back; the export lists swaps', async () => {
   const slot2 = workouts[1].exercises[0];
+  // Asked from day 3's slot: the answer (and the Undo it gives the coach) is day 3's row, not the earliest one.
+  const fromDay3 = (await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: workouts[2].exercises[0].id, exercise_id: goblet.id, reason: 'Knee', scope: 'program' })).body;
+  assert.equal(fromDay3.workouts, 2);
+  assert.equal(app.ctx.db.get('SELECT workout_exercise_id FROM exercise_swaps WHERE id = ?', fromDay3.id).workout_exercise_id, workouts[2].exercises[0].id);
+  assert.equal((await coach('DELETE', `/v1/swaps/${fromDay3.id}`)).body.removed, 1, 'Undo from the Live panel puts only day 3 back');
   const sw = (await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: slot2.id, exercise_id: goblet.id, reason: 'Knee', scope: 'program' })).body;
   assert.equal(sw.workouts, 2, 'day 2 and day 3; day 1 is already logged');
   const list = (await coach('GET', `/v1/clients/${ava.id}/swaps`)).body.data;
@@ -158,7 +163,7 @@ test('scope program covers the rest of the program but never a workout already l
   // Back in place for the export check.
   await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: slot2.id, exercise_id: goblet.id, reason: 'Knee' });
   const e = (await owner('GET', `/v1/families/${ava.family.id}/export`)).body;
-  assert.deepEqual(Object.keys(e.athletes[0].exercise_swaps[0]).sort(), ['created_at', 'created_by', 'day', 'exercise_name', 'instead_of', 'program_name', 'reason', 'week', 'workout_title']);
+  assert.deepEqual(Object.keys(e.athletes[0].exercise_swaps[0]).sort(), ['by_kind', 'created_at', 'created_by', 'day', 'exercise_name', 'instead_of', 'program_name', 'reason', 'week', 'workout_title']);
 });
 
 test('who may swap, and what a swap refuses', async () => {
@@ -173,6 +178,9 @@ test('who may swap, and what a swap refuses', async () => {
   await coach('POST', `/v1/clients/${cal.id}/archive`, {});
   assert.equal((await coach('POST', `/v1/clients/${cal.id}/swaps`, { workout_exercise_id: slot.id, exercise_id: goblet.id })).status, 409, 'archived');
   assert.equal((await coach('GET', '/v1/sessions/cls_nope/live')).status, 404);
+  const spare = (await coach('POST', '/v1/exercises', { name: 'Box squat' })).body;
+  await coach('POST', `/v1/clients/${ava.id}/swaps`, { workout_exercise_id: slot.id, exercise_id: spare.id });
+  assert.equal((await coach('DELETE', `/v1/exercises/${spare.id}`)).status, 409, 'swapped in for an athlete: not deleted under her');
 });
 
 test('a version 55 database gains the swaps table, opened twice', () => {
@@ -185,7 +193,7 @@ test('a version 55 database gains the swaps table, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 56, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 57, `round ${round}`);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'exercise_swaps'`).n, 1);
       d.close();
     }

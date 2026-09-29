@@ -288,6 +288,25 @@ const defaultWeight = (x, i) => {
 const exDone = (x) => { const rows = rowsFor(x); return rows.length > 0 && rows.every((r) => r.done); };
 const exStarted = (x) => (draft.sets[x.id] ?? []).some((r) => r.done);
 
+// "Can't do this today?": the swaps the coach listed for this exercise. A pick is for this workout only and can be
+// undone until the workout is logged; a coach's own swap is left alone.
+function altBlock(x) {
+  if (draft?.log_id) return null;                                    // a reopened workout is history, not a plan to change
+  if (x.swapped?.by_kind === 'athlete') {
+    return h('div', { class: 'row wrap small', style: 'align-items:center;gap:8px' }, h('span', { class: 'muted grow' }, `You picked ${x.name} instead of ${x.swapped.from}.`),
+      exStarted(x) ? null : btn(`Back to ${x.swapped.from}`, (e) => busy(e.currentTarget, async () => { await api('DELETE', `/app/api/swaps/${x.swapped.id}`); say(`Back to ${x.swapped.from}.`); await refresh(); }), 'ghost'));
+  }
+  if (x.swapped || !x.alternatives?.length || exStarted(x)) return null;
+  const box = h('details', { class: 'c-alts' }, h('summary', { class: 'small strong', style: 'cursor:pointer' }, 'Can\'t do this today? Pick a swap'),
+    h('div', { class: 'stack-tight', style: 'padding-top:6px' }, h('span', { class: 'small muted' }, `Your coach's swaps for ${x.name}. This workout only; your coach sees it.`),
+      x.alternatives.map((a) => btn(`${a.name} · ${a.tag_label}${a.note ? ` · ${a.note}` : ''}`, (e) => busy(e.currentTarget, async () => {
+        const r = await api('POST', '/app/api/swaps', { workout_exercise_id: x.id, alternative_id: a.id });
+        say(`${r.exercise_name} instead of ${r.instead_of}.`); toast(`${r.exercise_name} today instead of ${r.instead_of}. Your coach sees the swap.`);
+        await refresh();
+      }), 'secondary', { style: 'text-align:left;justify-content:flex-start' }))));
+  return box;
+}
+
 function renderLogger(w) {
   const home = state.home;
   const reopened = !!draft.log_id;
@@ -304,7 +323,7 @@ function renderLogger(w) {
       h('span', { class: `c-ex-mark${x.poster_url && !exDone(x) ? ' c-ex-mark--still' : ''}`, 'aria-hidden': 'true' }, exDone(x) ? '✓' : x.poster_url ? [h('img', { src: x.poster_url, alt: '', loading: 'lazy' }), h('span', { class: 'c-ex-mark-play' }, playIcon())] : playIcon()),
       h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
         h('span', { class: 'dp-ex-sets' }, [detailsOf(x), x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
-        x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
+        x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason.toLowerCase()})` : ''}` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
         x.progression?.text ? h('span', { class: 'small strong', style: 'color:var(--green-bright)' }, `Your progression: ${x.progression.text} on the plan`) : null,
         x.load ? h('span', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : `color:var(${x.load.planned_pct ? '--amber' : '--green-bright'})` }, x.load.text) : null),
       h('span', { class: 'sr-only' }, exDone(x) ? ' (done)' : ''));
@@ -321,7 +340,8 @@ function renderLogger(w) {
         x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
         x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
-        x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null));
+        x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null,
+        altBlock(x)));
       const setsBox = h('div', { class: 'c-sets' });
       box.append(setsBox);
       drawSets(x, setsBox);

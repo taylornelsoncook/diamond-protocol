@@ -1677,17 +1677,5 @@ CREATE TABLE IF NOT EXISTS exercise_swaps (
   session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,
   created_by TEXT,
   created_at TEXT NOT NULL,
-  by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete')),   -- version 57: an athlete's own pick from the coach's list
   UNIQUE (client_id, workout_exercise_id)
-);
--- Version 57: the swaps an athlete may pick on their own for an exercise (services/substitutions.js): "no barbell",
--- "knee", "at home"... Library data, not personal; a pick becomes an exercise_swaps row with by_kind 'athlete'.
-CREATE TABLE IF NOT EXISTS exercise_alternatives (
-  id TEXT PRIMARY KEY,
-  exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
-  alt_exercise_id TEXT NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
-  tag TEXT NOT NULL DEFAULT 'other' CHECK (tag IN ('no_barbell','no_equipment','at_home','knee','shoulder','back','easier','harder','other')),
-  note TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE (exercise_id, alt_exercise_id)
 );

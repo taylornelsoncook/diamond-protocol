@@ -4,7 +4,7 @@
 import { h, fill, toast, btn, busy, field, input, select, panel, ago } from './ui.js';
 import { sparkline } from './charts.js';
 
-const MAX_BYTES = 15 * 1024 * 1024;
+const MAX_BYTES = 15 * 1024 * 1024, MAX_ARCHIVE = 60 * 1024 * 1024;
 const plural = (n, one, many = `${one}s`) => `${Number(n).toLocaleString()} ${n === 1 ? one : many}`;
 const day = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—');
 const hm = (min) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, '0')}m`;
@@ -17,23 +17,37 @@ export function fmtMetric(m, value) {
 // Read a chosen file the way the server wants it: CSV as text, Excel and PDF as base64.
 function readFile(file) {
   return new Promise((resolve, reject) => {
-    if (file.size > MAX_BYTES) return reject(new Error('That file is bigger than 15 MB. Export a shorter date range.'));
     const name = file.name, lower = name.toLowerCase();
+    const archive = /\.(zip|xml)$/.test(lower);
+    if (file.size > (archive ? MAX_ARCHIVE : MAX_BYTES)) return reject(new Error(archive ? 'That export is bigger than 60 MB. Ask us about bringing it in another way.' : 'That file is bigger than 15 MB. Export a shorter date range.'));
     const r = new FileReader();
     r.onerror = () => reject(new Error('That file couldn\'t be read. Choose it again.'));
     if (/\.(csv|tsv|txt)$/.test(lower)) { r.onload = () => resolve({ name, csv: r.result }); r.readAsText(file); return; }
-    if (/\.(xlsx|pdf)$/.test(lower)) { r.onload = () => resolve({ name, [lower.endsWith('.pdf') ? 'pdf_base64' : 'xlsx_base64']: String(r.result).split(',')[1] }); r.readAsDataURL(file); return; }
+    if (/\.(xlsx|pdf|zip|xml)$/.test(lower)) { const key = lower.endsWith('.pdf') ? 'pdf_base64' : lower.endsWith('.zip') ? 'zip_base64' : lower.endsWith('.xml') ? 'xml_base64' : 'xlsx_base64'; r.onload = () => resolve({ name, [key]: String(r.result).split(',')[1] }); r.readAsDataURL(file); return; }
     if (/\.xls$/.test(lower)) return reject(new Error('That\'s an old Excel file (.xls). Open it in Excel and save it as .xlsx, or export a CSV.'));
-    reject(new Error('Choose a CSV, Excel (.xlsx) or PDF file.'));
+    reject(new Error('Choose a CSV, Excel (.xlsx) or PDF file, or an Apple Health or Fitbit export zip.'));
   });
 }
+// The metrics a spreadsheet column can be saved as (for the mapping form), from the server's list when it gives one.
+const KNOWN = [['', 'Keep under its own name'], ['hrv_ms', 'Heart rate variability (ms)'], ['rhr_bpm', 'Resting heart rate (bpm)'], ['recovery_pct', 'Recovery (%)'], ['readiness_pct', 'Readiness (%)'], ['sleep_score_pct', 'Sleep score (%)'],
+  ['sleep_min', 'Sleep'], ['in_bed_min', 'In bed'], ['deep_min', 'Deep sleep'], ['rem_min', 'REM sleep'], ['light_min', 'Light sleep'], ['awake_min', 'Awake in bed'], ['sleep_efficiency_pct', 'Sleep efficiency (%)'],
+  ['day_strain', 'Day strain'], ['steps', 'Steps'], ['calories_kcal', 'Energy burned (cal)'], ['active_cal_kcal', 'Active burn (cal)'], ['avg_hr_bpm', 'Average heart rate (bpm)'], ['max_hr_bpm', 'Max heart rate (bpm)'],
+  ['spo2_pct', 'Blood oxygen (%)'], ['resp_rate', 'Respiratory rate'], ['skin_temp_c', 'Skin temperature (°C)'], ['vo2max', 'VO2 max'], ['body_battery', 'Body battery'], ['stress_score', 'Stress'], ['training_load', 'Training load'], ['distance_km', 'Distance (km)'], ['weight_kg', 'Body weight (kg)']];
+const TIME_KEYS = new Set(['sleep_min', 'in_bed_min', 'deep_min', 'rem_min', 'light_min', 'awake_min']);
 
-// The import form. opts: { preview(body), commit(body), athlete: () => ({ id, name }) | null, onSaved(result) }.
-// The athlete is chosen outside the form (a picker for staff, the athlete being viewed for a parent).
+// The import form. opts: { preview(body), commit(body), athlete: () => ({ id, name }) | null, onSaved(result), sources?: () => api GET { data } }.
+// The athlete is chosen outside the form (a picker for staff, the athlete being viewed for a parent). The source menu
+// says where the file comes from and how to get it from that app; "Work it out from the file" recognizes it by its columns.
 export function importForm(opts) {
-  const fileIn = h('input', { type: 'file', accept: '.csv,.tsv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'File to bring in' });
+  const fileIn = h('input', { type: 'file', accept: '.csv,.tsv,.xlsx,.pdf,.zip,.xml,text/csv,application/pdf,application/zip,text/xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'File to bring in' });
   const link = input({ type: 'url', placeholder: 'https://docs.google.com/spreadsheets/d/…', 'aria-label': 'Google Sheets link' });
   const out = h('div', { class: 'stack', 'aria-live': 'polite' });
+  const sourceSel = select([['auto', 'Work it out from the file']], { value: 'auto', 'aria-label': 'Where the file comes from' });
+  const sourceHelp = h('p', { class: 'small muted', style: 'margin:0' });
+  let sourcesList = [];
+  const showHelp = () => { const s = sourcesList.find((x) => x.key === sourceSel.value); sourceHelp.textContent = s?.help ?? ''; link.disabled = !!s && !s.accepts.includes('sheet'); if (link.disabled) link.value = ''; };
+  sourceSel.addEventListener('change', () => { showHelp(); fill(out); body = null; mapping = null; });
+  (opts.sources ? opts.sources() : Promise.resolve({ data: [] })).then((r) => { sourcesList = r.data ?? []; if (sourcesList.length) fill(sourceSel, sourcesList.map((s) => h('option', { value: s.key, selected: s.key === 'auto' }, s.label))); showHelp(); }).catch(() => {});
   let body = null, mapping = null;
   const source = async () => {
     if (link.value.trim()) return { sheet_url: link.value.trim() };
@@ -46,13 +60,13 @@ export function importForm(opts) {
   async function check(e) {
     const who = opts.athlete();
     if (!who) throw new Error('Choose the athlete first.');
-    body = { ...(await source()), client_id: who.id };
+    body = { ...(await source()), client_id: who.id, source: sourceSel.value || 'auto' };
     if (mapping) body.mapping = mapping;
     const p = await opts.preview(body);
     draw(p, who);
   }
   function draw(p, who) {
-    const facts = [`${p.format_label}`, `${plural(p.rows, 'row')}`, p.days ? `${plural(p.days, 'day')} (${day(p.from)} to ${day(p.to)})` : null, p.workouts ? plural(p.workouts, 'workout') : null].filter(Boolean).join(' · ');
+    const facts = [p.source_label && p.source_label !== p.format_label ? `${p.source_label}: ${p.format_label}` : p.format_label, `${plural(p.rows, 'row')}`, p.days ? `${plural(p.days, 'day')} (${day(p.from)} to ${day(p.to)})` : null, p.workouts ? plural(p.workouts, 'workout') : null].filter(Boolean).join(' · ');
     const saveBtn = btn(`Save for ${who.name.split(' ')[0]}`, (e) => busy(e.currentTarget, async () => {
       try { const r = await opts.commit(body); toast(`Saved: ${[r.days ? plural(r.days, 'day') : null, r.workouts ? plural(r.workouts, 'workout') : null].filter(Boolean).join(' and ')} for ${who.name.split(' ')[0]}.`); fileIn.value = ''; link.value = ''; mapping = null; body = null; fill(out); opts.onSaved?.(r); }
       catch (x) { toast(x.message, 'warn'); if (x.details?.problems) draw({ ...p, problems: x.details.problems, problem_count: x.details.problem_count, ready: false }, who); }
@@ -82,22 +96,31 @@ export function importForm(opts) {
       const tick = h('input', { type: 'checkbox', checked: !!guess, 'aria-label': `Bring in ${c}` });
       const label = input({ value: guess?.label ?? c, maxlength: '40', 'aria-label': `Name for ${c}`, style: 'flex:1 1 150px;width:auto;min-width:0' });
       const unit = input({ value: guess?.unit ?? '', maxlength: '12', placeholder: 'unit', 'aria-label': `Unit for ${c}`, style: 'flex:0 0 5.5rem;width:5.5rem;min-width:0' });
-      return { c, tick, label, unit, el: h('div', { style: 'display:flex;flex-wrap:wrap;gap:8px;align-items:center' }, h('label', { class: 'small', style: 'flex:1 1 100%;display:flex;gap:6px;align-items:center;min-height:44px;overflow-wrap:anywhere' }, tick, c), label, unit) };
+      // Save as one of the metrics we know (the trends and the athlete app then treat it like a wearable's), or under its own name.
+      const asSel = select(KNOWN, { value: guess?.metric ?? '', 'aria-label': `Save ${c} as`, style: 'flex:1 1 170px;width:auto;min-width:0' });
+      const timeSel = select([['', 'in minutes'], ['seconds', 'in seconds'], ['hours', 'in hours']], { value: /hour|hrs?\b/i.test(c) ? 'hours' : /sec/i.test(c) ? 'seconds' : '', 'aria-label': `How ${c} is written`, style: 'flex:0 0 8rem;width:8rem;min-width:0' });   // the column's name says how it's written
+      const pctSel = select([['', 'as a percent'], ['fraction', 'as 0 to 1']], { value: '', 'aria-label': `How ${c} is written`, style: 'flex:0 0 8rem;width:8rem;min-width:0' });
+      const syncRow = () => { const known = !!asSel.value; label.hidden = known; unit.hidden = known; timeSel.hidden = !TIME_KEYS.has(asSel.value); pctSel.hidden = !/_pct$/.test(asSel.value); };
+      asSel.addEventListener('change', syncRow); syncRow();
+      return { c, tick, label, unit, asSel, timeSel, pctSel, el: h('div', { style: 'display:flex;flex-wrap:wrap;gap:8px;align-items:center' }, h('label', { class: 'small', style: 'flex:1 1 100%;display:flex;gap:6px;align-items:center;min-height:44px;overflow-wrap:anywhere' }, tick, c), asSel, timeSel, pctSel, label, unit) };
     });
     const sync = () => rows.forEach((r) => { r.el.style.display = r.c === dateSel.value ? 'none' : 'flex'; });
     dateSel.addEventListener('change', sync); sync();
     return h('div', { class: 'stack' },
-      h('p', { class: 'small', style: 'margin:0' }, 'We don\'t recognize this file\'s layout. Choose the column with the date, and tick the columns of numbers to bring in.'),
+      h('p', { class: 'small', style: 'margin:0' }, 'We don\'t recognize this file\'s layout. Choose the column with the date, tick the columns of numbers to bring in, and say what each one is: one of the measures we track (so it shows with the same trends as a wearable\'s), or its own name.'),
       field('Date column', dateSel),
       h('div', { class: 'stack-tight' }, rows.map((r) => r.el)),
       h('div', null, btn('Check again', (e) => busy(e.currentTarget, async () => {
-        mapping = { date_column: dateSel.value, metrics: rows.filter((r) => r.tick.checked && r.c !== dateSel.value).map((r) => ({ column: r.c, label: r.label.value.trim(), unit: r.unit.value.trim() })) };
+        mapping = { date_column: dateSel.value, metrics: rows.filter((r) => r.tick.checked && r.c !== dateSel.value).map((r) => (r.asSel.value
+          ? { column: r.c, metric: r.asSel.value, from: (TIME_KEYS.has(r.asSel.value) ? r.timeSel.value : /_pct$/.test(r.asSel.value) ? r.pctSel.value : '') || undefined }
+          : { column: r.c, label: r.label.value.trim(), unit: r.unit.value.trim() })) };
         try { await check(); } catch (x) { toast(x.message, 'warn'); }
       }), 'secondary')));
   }
   const checkBtn = btn('Check the file', (e) => busy(e.currentTarget, async () => { mapping = null; try { await check(); } catch (x) { toast(x.message, 'warn'); } }), 'secondary');
   return h('div', { class: 'stack' },
-    h('div', { class: 'form-grid' }, field('File', fileIn, 'CSV, Excel (.xlsx) or a PDF with a table in it. WHOOP exports are recognized.'), field('Or a Google Sheets link', link, 'In the sheet, press Share and set it to "Anyone with the link".')),
+    field('Where the file comes from', sourceSel), sourceHelp,
+    h('div', { class: 'form-grid' }, field('File', fileIn, 'CSV, Excel (.xlsx), a PDF with a table in it, or an Apple Health or Fitbit export zip.'), field('Or a Google Sheets link', link, 'In the sheet, press Share and set it to "Anyone with the link".')),
     h('div', null, checkBtn), out);
 }
 
@@ -106,7 +129,7 @@ export function importsList(list, { undo, showAthlete = false, canUndo = () => t
   if (!list.length) return h('p', { class: 'muted small' }, 'Nothing brought in yet.');
   return h('div', null, list.map((d) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
     h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
-      h('span', { class: 'strong' }, `${showAthlete ? `${d.client_name}: ` : ''}${d.format_label}`),
+      h('span', { class: 'strong' }, `${showAthlete ? `${d.client_name}: ` : ''}${d.source_label && d.source_label !== d.format_label ? `${d.source_label}: ` : ''}${d.format_label}`),
       h('span', { class: 'small muted' }, [d.filename, d.days ? `${plural(d.days, 'day')} (${day(d.from_day)} to ${day(d.to_day)})` : null, d.workouts ? plural(d.workouts, 'workout') : null,
         `${d.created_by ?? 'Someone'}${d.created_by_kind === 'parent' ? ' (parent)' : ''}, ${ago(d.created_at).toLowerCase()}`].filter(Boolean).join(' · '))),
     d.undone_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Undone') : undo && canUndo(d) ? btn('Undo', (e) => {

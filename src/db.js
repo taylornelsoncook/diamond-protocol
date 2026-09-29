@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 53;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks
+const SCHEMA_VERSION = 54;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -169,6 +169,7 @@ function migrate(raw, schema) {
   if (version < 15) rebuild(raw, schema, ['sales']);                                  // 'online' payment method for pay links
   if (version < 23) rebuild(raw, schema, ['workout_logs']);                           // screen logs without a program assignment
   if (version < 43) rebuild(raw, schema, ['workout_logs']);                           // version 43: logs outlive a deleted program or workout
+  if (version < 54) rebuild(raw, schema, ['data_imports']);                           // version 54: files from any system (Apple Health and Fitbit zips), no fixed list of kinds
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
   // Version 35: device names are matched in lower case, so results that waited under "Swift" join "swift".
   if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {

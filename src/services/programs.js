@@ -557,14 +557,32 @@ export function programsActivity(ctx, { programId, days = 14 } = {}) {
 // and "max" are sets the athlete ticks without a rep count.
 const MAX_WEIGHT = 2000, MAX_REPS = 500;
 export const REOPEN_HOURS = 2;
-const workoutItems = (ctx, workoutId) => ctx.db.all('SELECT we.id, we.exercise_id, e.name FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position', workoutId);
+// The slots of a workout with the exercise each one logs as: the plan's, or the one a coach swapped in for this athlete.
+function workoutItems(ctx, workoutId, clientId = null) {
+  const items = ctx.db.all('SELECT we.id, we.exercise_id, e.name FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position', workoutId);
+  const swaps = clientId ? swapsFor(ctx, clientId, workoutId) : null;
+  return swaps?.size ? items.map((i) => { const sw = swaps.get(i.id); return sw ? { ...i, exercise_id: sw.exercise_id, name: sw.name } : i; }) : items;
+}
+// Version 56: the exercises a coach swapped for this athlete in one workout, by slot (services/live.js writes them).
+export function swapsFor(ctx, clientId, workoutId) {
+  const rows = ctx.db.all(`SELECT s.id, s.workout_exercise_id, s.reason, s.created_by, s.created_at, e.id AS exercise_id, e.name, e.video_url, e.poster_url, e.instructions, e.category
+    FROM exercise_swaps s JOIN exercises e ON e.id = s.exercise_id JOIN workout_exercises we ON we.id = s.workout_exercise_id WHERE s.client_id = ? AND we.workout_id = ?`, clientId, workoutId);
+  return new Map(rows.map((r) => [r.workout_exercise_id, r]));
+}
+// A slot as this athlete does it: the swapped-in exercise takes the slot's sets and reps; a weight from a tested max
+// doesn't carry over (it belonged to the other lift), and `swapped` says what it replaced and why.
+export function slotFor(x, swap) {
+  if (!swap) return x;
+  return { ...x, exercise_id: swap.exercise_id, name: swap.name, video_url: swap.video_url, poster_url: swap.poster_url, instructions: swap.instructions, category: swap.category,
+    load_test: null, load_pct: null, swapped: { id: swap.id, from: x.name, reason: swap.reason, by: swap.created_by } };
+}
 const blank = (x) => x === undefined || x === null || x === '';
 
 // Reads what an athlete logged for one workout: exercise_ids ticked, sets (workout_exercise_id, set_no, weight, reps),
 // effort (rpe 1-10), notes, and when they started and finished (the phone's clock, kept only when it makes sense: a
 // workout saved offline is sent later but counts on the day it was done). Used by the app and the weight-room screen.
-export function readLog(ctx, workoutId, body = {}) {
-  const items = workoutItems(ctx, workoutId), byId = new Map(items.map((i) => [i.id, i]));
+export function readLog(ctx, workoutId, body = {}, clientId = null) {
+  const items = workoutItems(ctx, workoutId, clientId), byId = new Map(items.map((i) => [i.id, i]));
   if (body.exercise_ids !== undefined && !Array.isArray(body.exercise_ids)) throw badRequest('exercise_ids must be a list.');
   if (body.sets !== undefined && body.sets !== null && !Array.isArray(body.sets)) throw badRequest('sets must be a list.');
   const ids = new Set();
@@ -646,7 +664,8 @@ function reopenId(ctx, clientId) {
 // One exercise as the app shows it: today's weight from a tested max, sets and reps to log, last time and best weight.
 // One exercise as the app shows it: the plan, today's weight (lighter on a rough day), an easy day's sets taken off
 // (never below one), and the coach-approved steps for this athlete on top (progression.js).
-export function appExercise(ctx, clientId, x, readiness) {
+export function appExercise(ctx, clientId, x0, readiness, swaps = null) {
+  const x = slotFor(x0, swaps?.get(x0.id));
   const drop = readiness?.drop ?? 0, setsOff = readiness?.sets_off ?? 0;
   const rx = parseRx(x);
   const step = appliedFor(ctx, clientId, x.exercise_id);
@@ -658,24 +677,31 @@ export function appExercise(ctx, clientId, x, readiness) {
     progression: step, last: lastTime(ctx, clientId, x.exercise_id), best_weight: bestWeight(ctx, clientId, x.exercise_id) };
 }
 
+// The athlete's active program and the workouts left in it (the next one is what the app opens on).
+export function nextWorkoutFor(ctx, clientId) {
+  const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', clientId);
+  if (!a) return null;
+  const program = getProgram(ctx, a.program_id);
+  const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', a.id).map((r) => r.workout_id));
+  const left = program.workouts.filter((w) => !done.has(w.id));
+  return { assignment: a, program, left, next: left[0] ?? null };
+}
 export function clientHome(ctx, client) {
   const access = appAccess(ctx, client);
   const base = { client: { name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status };
   if (!access.open) return { ...base, locked: true, message: access.message };
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
-  const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', client.id);
-  if (!a) return { ...base, locked: false, program: null, history, reopen_id, upcoming: [], message: 'Your coach is building your program. Check back soon.' };
-  const program = getProgram(ctx, a.program_id);
-  const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', a.id).map((r) => r.workout_id));
-  const left = program.workouts.filter((w) => !done.has(w.id));
-  const next = left[0] ?? null;
+  const own = nextWorkoutFor(ctx, client.id);
+  if (!own) return { ...base, locked: false, program: null, history, reopen_id, upcoming: [], message: 'Your coach is building your program. Check back soon.' };
+  const { program, left, next } = own;
   const readiness = next ? readinessToday(ctx, client.id) : null;
+  const swaps = next ? swapsFor(ctx, client.id, next.id) : null;
   return {
     ...base, locked: false,
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: program.workouts.length - left.length, total: program.workouts.length },
     readiness,
-    workout: next && { ...next, exercises: next.exercises.map((x) => appExercise(ctx, client.id, x, readiness)) },
+    workout: next && { ...next, exercises: next.exercises.map((x) => appExercise(ctx, client.id, x, readiness, swaps)) },
     upcoming: left.slice(1, 4).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, exercises: w.exercises.map((x) => x.name) })),
     history, reopen_id,
     message: next ? null : 'Program complete. Your coach will set your next block.'
@@ -711,7 +737,7 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
   if (!a) throw conflict('You aren\'t on a program right now, so this workout couldn\'t be saved. Tell your coach what you did.');
   const w = ctx.db.get('SELECT * FROM workouts WHERE id = ? AND program_id = ?', workoutId, a.program_id);
   if (!w) throw conflict('Your coach changed your program, so this workout couldn\'t be saved. Tell your coach what you did.');
-  const data = readLog(ctx, workoutId, body);
+  const data = readLog(ctx, workoutId, body, client.id);
   const existing = ctx.db.get('SELECT * FROM workout_logs WHERE assignment_id = ? AND workout_id = ?', a.id, workoutId);
   if (existing) {
     const bare = existing.session_id && existing.rpe == null && !ctx.db.get('SELECT 1 FROM workout_sets WHERE workout_log_id = ?', existing.id);
@@ -743,7 +769,7 @@ export function editLog(ctx, client, logId, body = {}) {
   if (!l.workout_id) throw conflict('Your coach removed this workout from your program, so it can\'t be reopened. It stays in your history.');
   const why = reopenBlock(ctx, client.id, l);
   if (why) throw conflict(why);
-  const data = readLog(ctx, l.workout_id, body);
+  const data = readLog(ctx, l.workout_id, body, client.id);
   ctx.db.tx(() => {
     ctx.db.run('DELETE FROM workout_sets WHERE workout_log_id = ?', l.id);
     ctx.db.run('DELETE FROM exercise_logs WHERE workout_log_id = ?', l.id);

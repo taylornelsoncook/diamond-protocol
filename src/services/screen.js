@@ -1,7 +1,7 @@
 import { newId, v, notFound, conflict, badRequest } from '../util.js';
 import { getSetting } from './families.js';
 import { kioskFor, openSessions, bookingsIn, checkInBooking, nameOnBoard } from './checkin.js';
-import { getProgram, appExercise, LOAD_TESTS, readLog, saveSets, startOfToday } from './programs.js';
+import { getProgram, appExercise, swapsFor, LOAD_TESTS, readLog, saveSets, startOfToday } from './programs.js';
 import { teamRosterFor } from './teams.js';
 import { readinessToday } from './engage.js';
 import { emit } from './events.js';
@@ -33,7 +33,7 @@ export function workoutView(ctx, workoutId) {
 }
 
 // Who can log in a session: booked athletes, plus the team's roster athletes (each has a profile).
-function athletesIn(ctx, s) {
+export function athletesIn(ctx, s) {
   const out = bookingsIn(ctx, s.id).map((b) => ({ ref: `b_${b.id}`, client_id: b.client_id, name: b.name, booking_id: b.id, here: b.status === 'attended' }));
   const team = teamRosterFor(ctx, s);
   if (team) {
@@ -82,11 +82,11 @@ export function screenAthlete(ctx, key, body = {}, asOf = ctx.now()) {
     name: client.name.split(' ')[0], logged: loggedIn(ctx, s.id).has(client.id),
     readiness: readiness?.level ? { level: readiness.level, headline: readiness.headline } : null,
     // The same numbers as the athlete's phone: today's weight (lighter on a rough day, plus approved steps) and sets.
-    weights: w.exercises.map((x) => appExercise(ctx, client.id, x, readiness)).filter((x) => x.load || x.progression || x.planned_sets).map((x) => {
+    weights: w.exercises.map((x) => appExercise(ctx, client.id, x, readiness, swapsFor(ctx, client.id, w.id))).filter((x) => x.load || x.progression || x.planned_sets || x.swapped).map((x) => {
       const l = x.load;
       const weight = !l ? null : l.missing ? `Test your ${l.lift} max first` : `${l.lb} lb${l.planned_pct ? ' (lighter today)' : ''}${x.progression?.weight_lb ? ` (with your +${x.progression.weight_lb} lb step)` : ''}`;
       const sets = x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : x.progression?.sets || x.progression?.reps ? `${x.target_sets} × ${x.target_reps ?? x.reps} (your progression)` : null;
-      return { exercise_id: x.id, name: x.name, text: [weight, sets].filter(Boolean).join(' · ') };
+      return { exercise_id: x.id, name: x.name, text: [x.swapped ? `instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}` : null, weight, sets].filter(Boolean).join(' · ') };
     })
   };
 }
@@ -99,7 +99,7 @@ export function screenLog(ctx, key, body = {}, asOf = ctx.now()) {
   if (loggedIn(ctx, s.id).has(client.id)) throw conflict(`${client.name.split(' ')[0]}, you already logged this one.`);
   const w = ctx.db.get('SELECT w.*, p.name AS program_name FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ?', s.workout_id);
   const valid = new Set(ctx.db.all('SELECT id FROM workout_exercises WHERE workout_id = ?', w.id).map((r) => r.id));
-  const data = readLog(ctx, w.id, { sets: body.sets, exercise_ids: Array.isArray(body.exercise_ids) ? body.exercise_ids.map(String) : body.sets?.length ? [] : [...valid] });
+  const data = readLog(ctx, w.id, { sets: body.sets, exercise_ids: Array.isArray(body.exercise_ids) ? body.exercise_ids.map(String) : body.sets?.length ? [] : [...valid] }, client.id);
   const ids = data.ids;
   const checkIn = () => {
     if (a.booking_id && !a.here) checkInBooking(ctx, a.booking_id);

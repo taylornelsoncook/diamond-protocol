@@ -6,7 +6,7 @@ import { v, notFound, conflict, badRequest, HttpError, newId, token, sha256, loc
 import { getSetting, getFamily, cardExpiry, addGuardian, updateGuardian, payerFor } from './families.js';
 import * as billing from './billing.js';
 import * as commerce from './commerce.js';
-import { feeSettings } from './fees.js';
+import { feeSettings, cardFee } from './fees.js';
 import { attendance } from './clients.js';
 import { education } from './engage.js';
 import { getTest } from './performance.js';
@@ -141,7 +141,7 @@ export function membershipPanel(ctx, clientId) {
     clientId, new Date(Date.parse(ctx.now()) - 30 * 86400000).toISOString()) ?? null;
   const pastDue = s ? ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS n FROM invoices WHERE subscription_id = ? AND status = 'failed'`, s.id).n : 0;
   return {
-    membership: s ? { status: s.status, plan_id: s.plan_id, plan_name: s.plan_name, price_cents: s.price_cents, trial_ends_at: s.status === 'trialing' ? s.trial_ends_at : null,
+    membership: s ? { status: s.status, plan_id: s.plan_id, plan_name: s.plan_name, price_cents: s.price_cents, fee_cents: cardFee(ctx, s.price_cents, 'memberships').cents, fee_label: feeSettings(ctx).label, trial_ends_at: s.status === 'trialing' ? s.trial_ends_at : null,
       next_charge_at: ['active', 'trialing', 'past_due'].includes(s.status) ? s.current_period_end : null, renews: s.current_period_end, past_due_cents: pastDue,
       pending_plan_name: s.pending_plan_name ?? null, pending_price_cents: s.pending_price_cents ?? null,   // the owner set a change for the renewal
       can_ask: s.status === 'paused' ? ['switch', 'cancel'] : REQUEST_KINDS } : null,

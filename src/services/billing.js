@@ -159,11 +159,11 @@ export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
       VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?, ?)`, id, subId, s.client_id, diff + fee, ctx.now(), s.current_period_end, ctx.now(), `Plan change: ${s.plan_name} to ${plan.name}, the rest of this month`, fee);
     try {
       const inv = await attemptCharge(ctx, id, ctx.now());
-      charged = { invoice_id: id, amount_cents: diff, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null };
+      charged = { invoice_id: id, amount_cents: diff + fee, fee_cents: fee, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null };
     } catch (e) {
       // The card processor didn't answer: the plan has changed and the charge is left to retry from Billing.
       ctx.db.run(`UPDATE invoices SET status = 'failed', last_error = ? WHERE id = ? AND status = 'open'`, String(e.message ?? e).slice(0, 300), id);
-      charged = { invoice_id: id, amount_cents: diff, status: 'failed', error: 'The card processor didn\'t answer. Retry the charge from Billing.' };
+      charged = { invoice_id: id, amount_cents: diff + fee, fee_cents: fee, status: 'failed', error: 'The card processor didn\'t answer. Retry the charge from Billing.' };
     }
   }
   return { subscription: getSubscription(ctx, subId), when, charged, difference_cents: when === 'difference' ? diff : null };
@@ -750,9 +750,11 @@ export function recordInvoicePaymentByHand(ctx, id, body = {}) {
     if (inv.status === 'void') throw conflict('This invoice was voided. There\'s nothing to collect.');
     const s = getSubscription(ctx, inv.subscription_id);
     const before = s.status;
-    // Cash and check never carry the card fee: it comes off before the payment is recorded.
-    if (inv.fee_cents) { ctx.db.run('UPDATE invoices SET amount_cents = amount_cents - fee_cents, fee_cents = 0 WHERE id = ?', id); inv.amount_cents -= inv.fee_cents; inv.fee_cents = 0; }
-    ctx.db.tx(() => recordPaid(ctx, inv, s, { ref: null, method, reference }));
+    ctx.db.tx(() => {
+      // Cash and check never carry the card fee: it comes off as the payment is recorded, in the same transaction.
+      if (inv.fee_cents) { ctx.db.run('UPDATE invoices SET amount_cents = amount_cents - fee_cents, fee_cents = 0 WHERE id = ?', id); inv.amount_cents -= inv.fee_cents; inv.fee_cents = 0; }
+      recordPaid(ctx, inv, s, { ref: null, method, reference });
+    });
     await membershipReceipt(ctx, id, { how: `${HAND_METHODS[method].toLowerCase()}${reference ? ` (${method === 'check' ? 'check ' : ''}${reference})` : ''}` });
     return { ...invoiceDetail(ctx, id), membership_reactivated: before === 'past_due' && getSubscription(ctx, s.id).status === 'active' };
   });

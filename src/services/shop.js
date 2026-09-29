@@ -4,6 +4,7 @@ import { createSale, onlineLocation } from './commerce.js';
 import { assign } from './programs.js';
 import { sendEmail } from './mail.js';
 import { emit } from './events.js';
+import { cardFee } from './fees.js';
 
 // Programs and courses sold online. The owner sets a price on a program or an athlete course and turns on "Sell
 // online". Families buy from the parent portal's Programs tab with the family card; out-of-town athletes find them on
@@ -19,12 +20,12 @@ function programItem(ctx, p) {
   const workouts = ctx.db.all('SELECT week, day, title FROM workouts WHERE program_id = ? ORDER BY week, day', p.id);
   return { kind: 'program', id: p.id, title: p.name, description: p.description, level: p.level, weeks: p.weeks, workouts: workouts.length,
     per_week: workouts.length ? Math.round(workouts.length / Math.max(1, new Set(workouts.map((w) => w.week)).size)) : 0,
-    outline: workouts.filter((w) => w.week === workouts[0]?.week).map((w) => w.title), price_cents: p.price_cents, for_sale: !!p.for_sale };
+    outline: workouts.filter((w) => w.week === workouts[0]?.week).map((w) => w.title), price_cents: p.price_cents, fee_cents: cardFee(ctx, p.price_cents, 'store').cents, for_sale: !!p.for_sale };
 }
 function courseItem(ctx, c) {
   const lessons = ctx.db.all('SELECT title, minutes, quiz FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', c.id);
   return { kind: 'course', id: c.id, title: c.title, description: c.description, lessons: lessons.length, minutes: lessons.reduce((t, l) => t + (l.minutes ?? 0), 0),
-    quizzes: lessons.filter((l) => l.quiz).length, outline: lessons.map((l) => l.title), price_cents: c.price_cents, for_sale: !!c.for_sale };
+    quizzes: lessons.filter((l) => l.quiz).length, outline: lessons.map((l) => l.title), price_cents: c.price_cents, fee_cents: cardFee(ctx, c.price_cents, 'store').cents, for_sale: !!c.for_sale };
 }
 
 // What's for sale: priced, turned on, and with something inside (a program with workouts, a published course with lessons).
@@ -111,6 +112,6 @@ async function buyNow(ctx, guardian, client, kind, body) {
   const biz = getSetting(ctx, 'business_name');
   const where = kind === 'program' ? 'is in' : 'is unlocked in the Education tab of';
   sendEmail(ctx, { to: guardian.email, subject: `${item.title} is ready for ${first(c.name)}`,
-    text: `Hi ${first(guardian.name)},\n\nThanks for buying ${item.title}. It ${where} ${first(c.name)}'s app now:\n${ctx.publicUrl ?? ''}/app?token=${c.access_token}\n\nThat link is just for ${first(c.name)}, so keep it private. You can follow along from the parent portal too.\n\n${money(item.price_cents)} was charged to the card ending ${payer.card_last4 ?? ''}.\n\n${biz}` }).catch(() => {});
+    text: `Hi ${first(guardian.name)},\n\nThanks for buying ${item.title}. It ${where} ${first(c.name)}'s app now:\n${ctx.publicUrl ?? ''}/app?token=${c.access_token}\n\nThat link is just for ${first(c.name)}, so keep it private. You can follow along from the parent portal too.\n\n${money(sale.amount_cents)} was charged to the card ending ${payer.card_last4 ?? ''}${sale.fee_cents ? ` (${money(item.price_cents)} plus a ${money(sale.fee_cents)} ${(sale.fee_label ?? 'card processing fee').toLowerCase()})` : ''}.\n\n${biz}` }).catch(() => {});
   return { purchase: { id, kind, item_id: item.id, title: item.title, amount_cents: item.price_cents }, sale_id: sale.id };
 }

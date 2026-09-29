@@ -744,7 +744,7 @@ async function viewPrograms(main) {
   const KINDS = { switch: 'switch plans', pause: 'pause', cancel: 'cancel' };
   const memPanel = panel(`${a.first_name}'s membership`, {},
     m ? h('dl', { class: 'dl' },
-      h('div', null, h('dt', null, 'Plan'), h('dd', null, m.plan_name, m.price_cents != null ? ` · ${money(m.price_cents)} a month` : '')),
+      h('div', null, h('dt', null, 'Plan'), h('dd', null, m.plan_name, m.price_cents != null ? ` · ${money(m.price_cents)} a month${m.fee_cents ? ` plus a ${money(m.fee_cents)} ${(m.fee_label ?? 'card processing fee').toLowerCase()}` : ''}` : '')),
       h('div', null, h('dt', null, 'Status'), h('dd', { class: m.status === 'past_due' ? 'warn-text' : null }, STATUS[m.status] ?? m.status, m.past_due_cents ? ` · ${money(m.past_due_cents)} didn't go through` : '')),
       m.trial_ends_at ? h('div', null, h('dt', null, 'Trial ends'), h('dd', null, fmt(m.trial_ends_at, { month: 'long', day: 'numeric' }))) : null,
       m.next_charge_at && !m.trial_ends_at ? h('div', null, h('dt', null, 'Next charge'), h('dd', null, fmt(m.next_charge_at, { month: 'long', day: 'numeric' }))) : null,
@@ -789,17 +789,19 @@ async function viewPrograms(main) {
     }) : h('p', { class: 'muted small' }, 'No weekly classes yet.'),
     !member && groups.length ? btn('See membership plans', () => document.getElementById('p-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 'ghost') : null);
 
-  const buy = (label, cents, fn, back) => btn(`${label} · ${money(cents)}`, (e) => {
-    if (!f.card.on_file || f.card.expired) return cardProblem(`This costs ${money(cents)}.`, back);
-    if (!confirm(`Charge ${money(cents)} to the ${cardName(f.card)}?`)) return;
+  // fee: the card processing fee the owner turned on, shown and confirmed before the charge.
+  const feeWord = (storeData.fee_label ?? 'Card processing fee').toLowerCase();
+  const buy = (label, cents, fn, back, fee = 0) => btn(`${label} · ${money(cents + fee)}`, (e) => {
+    if (!f.card.on_file || f.card.expired) return cardProblem(`This costs ${money(cents + fee)}.`, back);
+    if (!confirm(`Charge ${money(cents + fee)} to the ${cardName(f.card)}?${fee ? ` That's ${money(cents)} plus a ${money(fee)} ${feeWord}.` : ''}`)) return;
     busy(e.currentTarget, async () => { try { await fn(); } catch (x) { if (x.status === 402) return cardProblem(x.message, back); throw x; } });
   }, 'secondary');
   const packLine = (p) => (p.kind === 'pack' ? [`${p.sessions} ${p.credit_type} sessions`, p.per_session_cents ? `${money(p.per_session_cents)} each` : null, p.saves_cents ? `save ${money(p.saves_cents)}` : null].filter(Boolean).join(' · ') : `1 ${p.credit_type} session`);
   const storePanel = h('section', { class: 'dp-panel', id: 'p-plans' }, h('div', { class: 'dp-panel-head' }, h('div', null, h('h2', { class: 'dp-panel-title' }, 'Packs & memberships'), h('p', { class: 'dp-panel-sub' }, `For ${a.first_name}`))),
-    ...storeData.plans.map((p) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, `${money(p.price_cents)} a month${p.trial_days ? ` · ${p.trial_days}-day free trial` : ''}`)),
-      m ? (m.plan_id === p.id ? h('span', { class: 'dp-badge dp-badge--good' }, 'Current') : null) : buy('Start', p.price_cents, async () => { await post('membership', { plan_id: p.id, athlete_id: a.id }); toast('Membership started.'); await reload(); }, 'programs'))),
+    ...storeData.plans.map((p) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: 'small muted' }, `${money(p.price_cents)} a month${p.fee_cents ? ` plus a ${money(p.fee_cents)} ${feeWord}` : ''}${p.trial_days ? ` · ${p.trial_days}-day free trial` : ''}`)),
+      m ? (m.plan_id === p.id ? h('span', { class: 'dp-badge dp-badge--good' }, 'Current') : null) : buy('Start', p.price_cents, async () => { await post('membership', { plan_id: p.id, athlete_id: a.id }); toast('Membership started.'); await reload(); }, 'programs', p.fee_cents))),
     ...storeData.products.map((p) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: `small ${p.saves_cents ? 'good-text' : 'muted'}` }, packLine(p))),
-      buy('Buy', p.price_cents, async () => { await post('purchase', { product_id: p.id, athlete_id: a.id }); toast('Added to your account.'); await reload(); }, 'programs'))));
+      buy('Buy', p.price_cents, async () => { await post('purchase', { product_id: p.id, athlete_id: a.id }); toast('Added to your account.'); await reload(); }, 'programs', p.fee_cents))));
 
   // Programs and courses sold online: pay once, it shows in the athlete's app.
   const owns = (x) => shop.owned.some((o) => o.client_id === a.id && o.item_kind === x.kind && o.item_id === x.id);
@@ -814,7 +816,7 @@ async function viewPrograms(main) {
         await post('shop/buy', { kind: x.kind, item_id: x.id, athlete_id: a.id });
         state.buy = null;
         toast(`${x.title} is in ${a.first_name}'s app now. We emailed you the link.`); await reload();
-      }, 'programs'));
+      }, 'programs', x.fee_cents));
   };
   const onlinePanel = shop.items.length ? panel('Online programs & courses', { subtitle: `Pay once and ${a.first_name} gets it in their app. No membership needed.` }, shop.items.map(onlineRow)) : null;
 

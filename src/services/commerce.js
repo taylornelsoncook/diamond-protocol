@@ -352,7 +352,9 @@ function bookingToCollect(ctx, bookingId, client, amount) {
   if (ctx.db.get(`SELECT id FROM sales WHERE booking_id = ? AND status = 'pending'`, bookingId)) throw conflict('A payment for that booking is already waiting for the card. Finish or cancel it first.');
   return b;
 }
-async function createSaleNow(ctx, body, actor, { online = false, counter = false, role, userId } = {}, requestId) {
+// fee: false leaves the card fee off: bookings charged to the card on file from the roster, the portal, Book now and
+// offer links, where the payer saw the price and nothing more before paying.
+async function createSaleNow(ctx, body, actor, { online = false, counter = false, role, userId, fee: feeOn = true } = {}, requestId) {
   const method = v.oneOf(body.method, 'method', METHODS);
   const loc = getLocation(ctx, v.str(body.location_id, 'location_id'));
   if (!loc.active && !online) throw conflict(`${loc.name} is archived. Choose another location.`);
@@ -375,7 +377,7 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   const price = subtotal - discount.cents;
   const booking = body.booking_id ? bookingToCollect(ctx, v.str(body.booking_id, 'booking_id', { max: 64 }), client, price) : null;
   // Owner setting (services/fees.js): a card processing fee on card payments, its own line on the receipt. Cash never carries it.
-  const fee = CARD_METHODS.includes(method) ? cardFee(ctx, price, online ? 'store' : 'counter') : { cents: 0 };
+  const fee = feeOn && CARD_METHODS.includes(method) ? cardFee(ctx, price, online ? 'store' : 'counter') : { cents: 0 };
   const amount = price + fee.cents;
 
   const wantsSave = !!body.save_card && ['tap_to_pay', 'reader'].includes(method);

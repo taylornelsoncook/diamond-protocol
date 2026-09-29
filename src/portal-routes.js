@@ -11,6 +11,7 @@ import * as checkin from './services/checkin.js';
 import * as booknow from './services/booknow.js';
 import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
+import { cardFee, feeSettings } from './services/fees.js';
 import * as sms from './services/sms.js';
 import * as leads from './services/leads.js';
 import * as shop from './services/shop.js';
@@ -200,13 +201,16 @@ export const portalRoutes = [
   ['GET', '/portal/api/store', 'guardian', 'Packs and memberships a parent can buy. Packs say their price a session and what they save against single sessions.', (ctx) => {
     const products = commerce.listProducts(ctx).filter((p) => ['session', 'pack'].includes(p.kind));
     const single = (type) => products.filter((p) => p.kind === 'session' && (p.credit_type ?? 'private') === (type ?? 'private')).map((p) => p.price_cents).sort((a, b) => a - b)[0] ?? null;
+    // The card fee, where the owner turned it on, is shown before the parent buys (fee_cents and total_cents on each item).
+    const withFee = (p, place) => { const fee = cardFee(ctx, p.price_cents, place).cents; return { ...p, fee_cents: fee, total_cents: p.price_cents + fee }; };
     return {
+      fee_label: feeSettings(ctx).label,
       products: products.map((p) => {
-        if (p.kind !== 'pack' || !p.sessions) return p;
+        if (p.kind !== 'pack' || !p.sessions) return withFee(p, 'store');
         const each = Math.round(p.price_cents / p.sessions), one = single(p.credit_type);
-        return { ...p, per_session_cents: each, saves_cents: one && one * p.sessions > p.price_cents ? one * p.sessions - p.price_cents : null };
+        return withFee({ ...p, per_session_cents: each, saves_cents: one && one * p.sessions > p.price_cents ? one * p.sessions - p.price_cents : null }, 'store');
       }),
-      plans: billing.listPlans(ctx).map(({ subscribers, ...p }) => p)
+      plans: billing.listPlans(ctx).map(({ subscribers, ...p }) => withFee(p, 'memberships'))
     };
   }],
   ['POST', '/portal/api/purchase', 'guardian', 'Buy a pack with the family card: product_id, athlete_id.', async (ctx, r) => {

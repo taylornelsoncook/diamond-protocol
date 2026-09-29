@@ -8,6 +8,8 @@ import { recordOnlineSale } from './commerce.js';
 import { cardFee, feeSettings } from './fees.js';
 // What the payer pays: the amount plus the card fee the link carries (a membership's fee is already in its amount).
 const totalOf = (l) => l.amount_cents + (l.fee_cents ?? 0);
+// The fee to show: a link's own (added to the total), or the fee already inside a membership invoice's amount.
+const feeShown = (ctx, l) => (l.kind === 'invoice' ? { cents: ctx.db.get('SELECT fee_cents FROM invoices WHERE id = ?', l.invoice_id)?.fee_cents ?? 0, included: true } : { cents: l.fee_cents ?? 0, included: false });
 
 // Pay links: a page (/pay/<token>) a parent opens from an email or text to pay one thing by card without signing in:
 // a membership payment that didn't go through, an unpaid session, a pack, or a set amount. With Stripe the parent pays on
@@ -126,7 +128,7 @@ export async function sendPayLink(ctx, id) {
   const emails = l.family_id ? ctx.db.all('SELECT email FROM guardians WHERE family_id = ? AND email IS NOT NULL', l.family_id).map((g) => g.email) : [payer.email].filter(Boolean);
   const phones = l.family_id ? familyPhones(ctx, l.family_id) : [];
   if (!emails.length && !phones.length) throw conflict('There\'s no email or texting number for this family. Copy the link and send it yourself.');
-  const total = totalOf(l), feeNote = l.fee_cents ? ` (includes a ${money(l.fee_cents)} ${feeSettings(ctx).label.toLowerCase()})` : '';
+  const total = totalOf(l), shown = feeShown(ctx, l), feeNote = shown.cents ? ` (includes a ${money(shown.cents)} ${feeSettings(ctx).label.toLowerCase()})` : '';
   for (const to of emails) await sendEmail(ctx, { to, subject: `Pay ${money(total)} to ${biz(ctx)}`,
     text: `Hi ${first(payer.name)},\n\nHere's a secure link to pay ${money(total)} for ${l.description}${feeNote}:\n\n${l.url}\n\nNo sign-in needed. The link works for ${DAYS_OPEN} days.\n\n${biz(ctx)}` });
   for (const to of phones) await sendText(ctx, { to, kind: 'pay_link', familyId: l.family_id, body: `${biz(ctx)}: Pay ${money(total)} for ${l.description}: ${l.url}` }).catch((e) => console.error('text', e.message));
@@ -166,7 +168,7 @@ export function publicPayLink(ctx, tok) {
   const status = l.status === 'open' && l.expires_at <= ctx.now() ? 'expired' : l.status;
   const open = status === 'open';
   return {
-    business_name: biz(ctx), description: l.description, amount_cents: l.amount_cents, fee_cents: l.fee_cents ?? 0, fee_label: l.fee_cents ? feeSettings(ctx).label : null, total_cents: totalOf(l), status, paid_at: l.paid_at, athlete: first(l.client_name),
+    business_name: biz(ctx), description: l.description, amount_cents: l.amount_cents, fee_cents: feeShown(ctx, l).cents, fee_included: feeShown(ctx, l).included, fee_label: feeShown(ctx, l).cents ? feeSettings(ctx).label : null, total_cents: totalOf(l), status, paid_at: l.paid_at, athlete: first(l.client_name),
     can_pay_online: open && ctx.payments.name === 'stripe' && typeof ctx.payments.checkoutPayment === 'function',
     can_simulate: open && !!ctx.payments.simulate
   };

@@ -1475,9 +1475,9 @@ async function viewBilling(main) {
       await patch('/v1/settings', { card_fee_pct: Number(pct.value) || 0, card_fee_flat: Math.round((Number(flat.value) || 0) * 100), card_fee_label: label.value.trim() || null, card_fee_on: boxes.filter((b) => b.cb.checked).map((b) => b.k) });
       toast(boxes.some((b) => b.cb.checked) ? 'Saved. New card payments carry the fee; payments already made or invoiced don\'t change.' : 'Saved. No card fee is added.');
     }), 'primary');
-    return panel('Card processing fee', { subtitle: 'Pass some of the card cost on to the payer as its own line on receipts, ForActive-style. Off unless you turn it on.' },
+    return panel('Card processing fee', { subtitle: 'Pass some of the card cost on to the payer as its own line on receipts. Off unless you turn it on.' },
       h('div', { class: 'stack' },
-        h('div', { class: 'dp-error', role: 'note', style: 'background:var(--amber-deep);color:var(--steel)' }, h('strong', null, 'Check the rules first. '), 'Passing card costs to the payer is regulated: some states limit or ban surcharges on credit cards, card networks don\'t allow them on debit cards and cap them at your actual cost (at most 3%), and the fee has to be disclosed before payment. Many businesses charge a small "service fee" on every payment method instead. Ask your accountant or lawyer before turning this on. This only adds the line and the amount here; it doesn\'t register a surcharge with your card processor.'),
+        h('div', { class: 'dp-error', role: 'note', style: 'background:var(--amber-deep);color:var(--steel)' }, h('strong', null, 'Check the rules first. '), 'Passing card costs to the payer is regulated: some states limit or ban surcharges on credit cards, card networks don\'t allow them on debit cards and cap them at your actual cost (3 to 4% depending on the network), and the fee has to be shown before payment. Many businesses charge a small "service fee" on every payment method instead. Ask your accountant or lawyer before turning this on. This only adds the line and the amount here; it doesn\'t register a surcharge with your card processor.'),
         h('div', { class: 'row wrap', style: 'gap:8px 24px' }, boxes.map((b) => b.el)),
         h('div', { class: 'row wrap', style: 'gap:8px;align-items:flex-end' }, field('Percent of the payment', pct), field('Plus a flat amount ($)', flat), h('div', { class: 'grow', style: 'min-width:200px' }, field('Called', label))),
         example, h('div', null, save)));
@@ -1746,6 +1746,7 @@ async function viewSell(main) {
     const c = client(), sub = c?.subscription && c.subscription.status !== 'canceled' ? c.subscription : null;
     fill(planGrid, planList.map((p) => h('button', { type: 'button', class: 'dp-panel pos-tile', disabled: !!sub, title: sub ? `${firstName(c)} already has ${sub.plan_name}` : null, onClick: () => startMembership(p) },
       h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
+      String(settings.card_fee_on ?? '').split(',').includes('memberships') && (Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0)) ? h('span', { class: 'small muted' }, `plus a ${money(Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0))} ${(settings.card_fee_label || 'card processing fee').toLowerCase()}`) : null,
       h('span', { class: 'small muted' }, sub ? `${firstName(c)} already has ${sub.plan_name}` : p.trial_days ? `${p.trial_days}-day free trial` : 'Billed monthly'))));
   }
   function startMembership(p) {

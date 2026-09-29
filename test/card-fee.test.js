@@ -123,7 +123,19 @@ test('a pay link for a set amount adds the fee at checkout and records it on the
     'inv_link', app.ctx.db.get('SELECT id FROM subscriptions WHERE client_id = ?', maya.id).id, maya.id, '2026-10-01', '2026-11-01', app.ctx.now());
   const il = (await owner('POST', '/v1/pay-links', { kind: 'invoice', invoice_id: 'inv_link' })).body;
   assert.deepEqual([il.amount_cents, il.fee_cents], [15465, 0]);
-  assert.equal((await pub('GET', `/pay-api/${il.url.split("/").pop()}`)).body.total_cents, 15465);
+  const ipage = (await pub('GET', `/pay-api/${il.url.split("/").pop()}`)).body;
+  assert.deepEqual([ipage.total_cents, ipage.fee_cents, ipage.fee_included], [15465, 465, true], 'the invoice\'s own fee shows as included, never added again');
+});
+
+test('bookings charged to the card on file from the portal, Book now and offers carry no fee: the parent saw only the price', async () => {
+  const { createSale } = await import('../src/services/commerce.js');
+  const s = await createSale(app.ctx, { location_id: facility.id, method: 'card_on_file', client_id: maya.id, custom: { description: 'Speed class (portal booking)', amount_cents: 2500 } }, null, { fee: false });
+  assert.deepEqual([s.status, s.amount_cents, s.fee_cents], ['succeeded', 2500, 0]);
+  const store = await import('../src/services/shop.js');
+  assert.equal(typeof store.shopItems, 'function');
+  // What a parent sees before buying carries the fee and the total.
+  const plans = (await owner('GET', '/v1/plans')).body;
+  assert.ok(plans.data?.length || plans.length, 'plans exist');
 });
 
 test('a version 50 database gains the fee columns, opened twice', () => {

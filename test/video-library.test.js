@@ -69,6 +69,9 @@ case "$src" in *[Nn]evercloud*) echo "Error opening input files: Operation timed
 case "$*" in *"-ss 1 "*short*) exit 0 ;; *-frames:v*) printf 'JPEG' > "$out" ;; *) cp "$src" "$out" ;; esac
 `);
   chmodSync(join(bin, 'ffmpeg'), 0o755);
+  // A stand-in brctl (iCloud): records what it was asked to do.
+  writeFileSync(join(bin, 'brctl'), `#!/bin/sh\necho "$1 $2" >> "${join(dir, 'brctl.log')}"\n`);
+  chmodSync(join(bin, 'brctl'), 0o755);
   process.env.PATH = `${bin}:${process.env.PATH}`;
 });
 after(() => { app.server.close(); s3.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -221,5 +224,22 @@ test('a video still in iCloud is waited for and tried again; one that never arri
     assert.ok(readFileSync(join(cwd, 'video-library.csv'), 'utf8').includes('Cloudy squat,'), 'the one that arrived is in the list');
     assert.ok(lines.some((l) => /kept in iCloud/.test(l)), 'the report says how to fix the other');
     assert.match(readFileSync(join(cwd, 'video-upload-report.txt'), 'utf8'), /Nevercloud lunge\.mp4: .*Operation timed out/);
+  } finally { delete process.env.DP_TEST_CLOUD; rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('--free-space fetches each video from iCloud just before its turn and hands the original back after the upload', async () => {
+  const folder = join(dir, 'stream'); mkdirSync(folder);
+  writeFileSync(join(folder, 'Stream one.mp4'), 'first'); writeFileSync(join(folder, 'Stream two.mp4'), 'second');
+  const cwd = mkdtempSync(join(tmpdir(), 'dp-stream-'));
+  process.env.DP_TEST_CLOUD = '1';
+  try {
+    const r = await upload([folder, '--skip-check', '--free-space'], { env: ENV(), log: () => {}, cwd });
+    assert.deepEqual([r.uploaded, r.failed], [2, 0]);
+    const asked = readFileSync(join(dir, 'brctl.log'), 'utf8').trim().split('\n');
+    for (const name of ['Stream one.mp4', 'Stream two.mp4']) {
+      assert.ok(asked.includes(`download ${join(folder, name)}`), `${name} was asked for`);
+      assert.ok(asked.includes(`evict ${join(folder, name)}`), `${name} was handed back`);
+    }
+    assert.ok(!asked.some((l) => l.startsWith('evict') && /Cloudy|Nevercloud/.test(l)), 'without the flag nothing is handed back');
   } finally { delete process.env.DP_TEST_CLOUD; rmSync(cwd, { recursive: true, force: true }); }
 });

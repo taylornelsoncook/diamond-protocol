@@ -47,7 +47,7 @@ test('families sign themselves up: details, agree, confirm email, signed in', as
   assert.equal(me.family.waiver.signed, false, 'the waiver is still signed in the portal');
   kim = me;
   const welcome = await mailTo('kim@example.com', /^Welcome to/);
-  assert.ok(welcome.body.includes('Your family account is ready') && welcome.body.includes('https://app.example.com/parent') && welcome.body.includes(`LEOREY${year}`));
+  assert.ok(welcome.body.includes('Your family account is ready') && welcome.body.includes('https://app.example.com/portal') && welcome.body.includes(`LEOREY${year}`));
   const events = (await call('GET', '/v1/events?limit=20', null, owner)).body.data;
   assert.ok(events.some((e) => e.type === 'family.signed_up'));
 });

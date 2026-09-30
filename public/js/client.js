@@ -4,8 +4,11 @@ import { detailsOf, groupTag, groupTitle, withGroups } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
+// An athlete who signed in at /portal with their own email has no token: the portal cookie opens the app, and
+// tokenValue becomes "session:<athlete id>" so drafts and caches stay theirs (the header is left empty for it).
 const params = new URLSearchParams(location.search);
 let tokenValue = params.get('token');
+const viaCookie = (t) => String(t ?? '').startsWith('session:');
 const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k) ?? 'null'); } catch { return null; } },
   set(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked: memory only */ } }
@@ -19,7 +22,7 @@ if (params.has('token')) history.replaceState(null, '', `/app${location.hash}`);
 const root = document.getElementById('root');
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 const call = async (token, method, path, body) => {
-  const res = await fetch(path, { method, headers: { 'x-client-token': token || '', ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(path, { method, headers: { 'x-client-token': viaCookie(token) ? '' : token || '', ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.error?.message || 'Something went wrong. Try again.', res.status);
   return data;
@@ -66,14 +69,24 @@ async function refresh() {
   catch { /* offline: keep what's on screen */ }
 }
 
+const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn dp-btn--primary', href: '/portal' }, 'Sign in with your email'));
 async function load() {
-  if (!tokenValue) return message('Open the link your coach sent you to see your workouts.');
   let home;
-  try { home = await api('GET', '/app/api/home'); }
-  catch (e) {
-    const cached = store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`);
-    if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
-    home = cached.home;                           // offline: the last workout this phone saw
+  if (!tokenValue || viaCookie(tokenValue)) {                   // no private link on this phone: the portal cookie, if they signed in there
+    try { home = await api('GET', '/app/api/home'); tokenValue = `session:${home.client?.id ?? 'me'}`; }
+    catch (e) {
+      const cached = tokenValue ? store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`) : null;
+      if (e.status === 401 || !tokenValue) return message('Sign in with your email to see your workouts, or open the link your coach sent you.', signInLink());
+      if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
+      home = cached.home;
+    }
+  } else {
+    try { home = await api('GET', '/app/api/home'); }
+    catch (e) {
+      const cached = store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`);
+      if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
+      home = cached.home;                           // offline: the last workout this phone saw
+    }
   }
   fill(root, view, tabs, live);
   state.home = home;

@@ -42,6 +42,7 @@ export const OPEN_WHILE_LOCKED = new Set([
   'GET /portal/api/payments', 'GET /portal/api/payments/membership/:id', 'POST /portal/api/payments/:id/retry',
   'POST /portal/api/agreements', 'POST /portal/api/waiver', 'POST /portal/api/waiver/email',
   'GET /portal/api/devices', 'POST /portal/api/devices/sign-out-others',
+  'GET /portal/api/session', 'POST /portal/api/password', 'DELETE /portal/api/password',
   'GET /portal/api/export', 'POST /portal/api/deletion-request',
   // Safety and consent never wait on a payment: medical notes and emergency contacts, turning texts off, and adding the
   // other parent (who may be the one to pay).

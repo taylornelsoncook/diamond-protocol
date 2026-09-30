@@ -10,13 +10,14 @@ wearableReturnNotice();
 async function api(method, path, body) {
   const res = await fetch(`/portal/api/${path}`, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && !['login', 'verify'].includes(path)) { state.me = null; render(); }
+  if (res.status === 401 && !['login', 'login/password', 'verify'].includes(path)) { state.me = null; state.session = null; render(); }
   if (!res.ok) { const e = new Error(data.error?.message || 'Something went wrong. Try again.'); e.status = res.status; e.code = data.error?.code; e.details = data.error?.details; throw e; }
   return data;
 }
 const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b);
 
-const state = { me: null, tab: 'home', athleteId: null, homeTab: 'overview' };
+const state = { me: null, session: null, tab: 'home', athleteId: null, homeTab: 'overview' };
+const HERE = location.pathname.startsWith('/portal') ? '/portal' : '/parent';   // the page's own address (both open this page)
 const root = document.getElementById('root');
 const athlete = () => state.me.athletes.find((a) => a.id === state.athleteId) ?? state.me.athletes[0];
 const fmt = (iso, opts) => new Intl.DateTimeFormat('en-US', { timeZone: state.me?.timezone, ...opts }).format(new Date(iso));
@@ -38,26 +39,29 @@ const go = (tab, opts = {}) => { Object.assign(state, opts, { tab }); render(); 
 const copy = async (text, what = 'Copied.') => { try { await navigator.clipboard.writeText(text); toast(what); } catch { prompt('Copy this:', text); } };
 
 async function boot() {
-  try { state.me = await get('me'); state.athleteId ??= state.me.athletes[0]?.id; } catch { state.me = null; }
+  // Who holds the cookie: a parent (the family portal), an athlete with their own email (their app), or both.
+  try { state.session = await get('session'); } catch { state.session = null; }
+  if (state.session && state.session.kind !== 'athlete') { try { state.me = await get('me'); state.athleteId ??= state.me.athletes[0]?.id; } catch { state.me = null; } }
+  else state.me = null;
   const q = new URLSearchParams(location.search);
   // Signed in from the check-in QR code on the door: go back to it.
   const back = q.get('checkin');
   if (state.me && back && /^[\w-]+$/.test(back)) { location.replace(`/here/${back}`); return; }
   // From the public Book now page: open the Book tab on classes or evaluations.
   const book = q.get('book');
-  if (state.me && ['classes', 'private', 'evaluation'].includes(book)) { state.tab = 'book'; state.bookMode = book; history.replaceState(null, '', '/parent'); }
+  if (state.me && ['classes', 'private', 'evaluation'].includes(book)) { state.tab = 'book'; state.bookMode = book; history.replaceState(null, '', HERE); }
   // Home-screen shortcuts (parent.webmanifest) open a tab.
   const tab = q.get('tab');
-  if (state.me && ['home', 'book', 'progress', 'programs', 'family'].includes(tab)) { state.tab = tab; history.replaceState(null, '', '/parent'); }
+  if (state.me && ['home', 'book', 'progress', 'programs', 'family'].includes(tab)) { state.tab = tab; history.replaceState(null, '', HERE); }
   // From the store page (/shop): open Programs on what they came to buy. New families add a card first.
   const buy = q.get('buy');
   const buying = state.me && /^(program|course):[\w-]+$/.test(buy ?? '');
   if (buying) state.buy = buy;
   if (state.me && q.has('welcome')) {
-    state.tab = 'family'; history.replaceState(null, '', '/parent');
+    state.tab = 'family'; history.replaceState(null, '', HERE);
     const claim = q.has('claim') ? ' We\'ll check the Athlete ID you gave with your coach.' : '';
     setTimeout(() => toast(buying ? `Welcome! Add a card here, then buy it on the Programs tab.${claim}` : `Welcome! Sign the waiver and add a card, then you can book.${claim}`), 300);
-  } else if (buying) { state.tab = 'programs'; history.replaceState(null, '', '/parent'); }
+  } else if (buying) { state.tab = 'programs'; history.replaceState(null, '', HERE); }
   render();
 }
 async function refresh({ keepScroll = true } = {}) { state.me = await get('me'); render({ keepScroll }); }
@@ -76,6 +80,7 @@ let installPrompt = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; document.getElementById('p-install-slot')?.replaceChildren(installCard()); });
 
 function render({ keepScroll = false } = {}) {
+  if (state.session?.kind === 'athlete') return renderAthleteHome();
   if (!state.me) return renderSignIn();
   const y = window.scrollY;
   const views = { home: viewHome, book: viewBook, progress: viewProgress, programs: viewPrograms, family: viewFamily };
@@ -164,21 +169,28 @@ function renderSignIn() {
   const main = h('main', { class: 'p-wrap', style: 'min-height:100vh;justify-content:center' });
   const email = input({ type: 'email', autocomplete: 'email', inputmode: 'email', required: true, value: store.get('dp_parent_email') ?? '' });
   const remember = h('input', { type: 'checkbox', checked: store.get('dp_parent_email') != null });
+  const password = input({ type: 'password', autocomplete: 'current-password', placeholder: 'Only if you set one' });
   const err = h('div', { class: 'dp-error', role: 'alert' });
-  const send = btn('Email me a sign-in code', null, 'primary', { type: 'submit', class: 'dp-btn dp-btn--primary dp-btn--block' });
-  const stepOne = h('form', { class: 'dp-panel stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(send, async () => {
-    try {
-      const r = await post('login', { email: email.value });
-      store.set('dp_parent_email', remember.checked ? email.value.trim() : null);
-      stepTwo(email.value.trim(), r.dev_code);
-    } catch (x) { err.textContent = x.message; }
+  const send = btn('Email me a sign-in code', null, 'secondary', { type: 'button', class: 'dp-btn dp-btn--secondary dp-btn--block' });
+  const go = btn('Sign in with my password', null, 'primary', { type: 'submit', class: 'dp-btn dp-btn--primary dp-btn--block' });
+  const remembered = () => store.set('dp_parent_email', remember.checked ? email.value.trim() : null);
+  const sendCode = () => busy(send, async () => {
+    try { const r = await post('login', { email: email.value }); remembered(); stepTwo(email.value.trim(), r.dev_code); }
+    catch (x) { err.textContent = x.message; }
+  });
+  send.addEventListener('click', () => { err.textContent = ''; if (!email.reportValidity()) return; sendCode(); });
+  // Parents and athletes sign in here. A password is optional (set inside the portal); with the box empty, Sign in emails a code.
+  const stepOne = h('form', { class: 'dp-panel stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; if (!password.value) return sendCode(); busy(go, async () => {
+    try { await post('login/password', { email: email.value, password: password.value }); remembered(); await boot(); }
+    catch (x) { err.textContent = x.message; }
   }); } },
     h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.', style: 'width:180px;align-self:center' }),
-    h('h1', { class: 'p-title', style: 'text-align:center' }, 'Parent sign-in'),
-    h('p', { class: 'muted', style: 'text-align:center' }, 'Use the email your coach has on file. No password needed.'),
+    h('h1', { class: 'p-title', style: 'text-align:center' }, 'Sign in'),
+    h('p', { class: 'muted', style: 'text-align:center' }, 'Parents and athletes: use the email your coach has on file. We can email you a code, or use your password if you set one.'),
     field('Email', email),
+    field('Password (optional)', password),
     h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, remember, h('span', null, 'Remember my email on this phone')),
-    err, send,
+    err, go, send,
     h('details', { class: 'small' }, h('summary', { style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'No email from us?'),
       h('p', { class: 'muted' }, 'Check spam, and that the address matches the one your coach has. Your coach can fix a typo or add your email to your family, then send you a sign-in email.')),
     h('p', { class: 'small muted', style: 'text-align:center;margin:0' }, 'New here? ', h('a', { href: '/join' }, 'Create a family account')));
@@ -330,7 +342,9 @@ async function viewOverview(main) {
       h('div', { class: 'row wrap' }, btn('Book a session', () => { state.athleteId = a.id; go('book'); }, 'secondary'),
         a.app_link ? h('a', { class: 'dp-btn dp-btn--ghost', href: a.app_link }, 'Open workouts') : null));
   });
-  fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(), h('div', { id: 'p-install-slot' }, installCard()),
+  fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(),
+    state.session?.kind === 'both' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '/app' }, 'My workouts') : null,   // a parent who trains here too
+    h('div', { id: 'p-install-slot' }, installCard()),
     state.me.athletes.length ? [cards, calendarPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
   drawSubtabs();
 }
@@ -980,8 +994,8 @@ async function viewFamily(main) {
     h('p', { class: 'small muted' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
 
   fill(main, top('Family'), lockNote, back, finish, agreementsPanel, cardPanel, payPanel, waiverPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, add,
-    parentsPanel(), textsPanel, devicesPanel(), dataPanel,
-    btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.me = null; render(); }), 'ghost'));
+    parentsPanel(), textsPanel, signInPanel(), devicesPanel(), dataPanel,
+    btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.me = null; state.session = null; render(); }), 'ghost'));
   if (focus) setTimeout(() => scrollTo(focus === 'card' ? 'fam-card' : focus === 'waiver' ? 'fam-waiver' : focus), 50);
 }
 async function membershipReceipt(id) {
@@ -1062,7 +1076,34 @@ function parentsPanel() {
       h('p', { class: 'small muted', style: 'margin:0' }, 'They can sign in, book and see progress. The other parents get an email.'), addErr, btn('Add parent', null, 'secondary', { type: 'submit' }))) : h('p', { class: 'small muted' }, 'A family can have up to 6 parents.');
   return panel('Parents', {}, f.guardians.map((g) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', null, g.name, g.id === me.id ? h('span', { class: 'small muted' }, ' (you)') : null), h('span', { class: 'small muted' }, [g.email, g.phone].filter(Boolean).join(' · '))))), mine, adder);
 }
-// Devices signed in to this parent's account; sign out everywhere else.
+// Your sign-in: an optional password beside the emailed codes (parents and athletes alike).
+function signInPanel() {
+  const s = state.session ?? { has_password: false, email: state.me?.guardian?.email };
+  const pw = input({ type: 'password', autocomplete: 'new-password', minlength: '10' });
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  const body = h('div', { class: 'stack' });
+  const draw = () => fill(body,
+    h('p', { class: 'small muted', style: 'margin:0' }, s.has_password ? `A password is set for ${s.email}. Emailed codes still work too.` : `You sign in with a code we email to ${s.email}. Set a password if you'd rather not wait for a code.`),
+    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+      try { await post('password', { password: pw.value }); s.has_password = true; pw.value = ''; toast('Password saved. Codes still work too.'); draw(); }
+      catch (x) { err.textContent = x.message; }
+    }); } }, field(s.has_password ? 'New password' : 'Password', pw, 'At least 10 characters. A short sentence works well.'), err,
+      h('div', { class: 'row wrap' }, btn(s.has_password ? 'Change password' : 'Set a password', null, 'secondary', { type: 'submit' }),
+        s.has_password ? btn('Remove it', (e) => { if (confirm('Remove your password? You\'ll sign in with emailed codes.')) busy(e.currentTarget, async () => { await api('DELETE', 'password'); s.has_password = false; toast('Password removed.'); draw(); }); }, 'ghost') : null)));
+  draw();
+  return panel('Your sign-in', {}, body);
+}
+// An athlete signed in with their own email (no family role): their workouts live in the app; here they manage the sign-in.
+function renderAthleteHome() {
+  const s = state.session;
+  const main = h('main', { class: 'p-wrap' },
+    h('div', { class: 'p-top' }, h('img', { src: '/brand/mark.png', alt: '' }), h('div', { class: 'stack-tight grow' }, h('div', { class: 'p-title' }, `Hi ${s.first_name}`), h('div', { class: 'small muted' }, s.email))),
+    panel('Your workouts', { subtitle: 'Today\'s workout, check-ins, progress and lessons.' }, h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/app' }, 'Open my workouts')),
+    signInPanel(), devicesPanel(),
+    btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.session = null; render(); }), 'ghost'));
+  fill(root, main);
+}
+// Devices signed in to this account; sign out everywhere else.
 function devicesPanel() {
   const list = h('div', null, h('p', { class: 'muted small' }, 'Loading…'));
   const draw = (rows) => fill(list, rows.map((d) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', null, d.device, d.current ? h('span', { class: 'small good-text' }, ' · this device') : null),

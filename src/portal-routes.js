@@ -49,7 +49,11 @@ function athleteSummary(ctx, id, guardianId) {
 }
 
 export const portalRoutes = [
-  ['POST', '/portal/api/login', 'public', 'Email a 6-digit sign-in code.', (ctx, r) => families.requestCode(ctx, r.body)],
+  ['POST', '/portal/api/login', 'public', 'Email a 6-digit sign-in code to a parent or an athlete with their own email.', (ctx, r) => families.requestCode(ctx, r.body)],
+  ['POST', '/portal/api/login/password', 'public', 'Sign in with email and password (set inside the portal; emailed codes always work too).', (ctx, r) => { rateLimit(`portal-pw:${r.ip}`, 60, 15 * 60000); return families.passwordLogin(ctx, r.body, { userAgent: r.userAgent }); }],
+  ['GET', '/portal/api/session', 'portal', 'Who is signed in: kind (parent, athlete or both), name, whether a password is set, and the athlete when it is one.', (ctx, r) => portal.session(ctx, r.who)],
+  ['POST', '/portal/api/password', 'portal', 'Set or change the password for signing in: password (10+ characters). Emailed codes keep working.', (ctx, r) => families.setPassword(ctx, r.who, r.body)],
+  ['DELETE', '/portal/api/password', 'portal', 'Remove the password; sign in with emailed codes only.', (ctx, r) => families.removePassword(ctx, r.who)],
   ['GET', '/portal/api/public/info', 'public', 'Business name, whether sign-up is open, and whether terms and privacy are published.', (ctx) => signup.signupInfo(ctx)],
   ['POST', '/portal/api/public/inquiry', 'public', 'Ask about training: parent_name, email, phone, athlete_name, athlete_age, sport, message, texts_ok. We reply by email with next steps.', (ctx, r) => leads.submitInquiry(ctx, r.body)],
   ['GET', '/portal/api/public/certificates/:token', 'public', 'A course certificate for its shareable page: athlete name, course, lessons and date. Nothing else.', (ctx, r) => engage.publicCertificate(ctx, r.params.token)],
@@ -70,7 +74,7 @@ export const portalRoutes = [
   ['PATCH', '/portal/api/texts', 'guardian', 'Turn text messages on or off: texts (true or false), phone (your mobile number, needed to turn them on).', (ctx, r) => sms.setTextPrefs(ctx, r.guardian, r.body)],
   ['GET', '/portal/api/check-in', 'guardian', 'From the door QR code (?code=): your athletes booked at that location with check-in open now.', (ctx, r) => checkin.familyCheckIns(ctx, r.guardian.family_id, r.query.code)],
   ['POST', '/portal/api/check-in', 'guardian', 'Check in at the door: code, and booking_id (or none to check in everyone booked there now).', (ctx, r) => checkin.familyCheckIn(ctx, r.guardian.family_id, r.body)],
-  ['POST', '/portal/api/logout', 'guardian', 'Sign out.', (ctx, r) => { families.portalLogout(ctx, r.familyToken); return { ok: true }; }],
+  ['POST', '/portal/api/logout', 'portal', 'Sign out.', (ctx, r) => { families.portalLogout(ctx, r.familyToken); return { ok: true }; }],
 
   ['GET', '/portal/api/me', 'guardian', 'Family, athletes, card, waiver, and payment_lock when a declined membership payment has locked the family out (every route but the card, payments, your details, agreements, the waiver, devices, export and deletion then answers 402 payment_locked).', (ctx, r) => {
     const fam = families.getFamily(ctx, r.guardian.family_id);
@@ -260,8 +264,8 @@ export const portalRoutes = [
   ['POST', '/portal/api/payments/:id/retry', 'guardian', 'Try a declined membership payment again on the card on file.', (ctx, r) => portal.retryDeclined(ctx, r.guardian.family_id, r.params.id)],
   ['PATCH', '/portal/api/me', 'guardian', 'Change your own name or phone. Your sign-in email is changed by your coach.', (ctx, r) => portal.updateMe(ctx, r.guardian, r.body)],
   ['POST', '/portal/api/guardians', 'guardian', 'Add another parent: name, email, optional phone and relationship. They are emailed how to sign in; the other parents are told. Up to 6 parents.', (ctx, r) => portal.withFamilyLock(r.guardian.family_id, () => portal.addParent(ctx, r.guardian, r.body)), 201],
-  ['GET', '/portal/api/devices', 'guardian', 'Devices signed in to your account.', (ctx, r) => ({ data: portal.listDevices(ctx, r.guardian, r.familyToken) })],
-  ['POST', '/portal/api/devices/sign-out-others', 'guardian', 'Sign out every other device.', (ctx, r) => portal.signOutOthers(ctx, r.guardian, r.familyToken)],
+  ['GET', '/portal/api/devices', 'portal', 'Devices signed in to your account.', (ctx, r) => ({ data: portal.listDevices(ctx, r.who, r.familyToken) })],
+  ['POST', '/portal/api/devices/sign-out-others', 'portal', 'Sign out every other device.', (ctx, r) => portal.signOutOthers(ctx, r.who, r.familyToken)],
   ['GET', '/portal/api/calendar', 'guardian', 'Whether your private calendar feed is on.', (ctx, r) => portal.calendarStatus(r.guardian)],
   ['POST', '/portal/api/calendar', 'guardian', 'Make (or reset) your private calendar feed address for Apple, Google or Outlook. The address is shown once; the old one stops working.', (ctx, r) => portal.resetCalendar(ctx, r.guardian, r.baseUrl)],
   ['DELETE', '/portal/api/calendar', 'guardian', 'Turn off your calendar feed.', (ctx, r) => portal.stopCalendar(ctx, r.guardian)],

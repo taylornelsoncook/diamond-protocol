@@ -6,6 +6,7 @@ import { h, fill, toast, copyText, busy, btn, field, input, select, panel, ago, 
 import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
 import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
+import { scheduleFields, fmtDay } from './training-days.js';
 
 let deps = null;     // { api, render, header, role, pulseTile }
 export function initPrograms(d) { deps = d; }
@@ -468,7 +469,7 @@ function clientsPanel(p, edit) {
           h('div', { class: 'row wrap', style: 'gap:8px' }, h('a', { href: `#/clients/${c.id}`, class: 'strong', style: 'color:inherit' }, c.name),
             c.app_open ? null : h('span', { class: 'dp-badge dp-badge--muted' }, c.membership === 'paused' ? 'Paused: app locked' : 'No membership: app locked')),
           h('div', { class: 'row', style: 'gap:8px;max-width:360px' }, h('div', { class: 'grow' }, bar(pct, `${c.name}: ${c.done} of ${c.total} workouts`)), h('span', { class: 'small muted', style: 'white-space:nowrap' }, `${c.done} of ${c.total}`)),
-          h('span', { class: 'small muted' }, c.complete ? 'Finished every workout.' : c.next ? `Next: week ${c.next.week}, day ${c.next.day} · ${c.next.title}` : 'No workouts in this program yet.'),
+          h('span', { class: 'small muted' }, c.complete ? 'Finished every workout.' : c.next ? `Next: ${c.next.title} · ${c.next.status === 'today' ? 'today' : c.next.status === 'missed' ? `missed, was ${fmtDay(c.next.date)}` : fmtDay(c.next.date)} (week ${c.next.week}, day ${c.next.day})${c.missed ? ` · ${plural(c.missed, 'workout')} missed` : ''}` : 'No workouts in this program yet.'),
           h('span', { class: `small ${stale ? 'warn-text' : 'muted'}` }, c.last_workout_at ? `Last workout ${ago(c.last_workout_at).toLowerCase()}` : `No workouts yet (${plural(c.days_idle, 'day')} on the program)`)),
         h('div', { class: 'row wrap', style: 'justify-content:flex-end' },
           btn('Send link', (e) => busy(e.currentTarget, () => sendLink(c)), 'ghost', { 'aria-label': `Email ${first(c.name)} the workout app link` }),
@@ -480,6 +481,8 @@ function clientsPanel(p, edit) {
 }
 
 function assignDialog(p) {
+  const need = Math.max(1, ...p.workouts.map((w) => w.day));
+  const sched = scheduleFields({ need });        // the day week 1 starts and the weekdays they train, the same for everyone assigned here
   const q = input({ type: 'search', placeholder: 'Name or Athlete ID', 'aria-label': 'Find a client' });
   const out = h('div', { class: 'stack', style: 'gap:0;max-height:50vh;overflow:auto' });
   let clients = null;
@@ -494,7 +497,7 @@ function assignDialog(p) {
         on ? null : btn('Assign', (e) => {
           if (c.program && !confirm(`Move ${first(c.name)} off ${c.program.name} and onto ${p.name}? Their logged workouts stay.`)) return;
           busy(e.currentTarget, async () => {
-            await post(`/v1/programs/${p.id}/assign`, { client_id: c.id });
+            await post(`/v1/programs/${p.id}/assign`, { client_id: c.id, ...sched.body() });
             document.getElementById('dialog').close();
             toast(`${first(c.name)} is on ${p.name}. Use Send link to email the workout app link.`); deps.render();
           });
@@ -502,7 +505,7 @@ function assignDialog(p) {
     }) : h('p', { class: 'small muted' }, 'No clients match.'));
   };
   q.addEventListener('input', draw);
-  dialog(`Assign ${p.name}`, h('div', { class: 'stack' }, q, out), [{ label: 'Close', variant: 'ghost' }]);
+  dialog(`Assign ${p.name}`, h('div', { class: 'stack' }, sched.el, q, out), [{ label: 'Close', variant: 'ghost' }]);
   draw();
   get('/v1/clients').then((r) => { clients = r.data; draw(); }).catch((e) => fill(out, h('p', { class: 'dp-error' }, e.message)));
   q.focus();

@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 61;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan
+const SCHEMA_VERSION = 62;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -96,9 +96,11 @@ const ADDED_TABLES = {
   56: ['exercise_swaps'],                                                                             // one athlete's exercise swapped by a coach in the live session view
   57: ['exercise_alternatives'],                                                                      // the swaps an athlete may pick on their own
   58: ['routines', 'routine_exercises'],                                                              // warm-up and cool-down blocks
-  59: ['monthly_reports']                                                                             // monthly progress reports for parents
+  59: ['monthly_reports'],                                                                            // monthly progress reports for parents
+  62: ['assignment_moves']                                                                            // the training calendar: one athlete's workout moved to another date
 };
 const ADDED_COLUMNS = {
+  assignments: ['training_days TEXT'],   // version 62: the weekdays the athlete trains (the training calendar)
   workouts: ['warmup_id TEXT REFERENCES routines(id) ON DELETE SET NULL', 'cooldown_id TEXT REFERENCES routines(id) ON DELETE SET NULL'],   // version 58
   exercise_swaps: ["by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete'))"],   // version 57
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',

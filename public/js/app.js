@@ -3,6 +3,7 @@ import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, vie
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, workoutRow } from './programs-coach.js';
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
+import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
 wearableReturnNotice();
@@ -750,7 +751,7 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
-  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`)]);   // front desk doesn't link devices
+  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks, calendar] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`), get(`/v1/clients/${id}/training-calendar`)]);   // front desk doesn't link devices
   const [en, testLib, owed, products, badgeLib, notesList, att, famList, outside] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null, get(`/v1/clients/${id}/outside-data`).catch(() => null)]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   const [reqList, claimList] = isOwner() ? await Promise.all([get(`/v1/membership-requests?client_id=${id}&status=all`).catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]) : [{ data: [] }, { data: [] }];
@@ -786,14 +787,24 @@ async function viewClient(main, id) {
   const payLinks = owed ? payLinksPanel(id, first, owed, products.data, render) : null;
 
   const progSel = select([['', 'Choose a program'], ...progs.data.map((p) => [p.id, p.name])], { value: c.program?.id ?? '', 'aria-label': 'Program' });
+  // Assigning a program sets its calendar too: the day week 1 starts and the weekdays they train (version 62).
+  const schedBox = h('div'); let sched = null;
+  const drawSched = () => {
+    const p = progs.data.find((x) => x.id === progSel.value);
+    if (!p || c.program?.id === p.id) { sched = null; return fill(schedBox); }
+    const need = Math.max(1, p.days_per_week || 1);
+    sched = scheduleFields({ days: defaultDays(need), need }); fill(schedBox, sched.el);
+  };
+  progSel.addEventListener('change', drawSched); drawSched();
   const appUrl = location.origin + c.app_link;
   const appTo = [c.email, ...(fam?.guardians ?? []).map((g) => g.email)].filter(Boolean);
   const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${plural(c.workouts_completed, 'workout')} logged.` : 'No program assigned yet.' },
     role === 'front_desk' ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
       if (!progSel.value) throw new Error('Choose a program first.');
       if (c.program && c.program.id !== progSel.value && !confirm(`Move ${first} off ${c.program.name} and onto ${progSel.selectedOptions[0].textContent}? Their logged workouts stay.`)) return;
-      await post(`/v1/programs/${progSel.value}/assign`, { client_id: id }); toast(`Program assigned to ${first}.`); render();
+      await post(`/v1/programs/${progSel.value}/assign`, { client_id: id, ...(sched ? sched.body() : {}) }); toast(`Program assigned to ${first}.`); render();
     }), 'secondary')),
+    role === 'front_desk' ? null : schedBox,
     h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),
     h('div', { class: 'row wrap' },
       !c.archived_at && appTo.length ? btn('Email app link', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/app-link/email`); toast(`App link emailed to ${r.sent_to.join(' and ')}.`); }), 'secondary', { title: `Sends it to ${appTo.join(', ')}` }) : null,
@@ -1091,7 +1102,7 @@ async function viewClient(main, id) {
     ['family', 'Family', [familyPanel ?? noFamilyPanel, requestsPanel, mergePanel]],
     ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
     ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
-    ['training', 'Training', [training, eng.accountability, eng.goals, eng.badges]],
+    ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), eng.accountability, eng.goals, eng.badges]],
     ['testing', 'Testing', [perfPanel, eng.targets]],
     ['recovery', 'Recovery & sleep', [outsidePanel]],
     ['form-checks', 'Form checks', [formChecksPanel]],

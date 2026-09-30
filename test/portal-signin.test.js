@@ -210,7 +210,7 @@ test('a version 59 database is upgraded: a code emailed before the upgrade still
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 61, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 62, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(portal_sessions)').some((c) => c.name === 'client_id'));
       assert.ok(d.all('PRAGMA table_info(login_codes)').some((c) => c.name === 'client_id'));
       for (const t of ['guardians', 'clients']) assert.ok(d.all(`PRAGMA table_info(${t})`).some((c) => c.name === 'password_hash'), t);

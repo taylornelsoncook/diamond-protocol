@@ -42,7 +42,7 @@ test('a weight can be a percent of a tested max', async () => {
   assert.deepEqual([w.exercises[0].load_test, w.exercises[0].load_pct], ['squat_1rm', 75]);
   const load = await home();
   assert.equal(load.missing, true);
-  assert.match(load.text, /75% of your back squat max\. Test your max/);
+  assert.match(load.text, /75% of your back squat max\. Enter your max on the Performance tab, or log a few sets/);
 });
 
 test('the weight follows the latest max the family can see, rounded to 5 lb', async () => {

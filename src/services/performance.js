@@ -408,9 +408,11 @@ export function athleteProfile(ctx, ref, { parentView = false, from = null, to =
 }
 
 // Parents see results from testing days the coach has shared, or everything if the business chose that.
+// What a family may see: results of shared testing days, and (owner decision, athlete maxes) a max typed on the
+// profile by the athlete, a parent or a coach (no testing day), which shows at once.
 export function parentFilter(ctx) {
   const all = ctx.db.get(`SELECT value FROM settings WHERE key = 'share_results'`)?.value === 'all';
-  return all ? '' : 'AND r.session_id IN (SELECT id FROM perf_sessions WHERE shared_at IS NOT NULL)';
+  return all ? '' : "AND (r.session_id IN (SELECT id FROM perf_sessions WHERE shared_at IS NOT NULL) OR (r.session_id IS NULL AND r.source IN ('athlete', 'parent', 'coach')))";
 }
 
 // ---------- Testing days ----------

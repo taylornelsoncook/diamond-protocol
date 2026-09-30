@@ -4,6 +4,7 @@
 import { h, fill, toast, busy, btn, ago, videoEmbed } from './ui.js';
 import { sparkline, fmtResult } from './charts.js';
 import { dataSummary } from './dataimport-ui.js';
+import { maxesBlock } from './maxes-ui.js';
 
 export const ENGAGE_TABS = [['accountability', 'Accountability'], ['performance', 'Performance'], ['education', 'Education']];
 
@@ -279,11 +280,23 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
     api.get('outside-data').then((d) => { if (d?.has_data) fill(box, dataSummary(d, { title: 'Your recovery and sleep' })); }).catch(() => {});
     return box;
   }
+  // The lifts a program loads from: the max on file or the estimate from sets, with Update. Athletes and parents may enter one.
+  function maxesBox() {
+    if (!api.get) return null;
+    const box = h('div');
+    const draw = () => api.get('maxes').then((d) => {
+      if (!d?.lifts?.length) return fill(box);
+      fill(box, section(parent ? `${name()}'s maxes` : 'Your maxes', `The weights in ${parent ? `${name()}'s` : 'your'} program come from these. Enter one from a testing day or a heavy set; with nothing on file it's estimated from logged sets (the last ${d.estimate_days} days).`,
+        maxesBlock(d, { who: parent ? 'parent' : 'athlete', first: name(), canEdit: true, save: (b) => api.post('maxes', b), remove: api.del ? (id) => api.del(`maxes/${id}`) : null, reload: draw })));
+    }).catch(() => fill(box));
+    draw();
+    return box;
+  }
   function renderPerformance() {
     const p = data.performance;
     const tests = p.tests;
     const ranks = p.rankings?.length ? p.rankings : null;
-    fill(el, outsideBox(),
+    fill(el, maxesBox(), outsideBox(),
       tests.length ? h('div', { class: 'eg-summary' },
         h('div', null, h('b', null, tests.length), h('span', null, tests.length === 1 ? 'test' : 'tests')),
         h('div', null, h('b', { class: p.prs.length ? 'good-text' : '' }, p.prs.length), h('span', null, `new ${p.prs.length === 1 ? 'PR' : 'PRs'}`)),

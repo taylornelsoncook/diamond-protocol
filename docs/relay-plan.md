@@ -56,13 +56,14 @@ business's own), and their MCP server is a developer feature.
 1. **Training calendar** (this pull request, schema 62). Assign with a start date and training days; every workout
    dated; done, today, missed, upcoming; the app opens on today's; the athlete opens any workout from a week strip;
    the coach sees the calendar on the client page, changes the schedule, and moves one workout for one athlete.
-2. **Athlete maxes.** An athlete (or their parent) enters and updates their own 1RM for the lifts a program uses, the
-   coach approves or overrides, and when nothing is tested or entered the weight comes from an estimated 1RM out of
-   their logged sets (Epley, the same formula the monthly report uses). Percent-of-max weights then work for every
-   athlete, not just those who came to a testing day. Owner decision needed: whether a parent-entered max needs a
-   coach's OK before it changes the weights.
-3. **Progress per lift.** A Progress screen in the athlete app and on the client page: estimated 1RM and top set over
-   time for each lift, weekly sets and volume, per program phase. Read from `workout_sets`; no new tables.
+2. **Athlete maxes** (built, second pull request). An athlete, a parent or a coach enters and updates the max for the
+   lifts a program uses; when nothing is tested or entered the weight comes from an estimated 1RM out of their logged
+   sets (Epley, the same formula the monthly report uses), and a new estimate can be saved as the max in one tap after
+   a workout. Owner decision: a typed max changes the weights at once, no coach approval. Percent-of-max weights now
+   work for every athlete, not just those who came to a testing day. **Next for this step: VBT devices** (GymAware,
+   Vitruve, Output, Perch, Enode, RepOne, FLEX, Metric, Tendo, EliteForm) feeding sets and maxes into the profile.
+3. **Progress per lift** (started with step 2: a weekly trend per lift and strength by exercise on the Performance
+   tab and the client page). Still to come: a full Progress screen with sets and volume per week and per phase.
 4. **Roster compliance.** On Today and the Programs page: this week's planned versus done per athlete, who missed
    two in a row, sortable by team. Reads the calendar built in step 1.
 5. **Assign to a team or a group.** Pick a team (or everyone on a program) and a start date; each athlete gets their

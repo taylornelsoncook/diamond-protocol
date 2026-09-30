@@ -9,6 +9,7 @@ import { getSetting } from './families.js';
 import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
 import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday } from './training-calendar.js';
+import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -431,16 +432,21 @@ export function latestMax(ctx, clientId, testKey, { visibleOnly = false } = {}) 
     WHERE r.client_id = ? AND t.key = ? AND r.metric = 'load' AND r.voided = 0 ${visibleOnly ? parentFilter(ctx) : ''} ORDER BY r.recorded_at DESC, r.rowid DESC LIMIT 1`, clientId, testKey) ?? null;
 }
 // drop: percentage points to take off today after a rough daily check-in (readiness).
+// The max is the latest one on file (a testing day, or one typed by the athlete, a parent or a coach); with none, an
+// estimate from the athlete's logged sets (maxes.js) stands in and the text says so.
 export function loadFor(ctx, clientId, x, { drop = 0, ...opts } = {}) {
   if (!x.load_test) return null;
-  const max = latestMax(ctx, clientId, x.load_test, opts);
+  const onFile = latestMax(ctx, clientId, x.load_test, opts);
+  const est = onFile ? null : estimatedMax(ctx, clientId, x.load_test);
+  const max = onFile ?? (est ? { value: est.value, recorded_at: est.date } : null);
   const lift = LOAD_TESTS[x.load_test];
   const pct = drop ? Math.max(30, x.load_pct - drop) : x.load_pct;
   const lighter = pct < x.load_pct ? { planned_pct: x.load_pct } : {};
-  if (!max) return { pct, lift, ...lighter, missing: true, text: `${pct}% of your ${lift} max${lighter.planned_pct ? ' (lighter today)' : ''}. Test your max to get a weight.` };
+  if (!max) return { pct, lift, ...lighter, missing: true, text: `${pct}% of your ${lift} max${lighter.planned_pct ? ' (lighter today)' : ''}. Enter your max on the Performance tab, or log a few sets and we'll estimate it.` };
   const lb = Math.max(5, Math.round((max.value * pct) / 100 / 5) * 5);
-  return { pct, lift, lb, max_lb: max.value, tested_at: max.recorded_at, ...lighter,
-    text: lighter.planned_pct ? `${lb} lb (lighter today: ${pct}% instead of ${x.load_pct}% of your ${max.value} lb ${lift} max)` : `${lb} lb (${pct}% of your ${max.value} lb ${lift} max)` };
+  const maxText = `${max.value} lb ${lift} max${est ? ' (estimated from your sets)' : ''}`;
+  return { pct, lift, lb, max_lb: max.value, tested_at: max.recorded_at, estimated: !!est, ...lighter,
+    text: lighter.planned_pct ? `${lb} lb (lighter today: ${pct}% instead of ${x.load_pct}% of your ${maxText})` : `${lb} lb (${pct}% of your ${maxText})` };
 }
 
 // Remove an exercise from a workout. The answer carries what Undo needs to put it back in the same place.
@@ -819,7 +825,9 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
   });
   let progressions = [];
   try { progressions = suggestAfterLog(ctx, client, id); } catch (e) { console.error('progression check:', e.message); }   // a suggestion is never worth failing the save
-  return { id, finished: { ...finishedSummary(ctx, id), progressions: progressions.map((p) => ({ exercise_name: p.exercise_name, text: p.text, status: p.status })) }, next: clientHome(ctx, client) };
+  let newMaxes = [];
+  try { newMaxes = maxSuggestions(ctx, client.id); } catch (e) { console.error('max estimate:', e.message); }   // a suggestion is never worth failing the save
+  return { id, finished: { ...finishedSummary(ctx, id), progressions: progressions.map((p) => ({ exercise_name: p.exercise_name, text: p.text, status: p.status })), new_maxes: newMaxes }, next: clientHome(ctx, client) };
 }
 
 // Save a reopened workout again: the whole log is replaced with what was sent (sending it twice changes nothing).

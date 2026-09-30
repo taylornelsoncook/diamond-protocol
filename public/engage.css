@@ -175,3 +175,6 @@
 .edu-pick-row:first-child{border-top:0}
 .edu-pick-row input{width:20px;height:20px;accent-color:var(--green-bright);flex-shrink:0}
 @media (max-width:760px){.edu-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.edu-acts .dp-btn{min-height:44px}}
+/* Athlete maxes (maxes-ui.js): on the Performance tab and the client page's Testing tab. */
+.mx-num{font:600 22px/1 var(--font-display);color:var(--steel)}
+.mx-lift .eg-best,.mx-ex .eg-best{min-width:84px;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:2px}

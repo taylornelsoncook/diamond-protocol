@@ -55,7 +55,7 @@ const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null,
 // The workout on screen: the one picked on the calendar, else what the server opens on.
 const currentWorkout = () => state.pickWorkout ?? state.home?.workout ?? null;
 const view = h('div', { class: 'c-view' });
-const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), post: (p, b) => api('POST', `/app/api/${p}`, b ?? {}) }, onData: () => drawTabs() });
+const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), post: (p, b) => api('POST', `/app/api/${p}`, b ?? {}), del: (p) => api('DELETE', `/app/api/${p}`) }, onData: () => drawTabs() });
 const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
 function drawTabs() {
   const dots = engageDots(engage.data);
@@ -243,15 +243,15 @@ function render() {
   const w = home.locked ? null : currentWorkout();
   if (!w) {
     stopRest();
-    fill(view, top(), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox, h('div', { class: 'dp-panel' }, h('p', null, home.message)),
-      home.locked ? null : calendarStrip(home), strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
+    fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox, h('div', { class: 'dp-panel' }, h('p', null, home.message)),
+      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.
   if (outbox().some((x) => x.token === tokenValue && x.kind === 'finish' && x.workout_id === w.id)) {
-    fill(view, top(), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
+    fill(view, top(), calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
       h('div', { class: 'dp-panel stack' }, h('p', null, `${w.title} is finished and saved on this phone. It sends when you're back online, then your next workout shows here.`)),
-      calendarStrip(home), comingUp(home.upcoming), historyPanel(home));
+      comingUp(home.upcoming), historyPanel(home));
     return;
   }
   draftFor(w);
@@ -581,6 +581,7 @@ function renderLogger(w) {
   redrawCards();
   const blocked = reopened ? null : strayPanel();
   fill(view, top(),
+    reopened ? null : calendarStrip(home),
     h('div', { class: 'stack-tight' },
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title),
@@ -592,7 +593,6 @@ function renderLogger(w) {
     reopened ? null : h('div', { class: 'stack-tight' }, h('div', { class: 'c-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': 'Program progress' }, h('div', { style: `width:${pct}%` })),
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
-    reopened ? null : calendarStrip(home),
     reopened ? null : readinessCard(home.readiness),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,
@@ -647,6 +647,11 @@ function renderDone(f) {
       h('p', { class: 'muted' }, f.offline ? 'Saved on this phone. It sends when you\'re back online, and your coach sees it then.' : f.merged ? 'Added to the workout you logged on the weight-room screen. Your coach can see it now.' : 'Your coach can see it now.'),
       facts.length ? h('p', { class: 'strong' }, facts.join(' · ')) : null,
       f.bests?.length ? h('div', { class: 'c-bests' }, h('div', { class: 'strong' }, 'New best'), f.bests.map((b) => h('div', null, `${b.name}: ${lb(b.weight)} (was ${lb(b.previous)})`))) : null,
+      f.new_maxes?.length ? h('div', { class: 'c-bests stack-tight', role: 'note' }, h('div', { class: 'strong' }, 'Your maxes'), f.new_maxes.map((m) => {
+        const line = h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('span', { class: 'grow' }, `${m.lift.charAt(0).toUpperCase() + m.lift.slice(1)}: your sets put your max around ${m.value} lb${m.on_file ? ` (on file: ${m.on_file} lb)` : ''}.`),
+          btn(`Save ${m.value} lb`, (e) => busy(e.currentTarget, async () => { await api('POST', '/app/api/maxes', { test: m.test, value: m.value, note: 'From logged sets' }); fill(line, h('span', null, `${m.lift.charAt(0).toUpperCase() + m.lift.slice(1)} max saved: ${m.value} lb. Your weights use it from now on.`)); engage.load().catch(() => {}); }), 'secondary'));
+        return line;
+      })) : null,
       nextUp ? h('p', null, `Next up: ${nextUp.title}, week ${nextUp.week} day ${nextUp.day}.`) : f.upcoming?.[0] && f.offline ? h('p', null, `Next up: ${f.upcoming[0].title}.`) : !f.offline && state.home?.message ? h('p', null, state.home.message) : null,
       h('div', { class: 'row wrap' },
         btn(nextUp ? 'See next workout' : 'Back to my workouts', () => { state.done = null; render(); window.scrollTo(0, 0); }, 'secondary'),

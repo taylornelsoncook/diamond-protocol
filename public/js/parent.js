@@ -227,7 +227,7 @@ function renderSignIn() {
 const engages = new Map();
 function engageFor(a) {
   if (!engages.has(a.id)) engages.set(a.id, createEngage({ audience: 'parent',
-    api: { get: (p) => get(`athletes/${a.id}/${p}`), post: (p, b) => post(`athletes/${a.id}/${p}`, b ?? {}) },
+    api: { get: (p) => get(`athletes/${a.id}/${p}`), post: (p, b) => post(`athletes/${a.id}/${p}`, b ?? {}), del: (p) => api('DELETE', `athletes/${a.id}/${p}`) },
     onData: (d) => { a.engagement = { ...a.engagement, unread: d.accountability.unread, open_assignments: d.education.assigned.filter((x) => !x.done).length }; drawSubtabs(); } }));
   return engages.get(a.id);
 }

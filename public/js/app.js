@@ -4,6 +4,7 @@ import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgram
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
+import { maxesBlock } from './maxes-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
 wearableReturnNotice();
@@ -751,7 +752,7 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
-  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks, calendar] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`), get(`/v1/clients/${id}/training-calendar`)]);   // front desk doesn't link devices
+  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks, calendar, maxData] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`), get(`/v1/clients/${id}/training-calendar`), get(`/v1/clients/${id}/maxes`)]);   // front desk doesn't link devices
   const [en, testLib, owed, products, badgeLib, notesList, att, famList, outside] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null, get(`/v1/clients/${id}/outside-data`).catch(() => null)]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   const [reqList, claimList] = isOwner() ? await Promise.all([get(`/v1/membership-requests?client_id=${id}&status=all`).catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]) : [{ data: [] }, { data: [] }];
@@ -1061,6 +1062,9 @@ async function viewClient(main, id) {
       p.tests_count > 1 ? h('span', { class: p.improved ? 'good-text' : 'muted', style: 'min-width:84px;text-align:right' }, `${p.change > 0 ? '+' : ''}${fmtResult(p.change, p.unit, p.decimals, { delta: true })}`) : h('span', { class: 'muted', style: 'min-width:84px;text-align:right' }, 'first test')))
       : h('p', { class: 'muted small' }, 'No test results yet.'),
     devLinks.data.length ? h('p', { class: 'small muted' }, 'Linked devices: ', devLinks.data.map((l) => `${l.provider} ${l.external_id.replace(/^name:/, 'name ')}`).join(', ')) : null);
+  // Maxes (owner decision): the lifts a program loads from, on file or estimated from logged sets; the athlete and the family enter their own too.
+  const maxesPanel = panel('Maxes', { subtitle: `The weights in ${first}'s program come from these. A max entered here shows to the family at once; with nothing on file the estimate from logged sets stands in.` },
+    maxesBlock(maxData, { who: 'coach', first, canEdit: role !== 'front_desk', save: (b) => post(`/v1/clients/${id}/maxes`, b), remove: (rid) => del(`/v1/clients/${id}/maxes/${rid}`), reload: render }));
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
   // Archive: owners and coaches. Refused with a membership; upcoming bookings are canceled only after a second yes.
@@ -1103,7 +1107,7 @@ async function viewClient(main, id) {
     ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
     ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
     ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), eng.accountability, eng.goals, eng.badges]],
-    ['testing', 'Testing', [perfPanel, eng.targets]],
+    ['testing', 'Testing', [maxesPanel, perfPanel, eng.targets]],
     ['recovery', 'Recovery & sleep', [outsidePanel]],
     ['form-checks', 'Form checks', [formChecksPanel]],
     ['messages', 'Messages', [eng.messages]],

@@ -14,6 +14,7 @@ import * as engage from './services/engage.js';
 import { cardFee, feeSettings } from './services/fees.js';
 import * as wearables from './services/wearables.js';
 import * as monthly from './services/monthly.js';
+import * as maxes from './services/maxes.js';
 import * as formchecks from './services/formchecks.js';
 import * as sms from './services/sms.js';
 import * as leads from './services/leads.js';
@@ -190,6 +191,9 @@ export const portalRoutes = [
   ['POST', '/portal/api/athletes/:id/data-imports/preview', 'guardian', 'Check a file for your athlete before saving: file { name, csv | xlsx_base64 | pdf_base64 } or sheet_url, and mapping for a table we don\'t recognize. Nothing is saved.', (ctx, r) => dataimport.previewImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body)],
   ['POST', '/portal/api/athletes/:id/data-imports', 'guardian', 'Save a checked file for your athlete (the same body as the preview). All or nothing.', (ctx, r) => dataimport.commitImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { kind: 'parent', name: r.guardian.name }), 201],
   ['POST', '/portal/api/data-imports/:id/undo', 'guardian', 'Undo a file brought in for one of your athletes.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'parent', name: r.guardian.name }, { familyId: r.guardian.family_id })],
+  ['GET', '/portal/api/athletes/:id/maxes', 'guardian', 'Your athlete\'s maxes for the lifts their program loads from: on file, estimated from their sets, history and trend, and strength by exercise.', (ctx, r) => maxes.maxesFor(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true })],
+  ['POST', '/portal/api/athletes/:id/maxes', 'guardian', 'Enter or update a max for your athlete: test (squat_1rm, bench_1rm, power_clean_1rm), value (lb, or unit kg), optional date and note.', (ctx, r) => maxes.saveMax(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { by: 'parent', name: r.guardian.name }), 201],
+  ['DELETE', '/portal/api/athletes/:id/maxes/:rid', 'guardian', 'Take back a max your family entered.', (ctx, r) => maxes.removeMax(ctx, athleteOf(ctx, r, r.params.id).id, r.params.rid)],
   ['GET', '/portal/api/athletes/:id/monthly-reports', 'guardian', 'Your athlete\'s monthly progress reports, newest first: workouts, sessions, check-ins, strength trend and the coach\'s line.', (ctx, r) => ({ data: monthly.forFamily(ctx, athleteOf(ctx, r, r.params.id).id) })],
   ['GET', '/portal/api/athletes/:id/wearables', 'guardian', 'Your athlete\'s linked wearables (WHOOP, Oura): status and last pull, and which providers can be connected.', (ctx, r) => ({ data: wearables.listConnections(ctx, athleteOf(ctx, r, r.params.id).id), providers: wearables.status(ctx).providers.filter((p) => p.ready).map(({ key, label }) => ({ key, label })) })],
   ['POST', '/portal/api/athletes/:id/wearables/:provider/connect', 'guardian', 'Link your athlete\'s WHOOP or Oura account: answers the provider\'s sign-in link to open. It works once, for 20 minutes.', (ctx, r) => wearables.connectUrl(ctx, athleteOf(ctx, r, r.params.id).id, r.params.provider, { kind: 'parent', id: r.guardian.id }), 201],

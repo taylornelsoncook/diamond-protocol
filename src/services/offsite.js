@@ -22,6 +22,22 @@ export function config(env = process.env) {
   };
   return c.endpoint && c.bucket && c.keyId && c.secret && c.passphrase ? c : null;
 }
+// The storage address has to be the S3 API address itself: https://<account id>.r2.cloudflarestorage.com, no bucket
+// name, path or slash on the end. Anything else made every send fail with a bare "Invalid URL", so it's checked here
+// and said in plain words (the clips bucket uses the same check).
+export function endpointProblem(value, name = 'BACKUP_S3_ENDPOINT') {
+  const v = String(value ?? '').trim();
+  if (!v) return null;                                                                  // not set is a different message
+  const hint = `Use the S3 API address from Cloudflare R2, like https://<account id>.r2.cloudflarestorage.com, with no bucket name or slash on the end.`;
+  if (!/^https?:\/\//i.test(v)) return `${name} isn't a web address (it must start with https://). ${hint}`;
+  let u;
+  try { u = new URL(v); } catch { return `${name} isn't a valid web address. ${hint}`; }
+  if (u.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) return `${name} must use https://, not http://. ${hint}`;   // plain http only for a stand-in on this machine (tests, local dev)
+  if (u.search || u.hash || u.username) return `${name} has extra parts on the end. ${hint}`;
+  if (u.pathname !== '/' && u.pathname !== '') return `${name} has a path on the end (${u.pathname}); the bucket name goes in BACKUP_S3_BUCKET instead. ${hint}`;
+  if (/\.r2\.dev$/i.test(u.hostname)) return `${name} is the public r2.dev address; backups need the S3 API address. ${hint}`;
+  return null;
+}
 
 // ---- encryption: AES-256-GCM, key from the passphrase via scrypt ----
 export function encrypt(buf, passphrase) {
@@ -96,7 +112,7 @@ const saveState = (ctx, patch) => ctx.db.run('INSERT INTO settings (key, value) 
 
 export function status(ctx) {
   const s = state(ctx);
-  return { configured: !!config(), last_ok_name: s.last_ok_name ?? null, last_ok_at: s.last_ok_at ?? null, last_error: s.last_error ?? null, last_error_at: s.last_error_at ?? null };
+  return { configured: !!config(), problem: config() ? endpointProblem(config().endpoint) : null, last_ok_name: s.last_ok_name ?? null, last_ok_at: s.last_ok_at ?? null, last_error: s.last_error ?? null, last_error_at: s.last_error_at ?? null };
 }
 
 // Check, encrypt, upload, download again, decrypt and compare one backup. Records the outcome either way.
@@ -105,6 +121,8 @@ export async function send(ctx, name) {
   if (!c) return null;
   const at = new Date().toISOString();
   try {
+    const bad = endpointProblem(c.endpoint);
+    if (bad) throw new Error(bad);
     const file = join(backupDir(ctx), name);
     checkDatabase(file);
     const plain = readFileSync(file);

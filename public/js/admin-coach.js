@@ -712,10 +712,11 @@ function formChecksPanel(fc) {
 }
 function backupsPanel(bk, s) {
   const off = bk.offsite;
-  const offFailing = off.last_error && (!off.last_ok_at || off.last_error_at > off.last_ok_at);
+  const offFailing = !!off.problem || (off.last_error && (!off.last_ok_at || off.last_error_at > off.last_ok_at));
   const offLine = h('p', { class: 'small' + (offFailing ? '' : ' muted'), role: offFailing ? 'status' : null },
     tag(!off.configured || (!off.last_ok_at && !offFailing) ? 'muted' : offFailing ? 'warn' : 'good', !off.configured ? 'Off-site: not set up' : offFailing ? 'Off-site: failing' : off.last_ok_at ? 'Off-site: OK' : 'Off-site: waiting'), ' ',
     !off.configured ? 'Copies stay on this server\'s disk only. Setup steps are in DEPLOY.md under Backups.'
+      : off.problem ? `${off.problem} Fix it in Render → Environment; the next hourly try will pick it up.`
       : offFailing ? `${off.last_error} Last try: ${ago(off.last_error_at)}. It retries every hour.`
       : off.last_ok_at ? `Newest encrypted copy sent and restore-checked. Last sent: ${ago(off.last_ok_at)}.` : 'The first encrypted copy goes out within the hour.');
   const line = (b) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, new Date(b.created_at).toLocaleString()), h('span', { class: 'muted' }, kb(b.bytes)),

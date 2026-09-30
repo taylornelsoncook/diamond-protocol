@@ -403,7 +403,7 @@ async function viewToday(main) {
     checkinPanelEl,
     h('div', { class: 'grid grid-2' },
       panel(`Needs your attention${allAttention.length ? ` (${allAttention.length})` : ''}`, {}, allAttention.length ? allAttention : h('p', { class: 'muted' }, 'Nothing waiting. Every client is paid up and training.')),
-      h('div', { class: 'stack', style: 'gap:24px' }, followPanel, bdays, followPanel || bdays ? null : panel('Birthdays this week', {}, h('p', { class: 'muted', style: 'margin:0' }, 'No birthdays this week.')))),
+      h('div', { class: 'stack', style: 'gap:24px' }, trainingWeekPanel(board.training), followPanel, bdays, followPanel || bdays ? null : panel('Birthdays this week', {}, h('p', { class: 'muted', style: 'margin:0' }, 'No birthdays this week.')))),
     team ? coachesPanel(team) : null,
     spots ? spotsPanel(spots, { mine: mineSpots }) : null,
     panel('Recent activity', {}, act),
@@ -1146,6 +1146,16 @@ async function viewClient(main, id) {
 
 // Progression steps for one athlete (services/progression.js): suggestions to approve or dismiss, the steps applied
 // with Undo, and a step added by hand. Owners and coaches; front desk doesn't see it.
+// Today: the roster's training week from the calendar. Who is behind (two planned workouts missed in a row) and the totals.
+function trainingWeekPanel(t) {
+  if (!t || !t.on_programs) return null;
+  return panel('Training this week', { subtitle: `${t.done} of ${t.planned} planned workouts done · ${t.missed} missed · ${t.on_pace} of ${t.on_programs} on pace.`, action: h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'Whole roster') },
+    t.behind_athletes.length ? t.behind_athletes.map((a) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${a.id}?tab=training`, class: 'strong', style: 'color:inherit' }, a.name),
+        h('span', { class: 'small muted' }, `${a.program_name}${a.teams?.length ? ` · ${a.teams.map((x) => x.name).join(', ')}` : ''} · ${a.week.done} of ${a.week.planned} this week`)),
+      h('span', { class: 'dp-badge dp-badge--warn' }, `Missed ${a.missed_streak} in a row`)))
+      : h('p', { class: 'muted', style: 'margin:0' }, t.behind ? `${t.behind} behind.` : 'Nobody is behind. Every planned workout so far this week is done or still ahead.'));
+}
 function progressionsBlock(clientId, first) {
   const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
   const draw = async () => {

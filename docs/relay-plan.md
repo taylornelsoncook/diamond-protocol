@@ -64,8 +64,8 @@ business's own), and their MCP server is a developer feature.
    Vitruve, Output, Perch, Enode, RepOne, FLEX, Metric, Tendo, EliteForm) feeding sets and maxes into the profile.
 3. **Progress per lift** (started with step 2: a weekly trend per lift and strength by exercise on the Performance
    tab and the client page). Still to come: a full Progress screen with sets and volume per week and per phase.
-4. **Roster compliance.** On Today and the Programs page: this week's planned versus done per athlete, who missed
-   two in a row, sortable by team. Reads the calendar built in step 1.
+4. **Roster compliance** (built, third pull request). On Today and the Programs page: this week's planned versus done
+   per athlete, who missed two in a row, with a team filter. Reads the calendar built in step 1.
 5. **Assign to a team or a group.** Pick a team (or everyone on a program) and a start date; each athlete gets their
    own assignment and calendar; the same schedule change can be pushed to all of them or one.
 6. **Templates.** A library of saved programs, workouts and exercise runs, with "Start from a template" in the builder

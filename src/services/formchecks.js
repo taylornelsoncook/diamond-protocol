@@ -10,6 +10,7 @@ import { getSetting } from './families.js';
 import { rateLimit } from './security.js';
 import { emit } from './events.js';
 import { sendMessage } from './engage.js';
+import { endpointProblem } from './offsite.js';
 
 export const MAX_BYTES = 150 * 1024 * 1024, MAX_SECONDS = 60, UPLOAD_MINUTES = 15, PLAY_MINUTES = 10, PER_DAY = 10;
 const TYPES = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/x-m4v': 'm4v' };
@@ -24,6 +25,7 @@ export function config(env = process.env) {
   if (!c.bucket) problems.push('FORMCHECK_S3_BUCKET is not set (the private bucket for athletes\' clips, like dp-athlete-videos).');
   else if (c.bucket === (env.BACKUP_S3_BUCKET ?? '')) problems.push('FORMCHECK_S3_BUCKET is the backups bucket. Clips need their own private bucket.');
   if (!c.endpoint) problems.push('No storage address: set FORMCHECK_S3_ENDPOINT (or the backups\' BACKUP_S3_ENDPOINT).');
+  else { const bad = endpointProblem(c.endpoint, env.FORMCHECK_S3_ENDPOINT ? 'FORMCHECK_S3_ENDPOINT' : 'BACKUP_S3_ENDPOINT'); if (bad) problems.push(bad); }
   if (!c.keyId || !c.secret) problems.push('No storage key: set FORMCHECK_S3_KEY_ID and FORMCHECK_S3_SECRET (or the backups\' BACKUP_S3_KEY_ID and BACKUP_S3_SECRET, if that token covers the clips bucket too).');
   return { ...c, problems, ready: !problems.length };
 }

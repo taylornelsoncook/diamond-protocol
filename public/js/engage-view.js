@@ -4,7 +4,7 @@
 import { h, fill, toast, busy, btn, ago, videoEmbed } from './ui.js';
 import { sparkline, fmtResult } from './charts.js';
 import { dataSummary } from './dataimport-ui.js';
-import { maxesBlock } from './maxes-ui.js';
+import { maxesBlock, volumeBlock } from './maxes-ui.js';
 
 export const ENGAGE_TABS = [['accountability', 'Accountability'], ['performance', 'Performance'], ['education', 'Education']];
 
@@ -292,11 +292,18 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
     draw();
     return box;
   }
+  // Training volume from the logged sets: this week against last, twelve weeks of sets, the program's phases, the most-logged exercises.
+  function volumeBox() {
+    if (!api.get) return null;
+    const box = h('div');
+    api.get('progress').then((d) => { if (d?.totals?.workouts) fill(box, section(parent ? `${name()}'s training` : 'Your training', `What ${parent ? name() : 'you'} logged, week by week and phase by phase.`, volumeBlock(d, { who: parent ? 'parent' : 'athlete', first: name() }))); }).catch(() => {});
+    return box;
+  }
   function renderPerformance() {
     const p = data.performance;
     const tests = p.tests;
     const ranks = p.rankings?.length ? p.rankings : null;
-    fill(el, maxesBox(), outsideBox(),
+    fill(el, maxesBox(), volumeBox(), outsideBox(),
       tests.length ? h('div', { class: 'eg-summary' },
         h('div', null, h('b', null, tests.length), h('span', null, tests.length === 1 ? 'test' : 'tests')),
         h('div', null, h('b', { class: p.prs.length ? 'good-text' : '' }, p.prs.length), h('span', null, `new ${p.prs.length === 1 ? 'PR' : 'PRs'}`)),

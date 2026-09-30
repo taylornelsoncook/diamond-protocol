@@ -252,13 +252,19 @@ function demoVideo(x) {
 let formChecksReady = null, formChecksAsk = null;   // null = not asked yet; one request is shared by every card
 const askFormChecks = () => (formChecksAsk ??= api('GET', '/app/api/form-checks').then((d) => { formChecksReady = !!d.ready; return d; }).catch((e) => { formChecksAsk = null; throw e; }));
 function formCheckSend(x) {
-  if (formChecksReady === false) return null;
-  const holder = h('div', { class: 'stack-tight' });
-  const draw = () => fill(holder, clipPicker('Send a form check', async (file, progress) => {
+  // The coach asked for a clip of this one in the plan: say so even before the bucket is set up, and make the button the main one.
+  const asked = !!x.form_check;
+  const askBox = asked ? h('div', { class: 'c-note stack-tight', role: 'note' },
+    h('span', { class: 'strong' }, x.form_check_sent ? '✓ Form check sent. Your coach will answer in the app.' : 'Your coach asked for a form check on this one.'),
+    x.form_check_note ? h('span', { class: 'small' }, x.form_check_note) : null) : null;
+  if (formChecksReady === false) return askBox;
+  const holder = h('div', { class: 'stack-tight' }, askBox);
+  const draw = () => fill(holder, askBox, clipPicker(asked && !x.form_check_sent ? 'Send the form check' : 'Send a form check', async (file, progress) => {
     const fc = await sendClip({ file, start: (b) => api('POST', '/app/api/form-checks', b), finish: (id) => api('POST', `/app/api/form-checks/${id}/done`), extra: { workout_exercise_id: x.id }, onProgress: progress });
     say(`Form check sent for ${fc.exercise_name}.`); toast(`Sent. Your coach will answer in the app; you'll see it under Form checks.`);
+    if (asked) { x.form_check_sent = true; render(); }        // the card and the Finish check see the clip went up
     formChecksPanel.draw?.();
-  }, { variant: 'ghost' }), h('span', { class: 'small muted' }, 'Film one set (up to 60 seconds) and your coach will answer with what to change.'));
+  }, { variant: asked && !x.form_check_sent ? 'primary' : 'ghost' }), h('span', { class: 'small muted' }, 'Film one set (up to 60 seconds) and your coach will answer with what to change.'));
   if (formChecksReady === true) draw();
   else askFormChecks().then((d) => { if (d.ready) draw(); }).catch(() => {});
   return holder;
@@ -353,6 +359,7 @@ function renderLogger(w) {
       h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
         h('span', { class: 'dp-ex-sets' }, [detailsOf(x), x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
         x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason.toLowerCase()})` : ''}` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
+        x.form_check ? h('span', { class: 'small strong', style: x.form_check_sent ? 'color:var(--green-bright)' : 'color:var(--amber)' }, x.form_check_sent ? '✓ Form check sent' : 'Form check asked') : null,
         x.progression?.text ? h('span', { class: 'small strong', style: 'color:var(--green-bright)' }, `Your progression: ${x.progression.text} on the plan`) : null,
         x.load ? h('span', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : `color:var(${x.load.planned_pct ? '--amber' : '--green-bright'})` }, x.load.text) : null),
       h('span', { class: 'sr-only' }, exDone(x) ? ' (done)' : ''));
@@ -482,6 +489,8 @@ function renderLogger(w) {
     const left = w.exercises.filter((x) => !exDone(x) && !exStarted(x));
     if (!reopened && left.length === w.exercises.length) throw new Error('Log at least one set before you finish.');
     if (!reopened && left.length && !confirm(`You haven't logged ${left.length === 1 ? left[0].name : `${left.length} exercises`}. Finish anyway?`)) return;
+    const unsent = reopened ? [] : w.exercises.filter((x) => x.form_check && !x.form_check_sent && formChecksReady !== false);
+    if (unsent.length && !confirm(`Your coach asked for a form check on ${unsent.map((x) => x.name).join(' and ')}. Finish without sending it?`)) return;
     await finish(draft, w);
   }), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' });
 

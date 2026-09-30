@@ -560,7 +560,8 @@ function copyWeekDialog(p, week, reload) {
 
 function workoutCard(p, w, exs, edit, reload) {
   const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
-  const body = (x) => h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, line(x)), x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
+  const body = (x) => h('span', { class: 'stack-tight grow' }, h('span', null, x.name, x.form_check ? h('span', { class: 'dp-badge dp-badge--neutral', style: 'margin-left:8px', title: x.form_check_note || 'The athlete is asked to send a clip of this one' }, 'Form check') : null),
+    h('span', { class: 'small muted' }, line(x)), x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
   const rows = withGroups(w.exercises, (x) => h('div', { class: `row pg-ex${x.group_label ? ' sf-in-group' : ''}` },
     groupTag(x), playBtn(x),
     edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${line(x)}: change, swap or remove`, onClick: () => slotDialog(x, { p, exs, reload }) },

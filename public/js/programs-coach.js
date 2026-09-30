@@ -457,7 +457,7 @@ function planPanel(p, plan, edit, { openWeek, reload }) {
       h('span', { class: 'small muted' }, [plural(w.sets, 'set'), w.avg_pct ? `${w.avg_pct}% of max` : null, w.avg_rpe ? `RPE ${w.avg_rpe}` : null].filter(Boolean).join(' · ') || 'Nothing planned'))));
   }
   return panel('Whole plan', { subtitle: 'Weeks down, days across. Phases are bands on the left; the bar is each week\'s sets, with its average percent of a tested max and target RPE. Press a week or a workout to open it.',
-    action: edit ? h('div', { class: 'row wrap' }, btn('Progress weeks', () => progressDialog(p, plan, reload), 'secondary'), btn('Add phase', () => phaseDialog(p, plan, null, reload), 'ghost')) : null },
+    action: edit ? h('div', { class: 'row wrap' }, btn('Progress weeks', () => progressDialog(p, plan, reload), 'secondary'), btn('Bulk edit', () => bulkEditDialog(p, reload), 'secondary'), btn('Add phase', () => phaseDialog(p, plan, null, reload), 'ghost')) : null },
     h('div', { class: 'pl-wrap' }, grid));
 }
 // Add or change a phase: a label across a run of weeks. Phases don't overlap; the server checks too.
@@ -478,6 +478,40 @@ function phaseDialog(p, plan, f, reload) {
   from.addEventListener('change', () => { if (Number(to.value) < Number(from.value)) to.value = from.value; });
 }
 // Progression: copy one week across a run of weeks, changing sets, percent of max or RPE by a step each week.
+// Change one exercise across a run of weeks in one go ("every back squat in weeks 3 to 6, plus 5 percent").
+function bulkEditDialog(p, reload) {
+  const inProgram = [...new Map(p.workouts.flatMap((w) => w.exercises).map((x) => [x.exercise_id, x.name])).entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  if (!inProgram.length) return toast('Add exercises to the program first.', 'warn');
+  const ex = select(inProgram.map(([id, name]) => [id, name]), { 'aria-label': 'Exercise' });
+  const from = input({ type: 'number', min: '1', max: String(p.weeks), value: '1', inputmode: 'numeric' }), to = input({ type: 'number', min: '1', max: String(p.weeks), value: String(p.weeks), inputmode: 'numeric' });
+  const sets = select([-2, -1, 0, 1, 2].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n} ${Math.abs(n) === 1 ? 'set' : 'sets'}` : 'Sets: no change']), { value: '0' });
+  const pct = select([-10, -5, -3, 0, 3, 5, 10].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n}% of max` : 'Percent of max: no change']), { value: '0' });
+  const rpe = select([-1, -0.5, 0, 0.5, 1].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n} RPE` : 'RPE: no change']), { value: '0' });
+  const rest = select([-60, -30, -15, 0, 15, 30, 60].map((n) => [String(n), n ? `${n > 0 ? '+' : ''}${n} s rest` : 'Rest: no change']), { value: '0' });
+  const reps = input({ placeholder: 'Leave empty to keep', maxlength: '80' }), tempo = input({ placeholder: 'Leave empty to keep', maxlength: '20' });
+  const preview = h('p', { class: 'small muted', style: 'margin:0' });
+  const say = () => {
+    const f = Number(from.value), t = Number(to.value);
+    const n = p.workouts.filter((w) => w.week >= f && w.week <= t).reduce((c, w) => c + w.exercises.filter((x) => x.exercise_id === ex.value).length, 0);
+    preview.textContent = `${ex.selectedOptions[0]?.textContent ?? 'It'} appears ${plural(n, 'time')} in weeks ${f}${t !== f ? ` to ${t}` : ''}. Exercises without a field are left as they are; the plan's numbers stay within the builder's limits.`;
+  };
+  for (const el of [ex, from, to]) el.addEventListener('input', say); say();
+  const send = async (extra = {}) => {
+    try { return await post(`/v1/programs/${p.id}/bulk-edit`, { exercise_id: ex.value, from_week: Number(from.value), to_week: Number(to.value), sets_step: Number(sets.value), pct_step: Number(pct.value), rpe_step: Number(rpe.value), rest_step: Number(rest.value), ...(reps.value.trim() ? { reps: reps.value.trim() } : {}), ...(tempo.value.trim() ? { tempo: tempo.value.trim() } : {}), ...extra }); }
+    catch (e) {
+      if (e.code === 'confirm_needed' && confirm(e.message.replace(' Send confirm: true to go ahead.', ' Change them anyway?'))) return send({ ...extra, confirm: true });
+      if (e.code === 'confirm_needed') return null;
+      throw e;
+    }
+  };
+  dialog('Bulk edit', h('div', { class: 'stack' },
+    h('p', { class: 'muted', style: 'margin:0' }, 'Change one exercise everywhere it appears in a run of weeks, in place. Steps move the numbers from where each one is; reps and tempo replace the text.'),
+    field('Exercise', ex), h('div', { class: 'form-grid' }, field('From week', from), field('To week', to)),
+    h('div', { class: 'form-grid' }, field('Sets', sets), field('Percent of max', pct), field('RPE', rpe), field('Rest', rest)),
+    h('div', { class: 'form-grid' }, field('Reps', reps, 'Replaces the reps text, like 8-10 or 5/side.'), field('Tempo', tempo)), preview), [
+    { label: 'Apply', variant: 'primary', onClick: async () => { const r = await send(); if (!r) return false; toast(`${plural(r.changed, 'exercise')} changed across weeks ${r.from_week}${r.to_week !== r.from_week ? ` to ${r.to_week}` : ''}.`); reload(); } },
+    { label: 'Cancel', variant: 'ghost' }]);
+}
 function progressDialog(p, plan, reload) {
   const withWork = plan.weeks.filter((w) => w.workouts.length).map((w) => w.week);
   if (!withWork.length) return toast('Build one week first, then progress it across the others.', 'warn');

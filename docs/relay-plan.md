@@ -72,7 +72,8 @@ business's own), and their MCP server is a developer feature.
    pushing one schedule change to everyone on a program.
 6. **Templates** (built, sixth pull request). Save any program or workout as a template and start from it (New
    program → Start from; Add day → Start from). Still to come: a template for a run of exercises inside a workout.
-7. **Bulk edits and drag to another day** in the builder.
+7. **Bulk edits** (built, ninth pull request): change one exercise across a run of weeks in one go from the Whole
+   plan view. Still to come: dragging a session to another day in the builder.
 8. **Export a program** (built, seventh pull request): a printable page (the browser saves it as a PDF) with the
    plan grid, phases and every workout, and an Excel workbook with a plan sheet, a sheet per workout and the phases.
 9. **Exercise tags** (built, eighth pull request): movement, muscles and equipment on every exercise, filters in the

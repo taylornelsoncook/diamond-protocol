@@ -351,7 +351,7 @@ export function copyWorkout(ctx, workoutId, body = {}) {
 }
 // Removing workouts athletes already logged needs confirm: true. Their logs stay in the athletes' history (keepLogsOf)
 // but leave the program's numbers.
-function guardLogged(ctx, ids, confirm, what) {
+export function guardLogged(ctx, ids, confirm, what) {
   if (!ids.length) return;
   const n = ctx.db.get(`SELECT COUNT(*) AS n FROM workout_logs WHERE workout_id IN (${ids.map(() => '?').join(', ')})`, ...ids).n;
   if (n && confirm !== true) {

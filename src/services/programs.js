@@ -135,9 +135,10 @@ function copyWorkoutInto(ctx, src, programId, week, day, title, adjust = null) {
 }
 // The set-detail columns of workout_exercises, and one row written with them (the builder, a copy, a program read from a PDF).
 const SLOT_COLS = SET_FIELDS;
+const slotVal = (c, f) => (c === 'form_check' ? (f.form_check ? 1 : 0) : f[c] ?? null);   // the ask is 0 or 1, never empty
 export function insertSlot(ctx, workoutId, exerciseId, position, f, id = newId('wex')) {
   ctx.db.run(`INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription, load_test, load_pct, ${SLOT_COLS.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ${SLOT_COLS.map(() => '?').join(', ')})`,
-    id, workoutId, exerciseId, position, f.prescription, f.load_test ?? null, f.load_pct ?? null, ...SLOT_COLS.map((c) => f[c] ?? null));
+    id, workoutId, exerciseId, position, f.prescription, f.load_test ?? null, f.load_pct ?? null, ...SLOT_COLS.map((c) => slotVal(c, f)));
   return id;
 }
 // A new program, empty or as a copy of another (copy_from: its workouts in the weeks kept).
@@ -354,6 +355,14 @@ export function slotFields(body = {}, cur = null) {
   });
   if (has('load_text')) f.load_text = blankOr('load_text', () => v.str(body.load_text, 'load_text', { max: 40 }));
   if (has('note')) f.note = blankOr('note', () => v.str(body.note, 'note', { max: 200 }));
+  // A form check asked on this exercise (version 61): the app shows the ask and the Send button up front. The note says what to film.
+  if (has('form_check')) {
+    if (![true, false, 0, 1, 'true', 'false', null, ''].includes(body.form_check)) throw badRequest('form_check is yes or no (true or false).');
+    f.form_check = body.form_check === true || body.form_check === 1 || body.form_check === 'true' ? 1 : 0;
+  }
+  f.form_check = f.form_check ? 1 : 0;
+  if (has('form_check_note')) f.form_check_note = blankOr('form_check_note', () => v.str(body.form_check_note, 'form_check_note', { max: 200 }));
+  if (!f.form_check) f.form_check_note = null;
   if (has('prescription') && !has('sets') && !has('reps')) {
     if (body.prescription !== null && typeof body.prescription !== 'string') throw badRequest('The sets and reps must be text, like 3 × 8.');
     const s = splitRx(body.prescription);
@@ -397,7 +406,7 @@ export function updateWorkoutExercise(ctx, id, body) {
   const f = adoptKind(ctx, x.workout_id, slotFields(body, x), body, id);
   ctx.db.tx(() => {
     ctx.db.run(`UPDATE workout_exercises SET prescription = ?, load_test = ?, load_pct = ?, exercise_id = ?, ${SLOT_COLS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
-      f.prescription, load.test, load.pct, exerciseId, ...SLOT_COLS.map((c) => f[c]), id);
+      f.prescription, load.test, load.pct, exerciseId, ...SLOT_COLS.map((c) => slotVal(c, f)), id);
     if (f.group_label) {
       sameKind(ctx, x.workout_id, f.group_label, f.group_kind);
       // Joining a group moves the exercise to sit right after the others in it.
@@ -698,6 +707,14 @@ export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)
   const left = program.workouts.filter((w) => !done.has(w.id));
   return { assignment: a, program, left, next: left[0] ?? null };
 }
+// Form checks asked in the plan (workout_exercises.form_check): whether this athlete has sent one for each such slot
+// (any clip that finished uploading; the coach may not have answered yet).
+function withAsks(ctx, clientId, exercises) {
+  const asked = exercises.filter((x) => x.form_check);
+  if (!asked.length) return exercises;
+  const sent = new Set(ctx.db.all(`SELECT DISTINCT workout_exercise_id FROM form_checks WHERE client_id = ? AND status != 'uploading' AND workout_exercise_id IN (${asked.map(() => '?').join(', ')})`, clientId, ...asked.map((x) => x.id)).map((r) => r.workout_exercise_id));
+  return exercises.map((x) => (x.form_check ? { ...x, form_check: true, form_check_sent: sent.has(x.id) } : { ...x, form_check: false }));
+}
 // The swaps the coach listed for a slot's planned exercise, for the app's "Can't do this today?".
 function alternativesFor(ctx, x) {
   return ctx.db.all(`SELECT a.id, a.alt_exercise_id AS exercise_id, e.name, a.tag, a.note FROM exercise_alternatives a JOIN exercises e ON e.id = a.alt_exercise_id WHERE a.exercise_id = ? ORDER BY e.name COLLATE NOCASE`, x.exercise_id)
@@ -718,7 +735,7 @@ export function clientHome(ctx, client) {
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: program.workouts.length - left.length, total: program.workouts.length },
     readiness,
-    workout: next && { ...next, exercises: next.exercises.map((x) => ({ ...appExercise(ctx, client.id, x, readiness, swaps), alternatives: alternativesFor(ctx, x) })) },
+    workout: next && { ...next, exercises: withAsks(ctx, client.id, next.exercises.map((x) => ({ ...appExercise(ctx, client.id, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }))) },
     upcoming: left.slice(1, 4).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, exercises: w.exercises.map((x) => x.name) })),
     history, reopen_id,
     message: next ? null : 'Program complete. Your coach will set your next block.'

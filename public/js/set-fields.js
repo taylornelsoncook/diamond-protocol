@@ -18,17 +18,24 @@ export function setFields(x = null, { hint = true } = {}) {
   const kind = select([['', 'On its own'], ...Object.entries(GROUP_KINDS)], { value: x?.group_kind ?? '', 'aria-label': 'Group' });
   const letter = select(LETTERS.map((l) => [l, `Group ${l}`]), { value: x?.group_label ?? 'A', 'aria-label': 'Group letter' });
   const note = input({ maxlength: '200', placeholder: 'A cue, like "pause at the bottom"', value: x?.note ?? '', 'aria-label': 'Note for the athlete' });
-  const sync = () => { letter.disabled = !kind.value; };
-  kind.addEventListener('change', sync); sync();
+  // Ask for a form check on this exercise (version 61): the app shows the ask and the Send button up front on the card.
+  const ask = h('input', { type: 'checkbox', checked: !!x?.form_check });
+  const askNote = input({ maxlength: '200', placeholder: 'What to film, like "side view, your heaviest set"', value: x?.form_check_note ?? '', 'aria-label': 'What to film' });
+  const askRow = h('div', { class: 'stack-tight' },
+    h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, ask, h('span', null, h('span', { class: 'strong' }, 'Ask for a form check'), h('span', { class: 'muted' }, ' · the athlete is asked to film a set of this one and send it to you'))),
+    askNote);
+  const sync = () => { letter.disabled = !kind.value; askNote.hidden = !ask.checked; };
+  kind.addEventListener('change', sync); ask.addEventListener('change', sync); sync();
   const lab = (text, el, w) => h('label', { class: 'sf-field', style: w ? `flex:0 0 ${w}` : 'flex:1 1 120px' }, h('span', { class: 'small muted' }, text), el);
   const el = h('div', { class: 'stack-tight sf' },
     h('div', { class: 'row wrap sf-row' }, lab('Sets', sets, '4.5rem'), lab('Reps', reps), lab('Load', loadT)),
     h('div', { class: 'row wrap sf-row' }, lab('Tempo', tempo, '5.5rem'), lab('Rest (sec)', rest, '5.5rem'), lab('RPE', rpe, '5rem'), lab('Group', kind), lab('Letter', letter, '7rem')),
     lab('Note', note),
+    askRow,
     hint ? h('span', { class: 'small muted' }, 'Sets and reps are what the athlete logs; reps can be a time or distance, like 40 sec. Give exercises the same group letter to show them together as a superset, circuit or block (A1, A2...).') : null);
   return { el, sets, reps, focus: () => sets.focus(), body: () => ({
     sets: num(sets), reps: txt(reps), load_text: txt(loadT), tempo: txt(tempo), rest_seconds: num(rest), target_rpe: num(rpe),
-    group_label: kind.value ? letter.value : null, group_kind: kind.value || null, note: txt(note) }) };
+    group_label: kind.value ? letter.value : null, group_kind: kind.value || null, note: txt(note), form_check: ask.checked, form_check_note: ask.checked ? txt(askNote) : null }) };
 }
 
 // What every screen shows under an exercise's name: "3 × 8 @ 135 lb · Tempo 3-1-1 · Rest 90 sec · RPE 8".

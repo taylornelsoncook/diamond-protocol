@@ -5,7 +5,7 @@
 // database upgrade can use it too.
 export const MAX_SETS = 12;
 export const GROUP_KINDS = { superset: 'Superset', circuit: 'Circuit', block: 'Block' };
-export const SET_FIELDS = ['sets', 'reps', 'tempo', 'rest_seconds', 'target_rpe', 'load_text', 'group_label', 'group_kind', 'note'];
+export const SET_FIELDS = ['sets', 'reps', 'tempo', 'rest_seconds', 'target_rpe', 'load_text', 'group_label', 'group_kind', 'note', 'form_check', 'form_check_note'];   // form_check: version 61, the coach asks for a clip
 export const REST_MAX = 1800;
 
 const RX_SPLIT = /^(\d{1,2})\s*(?:×|x|\*|sets?\s+of)\s*(.+)$/i;

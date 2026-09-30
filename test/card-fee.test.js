@@ -150,7 +150,7 @@ test('a version 50 database gains the fee columns, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 60, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 61, `round ${round}`);
       for (const t of ['invoices', 'sales', 'pay_links']) assert.ok(d.all(`PRAGMA table_info(${t})`).some((c) => c.name === 'fee_cents'), t);
       assert.deepEqual({ ...d.get(`SELECT amount_cents, fee_cents FROM sales WHERE id = 'sale_1'`) }, { amount_cents: 8000, fee_cents: 0 }, 'old sales carry no fee');
       d.close();

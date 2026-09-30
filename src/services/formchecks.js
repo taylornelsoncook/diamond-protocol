@@ -142,21 +142,23 @@ async function checkObject(ctx, key, contentType) {
 }
 
 // ---------- Watching ----------
+// A clip that answers a form check the coach asked for in the plan (workout_exercises.form_check, version 61).
+const ASKED = `(SELECT we.form_check FROM workout_exercises we WHERE we.id = f.workout_exercise_id) AS asked`;
 const shape = (ctx, fc) => ({ id: fc.id, client_id: fc.client_id, exercise_id: fc.exercise_id, exercise_name: fc.exercise_name, workout_title: fc.workout_title, note: fc.note,
   status: fc.status, bytes: fc.bytes, duration_s: fc.duration_s, created_at: fc.created_at, sent_at: fc.sent_at, answered_at: fc.answered_at, coach_name: fc.coach_name, reply: fc.reply,
-  has_reply_video: fc.reply_status === 'sent', seen_by_athlete_at: fc.seen_by_athlete_at, expires_at: fc.expires_at, days_left: Math.max(0, Math.ceil((Date.parse(fc.expires_at) - Date.parse(ctx.now())) / 86400000)) });
+  has_reply_video: fc.reply_status === 'sent', seen_by_athlete_at: fc.seen_by_athlete_at, asked: !!fc.asked, expires_at: fc.expires_at, days_left: Math.max(0, Math.ceil((Date.parse(fc.expires_at) - Date.parse(ctx.now())) / 86400000)) });
 export function listForClient(ctx, clientId, { limit = 30 } = {}) {
-  return ctx.db.all(`SELECT * FROM form_checks WHERE client_id = ? AND status != 'uploading' ORDER BY sent_at DESC LIMIT ?`, clientId, Math.min(Math.max(Number(limit) || 30, 1), 200)).map((fc) => shape(ctx, fc));
+  return ctx.db.all(`SELECT f.*, ${ASKED} FROM form_checks f WHERE f.client_id = ? AND f.status != 'uploading' ORDER BY f.sent_at DESC LIMIT ?`, clientId, Math.min(Math.max(Number(limit) || 30, 1), 200)).map((fc) => shape(ctx, fc));
 }
 export function listWaiting(ctx, { limit = 100 } = {}) {
-  return ctx.db.all(`SELECT f.*, c.name AS client_name FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE f.status = 'sent' AND c.archived_at IS NULL ORDER BY f.sent_at LIMIT ?`, limit)
+  return ctx.db.all(`SELECT f.*, c.name AS client_name, ${ASKED} FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE f.status = 'sent' AND c.archived_at IS NULL ORDER BY f.sent_at LIMIT ?`, limit)
     .map((fc) => ({ ...shape(ctx, fc), client_name: fc.client_name }));
 }
 export function listAll(ctx, { status: st, clientId, limit = 50 } = {}) {
   const where = [`f.status != 'uploading'`], p = [];
   if (st === 'waiting') where.push(`f.status = 'sent'`); else if (st === 'answered') where.push(`f.status = 'answered'`);
   if (clientId) { where.push('f.client_id = ?'); p.push(clientId); }
-  return ctx.db.all(`SELECT f.*, c.name AS client_name FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE ${where.join(' AND ')} ORDER BY f.sent_at DESC LIMIT ?`, ...p, Math.min(Math.max(Number(limit) || 50, 1), 200))
+  return ctx.db.all(`SELECT f.*, c.name AS client_name, ${ASKED} FROM form_checks f JOIN clients c ON c.id = f.client_id WHERE ${where.join(' AND ')} ORDER BY f.sent_at DESC LIMIT ?`, ...p, Math.min(Math.max(Number(limit) || 50, 1), 200))
     .map((fc) => ({ ...shape(ctx, fc), client_name: fc.client_name }));
 }
 function rowFor(ctx, id, { clientId = null, familyId = null } = {}) {

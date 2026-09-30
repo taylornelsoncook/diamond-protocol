@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 60;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords)
+const SCHEMA_VERSION = 61;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -110,7 +110,8 @@ const ADDED_COLUMNS = {
   locations: ['checkin_code TEXT'],                                       // version 16
   products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
   sale_items: ['variant_id TEXT'],                                        // version 17
-  workout_exercises: ['load_test TEXT', 'load_pct INTEGER',              // version 21: weights from tested maxes
+  workout_exercises: ['form_check INTEGER NOT NULL DEFAULT 0', 'form_check_note TEXT',   // version 61: a form check asked on the exercise
+    'load_test TEXT', 'load_pct INTEGER',              // version 21: weights from tested maxes
     'sets INTEGER', 'reps TEXT', 'tempo TEXT', 'rest_seconds INTEGER', 'target_rpe REAL', 'load_text TEXT',   // version 49: structured set details
     'group_label TEXT', "group_kind TEXT CHECK (group_kind IN ('superset','circuit','block'))", 'note TEXT'],
   coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies

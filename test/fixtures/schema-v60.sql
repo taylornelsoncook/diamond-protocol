@@ -199,9 +199,7 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   load_text TEXT,                                -- a load the coach types ("135 lb", "BW"), beside the percent of a tested max
   group_label TEXT,                              -- A, B, C: exercises sharing a label in one workout are one group
   group_kind TEXT CHECK (group_kind IN ('superset','circuit','block')),
-  note TEXT,                                     -- a cue for this slot
-  form_check INTEGER NOT NULL DEFAULT 0,         -- version 61: the coach asks for a form check clip on this exercise (the app shows the ask)
-  form_check_note TEXT                           -- what to film
+  note TEXT                                      -- a cue for this slot
 );
 CREATE INDEX IF NOT EXISTS workout_exercises_exercise ON workout_exercises(exercise_id);   -- the library's use counts (a big video library)
 CREATE TABLE IF NOT EXISTS program_phases (           -- version 50: the planner's phases (base, build, peak, deload...) as bands across weeks

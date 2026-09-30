@@ -312,7 +312,7 @@ test('not set up: the app says so and nothing is offered; a version 52 database 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 62, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 63, `round ${round}`);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'form_checks'`).n, 1);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM pragma_table_info('form_checks') WHERE name IN ('object_key', 'reply_object_key', 'expires_at', 'seen_by_athlete_at', 'etag', 'reply_pending_key')`).n, 6);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'form_check_orphans'`).n, 1);

@@ -171,8 +171,7 @@ CREATE TABLE IF NOT EXISTS programs (
   weeks INTEGER NOT NULL DEFAULT 4 CHECK (weeks BETWEEN 1 AND 52),
   created_at TEXT NOT NULL,
   for_sale INTEGER NOT NULL DEFAULT 0,   -- sold online in the parent portal and at /shop (version 26)
-  price_cents INTEGER,
-  kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts'))   -- version 63: a program, a program template, or the one holder of workout templates
+  price_cents INTEGER
 );
 CREATE TABLE IF NOT EXISTS workouts (
   id TEXT PRIMARY KEY,

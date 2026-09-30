@@ -153,7 +153,7 @@ test('a version 54 database gains the progressions table, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 62, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 63, `round ${round}`);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'progressions'`).n, 1);
       d.close();
     }

@@ -3,7 +3,7 @@
 // tested max and the average target RPE), and a progression that copies one week across a run of weeks changing
 // the sets, percents or RPE by a step each week. Phases are labels for the coach: they never change a workout.
 import { newId, v, badRequest, notFound } from '../util.js';
-import { programDetail, copyWeek, rxText } from './programs.js';
+import { programDetail, copyWeek, rxText, updateWorkoutExercise, guardLogged } from './programs.js';
 
 export const PHASE_KINDS = { base: 'Base', build: 'Build', peak: 'Peak', deload: 'Deload', test: 'Testing', other: 'Other' };
 const MAX_SETS = 12;
@@ -94,6 +94,39 @@ const step = (val, name, min, max, halves = false) => {
   return n;
 };
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+// Bulk edit (Relay plan step 7): change one exercise everywhere it appears in a run of weeks, in place. Steps move the
+// numbers (sets, percent of max, RPE, rest) from where each slot is; reps and tempo replace the text. Slots without the
+// field are left alone; results stay within the builder's limits. Workouts athletes already logged need confirm: true.
+export function bulkEdit(ctx, programId, body = {}) {
+  const p = programDetail(ctx, programId);
+  const exerciseId = v.str(body.exercise_id, 'exercise_id');
+  const from = v.int(body.from_week ?? 1, 'from_week', { min: 1, max: 52 });
+  const to = v.int(body.to_week ?? p.weeks, 'to_week', { min: from, max: 52 });
+  const sets = step(body.sets_step, 'sets_step', -6, 6), pct = step(body.pct_step, 'pct_step', -30, 30), rpe = step(body.rpe_step, 'rpe_step', -3, 3, true);
+  const rest = body.rest_step === undefined || body.rest_step === null || body.rest_step === '' ? 0 : v.int(body.rest_step, 'rest_step', { min: -600, max: 600 });
+  const reps = body.reps === undefined ? undefined : body.reps === null || body.reps === '' ? null : v.str(body.reps, 'reps', { max: 80 });
+  const tempo = body.tempo === undefined ? undefined : body.tempo === null || body.tempo === '' ? null : v.str(body.tempo, 'tempo', { max: 20 });
+  if (!sets && !pct && !rpe && !rest && reps === undefined && tempo === undefined) throw badRequest('Choose at least one change: sets, percent of max, RPE, rest, reps or tempo.');
+  const slots = p.workouts.filter((w) => w.week >= from && w.week <= to).flatMap((w) => w.exercises.filter((x) => x.exercise_id === exerciseId).map((x) => ({ ...x, workout_id: w.id, week: w.week, day: w.day, title: w.title })));
+  if (!slots.length) throw badRequest(`That exercise isn't in weeks ${from === to ? from : `${from} to ${to}`} of this program.`);
+  guardLogged(ctx, [...new Set(slots.map((s) => s.workout_id))], body.confirm, `Weeks ${from === to ? from : `${from} to ${to}`}`);
+  const changed = [];
+  ctx.db.tx(() => {
+    for (const x of slots) {
+      const next = {};
+      if (sets && x.sets != null) next.sets = clamp(x.sets + sets, 1, MAX_SETS);
+      if (pct && x.load_test) { next.load_test = x.load_test; next.load_pct = clamp(x.load_pct + pct, 30, 110); }
+      if (rpe && x.target_rpe != null) next.target_rpe = clamp(Math.round((x.target_rpe + rpe) * 2) / 2, 1, 10);
+      if (rest && x.rest_seconds != null) next.rest_seconds = clamp(x.rest_seconds + rest, 0, 1800);
+      if (reps !== undefined) next.reps = reps;
+      if (tempo !== undefined) next.tempo = tempo;
+      if (!Object.keys(next).length) continue;
+      updateWorkoutExercise(ctx, x.id, next);
+      changed.push({ id: x.id, workout_id: x.workout_id, week: x.week, day: x.day, title: x.title, ...next });
+    }
+  });
+  return { exercise_id: exerciseId, from_week: from, to_week: to, slots: slots.length, changed: changed.length, changes: changed };
+}
 export function progressWeeks(ctx, programId, body = {}) {
   const p = programDetail(ctx, programId);
   const from = v.int(body.from, 'from', { min: 1, max: 52 });

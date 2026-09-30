@@ -65,7 +65,7 @@ async function sendLink(c) {
 }
 
 // ---------- Programs page ----------
-const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '' };
+const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
 
 export async function viewPrograms(main) {
   const [progs, exs, act, shop, blocks, tmpl, wtmpl] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
@@ -199,6 +199,9 @@ function libraryPanel(exs, edit) {
   const q = input({ type: 'search', placeholder: 'Search exercises', 'aria-label': 'Search exercises', value: pageState.exQ });
   const cat = select([['', 'Every category'], ...cats.map((c) => [c, c])], { value: pageState.exCat, 'aria-label': 'Category' });
   const flt = select([['', 'All exercises'], ['no_video', 'Missing a video'], ['unused', 'Not in a program']], { value: pageState.exFilter, 'aria-label': 'Show' });
+  const tags = exs.tags ?? { movements: [], muscles: [], equipment: [] };
+  const mv = select([['', 'Any movement'], ...tags.movements.map((t) => [t, cap(t)])], { value: pageState.exMove ?? '', 'aria-label': 'Movement' });
+  const eq = select([['', 'Any equipment'], ...tags.equipment.map((t) => [t, cap(t)])], { value: pageState.exEquip ?? '', 'aria-label': 'Equipment' });
   const listBox = h('div');
   const count = h('span');
   const PAGE = 60;
@@ -206,23 +209,26 @@ function libraryPanel(exs, edit) {
   const draw = () => {
     const needle = pageState.exQ.trim().toLowerCase();
     const shown = exs.data.filter((x) => (!needle || x.name.toLowerCase().includes(needle) || (x.instructions ?? '').toLowerCase().includes(needle))
-      && (!pageState.exCat || x.category === pageState.exCat) && (pageState.exFilter !== 'no_video' || !x.video_url) && (pageState.exFilter !== 'unused' || !x.uses));
+      && (!pageState.exCat || x.category === pageState.exCat) && (pageState.exFilter !== 'no_video' || !x.video_url) && (pageState.exFilter !== 'unused' || !x.uses)
+      && (!pageState.exMove || x.movement === pageState.exMove) && (!pageState.exEquip || (x.equipment ?? []).includes(pageState.exEquip)));
     count.textContent = shown.length === exs.data.length ? plural(exs.data.length, 'exercise') : `${shown.length} of ${exs.data.length} exercises`;
     fill(listBox, shown.length ? [...shown.slice(0, showing).map((x) => h('div', { class: 'list-item' },
       playBtn(x),
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name),
-        h('span', { class: 'small muted' }, [x.category ?? 'No category', x.uses ? `in ${plural(x.uses, 'workout')}` : 'not in a program', x.video_url ? null : 'no video yet'].filter(Boolean).join(' · ')),
+        h('span', { class: 'small muted' }, [x.category ?? 'No category', tagText(x), x.uses ? `in ${plural(x.uses, 'workout')}` : 'not in a program', x.video_url ? null : 'no video yet'].filter(Boolean).join(' · ')),
         x.programs.length ? h('span', { class: 'small muted' }, `Used in ${x.programs.map((p) => p.name).join(', ')}`) : null),
-      edit ? btn('Edit', () => exerciseDialog(x, cats), 'ghost', { 'aria-label': `Edit ${x.name}` }) : null)),
+      edit ? btn('Edit', () => exerciseDialog(x, cats, tags), 'ghost', { 'aria-label': `Edit ${x.name}` }) : null)),
       shown.length > showing ? h('div', { class: 'row', style: 'justify-content:center;padding-top:8px' }, btn(`Show ${Math.min(PAGE, shown.length - showing)} more (${(shown.length - showing).toLocaleString()} left)`, () => { showing += PAGE; draw(); }, 'ghost')) : null]
       : h('p', { class: 'small muted' }, exs.data.length ? 'No exercises match. Clear the search or filters.' : 'No exercises yet.'));
   };
   q.addEventListener('input', () => { pageState.exQ = q.value; showing = PAGE; draw(); });
   cat.addEventListener('change', () => { pageState.exCat = cat.value; showing = PAGE; draw(); });
   flt.addEventListener('change', () => { pageState.exFilter = flt.value; showing = PAGE; draw(); });
+  mv.addEventListener('change', () => { pageState.exMove = mv.value; showing = PAGE; draw(); });
+  eq.addEventListener('change', () => { pageState.exEquip = eq.value; showing = PAGE; draw(); });
   draw();
-  return panel('Exercise library', { subtitle: count, action: edit ? h('div', { class: 'row wrap' }, isOwner() ? btn('Import a list', () => importListDialog(), 'ghost') : null, btn('Add exercise', () => exerciseDialog(null, cats), 'secondary')) : null },
-    h('div', { class: 'stack', style: 'gap:8px' }, q, h('div', { class: 'form-grid', style: 'gap:8px' }, cat, flt)), listBox);
+  return panel('Exercise library', { subtitle: count, action: edit ? h('div', { class: 'row wrap' }, isOwner() ? btn('Import a list', () => importListDialog(), 'ghost') : null, btn('Add exercise', () => exerciseDialog(null, cats, tags), 'secondary')) : null },
+    h('div', { class: 'stack', style: 'gap:8px' }, q, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, cat, mv, eq, flt)), listBox);
 }
 // Owner: bring in a list of exercises (the video upload tool's video-library.csv, or any CSV with a Name column).
 // Checked first, every problem listed by row and column; nothing is saved until Bring them in.
@@ -260,12 +266,27 @@ function importListDialog() {
     } },
     { label: 'Cancel', variant: 'ghost' }]);
 }
-function exerciseFields(x, cats) {
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
+const tagText = (x) => [x.movement ? cap(x.movement) : null, ...(x.muscles ?? []), ...(x.equipment ?? [])].filter(Boolean).join(', ') || null;
+// A row of toggles for a list of tags. value() answers the picked ones in the list's order.
+function chipPicker(options, initial = [], label = 'Tags') {
+  const picked = new Set(initial);
+  const el = h('div', { class: 'td-days', role: 'group', 'aria-label': label });
+  const value = () => options.filter((o) => picked.has(o));
+  const draw = () => fill(el, options.map((o) => h('button', { type: 'button', class: 'td-day', 'aria-pressed': String(picked.has(o)), onClick: () => { if (picked.has(o)) picked.delete(o); else picked.add(o); draw(); } }, cap(o))));
+  draw();
+  return { el, value };
+}
+function exerciseFields(x, cats, tags = null) {
   const name = input({ value: x?.name ?? '', required: true }), url = input({ type: 'url', value: x?.video_url ?? '', placeholder: 'https://youtube.com/watch?v=…' });
   const cat = select([['', 'No category'], ...cats.map((c) => [c, c])], { value: x?.category ?? '' });
   const cue = textarea(x?.instructions ?? '', { placeholder: 'One or two coaching cues' });
-  return { name, url, cat, cue, body: () => ({ name: name.value, video_url: url.value || null, instructions: cue.value || null, category: cat.value || null }),
-    el: h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('Category', cat)), field('Demo video link', url, 'YouTube, Vimeo or a direct .mp4 link.'), field('Coaching cues', cue)) };
+  const t = tags ?? pageState.tags ?? { movements: [], muscles: [], equipment: [] };
+  const mv = select([['', 'No movement pattern'], ...t.movements.map((m) => [m, cap(m)])], { value: x?.movement ?? '' });
+  const mus = chipPicker(t.muscles, x?.muscles ?? [], 'Muscles'), eqp = chipPicker(t.equipment, x?.equipment ?? [], 'Equipment');
+  return { name, url, cat, cue, body: () => ({ name: name.value, video_url: url.value || null, instructions: cue.value || null, category: cat.value || null, movement: mv.value || null, muscles: mus.value(), equipment: eqp.value() }),
+    el: h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('Category', cat)), field('Demo video link', url, 'YouTube, Vimeo or a direct .mp4 link.'), field('Coaching cues', cue),
+      t.movements.length ? h('div', { class: 'stack-tight' }, field('Movement pattern', mv), h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Muscles'), mus.el), h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Equipment'), eqp.el), h('span', { class: 'small muted' }, 'Tags help find the exercise in the library and the builder.')) : null) };
 }
 // The swaps an athlete may pick on their own for this exercise ("Can't do this today?" in the app).
 function alternativesBlock(x) {
@@ -295,8 +316,8 @@ function alternativesBlock(x) {
   return h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line);padding-top:12px' }, h('div', { class: 'dp-label' }, 'Swaps athletes may pick'),
     h('p', { class: 'small muted', style: 'margin:0' }, 'In the app, "Can\'t do this today?" offers these for this exercise. The pick is for that workout only and you see it on the session\'s Live panel.'), listBox, add);
 }
-function exerciseDialog(x, cats) {
-  const f = exerciseFields(x, cats);
+function exerciseDialog(x, cats, tags = null) {
+  const f = exerciseFields(x, cats, tags);
   if (x) f.el.append(alternativesBlock(x));
   const actions = [{ label: x ? 'Save exercise' : 'Add exercise', variant: 'primary', onClick: async () => {
     if (x) await patch(`/v1/exercises/${x.id}`, f.body()); else await post('/v1/exercises', { ...f.body(), video_url: f.url.value || undefined });
@@ -768,6 +789,10 @@ function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
   const cats = exs.categories ?? [];
   const q = input({ type: 'search', placeholder: 'Search the library', 'aria-label': 'Search the library' });
   const cat = select([['', 'Every category'], ...cats.map((c) => [c, c])], { 'aria-label': 'Category' });
+  const tags = exs.tags ?? { movements: [], muscles: [], equipment: [] };
+  pageState.tags = tags;
+  const mv = select([['', 'Any movement'], ...tags.movements.map((t) => [t, cap(t)])], { 'aria-label': 'Movement' });
+  const eq = select([['', 'Any equipment'], ...tags.equipment.map((t) => [t, cap(t)])], { 'aria-label': 'Equipment' });
   const results = h('div', { class: 'stack pg-pick', style: 'gap:0' });
   const chosen = h('div', { class: 'stack' });
   let picked = null, added = 0;
@@ -777,10 +802,10 @@ function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
   };
   const drawResults = () => {
     const needle = q.value.trim().toLowerCase();
-    const shown = exs.data.filter((x) => (!needle || x.name.toLowerCase().includes(needle)) && (!cat.value || x.category === cat.value)).slice(0, 40);
+    const shown = exs.data.filter((x) => (!needle || x.name.toLowerCase().includes(needle)) && (!cat.value || x.category === cat.value) && (!mv.value || x.movement === mv.value) && (!eq.value || (x.equipment ?? []).includes(eq.value))).slice(0, 40);
     const exact = exs.data.some((x) => x.name.toLowerCase() === needle);
     fill(results, shown.map((x) => h('button', { type: 'button', class: 'pg-pick-item', 'aria-pressed': String(picked?.id === x.id), onClick: () => choose(x) },
-      h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, [x.category, x.video_url ? null : 'no video'].filter(Boolean).join(' · ')))),
+      h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, [x.category, tagText(x), x.video_url ? null : 'no video'].filter(Boolean).join(' · ')))),
     needle && !exact ? h('button', { type: 'button', class: 'pg-pick-item pg-pick-new', onClick: () => newInline(q.value.trim()) }, h('span', { class: 'strong' }, `Add “${q.value.trim()}” to the library`), h('span', { class: 'small muted' }, 'Then pick it here')) : null,
     !shown.length && !needle ? h('p', { class: 'small muted' }, 'The library is empty. Type a name to add the first exercise.') : null);
   };
@@ -820,8 +845,8 @@ function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
     ? [{ label: 'Swap', variant: 'primary', onClick: async () => { if (!picked) throw new Error('Choose an exercise from the list first.'); await onPick(picked); } }, { label: 'Cancel', variant: 'ghost' }]
     : [{ label: 'Add exercise', variant: 'primary', onClick: () => add(false) }, { label: 'Add and add another', onClick: () => add(true) }, { label: 'Done', variant: 'ghost' }];
   q.addEventListener('input', drawResults);
-  cat.addEventListener('change', drawResults);
-  const d = dialog(title, h('div', { class: 'stack' }, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), h('div', { style: 'width:180px' }, cat)), results, chosen), actions);
+  cat.addEventListener('change', drawResults); mv.addEventListener('change', drawResults); eq.addEventListener('change', drawResults);
+  const d = dialog(title, h('div', { class: 'stack' }, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), h('div', { style: 'width:150px' }, cat), tags.movements.length ? h('div', { style: 'width:150px' }, mv) : null, tags.equipment.length ? h('div', { style: 'width:150px' }, eq) : null), results, chosen), actions);
   if (!onPick) d.addEventListener('close', () => { if (added) onAdd(); }, { once: true });
   drawResults();
   q.focus();

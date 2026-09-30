@@ -59,3 +59,20 @@
 .c-ex-mark-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--steel);text-shadow:0 0 6px rgba(0,0,0,.8)}
 .c-demo{position:relative}
 .c-demo-tag{position:absolute;left:8px;top:8px;padding:2px 8px;border-radius:var(--radius-pill);background:rgba(0,0,0,.6);color:var(--steel);font:600 11px/18px var(--font-sans);letter-spacing:.04em;text-transform:uppercase;pointer-events:none}
+/* The training calendar (version 62): a week strip on the Workout tab, a day at a time. */
+.c-cal{gap:10px}
+.c-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.c-day{min-height:58px;padding:4px 0;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);color:inherit;font:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.c-day--now{outline:2px solid var(--steel);outline-offset:-2px}
+.c-day--done{background:var(--green-deep);border-color:var(--green-mid)}
+.c-day--missed{border-color:var(--amber)}
+.c-day-wd{font:600 10px/12px var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--steel-muted)}
+.c-day-n{font:600 15px/1 var(--font-sans);color:var(--steel)}
+.c-day-dot{font:700 12px/12px var(--font-sans);min-height:12px;color:var(--green-bright)}
+.c-day--missed .c-day-dot{color:var(--amber)}
+.c-day--done .c-day-dot{color:var(--green-soft)}
+.c-day[aria-pressed="true"]{border-color:var(--green-bright);box-shadow:0 0 0 1px var(--green-bright) inset}
+.c-day:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.c-day-info{border-top:1px solid var(--line-subtle);padding-top:8px}
+.c-plan{border-top:1px solid var(--line-subtle);padding-top:8px}
+.c-plan-row{display:flex;align-items:center;gap:8px;min-height:40px}

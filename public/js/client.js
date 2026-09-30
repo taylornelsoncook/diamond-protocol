@@ -49,7 +49,11 @@ const say = (msg) => { spoken.push(msg); if (spoken.length === 1) queueMicrotask
 // A link like /app?token=…#education opens that tab, and changing the # while the app is open switches tabs.
 const TAB_KEYS = ['workout', 'accountability', 'performance', 'education'];
 const hashTab = () => { const k = location.hash.replace(/^#\/?/, '').toLowerCase(); return TAB_KEYS.includes(k) ? k : null; };
-const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map() };
+const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map(),
+  pick: null, pickWorkout: null,                       // a workout opened from the calendar instead of the one the app opens on
+  calWeek: null, calDay: null };                       // the week the calendar strip shows (its Monday) and the day tapped
+// The workout on screen: the one picked on the calendar, else what the server opens on.
+const currentWorkout = () => state.pickWorkout ?? state.home?.workout ?? null;
 const view = h('div', { class: 'c-view' });
 const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), post: (p, b) => api('POST', `/app/api/${p}`, b ?? {}) }, onData: () => drawTabs() });
 const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
@@ -77,8 +81,11 @@ function show(tab) {
 }
 window.addEventListener('hashchange', () => { const k = hashTab() ?? 'workout'; if (k !== state.tab && root.contains(tabs)) show(k); });
 async function refresh() {
-  try { const home = await api('GET', '/app/api/home'); state.home = home; if (state.tab === 'workout' && !state.done && !editing()) render(); }
-  catch { /* offline: keep what's on screen */ }
+  try {
+    const home = await api('GET', '/app/api/home'); state.home = home;
+    if (state.pick) { try { state.pickWorkout = await api('GET', `/app/api/workouts/${state.pick}`); } catch (e) { if (e.status) { state.pick = null; state.pickWorkout = null; } } }   // logged since, or gone
+    if (state.tab === 'workout' && !state.done && !editing()) render();
+  } catch { /* offline: keep what's on screen */ }
 }
 
 const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn dp-btn--primary', href: '/portal' }, 'Sign in with your email'));
@@ -128,7 +135,7 @@ function draftFor(workout) {
 }
 const hasSets = (d) => !!d && Object.values(d.sets).some((rows) => rows.some((r) => r.done));
 // A draft for another workout (the coach changed the program, or it was logged on the weight-room screen).
-const strayDraft = () => { const d = store.get(DRAFT_KEY()); return d && d.token === tokenValue && !d.log_id && d.workout_id !== state.home?.workout?.id && hasSets(d) ? d : null; };
+const strayDraft = () => { const d = store.get(DRAFT_KEY()); return d && d.token === tokenValue && !d.log_id && d.workout_id !== currentWorkout()?.id && hasSets(d) ? d : null; };
 
 // ---------- Sending, with retries when there's no signal ----------
 // Finished workouts wait in an outbox on the phone until the server has them. Each Finish carries a request id, so a
@@ -233,21 +240,86 @@ function render() {
   if (state.done) return renderDone(state.done);
   const kept = store.get(DRAFT_KEY());
   if (kept?.token === tokenValue && kept.log_id && kept.workout) { draft = kept; return renderLogger(kept.workout); }
-  if (home.locked || !home.workout) {
+  const w = home.locked ? null : currentWorkout();
+  if (!w) {
     stopRest();
     fill(view, top(), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox, h('div', { class: 'dp-panel' }, h('p', null, home.message)),
-      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
+      home.locked ? null : calendarStrip(home), strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.
-  if (outbox().some((x) => x.token === tokenValue && x.kind === 'finish' && x.workout_id === home.workout.id)) {
+  if (outbox().some((x) => x.token === tokenValue && x.kind === 'finish' && x.workout_id === w.id)) {
     fill(view, top(), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
-      h('div', { class: 'dp-panel stack' }, h('p', null, `${home.workout.title} is finished and saved on this phone. It sends when you're back online, then your next workout shows here.`)),
-      comingUp(home.upcoming), historyPanel(home));
+      h('div', { class: 'dp-panel stack' }, h('p', null, `${w.title} is finished and saved on this phone. It sends when you're back online, then your next workout shows here.`)),
+      calendarStrip(home), comingUp(home.upcoming), historyPanel(home));
     return;
   }
-  draftFor(home.workout);
-  renderLogger(home.workout);
+  draftFor(w);
+  renderLogger(w);
+}
+
+// ---------- The training calendar ----------
+// Every workout of the program has a date (the coach set the start and the training days). The strip shows one week;
+// tap a day to see what's planned and open it (a missed workout, or one a day ahead).
+const addDays = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const mondayOf = (d) => addDays(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
+const dayName = (d, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
+const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up' };
+// The line under the title: when this workout is (or was) planned.
+const whenText = (w) => (!w.date ? null : w.status === 'today' ? 'Today' : w.status === 'missed' ? `Missed · was ${dayName(w.date)}` : `Up next · ${dayName(w.date)}`);
+function calendarStrip(home) {
+  const cal = home.calendar;
+  if (!cal?.workouts?.length) return null;
+  const byDate = new Map();
+  for (const w of cal.workouts) byDate.set(w.date, [...(byDate.get(w.date) ?? []), w]);
+  state.calWeek ??= mondayOf(cal.today);
+  const box = h('section', { class: 'dp-panel stack-tight c-cal', 'aria-label': 'Your training calendar' });
+  let showPlan = false;
+  const draw = () => {
+    const days = Array.from({ length: 7 }, (_, i) => addDays(state.calWeek, i));
+    const cells = days.map((d) => {
+      const ws = byDate.get(d) ?? [];
+      const st = !ws.length ? 'rest' : ws.every((w) => w.status === 'done') ? 'done' : ws.some((w) => w.status === 'missed') ? 'missed' : d === cal.today ? 'today' : 'planned';
+      return h('button', { type: 'button', class: `c-day c-day--${st}${d === cal.today ? ' c-day--now' : ''}`, 'aria-pressed': String(state.calDay === d),
+        'aria-label': `${dayName(d, { weekday: 'long', month: 'long', day: 'numeric' })}${d === cal.today ? ', today' : ''}: ${ws.length ? ws.map((w) => `${w.title} (${STATUS_WORD[w.status].toLowerCase()})`).join(', ') : 'rest day'}`,
+        onClick: () => { state.calDay = state.calDay === d ? null : d; draw(); } },
+        h('span', { class: 'c-day-wd' }, dayName(d, { weekday: 'short' })), h('span', { class: 'c-day-n' }, String(Number(d.slice(8)))),
+        h('span', { class: 'c-day-dot', 'aria-hidden': 'true' }, st === 'done' ? '✓' : st === 'missed' ? '!' : ws.length ? '•' : ''));
+    });
+    const picked = state.calDay ? byDate.get(state.calDay) ?? [] : null;
+    const line = (w) => h('div', { class: 'c-plan-row' },
+      h('span', { class: 'grow small' }, h('span', { class: 'strong' }, w.title), ` · week ${w.week} day ${w.day}${w.moved ? ' · moved by your coach' : ''} · ${STATUS_WORD[w.status].toLowerCase()}`),
+      w.status === 'done' ? null : currentWorkout()?.id === w.id ? h('span', { class: 'small muted' }, 'Open below') : btn('Open', (e) => busy(e.currentTarget, () => openPick(w.id)), 'secondary', { 'aria-label': `Open ${w.title}` }));
+    const weekOfToday = state.calWeek === mondayOf(cal.today);
+    const label = `${dayName(days[0], { month: 'short', day: 'numeric' })} – ${dayName(days[6], { month: 'short', day: 'numeric' })}`;
+    fill(box,
+      h('div', { class: 'row', style: 'align-items:center;gap:6px' },
+        btn('‹', () => { state.calWeek = addDays(state.calWeek, -7); state.calDay = null; draw(); }, 'ghost', { 'aria-label': 'Previous week' }),
+        h('span', { class: 'grow small strong', style: 'text-align:center' }, label),
+        weekOfToday ? null : btn('Today', () => { state.calWeek = mondayOf(cal.today); state.calDay = null; draw(); }, 'ghost'),
+        btn('›', () => { state.calWeek = addDays(state.calWeek, 7); state.calDay = null; draw(); }, 'ghost', { 'aria-label': 'Next week' })),
+      h('div', { class: 'c-week', role: 'group', 'aria-label': `Training days, ${label}` }, cells),
+      picked ? h('div', { class: 'c-day-info stack-tight' }, h('span', { class: 'small strong' }, dayName(state.calDay, { weekday: 'long', month: 'long', day: 'numeric' })),
+        picked.length ? picked.map(line) : h('span', { class: 'small muted' }, 'Rest day. Nothing planned.')) : null,
+      h('div', { class: 'row wrap small muted', style: 'align-items:center' }, h('span', { class: 'grow' }, `${cal.counts.done} done · ${cal.counts.missed} missed · ${cal.counts.upcoming} to go · ${cal.days_text}`),
+        btn(showPlan ? 'Hide the plan' : 'Whole plan', () => { showPlan = !showPlan; draw(); }, 'ghost')),
+      showPlan ? h('div', { class: 'c-plan stack-tight' }, [...new Set(cal.workouts.map((w) => w.week))].map((week) => [h('span', { class: 'small strong' }, `Week ${week}`),
+        ...cal.workouts.filter((w) => w.week === week).map((w) => h('div', { class: 'c-plan-row' }, h('span', { class: 'small muted', style: 'min-width:92px' }, dayName(w.date)), h('span', { class: 'grow small' }, h('span', { class: w.status === 'done' ? 'muted' : 'strong' }, w.title), w.moved ? ' · moved' : ''),
+          h('span', { class: `small ${w.status === 'missed' ? 'warn-text' : w.status === 'done' ? 'good-text' : 'muted'}` }, STATUS_WORD[w.status])))])) : null);
+  };
+  draw();
+  return box;
+}
+// Open a workout from the calendar. Sets already logged in another workout stay where they are: finish or discard them first.
+async function openPick(id) {
+  if (id === state.home?.workout?.id) { state.pick = null; state.pickWorkout = null; state.open = null; render(); window.scrollTo(0, 0); return; }
+  const d = store.get(DRAFT_KEY());
+  if (d && d.token === tokenValue && !d.log_id && d.workout_id !== id && hasSets(d)) throw new Error(`You've logged sets in ${d.title}. Finish it or discard those sets first.`);
+  try { state.pickWorkout = await api('GET', `/app/api/workouts/${id}`); }
+  catch (e) { if (e.status === 409) { await refresh(); } throw e; }
+  state.pick = id; state.open = null;
+  render();
+  window.scrollTo(0, 0);
 }
 
 // The exercise's demo. A video file of ours plays muted and looping as soon as the card opens, with the still first, so
@@ -511,12 +583,16 @@ function renderLogger(w) {
   fill(view, top(),
     h('div', { class: 'stack-tight' },
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
-      h('h1', { class: 'c-title' }, w.title)),
+      h('h1', { class: 'c-title' }, w.title),
+      !reopened && whenText(w) ? h('div', { class: `small strong${w.status === 'missed' ? ' warn-text' : ''}` }, whenText(w)) : null),
     pendingBox,
+    !reopened && state.pickWorkout && home.workout ? h('div', { class: 'c-note row', style: 'align-items:center' }, h('span', { class: 'grow' }, `You opened this one from your calendar. ${home.workout.title} is what's up ${home.workout.status === 'today' ? 'today' : 'next'}.`),
+      btn(`Back to ${home.workout.title}`, () => openPick(home.workout.id), 'ghost')) : null,
     reopened ? h('div', { class: 'c-note row' }, h('span', { class: 'grow' }, 'Fix what you logged, then save. Your coach sees the changes.'), btn('Cancel', () => { store.set(DRAFT_KEY(), null); draft = null; render(); }, 'ghost')) : null,
     reopened ? null : h('div', { class: 'stack-tight' }, h('div', { class: 'c-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': 'Program progress' }, h('div', { style: `width:${pct}%` })),
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
+    reopened ? null : calendarStrip(home),
     reopened ? null : readinessCard(home.readiness),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,
@@ -545,6 +621,7 @@ async function finish(d, w) {
   setOutbox([...outbox().filter((x) => x.request_id !== entry.request_id), entry]);
   store.set(DRAFT_KEY(), null);
   draft = null; state.open = null; state.details.clear();
+  state.pick = null; state.pickWorkout = null; state.calDay = null;
   stopRest();
   await flush();
   const out = results.get(entry.request_id);

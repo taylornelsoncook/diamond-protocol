@@ -277,3 +277,15 @@ td .dp-badge{white-space:nowrap}
 .fc-progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
 .fc-progress>div{height:6px;background:var(--green-mid);transition:width .2s}
 .fc-note{padding:10px 14px;border:1px solid var(--line);background:var(--surface);color:var(--steel);border-radius:var(--radius-md);font-size:14px;line-height:20px}
+/* Training days (version 62): the weekdays an athlete trains, on the client page and the program page. */
+.td-days{display:flex;gap:4px;flex-wrap:wrap}
+.td-day{min-width:46px;min-height:40px;padding:0 6px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel-muted);font:600 13px/1 var(--font-sans);cursor:pointer}
+.td-day[aria-pressed="true"]{background:var(--green-deep);color:var(--green-soft);border-color:var(--green-mid)}
+.td-day:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.tc-row{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 0;border-top:1px solid var(--line-subtle);flex-wrap:wrap}
+.tc-row--today{background:var(--surface)}
+.tc-date{min-width:110px;font-variant-numeric:tabular-nums}
+.tc-week>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:8px;font-weight:600;list-style:none}
+.tc-week>summary::-webkit-details-marker{display:none}
+.tc-week>summary::before{content:'▸';color:var(--steel-muted)}
+.tc-week[open]>summary::before{content:'▾'}

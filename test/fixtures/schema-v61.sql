@@ -221,21 +221,9 @@ CREATE TABLE IF NOT EXISTS assignments (
   program_id TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
   start_date TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  training_days TEXT   -- version 62: the weekdays this athlete trains, 0 (Sunday) to 6, comma list; empty = the program's default
+  created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS assignments_client ON assignments(client_id, active);
--- Version 62: one workout of an athlete's program moved to another date on their own calendar (services/training-calendar.js).
--- The plan itself never changes; a move is that athlete's alone and goes when the schedule is set again.
-CREATE TABLE IF NOT EXISTS assignment_moves (
-  id TEXT PRIMARY KEY,
-  assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-  workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
-  date TEXT NOT NULL,
-  moved_by TEXT,
-  created_at TEXT NOT NULL,
-  UNIQUE (assignment_id, workout_id)
-);
 CREATE TABLE IF NOT EXISTS workout_logs (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

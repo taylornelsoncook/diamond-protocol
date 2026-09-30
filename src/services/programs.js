@@ -8,6 +8,7 @@ import { blocksFor, attachFields as routineFields } from './routines.js';
 import { getSetting } from './families.js';
 import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
+import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday } from './training-calendar.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -454,7 +455,9 @@ export function removeWorkoutExercise(ctx, id) {
 }
 
 // ---- Assignments ----
-export function assign(ctx, programId, clientId, startDate) {
+// start_date is the day week 1 begins (default today); training_days the weekdays the athlete trains (0 Sunday to 6
+// Saturday; default: the usual spread for the program's days a week, see training-calendar.js).
+export function assign(ctx, programId, clientId, startDate, { training_days } = {}) {
   const p = ctx.db.get('SELECT id, name FROM programs WHERE id = ?', programId);
   if (!p) throw notFound('Program');
   const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', clientId);
@@ -464,13 +467,14 @@ export function assign(ctx, programId, clientId, startDate) {
   const current = ctx.db.get('SELECT a.program_id, p.name FROM assignments a JOIN programs p ON p.id = a.program_id WHERE a.client_id = ? AND a.active = 1', clientId);
   if (current?.program_id === programId) throw conflict(`${first} is already on ${p.name}.`);
   const id = newId('asg');
+  const start = parseDate(startDate, 'start_date', localToday(ctx)), days = daysFor(ctx, programId, training_days);
   ctx.db.tx(() => {
     ctx.db.run('UPDATE assignments SET active = 0 WHERE client_id = ? AND active = 1', clientId);
-    ctx.db.run('INSERT INTO assignments (id, client_id, program_id, start_date, active, created_at) VALUES (?, ?, ?, ?, 1, ?)',
-      id, clientId, programId, v.date(startDate, 'start_date', { optional: true }) ?? ctx.now(), ctx.now());
+    ctx.db.run('INSERT INTO assignments (id, client_id, program_id, start_date, training_days, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
+      id, clientId, programId, start, days, ctx.now());
     emit(ctx, 'program.assigned', { assignment_id: id, client_id: clientId, client_name: c.name, program_id: programId, program_name: p.name });
   });
-  return { id, client_id: clientId, program_id: programId, previous_program: current ? { id: current.program_id, name: current.name } : null };
+  return { id, client_id: clientId, program_id: programId, start_date: start, training_days: days ? days.split(',').map(Number) : null, previous_program: current ? { id: current.program_id, name: current.name } : null };
 }
 // Take a client off a program. Their logged workouts stay in their history.
 export function unassign(ctx, programId, clientId) {
@@ -500,23 +504,24 @@ export function clientProgress(ctx, { programId, clientId } = {}) {
   const where = ['a.active = 1', 'c.archived_at IS NULL'], args = [];
   if (programId) { where.push('a.program_id = ?'); args.push(programId); }
   if (clientId) { where.push('a.client_id = ?'); args.push(clientId); }
-  const rows = ctx.db.all(`SELECT c.id, c.name, c.athlete_id, c.archived_at, a.id AS assignment_id, a.program_id, a.start_date, p.name AS program_name,
+  const rows = ctx.db.all(`SELECT c.id, c.name, c.athlete_id, c.archived_at, a.id AS assignment_id, a.program_id, a.start_date, a.training_days, p.name AS program_name,
       (SELECT COUNT(*) FROM workouts w WHERE w.program_id = a.program_id) AS total,
       (SELECT MAX(l.completed_at) FROM workout_logs l WHERE l.client_id = c.id) AS last_workout_at
     FROM assignments a JOIN clients c ON c.id = a.client_id JOIN programs p ON p.id = a.program_id WHERE ${where.join(' AND ')} ORDER BY c.name COLLATE NOCASE`, ...args);
-  const workoutsOf = new Map();
+  const programsOf = new Map();
   const now = Date.parse(ctx.now());
   return rows.map((r) => {
-    if (!workoutsOf.has(r.program_id)) workoutsOf.set(r.program_id, ctx.db.all('SELECT id, week, day, title FROM workouts WHERE program_id = ? ORDER BY week, day', r.program_id));
-    const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', r.assignment_id).map((x) => x.workout_id));
-    const next = workoutsOf.get(r.program_id).find((w) => !done.has(w.id)) ?? null;
-    const since = r.last_workout_at && r.last_workout_at > r.start_date ? r.last_workout_at : r.start_date;
-    const idle = Math.max(0, Math.floor((now - Date.parse(since)) / 86400000));
+    if (!programsOf.has(r.program_id)) programsOf.set(r.program_id, getProgram(ctx, r.program_id));
+    const cal = datedWorkouts(ctx, { id: r.assignment_id, start_date: r.start_date, training_days: r.training_days }, programsOf.get(r.program_id));
+    const next = pickNext(cal.workouts, cal.today);
+    const startAt = Date.parse(`${cal.start_date}T12:00:00Z`);
+    const since = r.last_workout_at && Date.parse(r.last_workout_at) > startAt ? Date.parse(r.last_workout_at) : startAt;
+    const idle = Math.max(0, Math.floor((now - since) / 86400000));
     const access = appAccess(ctx, r);
     const complete = r.total > 0 && !next;
-    return { id: r.id, name: r.name, athlete_id: r.athlete_id, program_id: r.program_id, program_name: r.program_name, start_date: r.start_date,
-      done: workoutsOf.get(r.program_id).filter((w) => done.has(w.id)).length, total: r.total,
-      next: next && { id: next.id, week: next.week, day: next.day, title: next.title }, last_workout_at: r.last_workout_at, days_idle: idle,
+    return { id: r.id, name: r.name, athlete_id: r.athlete_id, program_id: r.program_id, program_name: r.program_name, start_date: cal.start_date, training_days: cal.training_days,
+      done: cal.counts.done, missed: cal.counts.missed, total: r.total,
+      next: next && { id: next.id, week: next.week, day: next.day, title: next.title, date: next.date, status: next.status }, last_workout_at: r.last_workout_at, days_idle: idle,
       membership: access.status, app_open: access.open, complete, quiet: !complete && r.total > 0 && access.open && idle >= QUIET_DAYS };
   });
 }
@@ -699,13 +704,18 @@ export function appExercise(ctx, clientId, x0, readiness, swaps = null) {
 }
 
 // The athlete's active program and the workouts left in it (the next one is what the app opens on).
+// Since version 62 every workout has a date on the athlete's calendar: `left` is what isn't logged yet, in date order, and
+// `next` is what the app opens on (today's workout, else the earliest one missed, else the next one coming up).
 export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)) {
   const a = ctx.db.get('SELECT * FROM assignments WHERE client_id = ? AND active = 1', clientId);
   if (!a) return null;
   const program = load(a.program_id);
-  const done = new Set(ctx.db.all('SELECT workout_id FROM workout_logs WHERE assignment_id = ?', a.id).map((r) => r.workout_id));
-  const left = program.workouts.filter((w) => !done.has(w.id));
-  return { assignment: a, program, left, next: left[0] ?? null };
+  const calendar = datedWorkouts(ctx, a, program);
+  const byId = new Map(program.workouts.map((w) => [w.id, w]));
+  const dated = (item) => ({ ...byId.get(item.id), date: item.date, status: item.status, moved: item.moved });
+  const left = calendar.workouts.filter((w) => w.status !== 'done').map(dated);
+  const pick = pickNext(calendar.workouts, calendar.today);
+  return { assignment: a, program, left, next: pick ? dated(pick) : null, calendar };
 }
 // Form checks asked in the plan (workout_exercises.form_check): whether this athlete has sent one for each such slot
 // (any clip that finished uploading; the coach may not have answered yet).
@@ -727,19 +737,37 @@ export function clientHome(ctx, client) {
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
   const own = nextWorkoutFor(ctx, client.id);
   if (!own) return { ...base, locked: false, program: null, history, reopen_id, upcoming: [], message: 'Your coach is building your program. Check back soon.' };
-  const { program, left, next } = own;
+  const { program, left, next, calendar } = own;
   const readiness = next ? readinessToday(ctx, client.id) : null;
-  const swaps = next ? swapsFor(ctx, client.id, next.id) : null;
+  const { dates, moves, ...cal } = calendar;
   return {
     ...base, locked: false,
     program: { id: program.id, name: program.name, weeks: program.weeks },
-    progress: { completed: program.workouts.length - left.length, total: program.workouts.length },
+    progress: { completed: program.workouts.length - left.length, total: program.workouts.length, missed: cal.counts.missed },
     readiness,
-    workout: next && { ...next, exercises: withAsks(ctx, client.id, next.exercises.map((x) => ({ ...appExercise(ctx, client.id, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }))) },
-    upcoming: left.slice(1, 4).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, exercises: w.exercises.map((x) => x.name) })),
+    workout: next && appWorkout(ctx, client.id, next, readiness),
+    upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
+    calendar: cal,
     history, reopen_id,
     message: next ? null : 'Program complete. Your coach will set your next block.'
   };
+}
+// A workout as the athlete does it today: each exercise with their weight, steps, swaps and form-check asks.
+function appWorkout(ctx, clientId, w, readiness) {
+  const swaps = swapsFor(ctx, clientId, w.id);
+  return { ...w, exercises: withAsks(ctx, clientId, w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }))) };
+}
+// A workout the athlete picked on the calendar (a missed one, or a day ahead) instead of the one the app opened on.
+export function openWorkout(ctx, client, workoutId) {
+  const access = appAccess(ctx, client);
+  if (!access.open) throw conflict(access.message);
+  const own = nextWorkoutFor(ctx, client.id);
+  if (!own) throw conflict('You aren\'t on a program right now.');
+  const item = own.calendar.workouts.find((w) => w.id === String(workoutId));
+  if (!item) throw notFound('That workout in your program');
+  if (item.status === 'done') throw Object.assign(conflict('You already logged this workout. It\'s under Finished workouts.'), { details: { log_id: item.log_id } });
+  const w = own.program.workouts.find((x) => x.id === item.id);
+  return appWorkout(ctx, client.id, { ...w, date: item.date, status: item.status, moved: item.moved }, readinessToday(ctx, client.id));
 }
 
 // What the done screen shows.

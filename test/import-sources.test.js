@@ -224,7 +224,7 @@ test('a version 53 database is upgraded: data_imports takes any file kind and ke
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 61, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 62, `round ${round}`);
       assert.deepEqual(d.get('SELECT source, file_kind, filename, rows FROM data_imports WHERE id = ?', 'dim_1'), { source: 'whoop_cycles', file_kind: 'csv', filename: 'cycles.csv', rows: 10 });
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM data_import_replaced WHERE import_id = 'dim_1'`).n, 1, 'what the import replaced still points at it');
       if (round === 1) d.run(`INSERT INTO data_imports (id, client_id, source, file_kind, rows, days, workouts, created_at) VALUES ('dim_2', 'cli_1', 'fitbit', 'fitbit', 1, 1, 0, '2026-09-02T00:00:00Z')`);

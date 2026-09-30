@@ -2,7 +2,7 @@
 // Settings) and the
 // program builder (one week at a time). Owners and coaches build and assign; front desk sees everything read-only and
 // can email an athlete their workout app link. The server enforces the same rules.
-import { h, fill, toast, busy, btn, field, input, select, panel, ago, money, videoEmbed, playIcon } from './ui.js';
+import { h, fill, toast, copyText, busy, btn, field, input, select, panel, ago, money, videoEmbed, playIcon } from './ui.js';
 import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
 import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
@@ -152,7 +152,7 @@ function storePanel(shop) {
     listed.map((x) => h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title), h('span', { class: 'small muted' }, `${x.kind === 'program' ? 'Program' : 'Course'} · ${money(x.price_cents)} · ${x.sold} sold`)),
       x.kind === 'program' ? h('a', { class: 'dp-btn dp-btn--ghost', href: `#/programs/${x.id}` }, 'Open') : null)),
     h('div', { class: 'row wrap' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
-      btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website and Instagram.')), 'ghost'),
+      btn('Copy link', () => copyText(link, 'Link copied. Put it on your website and Instagram.'), 'ghost'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: '/shop', target: '_blank', rel: 'noopener' }, 'View')));
 }
 

@@ -1,4 +1,4 @@
-import { h, fill, toast, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
+import { h, fill, toast, copyText, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, workoutRow } from './programs-coach.js';
 import { dataSummary } from './dataimport-ui.js';
@@ -798,7 +798,7 @@ async function viewClient(main, id) {
     h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),
     h('div', { class: 'row wrap' },
       !c.archived_at && appTo.length ? btn('Email app link', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/app-link/email`); toast(`App link emailed to ${r.sent_to.join(' and ')}.`); }), 'secondary', { title: `Sends it to ${appTo.join(', ')}` }) : null,
-      btn('Copy app link', async () => { await navigator.clipboard.writeText(appUrl); toast('App link copied.'); }, 'outline'),
+      btn('Copy app link', () => copyText(appUrl, 'App link copied.'), 'outline'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
       role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
     logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null,
@@ -864,8 +864,7 @@ async function viewClient(main, id) {
   const cardActions = h('div', { class: 'row wrap' },
     state.payments.provider === 'stripe' ? btn(c.card.on_file ? 'Send link to update card' : 'Copy card link for client', (e) => busy(e.currentTarget, async () => {
       const { url } = await post(`/v1/clients/${id}/card/setup-link`);
-      await navigator.clipboard.writeText(url).catch(() => {});
-      toast(`Secure card link copied. Send it to ${first}.`);
+      await copyText(url, `Secure card link copied. Send it to ${first}.`);
     }), 'outline') : null,
     state.payments.can_simulate && !c.card.on_file ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/card/test`); toast('Test card added.'); render(); }), 'ghost') : null);
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { 'aria-label': 'Check-in location', value: (() => { try { return localStorage.getItem('dp_location'); } catch { return null; } })() || locs.data[0]?.id });

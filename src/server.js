@@ -46,7 +46,7 @@ const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.htm
 const CSP = [
   "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
-  "frame-src https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
+  "frame-src 'self' https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
 // The athlete app and the client page upload form-check clips straight to the owner's private bucket, so that one
 // address is allowed for connections when it's set up.
@@ -266,8 +266,14 @@ function authenticate(ctx, req, route, r, url) {
   if (route.auth === 'client') {
     const linkToken = req.headers['x-client-token'] || url.searchParams.get('token');
     r.client = linkToken ? clientByToken(ctx, linkToken) : null;
-    if (!r.client && cookies.dp_family) {                                  // signed in at /portal as the athlete
-      r.client = whoForToken(ctx, cookies.dp_family)?.client ?? null;
+    if (!r.client && cookies.dp_family) {                                  // signed in at /portal: as the athlete, or a parent opening one of the family's athletes
+      const who = whoForToken(ctx, cookies.dp_family);
+      const wanted = req.headers['x-athlete-id'] || url.searchParams.get('athlete');
+      if (wanted && who?.guardian) {                                          // the family portal's Workout tab: the parent acts for their own athlete
+        const a = ctx.db.get('SELECT * FROM clients WHERE id = ? AND family_id = ? AND archived_at IS NULL', String(wanted), who.guardian.family_id);
+        if (!a) throw new HttpError(401, 'not_your_athlete', 'That athlete isn\'t in your family.');
+        r.client = a; r.actingParent = who.guardian;
+      } else r.client = who?.client ?? null;
       if (r.client && req.method !== 'GET' && !sameSite()) throw new HttpError(403, 'bad_origin', 'Requests from other sites are not allowed.');
       if (r.client) r.familyToken = cookies.dp_family;
     }
@@ -356,7 +362,8 @@ async function serveStatic(res, pathname) {
     const type = MIME[extname(full)] || 'application/octet-stream';
     // The Book now page is made to sit inside the business's own website, so any site may frame it. It only shows
     // public information and every button opens the parent portal in a new tab.
-    const policy = file === 'book.html' ? csp().replace("frame-ancestors 'none'", 'frame-ancestors *') : csp();
+    // The athlete app (client.html) sits inside the family portal's Workout tab, so our own pages may frame it.
+    const policy = file === 'book.html' ? csp().replace("frame-ancestors 'none'", 'frame-ancestors *') : file === 'client.html' ? csp().replace("frame-ancestors 'none'", "frame-ancestors 'self'") : csp();
     res.writeHead(200, { 'content-type': type, 'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : 'public, max-age=300' });
     res.end(body);
   } catch {

@@ -6,23 +6,35 @@ import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 // An athlete who signed in at /portal with their own email has no token: the portal cookie opens the app, and
 // tokenValue becomes "session:<athlete id>" so drafts and caches stay theirs (the header is left empty for it).
+// The family portal's Workout tab opens /app?athlete=<id>&embed=1 for one of the parent's athletes: the portal cookie
+// signs the requests and x-athlete-id says which athlete, tokenValue is "family:<id>", and the app hides its own tab
+// bar (the portal's tabs stand in) and tells the portal how tall it is.
 const params = new URLSearchParams(location.search);
-let tokenValue = params.get('token');
-const viaCookie = (t) => String(t ?? '').startsWith('session:');
+const familyAthlete = params.get('athlete');
+const embedded = params.get('embed') === '1';
+let tokenValue = params.get('token') ?? (familyAthlete ? `family:${familyAthlete}` : null);
+const viaCookie = (t) => /^(session|family):/.test(String(t ?? ''));
+const athleteHeader = (t) => (String(t ?? '').startsWith('family:') ? { 'x-athlete-id': String(t).slice(7) } : {});
 const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k) ?? 'null'); } catch { return null; } },
   set(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked: memory only */ } }
 };
 try {
-  if (tokenValue) localStorage.setItem('dp_client_token', tokenValue);
-  else tokenValue = localStorage.getItem('dp_client_token');
+  if (tokenValue && !viaCookie(tokenValue)) localStorage.setItem('dp_client_token', tokenValue);
+  else if (!tokenValue) tokenValue = localStorage.getItem('dp_client_token');
 } catch { /* storage blocked: keep the token in memory */ }
 if (params.has('token')) history.replaceState(null, '', `/app${location.hash}`);   // keep #education and the like
+// Inside the portal: report the page's height so the frame fits, whenever it changes.
+if (embedded && window.parent !== window) {
+  const tell = () => window.parent.postMessage({ dpAppHeight: document.documentElement.scrollHeight, athlete: familyAthlete }, location.origin);
+  new ResizeObserver(tell).observe(document.body);
+  window.addEventListener('load', tell);
+}
 
 const root = document.getElementById('root');
 class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
 const call = async (token, method, path, body) => {
-  const res = await fetch(path, { method, headers: { 'x-client-token': viaCookie(token) ? '' : token || '', ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
+  const res = await fetch(path, { method, headers: { 'x-client-token': viaCookie(token) ? '' : token || '', ...athleteHeader(token), ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin' });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(data.error?.message || 'Something went wrong. Try again.', res.status);
   return data;
@@ -73,7 +85,7 @@ const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn d
 async function load() {
   let home;
   if (!tokenValue || viaCookie(tokenValue)) {                   // no private link on this phone: the portal cookie, if they signed in there
-    try { home = await api('GET', '/app/api/home'); tokenValue = `session:${home.client?.id ?? 'me'}`; }
+    try { home = await api('GET', '/app/api/home'); if (!String(tokenValue ?? '').startsWith('family:')) tokenValue = `session:${home.client?.id ?? 'me'}`; }
     catch (e) {
       const cached = tokenValue ? store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`) : null;
       if (e.status === 401 || !tokenValue) return message('Sign in with your email to see your workouts, or open the link your coach sent you.', signInLink());
@@ -88,7 +100,7 @@ async function load() {
       home = cached.home;                           // offline: the last workout this phone saw
     }
   }
-  fill(root, view, tabs, live);
+  fill(root, view, embedded ? null : tabs, live);         // in the portal, the portal's own tabs stand in
   state.home = home;
   drawTabs();
   if (state.tab === 'workout') render(); else show(state.tab);
@@ -212,7 +224,7 @@ const lb = (w) => (w == null ? '' : `${Number.isInteger(w) ? w : w.toFixed(1)} l
 const setText = (s) => [s.weight != null ? lb(s.weight) : null, s.reps != null ? `${s.reps} reps` : null].filter(Boolean).join(' × ') || 'done';
 const shortDate = (iso) => new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const RPE_WORDS = ['', 'Very easy', 'Easy', 'Moderate', 'Somewhat hard', 'Hard', 'Hard', 'Very hard', 'Very hard', 'Near max', 'Max effort'];
-const top = () => h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' });
+const top = () => (embedded ? null : h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }));
 
 function render() {
   const home = state.home;
@@ -224,7 +236,7 @@ function render() {
   if (home.locked || !home.workout) {
     stopRest();
     fill(view, top(), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox, h('div', { class: 'dp-panel' }, h('p', null, home.message)),
-      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, 'Check in, see your goals, results and lessons with the tabs below.'));
+      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.

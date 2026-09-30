@@ -86,7 +86,7 @@ export function deleteExercise(ctx, id) {
 
 // ---- Programs ----
 const WEEK_AGO = (ctx) => new Date(Date.parse(ctx.now()) - 7 * 86400000).toISOString();
-export function listPrograms(ctx) {
+export function listPrograms(ctx, { kind = 'program' } = {}) {
   return ctx.db.all(
     `SELECT p.*,
       (SELECT COUNT(*) FROM workouts w WHERE w.program_id = p.id) AS workout_count,
@@ -94,7 +94,7 @@ export function listPrograms(ctx) {
       (SELECT MAX(n) FROM (SELECT COUNT(*) AS n FROM workouts w WHERE w.program_id = p.id GROUP BY w.week)) AS days_per_week,
       (SELECT COUNT(*) FROM workout_logs l JOIN workouts w ON w.id = l.workout_id JOIN clients c ON c.id = l.client_id
         WHERE w.program_id = p.id AND c.archived_at IS NULL AND l.completed_at >= ?) AS logged_7d
-     FROM programs p ORDER BY p.created_at`, WEEK_AGO(ctx));
+     FROM programs p WHERE p.kind = ? ORDER BY p.created_at`, WEEK_AGO(ctx), v.oneOf(kind, 'kind', ['program', 'template']));
 }
 export function getProgram(ctx, id) {
   const p = ctx.db.get('SELECT * FROM programs WHERE id = ?', id);
@@ -148,12 +148,13 @@ export function createProgram(ctx, body) {
   const src = body.copy_from ? getProgram(ctx, v.str(body.copy_from, 'copy_from')) : null;
   const id = newId('prog');
   const weeks = v.int(body.weeks ?? src?.weeks ?? 4, 'weeks', { min: 1, max: 52 });
+  const kind = body.kind === undefined ? 'program' : v.oneOf(body.kind, 'kind', ['program', 'template']);
   ctx.db.tx(() => {
-    ctx.db.run('INSERT INTO programs (id, name, description, level, weeks, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ctx.db.run('INSERT INTO programs (id, name, description, level, weeks, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?)',
       id, v.str(body.name, 'name', { max: 120 }),
       body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : src?.description ?? null,
       body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : src?.level ?? null,
-      weeks, ctx.now());
+      weeks, ctx.now(), kind);
     if (src) { for (const w of src.workouts.filter((x) => x.week <= weeks)) copyWorkoutInto(ctx, w, id, w.week, w.day); copyPhases(ctx, src.id, id, weeks); }
   });
   return getProgram(ctx, id);
@@ -162,7 +163,62 @@ export function createProgram(ctx, body) {
 export function duplicateProgram(ctx, id, body = {}) {
   const src = getProgram(ctx, id);
   const name = body.name ? v.str(body.name, 'name', { max: 120 }) : `${src.name} (copy)`.slice(0, 120);
-  return createProgram(ctx, { name, copy_from: id, weeks: Math.max(src.weeks, lastWeekOf(ctx, id)) });
+  return createProgram(ctx, { name, copy_from: id, weeks: Math.max(src.weeks, lastWeekOf(ctx, id)), kind: body.kind });
+}
+
+// ---- Templates (version 63; Relay plan step 6) ----
+// A program template is a program with kind 'template': the builder edits it like any program, nobody is ever assigned
+// to it and it isn't sold. New program's copy_from takes a template like any program. Workout templates are the
+// workouts of one hidden holder program (kind 'workouts'), so every copy path (fields, groups, blocks) already works.
+export const TEMPLATE_HOLDER = 'Workout templates';
+function templateHolder(ctx) {
+  let h = ctx.db.get(`SELECT id FROM programs WHERE kind = 'workouts'`);
+  if (!h) { h = { id: newId('prog') }; ctx.db.run(`INSERT INTO programs (id, name, weeks, created_at, kind) VALUES (?, ?, 52, ?, 'workouts')`, h.id, TEMPLATE_HOLDER, ctx.now()); }
+  return h.id;
+}
+// Save a program as a template (a copy with every week, workout and phase, under the template's name).
+export function saveProgramTemplate(ctx, programId, body = {}) {
+  const src = getProgram(ctx, programId);
+  if (src.kind === 'workouts') throw conflict('That isn\'t a program.');
+  return duplicateProgram(ctx, programId, { name: body.name ? v.str(body.name, 'name', { max: 120 }) : src.kind === 'template' ? `${src.name} (copy)` : src.name, kind: 'template' });
+}
+const shapeWorkoutTemplate = (w) => ({ id: w.id, name: w.title, exercises: w.exercises.length, exercise_names: w.exercises.map((x) => x.name), warmup: w.warmup?.name ?? null, cooldown: w.cooldown?.name ?? null, created_at: w.created_at ?? null });
+export function listWorkoutTemplates(ctx) {
+  const h = ctx.db.get(`SELECT id FROM programs WHERE kind = 'workouts'`);
+  if (!h) return [];
+  return getProgram(ctx, h.id).workouts.sort((a, b) => a.week - b.week || a.day - b.day).map(shapeWorkoutTemplate);
+}
+// Save a workout as a template: a copy of its exercises and blocks under a name, in the holder.
+export function saveWorkoutTemplate(ctx, workoutId, body = {}) {
+  const w = workoutRow(ctx, workoutId);
+  const name = body.name ? v.str(body.name, 'name', { max: 120 }) : w.title;
+  const holderId = templateHolder(ctx);
+  const n = ctx.db.get('SELECT COUNT(*) AS n FROM workouts WHERE program_id = ?', holderId).n;
+  if (n >= 364) throw conflict('You have 364 workout templates already. Delete some first.');
+  const id = ctx.db.tx(() => copyWorkoutInto(ctx, w, holderId, Math.floor(n / 7) + 1, (n % 7) + 1, name));
+  return shapeWorkoutTemplate(getProgram(ctx, holderId).workouts.find((x) => x.id === id));
+}
+export function deleteWorkoutTemplate(ctx, id) {
+  const w = ctx.db.get(`SELECT w.id FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ? AND p.kind = 'workouts'`, id);
+  if (!w) throw notFound('Workout template');
+  ctx.db.run('DELETE FROM workouts WHERE id = ?', w.id);
+  return { id: w.id, deleted: true };
+}
+// Start a day from a workout template: the template's exercises and blocks copied into week/day of the program.
+function workoutFromTemplate(ctx, programId, body) {
+  const t = ctx.db.get(`SELECT w.* FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ? AND p.kind = 'workouts'`, v.str(body.template_id, 'template_id'));
+  if (!t) throw notFound('Workout template');
+  const p = getProgram(ctx, programId);
+  const week = v.int(body.week, 'week', { min: 1, max: p.weeks });
+  const day = freeDay(ctx, programId, week, body.day);
+  const id = ctx.db.tx(() => copyWorkoutInto(ctx, t, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? t.title));
+  return getProgram(ctx, programId).workouts.find((w) => w.id === id);
+}
+// Templates and the holder are never assigned or sold.
+export function assertAssignable(ctx, programId) {
+  const p = ctx.db.get('SELECT kind, name FROM programs WHERE id = ?', programId);
+  if (!p) throw notFound('Program');
+  if (p.kind !== 'program') throw conflict(`${p.name} is a template. Start a program from it first, then assign that.`);
 }
 export function updateProgram(ctx, id, body) {
   const p = getProgram(ctx, id);
@@ -200,7 +256,7 @@ const deleteWorkouts = (ctx, ids) => { keepLogsOf(ctx, ids); for (const id of id
 // Refused while current clients are on it. Archived clients still on it (not shown on the program) are taken off.
 // Athletes' logged workouts stay in their history (keepLogsOf).
 export function deleteProgram(ctx, id) {
-  getProgram(ctx, id);
+  if (getProgram(ctx, id).kind === 'workouts') throw conflict('That holds your workout templates. Delete the templates one at a time.');
   const on = ctx.db.get('SELECT COUNT(*) AS n FROM assignments a JOIN clients c ON c.id = a.client_id WHERE a.program_id = ? AND a.active = 1 AND c.archived_at IS NULL', id).n;
   if (on) throw conflict(`${on} ${on === 1 ? 'client is' : 'clients are'} on this program. Move them to another program or remove them first.`);
   const kept = ctx.db.get('SELECT COUNT(*) AS n FROM workout_logs l JOIN workouts w ON w.id = l.workout_id WHERE w.program_id = ?', id).n;
@@ -228,6 +284,7 @@ function freeDay(ctx, programId, week, day) {
   return d;
 }
 export function addWorkout(ctx, programId, body) {
+  if (body.template_id) return workoutFromTemplate(ctx, programId, body);
   const p = getProgram(ctx, programId);
   const week = v.int(body.week, 'week', { min: 1, max: p.weeks });
   const day = freeDay(ctx, programId, week, body.day);
@@ -466,6 +523,7 @@ export function removeWorkoutExercise(ctx, id) {
 export function assign(ctx, programId, clientId, startDate, { training_days } = {}) {
   const p = ctx.db.get('SELECT id, name FROM programs WHERE id = ?', programId);
   if (!p) throw notFound('Program');
+  assertAssignable(ctx, programId);
   const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', clientId);
   if (!c) throw notFound('Client');
   const first = c.name.split(' ')[0];
@@ -488,6 +546,7 @@ export function assign(ctx, programId, clientId, startDate, { training_days } = 
 export function assignTeam(ctx, programId, body = {}) {
   const p = ctx.db.get('SELECT id, name FROM programs WHERE id = ?', programId);
   if (!p) throw notFound('Program');
+  assertAssignable(ctx, programId);
   const team = ctx.db.get('SELECT t.id, t.name, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', v.str(body.contract_id, 'contract_id'));
   if (!team) throw notFound('Team');
   const start = parseDate(body.start_date, 'start_date', localToday(ctx)), days = daysFor(ctx, programId, body.training_days);

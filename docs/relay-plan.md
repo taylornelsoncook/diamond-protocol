@@ -70,8 +70,8 @@ business's own), and their MCP server is a developer feature.
 5. **Assign to a team** (built, fourth pull request). Pick a team and a start date; each athlete gets their own
    assignment and calendar; athletes on another program are named and moved only on a second yes. Still to come:
    pushing one schedule change to everyone on a program.
-6. **Templates.** A library of saved programs, workouts and exercise runs, with "Start from a template" in the builder
-   and "Save as template" on any program or workout.
+6. **Templates** (built, sixth pull request). Save any program or workout as a template and start from it (New
+   program → Start from; Add day → Start from). Still to come: a template for a run of exercises inside a workout.
 7. **Bulk edits and drag to another day** in the builder.
 8. **Export a program** as a PDF calendar (with phases) and as an Excel file with a sheet per workout.
 9. **Exercise tags** (movement, muscle, equipment) and filters in the library and the builder's search.

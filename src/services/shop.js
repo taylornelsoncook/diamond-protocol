@@ -30,7 +30,7 @@ function courseItem(ctx, c) {
 
 // What's for sale: priced, turned on, and with something inside (a program with workouts, a published course with lessons).
 export function shopItems(ctx) {
-  const programs = ctx.db.all('SELECT * FROM programs WHERE for_sale = 1 AND price_cents > 0 ORDER BY name').map((p) => programItem(ctx, p)).filter((p) => p.workouts > 0);
+  const programs = ctx.db.all(`SELECT * FROM programs WHERE for_sale = 1 AND price_cents > 0 AND kind = 'program' ORDER BY name`).map((p) => programItem(ctx, p)).filter((p) => p.workouts > 0);
   const courses = ctx.db.all(`SELECT * FROM courses WHERE for_sale = 1 AND price_cents > 0 AND published = 1 AND audience = 'athletes' ORDER BY title`).map((c) => courseItem(ctx, c)).filter((c) => c.lessons > 0);
   return [...programs, ...courses];
 }
@@ -51,6 +51,7 @@ export function setForSale(ctx, kind, id, body = {}) {
   const row = kind === 'program' ? ctx.db.get('SELECT * FROM programs WHERE id = ?', id) : ctx.db.get('SELECT * FROM courses WHERE id = ?', id);
   if (!row) throw notFound(kind === 'program' ? 'Program' : 'Course');
   if (kind === 'course' && row.audience === 'parents') throw conflict('Parent courses are free in the parent portal. Only athlete courses can be sold.');
+  if (kind === 'program' && row.kind !== 'program') throw conflict('A template can\'t be sold. Start a program from it first.');
   const on = body.for_sale === undefined ? !!row.for_sale : body.for_sale === true;
   const price = body.price_cents === undefined ? row.price_cents : body.price_cents === null || body.price_cents === '' ? null : Number(body.price_cents);
   if (price != null && (!Number.isInteger(price) || price < 100 || price > 100000)) throw badRequest('Set a price between $1 and $1,000.');

@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 62;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts)
+const SCHEMA_VERSION = 63;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -125,7 +125,8 @@ const ADDED_COLUMNS = {
     'program_id TEXT', 'program_name TEXT', 'workout_title TEXT', 'workout_week INTEGER', 'workout_day INTEGER', 'exercises_snapshot TEXT'],   // version 43: what a deleted workout was
   lessons: ['quiz TEXT', "category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))"],   // version 24: lesson quizzes; 46: Education tabs
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
-  programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],                  // version 26: sold online
+  programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER',                  // version 26: sold online
+    "kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts'))"],   // version 63: templates
   spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
   // ---- version 34 (batch B10): coach-written protocols, edits to built-in tests that survive the library refresh, possible ranges
   perf_tests: ['protocol TEXT', "edited TEXT NOT NULL DEFAULT '[]'"],

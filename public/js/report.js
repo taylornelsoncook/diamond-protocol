@@ -1,4 +1,4 @@
-import { h, fill, btn, busy, toast } from './ui.js';
+import { h, fill, btn, busy, toast, copyText } from './ui.js';
 import { sparkline, fmtResult, fmtDate } from './charts.js';
 
 // One page for three readers: parents (?athlete=, signed in to the portal), staff (?client=, signed in to the dashboard;
@@ -75,7 +75,7 @@ function sharePanel(r) {
     label.value = '';
     const field = h('input', { class: 'dp-input', readonly: true, value: l.url, 'aria-label': 'The new link', onFocus: (ev) => ev.target.select() });
     fill(made, h('div', { class: 'rp-note stack-tight' }, h('span', { class: 'small' }, `Copy this link now: it's only shown once. It works until ${fmtDate(l.expires_at)} and never shows the date of birth.`),
-      h('div', { class: 'row', style: 'gap:8px' }, field, btn('Copy', (ev) => busy(ev.currentTarget, async () => { await navigator.clipboard.writeText(l.url); toast('Link copied.'); }), 'secondary', { style: 'min-height:44px' }))));
+      h('div', { class: 'row', style: 'gap:8px' }, field, btn('Copy', (ev) => busy(ev.currentTarget, () => copyText(l.url, 'Link copied.')), 'secondary', { style: 'min-height:44px' }))));
     field.focus();
     refresh();
   }), 'secondary', { style: 'min-height:44px' });

@@ -19,6 +19,13 @@ export function fill(el, ...kids) {
   return el;
 }
 
+// Copy text to the clipboard, or show it to copy by hand where the browser refuses (Safari without a
+// secure context, a page inside another site, clipboard access turned off).
+export async function copyText(text, done = 'Copied.') {
+  try { await navigator.clipboard.writeText(text); toast(done); }
+  catch { prompt('Copying is blocked here. Select the link and copy it:', text); }
+}
+
 export function toast(msg, tone = 'good') {
   const host = document.getElementById('toasts');
   const t = h('div', { class: `dp-toast${tone === 'warn' ? ' dp-toast--warn' : ''}`, role: 'status' }, msg);

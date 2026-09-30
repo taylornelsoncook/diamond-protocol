@@ -75,7 +75,8 @@ business's own), and their MCP server is a developer feature.
 7. **Bulk edits and drag to another day** in the builder.
 8. **Export a program** (built, seventh pull request): a printable page (the browser saves it as a PDF) with the
    plan grid, phases and every workout, and an Excel workbook with a plan sheet, a sheet per workout and the phases.
-9. **Exercise tags** (movement, muscle, equipment) and filters in the library and the builder's search.
+9. **Exercise tags** (built, eighth pull request): movement, muscles and equipment on every exercise, filters in the
+   library and the builder's picker, and columns in the import list.
 10. **Custom check-in questions**, chosen by the coach, feeding the same readiness rules.
 
 Steps 2 to 4 are the biggest wins after the calendar, because they turn the data the app already collects into what

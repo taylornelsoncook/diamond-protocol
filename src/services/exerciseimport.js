@@ -5,7 +5,7 @@
 // none, or replace their video.
 import { newId, badRequest } from '../util.js';
 import { parseCsv } from './perf-import.js';
-import { CATEGORIES } from './programs.js';
+import { CATEGORIES, MOVEMENTS, MUSCLES, EQUIPMENT } from './programs.js';
 import { videoKind } from './integrations.js';
 
 const MAX_ROWS = 10000;
@@ -16,7 +16,10 @@ const COLUMNS = {
   category: ['category', 'type', 'group', 'folder'],
   video_url: ['videourl', 'video', 'videolink', 'url', 'link'],
   poster_url: ['posterurl', 'poster', 'thumbnail', 'thumbnailurl', 'image', 'still'],
-  instructions: ['instructions', 'cues', 'coachingcues', 'notes', 'description']
+  instructions: ['instructions', 'cues', 'coachingcues', 'notes', 'description'],
+  movement: ['movement', 'pattern', 'movementpattern'],
+  muscles: ['muscles', 'muscle', 'musclegroup', 'musclegroups', 'bodypart'],
+  equipment: ['equipment', 'gear', 'implement']
 };
 const key = (h) => String(h).toLowerCase().replace(/[^a-z0-9]/g, '');
 const clean = (s) => String(s ?? '').normalize('NFC').replace(/\s+/g, ' ').trim();   // Macs and drives often write accents apart (NFD)
@@ -42,7 +45,7 @@ function check(ctx, body) {
   const existing = EXISTING.includes(body.existing) ? body.existing : 'skip';
   const library = new Map(ctx.db.all('SELECT id, name, video_url, poster_url FROM exercises').map((e) => [e.name.normalize('NFC').toLowerCase(), e]));
   const problems = [], seen = new Map(), add = [], update = [], skipped = [];
-  let unknownCats = 0;
+  let unknownCats = 0, unknownTags = 0;
   t.rows.forEach((r, i) => {
     const row = i + 2;                     // the header is row 1
     const problem = (column, message) => problems.push({ row, column, message });
@@ -63,7 +66,10 @@ function check(ctx, body) {
     if (rawPoster && (!poster || !/\.(jpe?g|png|webp)$/i.test(new URL(poster).pathname))) problem(col.poster_url, `"${rawPoster.slice(0, 80)}" isn't a picture link (a secure https link to a .jpg, .png or .webp file).`);
     const instructions = col.instructions ? String(r[col.instructions] ?? '').trim() : '';
     if (instructions.length > 4000) problem(col.instructions, `The cues are ${instructions.length} characters; keep them to 4,000.`);
-    const item = { row, name, category, video_url: video, poster_url: poster, instructions: instructions || null };
+    // Tags: a value that isn't on our list comes in without that tag (noted, never a problem), like an unknown category.
+    const tagList = (c, list) => { if (!c) return null; const raw = clean(r[c]); if (!raw) return null; const known = raw.split(/[,;|/]/).map((x) => x.trim().toLowerCase()).filter((x) => list.includes(x)); if (known.length < raw.split(/[,;|/]/).filter((x) => x.trim()).length) unknownTags++; return known.length ? list.filter((x) => known.includes(x)).join(',') : null; };
+    const movement = col.movement ? (() => { const raw = clean(r[col.movement]).toLowerCase(); if (!raw) return null; if (!MOVEMENTS.includes(raw)) { unknownTags++; return null; } return raw; })() : null;
+    const item = { row, name, category, video_url: video, poster_url: poster, instructions: instructions || null, movement, muscles: tagList(col.muscles, MUSCLES), equipment: tagList(col.equipment, EQUIPMENT) };
     const have = library.get(lower);
     if (!have) return add.push(item);
     // A still only changes when the file gives one; the same video with no still in the file keeps the one it has.
@@ -73,6 +79,7 @@ function check(ctx, body) {
     else skipped.push({ row, name: have.name, reason: existing === 'skip' ? 'already in the library' : !video ? 'no video in the file' : existing === 'add_video' ? 'already has a video' : 'already has this video' });
   });
   const notes = [];
+  if (unknownTags) notes.push(`${unknownTags.toLocaleString()} ${unknownTags === 1 ? 'tag isn\'t' : 'tags aren\'t'} on our lists (movement: ${MOVEMENTS.join(', ')}; muscles: ${MUSCLES.join(', ')}; equipment: ${EQUIPMENT.join(', ')}); ${unknownTags === 1 ? 'it is' : 'they are'} left off (you can set them later).`);
   if (unknownCats) notes.push(`${unknownCats.toLocaleString()} ${unknownCats === 1 ? 'category isn\'t' : 'categories aren\'t'} one of ${CATEGORIES.join(', ')}; ${unknownCats === 1 ? 'that exercise comes' : 'those exercises come'} in with no category (you can set it later).`);
   return { t, col, existing, problems, add, update, skipped, notes };
 }
@@ -95,8 +102,8 @@ export function saveExerciseImport(ctx, body = {}) {
   if (!s.ready) throw badRequest('There\'s nothing new to bring in from that file.');
   const now = ctx.now();
   ctx.db.tx(() => {
-    for (const x of c.add) ctx.db.run('INSERT INTO exercises (id, name, video_url, poster_url, instructions, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      newId('ex'), x.name, x.video_url, x.poster_url, x.instructions, x.category, now);
+    for (const x of c.add) ctx.db.run('INSERT INTO exercises (id, name, video_url, poster_url, instructions, category, movement, muscles, equipment, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      newId('ex'), x.name, x.video_url, x.poster_url, x.instructions, x.category, x.movement ?? null, x.muscles ?? null, x.equipment ?? null, now);
     for (const x of c.update) ctx.db.run('UPDATE exercises SET video_url = ?, poster_url = ? WHERE id = ?', x.video_url, x.poster_url, x.id);
   });
   return { ...s, saved: true };

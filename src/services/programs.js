@@ -17,6 +17,33 @@ export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 // The reasons a coach lists a swap under (services/substitutions.js); the app shows the label.
 export const ALT_TAGS = { no_barbell: 'No barbell', no_equipment: 'No equipment', at_home: 'At home', knee: 'Knee', shoulder: 'Shoulder', back: 'Back', easier: 'Easier', harder: 'Harder', other: 'Other' };
 export const CATEGORIES = ['Speed', 'Power', 'Lower body', 'Upper body', 'Core', 'Arm care', 'Mobility', 'Conditioning'];
+// Tags (version 64, Relay plan step 9): one movement pattern, and any number of muscles and pieces of equipment, for
+// finding exercises in the library and the builder. Stored as text (comma lists), answered as arrays.
+export const MOVEMENTS = ['squat', 'hinge', 'lunge', 'push', 'pull', 'carry', 'rotation', 'jump', 'sprint', 'throw', 'core', 'mobility', 'conditioning', 'other'];
+export const MUSCLES = ['quads', 'hamstrings', 'glutes', 'calves', 'back', 'chest', 'shoulders', 'arms', 'core', 'hips', 'full body'];
+export const EQUIPMENT = ['barbell', 'dumbbell', 'kettlebell', 'bodyweight', 'band', 'medicine ball', 'box', 'sled', 'machine', 'cable', 'trap bar', 'bench', 'other'];
+export const TAGS = { movements: MOVEMENTS, muscles: MUSCLES, equipment: EQUIPMENT };
+const oneTag = (val, list, field) => {
+  if (val === undefined || val === null || val === '') return null;
+  const s = String(val).trim().toLowerCase();
+  if (!list.includes(s)) throw badRequest(`${field} must be one of: ${list.join(', ')}. Or leave it empty.`);
+  return s;
+};
+const manyTags = (val, list, field) => {
+  if (val === undefined || val === null || val === '') return null;
+  const items = [...new Set((Array.isArray(val) ? val : String(val).split(',')).map((x) => String(x).trim().toLowerCase()).filter(Boolean))];
+  if (!items.length) return null;
+  const bad = items.find((x) => !list.includes(x));
+  if (bad) throw badRequest(`${field}: "${bad}" isn't one of ${list.join(', ')}.`);
+  return list.filter((x) => items.includes(x)).join(',');
+};
+export const tagFields = (body, cur = {}) => ({
+  movement: body.movement !== undefined ? oneTag(body.movement, MOVEMENTS, 'movement') : cur.movement ?? null,
+  muscles: body.muscles !== undefined ? manyTags(body.muscles, MUSCLES, 'muscles') : cur.muscles ?? null,
+  equipment: body.equipment !== undefined ? manyTags(body.equipment, EQUIPMENT, 'equipment') : cur.equipment ?? null
+});
+const splitTags = (s) => (s ? String(s).split(',').filter(Boolean) : []);
+export const shapeExercise = (e) => (e ? { ...e, muscles: splitTags(e.muscles), equipment: splitTags(e.equipment) } : e);
 const category = (val) => {
   if (val === undefined || val === null || val === '') return null;
   if (!CATEGORIES.includes(val)) throw badRequest(`Choose a category: ${CATEGORIES.join(', ')}. Or leave it empty.`);
@@ -29,7 +56,7 @@ const uniqueName = (ctx, name, exceptId = '') => {
 
 // Every exercise with how many workouts use it and the programs it's in. Filters: q (name or cues), category,
 // filter=no_video (missing a demo video) or unused (in no workout).
-export function listExercises(ctx, { q, category: cat, filter } = {}) {
+export function listExercises(ctx, { q, category: cat, filter, movement, muscle, equipment } = {}) {
   const inPrograms = new Map();
   for (const r of ctx.db.all(`SELECT DISTINCT we.exercise_id, p.id, p.name FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id
     JOIN programs p ON p.id = w.program_id ORDER BY p.name COLLATE NOCASE`)) {
@@ -38,15 +65,17 @@ export function listExercises(ctx, { q, category: cat, filter } = {}) {
   }
   const needle = String(q ?? '').trim().toLowerCase();
   const uses = new Map(ctx.db.all('SELECT exercise_id, COUNT(*) AS n FROM workout_exercises GROUP BY exercise_id').map((r) => [r.exercise_id, r.n]));
-  return ctx.db.all('SELECT e.* FROM exercises e ORDER BY e.name COLLATE NOCASE').map((e) => ({ ...e, uses: uses.get(e.id) ?? 0 }))
+  const mv = movement ? String(movement).toLowerCase() : null, mu = muscle ? String(muscle).toLowerCase() : null, eq = equipment ? String(equipment).toLowerCase() : null;
+  return ctx.db.all('SELECT e.* FROM exercises e ORDER BY e.name COLLATE NOCASE').map((e) => ({ ...shapeExercise(e), uses: uses.get(e.id) ?? 0 }))
     .map((e) => ({ ...e, programs: inPrograms.get(e.id) ?? [] }))
     .filter((e) => (!needle || e.name.toLowerCase().includes(needle) || (e.instructions ?? '').toLowerCase().includes(needle))
-      && (!cat || e.category === cat) && (filter !== 'no_video' || !e.video_url) && (filter !== 'unused' || !e.uses));
+      && (!cat || e.category === cat) && (filter !== 'no_video' || !e.video_url) && (filter !== 'unused' || !e.uses)
+      && (!mv || e.movement === mv) && (!mu || e.muscles.includes(mu)) && (!eq || e.equipment.includes(eq)));
 }
 export function getExercise(ctx, id) {
   const e = ctx.db.get('SELECT * FROM exercises WHERE id = ?', id);
   if (!e) throw notFound('Exercise');
-  return e;
+  return shapeExercise(e);
 }
 export function createExercise(ctx, body) {
   const e = {
@@ -55,9 +84,10 @@ export function createExercise(ctx, body) {
     video_url: v.url(body.video_url, 'video_url', { optional: true }),
     poster_url: v.url(body.poster_url, 'poster_url', { optional: true }),
     instructions: v.str(body.instructions, 'instructions', { max: 4000, optional: true }),
-    category: category(body.category)
+    category: category(body.category),
+    ...tagFields(body)
   };
-  ctx.db.run('INSERT INTO exercises (id, name, video_url, poster_url, instructions, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', e.id, e.name, e.video_url, e.poster_url, e.instructions, e.category, ctx.now());
+  ctx.db.run('INSERT INTO exercises (id, name, video_url, poster_url, instructions, category, movement, muscles, equipment, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', e.id, e.name, e.video_url, e.poster_url, e.instructions, e.category, e.movement, e.muscles, e.equipment, ctx.now());
   return getExercise(ctx, e.id);
 }
 export function updateExercise(ctx, id, body) {
@@ -65,11 +95,14 @@ export function updateExercise(ctx, id, body) {
   // A new video link drops the old still unless a new one comes with it (the still showed the old video).
   const newVideo = body.video_url !== undefined ? v.url(body.video_url, 'video_url', { optional: true }) : e.video_url;
   const poster = body.poster_url !== undefined ? v.url(body.poster_url, 'poster_url', { optional: true }) : newVideo === e.video_url ? e.poster_url : null;
-  ctx.db.run('UPDATE exercises SET name = ?, video_url = ?, poster_url = ?, instructions = ?, category = ? WHERE id = ?',
+  const raw = ctx.db.get('SELECT movement, muscles, equipment FROM exercises WHERE id = ?', id);
+  const tags = tagFields(body, raw);
+  ctx.db.run('UPDATE exercises SET name = ?, video_url = ?, poster_url = ?, instructions = ?, category = ?, movement = ?, muscles = ?, equipment = ? WHERE id = ?',
     body.name !== undefined ? uniqueName(ctx, v.str(body.name, 'name', { max: 120 }).normalize('NFC'), id) : e.name,
     newVideo, poster,
     body.instructions !== undefined ? v.str(body.instructions, 'instructions', { max: 4000, optional: true }) : e.instructions,
     body.category !== undefined ? category(body.category) : e.category,
+    tags.movement, tags.muscles, tags.equipment,
     id);
   return getExercise(ctx, id);
 }

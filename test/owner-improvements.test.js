@@ -359,7 +359,7 @@ test('a version 45 database gains the version 46 columns, parent-course lessons 
     for (const round of [1, 2]) {
       const d = openDb(file);
       const cols = (t) => d.all(`PRAGMA table_info(${t})`).map((c) => c.name);
-      assert.equal(d.get('PRAGMA user_version').user_version, 59, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 60, `round ${round}`);
       assert.equal(d.get('PRAGMA integrity_check').integrity_check, 'ok');
       for (const [t, c] of [['clients', 'training_type'], ['subscriptions', 'pending_plan_id'], ['subscriptions', 'pending_set_at'], ['invoices', 'note'], ['lessons', 'category']]) assert.ok(cols(t).includes(c), `${t}.${c}`);
       assert.deepEqual(d.all('SELECT id, category FROM lessons ORDER BY id').map((l) => [l.id, l.category]), [['les_a', 'athlete'], ['les_l', 'athlete'], ['les_p', 'parent']]);

@@ -58,9 +58,7 @@ CREATE TABLE IF NOT EXISTS guardians (
   sms_opt_out_at TEXT,                   -- the parent replied STOP; no texts until they reply START or turn texts on again
   created_at TEXT NOT NULL,
   calendar_token_hash TEXT,              -- version 41: hash of the secret in the parent's private calendar feed link (/cal/<secret>.ics)
-  calendar_created_at TEXT,
-  password_hash TEXT,                    -- version 60: an optional portal password (set inside the portal; emailed codes always work too)
-  password_set_at TEXT
+  calendar_created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
@@ -89,9 +87,7 @@ CREATE TABLE IF NOT EXISTS clients (
   archived_by TEXT,                      -- who archived them (staff name)
   created_at TEXT NOT NULL,
   card_exp TEXT,                         -- version 41: the saved card's expiry as YYYY-MM
-  training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote')),   -- version 46: how they train, picked by staff (shown under the name)
-  password_hash TEXT,                    -- version 60: an athlete with their own email signs in to the portal; an optional password
-  password_set_at TEXT
+  training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote'))   -- version 46: how they train, picked by staff (shown under the name)
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -581,23 +577,19 @@ CREATE TABLE IF NOT EXISTS time_off (
 -- ---- Parent portal sign-in and email ----
 CREATE TABLE IF NOT EXISTS login_codes (
   id TEXT PRIMARY KEY,
-  guardian_id TEXT REFERENCES guardians(id) ON DELETE CASCADE,     -- version 60: a code is for a parent, an athlete with their own email, or both (one address)
+  guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
   code_hash TEXT NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
-  used_at TEXT,
-  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
-  CHECK (guardian_id IS NOT NULL OR client_id IS NOT NULL)
+  used_at TEXT
 );
 CREATE TABLE IF NOT EXISTS portal_sessions (
   token_hash TEXT PRIMARY KEY,
-  guardian_id TEXT REFERENCES guardians(id) ON DELETE CASCADE,     -- version 60: a session is a parent's, an athlete's, or both when one email is both
+  guardian_id TEXT NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
   expires_at TEXT NOT NULL,
   created_at TEXT,                       -- version 41: signed-in devices (Family tab): when, the browser, last used
   user_agent TEXT,
-  last_seen_at TEXT,
-  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
-  CHECK (guardian_id IS NOT NULL OR client_id IS NOT NULL)
+  last_seen_at TEXT
 );
 CREATE TABLE IF NOT EXISTS outbox (
   id TEXT PRIMARY KEY,

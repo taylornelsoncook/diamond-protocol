@@ -8,7 +8,7 @@ import { HttpError } from './util.js';
 import { userForSession, keyForSecret, logApiRequest } from './services/access.js';
 import { clientByToken } from './services/clients.js';
 import { deliverPending } from './services/events.js';
-import { guardianForToken } from './services/families.js';
+import { whoForToken } from './services/families.js';
 import { familyLock, clientLock, lockMessage, athleteLockMessage, OPEN_WHILE_LOCKED } from './services/lockout.js';
 import { extendSchedule } from './services/schedule.js';
 import { runTeamBilling } from './services/teams.js';
@@ -42,7 +42,7 @@ const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/portal': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
@@ -174,10 +174,11 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         return json(res, 200, { user: out.user });
       }
       if (route.path === '/auth/logout') res.setHeader('set-cookie', cookie('dp_session', '', 0, url.protocol === 'https:'));
-      if (route.path === '/portal/api/verify' || route.path === '/portal/api/signup/verify') {
+      if (route.path === '/portal/api/verify' || route.path === '/portal/api/login/password' || route.path === '/portal/api/signup/verify') {
         const out = await route.handler(ctx, r);
         res.setHeader('set-cookie', cookie('dp_family', out.token, out.maxAge, url.protocol === 'https:'));
-        return json(res, 200, { guardian: out.guardian, ...(out.athletes ? { athletes: out.athletes.map(({ id, name, claim, message }) => ({ id, name, claim: claim ?? null, message: message ?? null })) } : {}) });
+        return json(res, 200, { guardian: out.guardian, athlete: out.athlete ?? null, kind: out.kind ?? 'parent', name: out.name ?? out.guardian?.name ?? null,
+          ...(out.athletes ? { athletes: out.athletes.map(({ id, name, claim, message }) => ({ id, name, claim: claim ?? null, message: message ?? null })) } : {}) });
       }
       if (route.path === '/portal/api/logout') res.setHeader('set-cookie', cookie('dp_family', '', 0, url.protocol === 'https:'));
       const out = await route.handler(ctx, r);
@@ -245,20 +246,32 @@ function authenticate(ctx, req, route, r, url) {
   const cookies = Object.fromEntries((req.headers.cookie || '').split(';').map((c) => c.trim().split('=')).filter(([k]) => k).map(([k, ...rest]) => [k, decodeURIComponent(rest.join('='))]));
   r.sessionToken = cookies.dp_session;
   if (route.auth === 'public') return;
-  if (route.auth === 'guardian') {
+  // The portal cookie (or "Authorization: Bearer dp_fam_..."): a parent's session, an athlete's, or both when one
+  // person is both. 'guardian' routes are the family's; 'portal' routes are for anyone signed in (session, password,
+  // devices, sign out); 'client' routes (the athlete app) take the private link's token or an athlete's session.
+  const sameSite = () => !req.headers.origin || req.headers.origin === `${url.protocol}//${url.host}`;
+  if (route.auth === 'guardian' || route.auth === 'portal') {
     const bearerFam = (req.headers.authorization || '').match(/^Bearer\s+(dp_fam_.+)$/i)?.[1];
     r.familyToken = bearerFam || cookies.dp_family;
-    r.guardian = guardianForToken(ctx, r.familyToken);
-    if (!r.guardian) throw new HttpError(401, 'unauthenticated', 'Sign in with your email to continue.');
-    if (!bearerFam && req.method !== 'GET' && req.headers.origin && req.headers.origin !== `${url.protocol}//${url.host}`) throw new HttpError(403, 'bad_origin', 'Requests from other sites are not allowed.');
+    r.who = whoForToken(ctx, r.familyToken);
+    r.guardian = r.who?.guardian ?? null;
+    if (!r.who) throw new HttpError(401, 'unauthenticated', 'Sign in with your email to continue.');
+    if (route.auth === 'guardian' && !r.guardian) throw new HttpError(401, 'parents_only', 'This part of the portal is for parents. Your workouts are in the app.');
+    if (!bearerFam && req.method !== 'GET' && !sameSite()) throw new HttpError(403, 'bad_origin', 'Requests from other sites are not allowed.');
     // A family whose membership payment keeps declining can only fix it (lockout.js).
-    const lock = OPEN_WHILE_LOCKED.has(`${route.method} ${route.path}`) ? null : familyLock(ctx, r.guardian.family_id);
+    const lock = !r.guardian || OPEN_WHILE_LOCKED.has(`${route.method} ${route.path}`) ? null : familyLock(ctx, r.guardian.family_id);
     if (lock) { const e = new HttpError(402, 'payment_locked', lockMessage(lock)); e.details = { amount_cents: lock.amount_cents, invoice_ids: lock.invoices.map((i) => i.id) }; throw e; }
     return;
   }
   if (route.auth === 'client') {
-    r.client = clientByToken(ctx, req.headers['x-client-token'] || url.searchParams.get('token'));
-    if (!r.client) throw new HttpError(401, 'invalid_link', 'This app link is not valid. Ask your coach for a new one.');
+    const linkToken = req.headers['x-client-token'] || url.searchParams.get('token');
+    r.client = linkToken ? clientByToken(ctx, linkToken) : null;
+    if (!r.client && cookies.dp_family) {                                  // signed in at /portal as the athlete
+      r.client = whoForToken(ctx, cookies.dp_family)?.client ?? null;
+      if (r.client && req.method !== 'GET' && !sameSite()) throw new HttpError(403, 'bad_origin', 'Requests from other sites are not allowed.');
+      if (r.client) r.familyToken = cookies.dp_family;
+    }
+    if (!r.client) throw new HttpError(401, 'invalid_link', linkToken ? 'This app link is not valid. Ask your coach for a new one.' : 'Sign in with your email at /portal, or open the link your coach sent you.');
     // Locked out over a declined payment: only the app's home answers (and says why) until it's paid (lockout.js).
     if (route.path !== '/app/api/home' && clientLock(ctx, r.client.id)) throw new HttpError(402, 'payment_locked', athleteLockMessage);
     return;

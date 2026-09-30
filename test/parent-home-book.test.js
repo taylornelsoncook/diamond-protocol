@@ -73,7 +73,7 @@ test('15 wrong codes in an hour lock sign-in for that email, and an unknown emai
   assert.equal(locked.status, 429);
   assert.equal(lockedFake.status, 429);
   assert.equal(locked.body.error.message.replace(/\d+ minutes?/, 'N'), lockedFake.body.error.message.replace(/\d+ minutes?/, 'N'));
-  assert.match(locked.body.error.message, /Too many wrong codes/);
+  assert.match(locked.body.error.message, /Too many wrong tries/);
   resetRateLimits(); resetSignInLocks();
   assert.equal((await dana('GET', '/portal/api/me')).status, 200, 'already signed-in devices are not affected');
 });

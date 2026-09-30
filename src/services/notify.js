@@ -28,7 +28,7 @@ export async function welcomeFamily(ctx, familyId, { selfSignup = false } = {}) 
   for (const g of familyEmails(ctx, familyId)) {
     await send(ctx, g.email, `Welcome to ${biz(ctx)}`,
       `Hi ${first(g.name)},\n\n${selfSignup ? 'Your family account is ready.' : `${biz(ctx)} set up your family account.`}${kids.length ? ` Athletes: ${kids.map((k) => `${k.name} (${k.athlete_id})`).join(', ')}.` : ''}\n\n` +
-      `Sign in at ${base(ctx)}/parent with this email address. We'll send you a code each time, so there's no password to remember.\n\n` +
+      `Sign in at ${base(ctx)}/portal with this email address. We'll email you a code, and once you're in you can set a password if you'd rather.\n\n` +
       `Before the first session:\n1. Sign the waiver (Family tab)\n2. Add a card for memberships, packs and camps (Family tab)\n3. Book a class, private session or evaluation (Book tab)\n\nSee you soon,\n${biz(ctx)}`);
   }
 }
@@ -58,7 +58,7 @@ export async function portalInvite(ctx, guardianId) {
   const g = ctx.db.get('SELECT name, email, family_id FROM guardians WHERE id = ?', guardianId);
   const kids = ctx.db.all('SELECT name FROM clients WHERE family_id = ? AND archived_at IS NULL ORDER BY name', g.family_id).map((k) => first(k.name));
   await send(ctx, g.email, `Sign in to ${biz(ctx)}`,
-    `Hi ${first(g.name)},\n\nHere's how to sign in to the parent portal${kids.length ? ` for ${kids.join(' and ')}` : ''}: go to ${base(ctx)}/parent and enter this email address (${g.email}). We'll email you a code each time, so there's no password to remember.\n\nIn the portal you can sign the waiver, save a card, book sessions and see progress.\n\n${biz(ctx)}`);
+    `Hi ${first(g.name)},\n\nHere's how to sign in to the parent portal${kids.length ? ` for ${kids.join(' and ')}` : ''}: go to ${base(ctx)}/portal and enter this email address (${g.email}). We'll email you a code; once you're in you can set a password if you'd rather.\n\nIn the portal you can sign the waiver, save a card, book sessions and see progress.\n\n${biz(ctx)}`);
   return g.email;
 }
 

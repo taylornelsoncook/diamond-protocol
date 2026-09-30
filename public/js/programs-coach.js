@@ -6,7 +6,7 @@ import { h, fill, toast, copyText, busy, btn, field, input, select, panel, ago, 
 import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
 import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
-import { scheduleFields, fmtDay } from './training-days.js';
+import { scheduleFields, fmtDay, statusBadge } from './training-days.js';
 
 let deps = null;     // { api, render, header, role, pulseTile }
 export function initPrograms(d) { deps = d; }
@@ -99,6 +99,7 @@ export async function viewPrograms(main) {
   const personRow = (c, detail) => h('div', { class: 'list-item' },
     h('div', { class: 'grow stack-tight' }, h('a', { href: `#/clients/${c.id}`, class: 'strong', style: 'color:inherit' }, c.name), h('span', { class: 'small muted' }, detail)),
     btn('Send link', (e) => busy(e.currentTarget, () => sendLink(c)), 'ghost', { 'aria-label': `Email ${first(c.name)} the workout app link` }));
+  const weekPanel = rosterWeekPanel(act);
   const checkOn = act.quiet.length || act.complete.length ? panel('Athletes to check on', { subtitle: 'No workout in a week, or every workout done and ready for the next block.' },
     act.quiet.map((c) => personRow(c, `${c.program_name} · ${c.last_workout_at ? `last workout ${ago(c.last_workout_at).toLowerCase()}` : `no workouts in ${plural(c.days_idle, 'day')}`}${c.next ? ` · next: week ${c.next.week}, day ${c.next.day}` : ''}`)),
     act.complete.map((c) => personRow(c, `Finished ${c.program_name}. Give ${first(c.name)} the next block.`))) : null;
@@ -112,9 +113,40 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, search), h('div', { style: 'width:180px' }, levelSel)),
-        cards, routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
+        cards, weekPanel, routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
+}
+
+// The roster this week (the training calendar): every athlete on a program with planned, done and missed, behind first.
+// Behind = two planned workouts missed in a row. A team filter narrows it; the coach opens the athlete's Training tab.
+const rosterUi = { team: '', only: '' };
+function rosterWeekPanel(act) {
+  const w = act.week;
+  if (!act.athletes?.length) return panel('This week', { subtitle: 'Planned against done for every athlete on a program, from their training calendar.' }, h('p', { class: 'muted small' }, 'Nobody is on a program yet.'));
+  const teams = [...new Map(act.athletes.flatMap((a) => a.teams).map((t) => [t.id, t])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  const teamSel = select([['', 'Everyone'], ...teams.map((t) => [t.id, t.name])], { value: rosterUi.team, 'aria-label': 'Team' });
+  const onlySel = select([['', 'All athletes'], ['behind', 'Behind (missed 2 in a row)'], ['missed', 'Missed one this week'], ['on_pace', 'On pace']], { value: rosterUi.only, 'aria-label': 'Show' });
+  const list = h('div');
+  const draw = () => {
+    const shown = act.athletes.filter((a) => (!rosterUi.team || a.teams.some((t) => t.id === rosterUi.team))
+      && (rosterUi.only !== 'behind' || a.behind) && (rosterUi.only !== 'missed' || a.week.missed > 0) && (rosterUi.only !== 'on_pace' || (a.week.planned > 0 && a.week.missed === 0 && !a.behind)));
+    fill(list, shown.length ? shown.map((a) => h('div', { class: 'list-item pg-client', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
+        h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('a', { href: `#/clients/${a.id}?tab=training`, class: 'strong', style: 'color:inherit' }, a.name),
+          a.behind ? h('span', { class: 'dp-badge dp-badge--warn' }, `Behind · missed ${a.missed_streak} in a row`) : a.week.missed ? h('span', { class: 'dp-badge dp-badge--neutral' }, `Missed ${a.week.missed} this week`) : a.week.planned && a.week.done >= a.week.planned ? h('span', { class: 'dp-badge dp-badge--good' }, 'Week done') : a.complete ? h('span', { class: 'dp-badge dp-badge--good' }, 'Program finished') : null,
+          a.app_open ? null : h('span', { class: 'dp-badge dp-badge--muted' }, 'App locked')),
+        h('span', { class: 'small muted' }, [a.program_name, a.teams.length ? a.teams.map((t) => t.name).join(', ') : null, a.next ? `next: ${a.next.title} (${a.next.status === 'today' ? 'today' : a.next.status === 'missed' ? `missed ${fmtDay(a.next.date)}` : fmtDay(a.next.date)})` : null].filter(Boolean).join(' · '))),
+      h('div', { class: 'row', style: 'gap:8px;align-items:center;min-width:200px' },
+        h('div', { class: 'grow' }, bar(a.week.planned ? (a.week.done / a.week.planned) * 100 : 0, `${a.name}: ${a.week.done} of ${a.week.planned} this week`)),
+        h('span', { class: 'small', style: 'white-space:nowrap;min-width:110px;text-align:right' }, a.week.planned ? `${a.week.done} of ${a.week.planned} done${a.week.missed ? ` · ${a.week.missed} missed` : ''}` : 'Nothing planned'))))
+      : h('p', { class: 'muted small' }, 'Nobody matches.'));
+  };
+  teamSel.addEventListener('change', () => { rosterUi.team = teamSel.value; draw(); });
+  onlySel.addEventListener('change', () => { rosterUi.only = onlySel.value; draw(); });
+  draw();
+  return panel('This week', { subtitle: `${fmtDay(w.start, { month: 'short', day: 'numeric' })} to ${fmtDay(w.end, { month: 'short', day: 'numeric' })} · ${w.done} of ${w.planned} planned workouts done · ${w.missed} missed · ${w.behind} ${w.behind === 1 ? 'athlete' : 'athletes'} behind (two missed in a row). From each athlete's training calendar.` },
+    h('div', { class: 'row wrap' }, h('div', { style: 'min-width:200px' }, teamSel), h('div', { style: 'min-width:200px' }, onlySel)), list);
 }
 
 // One logged workout in a feed.

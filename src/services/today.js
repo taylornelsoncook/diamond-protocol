@@ -6,6 +6,7 @@ import { getSetting } from './families.js';
 import { listSessions, isBirthday } from './schedule.js';
 import { recentFlags } from './engage.js';
 import { atRisk, activeSnoozes } from './insights.js';
+import { programsActivity } from './programs.js';
 import { OWNER_EVENTS, LEAD_EVENTS } from './security.js';
 
 const BIRTHDAY_DAYS = 7;
@@ -25,6 +26,11 @@ function withState(sessions, now) {
 // then those checked in.
 const arrivalRank = (r) => (r.status === 'attended' ? 2 : r.state === 'done' ? 1 : 0);
 
+// The roster's training week (the training calendar): who is behind (two planned workouts missed in a row) and the totals.
+function trainingWeek(ctx) {
+  const act = programsActivity(ctx, {});
+  return { ...act.week, on_programs: act.on_programs, behind_athletes: act.behind.slice(0, 8) };
+}
 export function todayBoard(ctx, { role = 'owner' } = {}) {
   const zone = getSetting(ctx, 'timezone'), now = ctx.now(), today = localDate(now, zone);
   const dayStart = zonedToUtc(today, '00:00', zone), dayEnd = zonedToUtc(addDaysToDate(today, 1), '00:00', zone);
@@ -73,6 +79,7 @@ export function todayBoard(ctx, { role = 'owner' } = {}) {
     date: today, now, timezone: zone, sessions, arrivals, birthdays, flags,
     tomorrow: { date: addDaysToDate(today, 1), sessions: tomorrowList.length, first_at: tomorrowList[0]?.starts_at ?? null, booked: tomorrowList.reduce((t, s) => t + s.booked_count, 0) }
   };
+  out.training = trainingWeek(ctx);
   // Follow-ups (owners and coaches): athletes to check on, and what was followed up lately (Undo / Bring back).
   if (role !== 'front_desk') {
     out.follow_ups = atRisk(ctx, { role, hideSnoozed: true, limit: 8 });

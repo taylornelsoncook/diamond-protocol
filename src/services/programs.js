@@ -8,7 +8,7 @@ import { blocksFor, attachFields as routineFields } from './routines.js';
 import { getSetting } from './families.js';
 import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
-import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday } from './training-calendar.js';
+import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday, weekOf, weekStats } from './training-calendar.js';
 import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
@@ -506,6 +506,8 @@ export function appAccess(ctx, client) {
 // Progress for every current (not archived) client on a program, or on any program: workouts done, last workout,
 // what's next. Quiet: no workout for 7 days or more (only when they can open the app). Complete: every workout done.
 const QUIET_DAYS = 7;
+// Behind (owner decision, the roster view): two planned workouts missed in a row, counting back from the latest one dated before today.
+export const BEHIND_STREAK = 2;
 export function clientProgress(ctx, { programId, clientId } = {}) {
   const where = ['a.active = 1', 'c.archived_at IS NULL'], args = [];
   if (programId) { where.push('a.program_id = ?'); args.push(programId); }
@@ -516,10 +518,15 @@ export function clientProgress(ctx, { programId, clientId } = {}) {
     FROM assignments a JOIN clients c ON c.id = a.client_id JOIN programs p ON p.id = a.program_id WHERE ${where.join(' AND ')} ORDER BY c.name COLLATE NOCASE`, ...args);
   const programsOf = new Map();
   const now = Date.parse(ctx.now());
+  // Teams (active roster lines) per athlete, for the roster view's team filter.
+  const teamsOf = new Map();
+  if (rows.length) for (const t of ctx.db.all(`SELECT r.client_id, t.id, t.name, o.name AS org_name FROM team_roster r JOIN team_contracts t ON t.id = r.contract_id JOIN organizations o ON o.id = t.org_id
+      WHERE r.active = 1 AND r.client_id IN (${rows.map(() => '?').join(', ')}) ORDER BY o.name, t.name`, ...rows.map((r) => r.id))) teamsOf.set(t.client_id, [...(teamsOf.get(t.client_id) ?? []), { id: t.id, name: `${t.org_name} ${t.name}` }]);
   return rows.map((r) => {
     if (!programsOf.has(r.program_id)) programsOf.set(r.program_id, getProgram(ctx, r.program_id));
     const cal = datedWorkouts(ctx, { id: r.assignment_id, start_date: r.start_date, training_days: r.training_days }, programsOf.get(r.program_id));
     const next = pickNext(cal.workouts, cal.today);
+    const week = weekStats(cal.workouts, cal.today);
     const startAt = Date.parse(`${cal.start_date}T12:00:00Z`);
     const since = r.last_workout_at && Date.parse(r.last_workout_at) > startAt ? Date.parse(r.last_workout_at) : startAt;
     const idle = Math.max(0, Math.floor((now - since) / 86400000));
@@ -528,6 +535,7 @@ export function clientProgress(ctx, { programId, clientId } = {}) {
     return { id: r.id, name: r.name, athlete_id: r.athlete_id, program_id: r.program_id, program_name: r.program_name, start_date: cal.start_date, training_days: cal.training_days,
       done: cal.counts.done, missed: cal.counts.missed, total: r.total,
       next: next && { id: next.id, week: next.week, day: next.day, title: next.title, date: next.date, status: next.status }, last_workout_at: r.last_workout_at, days_idle: idle,
+      week, missed_streak: week.missed_streak, behind: week.missed_streak >= BEHIND_STREAK, teams: teamsOf.get(r.id) ?? [],
       membership: access.status, app_open: access.open, complete, quiet: !complete && r.total > 0 && access.open && idle >= QUIET_DAYS };
   });
 }
@@ -574,13 +582,20 @@ export function listCompletions(ctx, { clientId, programId, since, limit = 50 } 
 export function programsActivity(ctx, { programId, days = 14 } = {}) {
   const progress = clientProgress(ctx, { programId });
   const since = new Date(Date.parse(ctx.now()) - days * 86400000).toISOString();
+  const wk = progress[0]?.week ? { start: progress[0].week.start, end: progress[0].week.end } : weekOf(localToday(ctx));
   return {
     recent: listCompletions(ctx, { programId, since, limit: 40 }),
     logged_7d: ctx.db.get(`SELECT COUNT(*) AS n FROM workout_logs l JOIN clients c ON c.id = l.client_id JOIN workouts w ON w.id = l.workout_id
       WHERE c.archived_at IS NULL AND l.completed_at >= ? ${programId ? 'AND w.program_id = ?' : ''}`, WEEK_AGO(ctx), ...(programId ? [programId] : [])).n,
     on_programs: progress.length,
     quiet: progress.filter((a) => a.quiet).sort((a, b) => b.days_idle - a.days_idle),
-    complete: progress.filter((a) => a.complete)
+    complete: progress.filter((a) => a.complete),
+    // The roster this week (the training calendar): every athlete on a program, behind first, with the week's totals.
+    week: { ...wk, planned: progress.reduce((t, a) => t + a.week.planned, 0), done: progress.reduce((t, a) => t + a.week.done, 0), missed: progress.reduce((t, a) => t + a.week.missed, 0),
+      behind: progress.filter((a) => a.behind).length, on_pace: progress.filter((a) => a.week.planned > 0 && a.week.missed === 0 && !a.behind).length },
+    athletes: [...progress].sort((a, b) => (b.behind - a.behind) || (b.missed_streak - a.missed_streak) || (b.week.missed - a.week.missed) || a.name.localeCompare(b.name))
+      .map((a) => ({ id: a.id, name: a.name, athlete_id: a.athlete_id, program_id: a.program_id, program_name: a.program_name, teams: a.teams, week: a.week, missed_streak: a.missed_streak, behind: a.behind, next: a.next, last_workout_at: a.last_workout_at, app_open: a.app_open, complete: a.complete })),
+    behind: progress.filter((a) => a.behind).sort((a, b) => b.missed_streak - a.missed_streak).map((a) => ({ id: a.id, name: a.name, program_name: a.program_name, missed_streak: a.missed_streak, week: a.week, teams: a.teams }))
   };
 }
 

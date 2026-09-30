@@ -537,9 +537,29 @@ function assignDialog(p) {
     }) : h('p', { class: 'small muted' }, 'No clients match.'));
   };
   q.addEventListener('input', draw);
-  dialog(`Assign ${p.name}`, h('div', { class: 'stack' }, sched.el, q, out), [{ label: 'Close', variant: 'ghost' }]);
+  // A whole team at once: everyone on the roster gets the same start date and training days.
+  const teamSel = select([['', 'Choose a team']], { 'aria-label': 'Team' });
+  const teamNote = h('span', { class: 'small muted' });
+  const teamBox = h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Or a whole team'),
+    h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('div', { class: 'grow', style: 'min-width:200px' }, teamSel),
+      btn('Assign the team', (e) => {
+        const t = teams?.find((x) => x.id === teamSel.value);
+        if (!t) return toast('Choose a team first.', 'warn');
+        if (!confirm(`Put everyone on ${t.label} (${t.roster_count} ${t.roster_count === 1 ? 'athlete' : 'athletes'}) on ${p.name}? Athletes already on another program stay where they are unless you say so next.`)) return;
+        busy(e.currentTarget, async () => {
+          let r = await post(`/v1/programs/${p.id}/assign-team`, { contract_id: t.id, ...sched.body() });
+          const onOther = r.skipped.filter((s) => s.program_name);
+          if (onOther.length && confirm(`${onOther.map((s) => `${s.name} (${s.program_name})`).join(', ')} ${onOther.length === 1 ? 'is' : 'are'} on another program. Move ${onOther.length === 1 ? 'them' : 'them all'} onto ${p.name} too? Their logged workouts stay.`)) r = await post(`/v1/programs/${p.id}/assign-team`, { contract_id: t.id, replace: true, ...sched.body() });
+          document.getElementById('dialog').close();
+          toast(`${plural(r.assigned.length, 'athlete')} from ${r.team.name} ${r.assigned.length === 1 ? 'is' : 'are'} on ${p.name}${r.skipped.length ? ` · ${r.skipped.length} skipped (${r.skipped.map((s) => `${first(s.name)}: ${s.reason}`).join(', ')})` : ''}.`);
+          deps.render();
+        });
+      }, 'secondary')), teamNote);
+  let teams = null;
+  dialog(`Assign ${p.name}`, h('div', { class: 'stack' }, sched.el, teamBox, h('span', { class: 'dp-label' }, 'One athlete'), q, out), [{ label: 'Close', variant: 'ghost' }]);
   draw();
   get('/v1/clients').then((r) => { clients = r.data; draw(); }).catch((e) => fill(out, h('p', { class: 'dp-error' }, e.message)));
+  get('/v1/teams').then((r) => { teams = r.data; if (!teams.length) { teamBox.hidden = true; return; } fill(teamSel, [['', 'Choose a team'], ...teams.map((t) => [t.id, `${t.label} · ${plural(t.roster_count, 'athlete')}`])].map(([value, label]) => h('option', { value }, label))); teamNote.textContent = 'Everyone on the roster (not archived) gets their own calendar with the start date and days above.'; }).catch(() => { teamBox.hidden = true; });
   q.focus();
 }
 

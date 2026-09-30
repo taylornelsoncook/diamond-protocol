@@ -482,6 +482,30 @@ export function assign(ctx, programId, clientId, startDate, { training_days } = 
   });
   return { id, client_id: clientId, program_id: programId, start_date: start, training_days: days ? days.split(',').map(Number) : null, previous_program: current ? { id: current.program_id, name: current.name } : null };
 }
+// Put a whole team on a program at once (Relay plan step 5): every active roster athlete who isn't archived gets their
+// own assignment and calendar with the same start date and training days. Athletes already on this program are skipped
+// and named; athletes on another program are skipped too unless replace: true moves them. All or nothing.
+export function assignTeam(ctx, programId, body = {}) {
+  const p = ctx.db.get('SELECT id, name FROM programs WHERE id = ?', programId);
+  if (!p) throw notFound('Program');
+  const team = ctx.db.get('SELECT t.id, t.name, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', v.str(body.contract_id, 'contract_id'));
+  if (!team) throw notFound('Team');
+  const start = parseDate(body.start_date, 'start_date', localToday(ctx)), days = daysFor(ctx, programId, body.training_days);
+  const roster = ctx.db.all(`SELECT c.id, c.name, a.program_id AS current_program_id, pr.name AS current_program FROM team_roster r JOIN clients c ON c.id = r.client_id
+    LEFT JOIN assignments a ON a.client_id = c.id AND a.active = 1 LEFT JOIN programs pr ON pr.id = a.program_id
+    WHERE r.contract_id = ? AND r.active = 1 AND c.archived_at IS NULL ORDER BY c.name COLLATE NOCASE`, team.id);
+  if (!roster.length) throw conflict(`${team.org_name} ${team.name} has nobody on its roster.`);
+  const assigned = [], skipped = [];
+  ctx.db.tx(() => {
+    for (const c of roster) {
+      if (c.current_program_id === programId) { skipped.push({ id: c.id, name: c.name, reason: 'already on it' }); continue; }
+      if (c.current_program_id && !body.replace) { skipped.push({ id: c.id, name: c.name, reason: `on ${c.current_program}`, program_name: c.current_program }); continue; }
+      const r = assign(ctx, programId, c.id, start, { training_days: days ? days.split(',').map(Number) : undefined });
+      assigned.push({ id: c.id, name: c.name, previous_program: r.previous_program });
+    }
+  });
+  return { program_id: programId, program_name: p.name, team: { id: team.id, name: `${team.org_name} ${team.name}` }, start_date: start, training_days: days ? days.split(',').map(Number) : null, assigned, skipped };
+}
 // Take a client off a program. Their logged workouts stay in their history.
 export function unassign(ctx, programId, clientId) {
   const a = ctx.db.get('SELECT id FROM assignments WHERE program_id = ? AND client_id = ? AND active = 1', programId, clientId);

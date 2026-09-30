@@ -73,7 +73,8 @@ business's own), and their MCP server is a developer feature.
 6. **Templates** (built, sixth pull request). Save any program or workout as a template and start from it (New
    program → Start from; Add day → Start from). Still to come: a template for a run of exercises inside a workout.
 7. **Bulk edits and drag to another day** in the builder.
-8. **Export a program** as a PDF calendar (with phases) and as an Excel file with a sheet per workout.
+8. **Export a program** (built, seventh pull request): a printable page (the browser saves it as a PDF) with the
+   plan grid, phases and every workout, and an Excel workbook with a plan sheet, a sheet per workout and the phases.
 9. **Exercise tags** (movement, muscle, equipment) and filters in the library and the builder's search.
 10. **Custom check-in questions**, chosen by the coach, feeding the same readiness rules.
 

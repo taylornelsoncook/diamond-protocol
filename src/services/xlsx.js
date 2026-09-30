@@ -1,7 +1,14 @@
 import { inflateRawSync, deflateRawSync, crc32 } from 'node:zlib';
 
 // Reads the first worksheet of an .xlsx file into rows of strings.
-export function readXlsx(buf) {
+// The sheet names in a workbook, in order.
+export function listSheets(buf) {
+  const files = unzip(buf);
+  const wb = files['xl/workbook.xml']?.toString('utf8') ?? '';
+  return (wb.match(/<sheet\b[^>]*>/g) ?? []).map((s) => xmlText(s.match(/\bname="([^"]*)"/)?.[1] ?? ''));
+}
+// One sheet's rows as text: the first sheet, or the one named. Every cell comes back as text.
+export function readXlsx(buf, sheetName = null) {
   const files = unzip(buf);
   const text = (name) => (files[name] ? files[name].toString('utf8') : null);
   const shared = [];
@@ -10,7 +17,9 @@ export function readXlsx(buf) {
   // First sheet listed in the workbook, via its relationship; fall back to sheet1.xml.
   let path = 'xl/worksheets/sheet1.xml';
   const wb = text('xl/workbook.xml'), rels = text('xl/_rels/workbook.xml.rels');
-  const rid = wb?.match(/<sheet\b[^>]*r:id="([^"]+)"/)?.[1];
+  const sheetTag = sheetName ? (wb?.match(/<sheet\b[^>]*>/g) ?? []).find((s) => xmlText(s.match(/\bname="([^"]*)"/)?.[1] ?? '') === sheetName) : wb?.match(/<sheet\b[^>]*>/)?.[0];
+  if (sheetName && !sheetTag) throw new Error(`No sheet named "${sheetName}".`);
+  const rid = sheetTag?.match(/r:id="([^"]+)"/)?.[1];
   const rel = rid && rels ? (rels.match(/<Relationship\b[^>]*\/?>/g) ?? []).find((x) => x.includes(`Id="${rid}"`)) : null;
   const target = rel?.match(/Target="([^"]+)"/)?.[1];
   if (target) path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;

@@ -1,0 +1,11 @@
+/* The printable program (/program.html): the plan as a grid, then every workout. Print styles come from report.css. */
+.pp-grid{width:100%;border-collapse:collapse;font-size:13px}
+.pp-grid th,.pp-grid td{border:1px solid var(--line-subtle);padding:6px 8px;vertical-align:top;text-align:left}
+.pp-grid th{font:500 11px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted)}
+.pp-grid .pp-week{font:600 14px/1 var(--font-display);white-space:nowrap}
+.pp-phase{display:inline-block;padding:2px 8px;border-radius:999px;font:600 11px/16px var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--green-soft);background:var(--green-deep);border:1px solid var(--green-mid)}
+.pp-workout{break-inside:avoid;border-top:1px solid var(--line);padding-top:12px}
+.pp-workout h3{font:600 17px/1.2 var(--font-display);letter-spacing:.03em;text-transform:uppercase;margin:0 0 6px;color:var(--steel)}
+.pp-workout .rp-table td{padding:6px 8px 6px 0;font-size:13px}
+.pp-block{font-size:13px;color:var(--steel-muted);margin:4px 0}
+@media print{.pp-phase{color:#1f6b2a;background:#fff;border-color:#1f6b2a}.pp-workout{break-inside:auto}.pp-workout h3{break-after:avoid}}

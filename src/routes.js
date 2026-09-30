@@ -16,6 +16,7 @@ import * as programs from './services/programs.js';
 import * as trainingCalendar from './services/training-calendar.js';
 import * as maxes from './services/maxes.js';
 import * as progress from './services/progress.js';
+import * as programexport from './services/programexport.js';
 import * as events from './services/events.js';
 import * as access from './services/access.js';
 import * as commerce from './services/commerce.js';
@@ -271,6 +272,7 @@ export const routes = [
   ['POST', '/v1/programs/:id/duplicate', 'any', 'Training', 'Copy a program with all its weeks and workouts. Optional name (default "<name> (copy)").', (ctx, r) => programs.duplicateProgram(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/workouts', 'any', 'Training', 'Add a workout: week, day (default: the next free day, up to 7), title (default "Day N"). template_id starts it from a workout template (its exercises and blocks copied in).', (ctx, r) => programs.addWorkout(ctx, r.params.id, r.body), 201],
   ['POST', '/v1/programs/:id/weeks/:week/copy', 'any', 'Training', 'Copy every workout in a week to week to (default the next week), or to each week from to through through. Weeks that have workouts need replace: true; replacing logged workouts needs confirm: true. The program grows to the last week copied to.', (ctx, r) => programs.copyWeek(ctx, r.params.id, r.params.week, r.body)],
+  ['GET', '/v1/programs/:id/export.xlsx', 'any', 'Training', 'The program as an Excel workbook: a Plan sheet (weeks down, days across, each week\'s phase and sets), one sheet per workout (every exercise with sets, reps, load, tempo, rest, target RPE, group, cue and form-check ask, then the warm-up and cool-down) and a Phases sheet. The printable page is /program.html?id=.', (ctx, r) => ({ __file: programexport.workbook(ctx, r.params.id) })],
   ['GET', '/v1/programs/:id/plan', 'any', 'Training', 'The planner: every week with its workouts by day (exercises, sets to log, average percent of a max and RPE), the week\'s totals, the program\'s phases, and days (the most days any week has).', (ctx, r) => planner.planOf(ctx, r.params.id)],
   ['POST', '/v1/programs/:id/phases', 'any', 'Training', 'Add a training phase as a band across weeks: kind (base, build, peak, deload, test, other), start_week, end_week (within the program), optional name (defaults to the kind) and note. Phases don\'t overlap. A phase is a label for the coach; it never changes a workout.', (ctx, r) => planner.addPhase(ctx, r.params.id, r.body), 201],
   ['PATCH', '/v1/phases/:id', 'any', 'Training', 'Change a phase\'s name, kind, weeks or note.', (ctx, r) => planner.updatePhase(ctx, r.params.id, r.body)],

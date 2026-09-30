@@ -64,3 +64,6 @@ details.p-athlete > summary.p-athlete-sum{list-style:none}
   #dialog[open]{position:static;border:0;background:#fff;color:#000;max-height:none;width:auto}#dialog .p-dialog-actions{display:none}#dialog .muted{color:#333}}
 .p-time--day{width:78px;display:flex;flex-direction:column;gap:2px}
 .p-time-day{font:600 15px/1.1 var(--font-display);color:var(--steel);overflow-wrap:anywhere}
+
+/* The athlete app inside the family account's Workout tab */
+.p-frame{width:100%;border:0;border-radius:12px;background:var(--ground, #000);display:block}

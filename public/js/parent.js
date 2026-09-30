@@ -235,7 +235,7 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
   const cur = subtabs.querySelector('[aria-current]');
   if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
@@ -244,6 +244,7 @@ async function viewHome(main) {
   subtabs = h('nav', { class: 'p-subtabs', 'aria-label': 'Home sections' });
   if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
+  if (state.homeTab === 'workout') return viewWorkout(main);
   const a = athlete(), eng = engageFor(a);
   const where = h('div', { class: 'eg-view' });
   fill(main, top(ENGAGE_TABS.find(([k]) => k === state.homeTab)[1]), subtabs, athleteChips(() => render()), where);
@@ -252,6 +253,25 @@ async function viewHome(main) {
   if (!had) { fill(where, h('p', { class: 'muted' }, 'Loading…')); await eng.load(); }
   eng.render(where, state.homeTab);
   if (had) eng.load().then(() => eng.rerender()).catch(() => {});      // show what we have, then refresh
+}
+// ---------- Workout: the athlete's own app, inside the family account ----------
+// The whole family is one account; each athlete keeps their own Athlete ID and their own workouts. The app page opens
+// here for the chosen athlete (/app?athlete=<id>&embed=1, signed by this parent's cookie) and tells us how tall it is.
+const frameHeights = new Map();
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin || !e.data || typeof e.data.dpAppHeight !== 'number') return;
+  frameHeights.set(e.data.athlete, e.data.dpAppHeight);
+  const f = document.querySelector(`iframe[data-athlete="${e.data.athlete}"]`);
+  if (f) f.style.height = `${Math.max(420, e.data.dpAppHeight + 8)}px`;
+});
+function viewWorkout(main) {
+  const a = athlete();
+  const src = `/app?athlete=${encodeURIComponent(a.id)}&embed=1`;
+  const frame = h('iframe', { class: 'p-frame', src, title: `${a.first_name ?? a.name}'s workout`, 'data-athlete': a.id, style: `height:${Math.max(420, (frameHeights.get(a.id) ?? 0) + 8)}px` });
+  fill(main, top('Workout'), subtabs, athleteChips(() => render()),
+    h('p', { class: 'small muted', style: 'margin:0' }, `${a.first_name ?? a.name}'s program, logged under Athlete ID ${a.athlete_id ?? '…'}. `, h('a', { href: src.replace('&embed=1', ''), target: '_blank', rel: 'noopener' }, 'Open full screen')),
+    frame);
+  drawSubtabs();
 }
 // ---------- For parents: short courses the coaches wrote for parents, by athlete age ----------
 let parentReader = null;
@@ -340,7 +360,7 @@ async function viewOverview(main) {
       h('div', { class: 'dp-label' }, 'Coming up'),
       rows.length ? list : h('p', { class: 'muted small' }, 'Nothing booked yet.'),
       h('div', { class: 'row wrap' }, btn('Book a session', () => { state.athleteId = a.id; go('book'); }, 'secondary'),
-        a.app_link ? h('a', { class: 'dp-btn dp-btn--ghost', href: a.app_link }, 'Open workouts') : null));
+        btn('Open workouts', () => { state.athleteId = a.id; state.homeTab = 'workout'; render(); }, 'ghost')));
   });
   fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(),
     state.session?.kind === 'both' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '/app' }, 'My workouts') : null,   // a parent who trains here too

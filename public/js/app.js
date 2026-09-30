@@ -761,7 +761,6 @@ async function viewClient(main, id) {
   const first = c.name.split(' ')[0];
   const role = state.user.role;
   const act = (path, msg, body) => (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription/${path}`, body); toast(msg); render(); });
-  const sectionId = (el, key) => { if (el) el.id = `cl-${key}`; return el; };
 
   const planSel = select(plans.data.map((p) => [p.id, `${p.name}${p.price_cents == null ? '' : `, ${money(p.price_cents)}/mo`}`]), { value: sub?.plan_id, 'aria-label': 'Plan' });
   const membership = panel('Membership', { subtitle: sub ? null : 'No active plan.' },
@@ -1074,7 +1073,6 @@ async function viewClient(main, id) {
     contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
     c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
-  const left = [[sectionId(familyPanel ?? noFamilyPanel, 'family'), 'Family'], [eng.accountability], [eng.goals], [sectionId(membership, 'membership'), 'Membership'], [sectionId(requestsPanel, 'requests'), 'Requests'], [sectionId(sessionsPanel, 'sessions'), 'Sessions'], [payments], [payLinks], [mergePanel]];
   // Outside data (wearables and spreadsheets): owners and coaches bring more in from Settings → Data import.
   const wear = outside ? wearablesBlock({ first, canConnect: ['owner', 'coach'].includes(role), list: async () => ({ ...(await get(`/v1/clients/${id}/wearables`)), providers: (await get('/v1/wearables/status')).providers.filter((p) => p.ready) }),
     connect: (p) => post(`/v1/clients/${id}/wearables/${p}/connect`), disconnect: (w) => del(`/v1/wearables/${w}`), sync: ['owner', 'coach'].includes(role) ? (w) => post(`/v1/wearables/${w}/sync`) : null, afterChange: () => render() }) : null;
@@ -1087,8 +1085,26 @@ async function viewClient(main, id) {
     reply: (f, text) => post(`/v1/form-checks/${f}/reply`, { text }), replyVideo: { start: (f, b) => post(`/v1/form-checks/${f}/reply-video`, b), finish: (f) => post(`/v1/form-checks/${f}/reply-video/done`) },
     remove: (f) => del(`/v1/form-checks/${f}`), empty: `${first} hasn't sent a form check yet. In the app, each exercise has a Send a form check button once the private clips bucket is set up (Settings → Backups & jobs).` }) : null;
   const formChecksPanel = canAnswer ? panel('Form checks', { subtitle: 'Clips sent from the app. Your answer goes to the athlete as a message too; add a clip of your own if it helps.' }, fcBlock.el) : null;
-  const right = [[sectionId(formChecksPanel, 'form-checks'), 'Form checks'], [sectionId(staffNotesPanel(id, notesList.data), 'notes'), 'Notes'], [sectionId(contactHistoryPanel(id, c), 'contact'), 'Contact history'], [sectionId(bookingsPanel, 'upcoming'), 'Upcoming'], [sectionId(attendancePanel, 'attendance'), 'Attendance'], [eng.messages], [sectionId(perfPanel, 'testing'), 'Testing'], [sectionId(outsidePanel, 'outside'), 'Recovery & sleep'], [eng.targets], [eng.badges], [eng.education], [sectionId(training, 'training'), 'Training'], [sectionId(account, 'profile'), 'Profile']];
-  const jumps = [...left, ...right].filter(([el, label]) => el && label);
+  // The page's sections as tabs. Each panel is built once above; a tab shows only its own panels, so the page stays
+  // short and money stays where the roles rules put it (panels the signed-in role can't have are already null).
+  const TABS = [
+    ['family', 'Family', [familyPanel ?? noFamilyPanel, requestsPanel, mergePanel]],
+    ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
+    ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
+    ['training', 'Training', [training, eng.accountability, eng.goals, eng.badges]],
+    ['testing', 'Testing', [perfPanel, eng.targets]],
+    ['recovery', 'Recovery & sleep', [outsidePanel]],
+    ['form-checks', 'Form checks', [formChecksPanel]],
+    ['messages', 'Messages', [eng.messages]],
+    ['education', 'Education', [eng.education]],
+    ['notes', 'Notes', [staffNotesPanel(id, notesList.data)]],
+    ['contact', 'Contact history', [contactHistoryPanel(id, c)]],
+    ['profile', 'Profile', [account]]
+  ].map(([key, label, panels]) => [key, label, panels.filter(Boolean)]).filter(([, , panels]) => panels.length);
+  // Older links name a section (Today's "Watch" is ?tab=form-checks, "Open" ?tab=training, the card ?tab=sessions).
+  const TAB_ALIASES = { requests: 'family', merge: 'family', sessions: 'membership', upcoming: 'schedule', attendance: 'schedule', outside: 'recovery' };
+  const tabBar = h('nav', { class: 'tm-jump', role: 'tablist', 'aria-label': 'Sections' }, TABS.map(([key, label]) => h('button', { type: 'button', role: 'tab', 'aria-selected': 'false', 'data-tab': key }, label)));
+  const content = h('div', { class: 'stack', style: 'gap:24px' });
   fill(main,
     header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), trainingTag(c), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
       h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
@@ -1097,12 +1113,20 @@ async function viewClient(main, id) {
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}`, c.emergency_name || c.emergency_phone ? [' · Emergency: ', c.emergency_name ?? '', ' ', c.emergency_phone ? h('a', { href: telHref(c.emergency_phone), style: 'color:inherit;text-decoration:underline' }, c.emergency_phone) : null] : null) : null,
     pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
     contactRow || teamsLine ? h('div', { class: 'stack-tight' }, contactRow, teamsLine) : null,
-    h('nav', { class: 'tm-jump', 'aria-label': 'Sections' }, jumps.map(([el, label]) => h('button', { type: 'button', onClick: () => el.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, label))),
-    h('div', { class: 'grid grid-2' }, h('div', { class: 'stack', style: 'gap:24px' }, left.map(([el]) => el)), h('div', { class: 'stack', style: 'gap:24px' }, right.map(([el]) => el))));
-  if (openAdd) sibName.focus();
-  // Today's "Watch" link lands on the section it names (#/clients/<id>?tab=form-checks).
+    tabBar, content);
+  // Nothing shows until a section is clicked (owner decision): the bar lists the sections, the chosen one fills the page.
+  const openTab = (key, { focus = false } = {}) => {
+    const tab = TABS.find(([k]) => k === key);
+    for (const b of tabBar.children) b.setAttribute('aria-selected', String(b.dataset.tab === key));
+    fill(content, tab ? tab[2] : h('p', { class: 'muted small', style: 'margin:8px 0' }, 'Pick a section above to see it.'));
+    const q = hashQuery(); if (tab) q.set('tab', key); else q.delete('tab');
+    const qs = q.toString(); history.replaceState(null, '', `#/clients/${id}${qs ? `?${qs}` : ''}`);
+    if (focus && key === 'family' && noFamilyPanel == null && fam) sibName.focus();
+  };
+  for (const b of tabBar.children) b.addEventListener('click', () => openTab(b.dataset.tab));
   const wanted = hashQuery().get('tab');
-  if (wanted) requestAnimationFrame(() => document.getElementById(`cl-${wanted}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  const start = openAdd ? 'family' : wanted ? (TAB_ALIASES[wanted] ?? wanted) : null;
+  if (start && TABS.some(([k]) => k === start)) openTab(start, { focus: openAdd }); else openTab(null);
 }
 
 // Progression steps for one athlete (services/progression.js): suggestions to approve or dismiss, the steps applied

@@ -66,8 +66,9 @@ business's own), and their MCP server is a developer feature.
    tab and the client page). Still to come: a full Progress screen with sets and volume per week and per phase.
 4. **Roster compliance** (built, third pull request). On Today and the Programs page: this week's planned versus done
    per athlete, who missed two in a row, with a team filter. Reads the calendar built in step 1.
-5. **Assign to a team or a group.** Pick a team (or everyone on a program) and a start date; each athlete gets their
-   own assignment and calendar; the same schedule change can be pushed to all of them or one.
+5. **Assign to a team** (built, fourth pull request). Pick a team and a start date; each athlete gets their own
+   assignment and calendar; athletes on another program are named and moved only on a second yes. Still to come:
+   pushing one schedule change to everyone on a program.
 6. **Templates.** A library of saved programs, workouts and exercise runs, with "Start from a template" in the builder
    and "Save as template" on any program or workout.
 7. **Bulk edits and drag to another day** in the builder.

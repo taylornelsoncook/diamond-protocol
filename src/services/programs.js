@@ -705,7 +705,7 @@ function alternativesFor(ctx, x) {
 }
 export function clientHome(ctx, client) {
   const access = appAccess(ctx, client);
-  const base = { client: { name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status };
+  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status };
   if (!access.open) return { ...base, locked: true, message: access.message };
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
   const own = nextWorkoutFor(ctx, client.id);

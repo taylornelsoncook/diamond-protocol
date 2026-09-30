@@ -67,7 +67,11 @@ export function exportFamily(ctx, familyId) {
     agreements: familyConsents(ctx, familyId),
     // Parent portal: profiles a parent said were their child's (by Athlete ID), and the devices signed in.
     profile_claims: ctx.db.all('SELECT athlete_id, guardian_name AS asked_by, status, created_at, resolved_at FROM profile_claims WHERE family_id = ? ORDER BY created_at', familyId),
-    signed_in_devices: ctx.db.all('SELECT g.name AS parent, s.user_agent AS device, s.created_at, s.last_seen_at FROM portal_sessions s JOIN guardians g ON g.id = s.guardian_id WHERE g.family_id = ? AND s.expires_at > ? ORDER BY s.created_at', familyId, ctx.now()),
+    signed_in_devices: ctx.db.all(`SELECT COALESCE(g.name, c.name) AS person, CASE WHEN g.id IS NOT NULL THEN 'parent' ELSE 'athlete' END AS kind, s.user_agent AS device, s.created_at, s.last_seen_at
+      FROM portal_sessions s LEFT JOIN guardians g ON g.id = s.guardian_id LEFT JOIN clients c ON c.id = s.client_id
+      WHERE (g.family_id = ? OR c.family_id = ?) AND s.expires_at > ? ORDER BY s.created_at`, familyId, familyId, ctx.now()),
+    sign_in_passwords: ctx.db.all(`SELECT name, 'parent' AS kind, password_set_at AS set_at FROM guardians WHERE family_id = ? AND password_hash IS NOT NULL
+      UNION ALL SELECT name, 'athlete', password_set_at FROM clients WHERE family_id = ? AND password_hash IS NOT NULL`, familyId, familyId),
     athletes: kids.map((k) => ({
       ...k,
       bookings: per(`SELECT s.name AS session, s.starts_at, b.status, b.coverage, b.note AS note_for_coach FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? ORDER BY s.starts_at`, k.id),
@@ -151,8 +155,10 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`UPDATE invoices SET void_reason = NULL, paid_reference = NULL, last_error = NULL WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE invoice_refunds SET reason = NULL WHERE invoice_id IN (SELECT id FROM invoices WHERE client_id = ?)`, id);
       ctx.db.run(`UPDATE invoice_charges SET error = NULL, refund_error = NULL WHERE invoice_id IN (SELECT id FROM invoices WHERE client_id = ?)`, id);
+      ctx.db.run('DELETE FROM portal_sessions WHERE client_id = ?', id);                      // an athlete's own sign-ins and codes (version 60)
+      ctx.db.run('DELETE FROM login_codes WHERE client_id = ?', id);
       ctx.db.run(`UPDATE clients SET name = 'Deleted athlete', archived_by = NULL, athlete_id = NULL, email = NULL, phone = NULL, notes = NULL, birth_date = NULL, sex = NULL, sport = NULL, position = NULL, school = NULL, grad_year = NULL,
-        medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, card_exp = NULL, stripe_customer_id = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
+        medical_notes = NULL, emergency_name = NULL, emergency_phone = NULL, card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, card_exp = NULL, stripe_customer_id = NULL, password_hash = NULL, password_set_at = NULL, access_token = ? WHERE id = ?`, newId('gone'), id);
     }
     ctx.db.run('DELETE FROM texts WHERE family_id = ?', familyId);
     // Pay links: unpaid ones go; paid ones stay as payment records, without names or contact details.

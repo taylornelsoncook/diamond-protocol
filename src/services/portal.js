@@ -310,14 +310,25 @@ function deviceName(ua) {
   const browser = /Edg\//.test(s) ? 'Edge' : /Firefox\//.test(s) ? 'Firefox' : /CriOS|Chrome\//.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : /node|undici/i.test(s) ? 'App' : 'Browser';
   return `${browser} on ${os}`;
 }
-export function listDevices(ctx, guardian, rawToken) {
+// who: the signed-in person ({ guardian, client }; a guardian row alone still works). Their sessions are the parent's
+// and, for an athlete signed in with their own email, the athlete's.
+const whoIds = (who) => (who.guardian || who.client ? [who.guardian?.id ?? '', who.client?.id ?? ''] : [who.id, '']);
+export function listDevices(ctx, who, rawToken) {
   const cur = rawToken ? sha256(rawToken) : '';
-  return ctx.db.all('SELECT token_hash, created_at, user_agent, last_seen_at FROM portal_sessions WHERE guardian_id = ? AND expires_at > ? ORDER BY COALESCE(last_seen_at, created_at) DESC', guardian.id, ctx.now())
+  return ctx.db.all('SELECT token_hash, created_at, user_agent, last_seen_at FROM portal_sessions WHERE (guardian_id = ? OR client_id = ?) AND expires_at > ? ORDER BY COALESCE(last_seen_at, created_at) DESC', ...whoIds(who), ctx.now())
     .map((s) => ({ id: s.token_hash.slice(0, 16), current: s.token_hash === cur, device: deviceName(s.user_agent), signed_in_at: s.created_at, last_seen_at: s.last_seen_at }));
 }
-export function signOutOthers(ctx, guardian, rawToken) {
-  const r = ctx.db.run('DELETE FROM portal_sessions WHERE guardian_id = ? AND token_hash != ?', guardian.id, rawToken ? sha256(rawToken) : '');
-  return { signed_out: r.changes, devices: listDevices(ctx, guardian, rawToken) };
+export function signOutOthers(ctx, who, rawToken) {
+  const r = ctx.db.run('DELETE FROM portal_sessions WHERE (guardian_id = ? OR client_id = ?) AND token_hash != ?', ...whoIds(who), rawToken ? sha256(rawToken) : '');
+  return { signed_out: r.changes, devices: listDevices(ctx, who, rawToken) };
+}
+// The portal's first call: who this cookie belongs to, so the page knows whether to show the family portal, the
+// athlete's app, or both.
+export function session(ctx, who) {
+  const person = who.guardian ?? who.client;
+  return { kind: who.kind, name: person.name, first_name: person.name.split(' ')[0], email: person.email, has_password: who.has_password,
+    parent: who.guardian ? { id: who.guardian.id, family_id: who.guardian.family_id } : null,
+    athlete: who.client ? { id: who.client.id, name: who.client.name, athlete_id: who.client.athlete_id, app_link: '/app' } : null };
 }
 
 // ---------- Athletes (portal rules) ----------

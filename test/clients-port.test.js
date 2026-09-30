@@ -268,7 +268,7 @@ test('family: staff fix a parent\'s details (athlete email in step, texts off fo
   // Re-send the sign-in email.
   const sent = await desk('POST', `/v1/families/${fam.id}/guardians/${g.id}/welcome`);
   assert.deepEqual(sent.body, { sent_to: 'faye.new@example.com' });
-  assert.match(outbox()[0].body, /\/parent and enter this email address \(faye\.new@example\.com\)/);
+  assert.match(outbox()[0].body, /\/portal and enter this email address \(faye\.new@example\.com\)/);
   // Paper waiver at the desk.
   const w = await desk('POST', `/v1/families/${fam.id}/waiver`, { signed_by: 'Faye Parent' });
   assert.equal(w.body.waiver.signed, true);

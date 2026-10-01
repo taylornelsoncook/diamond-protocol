@@ -10,6 +10,9 @@ import { sendClip, CLIP_TYPES } from './formchecks-ui.js';
 const SVG = 'http://www.w3.org/2000/svg';
 const FPS = [240, 120, 60, 30, 960, 480, 50, 25, 24];
 const KIND_LABEL = { top_speed: 'Top speed', acceleration: 'Acceleration', cod: 'Change of direction' };
+// Which part of the run the clip shows, in yards from the start (sprint.js SEGMENTS).
+const SEGMENTS = [['0-10', '0–10 yd'], ['10-20', '10–20 yd'], ['20-30', '20–30 yd'], ['30-40', '30–40 yd'], ['40+', '40+ yd']];
+const segmentSelect = (value) => select([['', 'Not set'], ...SEGMENTS], { value: value ?? '' });
 const LANDMARK_ORDER = ['shoulder', 'hip', 'knee_swing', 'ankle_swing', 'knee_stance', 'ankle_stance', 'foot'];
 const LANDMARK_LABEL = { shoulder: 'Shoulder', hip: 'Hip', knee_swing: 'Knee of the swing leg', ankle_swing: 'Ankle of the swing leg', knee_stance: 'Knee of the stance leg', ankle_stance: 'Ankle of the stance leg', foot: 'Stance foot on the ground' };
 const BONES = [['shoulder', 'hip', 'trunk'], ['hip', 'knee_swing', 'swing'], ['knee_swing', 'ankle_swing', 'swing'], ['hip', 'knee_stance', 'stance'], ['knee_stance', 'ankle_stance', 'stance'], ['ankle_stance', 'foot', 'stance']];
@@ -416,6 +419,7 @@ export async function sprintViewer(opts) {
     const cap = select(FPS.map((f) => [String(f), `${f} frames a second`]), { value: String(clip.capture_fps) });
     const file = select(FPS.map((f) => [String(f), `${f} frames a second`]), { value: String(clip.file_fps) });
     const kind = select(Object.entries(KIND_LABEL), { value: clip.kind });
+    const segSel = segmentSelect(clip.segment);
     const stepsSel = select([['2', '2 steps'], ['3', '3 steps'], ['4', '4 steps']], { value: String(clip.steps ?? 2), disabled: clip.kind === 'cod' });
     const spd = input({ type: 'number', step: '0.01', min: '1', max: '13', value: clip.speed_mps ?? '', inputmode: 'decimal', placeholder: 'e.g. 9.2' });
     const rep = input({ type: 'number', step: '0.01', min: '0.3', max: '30', value: clip.rep_time_s ?? '', inputmode: 'decimal' });
@@ -431,12 +435,12 @@ export async function sprintViewer(opts) {
         btn(clip.calibration ? 'Tap them again' : 'Tap the two cones', () => { video.pause(); cal = { a: null, b: null }; draw(); }, 'secondary'),
         clip.calibration ? btn('Remove', (e) => busy(e.currentTarget, async () => { clip = await save({ calibration: null }); draw(); }), 'ghost') : null);
     const body = h('div', { class: 'stack' },
-      h('div', { class: 'grid-2' }, field('What this rep is', kind), field('Steps to mark', stepsSel, 'Up to 4 steps of each position.'), field('Title', title), field('Direction of travel', dirSel), field('Filmed at', cap, 'iPhone slow motion is 240.'),
+      h('div', { class: 'grid-2' }, field('What this rep is', kind), clip.kind === 'cod' ? null : field('Distance', segSel, 'Which part of the run this clip shows.'), field('Steps to mark', stepsSel, 'Up to 4 steps of each position.'), field('Title', title), field('Direction of travel', dirSel), field('Filmed at', cap, 'iPhone slow motion is 240.'),
         field('The file plays at', file, 'The same as filmed, unless the clip plays slowed down on a computer (then usually 30).'), field('Rep time (s)', rep, 'From the timing gates, if you have it.'),
         field('Speed (m/s)', spd, 'Optional: from gates or radar. Gives distance per step when there are no cones.')),
       conesLine,
       h('div', { class: 'row' }, btn('Save details', (e) => busy(e.currentTarget, async () => {
-        const body = { title: title.value, direction: Number(dirSel.value), capture_fps: Number(cap.value), file_fps: Number(file.value), speed_mps: spd.value === '' ? null : Number(spd.value), rep_time_s: rep.value === '' ? null : Number(rep.value) };
+        const body = { segment: clip.kind === 'cod' ? undefined : (segSel.value || null), title: title.value, direction: Number(dirSel.value), capture_fps: Number(cap.value), file_fps: Number(file.value), speed_mps: spd.value === '' ? null : Number(spd.value), rep_time_s: rep.value === '' ? null : Number(rep.value) };
         if (clip.kind !== 'cod' && kind.value === clip.kind && Number(stepsSel.value) !== clip.steps) { if (Number(stepsSel.value) < clip.steps && clip.analysis.marked && !confirm('Fewer steps clears the marks past the last one. Go ahead?')) return; body.steps = Number(stepsSel.value); }
         if (kind.value !== clip.kind) { if (clip.analysis.marked && !confirm('Changing what this rep is clears the frames already marked. Go ahead?')) return; body.kind = kind.value; body.confirm = true; }
         clip = await save(body); toast('Saved.'); draw();
@@ -495,7 +499,7 @@ export async function sprintViewer(opts) {
   }
   function draw() {
     const head = h('div', { class: 'row wrap', style: 'gap:10px;align-items:center' },
-      h('div', { class: 'grow' }, h('div', { class: 'sp-kicker' }, `${clip.kind_label}${clip.client_name && !opts.athlete ? ` · ${clip.client_name}` : ''}`),
+      h('div', { class: 'grow' }, h('div', { class: 'sp-kicker' }, `${clip.kind_label}${clip.segment_label ? ` · ${clip.segment_label}` : ''}${clip.client_name && !opts.athlete ? ` · ${clip.client_name}` : ''}`),
         h('h2', { class: 'sp-title' }, clip.title || `${clip.kind_label} rep`), h('div', { class: 'small muted' }, [clip.sent_at ? `Sent ${ago(clip.sent_at).toLowerCase()}` : null, clip.uploaded_by_kind !== 'staff' && clip.uploaded_by_name ? `by ${clip.uploaded_by_name}` : null, clip.note].filter(Boolean).join(' · '))),
       opts.onBack ? btn('Back', opts.onBack, 'secondary') : null);
     fill(box, head,
@@ -546,7 +550,7 @@ export function compareView({ api, prefix, ids, onBack, title = true }) {
         const pose = () => { ov.replaceChildren(); const w = v.videoWidth || c.video_w || 1920, hh = v.videoHeight || c.video_h || 1080; ov.setAttribute('viewBox', `0 0 ${w} ${hh}`); const p = c.analysis.positions.find((x) => sel && posKey(x) === sel); if (p?.marked && Math.abs(v.currentTime - p.t) < 0.75 / fps) drawPose(ov, p.points, { w }); frame.textContent = `Frame ${fo(v.currentTime)}`; };
         v.addEventListener('seeked', pose); v.addEventListener('loadedmetadata', () => { v.playbackRate = 0.25; pose(); });
         const col = { c, v, seek, fo, pose, info,
-          el: h('div', { class: 'stack-tight sp-col' }, h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('div', { class: 'grow' }, h('div', { class: 'strong' }, c.title || `${c.kind_label} rep`), h('div', { class: 'small muted' }, [c.client_name, c.sent_at ? ago(c.sent_at) : null, c.rep_time_s ? `${c.rep_time_s} s` : null].filter(Boolean).join(' · '))), gradeChip(c.analysis.grade, true)),
+          el: h('div', { class: 'stack-tight sp-col' }, h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('div', { class: 'grow' }, h('div', { class: 'strong' }, c.title || `${c.kind_label} rep`), h('div', { class: 'small muted' }, [c.client_name, c.segment_label, c.sent_at ? ago(c.sent_at) : null, c.rep_time_s ? `${c.rep_time_s} s` : null].filter(Boolean).join(' · '))), gradeChip(c.analysis.grade, true)),
             h('div', { class: 'sp-stage' }, v, ov),
             h('div', { class: 'row', style: 'gap:6px;align-items:center' }, btn('←', () => step(col, -1), 'secondary', { 'aria-label': 'Back one frame' }), btn('→', () => step(col, 1), 'secondary', { 'aria-label': 'Forward one frame' }), frame), info) };
         return col;
@@ -589,6 +593,10 @@ export function uploadForm(opts) {
   const tip = h('p', { class: 'small muted', style: 'margin:0' });
   const showTip = () => { tip.textContent = opts.kinds.find((k) => k.key === kind.value)?.tip ?? ''; };
   kind.addEventListener('change', showTip); showTip();
+  const seg = segmentSelect(null);
+  const segField = field('Distance', seg, 'Which part of the run this clip shows.');
+  const showSeg = () => { segField.hidden = kind.value === 'cod'; if (kind.value === 'acceleration' && !seg.value) seg.value = '0-10'; };
+  kind.addEventListener('change', showSeg); showSeg();
   const fpsSel = select(FPS.map((f) => [String(f), f === 240 ? '240 (iPhone slow motion)' : f === 60 ? '60 (most phones, or a screen recording)' : String(f)]), { value: '240' });
   const rep = input({ type: 'number', step: '0.01', min: '0.3', max: '30', inputmode: 'decimal', placeholder: 'e.g. 1.07' });
   const title = input({ maxlength: '80', placeholder: opts.who === 'athlete' ? 'e.g. Fly 20, rep 2' : 'e.g. Rep 2' });
@@ -604,7 +612,7 @@ export function uploadForm(opts) {
       bar.hidden = false;
       try {
         const clip = await sendClip({ file, start: opts.start, finish: opts.finish,
-          extra: { kind: kind.value, capture_fps: Number(fpsSel.value), title: title.value || null, note: note.value || null, rep_time_s: rep.value === '' ? null : Number(rep.value) },
+          extra: { kind: kind.value, segment: kind.value === 'cod' ? null : (seg.value || null), capture_fps: Number(fpsSel.value), title: title.value || null, note: note.value || null, rep_time_s: rep.value === '' ? null : Number(rep.value) },
           onProgress: (p) => { const pct = Math.round(p * 100); bar.firstChild.style.width = `${pct}%`; bar.setAttribute('aria-valuenow', String(pct)); word.textContent = pct >= 100 ? 'Checking the clip…' : `Sending… ${pct}%`; } });
         toast(opts.who === 'athlete' ? 'Sent. Your coach will mark it up.' : 'Clip added.'); title.value = ''; note.value = ''; rep.value = '';
         opts.onSent?.(clip);
@@ -612,7 +620,7 @@ export function uploadForm(opts) {
       finally { bar.hidden = true; word.textContent = ''; bar.firstChild.style.width = '0%'; }
     });
   });
-  return h('div', { class: 'stack' }, h('div', { class: 'grid-2' }, field('What it is', kind), field('Filmed at', fpsSel), field('Title', title), field('Rep time (s)', rep, 'From timing gates, if you have it.')), tip, field('Note', note),
+  return h('div', { class: 'stack' }, h('div', { class: 'grid-2' }, field('What it is', kind), segField, field('Filmed at', fpsSel), field('Title', title), field('Rep time (s)', rep, 'From timing gates, if you have it.')), tip, field('Note', note),
     h('p', { class: 'small muted', style: 'margin:0' }, 'One rep per clip, up to a minute and 150 MB. Film side-on with the camera still, the whole body in frame.'),
     h('div', { class: 'row wrap', style: 'gap:10px;align-items:center' }, button, word), bar, fileInput);
 }
@@ -630,7 +638,7 @@ export function clipList(rows, { onOpen, onCompare, athlete = false, showName = 
     return h('div', { class: 'list-item', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, tick, ready ? gradeChip(c.grade) : null,
       h('button', { type: 'button', class: 'linkish grow', style: 'text-align:left', onClick: () => onOpen(c.id) },
         h('div', { class: 'strong' }, `${showName ? `${c.client_name} · ` : ''}${c.title || c.kind_label}`),
-        h('div', { class: 'small muted' }, [c.kind_label, c.sent_at ? ago(c.sent_at) : null, c.rep_time_s ? `${c.rep_time_s} s` : null, ready && c.timing?.contact_s ? `contact ${ms(c.timing.contact_s)}` : null, ready && c.timing?.step_length_m ? `${m2(c.timing.step_length_m)} a step` : null].filter(Boolean).join(' · '))),
+        h('div', { class: 'small muted' }, [c.kind_label, c.segment_label, c.sent_at ? ago(c.sent_at) : null, c.rep_time_s ? `${c.rep_time_s} s` : null, ready && c.timing?.contact_s ? `contact ${ms(c.timing.contact_s)}` : null, ready && c.timing?.step_length_m ? `${m2(c.timing.step_length_m)} a step` : null].filter(Boolean).join(' · '))),
       status);
   }));
   return h('div', { class: 'stack-tight' }, list, cmp ? h('div', { class: 'row' }, cmp) : null);
@@ -686,9 +694,9 @@ export async function viewSprintCoach(main, id, { api, header, role }) {
   if (id === 'compare') { fill(main, header('Compare reps', 'Line the same position up across reps or athletes.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sprint' }, 'Sprint')), compareView({ api, prefix: '/v1', ids: (q.get('ids') ?? '').split(',').filter(Boolean), title: false })); return; }
   if (id === 'references') return referencesView(main, { api, header, role });
   if (id) { fill(main, header('Sprint analysis', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sprint' }, 'All clips')), await sprintViewer({ api, prefix: '/v1', id, editable: true, onRemoved: () => { location.hash = '#/sprint'; } })); return; }
-  const status = q.get('status') ?? 'waiting', kind = q.get('kind') ?? '';
-  const [d, refs, athletes] = await Promise.all([api('GET', `/v1/sprint-clips?${new URLSearchParams({ ...(status !== 'all' ? { status } : {}), ...(kind ? { kind } : {}) })}`), api('GET', '/v1/sprint/references'), api('GET', '/v1/athletes')]);
-  const go = (ch) => { const n = new URLSearchParams({ status, kind, ...ch }); for (const [k, val] of [...n]) if (!val) n.delete(k); location.hash = `#/sprint?${n}`; };
+  const status = q.get('status') ?? 'waiting', kind = q.get('kind') ?? '', segment = q.get('segment') ?? '';
+  const [d, refs, athletes] = await Promise.all([api('GET', `/v1/sprint-clips?${new URLSearchParams({ ...(status !== 'all' ? { status } : {}), ...(kind ? { kind } : {}), ...(segment ? { segment } : {}) })}`), api('GET', '/v1/sprint/references'), api('GET', '/v1/athletes')]);
+  const go = (ch) => { const n = new URLSearchParams({ status, kind, segment, ...ch }); for (const [k, val] of [...n]) if (!val) n.delete(k); location.hash = `#/sprint?${n}`; };
   const who = h('input', { class: 'dp-input', list: 'sp-athletes', placeholder: 'Start typing a name', autocomplete: 'off' });
   const dl = h('datalist', { id: 'sp-athletes' }, athletes.data.map((a) => h('option', { value: `${a.name}${a.athlete_id ? ` (${a.athlete_id})` : ''}` })));
   const pickId = () => { const a = athletes.data.find((x) => `${x.name}${x.athlete_id ? ` (${x.athlete_id})` : ''}` === who.value.trim()); if (!a) throw new Error('Pick the athlete from the list first.'); return a.client_id; };
@@ -703,7 +711,8 @@ export async function viewSprintCoach(main, id, { api, header, role }) {
     h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
       ...[['waiting', `To review${d.waiting ? ` (${d.waiting})` : ''}`], ['reviewed', 'Sent'], ['all', 'All']].map(([k, label]) => h('button', { type: 'button', class: 'sp-pos', 'aria-pressed': status === k ? 'true' : 'false', onClick: () => go({ status: k }) }, label)),
       h('span', { class: 'grow' }),
-      select([['', 'Every kind'], ...Object.entries(KIND_LABEL)], { value: kind, 'aria-label': 'Kind', onChange: (e) => go({ kind: e.target.value }) })),
+      select([['', 'Every kind'], ...Object.entries(KIND_LABEL)], { value: kind, 'aria-label': 'Kind', onChange: (e) => go({ kind: e.target.value }) }),
+      select([['', 'Any distance'], ...SEGMENTS], { value: segment, 'aria-label': 'Distance', onChange: (e) => go({ segment: e.target.value }) })),
     clipList(d.data, { showName: true, onOpen: (cid) => { location.hash = `#/sprint/${cid}`; }, onCompare: (ids) => { location.hash = `#/sprint/compare?ids=${ids.join(',')}`; } }));
 }
 

@@ -133,7 +133,7 @@ test('a version 49 database gains the phases table, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 65, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 66, `round ${round}`);
       assert.deepEqual(d.all('PRAGMA table_info(program_phases)').map((c) => c.name), ['id', 'program_id', 'name', 'kind', 'start_week', 'end_week', 'note', 'created_at']);
       d.run(`INSERT OR IGNORE INTO program_phases (id, program_id, name, kind, start_week, end_week, created_at) VALUES ('ph_1', 'prog_1', 'Base', 'base', 1, 2, '2026-09-01T00:00:00Z')`);
       assert.equal(d.get('SELECT COUNT(*) AS n FROM program_phases').n, 1);

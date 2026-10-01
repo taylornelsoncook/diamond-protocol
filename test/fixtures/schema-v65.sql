@@ -1695,7 +1695,6 @@ CREATE TABLE IF NOT EXISTS sprint_clips (
   capture_fps INTEGER NOT NULL DEFAULT 240,
   file_fps INTEGER NOT NULL DEFAULT 240,
   steps INTEGER NOT NULL DEFAULT 2,
-  segment TEXT,
   direction INTEGER NOT NULL DEFAULT 1,
   video_w INTEGER,
   video_h INTEGER,

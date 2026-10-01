@@ -27,6 +27,9 @@ export const KINDS = {
   acceleration: { label: 'Acceleration', steps: 2, positions: STRIDE, finish: true, tip: 'Film side-on from the start through the first 10 m, the camera still, two cones a known distance apart in the lane.' },
   cod: { label: 'Change of direction', steps: 1, positions: ['penultimate', 'plant', 'deepest', 'push_off'], finish: false, tip: 'Film the cut side-on to the plant leg, the whole body in frame from the last step in to the push away.' }
 };
+// Which part of the run a clip shows (owner decision, version 66), in yards from the start.
+export const SEGMENTS = { '0-10': '0–10 yd', '10-20': '10–20 yd', '20-30': '20–30 yd', '30-40': '30–40 yd', '40+': '40+ yd' };
+const segmentOf = (val) => { if (val === undefined || val === null || val === '') return null; if (!Object.hasOwn(SEGMENTS, String(val))) throw badRequest(`segment must be one of ${Object.keys(SEGMENTS).join(', ')}.`); return String(val); };
 export const POSITIONS = {
   // ALTIS's definitions; legs says which leg is which for the points (the app shows it while tapping).
   toe_off: { label: 'Toe-off', hint: 'The last frame the pushing foot is on the ground. ALTIS: about 90° between the thighs, the pushing knee not fully straight.', legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.' },
@@ -131,7 +134,7 @@ export function references(ctx) {
 }
 export function referencesView(ctx) {
   const refs = references(ctx);
-  return { kinds: Object.entries(KINDS).map(([key, k]) => ({ key, ...k, positions: k.positions.map((p) => ({ key: p, ...POSITIONS[p], measures: refs[key][p].map((r) => ({ ...r, label: MEASURES[r.measure].label, needs: MEASURES[r.measure].needs })) })) })),
+  return { segments: Object.entries(SEGMENTS).map(([key, label]) => ({ key, label })), kinds: Object.entries(KINDS).map(([key, k]) => ({ key, ...k, positions: k.positions.map((p) => ({ key: p, ...POSITIONS[p], measures: refs[key][p].map((r) => ({ ...r, label: MEASURES[r.measure].label, needs: MEASURES[r.measure].needs })) })) })),
     positions: POSITIONS, landmarks: LANDMARKS, measures: Object.fromEntries(Object.entries(MEASURES).map(([k, m]) => [k, { label: m.label, needs: m.needs }])),
     step_metrics: Object.entries(STEP_METRICS).map(([key, m]) => ({ key, ...m, chapter_label: CHAPTERS[m.chapter] })), step_references: stepReferences(ctx),
     customized: !!ctx.db.get(`SELECT 1 FROM settings WHERE key = 'sprint_references'`) };
@@ -345,6 +348,7 @@ function breakdownOf({ clip, at, nSteps, dir, scale, real, refs }) {
 
 const shape = (clip, extra = {}) => ({ id: clip.id, client_id: clip.client_id, client_name: clip.client_name, athlete_id: clip.athlete_id, kind: clip.kind, kind_label: KINDS[clip.kind]?.label,
   title: clip.title, note: clip.note, status: clip.status, uploaded_by_kind: clip.uploaded_by_kind, uploaded_by_name: clip.uploaded_by_name, bytes: clip.bytes, duration_s: clip.duration_s,
+  segment: clip.segment ?? null, segment_label: clip.segment ? SEGMENTS[clip.segment] : null,
   capture_fps: clip.capture_fps, file_fps: clip.file_fps, steps: stepsOf(clip), direction: clip.direction, video_w: clip.video_w, video_h: clip.video_h, calibration: parse(clip.calibration),
   speed_mps: clip.speed_mps, rep_time_s: clip.rep_time_s, review_note: clip.review_note, reviewed_at: clip.reviewed_at, reviewed_by_name: clip.reviewed_by_name, seen_at: clip.seen_at,
   created_at: clip.created_at, sent_at: clip.sent_at, ...extra });
@@ -364,11 +368,12 @@ export function getClip(ctx, id, scope = {}, { athleteView = false } = {}) {
   return shape(clip, { analysis: analyse(ctx, clip, marksOf(ctx, id)) });
 }
 // A list with each clip's grade and timing (for the Sprint screen, the client page and the athlete app).
-export function list(ctx, { clientId = null, status = null, kind = null, limit = 100, athleteView = false } = {}) {
+export function list(ctx, { clientId = null, status = null, kind = null, segment = null, limit = 100, athleteView = false } = {}) {
   const where = [`s.status != 'uploading'`, 'c.archived_at IS NULL'], args = [];
   if (clientId) { where.push('s.client_id = ?'); args.push(clientId); }
   if (status === 'waiting' || status === 'reviewed') { where.push('s.status = ?'); args.push(status); }
   if (kind) { if (!KINDS[kind]) throw badRequest('kind must be top_speed, acceleration or cod.'); where.push('s.kind = ?'); args.push(kind); }
+  if (segment) { where.push('s.segment = ?'); args.push(segmentOf(segment)); }
   const rows = ctx.db.all(`${SELECT} WHERE ${where.join(' AND ')} ORDER BY COALESCE(s.sent_at, s.created_at) DESC LIMIT ?`, ...args, Math.min(500, Math.max(1, Number(limit) || 100)));
   const refs = references(ctx), sref = stepReferences(ctx);
   return rows.map((clip) => {
@@ -392,7 +397,7 @@ export function summary(ctx, clientId) {
         positions.push({ position: pos, label: POSITIONS[pos].label, measure: ref.measure, measure_label: MEASURES[ref.measure].label, target: ref.target, average: Math.round(mean), low: Math.min(...vals), high: Math.max(...vals), count: vals.length, grade: gradeOf(mean, ref) });
       }
     }
-    out[kind] = { label: KINDS[kind].label, reps: reps.map(({ clip, a }) => ({ id: clip.id, date: (clip.sent_at ?? clip.created_at).slice(0, 10), title: clip.title, grade: a.grade, rep_time_s: clip.rep_time_s, ...Object.fromEntries(['contact_s', 'flight_s', 'step_rate_hz', 'step_length_m'].map((k) => [k, a.timing[k]])) })),
+    out[kind] = { label: KINDS[kind].label, reps: reps.map(({ clip, a }) => ({ id: clip.id, date: (clip.sent_at ?? clip.created_at).slice(0, 10), title: clip.title, segment: clip.segment ?? null, grade: a.grade, rep_time_s: clip.rep_time_s, ...Object.fromEntries(['contact_s', 'flight_s', 'step_rate_hz', 'step_length_m'].map((k) => [k, a.timing[k]])) })),
       positions, consistent: positions.filter((p) => p.count > 1 && p.high - p.low <= 10).map((p) => `${p.measure_label} at ${p.label.toLowerCase()}`), varies: positions.filter((p) => p.count > 1 && p.high - p.low > 20).map((p) => `${p.measure_label} at ${p.label.toLowerCase()}`) };
   }
   return out;
@@ -421,10 +426,11 @@ export function startUpload(ctx, client, body = {}, who) {
   const title = v.str(body.title, 'title', { max: 80, optional: true }), note = v.str(body.note, 'note', { max: 500, optional: true });
   const rep = num(body.rep_time_s, 'rep_time_s', 0.3, 30);
   const nSteps = kind === 'cod' ? 1 : (num(body.steps, 'steps', 2, 4, { whole: true }) ?? 2);
+  const segment = kind === 'cod' ? null : segmentOf(body.segment);
   if (who.kind !== 'staff') rateLimit(`sprint:${client.id}`, PER_DAY, 24 * 60 * 60000);
   const id = newId('spr'), key = `sprint/${client.id}/${id}.${store.TYPES[contentType]}`;
-  ctx.db.run(`INSERT INTO sprint_clips (id, client_id, kind, title, note, status, uploaded_by_kind, uploaded_by_user, uploaded_by_name, object_key, content_type, bytes, duration_s, capture_fps, file_fps, rep_time_s, steps, created_at)
-    VALUES (?, ?, ?, ?, ?, 'uploading', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, client.id, kind, title, note, who.kind, who.userId ?? null, who.name ?? null, key, contentType, bytes, duration, capture, file, rep, nSteps, ctx.now());
+  ctx.db.run(`INSERT INTO sprint_clips (id, client_id, kind, title, note, status, uploaded_by_kind, uploaded_by_user, uploaded_by_name, object_key, content_type, bytes, duration_s, capture_fps, file_fps, rep_time_s, steps, segment, created_at)
+    VALUES (?, ?, ?, ?, ?, 'uploading', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, client.id, kind, title, note, who.kind, who.userId ?? null, who.name ?? null, key, contentType, bytes, duration, capture, file, rep, nSteps, segment, ctx.now());
   return { id, upload: store.uploadFor(ctx, key, contentType), max_bytes: MAX_BYTES, max_seconds: MAX_SECONDS };
 }
 export async function finishUpload(ctx, id, { clientId = null } = {}) {
@@ -467,6 +473,7 @@ export function updateClip(ctx, id, body = {}) {
     // Marks past the new last step go (the last step's closing toe-off stays as the new "next toe-off").
     ctx.db.run(`DELETE FROM sprint_marks WHERE clip_id = ? AND (step > ? OR (step = ? AND position != 'toe_off'))`, id, set.steps + 1, set.steps + 1);
   }
+  if (body.segment !== undefined) set.segment = KINDS[set.kind ?? clip.kind].steps === 1 ? null : segmentOf(body.segment);
   if (body.title !== undefined) set.title = v.str(body.title, 'title', { max: 80, optional: true });
   if (body.note !== undefined) set.note = v.str(body.note, 'note', { max: 500, optional: true });
   if (body.direction !== undefined) { const d = Number(body.direction); if (d !== 1 && d !== -1) throw badRequest('direction is 1 (running to the right) or -1 (to the left).'); set.direction = d; }

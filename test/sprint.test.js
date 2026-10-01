@@ -285,6 +285,39 @@ test('the breakdown per step: projection and switching, as in the owner\'s scree
   assert.equal(cut.analysis.breakdown, null);
 });
 
+test('the distance a clip covers: chosen at upload, changed later, filtered on; never on a cut', async () => {
+  const a = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'acceleration', segment: '0-10' });
+  assert.deepEqual([a.segment, a.segment_label], ['0-10', '0–10 yd']);
+  const b = await upload(athlete, '/app/api/sprint-clips', { kind: 'top_speed', segment: '20-30' });
+  assert.equal(b.segment, '20-30');
+  assert.equal((await coach('POST', `/v1/clients/${maya.id}/sprint-clips`, { kind: 'top_speed', segment: '0-15', content_type: 'video/mp4', bytes: 10 })).status, 400);
+  assert.equal((await coach('PATCH', `/v1/sprint-clips/${a.id}`, { segment: '40+' })).body.segment_label, '40+ yd');
+  assert.equal((await athlete('PATCH', `/app/api/sprint-clips/${b.id}`, { segment: null })).body.segment, null);
+  await coach('PATCH', `/v1/sprint-clips/${b.id}`, { segment: '30-40' });
+  assert.deepEqual((await coach('GET', `/v1/sprint-clips?segment=30-40&client_id=${maya.id}`)).body.data.map((c) => c.id), [b.id]);
+  assert.equal((await coach('GET', '/v1/sprint-clips?segment=nope')).status, 400);
+  const cut = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'cod', segment: '0-10' });
+  assert.equal(cut.segment, null, 'a change of direction has no distance');
+  assert.deepEqual((await coach('GET', '/v1/sprint/references')).body.segments.map((x) => x.key), ['0-10', '10-20', '20-30', '30-40', '40+']);
+});
+
+test('a version 65 database gains the distance column, opened twice', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
+  const file = join(tmp, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v65.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 65');
+    old.close();
+    for (const round of [1, 2]) {
+      const d = openDb(file);
+      assert.equal(d.get('PRAGMA user_version').user_version, 66, `round ${round}`);
+      assert.ok(d.all('PRAGMA table_info(sprint_clips)').some((c) => c.name === 'segment'));
+      d.close();
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('a version 64 database gains the sprint tables, opened twice', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(tmp, 'old.db');
@@ -295,7 +328,7 @@ test('a version 64 database gains the sprint tables, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 65, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 66, `round ${round}`);
       const cols = d.all('PRAGMA table_info(sprint_clips)').map((c) => c.name);
       assert.ok(['kind', 'capture_fps', 'file_fps', 'calibration', 'etag'].every((c) => cols.includes(c)));
       assert.ok(d.all('PRAGMA table_info(sprint_marks)').length >= 6);

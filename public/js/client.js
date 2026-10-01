@@ -1,5 +1,6 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
+import { athleteSprint } from './sprint-ui.js';
 import { detailsOf, groupTag, groupTitle, withGroups } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 
@@ -47,7 +48,7 @@ let spoken = [];
 const say = (msg) => { spoken.push(msg); if (spoken.length === 1) queueMicrotask(() => { live.textContent = spoken.join(' '); spoken = []; }); };
 
 // A link like /app?token=…#education opens that tab, and changing the # while the app is open switches tabs.
-const TAB_KEYS = ['workout', 'accountability', 'performance', 'education'];
+const TAB_KEYS = ['workout', 'sprint', 'accountability', 'performance', 'education'];
 const hashTab = () => { const k = location.hash.replace(/^#\/?/, '').toLowerCase(); return TAB_KEYS.includes(k) ? k : null; };
 const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map(),
   pick: null, pickWorkout: null,                       // a workout opened from the calendar instead of the one the app opens on
@@ -59,7 +60,7 @@ const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), po
 const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
 function drawTabs() {
   const dots = engageDots(engage.data);
-  fill(tabs, [['workout', 'Workout'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
+  fill(tabs, [['workout', 'Workout'], ['sprint', 'Sprint'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
     tabIcon(k), label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
 }
 function show(tab) {
@@ -76,6 +77,11 @@ function show(tab) {
   }
   stopRest();
   const where = h('div', { class: 'eg-view' });
+  if (tab === 'sprint') {   // sprint reps sent to the coach and the analysis they send back (sprint-ui.js)
+    fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, 'Sprint')), where);
+    athleteSprint(where, { api });
+    return;
+  }
   fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, ENGAGE_TABS.find(([k]) => k === tab)[1])), where);
   engage.render(where, tab);
 }

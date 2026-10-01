@@ -289,3 +289,75 @@ td .dp-badge{white-space:nowrap}
 .tc-week>summary::-webkit-details-marker{display:none}
 .tc-week>summary::before{content:'▸';color:var(--steel-muted)}
 .tc-week[open]>summary::before{content:'▾'}
+/* Sprint analysis (sprint-ui.js): the clip with its overlay, the position picker, grades, kinogram and compare. */
+.sp-main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:var(--space-6);align-items:start}
+@media (max-width:900px){.sp-main{grid-template-columns:1fr}}
+.sp-stage{position:relative;background:#000;border-radius:var(--radius-md);overflow:hidden;line-height:0}
+.sp-video{display:block;width:100%;height:auto;max-height:70vh;object-fit:contain}
+.sp-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.sp-overlay--tap{pointer-events:auto;cursor:crosshair;outline:2px solid var(--green-bright);outline-offset:-2px}
+.sp-scrub{width:100%;accent-color:var(--green-bright)}
+.sp-frame{font-variant-numeric:tabular-nums}
+.sp-side{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4)}
+.sp-steprow{display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
+.sp-steplabel{min-width:48px}
+.sp-pos{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border-radius:var(--radius-pill);border:1px solid var(--control-border);background:var(--surface);color:var(--steel);font:500 14px/1 var(--font-sans);cursor:pointer}
+.sp-pos[aria-pressed="true"]{background:var(--steel);color:var(--black);border-color:var(--steel)}
+.sp-pos:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.sp-dot{width:8px;height:8px;border-radius:50%;background:var(--green-bright)}
+.sp-grade{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 6px;border-radius:6px;font:700 14px/1 var(--font-display);background:var(--surface-raised);color:var(--steel)}
+.sp-grade--big{min-width:38px;height:38px;font-size:20px}
+.sp-grade--A{background:var(--green-deep);color:var(--green-soft)}
+.sp-grade--B{background:var(--amber-deep);color:var(--amber)}
+.sp-grade--C{background:#3A1A16;color:#F2A08F}
+.sp-grade--none{color:var(--steel-muted)}
+.sp-pos[aria-pressed="true"] .sp-grade{outline:1px solid var(--black)}
+.sp-measure{border-top:1px solid var(--line-subtle);padding-top:var(--space-2);display:flex;flex-direction:column;gap:4px}
+.sp-num{font:600 18px/1 var(--font-display);font-variant-numeric:tabular-nums}
+.sp-h{margin:0;font:600 18px/1.3 var(--font-sans)}
+.sp-title{margin:0;font:700 28px/1.1 var(--font-display);text-transform:uppercase;letter-spacing:.04em}
+.sp-kicker{font:600 12px/1.4 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted)}
+.sp-tap{border:1px solid var(--green-mid);border-radius:var(--radius-md);padding:var(--space-3);background:var(--green-deep)}
+.sp-kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:var(--space-3)}
+.sp-ktile{display:flex;flex-direction:column;gap:4px;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px;color:var(--steel);cursor:pointer}
+.sp-ktile:focus-visible{outline:2px solid var(--green-bright)}
+.sp-kimg{position:relative;line-height:0}
+.sp-kimg .sp-grade{position:absolute;top:6px;right:6px}
+.sp-kframe{width:100%;height:auto;border-radius:6px;background:#000}
+.sp-compare{display:grid;gap:var(--space-4)}
+.sp-compare--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sp-compare--3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:700px){.sp-compare--2,.sp-compare--3{grid-template-columns:1fr}}
+.sp-col{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-3)}
+.sp-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4)}
+.linkish{background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer}
+.linkish:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.sp-banner{position:absolute;top:0;left:0;display:flex;flex-direction:column;align-items:flex-start;gap:3px;line-height:1.2;pointer-events:none;max-width:92%}
+.sp-b-row{flex-wrap:nowrap}
+.sp-banner[hidden]{display:none}
+.sp-b-title{color:#fff;font:600 clamp(16px,2.8vw,30px)/1.1 var(--font-sans);padding:6px 14px}
+.sp-b-score{color:#fff;font:500 clamp(11px,1.4vw,16px)/1.2 var(--font-sans);padding:3px 10px;margin-top:-3px}
+.sp-b-row{display:flex;flex-wrap:wrap;align-items:center;gap:0}
+.sp-b-name{background:#1F3A8A;color:#fff;font:500 clamp(10px,1.3vw,15px)/1.2 var(--font-sans);padding:3px 8px}
+.sp-b-verdict{color:#fff;font:500 clamp(10px,1.2vw,14px)/1.2 var(--font-sans);padding:3px 8px}
+.sp-val{display:inline-block;padding:2px 8px;border:2px solid transparent;border-radius:6px;font-variant-numeric:tabular-nums}
+.sp-pos--small{min-height:34px;font-size:13px;padding:0 10px}
+.sp-b-row{opacity:.85;transform-origin:left top}
+.sp-b-row--now{opacity:1}
+.sp-b-row--now .sp-b-name{font-size:clamp(12px,1.9vw,22px);padding:5px 12px}
+.sp-b-row--now .sp-b-verdict{font-size:clamp(11px,1.5vw,17px);padding:4px 10px}
+.sp-b-top{display:flex;align-items:flex-start;gap:0;flex-wrap:nowrap}
+.sp-b-col{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.sp-b-title--past{font-size:clamp(12px,2.1vw,24px)}
+.sp-b-center{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);color:#fff;font:500 clamp(16px,3.6vw,40px)/1.1 var(--font-sans);padding:10px 18px;pointer-events:none;white-space:nowrap;line-height:1.2}
+.sp-b-center[hidden]{display:none}
+/* The banner scales with the video, not the window (container units). */
+.sp-stage{container-type:inline-size}
+.sp-b-title{font-size:4.4cqw;white-space:nowrap;padding:.6cqw 1.6cqw}
+.sp-b-title--past{font-size:3cqw}
+.sp-b-score{font-size:2.1cqw;white-space:nowrap;padding:.4cqw 1.2cqw}
+.sp-b-name{font-size:2cqw;padding:.4cqw 1cqw}
+.sp-b-verdict{font-size:1.8cqw;padding:.4cqw 1cqw}
+.sp-b-row--now .sp-b-name{font-size:2.8cqw;padding:.6cqw 1.4cqw}
+.sp-b-row--now .sp-b-verdict{font-size:2.3cqw;padding:.6cqw 1.2cqw}
+.sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}

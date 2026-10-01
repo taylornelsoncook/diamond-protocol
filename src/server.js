@@ -32,6 +32,7 @@ import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
 import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
+import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
 import { calendarFeed } from './services/portal.js';
@@ -39,7 +40,7 @@ import { calendarFeed } from './services/portal.js';
 // What was typed as the email on the sign-in and forgot-password forms, for the activity log: only if it looks like an
 // email, so a password typed into the wrong box is never stored.
 const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(0, 120); return /^[^\s@]+@[^\s@]+$/.test(t) ? t : t ? '(not an email address)' : null; };
-const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video)$/;
+const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video|sprint-clips\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
 const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/portal': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
@@ -223,7 +224,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
-  runner.define('form-check-cleanup', 24 * HOUR, () => cleanupFormChecks(ctx));
+  runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx) }));
   runner.define('monthly-reports', HOUR, () => runMonthly(ctx));
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });

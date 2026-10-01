@@ -16,7 +16,7 @@ const OWNER_ONLY = [
   /^\/v1\/exercises\/import(\/|$)/   // the video library (version 48): bringing in a list of exercises
 ];
 // The owner changes these; others may read them (message templates for one-to-one emails and texts).
-const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/];
+const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/];   // sprint references (version 65): the owner sets them, coaches read them
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
   ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|workout-templates|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],

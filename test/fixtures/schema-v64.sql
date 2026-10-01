@@ -1674,52 +1674,6 @@ CREATE TABLE IF NOT EXISTS form_checks (
 CREATE INDEX IF NOT EXISTS idx_form_checks_client ON form_checks(client_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_form_checks_status ON form_checks(status, sent_at);
 -- Objects the store wouldn't delete when their form check went (a removed clip, a deleted family): the daily job tries again.
--- Sprint analysis (version 65): a clip of one rep (top speed, acceleration or change of direction) in the private clips
--- bucket under sprint/, the frames a coach marked and the points tapped on them. Angles, grades and timing are worked
--- out on read (services/sprint.js), never stored.
-CREATE TABLE IF NOT EXISTS sprint_clips (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('top_speed', 'acceleration', 'cod')),
-  title TEXT,
-  note TEXT,
-  status TEXT NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading', 'waiting', 'reviewed')),
-  uploaded_by_kind TEXT NOT NULL CHECK (uploaded_by_kind IN ('athlete', 'parent', 'staff')),
-  uploaded_by_user TEXT,
-  uploaded_by_name TEXT,
-  object_key TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  bytes INTEGER,
-  etag TEXT,
-  duration_s REAL,
-  capture_fps INTEGER NOT NULL DEFAULT 240,
-  file_fps INTEGER NOT NULL DEFAULT 240,
-  steps INTEGER NOT NULL DEFAULT 2,
-  direction INTEGER NOT NULL DEFAULT 1,
-  video_w INTEGER,
-  video_h INTEGER,
-  calibration TEXT,
-  speed_mps REAL,
-  rep_time_s REAL,
-  review_note TEXT,
-  reviewed_at TEXT,
-  reviewed_by TEXT,
-  reviewed_by_name TEXT,
-  seen_at TEXT,
-  created_at TEXT NOT NULL,
-  sent_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_sprint_clips_client ON sprint_clips(client_id, created_at);
-CREATE TABLE IF NOT EXISTS sprint_marks (
-  clip_id TEXT NOT NULL REFERENCES sprint_clips(id) ON DELETE CASCADE,
-  step INTEGER NOT NULL,
-  position TEXT NOT NULL,
-  t REAL NOT NULL,
-  points TEXT,
-  updated_at TEXT NOT NULL,
-  updated_by TEXT,
-  PRIMARY KEY (clip_id, step, position)
-);
 CREATE TABLE IF NOT EXISTS form_check_orphans (
   object_key TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,

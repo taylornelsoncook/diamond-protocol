@@ -11,6 +11,7 @@ export const ENGAGE_TABS = [['accountability', 'Accountability'], ['performance'
 // Tab bar icons, drawn like the parent portal's (1.6px stroke, 24px box).
 const PATHS = {
   workout: ['M3 10v4', 'M6 7v10', 'M18 7v10', 'M21 10v4', 'M6 12h12'],
+  sprint: ['M14 4.5a1.5 1.5 0 1 0 0 .01', 'M9 20l3-5-2-3 3-3 3 3h3', 'M10 12l-4 1', 'M12 15l3 2-1 3'],
   overview: ['M3 11l9-7 9 7', 'M5 10v10h14V10'],
   accountability: ['M4 5h16v15H4z', 'M4 9h16', 'M8 3v4', 'M16 3v4', 'M8.5 14.5l2.5 2.5 4.5-4.5'],
   performance: ['M4 19l5-6 4 3 7-9', 'M15 7h5v5'],

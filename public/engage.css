@@ -93,8 +93,8 @@
 .eg-body{display:flex;flex-direction:column;gap:14px;font-size:16px;line-height:25px;color:var(--silver)}
 
 /* Tab bars */
-.eg-tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(4,1fr);background:var(--black);border-top:1px solid var(--line-subtle);padding-bottom:env(safe-area-inset-bottom,0px);z-index:30}
-.eg-tab{position:relative;background:none;border:0;color:var(--steel-muted);min-height:58px;font:500 12px/1.2 var(--font-sans);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;padding:0 2px}
+.eg-tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);background:var(--black);border-top:1px solid var(--line-subtle);padding-bottom:env(safe-area-inset-bottom,0px);z-index:30}
+.eg-tab{position:relative;min-width:0;background:none;border:0;color:var(--steel-muted);min-height:58px;font:500 11px/1.2 var(--font-sans);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;padding:0 2px}
 .eg-tab[aria-current="page"]{color:var(--green-bright)}
 .eg-tab svg{width:22px;height:22px}
 .eg-tab .eg-tab-dot,.p-subtab .eg-tab-dot{position:absolute;top:8px;left:calc(50% + 8px);width:8px;height:8px;border-radius:50%;background:var(--amber)}

@@ -4,6 +4,7 @@ import { emit } from './events.js';
 import { sendEmail } from './mail.js';
 import { forgetFamily as forgetWearables } from './wearables.js';
 import { forExport as formChecksOf, removeAllFor as removeFormChecks } from './formchecks.js';
+import { forExport as sprintClipsOf, removeAllFor as removeSprintClips } from './sprint.js';
 import { forExport as progressionsOf } from './progression.js';
 import { forExport as swapsOf } from './live.js';
 import { forExport as monthlyOf } from './monthly.js';
@@ -89,6 +90,7 @@ export function exportFamily(ctx, familyId) {
       outside_data: per(`SELECT day, metric, value, label, unit, source FROM athlete_metrics WHERE client_id = ? ORDER BY day, metric`, k.id),
       outside_workouts: per(`SELECT started_at, ended_at, minutes, activity, strain, calories, avg_hr, max_hr, source FROM athlete_workouts WHERE client_id = ? ORDER BY started_at`, k.id),
       form_checks: formChecksOf(ctx, k.id),   // the notes around the clips; the clips themselves are removed with the family
+      sprint_analyses: sprintClipsOf(ctx, k.id),   // grades, timing and the coach's notes; never the clips
       progression_steps: progressionsOf(ctx, k.id),
       exercise_swaps: swapsOf(ctx, k.id),
       monthly_reports: monthlyOf(ctx, k.id),
@@ -136,6 +138,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
   const kids = ctx.db.all('SELECT id FROM clients WHERE family_id = ?', familyId).map((k) => k.id);
   await forgetWearables(ctx, familyId);   // tokens revoked and forgotten first, so no pull lands after the data is gone
   for (const id of kids) await removeFormChecks(ctx, id);   // the clips in the private bucket, before the rows go
+  for (const id of kids) await removeSprintClips(ctx, id);   // sprint clips too
   ctx.db.tx(() => {
     for (const id of kids) {
       ctx.db.run(`UPDATE subscriptions SET status = 'canceled', canceled_at = COALESCE(canceled_at, ?) WHERE client_id = ? AND status != 'canceled'`, ctx.now(), id);

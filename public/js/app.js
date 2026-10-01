@@ -6,6 +6,7 @@ import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
 import { maxesBlock, volumeBlock } from './maxes-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
+import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
@@ -25,9 +26,9 @@ const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b), patch
 const phoneText = (p) => (/^\+1\d{10}$/.test(p ?? '') ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
 const state = { user: null, testMode: false, payments: {} };
 const root = document.getElementById('root');
-const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['settings', 'Settings']];
+const ALL_NAV = [['today', 'Today'], ['schedule', 'Schedule'], ['sell', 'Point of sale'], ['clients', 'Clients'], ['leads', 'Leads'], ['teams', 'Teams'], ['testing', 'Testing'], ['sprint', 'Sprint'], ['billing', 'Billing'], ['programs', 'Programs'], ['education', 'Education'], ['integrations', 'API & integrations'], ['settings', 'Settings']];
 // Menus follow the role; the server enforces the same rules on every request.
-const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education', 'settings'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education', 'settings'] };   // front desk: programs read-only; staff see only the exercise library in Settings
+const NAV_FOR = { owner: null, coach: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'sprint', 'programs', 'education', 'settings'], front_desk: ['today', 'schedule', 'sell', 'clients', 'leads', 'testing', 'programs', 'education', 'settings'] };   // front desk: programs read-only; staff see only the exercise library in Settings
 let NAV = ALL_NAV;
 const isOwner = () => state.user?.role === 'owner';
 initEngage({ api, render, header, role: () => state.user?.role });
@@ -93,7 +94,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -1100,6 +1101,8 @@ async function viewClient(main, id) {
   const fcBlock = canAnswer ? formChecksBlock({ who: 'staff', first, list: () => get(`/v1/form-checks?client_id=${id}`), play: (f, which) => get(`/v1/form-checks/${f}/video?which=${which}`),
     reply: (f, text) => post(`/v1/form-checks/${f}/reply`, { text }), replyVideo: { start: (f, b) => post(`/v1/form-checks/${f}/reply-video`, b), finish: (f) => post(`/v1/form-checks/${f}/reply-video/done`) },
     remove: (f) => del(`/v1/form-checks/${f}`), empty: `${first} hasn't sent a form check yet. In the app, each exercise has a Send a form check button once the private clips bucket is set up (Settings → Backups & jobs).` }) : null;
+  // Sprint analysis (services/sprint.js): this athlete's reps, graded; owners and coaches add, mark and send them.
+  const sprintPanel = canAnswer ? panel('Sprint', { subtitle: 'Clips of top speed, acceleration and change of direction, with each position graded and the timing.' }, clientSprintPanel(id, { api, onOpen: (sid) => { location.hash = `#/sprint/${sid}`; } })) : null;
   const formChecksPanel = canAnswer ? panel('Form checks', { subtitle: 'Clips sent from the app. Your answer goes to the athlete as a message too; add a clip of your own if it helps.' }, fcBlock.el) : null;
   // The page's sections as tabs. Each panel is built once above; a tab shows only its own panels, so the page stays
   // short and money stays where the roles rules put it (panels the signed-in role can't have are already null).
@@ -1111,6 +1114,7 @@ async function viewClient(main, id) {
     ['testing', 'Testing', [maxesPanel, perfPanel, eng.targets]],
     ['recovery', 'Recovery & sleep', [outsidePanel]],
     ['form-checks', 'Form checks', [formChecksPanel]],
+    ['sprint', 'Sprint', [sprintPanel]],
     ['messages', 'Messages', [eng.messages]],
     ['education', 'Education', [eng.education]],
     ['notes', 'Notes', [staffNotesPanel(id, notesList.data)]],

@@ -13,7 +13,7 @@ import { sendMessage } from './engage.js';
 import { endpointProblem } from './offsite.js';
 
 export const MAX_BYTES = 150 * 1024 * 1024, MAX_SECONDS = 60, UPLOAD_MINUTES = 15, PLAY_MINUTES = 10, PER_DAY = 10;
-const TYPES = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/x-m4v': 'm4v' };
+export const TYPES = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/x-m4v': 'm4v' };
 
 // ---------- The bucket ----------
 // FORMCHECK_S3_* in Render; the endpoint, key and secret fall back to the backups' (one R2 token can cover both buckets)
@@ -75,7 +75,7 @@ async function s3(ctx, method, key) {
 const removeObject = async (ctx, key) => { try { const r = await s3(ctx, 'DELETE', key); return r.ok || r.status === 404 ? { ok: true } : { ok: false, error: `storage answered ${r.status}` }; } catch (e) { return { ok: false, error: e.message }; } };
 // Delete an object, and when the store won't, remember the key so the daily job tries again: a clip whose row is
 // gone must never be left sitting in the bucket.
-async function forget(ctx, key) {
+export async function forget(ctx, key) {
   if (!key) return true;
   const r = await removeObject(ctx, key);
   if (!r.ok) { console.error('form check delete:', key, r.error); ctx.db.run('INSERT INTO form_check_orphans (object_key, created_at, last_error) VALUES (?, ?, ?) ON CONFLICT (object_key) DO UPDATE SET last_error = excluded.last_error', key, ctx.now(), String(r.error).slice(0, 200)); }
@@ -83,9 +83,9 @@ async function forget(ctx, key) {
 }
 
 // ---------- Sending (the athlete) ----------
-const needReady = () => { const c = config(); if (!c.ready) throw new HttpError(503, 'form_checks_not_set_up', 'Form checks aren\'t set up yet. Ask your coach.'); return c; };
-const typeOf = (t) => { const ct = String(t ?? '').toLowerCase().split(';')[0].trim(); if (!Object.hasOwn(TYPES, ct)) throw badRequest('Send a video from your phone (MP4, MOV or WebM).'); return ct; };
-const uploadFor = (ctx, key, contentType) => { const c = config(); return { method: 'PUT', ...presign({ method: 'PUT', url: objectUrl(c, key), region: c.region, keyId: c.keyId, secret: c.secret, expires: UPLOAD_MINUTES * 60, now: new Date(ctx.now()), contentType }) }; };
+export const needReady = () => { const c = config(); if (!c.ready) throw new HttpError(503, 'form_checks_not_set_up', 'Form checks aren\'t set up yet. Ask your coach.'); return c; };
+export const typeOf = (t) => { const ct = String(t ?? '').toLowerCase().split(';')[0].trim(); if (!Object.hasOwn(TYPES, ct)) throw badRequest('Send a video from your phone (MP4, MOV or WebM).'); return ct; };
+export const uploadFor = (ctx, key, contentType) => { const c = config(); return { method: 'PUT', ...presign({ method: 'PUT', url: objectUrl(c, key), region: c.region, keyId: c.keyId, secret: c.secret, expires: UPLOAD_MINUTES * 60, now: new Date(ctx.now()), contentType }) }; };
 // Step 1: the app says what it's about to send; it gets a one-time address to PUT the clip to.
 export function startUpload(ctx, client, body = {}) {
   needReady();
@@ -131,7 +131,7 @@ export async function finishUpload(ctx, client, id) {
 }
 // What's in the bucket under key: { ok, bytes, etag }, or why not (kind: 'store' = couldn't ask, 'missing', 'bad' =
 // there but not what was declared, removed when we managed to delete it).
-async function checkObject(ctx, key, contentType) {
+export async function checkObject(ctx, key, contentType) {
   let res;
   try { res = await s3(ctx, 'HEAD', key); } catch (e) { return { ok: false, kind: 'store', why: `We couldn't check the clip (${e.message}). Try again in a minute.` }; }
   if (res.status === 404) return { ok: false, kind: 'missing', why: 'The clip didn\'t arrive. Check your signal and send it again.' };
@@ -186,6 +186,17 @@ export async function playUrl(ctx, id, which = 'clip', scope = {}) {
     }
   }
   return { ...presign({ method: 'GET', url: objectUrl(c, key), region: c.region, keyId: c.keyId, secret: c.secret, expires: PLAY_MINUTES * 60, now: new Date(ctx.now()) }), content_type: type };
+}
+// The same play address for another kind of clip kept in this bucket (sprint analysis, services/sprint.js): checked
+// against the ETag pinned when it arrived; a swapped object is removed and refused (onSwapped drops the row).
+export async function playObject(ctx, { key, contentType, etag, onSwapped }) {
+  const c = needReady();
+  if (etag) {
+    const head = await checkObject(ctx, key, contentType);
+    if (!head.ok && head.kind === 'store') throw new HttpError(503, 'storage_unavailable', 'The video can\'t be reached right now. Try again in a minute.');
+    if (!head.ok || head.etag !== etag) { await forget(ctx, key); onSwapped?.(); throw conflict('This clip isn\'t the one that was checked when it was sent, so it was removed. Send it again.'); }
+  }
+  return { ...presign({ method: 'GET', url: objectUrl(c, key), region: c.region, keyId: c.keyId, secret: c.secret, expires: PLAY_MINUTES * 60, now: new Date(ctx.now()) }), content_type: contentType };
 }
 export function markSeen(ctx, client, id) {
   const fc = rowFor(ctx, id, { clientId: client.id });

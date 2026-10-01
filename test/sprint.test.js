@@ -142,7 +142,7 @@ test('a change of direction: contact, braking and push from the plant to the pus
   assert.deepEqual(plant.measures.map((m) => [m.measure, m.value]), [['shin_lean', 31], ['trunk_lean_any', 11]]);
 });
 
-test('an athlete sends a rep and marks it; the coach marks and sends it with a message, then the marks are the coach's', async () => {
+test('an athlete sends a rep and marks it; the coach marks and sends it with a message, then the marks are the coach\'s', async () => {
   const ready = (await athlete('GET', '/app/api/sprint')).body;
   assert.equal(ready.ready, true);
   assert.deepEqual(ready.kinds.map((k) => k.key), ['top_speed', 'acceleration', 'cod']);

@@ -41,6 +41,7 @@ function logged(c, at, weight, { started = true, rpe = 7 } = {}) {
 
 before(async () => {
   app = createApp({ testMode: true, jobs: false, publicUrl: 'https://app.example.org' });
+  app.ctx.now = () => '2026-09-29T15:00:00.000Z';   // the tests are written for late September: August is over, September isn't
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia', password: 'correct-horse-battery' });
   createUser(app.ctx, { email: 'coach@test.dev', name: 'Riley', password: 'correct-horse-battery', role: 'coach' });
   createUser(app.ctx, { email: 'desk@test.dev', name: 'Jess', password: 'correct-horse-battery', role: 'front_desk' });

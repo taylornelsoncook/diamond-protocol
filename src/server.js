@@ -42,10 +42,10 @@ import { calendarFeed } from './services/portal.js';
 const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(0, 120); return /^[^\s@]+@[^\s@]+$/.test(t) ? t : t ? '(not an email address)' : null; };
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video|sprint-clips\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm' };
 const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/portal': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
-  "default-src 'self'", "img-src 'self' data: https:", "media-src 'self' https:",
+  "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "img-src 'self' data: https:", "media-src 'self' https: blob:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
   "frame-src 'self' https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
@@ -365,7 +365,7 @@ async function serveStatic(res, pathname) {
     // public information and every button opens the parent portal in a new tab.
     // The athlete app (client.html) sits inside the family portal's Workout tab, so our own pages may frame it.
     const policy = file === 'book.html' ? csp().replace("frame-ancestors 'none'", 'frame-ancestors *') : file === 'client.html' ? csp().replace("frame-ancestors 'none'", "frame-ancestors 'self'") : csp();
-    res.writeHead(200, { 'content-type': type, 'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : 'public, max-age=300' });
+    res.writeHead(200, { 'content-type': type, 'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : file.startsWith('vendor/') ? 'public, max-age=604800' : 'public, max-age=300' });   // vendor/: the pose model, large and versioned
     res.end(body);
   } catch {
     json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });

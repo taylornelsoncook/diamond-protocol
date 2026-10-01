@@ -361,3 +361,5 @@ td .dp-badge{white-space:nowrap}
 .sp-b-row--now .sp-b-name{font-size:2.8cqw;padding:.6cqw 1.4cqw}
 .sp-b-row--now .sp-b-verdict{font-size:2.3cqw;padding:.6cqw 1.2cqw}
 .sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}
+.sp-pos--suggested{border-style:dashed;border-color:var(--amber)}
+.sp-suggest-note{border-left:3px solid var(--amber);padding-left:8px}

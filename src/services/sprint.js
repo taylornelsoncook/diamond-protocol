@@ -23,9 +23,9 @@ export const MAX_BYTES = 150 * 1024 * 1024, MAX_SECONDS = 60, PER_DAY = 10;
 // ---------- Kinds and positions ----------
 const STRIDE = ['toe_off', 'mvp', 'strike', 'touchdown', 'full_support'];   // the five ALTIS kinogram positions
 export const KINDS = {
-  top_speed: { label: 'Top speed', steps: 2, positions: STRIDE, finish: true, tip: 'Film side-on at hip height, 10 to 15 m from the lane, after the athlete has built up to top speed.' },
-  acceleration: { label: 'Acceleration', steps: 2, positions: STRIDE, finish: true, tip: 'Film side-on from the start through the first 10 m, the camera still, two cones a known distance apart in the lane.' },
-  cod: { label: 'Change of direction', steps: 1, positions: ['penultimate', 'plant', 'deepest', 'push_off'], finish: false, tip: 'Film the cut side-on to the plant leg, the whole body in frame from the last step in to the push away.' }
+  top_speed: { label: 'Top speed', steps: 2, positions: STRIDE, finish: true, segment: '30-40', tip: 'The test: the 30 to 40 yard part of a sprint. Film it side-on at hip height from 10 to 15 yards away, the camera still, iPhone slow motion.' },
+  acceleration: { label: 'Acceleration', steps: 2, positions: STRIDE, finish: true, segment: '0-10', tip: 'The test: the first 10 yards from the start. Film side-on, the camera still, iPhone slow motion, two cones a known distance apart in the lane.' },
+  cod: { label: 'Change of direction', steps: 1, positions: ['penultimate', 'plant', 'deepest', 'push_off'], finish: false, tip: 'The test: a 5-yard sprint in, cut, and a 5-yard sprint out. Film the cut side-on, the camera still, the whole body in frame from the last steps in to the push away.' }
 };
 // Which part of the run a clip shows (owner decision, version 66), in yards from the start.
 export const SEGMENTS = { '0-10': '0–10 yd', '10-20': '10–20 yd', '20-30': '20–30 yd', '30-40': '30–40 yd', '40+': '40+ yd' };
@@ -242,12 +242,12 @@ export function analyse(ctx, clip, marks, refs = references(ctx), stepRefs = nul
       const got = measures.filter((x) => x.grade);
       const grade = got.length ? got.reduce((w, x) => (SCORE[x.grade] < SCORE[w] ? x.grade : w), 'A') : null;   // the weakest measure
       if (grade) grades.push(grade);
-      positions.push({ step, position: pos, label: POSITIONS[pos].label, hint: POSITIONS[pos].hint, legs: POSITIONS[pos].legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, measures, grade });
+      positions.push({ step, position: pos, label: POSITIONS[pos].label, hint: POSITIONS[pos].hint, legs: POSITIONS[pos].legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, suggested: m?.source === 'auto', measures, grade });
     }
   }
   if (kind.finish) {
     const m = byKey.get(markKey(nSteps + 1, 'toe_off'));
-    positions.push({ step: nSteps + 1, position: 'toe_off', label: POSITIONS.finish.label, hint: POSITIONS.finish.hint, legs: POSITIONS.finish.legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, measures: [], grade: null, finish: true });
+    positions.push({ step: nSteps + 1, position: 'toe_off', label: POSITIONS.finish.label, hint: POSITIONS.finish.hint, legs: POSITIONS.finish.legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, suggested: m?.source === 'auto', measures: [], grade: null, finish: true });
   }
   const at = (step, pos) => byKey.get(markKey(step, pos));
   const cal = parse(clip.calibration);
@@ -277,7 +277,8 @@ export function analyse(ctx, clip, marks, refs = references(ctx), stepRefs = nul
     step_length_m: avg('step_length_m') == null ? null : Math.round(avg('step_length_m') * 100) / 100 };
   const total = nSteps * kind.positions.length + (kind.finish ? 1 : 0), marked = positions.filter((p) => p.marked).length;
   const breakdown = clip.kind === 'cod' ? null : breakdownOf({ clip, at, nSteps, dir, scale, real, refs: (stepRefs ?? stepReferences(ctx))[clip.kind] });
-  return { positions, timing, grade: repGrade(grades), marked, total, calibrated: !!scale, steps: nSteps, breakdown };
+  const suggested = positions.filter((p) => p.suggested).length;
+  return { positions, timing, grade: repGrade(grades), marked, suggested, total, calibrated: !!scale, steps: nSteps, breakdown };
 }
 
 // ---------- The breakdown (per-step measures, chapters and scores) ----------
@@ -350,7 +351,7 @@ const shape = (clip, extra = {}) => ({ id: clip.id, client_id: clip.client_id, c
   title: clip.title, note: clip.note, status: clip.status, uploaded_by_kind: clip.uploaded_by_kind, uploaded_by_name: clip.uploaded_by_name, bytes: clip.bytes, duration_s: clip.duration_s,
   segment: clip.segment ?? null, segment_label: clip.segment ? SEGMENTS[clip.segment] : null,
   capture_fps: clip.capture_fps, file_fps: clip.file_fps, steps: stepsOf(clip), direction: clip.direction, video_w: clip.video_w, video_h: clip.video_h, calibration: parse(clip.calibration),
-  speed_mps: clip.speed_mps, rep_time_s: clip.rep_time_s, review_note: clip.review_note, reviewed_at: clip.reviewed_at, reviewed_by_name: clip.reviewed_by_name, seen_at: clip.seen_at,
+  speed_mps: clip.speed_mps, rep_time_s: clip.rep_time_s, auto_at: clip.auto_at ?? null, auto_note: clip.auto_note ?? null, review_note: clip.review_note, reviewed_at: clip.reviewed_at, reviewed_by_name: clip.reviewed_by_name, seen_at: clip.seen_at,
   created_at: clip.created_at, sent_at: clip.sent_at, ...extra });
 const SELECT = `SELECT s.*, c.name AS client_name, c.athlete_id, c.family_id FROM sprint_clips s JOIN clients c ON c.id = s.client_id`;
 function rowFor(ctx, id, { clientId = null, familyId = null } = {}) {
@@ -426,7 +427,7 @@ export function startUpload(ctx, client, body = {}, who) {
   const title = v.str(body.title, 'title', { max: 80, optional: true }), note = v.str(body.note, 'note', { max: 500, optional: true });
   const rep = num(body.rep_time_s, 'rep_time_s', 0.3, 30);
   const nSteps = kind === 'cod' ? 1 : (num(body.steps, 'steps', 2, 4, { whole: true }) ?? 2);
-  const segment = kind === 'cod' ? null : segmentOf(body.segment);
+  const segment = kind === 'cod' ? null : body.segment === undefined ? KINDS[kind].segment : segmentOf(body.segment);   // the main test's distance unless they say otherwise
   if (who.kind !== 'staff') rateLimit(`sprint:${client.id}`, PER_DAY, 24 * 60 * 60000);
   const id = newId('spr'), key = `sprint/${client.id}/${id}.${store.TYPES[contentType]}`;
   ctx.db.run(`INSERT INTO sprint_clips (id, client_id, kind, title, note, status, uploaded_by_kind, uploaded_by_user, uploaded_by_name, object_key, content_type, bytes, duration_s, capture_fps, file_fps, rep_time_s, steps, segment, created_at)
@@ -502,7 +503,7 @@ export function athleteMay(ctx, clientId, id) {
   return clip;
 }
 // Mark one position: the frame (t, the video's time in seconds) and the points tapped on it (any of LANDMARKS).
-export function saveMark(ctx, id, body = {}, user) {
+export function saveMark(ctx, id, body = {}, user, source = 'manual') {
   const clip = rowFor(ctx, id), kind = KINDS[clip.kind], nSteps = stepsOf(clip);
   const step = v.int(body.step, 'step', { min: 1, max: nSteps + (kind.finish ? 1 : 0) });
   const position = v.str(body.position, 'position', { max: 20 });
@@ -515,9 +516,44 @@ export function saveMark(ctx, id, body = {}, user) {
     if (!LANDMARKS[k]) throw badRequest(`${k} isn't a point we use: ${Object.keys(LANDMARKS).join(', ')}.`);
     if (p !== null) points[k] = point(p, k, clip.video_w, clip.video_h);
   }
-  ctx.db.run(`INSERT INTO sprint_marks (clip_id, step, position, t, points, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT (clip_id, step, position) DO UPDATE SET t = excluded.t, points = excluded.points, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
-    id, step, position, Math.round(t * 10000) / 10000, JSON.stringify(points), ctx.now(), user?.name ?? null);
+  ctx.db.run(`INSERT INTO sprint_marks (clip_id, step, position, t, points, updated_at, updated_by, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (clip_id, step, position) DO UPDATE SET t = excluded.t, points = excluded.points, updated_at = excluded.updated_at, updated_by = excluded.updated_by, source = excluded.source`,
+    id, step, position, Math.round(t * 10000) / 10000, JSON.stringify(points), ctx.now(), user?.name ?? null, source);
+  return source === 'auto' ? null : getClip(ctx, id);
+}
+// The app's suggestions (sprint-detect.js in the browser, from the pose model): every position and point at once.
+// They land as 'auto' marks and never replace a mark a person placed or confirmed; running it again replaces only
+// the earlier suggestions. The steps and direction it found are taken unless a person has marked anything yet.
+export function applyAuto(ctx, id, body = {}) {
+  const clip = rowFor(ctx, id);
+  const list = Array.isArray(body.marks) ? body.marks : null;
+  if (!list) throw badRequest('Send marks: [{ step, position, t, points }].');
+  if (list.length > 40) throw badRequest('That is more marks than a clip has.');
+  const manual = new Set(ctx.db.all(`SELECT step, position FROM sprint_marks WHERE clip_id = ? AND source = 'manual'`, id).map((m) => `${m.step}:${m.position}`));
+  const note = v.str(body.note, 'note', { max: 200, optional: true });
+  let added = 0;
+  ctx.db.tx(() => {
+    const set = { auto_at: ctx.now(), auto_note: note };
+    if (body.video_w !== undefined && body.video_h !== undefined) { set.video_w = num(body.video_w, 'video_w', 16, 8000, { whole: true }); set.video_h = num(body.video_h, 'video_h', 16, 8000, { whole: true }); }
+    if (!manual.size) {
+      if (body.direction === 1 || body.direction === -1) set.direction = body.direction;
+      if (KINDS[clip.kind].steps !== 1 && body.steps !== undefined) set.steps = v.int(body.steps, 'steps', { min: 2, max: 4 });
+    }
+    ctx.db.run(`UPDATE sprint_clips SET ${Object.keys(set).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...Object.values(set), id);
+    ctx.db.run(`DELETE FROM sprint_marks WHERE clip_id = ? AND source = 'auto'`, id);
+    for (const m of list) {
+      if (manual.has(`${m?.step}:${m?.position}`)) continue;
+      saveMark(ctx, id, m, { name: 'Suggested by the app' }, 'auto');
+      added++;
+    }
+  });
+  return { ...getClip(ctx, id), suggested_added: added, kept_manual: manual.size };
+}
+// "Looks right": suggestions become a person's marks (all of them, or one position).
+export function confirmAuto(ctx, id, body = {}, user) {
+  rowFor(ctx, id);
+  if (body.step !== undefined) ctx.db.run(`UPDATE sprint_marks SET source = 'manual', updated_by = ?, updated_at = ? WHERE clip_id = ? AND step = ? AND position = ? AND source = 'auto'`, user?.name ?? null, ctx.now(), id, v.int(body.step, 'step', { min: 1, max: 5 }), v.str(body.position, 'position', { max: 20 }));
+  else ctx.db.run(`UPDATE sprint_marks SET source = 'manual', updated_by = ?, updated_at = ? WHERE clip_id = ? AND source = 'auto'`, user?.name ?? null, ctx.now(), id);
   return getClip(ctx, id);
 }
 export function clearMark(ctx, id, body = {}) {

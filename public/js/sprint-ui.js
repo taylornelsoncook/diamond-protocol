@@ -6,12 +6,14 @@
 // Clips play from 10-minute signed addresses on the private bucket; nothing is downloaded or kept by the page.
 import { h, fill, btn, busy, toast, field, input, select, ago } from './ui.js';
 import { sendClip, CLIP_TYPES } from './formchecks-ui.js';
+import { suggest, canSuggest } from './sprint-auto.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const FPS = [240, 120, 60, 30, 960, 480, 50, 25, 24];
 const KIND_LABEL = { top_speed: 'Top speed', acceleration: 'Acceleration', cod: 'Change of direction' };
 // Which part of the run the clip shows, in yards from the start (sprint.js SEGMENTS).
 const SEGMENTS = [['0-10', '0–10 yd'], ['10-20', '10–20 yd'], ['20-30', '20–30 yd'], ['30-40', '30–40 yd'], ['40+', '40+ yd']];
+const MAIN_TEST = { top_speed: '30-40', acceleration: '0-10' };   // owner decision: the main test for each kind (a cut: 5 yards in, cut, 5 out)
 const segmentSelect = (value) => select([['', 'Not set'], ...SEGMENTS], { value: value ?? '' });
 const LANDMARK_ORDER = ['shoulder', 'hip', 'knee_swing', 'ankle_swing', 'knee_stance', 'ankle_stance', 'foot'];
 const LANDMARK_LABEL = { shoulder: 'Shoulder', hip: 'Hip', knee_swing: 'Knee of the swing leg', ankle_swing: 'Ankle of the swing leg', knee_stance: 'Knee of the stance leg', ankle_stance: 'Ankle of the stance leg', foot: 'Stance foot on the ground' };
@@ -358,7 +360,7 @@ export async function sprintViewer(opts) {
     return h('div', { class: 'stack-tight' }, kindSteps.map((step) => {
       const row = positions().filter((p) => p.step === step);
       return h('div', { class: 'sp-steprow' }, h('span', { class: 'small muted sp-steplabel' }, row[0]?.finish ? 'End' : clip.kind === 'cod' ? 'The cut' : `Step ${step}`),
-        h('div', { class: 'row wrap', style: 'gap:6px' }, row.map((p) => h('button', { type: 'button', class: 'sp-pos', 'aria-pressed': sel === posKey(p) ? 'true' : 'false',
+        h('div', { class: 'row wrap', style: 'gap:6px' }, row.map((p) => h('button', { type: 'button', class: `sp-pos${p.suggested ? ' sp-pos--suggested' : ''}`, title: p.suggested ? 'Suggested by the app' : null, 'aria-pressed': sel === posKey(p) ? 'true' : 'false',
           onClick: () => { sel = posKey(p); tap = null; if (p.marked) { video.pause(); video.currentTime = p.t; } drawSide(); drawOverlay(); } },
         p.label, p.marked ? (p.grade ? gradeChip(p.grade) : h('span', { class: 'sp-dot', title: 'Marked' })) : null))));
     }));
@@ -380,6 +382,8 @@ export async function sprintViewer(opts) {
       editable && p.legs ? h('p', { class: 'small', style: 'margin:0' }, p.legs) : null,
       refLine ? h('p', { class: 'small', style: 'margin:0' }, refLine) : null,
       items.length ? h('div', { class: 'stack-tight' }, items) : null,
+      p.suggested && !tap ? h('div', { class: 'row wrap sp-suggest-note', style: 'gap:8px;align-items:center' }, h('span', { class: 'small grow' }, 'Suggested by the app.'),
+        editable ? btn('Looks right', (e) => busy(e.currentTarget, async () => { clip = await api('POST', `${prefix}/sprint-clips/${id}/confirm`, { step: p.step, position: p.position }); draw(); }), 'secondary') : null) : null,
       tap ? tapPanel(p) : actions);
   }
   function tapPanel(p) {
@@ -394,9 +398,30 @@ export async function sprintViewer(opts) {
         Object.keys(tap.points).length ? btn('Undo last', () => { const last = [...tap.need].reverse().find((k) => tap.points[k]); delete tap.points[last]; drawSide(); drawOverlay(); }, 'ghost') : null,
         btn('Cancel', () => { tap = null; drawSide(); drawOverlay(); }, 'ghost')));
   }
+  // The app's suggestions: run the pose model on the clip, save what it found as suggestions (never over a person's marks).
+  let suggesting = null;
+  async function runSuggest() {
+    if (suggesting || !canSuggest()) return;
+    suggesting = 'Loading the body tracker…'; drawSide();
+    try {
+      const found = await suggest({ src: url, crossOrigin: true, kind: clip.kind, steps: clip.steps ?? 2, fileFps: clip.file_fps, onProgress: (text) => { suggesting = text; drawSide(); } });
+      if (!found.marks.length) { toast(`${found.note} Mark the positions by hand.`, 'bad'); return; }
+      clip = await api('PUT', `${prefix}/sprint-clips/${id}/auto`, { marks: found.marks, steps: found.steps, direction: found.direction, video_w: found.video_w, video_h: found.video_h, note: found.note });
+      toast(`Positions suggested. ${found.note} Check each one.`);
+      const first = positions().find((p) => p.marked); if (first) { sel = posKey(first); video.currentTime = first.t; }
+    } catch (e) { toast(`The positions couldn't be suggested: ${e.message}`, 'bad'); }
+    finally { suggesting = null; draw(); }
+  }
+  const confirmAll = (e) => busy(e.currentTarget, async () => { clip = await api('POST', `${prefix}/sprint-clips/${id}/confirm`, {}); toast('Kept as they are.'); draw(); });
   function drawSide() {
-    fill(side, h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('div', { class: 'grow' }, h('div', { class: 'strong' }, 'Motion & positions'), h('div', { class: 'small muted' }, `${clip.analysis?.marked ?? 0} of ${clip.analysis?.total ?? 0} marked`)),
-      h('span', { class: 'small muted' }, 'Rep grade'), gradeChip(clip.analysis?.grade, true)), picker(), detail());
+    const a = clip.analysis;
+    const auto = editable && canSuggest() ? h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
+      suggesting ? h('span', { class: 'small', role: 'status' }, suggesting) : btn(a?.marked ? 'Suggest the points again' : 'Suggest the points', () => runSuggest(), a?.marked ? 'ghost' : 'primary'),
+      a?.suggested && !suggesting ? btn(`Looks right: keep all ${a.suggested}`, confirmAll, 'secondary') : null) : null;
+    fill(side, h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('div', { class: 'grow' }, h('div', { class: 'strong' }, 'Motion & positions'), h('div', { class: 'small muted' }, `${a?.marked ?? 0} of ${a?.total ?? 0} marked${a?.suggested ? ` · ${a.suggested} suggested by the app` : ''}`)),
+      h('span', { class: 'small muted' }, 'Rep grade'), gradeChip(a?.grade, true)),
+      a?.suggested ? h('p', { class: 'small sp-suggest-note', style: 'margin:0' }, 'Dashed positions were suggested by the app. Step through each one: press Looks right, or Redo the points where a point is off.') : null,
+      auto, picker(), detail());
   }
   // Timing per step.
   function timingPanel() {
@@ -452,7 +477,7 @@ export async function sprintViewer(opts) {
   function kinogramPanel() {
     const holder = h('div', { class: 'stack' });
     const marked = positions().filter((p) => p.marked && !p.finish);
-    const build = (e) => busy(e.currentTarget, async () => {
+    const make = async () => {
       const v2 = document.createElement('video'); v2.muted = true; v2.playsInline = true; v2.preload = 'auto'; v2.src = url;
       await once(v2, 'loadeddata');
       const rows = new Map();
@@ -469,9 +494,12 @@ export async function sprintViewer(opts) {
       }
       fill(holder, [...rows].map(([step, tiles]) => h('div', { class: 'stack-tight' }, h('div', { class: 'small muted' }, clip.kind === 'cod' ? 'The cut' : `Step ${step}`), h('div', { class: 'sp-kgrid' }, tiles))));
       v2.removeAttribute('src'); v2.load();
-    });
+    };
+    const build = (e) => busy(e.currentTarget, make);
+    // It builds itself once positions are marked (owner decision: the kinogram without a button press).
+    if (marked.length && url) { fill(holder, h('p', { class: 'small muted', style: 'margin:0' }, 'Laying out the frames…')); make().catch(() => fill(holder, h('p', { class: 'small muted', style: 'margin:0' }, 'The frames couldn\'t be laid out. Press Build it again.'))); }
     return h('div', { class: 'dp-panel stack-tight' }, h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('h3', { class: 'dp-panel-title grow' }, 'Kinogram'),
-      marked.length ? btn(holder.childElementCount ? 'Build it again' : 'Build the kinogram', build, 'secondary') : null),
+      marked.length ? btn('Build it again', build, 'ghost') : null),
     marked.length ? null : h('p', { class: 'small muted', style: 'margin:0' }, 'Mark positions to lay their frames side by side here.'), holder);
   }
   function reviewPanel() {
@@ -524,6 +552,7 @@ export async function sprintViewer(opts) {
       if (!editable && clip.analysis?.breakdown?.chapters.some((c) => c.metrics.some((m) => m.values.length))) mode = 'projection';
       draw();
       video.addEventListener('loadeddata', () => { const p = selected(); if (p?.marked) video.currentTime = p.t; }, { once: true });
+      if (editable && !clip.auto_at && !clip.analysis?.marked && canSuggest()) video.addEventListener('loadeddata', () => runSuggest(), { once: true });   // nobody has marked it: suggest at once
       if (opts.athlete && clip.status === 'reviewed' && !clip.seen_at) api('POST', `${prefix}/sprint-clips/${id}/seen`).catch(() => {});
     } catch (e) { fill(box, h('div', { class: 'empty' }, e.message), opts.onBack ? btn('Back', opts.onBack, 'secondary') : null); }
   })();
@@ -595,7 +624,7 @@ export function uploadForm(opts) {
   kind.addEventListener('change', showTip); showTip();
   const seg = segmentSelect(null);
   const segField = field('Distance', seg, 'Which part of the run this clip shows.');
-  const showSeg = () => { segField.hidden = kind.value === 'cod'; if (kind.value === 'acceleration' && !seg.value) seg.value = '0-10'; };
+  const showSeg = () => { segField.hidden = kind.value === 'cod'; seg.value = MAIN_TEST[kind.value] ?? ''; };
   kind.addEventListener('change', showSeg); showSeg();
   const fpsSel = select(FPS.map((f) => [String(f), f === 240 ? '240 (iPhone slow motion)' : f === 60 ? '60 (most phones, or a screen recording)' : String(f)]), { value: '240' });
   const rep = input({ type: 'number', step: '0.01', min: '0.3', max: '30', inputmode: 'decimal', placeholder: 'e.g. 1.07' });
@@ -614,7 +643,17 @@ export function uploadForm(opts) {
         const clip = await sendClip({ file, start: opts.start, finish: opts.finish,
           extra: { kind: kind.value, segment: kind.value === 'cod' ? null : (seg.value || null), capture_fps: Number(fpsSel.value), title: title.value || null, note: note.value || null, rep_time_s: rep.value === '' ? null : Number(rep.value) },
           onProgress: (p) => { const pct = Math.round(p * 100); bar.firstChild.style.width = `${pct}%`; bar.setAttribute('aria-valuenow', String(pct)); word.textContent = pct >= 100 ? 'Checking the clip…' : `Sending… ${pct}%`; } });
-        toast(opts.who === 'athlete' ? 'Sent. Your coach will mark it up.' : 'Clip added.'); title.value = ''; note.value = ''; rep.value = '';
+        // Suggest every position and point straight away, from the file still on this device (owner decision).
+        if (opts.autoSave && canSuggest()) {
+          const local = URL.createObjectURL(file);
+          try {
+            const found = await suggest({ src: local, kind: clip.kind, steps: clip.steps ?? 2, fileFps: clip.file_fps, onProgress: (text, f) => { word.textContent = text; bar.firstChild.style.width = `${Math.round((f ?? 0) * 100)}%`; } });
+            if (found.marks.length) { await opts.autoSave(clip.id, { marks: found.marks, steps: found.steps, direction: found.direction, video_w: found.video_w, video_h: found.video_h, note: found.note }); toast(`Sent, and the positions are suggested. ${found.note} Check them and fix any that are off.`); }
+            else toast(`Sent. ${found.note} Mark the positions by hand.`, 'bad');
+          } catch (e) { toast(`Sent. The positions couldn't be suggested (${e.message}). Mark them by hand.`, 'bad'); }
+          finally { URL.revokeObjectURL(local); }
+        } else toast(opts.who === 'athlete' ? 'Sent. Your coach will mark it up.' : 'Clip added.');
+        title.value = ''; note.value = ''; rep.value = '';
         opts.onSent?.(clip);
       } catch (e) { toast(e.message, 'bad'); }
       finally { bar.hidden = true; word.textContent = ''; bar.firstChild.style.width = '0%'; }
@@ -663,7 +702,7 @@ export function athleteSprint(where, { api }) {
     fill(where, h('p', { class: 'muted' }, 'Loading…'));
     let d;
     try { d = await api('GET', '/app/api/sprint'); } catch (e) { fill(where, h('div', { class: 'empty' }, e.message)); return; }
-    const send = d.ready ? uploadForm({ api, kinds: d.kinds, who: 'athlete', start: (b) => api('POST', '/app/api/sprint-clips', b), finish: (id) => api('POST', `/app/api/sprint-clips/${id}/done`), onSent: () => draw() })
+    const send = d.ready ? uploadForm({ api, kinds: d.kinds, who: 'athlete', start: (b) => api('POST', '/app/api/sprint-clips', b), finish: (id) => api('POST', `/app/api/sprint-clips/${id}/done`), autoSave: (id, b) => api('PUT', `/app/api/sprint-clips/${id}/auto`, b), onSent: () => draw() })
       : h('p', { class: 'small muted', style: 'margin:0' }, 'Sending sprint clips isn\'t set up yet. Ask your coach.');
     fill(where, h('div', { class: 'stack' },
       h('div', { class: 'sp-card stack' }, h('h2', { class: 'eg-h' }, 'Send a rep'), h('p', { class: 'small muted', style: 'margin:0' }, 'Mark the positions yourself (open a rep and step through it) or leave it to your coach, who checks it and sends it back with a note.'), send),
@@ -679,7 +718,7 @@ export function clientSprintPanel(clientId, { api, onOpen }) {
   const draw = async () => {
     const d = await api('GET', `/v1/clients/${clientId}/sprint`);
     const refs = d.ready ? (await api('GET', '/v1/sprint/references')).kinds : [];
-    fill(box, d.ready ? h('details', { class: 'dp-panel' }, h('summary', { class: 'strong' }, 'Add a clip'), uploadForm({ api, kinds: refs, who: 'staff', start: (b) => api('POST', `/v1/clients/${clientId}/sprint-clips`, b), finish: (id) => api('POST', `/v1/sprint-clips/${id}/done`), onSent: (c) => onOpen(c.id) }))
+    fill(box, d.ready ? h('details', { class: 'dp-panel' }, h('summary', { class: 'strong' }, 'Add a clip'), uploadForm({ api, kinds: refs, who: 'staff', start: (b) => api('POST', `/v1/clients/${clientId}/sprint-clips`, b), finish: (id) => api('POST', `/v1/sprint-clips/${id}/done`), autoSave: (id, b) => api('PUT', `/v1/sprint-clips/${id}/auto`, b), onSent: (c) => onOpen(c.id) }))
       : h('p', { class: 'small muted', style: 'margin:0' }, 'Sprint clips use the private clips bucket. Set it up in Settings → Backups & jobs (Form-check videos) to add clips.'),
     clipList(d.data, { onOpen, onCompare: (ids) => { location.hash = `#/sprint/compare?ids=${ids.join(',')}`; } }),
     summaryBlock(d.summary));
@@ -703,7 +742,7 @@ export async function viewSprintCoach(main, id, { api, header, role }) {
   let chosen = null;
   const add = d.ready ? h('details', { class: 'dp-panel' }, h('summary', { class: 'strong' }, 'Add a clip for an athlete'),
     h('div', { class: 'stack' }, field('Athlete', h('div', null, who, dl)),
-      uploadForm({ api, kinds: refs.kinds, who: 'staff', start: (b) => { chosen = pickId(); return api('POST', `/v1/clients/${chosen}/sprint-clips`, b); }, finish: (cid) => api('POST', `/v1/sprint-clips/${cid}/done`), onSent: (c) => { location.hash = `#/sprint/${c.id}`; } })))
+      uploadForm({ api, kinds: refs.kinds, who: 'staff', start: (b) => { chosen = pickId(); return api('POST', `/v1/clients/${chosen}/sprint-clips`, b); }, finish: (cid) => api('POST', `/v1/sprint-clips/${cid}/done`), autoSave: (cid, b) => api('PUT', `/v1/sprint-clips/${cid}/auto`, b), onSent: (c) => { location.hash = `#/sprint/${c.id}`; } })))
     : h('div', { class: 'test-banner' }, 'Sprint clips go to the private clips bucket. Set it up first: Settings → Backups & jobs → Form-check videos.');
   fill(main, header('Sprint', 'Clips of top speed, acceleration and change of direction. Mark the positions, see the angles and timing, send it back.',
     h('div', { class: 'row wrap', style: 'gap:8px' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sprint/references' }, 'References'))),

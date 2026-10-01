@@ -293,8 +293,11 @@ test('the distance a clip covers: chosen at upload, changed later, filtered on; 
   assert.equal((await coach('POST', `/v1/clients/${maya.id}/sprint-clips`, { kind: 'top_speed', segment: '0-15', content_type: 'video/mp4', bytes: 10 })).status, 400);
   assert.equal((await coach('PATCH', `/v1/sprint-clips/${a.id}`, { segment: '40+' })).body.segment_label, '40+ yd');
   assert.equal((await athlete('PATCH', `/app/api/sprint-clips/${b.id}`, { segment: null })).body.segment, null);
-  await coach('PATCH', `/v1/sprint-clips/${b.id}`, { segment: '30-40' });
-  assert.deepEqual((await coach('GET', `/v1/sprint-clips?segment=30-40&client_id=${maya.id}`)).body.data.map((c) => c.id), [b.id]);
+  await coach('PATCH', `/v1/sprint-clips/${b.id}`, { segment: '10-20' });
+  assert.deepEqual((await coach('GET', `/v1/sprint-clips?segment=10-20&client_id=${maya.id}`)).body.data.map((c) => c.id), [b.id]);
+  // Left unsaid, a clip takes its kind's main test: top speed 30-40, acceleration 0-10 (owner decision).
+  assert.equal((await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'top_speed' })).segment, '30-40');
+  assert.equal((await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'acceleration' })).segment, '0-10');
   assert.equal((await coach('GET', '/v1/sprint-clips?segment=nope')).status, 400);
   const cut = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'cod', segment: '0-10' });
   assert.equal(cut.segment, null, 'a change of direction has no distance');
@@ -316,6 +319,36 @@ test('a version 65 database gains the distance column, opened twice', () => {
       d.close();
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('suggested marks: saved as suggestions, graded at once, never over a person\'s mark; Looks right makes them a person\'s', async () => {
+  const clip = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'top_speed' });
+  await coach('PUT', `/v1/sprint-clips/${clip.id}/marks`, { step: 1, position: 'touchdown', t: 0.3, points: { knee_stance: [520, 400], ankle_stance: [520, 500] } });   // a person's mark
+  const r = await coach('PUT', `/v1/sprint-clips/${clip.id}/auto`, { steps: 3, direction: -1, video_w: 1920, video_h: 1080, note: 'Found 3 steps.', marks: [
+    { step: 1, position: 'mvp', t: 0.16, points: { hip: [500, 300], knee_swing: [600, 300], knee_stance: [500, 400], ankle_swing: [600, 400] } },
+    { step: 1, position: 'touchdown', t: 0.25, points: { knee_stance: [500, 400], ankle_stance: [560, 500] } } ] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([r.body.suggested_added, r.body.kept_manual, r.body.auto_note, r.body.steps, r.body.direction], [1, 1, 'Found 3 steps.', 2, 1], 'a person had marked already: their steps, direction and touchdown stay');
+  const pos = (b, p) => b.analysis.positions.find((x) => x.step === 1 && x.position === p);
+  assert.deepEqual([pos(r.body, 'mvp').suggested, pos(r.body, 'mvp').grade, pos(r.body, 'touchdown').suggested, pos(r.body, 'touchdown').t], [true, 'B', false, 0.3]);
+  assert.equal(r.body.analysis.suggested, 1);
+  // Running it again replaces only the earlier suggestions.
+  const again = (await coach('PUT', `/v1/sprint-clips/${clip.id}/auto`, { marks: [{ step: 1, position: 'strike', t: 0.2, points: {} }] })).body;
+  assert.deepEqual([pos(again, 'mvp').marked, pos(again, 'strike').suggested], [false, true]);
+  // Looks right: one position, then all.
+  const one = (await coach('POST', `/v1/sprint-clips/${clip.id}/confirm`, { step: 1, position: 'strike' })).body;
+  assert.equal(pos(one, 'strike').suggested, false);
+  assert.equal(app.ctx.db.get(`SELECT updated_by FROM sprint_marks WHERE clip_id = ? AND position = 'strike'`, clip.id).updated_by, 'Riley Brooks');
+  // On a clip nobody has marked, the steps and direction found are taken; an athlete's own rep works the same way.
+  const fresh = await upload(athlete, '/app/api/sprint-clips', { kind: 'acceleration' });
+  const mine = await athlete('PUT', `/app/api/sprint-clips/${fresh.id}/auto`, { steps: 4, direction: -1, marks: [{ step: 1, position: 'toe_off', t: 0.1, points: { hip: [10, 10] } }] });
+  assert.equal(mine.status, 200, JSON.stringify(mine.body));
+  assert.deepEqual([mine.body.steps, mine.body.direction, mine.body.analysis.suggested], [4, -1, 1]);
+  assert.equal((await athlete('POST', `/app/api/sprint-clips/${fresh.id}/confirm`, {})).body.analysis.suggested, 0);
+  assert.equal((await coach('PUT', `/v1/sprint-clips/${clip.id}/auto`, { marks: 'nope' })).status, 400);
+  assert.equal((await coach('PUT', `/v1/sprint-clips/${clip.id}/auto`, { marks: [{ step: 1, position: 'plant', t: 0.2 }] })).status, 400, 'a bad suggestion saves nothing');
+  assert.equal(pos((await coach('GET', `/v1/sprint-clips/${clip.id}`)).body, 'strike').marked, true, 'the earlier marks are still there after the refused one');
+  assert.equal((await desk('PUT', `/v1/sprint-clips/${clip.id}/auto`, { marks: [] })).status, 403);
 });
 
 test('a version 64 database gains the sprint tables, opened twice', () => {

@@ -87,14 +87,20 @@ export const STEP_METRICS = {
   hip_flexion_deg: { label: 'Hip flexion', chapter: 'projection', unit: '°', better: 'range', about: 'The front thigh forward of vertical at toe-off.' },
   hip_extension_deg: { label: 'Hip extension', chapter: 'projection', unit: '°', better: 'range', about: 'The pushing thigh behind vertical at toe-off.' },
   hip_height_m: { label: 'Hip height', chapter: 'projection', unit: 'm', better: 'higher', about: 'The hip above the ground at full support.' },
-  thigh_velocity_dps: { label: 'Thigh angular velocity', chapter: 'switching', unit: '°/s', better: 'higher', about: 'How fast the pushing thigh swings through, from toe-off to touchdown.' },
+  thigh_velocity_dps: { label: 'Thigh angular velocity', chapter: 'switching', unit: '°/s', better: 'higher', about: 'How fast the thighs switch: the average of the four phases below.', words: { good: 'Good', ok: 'Average', bad: 'Slow' } },
+  early_flexion_dps: { label: 'Early flexion', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The pushing thigh swinging forward in the air, toe-off to touchdown.' },
+  late_flexion_dps: { label: 'Late flexion', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'That thigh still coming forward while the other foot is down, touchdown to the next toe-off.' },
+  early_extension_dps: { label: 'Early extension', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The landing thigh driving back, touchdown to full support.' },
+  late_extension_dps: { label: 'Late extension', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The landing thigh driving back, full support to the next toe-off.' },
   touchdown_dist_m: { label: 'Touchdown distance', chapter: 'switching', unit: 'm', better: 'lower', about: 'How far ahead of the hip the foot lands.' },
-  takeoff_dist_m: { label: 'Take-off distance', chapter: 'switching', unit: 'm', better: 'range', about: 'How far behind the hip the foot leaves the ground.' }
+  takeoff_dist_m: { label: 'Take-off distance', chapter: 'switching', unit: 'm', better: 'range', about: 'How far behind the hip the foot leaves the ground.' },
+  gct_s: { label: 'Ground contact time', chapter: 'reactivity', unit: 's', better: 'lower', about: 'Touchdown to the next toe-off.', words: { good: 'Short', ok: 'Average', bad: 'Long' } },
+  compression_m: { label: 'Compression', chapter: 'reactivity', unit: 'm', better: 'lower', about: 'How far the hip drops from touchdown to full support.', words: { good: 'Minimal', ok: 'Average', bad: 'A lot' } }
 };
-export const CHAPTERS = { projection: '1. Projection', switching: '2. Switching' };
+export const CHAPTERS = { projection: '1. Projection', switching: '2. Switching', reactivity: '3. Reactivity' };
 export const DEFAULT_STEP_REFS = {
-  top_speed: { hip_displacement_m: [1.95, 2.25], hip_flexion_deg: [60, 75], hip_extension_deg: [20, 35], hip_height_m: [0.8, 0.88], thigh_velocity_dps: [300, 380], touchdown_dist_m: [0.3, 0.45], takeoff_dist_m: [0.45, 0.65] },
-  acceleration: { hip_displacement_m: [1.1, 1.5], hip_flexion_deg: [55, 75], hip_extension_deg: [30, 50], hip_height_m: [0.7, 0.82], thigh_velocity_dps: [250, 350], touchdown_dist_m: [-0.1, 0.15], takeoff_dist_m: [0.6, 0.9] }
+  top_speed: { hip_displacement_m: [1.95, 2.25], hip_flexion_deg: [60, 75], hip_extension_deg: [20, 35], hip_height_m: [0.8, 0.88], thigh_velocity_dps: [300, 380], early_flexion_dps: [300, 400], late_flexion_dps: [300, 400], early_extension_dps: [280, 380], late_extension_dps: [350, 450], touchdown_dist_m: [0.3, 0.45], takeoff_dist_m: [0.45, 0.65], gct_s: [0.12, 0.15], compression_m: [0.03, 0.06] },
+  acceleration: { hip_displacement_m: [1.1, 1.5], hip_flexion_deg: [55, 75], hip_extension_deg: [30, 50], hip_height_m: [0.7, 0.82], thigh_velocity_dps: [250, 350], early_flexion_dps: [250, 350], late_flexion_dps: [250, 350], early_extension_dps: [230, 330], late_extension_dps: [300, 400], touchdown_dist_m: [-0.1, 0.15], takeoff_dist_m: [0.6, 0.9], gct_s: [0.16, 0.22], compression_m: [0.03, 0.07] }
 };
 
 // ---------- References (owner setting sprint_references, JSON over the defaults) ----------
@@ -264,7 +270,7 @@ export function analyse(ctx, clip, marks, refs = references(ctx), stepRefs = nul
 
 // ---------- The breakdown (per-step measures, chapters and scores) ----------
 // A value against its band: tone good / ok / bad, a word, and a 0-100 score (the band's edges are 40 and 70).
-export function judge(value, [low, high], better) {
+export function judge(value, [low, high], better, words = null) {
   const width = high - low;
   if (better === 'range') {
     const mid = (low + high) / 2, half = width / 2, off = Math.abs(value - mid);
@@ -274,10 +280,10 @@ export function judge(value, [low, high], better) {
   }
   const x = better === 'higher' ? (value - low) / width : (high - value) / width;   // 0 at the poor edge, 1 at the good edge
   const tone = x < 0 ? 'bad' : x > 1 ? 'good' : 'ok';
-  const word = better === 'higher' ? (x < 0 ? 'Below average' : x > 1 ? 'Above average' : 'Average') : (x < 0 ? 'Worse than average' : x > 1 ? 'Better than average' : 'Average');
+  const word = words ? words[tone] : better === 'higher' ? (x < 0 ? 'Below average' : x > 1 ? 'Above average' : 'Average') : (x < 0 ? 'Worse than average' : x > 1 ? 'Better than average' : 'Average');
   return { tone, word, score: Math.round(Math.max(0, Math.min(100, 40 + 30 * x))) };
 }
-const scoreWord = (n) => (n >= 70 ? 'Good' : n >= 40 ? 'Average' : 'Needs work');
+export const scoreWord = (n) => (n >= 85 ? 'Excellent' : n >= 70 ? 'Very good' : n >= 55 ? 'Good' : n >= 40 ? 'Average' : 'Needs work');   // the words in the owner's Speedworks examples (54 Average, 72 Very good)
 function breakdownOf({ clip, at, nSteps, dir, scale, real, refs }) {
   const pts = (m) => m?.points ?? {};
   const has = (p, ...ks) => ks.every((k) => Array.isArray(p[k]));
@@ -292,22 +298,35 @@ function breakdownOf({ clip, at, nSteps, dir, scale, real, refs }) {
     if (scale && down && has(pd, 'hip', 'foot')) add('touchdown_dist_m', s, (pd.foot[0] - pd.hip[0]) * dir * scale, down);
     if (scale && full && has(pf, 'hip', 'foot')) add('hip_height_m', s, (pf.foot[1] - pf.hip[1]) * scale, full);
     if (scale && off && next && has(po, 'hip') && has(pn, 'hip')) add('hip_displacement_m', s, (pn.hip[0] - po.hip[0]) * dir * scale, next, { from: { step: off.step, position: off.position } });
-    if (off && down && down.t > off.t && has(po, 'hip', 'knee_stance') && has(pd, 'hip', 'knee_swing')) {
-      const before = measure('recovery_thigh', { hip: po.hip, knee_swing: po.knee_stance }, dir), after = measure('recovery_thigh', pd, dir);
-      add('thigh_velocity_dps', s, (after - before) / real(down.t - off.t), down, { from: { step: off.step, position: off.position } });
-    }
+    // The thighs' four phases (degrees a second): the pushing leg flexes forward through the air (early, toe-off to
+    // touchdown) and on while the other foot is down (late, to the next toe-off, where it's the front thigh); the landing
+    // leg extends back from touchdown to full support (early) and on to the next toe-off (late, where it's the back thigh).
+    const thigh = (p, k) => (has(p, 'hip', k) ? measure('recovery_thigh', { hip: p.hip, knee_swing: p[k] }, dir) : null);   // + forward of vertical
+    const phase = (k, a, ka, b, kb, sign) => {
+      if (!a || !b || !(b.t > a.t)) return null;
+      const x = thigh(pts(a), ka), y = thigh(pts(b), kb);
+      if (x == null || y == null) return null;
+      const v = (sign * (y - x)) / real(b.t - a.t);
+      add(k, s, v, b, { from: { step: a.step, position: a.position }, legs: [ka, kb] });
+      return v;
+    };
+    const phases = [phase('early_flexion_dps', off, 'knee_stance', down, 'knee_swing', 1), phase('late_flexion_dps', down, 'knee_swing', next, 'knee_swing', 1),
+      phase('early_extension_dps', down, 'knee_stance', full, 'knee_stance', -1), phase('late_extension_dps', full, 'knee_stance', next, 'knee_stance', -1)].filter((x) => x != null);
+    if (phases.length) add('thigh_velocity_dps', s, phases.reduce((a, b) => a + b, 0) / phases.length, next ?? down, { from: off ? { step: off.step, position: off.position } : null, phases: phases.length });
+    if (down && next && next.t > down.t) add('gct_s', s, real(next.t - down.t), next, { from: { step: down.step, position: down.position } });
+    if (scale && down && full && has(pd, 'hip') && has(pf, 'hip')) add('compression_m', s, Math.max(0, (pf.hip[1] - pd.hip[1]) * scale), full, { from: { step: down.step, position: down.position } });
   }
-  const round = (k, x) => (STEP_METRICS[k].unit === 'm' ? Math.round(x * 100) / 100 : Math.round(x));
+  const round = (k, x) => (STEP_METRICS[k].unit === 'm' || STEP_METRICS[k].unit === 's' ? Math.round(x * 100) / 100 : Math.round(x));
   const chapters = Object.entries(CHAPTERS).map(([key, label]) => {
     const metrics = Object.entries(STEP_METRICS).filter(([, m]) => m.chapter === key).map(([k, m]) => {
-      const band = refs[k], values = vals[k].map((x) => { const v = round(k, x.value); return { ...x, value: v, ...judge(v, band, m.better) }; });
+      const band = refs[k], values = vals[k].map((x) => { const v = round(k, x.value); return { ...x, value: v, ...judge(v, band, m.better, m.words) }; });
       const words = [...new Set(values.map((x) => x.word))];
       const summary = !values.length ? null : words.length === 1 ? `${words[0]} ${values.length === 1 ? 'on the step' : 'in all steps'}` : words.map((w) => `${w} on ${values.filter((x) => x.word === w).length}`).join(', ');
       const tones = values.map((x) => x.tone), tone = !values.length ? null : tones.every((t) => t === 'good') ? 'good' : tones.some((t) => t === 'bad') ? 'bad' : 'ok';
       const score = values.length ? Math.round(values.reduce((a, x) => a + x.score, 0) / values.length) : null;
-      return { key: k, label: m.label, unit: m.unit, better: m.better, about: m.about, low: band[0], high: band[1], values, summary, tone, score, needs_scale: m.unit === 'm' && !scale };
+      return { key: k, label: m.label, unit: m.unit, better: m.better, about: m.about, detail: !!m.detail, low: band[0], high: band[1], values, summary, tone, score, needs_scale: m.unit === 'm' && !scale };
     });
-    const scored = metrics.filter((m) => m.score != null);
+    const scored = metrics.filter((m) => m.score != null && !m.detail);   // the four thigh phases explain the thigh speed; they aren't scored twice
     const score = scored.length ? Math.round(scored.reduce((a, m) => a + m.score, 0) / scored.length) : null;
     return { key, label, score, word: score == null ? null : scoreWord(score), metrics };
   });

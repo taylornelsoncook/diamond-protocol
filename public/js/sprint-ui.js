@@ -26,13 +26,49 @@ const needsOf = (pos, kind) => {
   const need = new Set(pos.measures.flatMap((m) => m.needs));
   // The breakdown (hip displacement, hip height, touchdown and take-off distances, thigh speed) reads the hip and foot.
   if (kind !== 'cod' && ['toe_off', 'touchdown', 'full_support'].includes(pos.position)) { need.add('hip'); need.add('foot'); }
-  if (kind !== 'cod' && pos.position === 'toe_off' && !pos.finish) { need.add('knee_swing'); need.add('knee_stance'); }
+  if (kind !== 'cod' && pos.position === 'toe_off') { need.add('knee_swing'); need.add('knee_stance'); }   // the next toe-off too: the thigh phases end there
+  if (kind !== 'cod' && ['touchdown', 'full_support'].includes(pos.position)) need.add('knee_stance');
   if (kind !== 'cod' && pos.position === 'touchdown') need.add('knee_swing');
   return LANDMARK_ORDER.filter((k) => need.has(k));
 };
 // ---------- The breakdown drawn on the video (Speedworks style) ----------
 const TONE = { good: '#3FA34D', ok: '#D9A43A', bad: '#C0392B' };
-const CHAPTER_COLOR = { projection: '#1F3A8A', switching: '#8A7419' };
+const CHAPTER_COLOR = { projection: '#1F3A8A', switching: '#8A7419', reactivity: '#7B2E9E' };
+const PHASE_COLOR = { early_flexion_dps: '#B13FB5', late_flexion_dps: '#7A3FA6', early_extension_dps: '#22A39A', late_extension_dps: '#2F4FB0' };
+// Measures shown together on the video, as in the owner's examples.
+const GROUPS = [
+  { key: 'hip_flexion_deg', label: 'Hip separation', keys: ['hip_flexion_deg', 'hip_extension_deg'] },
+  { key: 'phases', label: 'Thigh phases', keys: ['early_flexion_dps', 'late_flexion_dps', 'early_extension_dps', 'late_extension_dps'] },
+  { key: 'touchdown_dist_m', label: 'Touchdown and take-off distances', keys: ['touchdown_dist_m', 'takeoff_dist_m'] },
+  { key: 'gct_s', label: 'Ground contact time and compression', keys: ['gct_s', 'compression_m'] }
+];
+// A chapter's measures as groups, in order: each group is what one view of the video shows.
+function groupsOf(ch) {
+  const out = [];
+  for (const m of ch.metrics) {
+    const g = GROUPS.find((x) => x.keys.includes(m.key));
+    if (g) { if (!out.some((x) => x.key === g.key)) out.push({ key: g.key, label: g.label, metrics: ch.metrics.filter((x) => g.keys.includes(x.key)) }); }
+    else out.push({ key: m.key, label: m.label, metrics: [m] });
+  }
+  return out.map((g) => {
+    const got = g.metrics.filter((m) => m.values.length), tones = got.map((m) => m.tone);
+    return { ...g, has: got.length > 0, tone: !got.length ? null : tones.every((t) => t === 'good') ? 'good' : tones.includes('bad') ? 'bad' : 'ok', summary: got.length ? groupSummary(g.key, got) : null };
+  });
+}
+// A short verdict for what one view shows, in the style of the owner's examples.
+const mostWord = (m) => { const c = new Map(); for (const v of m.values) c.set(v.word, (c.get(v.word) ?? 0) + 1); return [...c].sort((a, b) => b[1] - a[1])[0][0]; };
+const howMany = (ms) => (ms.every((m) => m.values.every((v) => v.word === mostWord(m))) ? (ms[0].values.length === 1 ? 'on the step' : 'on each step') : 'on most steps');
+function groupSummary(key, got) {
+  if (got.length === 1) return got[0].summary;
+  const by = Object.fromEntries(got.map((m) => [m.key, m]));
+  if (key === 'gct_s' && by.gct_s && by.compression_m) return `GCT is ${mostWord(by.gct_s).toLowerCase()} with ${mostWord(by.compression_m).toLowerCase()} compression ${howMany(got)}`;
+  if (key === 'hip_flexion_deg' && got.every((m) => m.tone === 'good')) return 'Hip flexion and extension within optimal ranges';
+  if (key === 'phases') {
+    const off = got.filter((m) => m.tone !== 'good');
+    return off.length ? `${off.map((m) => `${m.label.toLowerCase()} ${mostWord(m).toLowerCase()}`).join(', ').replace(/^./, (c) => c.toUpperCase())}` : 'Good speeds in all four phases';
+  }
+  return got.map((m) => `${m.label} ${mostWord(m).toLowerCase()}`).join(', ').replace(/ distance /g, ' ');
+}
 const fmtVal = (m, v) => (m.unit === 'm' ? `${v.toFixed(2)}m` : m.unit === '°' ? `${v}°` : `${v}${m.unit}`);
 // Draw one chapter's measures for every step already passed (t ≤ now), in the video's pixels.
 function drawBreakdown(svg, chapter, { w, now, pointsAt, show }) {
@@ -81,25 +117,73 @@ function drawBreakdown(svg, chapter, { w, now, pointsAt, show }) {
       arrow(p.hip[0], p.foot[1], p.hip[0], p.hip[1], v.tone);
       const t = svgEl('text', { x: p.hip[0] + w * 0.04, y: (p.hip[1] + p.foot[1]) / 2, fill: '#fff', 'font-size': fs * 1.3, 'font-weight': '600', 'font-family': 'IBM Plex Sans, sans-serif', stroke: '#000', 'stroke-width': sw / 2, 'paint-order': 'stroke' }); t.textContent = fmtVal(height, v.value); svg.append(t);
     }
-  } else {
+  } else if (chapter.key === 'switching') {
     const vel = get('thigh_velocity_dps'), td = get('touchdown_dist_m'), to = get('takeoff_dist_m');
     for (const v of vel?.values ?? []) {
-      if (!passed(v)) continue;
+      if (!passed(v) || !v.from) continue;
       const a = pointsAt(v.from), b = pointsAt(v.at);
       if (!a?.knee_stance || !a?.hip || !b?.hip || !b?.knee_swing) continue;
       const dx = b.hip[0] - a.hip[0], dy = b.hip[1] - a.hip[1];   // the earlier thigh moved to where the hip is now
       svg.append(svgEl('polygon', { points: [b.hip, [a.knee_stance[0] + dx, a.knee_stance[1] + dy], b.knee_swing].map((q) => q.join(',')).join(' '), fill: TONE[v.tone], 'fill-opacity': '0.6', stroke: '#fff', 'stroke-width': sw, 'stroke-dasharray': dash }));
       const t = svgEl('text', { x: b.hip[0], y: b.hip[1] + w * 0.035, fill: '#fff', 'font-size': fs, 'font-weight': '600', 'text-anchor': 'middle', 'font-family': 'IBM Plex Sans, sans-serif', stroke: '#000', 'stroke-width': sw / 2, 'paint-order': 'stroke' }); t.textContent = fmtVal(vel, v.value); svg.append(t);
     }
-    for (const [m, word, row] of [[to, 'TO dist.', 0], [td, 'TD dist.', 1]]) {   // take-off labels on the first row, touchdown on the second
-      for (const v of m?.values ?? []) {
+    // The four thigh phases: a wedge per phase from where the thigh was to where it is, labels on the latest step passed.
+    const phaseKeys = Object.keys(PHASE_COLOR).filter((k) => get(k));
+    const latest = Math.max(0, ...phaseKeys.flatMap((k) => get(k).values.filter(passed).map((v) => v.step)));
+    for (const k of phaseKeys) {
+      const m = get(k);
+      for (const v of m.values) {
         if (!passed(v)) continue;
+        const a = pointsAt(v.from), b = pointsAt(v.at), [ka, kb] = v.legs ?? [];
+        if (!a?.hip || !b?.hip || !a[ka] || !b[kb]) continue;
+        const dx = b.hip[0] - a.hip[0], dy = b.hip[1] - a.hip[1];
+        svg.append(svgEl('polygon', { points: [b.hip, [a[ka][0] + dx, a[ka][1] + dy], b[kb]].map((q) => q.join(',')).join(' '), fill: PHASE_COLOR[k], 'fill-opacity': '0.75', stroke: '#fff', 'stroke-width': sw, 'stroke-dasharray': dash }));
+        if (v.step !== latest) continue;
+        const [ox, oy] = { early_flexion_dps: [1, -1], late_flexion_dps: [-1, -1], early_extension_dps: [-1, 1], late_extension_dps: [1, 1] }[k];
+        const text = `${m.label}: ${fmtVal(m, v.value)}`, lw2 = text.length * fs * 0.6 + fs;
+        const lx = b.hip[0] + ox * w * 0.07 - (ox < 0 ? lw2 : 0), ly = b.hip[1] + oy * w * 0.05 - (oy < 0 ? fs * 1.6 : 0);
+        svg.append(svgEl('rect', { x: lx, y: ly, width: lw2, height: fs * 1.6, fill: PHASE_COLOR[k], 'fill-opacity': '0.95' }));
+        const t = svgEl('text', { x: lx + lw2 / 2, y: ly + fs * 1.15, fill: '#fff', 'font-size': fs, 'text-anchor': 'middle', 'font-family': 'IBM Plex Sans, sans-serif' }); t.textContent = text; svg.append(t);
+      }
+    }
+    // Touchdown and take-off: a box and arrow each, one label per step ("TO dist. TD dist.") as in the owner's example.
+    const stepsSeen = [...new Set([...(to?.values ?? []), ...(td?.values ?? [])].map((v) => v.step))];
+    for (const step of stepsSeen) {
+      const parts = [[to, to?.values.find((v) => v.step === step), 'TO dist.'], [td, td?.values.find((v) => v.step === step), 'TD dist.']].filter(([, v]) => v && passed(v));
+      let anchor = null;
+      for (const [m, v] of parts) {
         const p = pointsAt(v.at);
         if (!p?.hip || !p?.foot) continue;
         box(p.hip[0], p.hip[1], p.foot[0], p.foot[1], v.tone);
         arrow(p.hip[0], p.foot[1] - sw * 2, p.foot[0], p.foot[1] - sw * 2, v.tone);
-        label((p.hip[0] + p.foot[0]) / 2, p.foot[1] + fs * (0.6 + row * 3.2), [`${word} ${fmtVal(m, v.value)}`], v.tone);
+        anchor = p;
+        void m;
       }
+      if (!anchor || !parts.length) continue;
+      const tone = parts.some(([, v]) => v.tone === 'bad') ? 'bad' : parts.some(([, v]) => v.tone === 'ok') ? 'ok' : 'good';
+      label(anchor.foot[0], anchor.foot[1] + fs * 0.6, [parts.map(([, , word]) => word).join('  '), parts.map(([m, v]) => fmtVal(m, v.value)).join('    ')], tone);
+    }
+  } else {
+    // 3. Reactivity: a ring where the foot lands, the push from there to the hip at toe-off, GCT under it; compression
+    // as a bar from the hip at touchdown down to the hip at full support.
+    const gct = get('gct_s'), comp = get('compression_m'), purple = '#9B30C0';
+    for (const v of gct?.values ?? []) {
+      if (!passed(v) || !v.from) continue;
+      const down = pointsAt(v.from), next = pointsAt(v.at);
+      const foot = down?.foot ?? next?.foot;
+      if (!foot) continue;
+      svg.append(svgEl('ellipse', { cx: foot[0], cy: foot[1], rx: w * 0.035, ry: w * 0.009, fill: 'none', stroke: purple, 'stroke-width': sw * 2 }));
+      if (next?.hip) arrow(foot[0], foot[1], foot[0] + (next.hip[0] - foot[0]) * 0.8, foot[1] + (next.hip[1] - foot[1]) * 0.8, v.tone);
+      label(foot[0], foot[1] + fs * 1.2, ['GCT:', `${v.value.toFixed(2)}s`], v.tone);
+    }
+    for (const v of comp?.values ?? []) {
+      if (!passed(v) || !v.from) continue;
+      const a = pointsAt(v.from), b = pointsAt(v.at);
+      if (!a?.hip || !b?.hip) continue;
+      const x = b.hip[0], top = a.hip[1] - w * 0.05, bottom = Math.max(b.hip[1], a.hip[1]) + w * 0.03;
+      svg.append(svgEl('rect', { x: x - w * 0.006, y: top, width: w * 0.012, height: bottom - top, fill: purple, 'fill-opacity': '0.55' }));
+      svg.append(svgEl('rect', { x: x - w * 0.006, y: a.hip[1], width: w * 0.012, height: Math.max(sw, b.hip[1] - a.hip[1]), fill: TONE[v.tone] }));
+      if (v.value > 0) { const t = svgEl('text', { x: x + w * 0.012, y: b.hip[1], fill: '#fff', 'font-size': fs * 0.9, 'font-family': 'IBM Plex Sans, sans-serif', stroke: '#000', 'stroke-width': sw / 2, 'paint-order': 'stroke' }); t.textContent = `↓ ${Math.round(v.value * 100)} cm`; svg.append(t); }
     }
   }
 }
@@ -126,10 +210,11 @@ export async function sprintViewer(opts) {
   const video = h('video', { playsinline: true, muted: true, preload: 'auto', class: 'sp-video', 'aria-label': 'Sprint clip' });
   const overlay = svgEl('svg', { class: 'sp-overlay', preserveAspectRatio: 'none', role: 'img', 'aria-label': 'Points and lines over the frame' });
   const banner = h('div', { class: 'sp-banner', 'aria-live': 'polite' });
-  const stage = h('div', { class: 'sp-stage' }, video, overlay, banner);
+  const center = h('div', { class: 'sp-b-center', hidden: true });
+  const stage = h('div', { class: 'sp-stage' }, video, overlay, banner, center);
   let mode = 'positions';                 // or a breakdown chapter: 'projection', 'switching'
-  let metricSel = null, story = null;   // the measure on the video (null = the chapter's first); story = playing each measure in turn
-  const showing = (ch) => metricSel === 'all' ? null : (ch.metrics.find((m) => m.key === metricSel) ?? ch.metrics.find((m) => m.values.length) ?? ch.metrics[0]);
+  let metricSel = null, story = null, centerFor = null;   // the measure on the video (null = the chapter's first); story = playing each measure in turn
+  const showing = (ch) => { const gs = groupsOf(ch); return gs.find((g) => g.key === metricSel) ?? gs.find((g) => g.has) ?? gs[0]; };
   const modeBar = h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' });
   const frameText = h('span', { class: 'small muted sp-frame' }, '');
   const scrub = h('input', { type: 'range', min: '0', max: '1000', value: '0', class: 'sp-scrub', 'aria-label': 'Position in the clip' });
@@ -138,7 +223,7 @@ export async function sprintViewer(opts) {
   const side = h('div', { class: 'stack sp-side' }), below = h('div', { class: 'stack' });
   const fps = () => clip.file_fps || 30;
   const frameOf = (t) => Math.floor(t * fps() + 0.02);   // the browser reports a frame's start a hair early
-  const seekFrame = (n) => { video.pause(); video.currentTime = Math.max(0, Math.min(video.duration || 1e9, (n + 0.5) / fps())); };
+  const seekFrame = (n) => { centerFor = null; video.pause(); video.currentTime = Math.max(0, Math.min(video.duration || 1e9, (n + 0.5) / fps())); };
   const positions = () => clip.analysis?.positions ?? [];
   const selected = () => positions().find((p) => sel && posKey(p) === sel) ?? null;
 
@@ -150,7 +235,7 @@ export async function sprintViewer(opts) {
     drawBanner(chapter);
     if (chapter) {
       const cur = showing(chapter);
-      drawBreakdown(overlay, chapter, { w, now: video.currentTime || 0, show: (k) => !cur || k === cur.key || (cur.key === 'hip_flexion_deg' && k === 'hip_extension_deg') || (cur.key === 'touchdown_dist_m' && k === 'takeoff_dist_m'), pointsAt: (at) => positions().find((x) => x.step === at.step && x.position === at.position)?.points });
+      drawBreakdown(overlay, chapter, { w, now: video.currentTime || 0, show: (k) => cur.metrics.some((m) => m.key === k), pointsAt: (at) => positions().find((x) => x.step === at.step && x.position === at.position)?.points });
       overlay.classList.remove('sp-overlay--tap');
       return;
     }
@@ -163,49 +248,67 @@ export async function sprintViewer(opts) {
   }
   // The chapter banner over the video: the chapter, its score once every step is passed, and each measure's verdict.
   function drawBanner(chapter) {
-    if (!chapter) { banner.hidden = true; return; }
+    if (!chapter) { banner.hidden = true; center.hidden = true; return; }
     banner.hidden = false;
-    const now = video.currentTime || 0, all = chapter.metrics.flatMap((m) => m.values), done = all.length && all.every((v) => v.t <= now + 1e-3);
-    fill(banner, h('div', { class: 'sp-b-title', style: `background:${CHAPTER_COLOR[chapter.key]}` }, chapter.label),
-      done && chapter.score != null ? h('div', { class: 'sp-b-score', style: `background:${CHAPTER_COLOR[chapter.key]}` }, `Score: ${chapter.score}/100. ${chapter.word}`) : null,
-      (() => {
-        const cur = showing(chapter), partner = { hip_flexion_deg: 'hip_extension_deg', touchdown_dist_m: 'takeoff_dist_m' }[cur?.key];
-        const upto = cur ? Math.max(chapter.metrics.indexOf(cur), chapter.metrics.findIndex((m) => m.key === partner)) : chapter.metrics.length - 1;
-        return chapter.metrics.slice(0, upto + 1).filter((m) => m.values.length && (m !== cur || m.values.some((v) => v.t <= now + 1e-3)))
-          .map((m) => h('div', { class: `sp-b-row${m === cur || m.key === partner ? ' sp-b-row--now' : ''}` }, h('span', { class: 'sp-b-name', style: `background:${CHAPTER_COLOR[chapter.key]}` }, m.label), h('span', { class: 'sp-b-verdict', style: `background:${TONE[m.tone] ?? '#333'}` }, m.summary)));
-      })());
+    const now = video.currentTime || 0, passed = (v) => v.t <= now + 1e-3;
+    const all = chapter.metrics.flatMap((m) => m.values), done = all.length > 0 && all.every(passed);
+    const chapters = clip.analysis.breakdown.chapters, idx = chapters.indexOf(chapter);
+    const gs = groupsOf(chapter), cur = showing(chapter), upto = gs.findIndex((g) => g.key === cur.key);
+    const rows = gs.slice(0, upto + 1).filter((g) => g.has && (g.key !== cur.key || g.metrics.some((m) => m.values.some(passed))))
+      .map((g) => h('div', { class: `sp-b-row${g.key === cur.key ? ' sp-b-row--now' : ''}` }, h('span', { class: 'sp-b-name', style: `background:${CHAPTER_COLOR[chapter.key]}` }, g.label), h('span', { class: 'sp-b-verdict', style: `background:${TONE[g.tone] ?? '#333'}` }, g.summary)));
+    // Every chapter's title along the top; the ones before this show their score, as in the owner's examples.
+    fill(banner, h('div', { class: 'sp-b-top' }, chapters.slice(0, idx + 1).map((c, i) => h('div', { class: 'sp-b-col' },
+      h('div', { class: `sp-b-title${i === idx ? '' : ' sp-b-title--past'}`, style: `background:${CHAPTER_COLOR[c.key]}` }, c.label),
+      (i < idx || done) && c.score != null ? h('div', { class: 'sp-b-score', style: `background:${CHAPTER_COLOR[c.key]}` }, `Score: ${c.score}/100. ${c.word}`) : null,
+      i === idx ? rows : null))));
+    center.hidden = !(done && chapter.score != null && centerFor === chapter.key);   // only when a chapter finishes playing
+    if (!center.hidden) fill(center, `Score: ${chapter.score}/100. ${chapter.word}`), center.style.background = CHAPTER_COLOR[chapter.key];
   }
   // Play the breakdown: the clip once per measure (from just before its first step to just after its last), the
   // verdicts stacking in the corner as in the owner's examples, the chapter's score at the end.
-  const storyMetrics = (ch) => ch.metrics.filter((m) => m.values.length && !['hip_extension_deg', 'takeoff_dist_m'].includes(m.key));
+  const storyMetrics = (ch) => groupsOf(ch).filter((g) => g.has);
   function playStory(ch) {
     const list = storyMetrics(ch);
     if (!list.length) { toast('Mark the steps first: nothing to show yet.', 'bad'); return; }
-    story = { ch: ch.key, i: 0, list: list.map((m) => m.key) };
+    centerFor = null;
+    story = { ch: ch.key, chi: clip.analysis.breakdown.chapters.indexOf(ch), all: true, i: 0, list: list.map((m) => m.key) };
     startStoryPart();
   }
   function startStoryPart() {
-    const ch = clip.analysis.breakdown.chapters.find((c) => c.key === story.ch), m = ch.metrics.find((x) => x.key === story.list[story.i]);
-    metricSel = m.key; drawModeBar();
-    const ts = m.values.map((v) => v.t).concat(m.values.map((v) => v.from ? positions().find((p) => p.step === v.from.step && p.position === v.from.position)?.t : null)).filter((x) => x != null);
+    const ch = clip.analysis.breakdown.chapters.find((c) => c.key === story.ch), g = groupsOf(ch).find((x) => x.key === story.list[story.i]);
+    metricSel = g.key; story.playing = true; drawModeBar();
+    const vals = g.metrics.flatMap((m) => m.values);
+    const ts = vals.map((v) => v.t).concat(vals.map((v) => v.from ? positions().find((p) => p.step === v.from.step && p.position === v.from.position)?.t : null)).filter((x) => x != null);
     story.end = Math.max(...ts) + 0.3;
     video.currentTime = Math.max(0, Math.min(...ts) - 0.3); video.playbackRate = Number(speed.value); video.play().catch(() => {});
   }
   video.addEventListener('timeupdate', () => {
-    if (!story || video.paused) return;
+    if (!story || story.waiting || video.paused) return;
     if (video.currentTime >= story.end || video.ended) {
-      if (story.i + 1 < story.list.length) { story.i++; startStoryPart(); }
-      else { metricSel = story.list[story.list.length - 1]; story = null; video.pause(); drawModeBar(); drawOverlay(); }
+      if (story.i + 1 < story.list.length) { story.i++; startStoryPart(); return; }
+      // The chapter is done: its score in the middle for a moment, then on to the next chapter (the whole breakdown).
+      video.pause(); centerFor = story.ch; drawOverlay();
+      const cur = story, chapters = clip.analysis.breakdown.chapters;
+      const nextIdx = chapters.findIndex((c, i) => i > cur.chi && storyMetrics(c).length);
+      if (!cur.all || nextIdx < 0) { story = null; drawModeBar(); return; }
+      cur.waiting = true;
+      setTimeout(() => {
+        if (story !== cur) return;   // the coach did something else meanwhile
+        const next = chapters[nextIdx]; mode = next.key; centerFor = null;
+        story = { ch: next.key, chi: nextIdx, all: true, i: 0, list: storyMetrics(next).map((x) => x.key) };
+        startStoryPart();
+      }, 2200);
+      return;
+
     }
   });
   function drawModeBar() {
     const b = clip.analysis?.breakdown;
     if (!b) { fill(modeBar); return; }
-    const chip = (key, label) => h('button', { type: 'button', class: 'sp-pos', 'aria-pressed': mode === key ? 'true' : 'false', onClick: () => { mode = key; metricSel = null; story = null; tap = null; drawModeBar(); drawOverlay(); } }, label);
+    const chip = (key, label) => h('button', { type: 'button', class: 'sp-pos', 'aria-pressed': mode === key ? 'true' : 'false', onClick: () => { mode = key; metricSel = null; story = null; centerFor = null; tap = null; drawModeBar(); drawOverlay(); } }, label);
     const ch = b.chapters.find((c) => c.key === mode), cur = ch ? showing(ch) : null;
-    const pair = { hip_extension_deg: 'hip_flexion_deg', takeoff_dist_m: 'touchdown_dist_m' };   // drawn with their partner, as in the owner's examples
-    const metricChips = ch ? ch.metrics.filter((m) => !pair[m.key]).map((m) => h('button', { type: 'button', class: 'sp-pos sp-pos--small', 'aria-pressed': cur?.key === m.key ? 'true' : 'false', onClick: () => { metricSel = m.key; story = null; drawModeBar(); drawOverlay(); } },
-      m.key === 'hip_flexion_deg' ? 'Hip separation' : m.key === 'touchdown_dist_m' ? 'Touchdown and take-off' : m.label, m.values.length ? h('span', { class: 'sp-dot', style: `background:${TONE[m.tone]}` }) : null)) : [];
+    const metricChips = ch ? groupsOf(ch).map((g) => h('button', { type: 'button', class: 'sp-pos sp-pos--small', 'aria-pressed': cur?.key === g.key ? 'true' : 'false', onClick: () => { metricSel = g.key; story = null; centerFor = null; drawModeBar(); drawOverlay(); } },
+      g.label, g.has ? h('span', { class: 'sp-dot', style: `background:${TONE[g.tone]}` }) : null)) : [];
     fill(modeBar, chip('positions', 'Positions'), b.chapters.map((c) => chip(c.key, `${c.label}${c.score != null ? ` · ${c.score}` : ''}`)),
       ch ? btn('Play the breakdown', () => playStory(ch), 'secondary') : null,
       ch ? h('div', { class: 'row wrap', style: 'gap:6px;flex-basis:100%' }, metricChips) : null,
@@ -220,7 +323,7 @@ export async function sprintViewer(opts) {
   };
   video.addEventListener('timeupdate', tick); video.addEventListener('seeked', tick); video.addEventListener('pause', tick);
   video.addEventListener('play', () => { const loop = () => { tick(); if (!video.paused) requestAnimationFrame(loop); }; loop(); });
-  scrub.addEventListener('input', () => { if (video.duration) { video.pause(); video.currentTime = (Number(scrub.value) / 1000) * video.duration; } });
+  scrub.addEventListener('input', () => { if (video.duration) { centerFor = null; video.pause(); video.currentTime = (Number(scrub.value) / 1000) * video.duration; } });
   speed.addEventListener('change', () => { video.playbackRate = Number(speed.value); });
   video.addEventListener('loadedmetadata', async () => {
     video.playbackRate = Number(speed.value);

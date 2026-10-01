@@ -346,3 +346,18 @@ td .dp-badge{white-space:nowrap}
 .sp-b-row--now{opacity:1}
 .sp-b-row--now .sp-b-name{font-size:clamp(12px,1.9vw,22px);padding:5px 12px}
 .sp-b-row--now .sp-b-verdict{font-size:clamp(11px,1.5vw,17px);padding:4px 10px}
+.sp-b-top{display:flex;align-items:flex-start;gap:0;flex-wrap:nowrap}
+.sp-b-col{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.sp-b-title--past{font-size:clamp(12px,2.1vw,24px)}
+.sp-b-center{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);color:#fff;font:500 clamp(16px,3.6vw,40px)/1.1 var(--font-sans);padding:10px 18px;pointer-events:none;white-space:nowrap;line-height:1.2}
+.sp-b-center[hidden]{display:none}
+/* The banner scales with the video, not the window (container units). */
+.sp-stage{container-type:inline-size}
+.sp-b-title{font-size:4.4cqw;white-space:nowrap;padding:.6cqw 1.6cqw}
+.sp-b-title--past{font-size:3cqw}
+.sp-b-score{font-size:2.1cqw;white-space:nowrap;padding:.4cqw 1.2cqw}
+.sp-b-name{font-size:2cqw;padding:.4cqw 1cqw}
+.sp-b-verdict{font-size:1.8cqw;padding:.4cqw 1cqw}
+.sp-b-row--now .sp-b-name{font-size:2.8cqw;padding:.6cqw 1.4cqw}
+.sp-b-row--now .sp-b-verdict{font-size:2.3cqw;padding:.6cqw 1.2cqw}
+.sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}

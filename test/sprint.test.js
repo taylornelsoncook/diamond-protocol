@@ -237,8 +237,22 @@ test('the breakdown per step: projection and switching, as in the owner\'s scree
     [[384, 'good'], [0.47, 'bad'], [0.57, 'good']]);
   assert.equal(val('projection', 'hip_displacement_m').summary, 'Below average on the step');
   assert.deepEqual(val('projection', 'hip_displacement_m').values[0].at, { step: 2, position: 'toe_off' }, 'drawn once the next toe-off is passed');
-  const [proj, sw] = b.chapters;
-  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Good', '2. Switching', 'Average']);
+  const [proj, sw, re] = b.chapters;
+  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Very good', '2. Switching', 'Good']);
+  // 3. Reactivity: contact from touchdown to the next toe-off (0.1 s, short), and no hip drop to full support (minimal).
+  assert.deepEqual([re.label, val('reactivity', 'gct_s').values[0].value, val('reactivity', 'gct_s').summary, val('reactivity', 'compression_m').values[0].word], ['3. Reactivity', 0.1, 'Short on the step', 'Minimal']);
+  // The four thigh phases: with the second toe-off's thighs and full support's stance thigh tapped, every phase reads.
+  await mark(1, 'touchdown', 0.225, { hip: [600, 300], knee_swing: [618, 350], knee_stance: [640, 345], foot: [647, 500] });   // the landing thigh 42° forward
+  await mark(1, 'full_support', 0.27, { hip: [640, 304], foot: [640, 389], knee_stance: [630, 354] });   // the landing thigh 11° forward; the hip dropped 4 cm
+  const ph = (await mark(2, 'toe_off', 0.325, { hip: [686, 300], knee_swing: [780, 340], knee_stance: [660, 350] })).body.analysis.breakdown;
+  const phase = (k) => ph.chapters[1].metrics.find((m) => m.key === k).values[0]?.value;
+  assert.deepEqual(['early_flexion_dps', 'late_flexion_dps', 'early_extension_dps', 'late_extension_dps'].map(phase).map((x) => typeof x), ['number', 'number', 'number', 'number']);
+  assert.equal(phase('early_flexion_dps'), 384);
+  assert.equal(phase('thigh_velocity_dps'), Math.round((384 + phase('late_flexion_dps') + phase('early_extension_dps') + phase('late_extension_dps')) / 4), 'thigh speed is the average of the four');
+  assert.ok(ph.chapters[1].metrics.find((m) => m.key === 'late_flexion_dps').detail);
+  assert.equal(ph.chapters[2].metrics.find((m) => m.key === 'compression_m').values[0].value, 0.04);
+  await mark(1, 'full_support', 0.27, { hip: [640, 300], foot: [640, 389] });
+  await mark(2, 'toe_off', 0.325, { hip: [686, 300] });
   // Without the cones the distances wait; the angles and thigh speed don't need them.
   const bare = (await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { calibration: null })).body.analysis.breakdown;
   assert.equal(bare.needs_scale, true);

@@ -1695,9 +1695,6 @@ CREATE TABLE IF NOT EXISTS sprint_clips (
   capture_fps INTEGER NOT NULL DEFAULT 240,
   file_fps INTEGER NOT NULL DEFAULT 240,
   steps INTEGER NOT NULL DEFAULT 2,
-  segment TEXT,
-  auto_at TEXT,
-  auto_note TEXT,
   direction INTEGER NOT NULL DEFAULT 1,
   video_w INTEGER,
   video_h INTEGER,
@@ -1721,7 +1718,6 @@ CREATE TABLE IF NOT EXISTS sprint_marks (
   points TEXT,
   updated_at TEXT NOT NULL,
   updated_by TEXT,
-  source TEXT NOT NULL DEFAULT 'manual',
   PRIMARY KEY (clip_id, step, position)
 );
 CREATE TABLE IF NOT EXISTS form_check_orphans (

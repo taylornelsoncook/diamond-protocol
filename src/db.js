@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 65;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks)
+const SCHEMA_VERSION = 66;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -101,6 +101,8 @@ const ADDED_TABLES = {
   65: ['sprint_clips', 'sprint_marks']                                                                // sprint analysis: clips, marked frames and tapped points
 };
 const ADDED_COLUMNS = {
+  sprint_clips: ['segment TEXT', 'auto_at TEXT', 'auto_note TEXT'],   // version 66: which part of the run the clip shows (0-10 … 40+ yards); when the app last suggested its marks
+  sprint_marks: ["source TEXT NOT NULL DEFAULT 'manual'"],   // version 66: 'auto' = suggested by the app, 'manual' = placed or confirmed by a person
   assignments: ['training_days TEXT'],   // version 62: the weekdays the athlete trains (the training calendar)
   workouts: ['warmup_id TEXT REFERENCES routines(id) ON DELETE SET NULL', 'cooldown_id TEXT REFERENCES routines(id) ON DELETE SET NULL'],   // version 58
   exercise_swaps: ["by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete'))"],   // version 57

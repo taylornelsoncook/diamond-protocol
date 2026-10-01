@@ -79,7 +79,7 @@ test('the angle maths and the rep grade', () => {
 
 test('a coach uploads a top-speed rep, marks it, and gets angles, grades, timing and distance per step', async () => {
   const clip = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'top_speed', title: 'Fly 20', capture_fps: 240 });
-  assert.deepEqual([clip.status, clip.kind_label, clip.uploaded_by_kind, clip.analysis.marked, clip.analysis.total], ['waiting', 'Top speed', 'staff', 0, 9]);
+  assert.deepEqual([clip.status, clip.kind_label, clip.uploaded_by_kind, clip.analysis.marked, clip.analysis.total], ['waiting', 'Top speed', 'staff', 0, 11]);
   assert.equal((await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { video_w: 1920, video_h: 1080, direction: 1 })).status, 200);
   const mark = (step, position, t, points = {}) => coach('PUT', `/v1/sprint-clips/${clip.id}/marks`, { step, position, t, points });
   // Step 1 MVP: thighs at a right angle (A), front knee at 90 against 110 (B): the position takes its weaker measure.
@@ -142,7 +142,7 @@ test('a change of direction: contact, braking and push from the plant to the pus
   assert.deepEqual(plant.measures.map((m) => [m.measure, m.value]), [['shin_lean', 31], ['trunk_lean_any', 11]]);
 });
 
-test('an athlete sends a rep from the app; the analysis shows only once a coach sends it, with a message', async () => {
+test('an athlete sends a rep and marks it; the coach marks and sends it with a message, then the marks are the coach's', async () => {
   const ready = (await athlete('GET', '/app/api/sprint')).body;
   assert.equal(ready.ready, true);
   assert.deepEqual(ready.kinds.map((k) => k.key), ['top_speed', 'acceleration', 'cod']);
@@ -153,10 +153,16 @@ test('an athlete sends a rep from the app; the analysis shows only once a coach 
   assert.ok(waiting.data.some((c) => c.id === clip.id) && waiting.waiting >= 1);
   assert.equal((await desk('GET', '/v1/sprint-clips')).status, 403);
   assert.equal((await desk('GET', `/v1/sprint-clips/${clip.id}/video`)).status, 403);
-  // The athlete sees the clip but no analysis yet, even after the coach marks it.
+  // Athletes mark their own reps too (owner decision) and see what's marked; the coach can mark the same clip.
+  const own = await athlete('PUT', `/app/api/sprint-clips/${clip.id}/marks`, { step: 1, position: 'toe_off', t: 0.1, points: { hip: [500, 300] } });
+  assert.equal(own.status, 200, JSON.stringify(own.body));
+  assert.deepEqual([own.body.can_edit, own.body.analysis.marked], [true, 1]);
+  assert.equal(app.ctx.db.get(`SELECT updated_by FROM sprint_marks WHERE clip_id = ? AND position = 'toe_off'`, clip.id).updated_by, 'Maya Okafor');
+  assert.equal((await athlete('PATCH', `/app/api/sprint-clips/${clip.id}`, { direction: -1 })).body.direction, -1);
+  await athlete('PATCH', `/app/api/sprint-clips/${clip.id}`, { direction: 1 });
+  assert.equal((await athlete('DELETE', `/app/api/sprint-clips/${clip.id}/marks`, { step: 1, position: 'toe_off' })).body.analysis.marked, 0);
   await coach('PUT', `/v1/sprint-clips/${clip.id}/marks`, { step: 1, position: 'mvp', t: 0.2, points: { hip: [500, 300], knee_swing: [600, 300], knee_stance: [500, 400] } });
-  assert.equal((await athlete('GET', `/app/api/sprint-clips/${clip.id}`)).body.analysis, null);
-  assert.equal((await athlete('GET', '/app/api/sprint')).body.data.find((c) => c.id === clip.id).grade, null);
+  assert.equal((await athlete('GET', '/app/api/sprint')).body.data.find((c) => c.id === clip.id).grade, 'A');
   // Sending needs a marked position; then the athlete sees it and gets a coach message.
   const r = await coach('POST', `/v1/sprint-clips/${clip.id}/review`, { note: 'Great shin angles. Drive the knee through sooner.' });
   assert.equal(r.status, 200);
@@ -166,6 +172,8 @@ test('an athlete sends a rep from the app; the analysis shows only once a coach 
   const seen = await athlete('POST', `/app/api/sprint-clips/${clip.id}/seen`);
   assert.equal(seen.body.analysis.grade, 'A');
   assert.ok(seen.body.seen_at);
+  assert.equal(seen.body.can_edit, false);
+  assert.equal((await athlete('PUT', `/app/api/sprint-clips/${clip.id}/marks`, { step: 1, position: 'mvp', t: 0.3, points: {} })).status, 409, 'once sent, the marks are the coach\'s');
   // The play address is signed for the clip's own object; another athlete's clip isn't reachable from this app.
   const play = await athlete('GET', `/app/api/sprint-clips/${clip.id}/video`);
   assert.match(new URL(play.body.url).pathname, new RegExp(`/sprint/${maya.id}/${clip.id}\\.mov$`));
@@ -199,8 +207,8 @@ test('refused: no bucket, a bad file, a sprint kind we don\'t have, a review wit
 test('the owner sets the references; coaches read them; every clip is re-graded', async () => {
   const refs = (await coach('GET', '/v1/sprint/references')).body;
   const ts = refs.kinds.find((k) => k.key === 'top_speed');
-  assert.deepEqual(ts.positions.map((p) => p.key), ['toe_off', 'mvp', 'touchdown', 'full_support']);
-  assert.deepEqual(ts.positions[1].measures.map((m) => [m.measure, m.target]), [['thigh_separation', 90], ['swing_knee', 110]]);
+  assert.deepEqual(ts.positions.map((p) => p.key), ['toe_off', 'mvp', 'strike', 'touchdown', 'full_support']);
+  assert.deepEqual(ts.positions[1].measures.map((m) => [m.measure, m.target]), [['thigh_separation', 90], ['swing_knee', 115]]);
   assert.equal(refs.customized, false);
   assert.equal((await coach('PATCH', '/v1/sprint/references', { references: { top_speed: { mvp: [{ measure: 'thigh_separation', target: 80, a: 10, b: 20 }] } } })).status, 403);
   assert.equal((await desk('GET', '/v1/sprint/references')).status, 403);
@@ -227,6 +235,7 @@ test('the breakdown per step: projection and switching, as in the owner\'s scree
   await mark(1, 'toe_off', 0.10, { hip: [500, 300], knee_swing: [599, 340], knee_stance: [473, 351], foot: [443, 500] });
   // Touchdown 0.125 s later: the pushing thigh has come through to 20° forward (48° in 0.125 s = 384°/s); the foot lands 47 cm ahead.
   await mark(1, 'touchdown', 0.225, { hip: [600, 300], knee_swing: [618, 350], foot: [647, 500] });
+  await mark(1, 'strike', 0.2, { hip: [580, 298], knee_swing: [598, 348] });   // the pushing thigh, now at the back, 20° forward: 48° in 0.1 s = 480°/s
   await mark(1, 'full_support', 0.27, { hip: [640, 300], foot: [640, 389] });   // hip 89 cm up
   const r = await mark(2, 'toe_off', 0.325, { hip: [686, 300] });               // the hip travelled 1.86 m
   const b = r.body.analysis.breakdown;
@@ -234,21 +243,22 @@ test('the breakdown per step: projection and switching, as in the owner\'s scree
   assert.deepEqual(['hip_displacement_m', 'hip_flexion_deg', 'hip_extension_deg', 'hip_height_m'].map((k) => [val('projection', k).values[0].value, val('projection', k).values[0].word]),
     [[1.86, 'Below average'], [68, 'Within the optimal range'], [28, 'Within the optimal range'], [0.89, 'Above average']]);
   assert.deepEqual(['thigh_velocity_dps', 'touchdown_dist_m', 'takeoff_dist_m'].map((k) => [val('switching', k).values[0].value, val('switching', k).values[0].tone]),
-    [[384, 'good'], [0.47, 'bad'], [0.57, 'good']]);
+    [[480, 'good'], [0.47, 'bad'], [0.57, 'good']]);
   assert.equal(val('projection', 'hip_displacement_m').summary, 'Below average on the step');
   assert.deepEqual(val('projection', 'hip_displacement_m').values[0].at, { step: 2, position: 'toe_off' }, 'drawn once the next toe-off is passed');
   const [proj, sw, re] = b.chapters;
-  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Very good', '2. Switching', 'Good']);
+  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Very good', '2. Switching', 'Very good']);
   // 3. Reactivity: contact from touchdown to the next toe-off (0.1 s, short), and no hip drop to full support (minimal).
   assert.deepEqual([re.label, val('reactivity', 'gct_s').values[0].value, val('reactivity', 'gct_s').summary, val('reactivity', 'compression_m').values[0].word], ['3. Reactivity', 0.1, 'Short on the step', 'Minimal']);
-  // The four thigh phases: with the second toe-off's thighs and full support's stance thigh tapped, every phase reads.
+  // The four thigh phases, split at the ALTIS positions: with MVP's front thigh, the landing thigh and the second toe-off's thighs tapped, every phase reads.
+  await mark(1, 'mvp', 0.16, { hip: [550, 290], knee_swing: [640, 320], knee_stance: [520, 340] });
   await mark(1, 'touchdown', 0.225, { hip: [600, 300], knee_swing: [618, 350], knee_stance: [640, 345], foot: [647, 500] });   // the landing thigh 42° forward
   await mark(1, 'full_support', 0.27, { hip: [640, 304], foot: [640, 389], knee_stance: [630, 354] });   // the landing thigh 11° forward; the hip dropped 4 cm
   const ph = (await mark(2, 'toe_off', 0.325, { hip: [686, 300], knee_swing: [780, 340], knee_stance: [660, 350] })).body.analysis.breakdown;
   const phase = (k) => ph.chapters[1].metrics.find((m) => m.key === k).values[0]?.value;
   assert.deepEqual(['early_flexion_dps', 'late_flexion_dps', 'early_extension_dps', 'late_extension_dps'].map(phase).map((x) => typeof x), ['number', 'number', 'number', 'number']);
-  assert.equal(phase('early_flexion_dps'), 384);
-  assert.equal(phase('thigh_velocity_dps'), Math.round((384 + phase('late_flexion_dps') + phase('early_extension_dps') + phase('late_extension_dps')) / 4), 'thigh speed is the average of the four');
+  assert.equal(phase('early_flexion_dps'), 480);
+  assert.equal(phase('thigh_velocity_dps'), Math.round((480 + phase('late_flexion_dps') + phase('early_extension_dps') + phase('late_extension_dps')) / 4), 'thigh speed is the average of the four');
   assert.ok(ph.chapters[1].metrics.find((m) => m.key === 'late_flexion_dps').detail);
   assert.equal(ph.chapters[2].metrics.find((m) => m.key === 'compression_m').values[0].value, 0.04);
   await mark(1, 'full_support', 0.27, { hip: [640, 300], foot: [640, 389] });
@@ -264,12 +274,12 @@ test('the breakdown per step: projection and switching, as in the owner\'s scree
   assert.equal((await owner('PATCH', '/v1/sprint/references', { step_references: { cod: { hip_flexion_deg: [1, 2] } } })).status, 400);
   await owner('PATCH', '/v1/sprint/references', { reset: true });
   // Up to four steps: step 5's toe-off closes step 4; going back to two drops what's past it.
-  assert.equal((await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { steps: 4 })).body.analysis.total, 17);
+  assert.equal((await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { steps: 4 })).body.analysis.total, 21);
   assert.equal((await mark(5, 'toe_off', 0.9, {})).status, 200);
   assert.equal((await mark(6, 'toe_off', 1.0, {})).status, 400);
   await mark(3, 'mvp', 0.5, {});
   const two = (await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { steps: 2 })).body.analysis;
-  assert.deepEqual([two.total, two.positions.filter((p) => p.marked).map((p) => `${p.step}:${p.position}`)], [9, ['1:toe_off', '1:touchdown', '1:full_support', '2:toe_off']]);
+  assert.deepEqual([two.total, two.positions.filter((p) => p.marked).map((p) => `${p.step}:${p.position}`)], [11, ['1:toe_off', '1:mvp', '1:strike', '1:touchdown', '1:full_support', '2:toe_off']]);
   const cut = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'cod' });
   assert.equal((await coach('PATCH', `/v1/sprint-clips/${cut.id}`, { steps: 3 })).status, 400);
   assert.equal(cut.analysis.breakdown, null);

@@ -204,7 +204,8 @@ function drawPose(target, points, { w, scale = 1, cones = null }) {
 // ---------- The viewer ----------
 // opts: { api, prefix: '/v1' | '/app/api', id, editable (coach), onBack, onRemoved, athlete (true in the athlete app) }
 export async function sprintViewer(opts) {
-  const { api, prefix, id, editable } = opts;
+  const { api, prefix, id } = opts;
+  let editable = !!opts.editable;   // a coach always; an athlete on their own rep until the coach sends it (can_edit)
   const box = h('div', { class: 'sp-viewer stack' }, h('p', { class: 'muted' }, 'Loading the clip…'));
   let clip, url, sel = null, tap = null, cal = null;
   const video = h('video', { playsinline: true, muted: true, preload: 'auto', class: 'sp-video', 'aria-label': 'Sprint clip' });
@@ -367,12 +368,13 @@ export async function sprintViewer(opts) {
       h('div', { class: 'row', style: 'gap:8px;align-items:center' }, gradeChip(m.grade), h('span', { class: 'strong grow' }, m.label), h('span', { class: 'sp-num' }, m.value == null ? '—' : `≈${m.value}°`)),
       m.grade ? h('div', { class: 'small' }, h('span', { class: 'strong' }, m.verdict), m.cue ? ` · ${m.cue}` : ` · within ${m.a}° of ${m.target}°.`) : h('div', { class: 'small muted' }, !editable ? 'Not measured on this rep.' : p.marked ? `Tap ${m.needs.map((n) => LANDMARK_LABEL[n].toLowerCase()).join(', ')} to measure it.` : 'Not marked yet.')));
     const actions = editable ? h('div', { class: 'row wrap', style: 'gap:8px' },
-      tap ? null : btn(p.marked ? 'Use this frame instead' : 'Use this frame', () => { tap = { need: needsOf(p, clip.kind), points: Math.abs(video.currentTime - (p.t ?? -1)) < 0.75 / fps() ? { ...p.points } : {}, skipped: new Set(), t: video.currentTime }; video.pause(); drawSide(); drawOverlay(); }, p.marked ? 'secondary' : 'primary'),
-      !tap && p.marked && needsOf(p, clip.kind).length ? btn('Redo the points', () => { video.currentTime = p.t; tap = { need: needsOf(p, clip.kind), points: {}, skipped: new Set(), t: p.t }; drawSide(); drawOverlay(); }, 'secondary') : null,
+      tap ? null : btn(p.marked ? 'Use this frame instead' : 'Use this frame', () => { tap = { need: needsOf(p, clip.kind), points: Math.abs(video.currentTime - (p.t ?? -1)) < 0.75 / fps() ? { ...p.points } : {}, skipped: new Set(), t: video.currentTime }; video.pause(); drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, p.marked ? 'secondary' : 'primary'),
+      !tap && p.marked && needsOf(p, clip.kind).length ? btn('Redo the points', () => { video.currentTime = p.t; tap = { need: needsOf(p, clip.kind), points: {}, skipped: new Set(), t: p.t }; drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'secondary') : null,
       !tap && p.marked ? btn('Clear', (e) => busy(e.currentTarget, async () => { clip = await api('DELETE', `${prefix}/sprint-clips/${id}/marks`, { step: p.step, position: p.position }); draw(); }), 'ghost') : null) : null;
     return h('div', { class: 'stack-tight' },
       h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('h3', { class: 'sp-h grow' }, `${p.finish ? '' : clip.kind === 'cod' ? '' : `Step ${p.step} · `}${p.label}`), p.grade ? gradeChip(p.grade, true) : null),
       h('p', { class: 'small muted', style: 'margin:0' }, p.hint, p.marked ? ` Marked at frame ${frameOf(p.t)}.` : ''),
+      editable && p.legs ? h('p', { class: 'small', style: 'margin:0' }, p.legs) : null,
       refLine ? h('p', { class: 'small', style: 'margin:0' }, refLine) : null,
       items.length ? h('div', { class: 'stack-tight' }, items) : null,
       tap ? tapPanel(p) : actions);
@@ -381,6 +383,7 @@ export async function sprintViewer(opts) {
     const next = tap.need.find((k) => !tap.points[k] && !tap.skipped.has(k));
     return h('div', { class: 'sp-tap stack-tight' },
       h('div', { class: 'strong' }, next ? `Tap: ${LANDMARK_LABEL[next]}` : 'All points tapped.'),
+      p.legs ? h('div', { class: 'small' }, p.legs) : null,
       h('div', { class: 'small muted' }, `${Object.keys(tap.points).length} of ${tap.need.length} points. Swing leg is green, stance leg amber. Frame ${frameOf(tap.t)}.`),
       h('div', { class: 'row wrap', style: 'gap:8px' },
         btn('Save', (e) => busy(e.currentTarget, async () => { clip = await api('PUT', `${prefix}/sprint-clips/${id}/marks`, { step: p.step, position: p.position, t: tap.t, points: tap.points }); tap = null; toast(`${p.label} saved.`); draw(); }), 'primary'),
@@ -468,7 +471,8 @@ export async function sprintViewer(opts) {
     marked.length ? null : h('p', { class: 'small muted', style: 'margin:0' }, 'Mark positions to lay their frames side by side here.'), holder);
   }
   function reviewPanel() {
-    if (!editable) return clip.review_note || clip.reviewed_at ? h('div', { class: 'dp-panel stack-tight' }, h('h3', { class: 'dp-panel-title' }, `From ${clip.reviewed_by_name?.split(' ')[0] ?? 'your coach'}`), h('p', { style: 'margin:0;white-space:pre-wrap' }, clip.review_note ?? 'Look through each position above.')) : null;
+    if (opts.athlete && editable) return h('div', { class: 'dp-panel stack-tight' }, h('h3', { class: 'dp-panel-title' }, 'Your coach'), h('p', { class: 'small muted', style: 'margin:0' }, 'Mark what you can: your coach checks it, fixes anything off and sends it back with a note. Once it\'s sent, the marks are theirs.'));
+    if (!editable || opts.athlete) return clip.review_note || clip.reviewed_at ? h('div', { class: 'dp-panel stack-tight' }, h('h3', { class: 'dp-panel-title' }, `From ${clip.reviewed_by_name?.split(' ')[0] ?? 'your coach'}`), h('p', { style: 'margin:0;white-space:pre-wrap' }, clip.review_note ?? 'Look through each position above.')) : null;
     const note = h('textarea', { class: 'dp-input', rows: '3', maxlength: '1500', placeholder: 'What you saw and the one or two things to work on.' }, clip.review_note ?? '');
     return h('div', { class: 'dp-panel stack-tight' }, h('h3', { class: 'dp-panel-title' }, clip.status === 'reviewed' ? `Sent to ${clip.client_name?.split(' ')[0]} ${ago(clip.reviewed_at).toLowerCase()}` : `Send to ${clip.client_name?.split(' ')[0] ?? 'the athlete'}`),
       h('p', { class: 'small muted', style: 'margin:0' }, 'They see every position, the grades and the timing in their app\'s Sprint tab, and your note comes as a message.'),
@@ -508,7 +512,7 @@ export async function sprintViewer(opts) {
   (async () => {
     try {
       clip = await api('GET', `${prefix}/sprint-clips/${id}`);
-      if (opts.athlete && !clip.analysis) { fill(box, h('div', { class: 'empty' }, 'Your coach hasn\'t sent the analysis of this rep yet.'), opts.onBack ? btn('Back', opts.onBack, 'secondary') : null); return; }
+      if (opts.athlete) editable = !!clip.can_edit;
       url = (await api('GET', `${prefix}/sprint-clips/${id}/video`)).url;
       video.src = url;
       const first = positions().find((p) => p.marked) ?? positions()[0];
@@ -620,9 +624,9 @@ export function clipList(rows, { onOpen, onCompare, athlete = false, showName = 
   const picked = new Set();
   const cmp = onCompare ? btn('Compare the ticked reps', () => onCompare([...picked]), 'secondary', { disabled: true }) : null;
   const list = h('div', { class: 'list' }, rows.map((c) => {
-    const ready = !athlete || c.status === 'reviewed';
+    const ready = true;   // athletes see what's marked on their own reps
     const tick = onCompare && ready ? h('input', { type: 'checkbox', 'aria-label': `Compare ${c.title || c.kind_label}`, onChange: (e) => { if (e.target.checked) picked.add(c.id); else picked.delete(c.id); if (picked.size > 3) { e.target.checked = false; picked.delete(c.id); toast('Compare up to three reps.', 'bad'); } cmp.disabled = picked.size < 2; } }) : null;
-    const status = c.status === 'reviewed' ? (athlete && !c.seen_at ? h('span', { class: 'dp-badge dp-badge--good' }, 'New') : h('span', { class: 'small muted' }, 'Sent')) : athlete ? h('span', { class: 'small muted' }, 'Waiting for your coach') : h('span', { class: 'dp-badge dp-badge--warn' }, c.marked ? `${c.marked} of ${c.total} marked` : 'To mark');
+    const status = c.status === 'reviewed' ? (athlete && !c.seen_at ? h('span', { class: 'dp-badge dp-badge--good' }, 'New') : h('span', { class: 'small muted' }, 'Sent')) : athlete ? h('span', { class: 'small muted' }, `${c.marked ?? 0} of ${c.total ?? 0} marked · your coach checks it`) : h('span', { class: 'dp-badge dp-badge--warn' }, c.marked ? `${c.marked} of ${c.total} marked` : 'To mark');
     return h('div', { class: 'list-item', style: 'gap:10px;align-items:center;flex-wrap:wrap' }, tick, ready ? gradeChip(c.grade) : null,
       h('button', { type: 'button', class: 'linkish grow', style: 'text-align:left', onClick: () => onOpen(c.id) },
         h('div', { class: 'strong' }, `${showName ? `${c.client_name} · ` : ''}${c.title || c.kind_label}`),
@@ -654,7 +658,7 @@ export function athleteSprint(where, { api }) {
     const send = d.ready ? uploadForm({ api, kinds: d.kinds, who: 'athlete', start: (b) => api('POST', '/app/api/sprint-clips', b), finish: (id) => api('POST', `/app/api/sprint-clips/${id}/done`), onSent: () => draw() })
       : h('p', { class: 'small muted', style: 'margin:0' }, 'Sending sprint clips isn\'t set up yet. Ask your coach.');
     fill(where, h('div', { class: 'stack' },
-      h('div', { class: 'sp-card stack' }, h('h2', { class: 'eg-h' }, 'Send a rep'), h('p', { class: 'small muted', style: 'margin:0' }, 'Your coach marks each position, grades it and sends it back here.'), send),
+      h('div', { class: 'sp-card stack' }, h('h2', { class: 'eg-h' }, 'Send a rep'), h('p', { class: 'small muted', style: 'margin:0' }, 'Mark the positions yourself (open a rep and step through it) or leave it to your coach, who checks it and sends it back with a note.'), send),
       h('div', { class: 'sp-card stack' }, h('h2', { class: 'eg-h' }, 'Your reps'), clipList(d.data, { athlete: true, onOpen: (id) => { state.open = id; draw(); }, onCompare: (ids) => { state.compare = ids; draw(); } })),
       Object.keys(d.summary ?? {}).length ? h('div', { class: 'sp-card stack' }, h('h2', { class: 'eg-h' }, 'Across your reps'), summaryBlock(d.summary)) : null));
   };

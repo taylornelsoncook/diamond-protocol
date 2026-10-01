@@ -21,18 +21,20 @@ import * as store from './formchecks.js';
 export const MAX_BYTES = 150 * 1024 * 1024, MAX_SECONDS = 60, PER_DAY = 10;
 
 // ---------- Kinds and positions ----------
-const STRIDE = ['toe_off', 'mvp', 'touchdown', 'full_support'];
+const STRIDE = ['toe_off', 'mvp', 'strike', 'touchdown', 'full_support'];   // the five ALTIS kinogram positions
 export const KINDS = {
   top_speed: { label: 'Top speed', steps: 2, positions: STRIDE, finish: true, tip: 'Film side-on at hip height, 10 to 15 m from the lane, after the athlete has built up to top speed.' },
   acceleration: { label: 'Acceleration', steps: 2, positions: STRIDE, finish: true, tip: 'Film side-on from the start through the first 10 m, the camera still, two cones a known distance apart in the lane.' },
   cod: { label: 'Change of direction', steps: 1, positions: ['penultimate', 'plant', 'deepest', 'push_off'], finish: false, tip: 'Film the cut side-on to the plant leg, the whole body in frame from the last step in to the push away.' }
 };
 export const POSITIONS = {
-  toe_off: { label: 'Toe-off', hint: 'The last frame the pushing foot is on the ground.' },
-  mvp: { label: 'MVP', hint: 'Max vertical projection: the highest point of the flight.' },
-  touchdown: { label: 'Touchdown', hint: 'The first frame the landing foot touches the ground.' },
-  full_support: { label: 'Full support', hint: 'The hip right over the foot on the ground.' },
-  finish: { label: 'Next toe-off', hint: 'Step 3 leaving the ground: it closes step 2\'s contact.' },
+  // ALTIS's definitions; legs says which leg is which for the points (the app shows it while tapping).
+  toe_off: { label: 'Toe-off', hint: 'The last frame the pushing foot is on the ground. ALTIS: about 90° between the thighs, the pushing knee not fully straight.', legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.' },
+  mvp: { label: 'MVP', hint: 'Max vertical projection: the highest point of the flight. ALTIS: about 90° between the thighs, the front knee open more than 110°.', legs: 'Swing leg = the front leg. Stance leg = the back leg that just pushed off.' },
+  strike: { label: 'Strike', hint: 'The back thigh is straight up and down, just before the front foot comes down. ALTIS: 20 to 40° between the thighs, the back knee right under the hip.', legs: 'Swing leg = the back leg coming through. Stance leg = the front leg about to land.' },
+  touchdown: { label: 'Touchdown', hint: 'The first frame the landing foot touches the ground.', legs: 'Stance leg = the leg landing. Swing leg = the back leg coming through.' },
+  full_support: { label: 'Full support', hint: 'ALTIS: the toe straight under the hip.', legs: 'Stance leg = the leg on the ground. Swing leg = the leg coming through.' },
+  finish: { label: 'Next toe-off', hint: 'The step after the last leaving the ground: it closes the last step\'s contact.', legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.' },
   penultimate: { label: 'Penultimate step', hint: 'The step before the plant, where braking starts.' },
   plant: { label: 'Plant', hint: 'The plant foot touching down.' },
   deepest: { label: 'Deepest point', hint: 'The lowest point over the plant leg.' },
@@ -53,20 +55,24 @@ export const MEASURES = {
   shin_lean: { label: 'Shin lean', needs: ['knee_stance', 'ankle_stance'], more: 'The shin is laid over more than the reference.', less: 'The shin is more upright than the reference.' },
   trunk_lean: { label: 'Trunk lean', needs: ['shoulder', 'hip'], more: 'The trunk leans forward more than the reference.', less: 'The trunk is more upright than the reference.' },
   trunk_lean_any: { label: 'Trunk lean', needs: ['shoulder', 'hip'], more: 'The trunk leans more than the reference.', less: 'The trunk is more upright than the reference.' },
+  back_thigh: { label: 'Back thigh', needs: ['hip', 'knee_swing'], more: 'The back thigh has already come forward of vertical.', less: 'The back thigh is still behind vertical: it comes through late.' },
+  foot_under_hip: { label: 'Foot under the hip', needs: ['hip', 'foot'], more: 'The foot is behind the hip.', less: 'The foot is ahead of the hip.' },
   recovery_thigh: { label: 'Recovery thigh', needs: ['hip', 'knee_swing'], more: 'The recovery thigh is further forward than the reference.', less: 'The recovery thigh is further back than the reference: it comes through late.' }
 };
 // Starting references in degrees: target, A within ±a, B within ±b, C beyond. The owner replaces them with their own.
 const R = (measure, target, a, b) => ({ measure, target, a, b });
 export const DEFAULT_REFERENCES = {
   top_speed: {
-    toe_off: [R('thigh_separation', 100, 15, 30), R('stance_knee', 160, 12, 25)],
-    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 110, 15, 30)],
+    toe_off: [R('thigh_separation', 90, 15, 30), R('stance_knee', 160, 12, 25)],
+    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 115, 10, 25)],
+    strike: [R('thigh_separation', 30, 10, 20), R('back_thigh', 0, 10, 20)],
     touchdown: [R('shin_angle', 0, 6, 14), R('swing_knee', 45, 15, 30)],
-    full_support: [R('recovery_thigh', 45, 12, 25), R('stance_knee', 145, 10, 20)]
+    full_support: [R('foot_under_hip', 0, 4, 9), R('recovery_thigh', 45, 12, 25)]
   },
   acceleration: {
-    toe_off: [R('trunk_lean', 45, 10, 20), R('stance_knee', 165, 10, 20)],
-    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 110, 15, 30)],
+    toe_off: [R('trunk_lean', 45, 10, 20), R('thigh_separation', 90, 15, 30)],
+    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 115, 10, 25)],
+    strike: [R('thigh_separation', 30, 10, 20), R('back_thigh', 0, 10, 20)],
     touchdown: [R('shin_angle', 0, 8, 18), R('swing_knee', 45, 15, 30)],
     full_support: [R('recovery_thigh', 45, 12, 25), R('trunk_lean', 40, 10, 20)]
   },
@@ -88,10 +94,11 @@ export const STEP_METRICS = {
   hip_extension_deg: { label: 'Hip extension', chapter: 'projection', unit: '°', better: 'range', about: 'The pushing thigh behind vertical at toe-off.' },
   hip_height_m: { label: 'Hip height', chapter: 'projection', unit: 'm', better: 'higher', about: 'The hip above the ground at full support.' },
   thigh_velocity_dps: { label: 'Thigh angular velocity', chapter: 'switching', unit: '°/s', better: 'higher', about: 'How fast the thighs switch: the average of the four phases below.', words: { good: 'Good', ok: 'Average', bad: 'Slow' } },
-  early_flexion_dps: { label: 'Early flexion', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The pushing thigh swinging forward in the air, toe-off to touchdown.' },
-  late_flexion_dps: { label: 'Late flexion', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'That thigh still coming forward while the other foot is down, touchdown to the next toe-off.' },
-  early_extension_dps: { label: 'Early extension', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The landing thigh driving back, touchdown to full support.' },
-  late_extension_dps: { label: 'Late extension', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The landing thigh driving back, full support to the next toe-off.' },
+  // The thigh phases split at the ALTIS positions (owner decision: follow ALTIS).
+  early_flexion_dps: { label: 'Early flexion', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The pushing thigh coming through from behind: toe-off to strike, where it is straight up and down.' },
+  late_flexion_dps: { label: 'Late flexion', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'That thigh lifting in front: strike to the next toe-off.' },
+  early_extension_dps: { label: 'Early extension', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'The front thigh driving down in the air: MVP to touchdown, through strike.' },
+  late_extension_dps: { label: 'Late extension', chapter: 'switching', unit: '°/s', better: 'higher', detail: true, about: 'That thigh driving back on the ground: touchdown to the next toe-off.' },
   touchdown_dist_m: { label: 'Touchdown distance', chapter: 'switching', unit: 'm', better: 'lower', about: 'How far ahead of the hip the foot lands.' },
   takeoff_dist_m: { label: 'Take-off distance', chapter: 'switching', unit: 'm', better: 'range', about: 'How far behind the hip the foot leaves the ground.' },
   gct_s: { label: 'Ground contact time', chapter: 'reactivity', unit: 's', better: 'lower', about: 'Touchdown to the next toe-off.', words: { good: 'Short', ok: 'Average', bad: 'Long' } },
@@ -188,6 +195,8 @@ export function measure(key, p, dir = 1) {
     case 'shin_lean': { const x = fromVertical(p.knee_stance, p.ankle_stance, 1); val = x === null ? null : Math.abs(x); break; }
     case 'trunk_lean': val = fromVertical(p.shoulder, p.hip, dir); break;
     case 'trunk_lean_any': { const x = fromVertical(p.shoulder, p.hip, 1); val = x === null ? null : Math.abs(x); break; }
+    case 'back_thigh': { const x = fromVertical(p.hip, p.knee_swing, dir); val = x === null ? null : -x; break; }
+    case 'foot_under_hip': val = fromVertical(p.hip, p.foot, dir); break;   // + when the hip is ahead of the foot
     case 'recovery_thigh': { const x = fromVertical(p.hip, p.knee_swing, dir); val = x === null ? null : -x; break; }   // knee ahead of the hip = forward
     default: val = null;
   }
@@ -230,12 +239,12 @@ export function analyse(ctx, clip, marks, refs = references(ctx), stepRefs = nul
       const got = measures.filter((x) => x.grade);
       const grade = got.length ? got.reduce((w, x) => (SCORE[x.grade] < SCORE[w] ? x.grade : w), 'A') : null;   // the weakest measure
       if (grade) grades.push(grade);
-      positions.push({ step, position: pos, label: POSITIONS[pos].label, hint: POSITIONS[pos].hint, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, measures, grade });
+      positions.push({ step, position: pos, label: POSITIONS[pos].label, hint: POSITIONS[pos].hint, legs: POSITIONS[pos].legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, measures, grade });
     }
   }
   if (kind.finish) {
     const m = byKey.get(markKey(nSteps + 1, 'toe_off'));
-    positions.push({ step: nSteps + 1, position: 'toe_off', label: POSITIONS.finish.label, hint: POSITIONS.finish.hint, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, measures: [], grade: null, finish: true });
+    positions.push({ step: nSteps + 1, position: 'toe_off', label: POSITIONS.finish.label, hint: POSITIONS.finish.hint, legs: POSITIONS.finish.legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, measures: [], grade: null, finish: true });
   }
   const at = (step, pos) => byKey.get(markKey(step, pos));
   const cal = parse(clip.calibration);
@@ -298,9 +307,9 @@ function breakdownOf({ clip, at, nSteps, dir, scale, real, refs }) {
     if (scale && down && has(pd, 'hip', 'foot')) add('touchdown_dist_m', s, (pd.foot[0] - pd.hip[0]) * dir * scale, down);
     if (scale && full && has(pf, 'hip', 'foot')) add('hip_height_m', s, (pf.foot[1] - pf.hip[1]) * scale, full);
     if (scale && off && next && has(po, 'hip') && has(pn, 'hip')) add('hip_displacement_m', s, (pn.hip[0] - po.hip[0]) * dir * scale, next, { from: { step: off.step, position: off.position } });
-    // The thighs' four phases (degrees a second): the pushing leg flexes forward through the air (early, toe-off to
-    // touchdown) and on while the other foot is down (late, to the next toe-off, where it's the front thigh); the landing
-    // leg extends back from touchdown to full support (early) and on to the next toe-off (late, where it's the back thigh).
+    // The thighs' four phases (degrees a second), split at the ALTIS positions: the pushing leg flexes from toe-off to
+    // strike (behind, coming to vertical: early) and on to the next toe-off (in front: late); the front leg extends from
+    // MVP to touchdown (driving down through strike: early) and on through the ground to the next toe-off (late).
     const thigh = (p, k) => (has(p, 'hip', k) ? measure('recovery_thigh', { hip: p.hip, knee_swing: p[k] }, dir) : null);   // + forward of vertical
     const phase = (k, a, ka, b, kb, sign) => {
       if (!a || !b || !(b.t > a.t)) return null;
@@ -310,8 +319,9 @@ function breakdownOf({ clip, at, nSteps, dir, scale, real, refs }) {
       add(k, s, v, b, { from: { step: a.step, position: a.position }, legs: [ka, kb] });
       return v;
     };
-    const phases = [phase('early_flexion_dps', off, 'knee_stance', down, 'knee_swing', 1), phase('late_flexion_dps', down, 'knee_swing', next, 'knee_swing', 1),
-      phase('early_extension_dps', down, 'knee_stance', full, 'knee_stance', -1), phase('late_extension_dps', full, 'knee_stance', next, 'knee_stance', -1)].filter((x) => x != null);
+    const mvp = at(s, 'mvp'), strike = at(s, 'strike');
+    const phases = [phase('early_flexion_dps', off, 'knee_stance', strike, 'knee_swing', 1), phase('late_flexion_dps', strike, 'knee_swing', next, 'knee_swing', 1),
+      phase('early_extension_dps', mvp, 'knee_swing', down, 'knee_stance', -1), phase('late_extension_dps', down, 'knee_stance', next, 'knee_stance', -1)].filter((x) => x != null);
     if (phases.length) add('thigh_velocity_dps', s, phases.reduce((a, b) => a + b, 0) / phases.length, next ?? down, { from: off ? { step: off.step, position: off.position } : null, phases: phases.length });
     if (down && next && next.t > down.t) add('gct_s', s, real(next.t - down.t), next, { from: { step: down.step, position: down.position } });
     if (scale && down && full && has(pd, 'hip') && has(pf, 'hip')) add('compression_m', s, Math.max(0, (pf.hip[1] - pd.hip[1]) * scale), full, { from: { step: down.step, position: down.position } });
@@ -348,7 +358,9 @@ const marksOf = (ctx, id) => ctx.db.all('SELECT * FROM sprint_marks WHERE clip_i
 // One clip with its analysis. An athlete sees the analysis only once a coach has sent it.
 export function getClip(ctx, id, scope = {}, { athleteView = false } = {}) {
   const clip = rowFor(ctx, id, scope);
-  if (athleteView && clip.status !== 'reviewed') return shape(clip, { analysis: null });
+  // Athletes (and parents through the family's app) mark their own reps too (owner decision): they see the numbers from
+  // whatever is marked, and may mark until the coach sends the analysis; after that it's the coach's to change.
+  if (athleteView) return shape(clip, { analysis: analyse(ctx, clip, marksOf(ctx, id)), can_edit: clip.status !== 'reviewed' });
   return shape(clip, { analysis: analyse(ctx, clip, marksOf(ctx, id)) });
 }
 // A list with each clip's grade and timing (for the Sprint screen, the client page and the athlete app).
@@ -360,16 +372,15 @@ export function list(ctx, { clientId = null, status = null, kind = null, limit =
   const rows = ctx.db.all(`${SELECT} WHERE ${where.join(' AND ')} ORDER BY COALESCE(s.sent_at, s.created_at) DESC LIMIT ?`, ...args, Math.min(500, Math.max(1, Number(limit) || 100)));
   const refs = references(ctx), sref = stepReferences(ctx);
   return rows.map((clip) => {
-    if (athleteView && clip.status !== 'reviewed') return shape(clip, { grade: null, timing: null, marked: 0 });
     const a = analyse(ctx, clip, marksOf(ctx, clip.id), refs, sref);
     return shape(clip, { grade: a.grade, scores: a.breakdown ? a.breakdown.chapters.map((c) => ({ key: c.key, label: c.label, score: c.score, word: c.word })) : null, timing: { contact_s: a.timing.contact_s, flight_s: a.timing.flight_s, step_rate_hz: a.timing.step_rate_hz, step_length_m: a.timing.step_length_m }, marked: a.marked, total: a.total });
   });
 }
 // Across one athlete's reps of a kind: each measure's average and spread per position, and the timing over time.
-export function summary(ctx, clientId, { athleteView = false } = {}) {
+export function summary(ctx, clientId) {
   const refs = references(ctx), sref = stepReferences(ctx), out = {};
   for (const kind of Object.keys(KINDS)) {
-    const clips = ctx.db.all(`${SELECT} WHERE s.client_id = ? AND s.kind = ? AND s.status ${athleteView ? `= 'reviewed'` : `!= 'uploading'`} ORDER BY COALESCE(s.sent_at, s.created_at)`, clientId, kind);
+    const clips = ctx.db.all(`${SELECT} WHERE s.client_id = ? AND s.kind = ? AND s.status != 'uploading' ORDER BY COALESCE(s.sent_at, s.created_at)`, clientId, kind);
     if (!clips.length) continue;
     const reps = clips.map((c) => ({ clip: c, a: analyse(ctx, c, marksOf(ctx, c.id), refs, sref) }));
     const positions = [];
@@ -476,6 +487,12 @@ export function updateClip(ctx, id, body = {}) {
   }
   if (Object.keys(set).length) ctx.db.run(`UPDATE sprint_clips SET ${Object.keys(set).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...Object.values(set), id);
   return getClip(ctx, id);
+}
+// An athlete's own clip they may still mark (before the coach sends the analysis).
+export function athleteMay(ctx, clientId, id) {
+  const clip = rowFor(ctx, id, { clientId });
+  if (clip.status === 'reviewed') throw conflict('Your coach has sent the analysis of this rep, so the marks are theirs now. Send a new rep to mark it yourself.');
+  return clip;
 }
 // Mark one position: the frame (t, the video's time in seconds) and the points tapped on it (any of LANDMARKS).
 export function saveMark(ctx, id, body = {}, user) {

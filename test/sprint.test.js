@@ -219,6 +219,48 @@ test('the owner sets the references; coaches read them; every clip is re-graded'
   assert.equal((await coach('GET', `/v1/sprint-clips/${clip.id}`)).body.analysis.grade, 'A');
 });
 
+test('the breakdown per step: projection and switching, as in the owner\'s screenshots, with scores', async () => {
+  const clip = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'top_speed', capture_fps: 240 });
+  await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { video_w: 1920, video_h: 1080, calibration: { a: [100, 500], b: [1100, 500], meters: 10 } });   // 1 px = 1 cm
+  const mark = (step, position, t, points) => coach('PUT', `/v1/sprint-clips/${clip.id}/marks`, { step, position, t, points });
+  // Toe-off: the front thigh 68° forward, the pushing thigh 28° back, the foot 57 cm behind the hip.
+  await mark(1, 'toe_off', 0.10, { hip: [500, 300], knee_swing: [599, 340], knee_stance: [473, 351], foot: [443, 500] });
+  // Touchdown 0.125 s later: the pushing thigh has come through to 20° forward (48° in 0.125 s = 384°/s); the foot lands 47 cm ahead.
+  await mark(1, 'touchdown', 0.225, { hip: [600, 300], knee_swing: [618, 350], foot: [647, 500] });
+  await mark(1, 'full_support', 0.27, { hip: [640, 300], foot: [640, 389] });   // hip 89 cm up
+  const r = await mark(2, 'toe_off', 0.325, { hip: [686, 300] });               // the hip travelled 1.86 m
+  const b = r.body.analysis.breakdown;
+  const val = (ch, k) => b.chapters.find((c) => c.key === ch).metrics.find((m) => m.key === k);
+  assert.deepEqual(['hip_displacement_m', 'hip_flexion_deg', 'hip_extension_deg', 'hip_height_m'].map((k) => [val('projection', k).values[0].value, val('projection', k).values[0].word]),
+    [[1.86, 'Below average'], [68, 'Within the optimal range'], [28, 'Within the optimal range'], [0.89, 'Above average']]);
+  assert.deepEqual(['thigh_velocity_dps', 'touchdown_dist_m', 'takeoff_dist_m'].map((k) => [val('switching', k).values[0].value, val('switching', k).values[0].tone]),
+    [[384, 'good'], [0.47, 'bad'], [0.57, 'good']]);
+  assert.equal(val('projection', 'hip_displacement_m').summary, 'Below average on the step');
+  assert.deepEqual(val('projection', 'hip_displacement_m').values[0].at, { step: 2, position: 'toe_off' }, 'drawn once the next toe-off is passed');
+  const [proj, sw] = b.chapters;
+  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Good', '2. Switching', 'Average']);
+  // Without the cones the distances wait; the angles and thigh speed don't need them.
+  const bare = (await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { calibration: null })).body.analysis.breakdown;
+  assert.equal(bare.needs_scale, true);
+  assert.deepEqual([bare.chapters[0].metrics[0].values.length, bare.chapters[0].metrics[1].values.length, bare.chapters[1].metrics[0].values.length], [0, 1, 1]);
+  // The owner's own bands change the verdict.
+  assert.equal((await owner('PATCH', '/v1/sprint/references', { step_references: { top_speed: { hip_flexion_deg: [70, 80] } } })).status, 200);
+  assert.equal((await coach('GET', `/v1/sprint-clips/${clip.id}`)).body.analysis.breakdown.chapters[0].metrics[1].values[0].word, 'Under the optimal range');
+  assert.equal((await owner('PATCH', '/v1/sprint/references', { step_references: { top_speed: { hip_flexion_deg: [80, 70] } } })).status, 400);
+  assert.equal((await owner('PATCH', '/v1/sprint/references', { step_references: { cod: { hip_flexion_deg: [1, 2] } } })).status, 400);
+  await owner('PATCH', '/v1/sprint/references', { reset: true });
+  // Up to four steps: step 5's toe-off closes step 4; going back to two drops what's past it.
+  assert.equal((await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { steps: 4 })).body.analysis.total, 17);
+  assert.equal((await mark(5, 'toe_off', 0.9, {})).status, 200);
+  assert.equal((await mark(6, 'toe_off', 1.0, {})).status, 400);
+  await mark(3, 'mvp', 0.5, {});
+  const two = (await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { steps: 2 })).body.analysis;
+  assert.deepEqual([two.total, two.positions.filter((p) => p.marked).map((p) => `${p.step}:${p.position}`)], [9, ['1:toe_off', '1:touchdown', '1:full_support', '2:toe_off']]);
+  const cut = await upload(coach, `/v1/clients/${maya.id}/sprint-clips`, { kind: 'cod' });
+  assert.equal((await coach('PATCH', `/v1/sprint-clips/${cut.id}`, { steps: 3 })).status, 400);
+  assert.equal(cut.analysis.breakdown, null);
+});
+
 test('a version 64 database gains the sprint tables, opened twice', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'dp-migrate-'));
   const file = join(tmp, 'old.db');

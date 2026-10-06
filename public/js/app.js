@@ -302,6 +302,9 @@ async function viewToday(main) {
         a.count === 1 ? btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/approve`); toast(`${first(a.items[0].name)} steps up ${a.items[0].text} on ${a.items[0].exercise_name}.`); refresh(); }), 'outline') : null,
         a.count === 1 ? btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/dismiss`); toast('Dismissed. Two more good workouts bring it back.'); refresh(); }), 'ghost') : null,
         h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}?tab=training` }, a.count === 1 ? 'Open' : 'Review')));
+    if (a.kind === 'weekly_notes') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} weekly ${a.count === 1 ? 'note is' : 'notes are'} drafted and waiting`), h('span', { class: 'small muted' }, 'Read each line, change the words, send. Athletes see it on their Workout tab.')),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/programs' }, 'Review'));
     if (a.kind === 'plan_adjustments') return h('div', { class: 'stack-tight' }, a.items.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
       h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, `${x.name}: ${x.kind === 'shift' ? 'a missed week' : x.kind === 'minimum' ? 'a minimum week' : 'ready for the next phase'}`), h('span', { class: 'small muted' }, x.text)),
       h('div', { class: 'row wrap', style: 'gap:6px' },

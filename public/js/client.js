@@ -369,6 +369,12 @@ function gearCard(home) {
       btn('Change', () => { gearOpen = true; render(); }, 'ghost')),
     both ? h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.at_home, onChange: async (e) => { prefs.at_home = e.target.checked; savePrefs(); await refresh(); render(); } }), 'Training at home today') : null);
 }
+// The coach's note for the week (weekly.js), once a coach sent it.
+function weeklyNoteCard(home) {
+  const n = home.weekly_note;
+  if (!n) return null;
+  return h('div', { class: 'dp-panel stack-tight su-note', role: 'note' }, h('span', { class: 'dp-label' }, `This week, from ${n.by ? `Coach ${n.by.split(' ')[0]}` : 'your coach'}`), h('p', { style: 'margin:0' }, n.body), h('span', { class: 'small muted' }, `About ${n.week_label}.`));
+}
 // The adaptive plan (adapt.js): a minimum week in force, and why the calendar moved this week.
 function adjustmentsCard(home) {
   const a = home.adjustments;
@@ -465,6 +471,7 @@ function calendarStrip(home) {
       picked ? h('div', { class: 'c-day-info stack-tight' }, h('span', { class: 'small strong' }, dayName(state.calDay, { weekday: 'long', month: 'long', day: 'numeric' })),
         picked.length ? picked.map(line) : h('span', { class: 'small muted' }, 'Rest day. Nothing planned.')) : null,
       h('div', { class: 'row wrap small muted', style: 'align-items:center' }, h('span', { class: 'grow' }, `${cal.counts.done} done · ${cal.counts.missed} missed · ${cal.counts.upcoming} to go · ${cal.days_text}`),
+        home.week ? h('span', { class: home.week.streak ? 'good-text strong' : 'muted' }, home.week.streak ? `${home.week.streak} clean ${home.week.streak === 1 ? 'week' : 'weeks'} in a row` : home.week.planned ? `${home.week.done} of ${home.week.planned} this week · ${home.week.sets} sets` : '') : null,
         btn(showPlan ? 'Hide the plan' : 'Whole plan', () => { showPlan = !showPlan; draw(); }, 'ghost')),
       showPlan ? h('div', { class: 'c-plan stack-tight' }, [...new Set(cal.workouts.map((w) => w.week))].map((week) => [h('span', { class: 'small strong' }, `Week ${week}`),
         ...cal.workouts.filter((w) => w.week === week).map((w) => h('div', { class: 'c-plan-row' }, h('span', { class: 'small muted', style: 'min-width:92px' }, dayName(w.date)), h('span', { class: 'grow small' }, h('span', { class: w.status === 'done' ? 'muted' : 'strong' }, w.title), w.moved ? ' · moved' : ''),
@@ -765,6 +772,7 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
     reopened ? null : readinessCard(home.readiness),
+    reopened ? null : weeklyNoteCard(home),
     reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
     reopened ? null : installCard(home),

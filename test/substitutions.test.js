@@ -119,7 +119,7 @@ test('a version 56 database gains the alternatives table and the by_kind column,
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'exercise_alternatives'`).n, 1);
       assert.ok(d.all('PRAGMA table_info(exercise_swaps)').some((c) => c.name === 'by_kind'));
       d.close();

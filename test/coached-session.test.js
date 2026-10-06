@@ -141,7 +141,7 @@ test('a version 67 database gains the cue table', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       d.run(`INSERT OR REPLACE INTO exercise_cues (exercise_id, audio, audio_type, audio_bytes, updated_at) VALUES ('ex_1', ?, 'audio/webm', 3, '2026-02-01T00:00:00.000Z')`, Buffer.from([1, 2, 3]));
       assert.equal(d.get('SELECT audio_bytes FROM exercise_cues WHERE exercise_id = ?', 'ex_1').audio_bytes, 3);
       d.close();

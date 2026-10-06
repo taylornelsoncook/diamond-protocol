@@ -12,6 +12,7 @@ import * as startup from './services/startup.js';
 import * as cues from './services/cues.js';
 import * as adapt from './services/adapt.js';
 import * as push from './services/push.js';
+import * as weekly from './services/weekly.js';
 import * as routines from './services/routines.js';
 import * as monthly from './services/monthly.js';
 import * as exerciseimport from './services/exerciseimport.js';
@@ -153,6 +154,13 @@ export const routes = [
   ['POST', '/v1/progressions/:id/approve', 'session', 'Training', 'Approve a suggested step: it applies to that athlete\'s workouts from now on, on top of the plan.', (ctx, r) => progression.decide(ctx, r.params.id, 'approve', r.user)],
   ['POST', '/v1/progressions/:id/dismiss', 'session', 'Training', 'Dismiss a suggested step (a new one needs two more good workouts).', (ctx, r) => progression.decide(ctx, r.params.id, 'dismiss', r.user)],
   ['POST', '/v1/clients/:id/progressions', 'session', 'Training', 'Add a step by hand for one athlete: exercise_id, kind (weight, reps, sets), amount (pounds, reps a set or sets; a minus takes some off). Applies at once.', (ctx, r) => progression.add(ctx, r.params.id, r.body, r.user), 201],
+  // The weekly coach's note (version 71, services/weekly.js). Owners and coaches.
+  ['GET', '/v1/weekly-notes', 'session', 'Training', 'Weekly notes: ?week=YYYY-MM-DD (a Monday; default last week), ?status=draft|sent|skipped, ?client_id. weeks lists the weeks on file; mode the setting.', (ctx, r) => ({ data: weekly.list(ctx, { week: r.query.week ?? undefined, status: r.query.status, clientId: r.query.client_id }), weeks: weekly.weeks(ctx), mode: families.getSetting(ctx, 'weekly_notes') })],
+  ['POST', '/v1/weekly-notes/generate', 'session', 'Training', 'Draft last week\'s notes now (week: a Monday; default last week). Athletes who already have one are left alone; a quiet week gets none.', (ctx, r) => weekly.generateWeek(ctx, r.body?.week ?? undefined)],
+  ['POST', '/v1/weekly-notes/send-all', 'session', 'Training', 'Send every draft of a week (week: a Monday; default last week). Empty drafts are skipped and named.', (ctx, r) => weekly.sendAll(ctx, r.body?.week, r.user)],
+  ['PATCH', '/v1/weekly-notes/:id', 'session', 'Training', 'Change the note\'s words (body, up to 600 characters). Not after it was sent.', (ctx, r) => weekly.update(ctx, r.params.id, r.body)],
+  ['POST', '/v1/weekly-notes/:id/send', 'session', 'Training', 'Send this note: it shows on the athlete\'s Workout tab and taps their phone.', (ctx, r) => weekly.send(ctx, r.params.id, r.user)],
+  ['POST', '/v1/weekly-notes/:id/skip', 'session', 'Training', 'Don\'t send this one.', (ctx, r) => weekly.skip(ctx, r.params.id)],
   // The adaptive plan (version 69, services/adapt.js): one athlete's calendar bends around what they did. Owners and coaches.
   ['GET', '/v1/plan-adjustments', 'session', 'Training', 'The adaptive plan\'s suggestions and changes: status=suggested|approved|dismissed|undone, client_id. Kinds: shift (a missed week comes round again), minimum (half the sets for the rest of the week after misses in a row), advance (the next phase early after two clean weeks). settings says the mode and the streak.', (ctx, r) => ({ data: adapt.list(ctx, { clientId: r.query.client_id, status: r.query.status, limit: r.query.limit }), settings: adapt.settings(ctx) })],
   ['POST', '/v1/plan-adjustments/:id/approve', 'session', 'Training', 'Make the change on the athlete\'s calendar.', (ctx, r) => adapt.apply(ctx, r.params.id, r.user)],
@@ -755,6 +763,8 @@ export const routes = [
   // Client app (authenticated by the client's private link token)
   ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => r.client.archived_at ? { has_data: false, metrics: [], workouts: [], imports: 0 } : dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
   // Push notifications (version 70, services/push.js): the phone subscribes from the app; the service worker asks what to show.
+  ['GET', '/app/api/leaderboard', 'client', 'Client app', 'The team board: this week\'s workouts and clean weeks for everyone opted in on your teams and program (first name and last initial), once you opt in and the owner has rankings on.', (ctx, r) => weekly.board(ctx, r.client.id)],
+  ['POST', '/app/api/leaderboard/opt-in', 'client', 'Client app', 'Be on the team board, or leave it: on (true or false).', (ctx, r) => weekly.setOptIn(ctx, r.client.id, r.body?.on === true)],
   ['GET', '/app/api/push', 'client', 'Client app', 'Notifications: the server\'s public key to subscribe with, the phones subscribed, and the reminder hour.', (ctx, r) => push.status(ctx, r.client.id)],
   ['POST', '/app/api/push/subscribe', 'client', 'Client app', 'Turn notifications on for this phone: subscription (what the browser\'s push manager answered: endpoint, keys.p256dh, keys.auth).', (ctx, r) => push.subscribe(ctx, r.client, r.body, { userAgent: r.userAgent ?? null }), 201],
   ['POST', '/app/api/push/unsubscribe', 'client', 'Client app', 'Turn notifications off for this phone: endpoint.', (ctx, r) => push.unsubscribe(ctx, r.client, r.body)],

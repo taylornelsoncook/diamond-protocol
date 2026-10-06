@@ -121,7 +121,7 @@ test('a version 57 database gains the block tables and the workout columns, open
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       assert.equal(d.get(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name IN ('routines', 'routine_exercises')`).n, 2);
       const cols = d.all('PRAGMA table_info(workouts)').map((c) => c.name);
       assert.ok(cols.includes('warmup_id') && cols.includes('cooldown_id'));

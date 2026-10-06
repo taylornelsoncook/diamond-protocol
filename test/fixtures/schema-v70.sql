@@ -1925,24 +1925,3 @@ CREATE TABLE IF NOT EXISTS push_notices (
   shown_at TEXT
 );
 CREATE INDEX IF NOT EXISTS push_notices_client ON push_notices(client_id, shown_at);
--- Version 71: the weekly coach's note (services/weekly.js): drafted each Monday from last week's facts, read and sent by
--- a coach (or sent as drafted in auto mode), shown on the athlete's Workout tab. One per athlete and week.
-CREATE TABLE IF NOT EXISTS weekly_notes (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  week_start TEXT NOT NULL,                      -- the Monday of the week the note is about
-  body TEXT NOT NULL,
-  drafted TEXT,                                  -- the line as drafted, before a coach changed it
-  facts TEXT,                                    -- JSON (weekly.factsFor)
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','skipped')),
-  sent_at TEXT,
-  sent_by TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT,
-  UNIQUE (client_id, week_start)
-);
--- Version 71: athletes who chose to be on the team board (first name and last initial, this week's workouts and clean weeks).
-CREATE TABLE IF NOT EXISTS leaderboard_optins (
-  client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL
-);

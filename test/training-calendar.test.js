@@ -195,7 +195,7 @@ test('a version 61 database gains the training days and the moves table, opened 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(assignments)').some((c) => c.name === 'training_days'));
       assert.deepEqual(d.all('PRAGMA table_info(assignment_moves)').map((c) => c.name), ['id', 'assignment_id', 'workout_id', 'date', 'moved_by', 'created_at']);
       assert.equal(d.get('SELECT start_date FROM assignments WHERE id = ?', 'asg_1').start_date, '2026-09-01T12:00:00.000Z', 'kept as it was');

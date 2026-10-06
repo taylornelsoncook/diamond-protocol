@@ -147,7 +147,7 @@ test('a version 60 database gains the ask, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       const cols = d.all('PRAGMA table_info(workout_exercises)');
       assert.ok(cols.some((c) => c.name === 'form_check' && c.notnull === 1 && c.dflt_value === '0'));
       assert.ok(cols.some((c) => c.name === 'form_check_note'));

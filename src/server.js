@@ -36,6 +36,7 @@ import { cleanup as cleanupCues } from './services/cues.js';
 import { runAdapt } from './services/adapt.js';
 import { runReminders as runPushReminders, cleanup as cleanupPush } from './services/push.js';
 import { workoutToday } from './services/programs.js';
+import { runWeekly } from './services/weekly.js';
 import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
@@ -233,6 +234,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('plan-adapt', HOUR, () => runAdapt(ctx));   // the adaptive plan: a missed week, misses in a row, two clean weeks (adapt.js)
   ctx.workoutToday = (clientId) => workoutToday(ctx, clientId);
   runner.define('push-reminders', HOUR, () => runPushReminders(ctx));   // the morning nudge on a day with a workout (push.js)
+  runner.define('weekly-notes', HOUR, () => runWeekly(ctx));   // Monday: last week's coach's notes drafted (weekly.js)
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };

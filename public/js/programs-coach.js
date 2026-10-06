@@ -70,8 +70,8 @@ async function sendLink(c) {
 const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
 
 export async function viewPrograms(main) {
-  const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
-    get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null)]);
+  const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules, notes] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
+    get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null), canEdit() ? get('/v1/weekly-notes').catch(() => null) : null]);
   const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
@@ -116,7 +116,7 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, search), h('div', { style: 'width:180px' }, levelSel)),
-        cards, weekPanel, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
+        cards, weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
@@ -730,6 +730,30 @@ function saveTemplateDialog(p) {
   name.focus(); name.select();
 }
 // The Programs page's templates: program templates (open, start a program, delete) and workout templates (delete).
+// The weekly coach's note (schema 71, services/weekly.js): a line per athlete drafted from last week's facts; the coach
+// changes the words and sends. It shows on the athlete's Workout tab and taps their phone.
+function weeklyNotesPanel(notes) {
+  const drafts = notes.data.filter((n) => n.status === 'draft'), sent = notes.data.filter((n) => n.status === 'sent');
+  const week = drafts[0]?.week_label ?? notes.weeks[0]?.label ?? 'last week';
+  const row = (n) => {
+    const text = textarea(n.body, { rows: '2', 'aria-label': `Note for ${first(n.client_name)}`, style: 'min-height:56px' });
+    let saved = n.body;
+    const save = async () => { const val = text.value.trim(); if (val === saved) return; saved = val; await patch(`/v1/weekly-notes/${n.id}`, { body: val }); };
+    text.addEventListener('blur', () => save().catch((e) => toast(e.message, 'warn')));
+    const f = n.facts ?? {};
+    return h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:260px' }, h('a', { href: `#/clients/${n.client_id}?tab=training`, class: 'strong', style: 'color:inherit' }, n.client_name),
+        h('span', { class: 'small muted' }, [f.planned != null ? `${f.done} of ${f.planned} workouts` : null, f.sets ? plural(f.sets, 'set') : null, f.checkins ? plural(f.checkins, 'check-in') : null, f.streak ? `${f.streak} clean ${f.streak === 1 ? 'week' : 'weeks'}` : null, f.top_lift ? `${f.top_lift.name} ~${f.top_lift.e1rm} lb${f.top_lift.change ? ` (${f.top_lift.change > 0 ? '+' : ''}${f.top_lift.change})` : ''}` : null].filter(Boolean).join(' · ')),
+        text),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        btn('Send', (e) => busy(e.currentTarget, async () => { await save(); await post(`/v1/weekly-notes/${n.id}/send`); toast(`Sent to ${first(n.client_name)}.`); deps.render(); }), 'primary'),
+        btn('Skip', (e) => busy(e.currentTarget, async () => { await post(`/v1/weekly-notes/${n.id}/skip`); deps.render(); }), 'ghost')));
+  };
+  return panel('Weekly notes', { subtitle: `A line for each athlete about ${week}, drafted from what they did. Change the words, then send: it shows in their app and taps their phone. ${notes.mode === 'auto' ? 'Drafts go out on their own on Monday.' : notes.mode === 'off' ? 'Off right now.' : 'Drafted every Monday.'}`,
+    action: h('div', { class: 'row wrap', style: 'gap:6px' }, drafts.length > 1 ? btn('Send all', (e) => { if (!confirm(`Send ${drafts.length} notes as they read now?`)) return; busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/send-all', { week: drafts[0].week_start }); toast(`Sent ${r.sent}.`); deps.render(); }); }, 'secondary') : null,
+      btn('Draft last week', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/generate'); toast(r.written ? `${plural(r.written, 'note')} drafted.` : r.kept ? 'Already drafted.' : 'Nothing to say: a quiet week for everyone.'); deps.render(); }), 'ghost')) },
+    drafts.length ? drafts.map(row) : h('p', { class: 'muted small' }, sent.length ? `All sent for ${week}. ${plural(sent.length, 'note')} went out.` : 'No drafts right now. They\'re written on Monday morning, or press Draft last week.'));
+}
 // Start-up rules (schema 67, services/startup.js): which program an athlete's answers to the start-up questions put them
 // on. The highest priority matching rule wins; the owner picks whether it happens at once, waits for a coach, or is off.
 const MODE_TEXT = { auto: 'Athletes who answer the questions start the matching program at once; you\'re told on Today and by email.', review: 'A match waits on Today for a coach to approve.', off: 'The rules do nothing; coaches assign every program.' };

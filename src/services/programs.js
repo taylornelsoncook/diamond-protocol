@@ -13,6 +13,7 @@ import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
 import { equipmentSwaps, getProfile as trainingProfile } from './startup.js';
 import { cuesFor } from './cues.js';
 import { activeMinimum, forAthlete as adjustmentsFor, checkAthlete as adaptAfterLog } from './adapt.js';
+import { thisWeek as weekStrip, forAthlete as weeklyNoteFor } from './weekly.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -906,6 +907,8 @@ export function clientHome(ctx, client, { at = null } = {}) {
     readiness,
     startup: startupState(ctx, client.id, true),
     adjustments: adjustmentsFor(ctx, client.id),   // a minimum week in force, and what the adaptive plan changed this week (adapt.js)
+    week: weekStrip(ctx, client.id),               // this week's planned, done, sets and the run of clean weeks (weekly.js)
+    weekly_note: weeklyNoteFor(ctx, client.id),    // the coach's note for the week, once sent
     workout: next && appWorkout(ctx, client.id, next, readiness, { at }),
     upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
     calendar: cal,

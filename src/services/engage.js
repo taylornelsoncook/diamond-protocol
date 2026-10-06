@@ -4,6 +4,7 @@
 // team goals, messages and reading reach its roster athletes (every one has a client profile).
 import { newId, token, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
 import { notify as pushNotify } from './push.js';
+import { planWeekStreak } from './weekly.js';
 import { updateSettings, getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
@@ -1203,7 +1204,7 @@ export function accountability(ctx, clientId, { guardianId } = {}) {
   const messages = messagesFor(ctx, clientId, 50, { guardianId });
   return {
     today: t, week_start: ws,
-    streaks: { active_weeks: activeWeekStreak(ctx, clientId), checkin_days: checkinStreak(ctx, clientId), best_checkin_days: bestCheckinStreak(ctx, clientId) },
+    streaks: { active_weeks: activeWeekStreak(ctx, clientId), checkin_days: checkinStreak(ctx, clientId), best_checkin_days: bestCheckinStreak(ctx, clientId), plan_weeks: planWeekStreak(ctx, clientId) },
     this_week: counts(ctx, clientId, ws, addDaysToDate(ws, 6)), this_month: counts(ctx, clientId, `${t.slice(0, 8)}01`, t),
     // Each day of the last four weeks, with what happened on it (tap a day to see it).
     calendar: Array.from({ length: 28 }, (_, i) => {

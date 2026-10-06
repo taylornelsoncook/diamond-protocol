@@ -138,7 +138,7 @@ test('the manifest and the service worker are served; a version 69 database gain
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       for (const t of ['push_subscriptions', 'push_notices']) assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
       d.close();
     }

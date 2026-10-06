@@ -180,7 +180,7 @@ test('a version 68 database gains the adaptive plan tables', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 70, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       for (const t of ['plan_adjustments', 'assignment_skips']) assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
       d.close();
     }

@@ -8,6 +8,7 @@ import { importView } from './program-import.js';
 import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
 import { scheduleFields, fmtDay, statusBadge } from './training-days.js';
 import { choices, ALL_WORD } from './startup-ui.js';
+import { sendClip } from './formchecks-ui.js';
 
 let deps = null;     // { api, render, header, role, pulseTile }
 export function initPrograms(d) { deps = d; }
@@ -218,6 +219,7 @@ function libraryPanel(exs, edit) {
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.name),
         h('span', { class: 'small muted' }, [x.category ?? 'No category', tagText(x), x.uses ? `in ${plural(x.uses, 'workout')}` : 'not in a program', x.video_url ? null : 'no video yet'].filter(Boolean).join(' · ')),
         x.programs.length ? h('span', { class: 'small muted' }, `Used in ${x.programs.map((p) => p.name).join(', ')}`) : null),
+      x.cue?.audio ? h('span', { class: 'dp-badge dp-badge--good', title: 'A recorded cue plays in the app' }, '🔊 Cue') : null,
       edit ? btn('Edit', () => exerciseDialog(x, cats, tags), 'ghost', { 'aria-label': `Edit ${x.name}` }) : null)),
       shown.length > showing ? h('div', { class: 'row', style: 'justify-content:center;padding-top:8px' }, btn(`Show ${Math.min(PAGE, shown.length - showing)} more (${(shown.length - showing).toLocaleString()} left)`, () => { showing += PAGE; draw(); }, 'ghost')) : null]
       : h('p', { class: 'small muted' }, exs.data.length ? 'No exercises match. Clear the search or filters.' : 'No exercises yet.'));
@@ -317,9 +319,73 @@ function alternativesBlock(x) {
   return h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line);padding-top:12px' }, h('div', { class: 'dp-label' }, 'Swaps athletes may pick'),
     h('p', { class: 'small muted', style: 'margin:0' }, 'In the app, "Can\'t do this today?" offers these for this exercise. The pick is for that workout only and you see it on the session\'s Live panel.'), listBox, add);
 }
+// The coach's cue (cues.js): record a few words once here (the phone's or laptop's microphone), and the app plays them
+// when the exercise opens; the words typed below are read aloud where there's no recording. A short "why this matters"
+// clip goes to the private clips bucket the same way a form check does.
+function cueBlock(x) {
+  const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line);padding-top:12px' }, h('div', { class: 'dp-label' }, 'Coach\'s cue in the app'), h('p', { class: 'small muted', style: 'margin:0' }, 'Loading…'));
+  let rec = null, chunks = [], blob = null, startedAt = 0, timer = null;
+  const mimeFor = () => ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find((t) => window.MediaRecorder?.isTypeSupported?.(t)) ?? '';
+  const draw = async () => {
+    const c = await get(`/v1/exercises/${x.id}/cue`);
+    const status = h('span', { class: 'small muted', 'aria-live': 'polite' });
+    const preview = h('div', { class: 'stack-tight' });
+    const words = textarea(c.transcript ?? '', { placeholder: c.words ? `Reads aloud: "${c.words}"` : 'What you say in the recording (read aloud where the phone can\'t play it)', style: 'min-height:56px' });
+    const recBtn = btn('Record', null, 'secondary'), stopBtn = btn('Stop', null, 'primary', { hidden: true }), saveBtn = btn('Save recording', null, 'primary', { hidden: true });
+    const canRecord = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
+    recBtn.addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        chunks = []; blob = null; preview.replaceChildren();
+        rec = new MediaRecorder(stream, mimeFor() ? { mimeType: mimeFor() } : undefined);
+        rec.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
+        rec.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop()); clearInterval(timer);
+          blob = new Blob(chunks, { type: rec.mimeType || mimeFor() || 'audio/webm' });
+          const secs = Math.round((Date.now() - startedAt) / 1000);
+          status.textContent = `${secs} second${secs === 1 ? '' : 's'} recorded. Listen, then save.`;
+          fill(preview, h('audio', { controls: true, src: URL.createObjectURL(blob), style: 'width:100%' }));
+          recBtn.hidden = false; recBtn.textContent = 'Record again'; stopBtn.hidden = true; saveBtn.hidden = false;
+        };
+        startedAt = Date.now(); rec.start();
+        recBtn.hidden = true; stopBtn.hidden = false; saveBtn.hidden = true;
+        timer = setInterval(() => { const secs = Math.round((Date.now() - startedAt) / 1000); status.textContent = `Recording… ${secs} s (up to ${c.max_audio_seconds}).`; if (secs >= c.max_audio_seconds) rec.stop(); }, 500);
+      } catch (e) { status.textContent = e.name === 'NotAllowedError' ? 'The microphone was blocked. Allow it in the browser and try again.' : e.message; }
+    });
+    stopBtn.addEventListener('click', () => rec?.state === 'recording' && rec.stop());
+    saveBtn.addEventListener('click', (e) => busy(e.currentTarget, async () => {
+      if (!blob) throw new Error('Record first.');
+      if (blob.size > c.max_audio_bytes) throw new Error(`That recording is ${(blob.size / 1024 / 1024).toFixed(1)} MB; the limit is ${c.max_audio_bytes / 1024 / 1024} MB. Keep it to a few sentences.`);
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+      await put(`/v1/exercises/${x.id}/cue/audio`, { audio_base64: b64, content_type: blob.type.split(';')[0], duration_s: Math.round((Date.now() - startedAt) / 1000), transcript: words.value.trim() || undefined });
+      toast('Cue saved. Athletes hear it when the exercise opens.'); draw();
+    }));
+    const onFile = (file, progress) => sendClip({ file, onProgress: progress, start: (b) => post(`/v1/exercises/${x.id}/cue/clip`, b), finish: () => post(`/v1/exercises/${x.id}/cue/clip/done`) }).then(() => { toast('Clip saved.'); draw(); });
+    const clipIn = h('input', { type: 'file', accept: 'video/mp4,video/quicktime,video/webm', class: 'sr-only', tabindex: '-1', 'aria-hidden': 'true' });
+    const clipBtn = btn(c.clip ? 'Replace the clip' : 'Add a clip', () => clipIn.click(), 'ghost');
+    clipIn.addEventListener('change', () => { const file = clipIn.files?.[0]; clipIn.value = ''; if (file) busy(clipBtn, () => onFile(file, () => {})); });
+    fill(box, h('div', { class: 'dp-label' }, 'Coach\'s cue in the app'),
+      h('span', { class: 'small muted' }, 'Say the one thing that matters, once. The app plays it the moment an athlete opens this exercise; where it can\'t, the phone reads the words.'),
+      c.audio ? h('div', { class: 'row wrap small', style: 'align-items:center;gap:8px' }, h('audio', { controls: true, src: `/v1/exercises/${x.id}/cue/audio?v=${encodeURIComponent(c.audio_at ?? '')}`, style: 'max-width:260px' }),
+        h('span', { class: 'muted grow' }, `${c.audio_seconds ? `${Math.round(c.audio_seconds)} s · ` : ''}${c.audio_by ?? 'a coach'}, ${ago(c.audio_at).toLowerCase()}`),
+        btn('Remove', (e) => { if (!confirm('Remove the recording? The words stay.')) return; busy(e.currentTarget, async () => { await del(`/v1/exercises/${x.id}/cue/audio`); draw(); }); }, 'ghost')) : null,
+      canRecord ? h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, recBtn, stopBtn, saveBtn, status) : h('span', { class: 'small muted' }, 'This browser can\'t record. Use the phone or a laptop with a microphone.'),
+      preview,
+      h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'The words'), words, h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
+        btn('Save words', (e) => busy(e.currentTarget, async () => { await patch(`/v1/exercises/${x.id}/cue`, { transcript: words.value.trim() }); toast('Saved.'); }), 'ghost'),
+        h('span', { class: 'small muted' }, 'Empty = the coaching cues above are read.'))),
+      h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('span', { class: 'small strong' }, 'Why this matters (a clip up to 20 seconds)'),
+        c.clip ? h('span', { class: 'small muted' }, `${c.clip_seconds ? `${Math.round(c.clip_seconds)} s · ` : ''}${c.clip_by ?? 'a coach'}, ${ago(c.clip_at).toLowerCase()}`) : null,
+        c.clip ? btn('Play', (e) => busy(e.currentTarget, async () => { const r = await get(`/v1/exercises/${x.id}/cue/video`); fill(preview, h('video', { controls: true, autoplay: true, playsinline: true, src: r.url, style: 'width:100%;max-height:320px;background:#000' })); }), 'ghost') : null,
+        c.clips_ready ? clipBtn : h('span', { class: 'small muted' }, 'Clips need the private clips bucket (Settings → Backups & jobs).'),
+        c.clip ? btn('Remove clip', (e) => { if (!confirm('Remove the clip?')) return; busy(e.currentTarget, async () => { await del(`/v1/exercises/${x.id}/cue/clip`); draw(); }); }, 'ghost') : null, clipIn));
+  };
+  draw().catch((e) => fill(box, h('p', { class: 'small muted' }, e.message)));
+  return box;
+}
 function exerciseDialog(x, cats, tags = null) {
   const f = exerciseFields(x, cats, tags);
-  if (x) f.el.append(alternativesBlock(x));
+  if (x) f.el.append(cueBlock(x), alternativesBlock(x));
   const actions = [{ label: x ? 'Save exercise' : 'Add exercise', variant: 'primary', onClick: async () => {
     if (x) await patch(`/v1/exercises/${x.id}`, f.body()); else await post('/v1/exercises', { ...f.body(), video_url: f.url.value || undefined });
     toast(x ? 'Exercise saved.' : 'Exercise added to the library.'); deps.render();

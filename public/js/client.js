@@ -193,7 +193,7 @@ function drawPending() {
 }
 
 // ---------- Rest timer ----------
-const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false }, store.get('dp_wo_prefs') ?? {});
+const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true }, store.get('dp_wo_prefs') ?? {});
 const savePrefs = () => store.set('dp_wo_prefs', prefs);
 // An athlete who trains both places says where they are today; at home, the gear swaps apply (startup.js).
 const atQ = () => (prefs.at_home && state.home?.startup?.gear?.trains_at === 'both' ? '?at=home' : '');
@@ -206,15 +206,53 @@ function startRest(x = null) {
   stopRest();
   const secs = x?.rest_seconds != null ? x.rest_seconds : prefs.rest_sec;
   if (!secs) return;
-  rest = { ends: Date.now() + secs * 1000, tick: setInterval(drawRest, 250) };
+  rest = { ends: Date.now() + secs * 1000, tick: setInterval(drawRest, 250), spoken: new Set() };
   say(`Rest ${clock(secs)}.`);
+  speak(secs >= 60 ? `Rest. ${Math.floor(secs / 60)} ${secs >= 120 ? 'minutes' : 'minute'}${secs % 60 ? ` ${secs % 60}` : ''}.` : `Rest. ${secs} seconds.`);
   drawRest();
+}
+// ---------- The coach's voice (cues.js) ----------
+// The phone talks when Voice is on: the rest timer's start, 30 and 10 seconds out and the end, and an exercise's cue
+// where the coach left none recorded (speechSynthesis reads the words). A recorded cue plays as it is.
+const canSpeak = () => prefs.voice && typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisUtterance !== 'undefined';
+function speak(text) {
+  if (!canSpeak() || !text) return;
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = 1.05; speechSynthesis.speak(u); } catch { /* no voice on this device */ }
+}
+const cueAudio = new Map();   // exercise id → object URL of the recording, fetched once with the app's own headers
+let cuePlaying = null;
+function stopCue() { if (cuePlaying) { cuePlaying.pause(); cuePlaying = null; } if (canSpeak()) { try { speechSynthesis.cancel(); } catch { /* fine */ } } }
+async function cueUrl(x) {
+  if (cueAudio.has(x.exercise_id)) return cueAudio.get(x.exercise_id);
+  const res = await fetch(`/app/api/exercises/${x.exercise_id}/cue/audio`, { headers: { 'x-client-token': viaCookie(tokenValue) ? '' : tokenValue || '', ...athleteHeader(tokenValue) }, credentials: 'same-origin' });
+  if (!res.ok) throw new ApiError('The cue couldn\'t be loaded.', res.status);
+  const url = URL.createObjectURL(await res.blob());
+  cueAudio.set(x.exercise_id, url);
+  return url;
+}
+// Play the coach's cue for an open exercise: the recording where there is one, else the words read aloud.
+async function playCue(x, { auto = false } = {}) {
+  if (!prefs.voice && auto) return;
+  stopCue();
+  if (x.cue?.audio) {
+    try { const a = new Audio(await cueUrl(x)); cuePlaying = a; a.onended = () => { if (cuePlaying === a) cuePlaying = null; }; await a.play(); return; }
+    catch { /* blocked or offline: fall back to the words */ }
+  }
+  const words = x.cue?.transcript ?? x.instructions;
+  if (words) speak(auto ? words : `${x.name}. ${words}`);
+}
+// "Why this matters": the coach's short clip, from a short-lived link.
+async function cueClip(x, holder) {
+  const r = await api('GET', `/app/api/exercises/${x.exercise_id}/cue/video`);
+  stopCue();
+  fill(holder, h('div', { class: 'video-frame c-demo' }, h('video', { src: r.url, controls: true, autoplay: true, playsinline: true, 'aria-label': `${x.name}: why this matters` }), h('span', { class: 'c-demo-tag' }, 'Your coach')));
 }
 function stopRest() { if (rest) clearInterval(rest.tick); rest = null; restBar.hidden = true; document.body.classList.remove('c-resting'); }
 function drawRest() {
   if (!rest) return;
   const left = Math.max(0, Math.round((rest.ends - Date.now()) / 1000));
-  if (!left) { stopRest(); try { navigator.vibrate?.([300, 120, 300]); } catch { /* no buzz */ } say('Rest over. Next set.'); toast('Rest over. Next set.'); return; }
+  if (!left) { stopRest(); try { navigator.vibrate?.([300, 120, 300]); } catch { /* no buzz */ } say('Rest over. Next set.'); speak('Rest over. Next set.'); toast('Rest over. Next set.'); return; }
+  for (const mark of [30, 10]) if (left === mark && !rest.spoken.has(mark)) { rest.spoken.add(mark); speak(`${mark} seconds.`); }
   restBar.hidden = false; document.body.classList.add('c-resting');   // room to scroll the page above the timer
   const bump = (s) => { rest.ends += s * 1000; drawRest(); };
   if (!restBar.firstChild) {
@@ -509,8 +547,16 @@ function renderLogger(w) {
     box.append(headOf(x));
     if (isOpen) {
       // The demo plays on its own, muted and looping, the moment the card opens (tap it for sound); Send a form check sits right under it.
+      // The coach's cue plays as the card opens (the recording, or the words read aloud); Why this matters plays their clip.
+      const clipHolder = h('div');
+      const cueRow = x.cue?.audio || x.cue?.clip || x.cue?.transcript || x.instructions ? h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' },
+        x.cue?.audio || x.cue?.transcript || x.instructions ? btn(x.cue?.audio ? '🔊 Coach\'s cue' : '🔊 Read the cue', (e) => busy(e.currentTarget, () => playCue(x)), 'ghost') : null,
+        x.cue?.clip ? btn('Why this matters', (e) => busy(e.currentTarget, () => cueClip(x, clipHolder)), 'ghost') : null,
+        h('label', { class: 'row muted', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.voice, onChange: (e) => { prefs.voice = e.target.checked; savePrefs(); if (!prefs.voice) stopCue(); } }), 'Voice')) : null;
+      if (!draft?.log_id && !exStarted(x)) playCue(x, { auto: true }).catch(() => {});
       box.append(h('div', { class: 'stack c-ex-media' },
         x.video_url !== undefined ? demoVideo(x) : null,
+        cueRow, clipHolder,
         formCheckSend(x),
         x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
@@ -606,7 +652,7 @@ function renderLogger(w) {
   const groupHeading = (x) => h('div', { class: 'sf-group' }, groupTitle(x),
     flowOf(x) ? h('span', { style: 'text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)' }, ` · one set of each${x.group_kind === 'circuit' ? ' in turn' : ''}, then rest`) : null);
   const list = h('div', { class: 'stack', style: 'gap:8px' });
-  const redrawCards = () => { cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); };
+  const redrawCards = () => { stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
   const redrawHead = (x) => { const box = cards.get(x.id); if (!box) return; box.querySelector('.c-ex-head').replaceWith(headOf(x)); box.classList.toggle('c-ex--done', exDone(x)); };
 

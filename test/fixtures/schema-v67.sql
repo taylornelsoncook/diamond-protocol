@@ -1848,29 +1848,3 @@ CREATE TABLE IF NOT EXISTS swap_optouts (
   created_at TEXT NOT NULL,
   PRIMARY KEY (client_id, workout_exercise_id)
 );
--- Version 68: the coach's cue for an exercise (services/cues.js): a short recording the app plays when the exercise
--- opens, its words (read aloud where there's no recording), and an optional short "why this matters" clip in the
--- private clips bucket. Library content from coaches, nothing personal; one row per exercise.
-CREATE TABLE IF NOT EXISTS exercise_cues (
-  exercise_id TEXT PRIMARY KEY REFERENCES exercises(id) ON DELETE CASCADE,
-  audio BLOB,
-  audio_type TEXT,
-  audio_bytes INTEGER,
-  audio_seconds REAL,
-  audio_by TEXT,
-  audio_at TEXT,
-  transcript TEXT,
-  clip_key TEXT,
-  clip_type TEXT,
-  clip_bytes INTEGER,
-  clip_seconds REAL,
-  clip_etag TEXT,
-  clip_by TEXT,
-  clip_at TEXT,
-  pending_key TEXT,      -- a clip being uploaded, checked at /done before it replaces the one on file
-  pending_type TEXT,
-  pending_bytes INTEGER,
-  pending_seconds REAL,
-  pending_at TEXT,
-  updated_at TEXT NOT NULL
-);

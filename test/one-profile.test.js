@@ -198,7 +198,7 @@ test('rankings, record boards, reports, share links, the athlete app and the par
   const rosa = await parent('rosa@example.com');
   const day = app.ctx.db.get(`SELECT id FROM perf_sessions WHERE name = 'Preseason'`).id;
   const hidden = (await rosa('GET', `/portal/api/athletes/${ty.client_id}/report`)).body;
-  assert.ok(!JSON.stringify(hidden).includes('4.8'), 'nothing from an unshared day');
+  assert.ok(!(hidden.tests ?? []).some((x) => x.test === 'dash_40yd') && !JSON.stringify(hidden.tests ?? []).includes('4.8'), 'nothing from an unshared day');   // the tests only: a timestamp elsewhere in the report can read "…:04.8…" by chance
   await coach('POST', `/v1/testing-sessions/${day}/share`, { notify: false });
   const shown = (await rosa('GET', `/portal/api/athletes/${ty.client_id}/engage`)).body.performance.tests;
   assert.equal(shown.find((x) => x.test === 'dash_40yd').best, 4.8);

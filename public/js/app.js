@@ -4,6 +4,7 @@ import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgram
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
+import { startupForm, summaryText, OUTCOME_TEXT } from './startup-ui.js';
 import { maxesBlock, volumeBlock } from './maxes-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
@@ -301,6 +302,14 @@ async function viewToday(main) {
         a.count === 1 ? btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/approve`); toast(`${first(a.items[0].name)} steps up ${a.items[0].text} on ${a.items[0].exercise_name}.`); refresh(); }), 'outline') : null,
         a.count === 1 ? btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/dismiss`); toast('Dismissed. Two more good workouts bring it back.'); refresh(); }), 'ghost') : null,
         h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}?tab=training` }, a.count === 1 ? 'Open' : 'Review')));
+    if (a.kind === 'startups') return h('div', { class: 'stack-tight' }, a.items.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
+        h('span', { class: 'strong' }, x.outcome === 'assigned' ? `${x.name} started ${x.program_name} on their own` : x.outcome === 'suggested' ? `${x.name} is ready for ${x.program_name}` : `${x.name} needs a program`),
+        h('span', { class: 'small muted' }, `${x.by === 'parent' ? 'A parent answered' : 'Answered'} the start-up questions ${ago(x.at).toLowerCase()}: ${x.answers}.${x.outcome === 'no_match' ? ' No start-up rule fits; pick a program on their Training tab or add a rule.' : ''}`)),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        x.outcome === 'suggested' ? btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${x.client_id}/training-profile/approve`); toast(`${first(x.name)} is on ${x.program_name}.`); refresh(); }), 'outline') : null,
+        x.outcome === 'assigned' ? btn('Got it', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${x.client_id}/training-profile/seen`); refresh(); }), 'ghost') : null,
+        h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${x.client_id}?tab=training` }, x.outcome === 'no_match' ? 'Pick a program' : 'Open')))));
     if (a.kind === 'form_checks') return h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.count === 1 ? `${a.items[0].name} sent a form check (${a.items[0].exercise_name})` : `${a.count} form checks are waiting for an answer`),
         h('span', { class: 'small muted' }, a.count === 1 ? `Sent ${ago(a.items[0].sent_at).toLowerCase()}. Watch it and answer on their client page.` : a.items.map((x) => `${x.name}: ${x.exercise_name}`).join(' · '))),
@@ -814,6 +823,7 @@ async function viewClient(main, id) {
       h('a', { class: 'dp-btn dp-btn--ghost', href: c.app_link, target: '_blank', rel: 'noopener' }, 'Open app'),
       role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
     logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null,
+    startupBlock(id, first, c, role),
     role === 'front_desk' ? null : progressionsBlock(id, first));
 
   // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
@@ -1160,6 +1170,44 @@ function trainingWeekPanel(t) {
         h('span', { class: 'small muted' }, `${a.program_name}${a.teams?.length ? ` · ${a.teams.map((x) => x.name).join(', ')}` : ''} · ${a.week.done} of ${a.week.planned} this week`)),
       h('span', { class: 'dp-badge dp-badge--warn' }, `Missed ${a.missed_streak} in a row`)))
       : h('p', { class: 'muted', style: 'margin:0' }, t.behind ? `${t.behind} behind.` : 'Nobody is behind. Every planned workout so far this week is done or still ahead.'));
+}
+// The start-up answers (schema 67, services/startup.js): what the athlete (or a parent) said about their goal, experience,
+// days, where they train and their gear; which program the rules suggest; a coach can answer or fix them, and place them.
+function startupBlock(clientId, first, c, role) {
+  const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
+  let editing = false;
+  const draw = async () => {
+    const d = await get(`/v1/clients/${clientId}/training-profile`);
+    const p = d.profile, canEdit = role !== 'front_desk';
+    const save = async (form, place) => {
+      const prob = form.problem(); if (prob && place) throw new Error(prob);
+      const r = await put(`/v1/clients/${clientId}/training-profile`, { ...form.body(), place });
+      editing = false;
+      if (r.placed?.outcome === 'assigned') { toast(`${first} is on ${r.placed.program.name}.`); render(); return; }
+      if (place && r.placed?.outcome === 'no_match') toast('Saved. No rule fits: assign a program above.', 'warn'); else toast('Saved.');
+      draw();
+    };
+    if (editing) {
+      const form = startupForm(d.questions, p, { who: 'coach', name: first });
+      fill(box, h('span', { class: 'dp-label' }, 'Start-up answers'), form.el, h('div', { class: 'row wrap' },
+        btn('Save', (e) => busy(e.currentTarget, () => save(form, false)), 'secondary'),
+        c.program ? null : btn('Save and place by the rules', (e) => busy(e.currentTarget, () => save(form, true)), 'primary'),
+        btn('Cancel', () => { editing = false; draw(); }, 'ghost')));
+      return;
+    }
+    const match = d.match?.rule;
+    fill(box, h('div', { class: 'row wrap', style: 'align-items:center' }, h('span', { class: 'dp-label grow' }, 'Start-up answers'), canEdit ? btn(p ? 'Change answers' : 'Answer for them', () => { editing = true; draw(); }, 'ghost') : null),
+      p ? h('div', { class: 'stack-tight' },
+        h('span', { class: 'small' }, summaryText(p)),
+        p.sport || p.note ? h('span', { class: 'small muted' }, [p.sport ? `Sport: ${p.sport}` : null, p.note ? `“${p.note}”` : null].filter(Boolean).join(' · ')) : null,
+        h('span', { class: 'small muted' }, `Answered by ${p.answered_by === 'coach' ? 'a coach' : p.answered_by === 'parent' ? 'a parent' : first} ${ago(p.updated_at ?? p.answered_at).toLowerCase()}.${p.outcome ? ` ${OUTCOME_TEXT[p.outcome]}${p.outcome_program ? ` (${p.outcome_program.name})` : ''}.` : ''}`),
+        !c.program ? h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' },
+          h('span', { class: 'small' }, match ? `The rules say: ${match.program_name} (${match.name ?? 'rule'}).` : d.match?.reason === 'unanswered' ? 'Goal, experience and days are needed before the rules can place them.' : 'No start-up rule fits these answers. Assign a program above, or add a rule on the Programs page.'),
+          match && canEdit ? btn(`Put ${first} on ${match.program_name}`, (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${clientId}/training-profile/approve`); toast(`${first} is on ${match.program_name}.`); render(); }), 'secondary') : null) : null)
+        : h('span', { class: 'small muted' }, `${first} hasn't answered the start-up questions. The app asks on first open with no program; ${canEdit ? 'or answer for them here.' : 'a coach can answer for them.'}`));
+  };
+  draw().catch((e) => fill(box, h('p', { class: 'small muted' }, e.message)));
+  return box;
 }
 function progressionsBlock(clientId, first) {
   const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });

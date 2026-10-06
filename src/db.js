@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 66;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source)
+const SCHEMA_VERSION = 67;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment')
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -98,14 +98,15 @@ const ADDED_TABLES = {
   58: ['routines', 'routine_exercises'],                                                              // warm-up and cool-down blocks
   59: ['monthly_reports'],                                                                            // monthly progress reports for parents
   62: ['assignment_moves'],                                                                           // the training calendar: one athlete's workout moved to another date
-  65: ['sprint_clips', 'sprint_marks']                                                                // sprint analysis: clips, marked frames and tapped points
+  65: ['sprint_clips', 'sprint_marks'],                                                               // sprint analysis: clips, marked frames and tapped points
+  67: ['training_profiles', 'program_rules', 'swap_optouts']                                         // the start-up questions, which program they lead to, equipment swaps put back
 };
 const ADDED_COLUMNS = {
   sprint_clips: ['segment TEXT', 'auto_at TEXT', 'auto_note TEXT'],   // version 66: which part of the run the clip shows (0-10 … 40+ yards); when the app last suggested its marks
   sprint_marks: ["source TEXT NOT NULL DEFAULT 'manual'"],   // version 66: 'auto' = suggested by the app, 'manual' = placed or confirmed by a person
   assignments: ['training_days TEXT'],   // version 62: the weekdays the athlete trains (the training calendar)
   workouts: ['warmup_id TEXT REFERENCES routines(id) ON DELETE SET NULL', 'cooldown_id TEXT REFERENCES routines(id) ON DELETE SET NULL'],   // version 58
-  exercise_swaps: ["by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete'))"],   // version 57
+  exercise_swaps: ["by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete','equipment'))"],   // version 57; 'equipment' version 67
   clients: ['stripe_customer_id TEXT', 'card_payment_method TEXT', 'card_brand TEXT', 'card_last4 TEXT', 'athlete_id TEXT', "sex TEXT CHECK (sex IN ('M','F'))", 'archived_at TEXT', 'archived_by TEXT', 'card_exp TEXT',
     "training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote'))", 'password_hash TEXT', 'password_set_at TEXT'],   // version 46; password: version 60   // athlete_id: version 6, sex: version 10, archive: version 31, card_exp: version 41
   team_roster: ['athlete_id TEXT'],
@@ -185,6 +186,7 @@ function migrate(raw, schema) {
   if (version < 43) rebuild(raw, schema, ['workout_logs']);                           // version 43: logs outlive a deleted program or workout
   if (version < 54) rebuild(raw, schema, ['data_imports']);                           // version 54: files from any system (Apple Health and Fitbit zips), no fixed list of kinds
   if (version < 60) rebuild(raw, schema, ['login_codes', 'portal_sessions']);        // version 60: a code or session can be an athlete's (guardian_id may be empty, client_id added)
+  if (version < 67) rebuild(raw, schema, ['exercise_swaps']);                         // version 67: a swap made for the athlete's gear at home (by_kind 'equipment')
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
   // Version 35: device names are matched in lower case, so results that waited under "Swift" join "swift".
   if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {

@@ -24,6 +24,8 @@ import * as contact from './services/contact.js';
 import * as tasks from './services/tasks.js';
 import * as profiles from './services/profiles.js';
 import * as portal from './services/portal.js';
+import * as startup from './services/startup.js';
+import * as substitutions from './services/substitutions.js';
 import { addDays, newId } from './util.js';
 
 const ctx = { db: openDb(process.env.DB_FILE || 'data/diamond.db'), testMode: true, payments: createTestProvider(), mail: {}, now: () => new Date().toISOString() };
@@ -80,6 +82,19 @@ const hyper = build('Hypertrophy Block A', 6, 'Intermediate', 'Moderate loads, h
   ['Pull', [['pulldown', '4 × 10'], ['row', '3 × 12 each side']]],
   ['Legs', [['squat', '4 × 8'], ['rdl', '3 × 10'], ['lunge', '3 × 12 each side']]]
 ]);
+
+// Equipment tags and swaps for the gear an athlete has at home, and the start-up rules that place a new athlete.
+programs.updateExercise(ctx, ex.squat.id, { equipment: ['barbell'] });
+programs.updateExercise(ctx, ex.goblet.id, { equipment: ['dumbbell', 'kettlebell'] });
+programs.updateExercise(ctx, ex.incline.id, { equipment: ['dumbbell', 'bench'] });
+programs.updateExercise(ctx, ex.pulldown.id, { equipment: ['machine'] });
+programs.updateExercise(ctx, ex.pushup.id, { equipment: ['bodyweight'] });
+substitutions.addAlternative(ctx, ex.squat.id, { exercise_id: ex.goblet.id, tag: 'no_barbell', note: 'Hold a dumbbell or kettlebell at the chest' });
+substitutions.addAlternative(ctx, ex.pulldown.id, { exercise_id: ex.row.id, tag: 'at_home' });
+substitutions.addAlternative(ctx, ex.incline.id, { exercise_id: ex.pushup.id, tag: 'no_equipment' });
+startup.createRule(ctx, { program_id: strength.id, name: 'New to training', experience: ['new', 'some'], days_max: 7, priority: 5 });
+startup.createRule(ctx, { program_id: hyper.id, name: 'Strength and size, experienced', goals: ['strength', 'power', 'general'], experience: ['experienced'] });
+startup.createRule(ctx, { program_id: strength.id, name: 'Anyone else with 3 days', priority: -5 });
 
 const people = [
   ['Maya Okafor', 'coach', strength], ['Daniel Reyes', 'hybrid', hyper], ['Priya Nair', 'program', strength],

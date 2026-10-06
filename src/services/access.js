@@ -5,6 +5,7 @@ import { teamSummary } from './teams.js';
 import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
+import { waiting as startupWaiting } from './startup.js';
 import { OWNER_EVENTS, LEAD_EVENTS, can } from './security.js';
 import { clientCounts } from './clients.js';
 import { moneyIn, todayBounds, lateChargeAlerts } from './billing.js';
@@ -305,6 +306,11 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
   if (role !== 'front_desk') {
     const ps = db.all(`SELECT p.id, p.client_id, c.name, e.name AS exercise_name, p.kind, p.amount FROM progressions p JOIN clients c ON c.id = p.client_id JOIN exercises e ON e.id = p.exercise_id WHERE p.status = 'suggested' AND c.archived_at IS NULL ORDER BY p.created_at`);
     if (ps.length) waiting.unshift({ kind: 'progressions', count: ps.length, items: ps.slice(0, 4).map((x) => ({ id: x.id, client_id: x.client_id, name: x.name, exercise_name: x.exercise_name, text: x.kind === 'weight' ? `+${x.amount} lb` : x.kind === 'reps' ? `+${x.amount} rep${x.amount === 1 ? '' : 's'} a set` : `+${x.amount} set${x.amount === 1 ? '' : 's'}` })) });
+  }
+  // The start-up questions (version 67): athletes who started a program on their own this week, and answers waiting on a coach.
+  if (role !== 'front_desk') {
+    const su = startupWaiting(ctx);
+    if (su.length) waiting.unshift({ kind: 'startups', count: su.length, items: su.slice(0, 6) });
   }
   // Monthly parent reports written and waiting for a coach's line and Send.
   if (role !== 'front_desk') {

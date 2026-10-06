@@ -7,6 +7,7 @@ import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
 import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
 import { scheduleFields, fmtDay, statusBadge } from './training-days.js';
+import { choices, ALL_WORD } from './startup-ui.js';
 
 let deps = null;     // { api, render, header, role, pulseTile }
 export function initPrograms(d) { deps = d; }
@@ -68,8 +69,8 @@ async function sendLink(c) {
 const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
 
 export async function viewPrograms(main) {
-  const [progs, exs, act, shop, blocks, tmpl, wtmpl] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
-    get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] }))]);
+  const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
+    get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null)]);
   const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
@@ -114,7 +115,7 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, search), h('div', { style: 'width:180px' }, levelSel)),
-        cards, weekPanel, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
+        cards, weekPanel, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
@@ -663,6 +664,59 @@ function saveTemplateDialog(p) {
   name.focus(); name.select();
 }
 // The Programs page's templates: program templates (open, start a program, delete) and workout templates (delete).
+// Start-up rules (schema 67, services/startup.js): which program an athlete's answers to the start-up questions put them
+// on. The highest priority matching rule wins; the owner picks whether it happens at once, waits for a coach, or is off.
+const MODE_TEXT = { auto: 'Athletes who answer the questions start the matching program at once; you\'re told on Today and by email.', review: 'A match waits on Today for a coach to approve.', off: 'The rules do nothing; coaches assign every program.' };
+function rulesPanel(rules, programs, edit) {
+  const q = rules.questions;
+  const label = (list, all) => (list.length ? list.join(', ') : all);
+  const modeSel = select([['auto', 'Start them at once'], ['review', 'A coach approves first'], ['off', 'Off']], { value: rules.mode, 'aria-label': 'What happens when an athlete answers' });
+  modeSel.addEventListener('change', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { auto_program: modeSel.value }); toast('Saved.'); deps.render(); }));
+  const ruleRow = (r) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
+      h('span', { class: 'strong' }, r.name ?? r.program_name, r.active ? null : h('span', { class: 'dp-badge dp-badge--muted', style: 'margin-left:8px' }, 'Off')),
+      h('span', { class: 'small muted' }, `→ ${r.program_name} · ${label(r.goal_labels, ALL_WORD.goals)} · ${label(r.experience_labels, ALL_WORD.experience)} · ${r.days_min === r.days_max ? `${r.days_min} days a week` : `${r.days_min} to ${r.days_max} days a week`} · ${r.equipment_labels.length ? `needs ${r.equipment_labels.join(', ')} at home` : ALL_WORD.equipment}${r.priority ? ` · priority ${r.priority}` : ''} · placed ${r.placed}`)),
+    edit ? h('div', { class: 'row wrap', style: 'gap:6px' },
+      btn('Edit', () => ruleDialog(q, programs, r), 'ghost', { 'aria-label': `Edit the rule ${r.name ?? r.program_name}` }),
+      btn(r.active ? 'Turn off' : 'Turn on', (e) => busy(e.currentTarget, async () => { await patch(`/v1/program-rules/${r.id}`, { active: !r.active }); deps.render(); }), 'ghost'),
+      btn('Delete', (e) => { if (!confirm(`Delete the rule ${r.name ?? r.program_name}? Athletes it placed stay on their program.`)) return; busy(e.currentTarget, async () => { await del(`/v1/program-rules/${r.id}`); toast('Rule deleted.'); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the rule ${r.name ?? r.program_name}` })) : null);
+  // Try it: where a set of answers would land.
+  const tryBox = h('div', { class: 'small muted' });
+  const tGoal = select([['', 'Goal'], ...q.goals.map((g) => [g.key, g.label])]), tExp = select([['', 'Experience'], ...q.experience.map((g) => [g.key, g.label])]), tDays = select([['', 'Days'], ...[1, 2, 3, 4, 5, 6, 7].map((n) => [String(n), `${n} days`])]), tWhere = select([['', 'Where'], ...q.trains_at.map((g) => [g.key, g.label])]);
+  const tryIt = async () => {
+    if (!tGoal.value || !tExp.value || !tDays.value) { tryBox.textContent = 'Pick a goal, experience and days to try.'; return; }
+    const r = await post('/v1/program-rules/try', { goal: tGoal.value, experience: tExp.value, days_per_week: Number(tDays.value), trains_at: tWhere.value || null, equipment: tWhere.value === 'home' ? [] : undefined });
+    tryBox.textContent = r.program ? `→ ${r.program.name} (${r.rule.name ?? 'rule'})${tWhere.value === 'home' ? ', with bodyweight only at home' : ''}` : r.reason === 'no_rules' ? 'No rules yet.' : 'No rule fits these answers: the athlete would wait for a coach.';
+  };
+  for (const el of [tGoal, tExp, tDays, tWhere]) el.addEventListener('change', () => tryIt().catch((e) => { tryBox.textContent = e.message; }));
+  return panel('Start-up rules', { subtitle: 'An athlete (or a parent) answers a few questions in the app: goal, experience, days a week, where they train, the gear at home. These rules say which program the answers lead to. The highest priority match wins; a program\'s days a week must fit.',
+    action: edit ? btn('Add rule', () => ruleDialog(q, programs), 'secondary') : null },
+    isOwner() ? h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' }, h('span', { class: 'small strong' }, 'When an athlete answers:'), modeSel, h('span', { class: 'small muted' }, MODE_TEXT[rules.mode] ?? '')) : h('p', { class: 'small muted', style: 'margin:0' }, MODE_TEXT[rules.mode] ?? ''),
+    rules.data.length ? rules.data.map(ruleRow) : h('p', { class: 'muted small' }, edit ? 'No rules yet. Add one per program: who it\'s for and how many days it needs. Until then, athletes who answer wait for a coach on Today.' : 'No rules yet.'),
+    h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:8px' }, h('span', { class: 'small strong' }, 'Try it'), h('div', { class: 'row wrap', style: 'gap:6px' }, tGoal, tExp, tDays, tWhere), tryBox));
+}
+function ruleDialog(q, programs, rule = null) {
+  const prog = select(programs.map((p) => [p.id, `${p.name}${p.days_per_week ? ` (${p.days_per_week} days a week)` : ''}`]), { value: rule?.program_id ?? programs[0]?.id });
+  const name = input({ value: rule?.name ?? '', placeholder: 'New to speed, 3 days' });
+  const goals = choices(q.goals, rule?.goals ?? [], { label: 'Goals' }), exp = choices(q.experience, rule?.experience ?? [], { label: 'Experience' }), gear = choices(q.gear, rule?.equipment ?? [], { label: 'Gear the program needs at home' });
+  const dmin = input({ type: 'number', min: '1', max: '7', value: String(rule?.days_min ?? programs.find((p) => p.id === prog.value)?.days_per_week ?? 3), inputmode: 'numeric' });
+  const dmax = input({ type: 'number', min: '1', max: '7', value: String(rule?.days_max ?? 7), inputmode: 'numeric' });
+  prog.addEventListener('change', () => { if (!rule) { const p = programs.find((x) => x.id === prog.value); if (p?.days_per_week) dmin.value = String(p.days_per_week); } });
+  const prio = input({ type: 'number', min: '-100', max: '100', value: String(rule?.priority ?? 0), inputmode: 'numeric' });
+  dialog(rule ? 'Edit the rule' : 'Add a start-up rule', h('div', { class: 'stack' },
+    field('Program', prog, 'A program, not a template. Its days a week set the fewest days this rule can take.'),
+    field('Name', name),
+    h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Goals it fits'), goals.el, h('span', { class: 'small muted' }, 'None picked = any goal.')),
+    h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Experience it fits'), exp.el, h('span', { class: 'small muted' }, 'None picked = any experience.')),
+    h('div', { class: 'form-grid' }, field('Fewest days a week', dmin), field('Most days a week', dmax), field('Priority', prio, 'Higher wins when two rules fit.')),
+    h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Gear the program needs at home'), gear.el, h('span', { class: 'small muted' }, 'An athlete training at home without it gets another rule, or waits for a coach. At the facility everyone has everything.'))), [
+    { label: rule ? 'Save' : 'Add rule', variant: 'primary', onClick: async () => {
+      const body = { program_id: prog.value, name: name.value.trim() || null, goals: goals.value(), experience: exp.value(), days_min: Number(dmin.value), days_max: Number(dmax.value), equipment: gear.value(), priority: Number(prio.value) };
+      if (rule) await patch(`/v1/program-rules/${rule.id}`, body); else await post('/v1/program-rules', body);
+      toast(rule ? 'Rule saved.' : 'Rule added.'); deps.render();
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
+}
 function templatesPanel(templates, workoutTemplates, programs, edit) {
   if (!templates.length && !workoutTemplates.length) return panel('Templates', { subtitle: 'Save any program with Save as template, or any workout from its card, and start new ones from them here.' }, h('p', { class: 'muted small' }, 'No templates yet.'));
   return panel('Templates', { subtitle: 'Programs and workouts saved to start from. A template is never assigned or sold.' },

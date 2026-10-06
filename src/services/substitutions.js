@@ -1,6 +1,7 @@
 import { newId, v, notFound, badRequest, conflict } from '../util.js';
 import { ALT_TAGS } from './programs.js';
 import { insertSwaps } from './live.js';
+import { optOut } from './startup.js';
 
 // Exercise substitutions (version 57): for each exercise in the library a coach lists the swaps an athlete may pick on
 // their own (no barbell, knee, at home...). In the app, "Can't do this today?" on an exercise card offers that list;
@@ -55,12 +56,13 @@ export function athleteSwap(ctx, client, body = {}) {
   const id = insertSwaps(ctx, { client, slotIds: [slot.id], to: { id: alt.alt_exercise_id, name: alt.name }, insteadOf: slot.name, reason: TAGS[alt.tag] ?? alt.tag, sessionId: null, by: client.name.split(' ')[0], byKind: 'athlete', scope: 'workout' });
   return { id, workout_exercise_id: slot.id, exercise_id: alt.alt_exercise_id, exercise_name: alt.name, instead_of: slot.name, reason: TAGS[alt.tag] ?? alt.tag };
 }
-// Back to the plan: only a swap the athlete picked themself, on a workout not logged yet.
+// Back to the plan: only a swap the athlete picked themself or one made for their gear, on a workout not logged yet.
 export function athleteUnswap(ctx, client, id) {
   const sw = ctx.db.get(`SELECT s.id, s.by_kind, we.workout_id FROM exercise_swaps s JOIN workout_exercises we ON we.id = s.workout_exercise_id WHERE s.id = ? AND s.client_id = ?`, String(id), client.id);
   if (!sw) throw notFound('Swap');
-  if (sw.by_kind !== 'athlete') throw conflict('Your coach made this swap. Ask them if you need something else.');
+  if (!['athlete', 'equipment'].includes(sw.by_kind)) throw conflict('Your coach made this swap. Ask them if you need something else.');
   if (ctx.db.get('SELECT id FROM workout_logs WHERE client_id = ? AND workout_id = ?', client.id, sw.workout_id)) throw conflict('You already logged this workout.');
-  ctx.db.run('DELETE FROM exercise_swaps WHERE id = ?', sw.id);
+  if (sw.by_kind === 'equipment') optOut(ctx, client.id, sw.id);   // swapped for their gear: put back and remembered (startup.js)
+  else ctx.db.run('DELETE FROM exercise_swaps WHERE id = ?', sw.id);
   return { id: sw.id, deleted: true };
 }

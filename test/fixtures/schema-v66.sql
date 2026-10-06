@@ -1755,7 +1755,7 @@ CREATE TABLE IF NOT EXISTS exercise_swaps (
   session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL,
   created_by TEXT,
   created_at TEXT NOT NULL,
-  by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete','equipment')),   -- version 57: an athlete's own pick from the coach's list; version 67: swapped in for the gear the athlete has at home
+  by_kind TEXT NOT NULL DEFAULT 'coach' CHECK (by_kind IN ('coach','athlete')),   -- version 57: an athlete's own pick from the coach's list
   UNIQUE (client_id, workout_exercise_id)
 );
 -- Version 57: the swaps an athlete may pick on their own for an exercise (services/substitutions.js): "no barbell",
@@ -1803,48 +1803,4 @@ CREATE TABLE IF NOT EXISTS monthly_reports (
   created_at TEXT NOT NULL,
   updated_at TEXT,
   UNIQUE (client_id, month)
-);
--- Version 67: the athlete's training profile (services/startup.js): the start-up questions answered in the app or by a
--- coach (goal, experience, days a week, where they train, the gear they have at home) and what came of them (outcome:
--- assigned on their own, suggested for a coach, no_match, or coach = a coach places them). One row per athlete.
-CREATE TABLE IF NOT EXISTS training_profiles (
-  client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
-  goal TEXT,
-  sport TEXT,
-  experience TEXT CHECK (experience IN ('new','some','experienced')),
-  days_per_week INTEGER CHECK (days_per_week BETWEEN 1 AND 7),
-  training_days TEXT,   -- weekdays 0 (Sunday) to 6, comma list
-  trains_at TEXT CHECK (trains_at IN ('home','facility','both')),
-  equipment TEXT,       -- comma list from the exercise library's equipment tags; 'bodyweight' alone = nothing
-  note TEXT,
-  answered_by TEXT,     -- athlete, parent or coach
-  answered_at TEXT NOT NULL,
-  updated_at TEXT,
-  outcome TEXT CHECK (outcome IN ('assigned','suggested','no_match','coach')),
-  outcome_program_id TEXT REFERENCES programs(id) ON DELETE SET NULL,
-  outcome_rule_id TEXT,
-  outcome_at TEXT,
-  seen_at TEXT          -- a coach pressed Got it on Today
-);
--- Version 67: start-up rules (services/startup.js): which program an athlete's answers put them on. Owners and coaches
--- write them on the Programs page; the highest priority matching rule wins.
-CREATE TABLE IF NOT EXISTS program_rules (
-  id TEXT PRIMARY KEY,
-  program_id TEXT NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
-  name TEXT,
-  goals TEXT,           -- comma list; empty = any goal
-  experience TEXT,      -- comma list of new, some, experienced; empty = any
-  days_min INTEGER NOT NULL DEFAULT 1,
-  days_max INTEGER NOT NULL DEFAULT 7,
-  equipment TEXT,       -- gear the program needs at home; empty = none
-  priority INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
-);
--- Version 67: an equipment swap the athlete put back (so the app doesn't swap that slot for their gear again).
-CREATE TABLE IF NOT EXISTS swap_optouts (
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  workout_exercise_id TEXT NOT NULL REFERENCES workout_exercises(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (client_id, workout_exercise_id)
 );

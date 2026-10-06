@@ -22,7 +22,7 @@ export function daysPicker(initial = [], { min = 1, onChange } = {}) {
   const draw = () => fill(el, DAY_NAMES.map((n, d) => h('button', { type: 'button', class: 'td-day', 'aria-pressed': String(picked.has(d)), 'aria-label': ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d],
     onClick: () => { if (picked.has(d)) picked.delete(d); else picked.add(d); draw(); onChange?.(value()); } }, n)));
   draw();
-  return { el, value, problem: () => (value().length < min ? `Pick at least ${min} ${min === 1 ? 'day' : 'days'}: the program has ${min} a week.` : null) };
+  return { el, value, set: (days) => { picked.clear(); for (const d of days ?? []) picked.add(d); draw(); }, problem: () => (value().length < min ? `Pick at least ${min} ${min === 1 ? 'day' : 'days'}: the program has ${min} a week.` : null) };
 }
 // Start date and training days together. body() is what the API takes.
 export function scheduleFields({ start = todayStr(), days = null, need = 1 } = {}) {

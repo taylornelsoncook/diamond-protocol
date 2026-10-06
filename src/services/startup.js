@@ -21,6 +21,7 @@ import { sendEmail } from './mail.js';
 import { parseDays, daysNeeded, defaultDays, today as localToday } from './training-calendar.js';
 import * as programs from './programs.js';
 import { insertSwaps } from './live.js';
+import { notify as pushNotify } from './push.js';
 
 export const GOALS = { speed: 'Get faster', strength: 'Get stronger', power: 'Jump higher and hit harder', conditioning: 'Build my engine', general: 'Stay in shape', return: 'Come back from an injury' };
 export const EXPERIENCE = { new: 'New to training', some: 'A year or two', experienced: 'Three years or more' };
@@ -227,6 +228,7 @@ export function placeAthlete(ctx, client, who = { by: 'athlete' }) {
   const a = programs.assign(ctx, rule.program_id, c.id, localToday(ctx), { training_days: trainingDays });
   setOutcome(ctx, c.id, 'assigned', { programId: rule.program_id, ruleId: rule.id });
   emit(ctx, 'program.auto_assigned', { assignment_id: a.id, client_id: c.id, client_name: c.name, program_id: rule.program_id, program_name: rule.program_name, rule_id: rule.id, rule_name: rule.name, by: who.by, start_date: a.start_date, training_days: a.training_days });
+  pushNotify(ctx, c.id, { title: 'Your program is ready', body: `You're on ${rule.program_name}. Your first workout is in the app.`, url: '/app', kind: 'program' });
   tell(ctx, `${first(c.name)} started ${rule.program_name} on their own`, `${c.name} answered the start-up questions${who.by === 'parent' ? ' (a parent answered)' : ''}:\n${answers}\n\nThe rule "${rule.name ?? rule.program_name}" put them on ${rule.program_name}, starting ${a.start_date}. Their first workout is in the app now. You can switch them from their client page (Training tab).\n\n${biz}`);
   return { outcome: 'assigned', program, rule: { id: rule.id, name: rule.name }, assignment: a };
 }

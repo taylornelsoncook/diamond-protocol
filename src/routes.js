@@ -11,6 +11,7 @@ import * as substitutions from './services/substitutions.js';
 import * as startup from './services/startup.js';
 import * as cues from './services/cues.js';
 import * as adapt from './services/adapt.js';
+import * as push from './services/push.js';
 import * as routines from './services/routines.js';
 import * as monthly from './services/monthly.js';
 import * as exerciseimport from './services/exerciseimport.js';
@@ -753,6 +754,12 @@ export const routes = [
 
   // Client app (authenticated by the client's private link token)
   ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => r.client.archived_at ? { has_data: false, metrics: [], workouts: [], imports: 0 } : dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
+  // Push notifications (version 70, services/push.js): the phone subscribes from the app; the service worker asks what to show.
+  ['GET', '/app/api/push', 'client', 'Client app', 'Notifications: the server\'s public key to subscribe with, the phones subscribed, and the reminder hour.', (ctx, r) => push.status(ctx, r.client.id)],
+  ['POST', '/app/api/push/subscribe', 'client', 'Client app', 'Turn notifications on for this phone: subscription (what the browser\'s push manager answered: endpoint, keys.p256dh, keys.auth).', (ctx, r) => push.subscribe(ctx, r.client, r.body, { userAgent: r.userAgent ?? null }), 201],
+  ['POST', '/app/api/push/unsubscribe', 'client', 'Client app', 'Turn notifications off for this phone: endpoint.', (ctx, r) => push.unsubscribe(ctx, r.client, r.body)],
+  ['POST', '/app/api/push/test', 'client', 'Client app', 'Send yourself a test notification.', (ctx, r) => push.sendTest(ctx, r.client)],
+  ['POST', '/push/pending', 'public', 'Client app', 'The phone\'s service worker asks what to show after a push: endpoint (its own subscription). Answers the notices not yet shown and marks them shown.', (ctx, r) => push.pending(ctx, r.body, { ip: r.ip })],
   ['GET', '/app/api/exercises/:id/cue/audio', 'client', 'Client app', 'Your coach\'s recorded cue for an exercise (an audio file).', (ctx, r) => cues.audioFile(ctx, r.params.id)],
   ['GET', '/app/api/exercises/:id/cue/video', 'client', 'Client app', 'A short-lived address to play your coach\'s "why this matters" clip for an exercise.', (ctx, r) => cues.clipUrl(ctx, r.params.id)],
   ['GET', '/app/api/form-checks', 'client', 'Client app', 'Your form checks and the coach\'s answers, newest first, and whether sending is set up.', (ctx, r) => ({ data: formchecks.listForClient(ctx, r.client.id), ready: formchecks.config().ready, max_bytes: formchecks.MAX_BYTES, max_seconds: formchecks.MAX_SECONDS })],

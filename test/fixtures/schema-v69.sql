@@ -1899,29 +1899,3 @@ CREATE TABLE IF NOT EXISTS assignment_skips (
   created_at TEXT NOT NULL,
   PRIMARY KEY (assignment_id, workout_id)
 );
--- Version 70: push notifications for the athlete app (services/push.js). A phone's subscription (what the browser's
--- push manager answered) and the notices waiting to be shown on it; the push itself carries nothing, the phone asks.
-CREATE TABLE IF NOT EXISTS push_subscriptions (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  endpoint_hash TEXT NOT NULL UNIQUE,
-  endpoint TEXT NOT NULL,
-  p256dh TEXT NOT NULL,
-  auth TEXT NOT NULL,
-  user_agent TEXT,
-  created_at TEXT NOT NULL,
-  last_used_at TEXT,
-  failed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS push_subscriptions_client ON push_subscriptions(client_id);
-CREATE TABLE IF NOT EXISTS push_notices (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,       -- message, program, test, workout:<day>
-  title TEXT NOT NULL,
-  body TEXT,
-  url TEXT,
-  created_at TEXT NOT NULL,
-  shown_at TEXT
-);
-CREATE INDEX IF NOT EXISTS push_notices_client ON push_notices(client_id, shown_at);

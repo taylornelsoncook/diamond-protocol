@@ -263,6 +263,67 @@ function drawRest() {
 }
 
 // ---------- How ready the athlete is today ----------
+// ---------- On the home screen, and notifications (sw.js, push.js) ----------
+// The app installs like a native one (the manifest and the service worker); a push taps the athlete when the coach writes,
+// the first program is ready, or a workout is on today. Shown until both are done, then folded away (Settings keeps it).
+let installPrompt = null, swReg = null, pushState = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; if (state.home && state.tab === 'workout' && !editing()) render(); });
+if ('serviceWorker' in navigator && !embedded) navigator.serviceWorker.register('/sw.js', { scope: '/app' }).then((r) => { swReg = r; }).catch(() => {});
+const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+const pushSupported = () => 'PushManager' in window && 'Notification' in window && 'serviceWorker' in navigator;
+const keyBytes = (b64) => { const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b64.length / 4) * 4, '=')); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+async function pushStatus() {
+  if (pushState) return pushState;
+  const d = await api('GET', '/app/api/push');
+  const reg = swReg ?? (await navigator.serviceWorker?.ready?.catch?.(() => null));
+  const sub = await reg?.pushManager?.getSubscription?.().catch(() => null);
+  pushState = { ...d, on: !!sub && d.subscriptions.some((x) => sub.endpoint.includes(x.endpoint_host)), sub };
+  return pushState;
+}
+async function pushOn() {
+  if (!pushSupported()) throw new Error(isIOS() && !standalone() ? 'On iPhone, add the app to your home screen first (Share, then Add to Home Screen), then turn notifications on from there.' : 'This browser can\'t show notifications.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications were blocked. Allow them in the browser\'s settings for this site and try again.');
+  const reg = swReg ?? await navigator.serviceWorker.ready;
+  const { public_key } = await api('GET', '/app/api/push');
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(public_key) });
+  await api('POST', '/app/api/push/subscribe', { subscription: sub.toJSON() });
+  pushState = null;
+}
+async function pushOff() {
+  const reg = swReg ?? await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) { await api('POST', '/app/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+  pushState = null;
+}
+function installCard(home) {
+  if (embedded || !home?.client) return null;
+  const hide = store.get('dp_install_hidden') === true;
+  const box = h('div', { class: 'dp-panel stack-tight su-install', hidden: true });
+  (async () => {
+    const st = pushSupported() ? await pushStatus().catch(() => null) : null;
+    const installed = standalone(), notifOn = !!st?.on;
+    if (hide && (installed || !installPrompt) && (notifOn || !pushSupported())) return;   // nothing left to do, or folded away
+    const rows = [];
+    if (!installed) {
+      rows.push(h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, 'Put the app on your home screen'),
+        h('span', { class: 'small muted' }, installPrompt ? 'Opens full screen, like any app, and works with no signal.' : isIOS() ? 'In Safari: tap Share, then Add to Home Screen. It opens full screen and works with no signal.' : 'In your browser\'s menu, choose Install app or Add to Home screen.')),
+        installPrompt ? btn('Add', async (e) => { const p = installPrompt; installPrompt = null; await busy(e.currentTarget, async () => { p.prompt(); await p.userChoice; render(); }); }, 'secondary') : null));
+    }
+    if (pushSupported() || isIOS()) {
+      rows.push(h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, notifOn ? 'Notifications are on' : 'Notifications'),
+        h('span', { class: 'small muted' }, notifOn ? `A tap when your coach writes, and a nudge at ${st.reminder_hour > 12 ? `${st.reminder_hour - 12} pm` : `${st.reminder_hour} am`} on a day with a workout.` : 'Hear from your coach, and get a nudge on the days you train.')),
+        notifOn ? btn('Test', (e) => busy(e.currentTarget, async () => { await api('POST', '/app/api/push/test'); toast('Sent. It shows in a moment.'); }), 'ghost') : null,
+        notifOn ? btn('Turn off', (e) => busy(e.currentTarget, async () => { await pushOff(); toast('Notifications are off.'); render(); }), 'ghost')
+          : btn('Turn on', (e) => busy(e.currentTarget, async () => { await pushOn(); toast('Notifications are on.'); render(); }), 'secondary')));
+    }
+    if (!rows.length) return;
+    fill(box, ...rows, installed && notifOn ? null : h('div', { class: 'row', style: 'justify-content:flex-end' }, btn('Not now', () => { store.set('dp_install_hidden', true); box.hidden = true; }, 'ghost', { class: 'dp-btn dp-btn--ghost small' })));
+    box.hidden = false;
+  })().catch(() => {});
+  return box;
+}
 // ---------- The start-up questions and the athlete's gear (startup.js) ----------
 // First open with no program: a few questions, and the first program is ready (or the coach is told). Later, the same
 // form changes the gear on file; the program stays.
@@ -345,7 +406,7 @@ function render() {
   if (!w) {
     stopRest();
     fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
-      !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home),
+      !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home), home.locked ? null : installCard(home),
       strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
@@ -706,6 +767,7 @@ function renderLogger(w) {
     reopened ? null : readinessCard(home.readiness),
     reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
+    reopened ? null : installCard(home),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,
     reopened ? null : routineBlock(w.cooldown, 'Cool-down'),

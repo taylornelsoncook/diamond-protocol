@@ -33,6 +33,7 @@ const DEFAULTS = {
   readiness_sleep_red_min: '300',         // ...and under this, an easy day on its own (5 hours)
   readiness_hrv_drop_pct: '20',           // HRV this many percent under the athlete's 30-day average is a reason (5 to 60; 0 = ignore HRV)
   progression_mode: 'suggest',            // after two workouts hitting every set at the top of the range: suggest a step to the coach, auto (approve at once) or off
+  push_reminder_hour: '7',                // push notifications (version 70): the hour (business time) the day's workout reminder goes out
   adapt_mode: 'suggest',                  // the adaptive plan (version 69): suggest to the coach, auto (applied at once) or off
   adapt_minimum_streak: '3',              // misses in a row that make the rest of the week a minimum week (2 to 6)
   auto_program: 'auto',                   // the start-up questions (version 67): auto puts the athlete on the matching program at once, review waits for a coach on Today, off asks nothing of the rules
@@ -91,6 +92,7 @@ export function updateSettings(ctx, body) {
   if (body.readiness_hrv_drop_pct !== undefined) { const n = v.int(body.readiness_hrv_drop_pct, 'readiness_hrv_drop_pct', { min: 0, max: 60 }); if (n && n < 5) throw badRequest('The HRV drop is 5 to 60 percent, or 0 to ignore HRV.'); next.readiness_hrv_drop_pct = String(n); }
   if (body.progression_mode !== undefined) next.progression_mode = v.oneOf(String(body.progression_mode), 'progression_mode', ['suggest', 'auto', 'off']);
   if (body.auto_program !== undefined) next.auto_program = v.oneOf(String(body.auto_program), 'auto_program', ['auto', 'review', 'off']);
+  if (body.push_reminder_hour !== undefined) next.push_reminder_hour = String(v.int(body.push_reminder_hour, 'push_reminder_hour', { min: 5, max: 20 }));
   if (body.adapt_mode !== undefined) next.adapt_mode = v.oneOf(String(body.adapt_mode), 'adapt_mode', ['suggest', 'auto', 'off']);
   if (body.adapt_minimum_streak !== undefined) next.adapt_minimum_streak = String(v.int(body.adapt_minimum_streak, 'adapt_minimum_streak', { min: 2, max: 6 }));
   if (body.progression_upper_lb !== undefined) next.progression_upper_lb = String(v.int(body.progression_upper_lb, 'progression_upper_lb', { min: 1, max: 50 }));

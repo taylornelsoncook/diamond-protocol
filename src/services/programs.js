@@ -860,6 +860,12 @@ export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)
   const pick = pickNext(calendar.workouts, calendar.today);
   return { assignment: a, program, left, next: pick ? dated(pick) : null, calendar };
 }
+// Today's workout, not yet logged, for the morning push reminder (push.js): { title, program, exercises } or null.
+export function workoutToday(ctx, clientId) {
+  const own = nextWorkoutFor(ctx, clientId);
+  const w = own?.calendar.workouts.find((x) => x.status === 'today');
+  return w ? { title: w.title, program: own.program.name, exercises: w.exercises } : null;
+}
 // Form checks asked in the plan (workout_exercises.form_check): whether this athlete has sent one for each such slot
 // (any clip that finished uploading; the coach may not have answered yet).
 function withAsks(ctx, clientId, exercises) {

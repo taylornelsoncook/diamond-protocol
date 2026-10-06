@@ -10,6 +10,7 @@ import * as live from './services/live.js';
 import * as substitutions from './services/substitutions.js';
 import * as startup from './services/startup.js';
 import * as cues from './services/cues.js';
+import * as adapt from './services/adapt.js';
 import * as routines from './services/routines.js';
 import * as monthly from './services/monthly.js';
 import * as exerciseimport from './services/exerciseimport.js';
@@ -151,6 +152,12 @@ export const routes = [
   ['POST', '/v1/progressions/:id/approve', 'session', 'Training', 'Approve a suggested step: it applies to that athlete\'s workouts from now on, on top of the plan.', (ctx, r) => progression.decide(ctx, r.params.id, 'approve', r.user)],
   ['POST', '/v1/progressions/:id/dismiss', 'session', 'Training', 'Dismiss a suggested step (a new one needs two more good workouts).', (ctx, r) => progression.decide(ctx, r.params.id, 'dismiss', r.user)],
   ['POST', '/v1/clients/:id/progressions', 'session', 'Training', 'Add a step by hand for one athlete: exercise_id, kind (weight, reps, sets), amount (pounds, reps a set or sets; a minus takes some off). Applies at once.', (ctx, r) => progression.add(ctx, r.params.id, r.body, r.user), 201],
+  // The adaptive plan (version 69, services/adapt.js): one athlete's calendar bends around what they did. Owners and coaches.
+  ['GET', '/v1/plan-adjustments', 'session', 'Training', 'The adaptive plan\'s suggestions and changes: status=suggested|approved|dismissed|undone, client_id. Kinds: shift (a missed week comes round again), minimum (half the sets for the rest of the week after misses in a row), advance (the next phase early after two clean weeks). settings says the mode and the streak.', (ctx, r) => ({ data: adapt.list(ctx, { clientId: r.query.client_id, status: r.query.status, limit: r.query.limit }), settings: adapt.settings(ctx) })],
+  ['POST', '/v1/plan-adjustments/:id/approve', 'session', 'Training', 'Make the change on the athlete\'s calendar.', (ctx, r) => adapt.apply(ctx, r.params.id, r.user)],
+  ['POST', '/v1/plan-adjustments/:id/dismiss', 'session', 'Training', 'Not this time (the same suggestion waits a week, or for the next phase).', (ctx, r) => adapt.dismiss(ctx, r.params.id, r.user)],
+  ['DELETE', '/v1/plan-adjustments/:id', 'session', 'Training', 'Undo a change: the calendar goes back as it was (logged workouts are never touched). A suggestion is dismissed.', (ctx, r) => adapt.undo(ctx, r.params.id, r.user)],
+  ['POST', '/v1/clients/:id/plan-adjustments/check', 'session', 'Training', 'Look at this athlete\'s calendar now and suggest (or in auto mode make) what it calls for.', (ctx, r) => ({ data: adapt.checkAthlete(ctx, r.params.id, { by: r.user?.name }) })],
   ['DELETE', '/v1/progressions/:id', 'session', 'Training', 'Take a step back out (or drop a suggestion).', (ctx, r) => progression.remove(ctx, r.params.id, r.user)],
   // Form checks (version 53): owners and coaches watch and answer, signed in only (never an API key; front desk isn't on the allow-list). The clips live in a private bucket.
   ['GET', '/v1/form-checks/status', 'session', 'Clients', 'Whether form-check clips are set up (the private bucket), how long clips are kept, and how many are waiting.', (ctx) => formchecks.status(ctx)],

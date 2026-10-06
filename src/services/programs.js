@@ -12,6 +12,7 @@ import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday, weekO
 import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
 import { equipmentSwaps, getProfile as trainingProfile } from './startup.js';
 import { cuesFor } from './cues.js';
+import { activeMinimum, forAthlete as adjustmentsFor, checkAthlete as adaptAfterLog } from './adapt.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -830,16 +831,18 @@ function reopenId(ctx, clientId) {
 // One exercise as the app shows it: today's weight from a tested max, sets and reps to log, last time and best weight.
 // One exercise as the app shows it: the plan, today's weight (lighter on a rough day), an easy day's sets taken off
 // (never below one), and the coach-approved steps for this athlete on top (progression.js).
-export function appExercise(ctx, clientId, x0, readiness, swaps = null) {
+// minimum: a minimum week (adapt.js) halves the sets, never below one, before an easy day's cut.
+export function appExercise(ctx, clientId, x0, readiness, swaps = null, { minimum = false } = {}) {
   const x = slotFor(x0, swaps?.get(x0.id));
   const drop = readiness?.drop ?? 0, setsOff = readiness?.sets_off ?? 0;
   const rx = parseRx(x);
   const step = appliedFor(ctx, clientId, x.exercise_id);
   const load = loadFor(ctx, clientId, x, { visibleOnly: true, drop });
   if (load && load.lb != null && step?.weight_lb) { load.lb = Math.max(5, load.lb + step.weight_lb); load.text = `${load.lb} lb (${load.text.replace(/^\d+ lb \((.*)\)$/, '$1')}, ${step.weight_lb > 0 ? '+' : ''}${step.weight_lb} lb from your progression)`; }
-  const planned = Math.min(MAX_SETS, rx.sets + (step?.sets ?? 0));
+  const full = Math.min(MAX_SETS, rx.sets + (step?.sets ?? 0));
+  const planned = minimum ? Math.max(1, Math.ceil(full / 2)) : full;
   const targetSets = Math.max(1, planned - setsOff);
-  return { ...x, load, target_sets: targetSets, ...(targetSets < planned ? { planned_sets: planned } : {}), target_reps: rx.reps == null ? null : Math.max(1, rx.reps + (step?.reps ?? 0)),
+  return { ...x, load, target_sets: targetSets, ...(targetSets < full ? { planned_sets: full } : {}), ...(minimum ? { minimum_week: true } : {}), target_reps: rx.reps == null ? null : Math.max(1, rx.reps + (step?.reps ?? 0)),
     progression: step, last: lastTime(ctx, clientId, x.exercise_id), best_weight: bestWeight(ctx, clientId, x.exercise_id) };
 }
 
@@ -853,7 +856,7 @@ export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)
   const calendar = datedWorkouts(ctx, a, program);
   const byId = new Map(program.workouts.map((w) => [w.id, w]));
   const dated = (item) => ({ ...byId.get(item.id), date: item.date, status: item.status, moved: item.moved });
-  const left = calendar.workouts.filter((w) => w.status !== 'done').map(dated);
+  const left = calendar.workouts.filter((w) => w.status !== 'done' && w.status !== 'skipped').map(dated);
   const pick = pickNext(calendar.workouts, calendar.today);
   return { assignment: a, program, left, next: pick ? dated(pick) : null, calendar };
 }
@@ -893,9 +896,10 @@ export function clientHome(ctx, client, { at = null } = {}) {
   return {
     ...base, locked: false,
     program: { id: program.id, name: program.name, weeks: program.weeks },
-    progress: { completed: program.workouts.length - left.length, total: program.workouts.length, missed: cal.counts.missed },
+    progress: { completed: cal.counts.done, total: cal.counts.total, missed: cal.counts.missed, skipped: cal.counts.skipped },
     readiness,
     startup: startupState(ctx, client.id, true),
+    adjustments: adjustmentsFor(ctx, client.id),   // a minimum week in force, and what the adaptive plan changed this week (adapt.js)
     workout: next && appWorkout(ctx, client.id, next, readiness, { at }),
     upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
     calendar: cal,
@@ -906,7 +910,8 @@ export function clientHome(ctx, client, { at = null } = {}) {
 // A workout as the athlete does it today: each exercise with their weight, steps, swaps and form-check asks.
 function appWorkout(ctx, clientId, w, readiness, { at = null } = {}) {
   const swaps = equipmentSwaps(ctx, clientId, w, swapsFor(ctx, clientId, w.id), { at });   // the gear the athlete has at home (startup.js)
-  const items = w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }));
+  const minimum = !!activeMinimum(ctx, clientId);
+  const items = w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps, { minimum }), alternatives: alternativesFor(ctx, x) }));
   const cues = cuesFor(ctx, items.map((x) => x.exercise_id));   // the coach's recorded cue and clip for the exercise they do (cues.js)
   return { ...w, exercises: withAsks(ctx, clientId, items.map((x) => ({ ...x, cue: cues.get(x.exercise_id) ?? null }))) };
 }
@@ -972,6 +977,7 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
   });
   let progressions = [];
   try { progressions = suggestAfterLog(ctx, client, id); } catch (e) { console.error('progression check:', e.message); }   // a suggestion is never worth failing the save
+  try { adaptAfterLog(ctx, client.id); } catch (e) { console.error('adaptive plan check:', e.message); }                   // a clean fortnight can offer the next phase (adapt.js)
   let newMaxes = [];
   try { newMaxes = maxSuggestions(ctx, client.id); } catch (e) { console.error('max estimate:', e.message); }   // a suggestion is never worth failing the save
   return { id, finished: { ...finishedSummary(ctx, id), progressions: progressions.map((p) => ({ exercise_name: p.exercise_name, text: p.text, status: p.status })), new_maxes: newMaxes }, next: clientHome(ctx, client) };

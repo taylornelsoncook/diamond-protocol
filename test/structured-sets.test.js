@@ -234,7 +234,7 @@ test('a version 48 database gains the fields and its prescriptions are split, op
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 68, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 69, `round ${round}`);
       const rows = d.all('SELECT id, prescription, sets, reps, load_text, target_rpe, load_test, load_pct, group_label FROM workout_exercises ORDER BY position').map((r) => ({ ...r }));
       assert.deepEqual(rows, [
         { id: 'wex_1', prescription: '3 × 8 @ 135 lb', sets: 3, reps: '8', load_text: '135 lb', target_rpe: null, load_test: null, load_pct: null, group_label: null },

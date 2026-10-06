@@ -33,6 +33,7 @@ import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
 import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
 import { cleanup as cleanupCues } from './services/cues.js';
+import { runAdapt } from './services/adapt.js';
 import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
@@ -227,6 +228,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
   runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx), cues: await cleanupCues(ctx) }));
   runner.define('monthly-reports', HOUR, () => runMonthly(ctx));
+  runner.define('plan-adapt', HOUR, () => runAdapt(ctx));   // the adaptive plan: a missed week, misses in a row, two clean weeks (adapt.js)
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };

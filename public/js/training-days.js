@@ -11,7 +11,7 @@ export const dayText = (days) => (days ?? []).map((d) => DAY_NAMES[d]).join(', '
 // A calendar date (2026-10-05) as words, never shifted by the browser's time zone.
 export const fmtDay = (d, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts }) : '');
 export const todayStr = () => new Date().toLocaleDateString('en-CA');
-const STATUS = { done: ['Done', 'dp-badge--good'], today: ['Today', 'dp-badge--neutral'], missed: ['Missed', 'dp-badge--warn'], upcoming: ['Coming up', 'dp-badge--muted'] };
+const STATUS = { done: ['Done', 'dp-badge--good'], today: ['Today', 'dp-badge--neutral'], missed: ['Missed', 'dp-badge--warn'], upcoming: ['Coming up', 'dp-badge--muted'], skipped: ['Skipped', 'dp-badge--muted'] };
 export const statusBadge = (st) => h('span', { class: `dp-badge ${STATUS[st]?.[1] ?? 'dp-badge--muted'}` }, STATUS[st]?.[0] ?? st);
 
 // Seven toggles. value() answers the picked weekdays, Sunday 0 to Saturday 6.

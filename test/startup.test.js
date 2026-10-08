@@ -231,7 +231,7 @@ test('a version 66 database gains the start-up tables and the equipment swap kin
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 67, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 68, `round ${round}`);
       if (round === 1) assert.deepEqual(d.get('SELECT by_kind, reason FROM exercise_swaps WHERE id = ?', 'swap_1'), { by_kind: 'athlete', reason: 'Knee' }, 'the swap survives the rebuild');
       d.run(`INSERT INTO exercise_swaps (id, client_id, workout_exercise_id, exercise_id, reason, created_at, by_kind) VALUES (?, 'cli_1', 'we_1', 'ex_2', 'No barbell at home', ?, 'equipment') ON CONFLICT (client_id, workout_exercise_id) DO UPDATE SET by_kind = excluded.by_kind`, `swap_${round}`, '2026-03-01T00:00:00.000Z');
       assert.equal(d.get('SELECT by_kind FROM exercise_swaps WHERE workout_exercise_id = ?', 'we_1').by_kind, 'equipment');

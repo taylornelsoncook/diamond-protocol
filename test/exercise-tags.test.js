@@ -82,7 +82,7 @@ test('a version 63 database gains the tag columns, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 67, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 68, `round ${round}`);
       const cols = d.all('PRAGMA table_info(exercises)').map((c) => c.name);
       assert.ok(['movement', 'muscles', 'equipment'].every((c) => cols.includes(c)));
       assert.equal(d.get('SELECT movement FROM exercises WHERE id = ?', 'ex_1').movement, null);

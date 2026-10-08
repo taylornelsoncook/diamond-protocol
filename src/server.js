@@ -32,6 +32,7 @@ import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
 import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
+import { cleanup as cleanupCues } from './services/cues.js';
 import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
@@ -116,7 +117,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       const r = { params: url.pathname.match(route.regex).groups ?? {}, query: Object.fromEntries(url.searchParams), body: {}, baseUrl };
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview', '/v1/leads/import', '/v1/data-imports/preview', '/v1/data-imports', '/v1/programs/import/draft', '/v1/exercises/import/preview', '/v1/exercises/import'].includes(url.pathname)
-        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? (/data-imports/.test(url.pathname) ? 90_000_000 : 30_000_000) : 1_000_000);   // files come base64-encoded; Apple Health and Fitbit zips are big
+        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? (/data-imports/.test(url.pathname) ? 90_000_000 : 30_000_000) : /^\/v1\/exercises\/[^/]+\/cue\/audio$/.test(url.pathname) ? 4_000_000 : 1_000_000);   // a coach's recorded cue, base64   // files come base64-encoded; Apple Health and Fitbit zips are big
       const ip = clientIp(req);
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
@@ -187,7 +188,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       // A public route that hands the person on (a wearable's sign-in coming back): a redirect instead of JSON.
       if (out?.__redirect && route.auth === 'public') { res.writeHead(302, { location: out.__redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
       if (out?.__file) {
-        res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': `attachment; filename="${out.__file.filename}"`, 'cache-control': 'no-store' });
+        res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': out.__file.inline ? 'inline' : `attachment; filename="${out.__file.filename}"`, 'cache-control': out.__file.cache ?? 'no-store', ...(out.__file.inline && out.__file.body ? { 'content-length': String(out.__file.body.length) } : {}) });
         if (out.__file.stream) return out.__file.stream.pipe(res);
         return res.end(out.__file.body);
       }
@@ -224,7 +225,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
-  runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx) }));
+  runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx), cues: await cleanupCues(ctx) }));
   runner.define('monthly-reports', HOUR, () => runMonthly(ctx));
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });

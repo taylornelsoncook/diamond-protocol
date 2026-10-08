@@ -11,6 +11,7 @@ import { trimPhases, copyPhases } from './planner.js';
 import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday, weekOf, weekStats } from './training-calendar.js';
 import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
 import { equipmentSwaps, getProfile as trainingProfile } from './startup.js';
+import { cuesFor } from './cues.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -67,7 +68,8 @@ export function listExercises(ctx, { q, category: cat, filter, movement, muscle,
   const needle = String(q ?? '').trim().toLowerCase();
   const uses = new Map(ctx.db.all('SELECT exercise_id, COUNT(*) AS n FROM workout_exercises GROUP BY exercise_id').map((r) => [r.exercise_id, r.n]));
   const mv = movement ? String(movement).toLowerCase() : null, mu = muscle ? String(muscle).toLowerCase() : null, eq = equipment ? String(equipment).toLowerCase() : null;
-  return ctx.db.all('SELECT e.* FROM exercises e ORDER BY e.name COLLATE NOCASE').map((e) => ({ ...shapeExercise(e), uses: uses.get(e.id) ?? 0 }))
+  const cueOf = cuesFor(ctx, ctx.db.all('SELECT exercise_id FROM exercise_cues').map((r) => r.exercise_id));
+  return ctx.db.all('SELECT e.* FROM exercises e ORDER BY e.name COLLATE NOCASE').map((e) => ({ ...shapeExercise(e), uses: uses.get(e.id) ?? 0, cue: cueOf.get(e.id) ?? null }))
     .map((e) => ({ ...e, programs: inPrograms.get(e.id) ?? [] }))
     .filter((e) => (!needle || e.name.toLowerCase().includes(needle) || (e.instructions ?? '').toLowerCase().includes(needle))
       && (!cat || e.category === cat) && (filter !== 'no_video' || !e.video_url) && (filter !== 'unused' || !e.uses)
@@ -904,7 +906,9 @@ export function clientHome(ctx, client, { at = null } = {}) {
 // A workout as the athlete does it today: each exercise with their weight, steps, swaps and form-check asks.
 function appWorkout(ctx, clientId, w, readiness, { at = null } = {}) {
   const swaps = equipmentSwaps(ctx, clientId, w, swapsFor(ctx, clientId, w.id), { at });   // the gear the athlete has at home (startup.js)
-  return { ...w, exercises: withAsks(ctx, clientId, w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }))) };
+  const items = w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }));
+  const cues = cuesFor(ctx, items.map((x) => x.exercise_id));   // the coach's recorded cue and clip for the exercise they do (cues.js)
+  return { ...w, exercises: withAsks(ctx, clientId, items.map((x) => ({ ...x, cue: cues.get(x.exercise_id) ?? null }))) };
 }
 // A workout the athlete picked on the calendar (a missed one, or a day ahead) instead of the one the app opened on.
 export function openWorkout(ctx, client, workoutId, { at = null } = {}) {

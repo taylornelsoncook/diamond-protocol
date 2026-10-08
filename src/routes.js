@@ -9,6 +9,7 @@ import * as progression from './services/progression.js';
 import * as live from './services/live.js';
 import * as substitutions from './services/substitutions.js';
 import * as startup from './services/startup.js';
+import * as cues from './services/cues.js';
 import * as routines from './services/routines.js';
 import * as monthly from './services/monthly.js';
 import * as exerciseimport from './services/exerciseimport.js';
@@ -272,7 +273,17 @@ export const routes = [
   ['POST', '/v1/exercises/import', 'session', 'Training', 'Owner: bring the list in, all or nothing (the same fields as the preview; checked again first).', (ctx, r) => exerciseimport.saveExerciseImport(ctx, r.body), 201],
   ['POST', '/v1/exercises', 'any', 'Training', 'Add an exercise: name (not already in the library), video_url (YouTube, Vimeo or a direct video file), poster_url (the still shown before a video file plays), instructions, category.', (ctx, r) => programs.createExercise(ctx, r.body), 201],
   ['PATCH', '/v1/exercises/:id', 'any', 'Training', 'Update an exercise.', (ctx, r) => programs.updateExercise(ctx, r.params.id, r.body)],
-  ['DELETE', '/v1/exercises/:id', 'any', 'Training', 'Delete an exercise no workout uses. Sets athletes logged keep its name.', (ctx, r) => programs.deleteExercise(ctx, r.params.id)],
+  ['DELETE', '/v1/exercises/:id', 'any', 'Training', 'Delete an exercise no workout uses. Sets athletes logged keep its name.', async (ctx, r) => { await cues.forgetExercise(ctx, r.params.id); return programs.deleteExercise(ctx, r.params.id); }],
+  // The coach's cue (version 68, services/cues.js): a recording the app plays when the exercise opens, its words, and a short clip.
+  ['GET', '/v1/exercises/:id/cue', 'any', 'Training', 'The coach\'s cue for an exercise: whether a recording and a clip are on file, who made them and when, the words read aloud without a recording (transcript, else the exercise\'s cue text), and the limits.', (ctx, r) => cues.getCue(ctx, r.params.id)],
+  ['GET', '/v1/exercises/:id/cue/audio', 'any', 'Training', 'The recorded cue itself (an audio file).', (ctx, r) => cues.audioFile(ctx, r.params.id)],
+  ['PUT', '/v1/exercises/:id/cue/audio', 'any', 'Training', 'Save a recorded cue (owner and coach): audio_base64, content_type (audio/webm, audio/mp4, audio/mpeg, audio/ogg, audio/wav), duration_s (up to 60), transcript (what was said). Up to 2 MB; replaces the one on file.', (ctx, r) => cues.saveAudio(ctx, r.params.id, r.body, r.user)],
+  ['DELETE', '/v1/exercises/:id/cue/audio', 'any', 'Training', 'Remove the recorded cue (the words stay).', (ctx, r) => cues.removeAudio(ctx, r.params.id)],
+  ['PATCH', '/v1/exercises/:id/cue', 'any', 'Training', 'The words of the cue (transcript, up to 1,000 characters; empty falls back to the exercise\'s cue text).', (ctx, r) => cues.saveTranscript(ctx, r.params.id, r.body)],
+  ['POST', '/v1/exercises/:id/cue/clip', 'any', 'Training', 'Add a short "why this matters" clip, step 1 (owner and coach): content_type (MP4, MOV, WebM), bytes (up to 60 MB), duration_s (up to 20). Answers a one-time address to upload the file to.', (ctx, r) => cues.startClip(ctx, r.params.id, r.body, r.user), 201],
+  ['POST', '/v1/exercises/:id/cue/clip/done', 'any', 'Training', 'Step 2: the clip is uploaded. It is checked and replaces the one on file.', (ctx, r) => cues.finishClip(ctx, r.params.id, r.user)],
+  ['GET', '/v1/exercises/:id/cue/video', 'any', 'Training', 'A short-lived address to play the cue clip.', (ctx, r) => cues.clipUrl(ctx, r.params.id)],
+  ['DELETE', '/v1/exercises/:id/cue/clip', 'any', 'Training', 'Remove the cue clip.', (ctx, r) => cues.removeClip(ctx, r.params.id)],
   ['GET', '/v1/programs', 'any', 'Training', 'List programs with workout and client counts, days per week and workouts logged in the last 7 days. ?kind=template lists program templates instead.', (ctx, r) => list(programs.listPrograms(ctx, { kind: r.query.kind || 'program' }))],
   ['POST', '/v1/programs', 'any', 'Training', 'Create a program: name, weeks, level, description. copy_from (a program or template id) starts it as a copy of that one\'s workouts and phases. kind: template makes a program template (never assigned or sold).', (ctx, r) => programs.createProgram(ctx, r.body), 201],
   ['GET', '/v1/workout-templates', 'any', 'Training', 'Workout templates: name, exercises, warm-up and cool-down. Start a day from one with template_id on POST /v1/programs/:id/workouts.', (ctx) => list(programs.listWorkoutTemplates(ctx))],
@@ -735,6 +746,8 @@ export const routes = [
 
   // Client app (authenticated by the client's private link token)
   ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => r.client.archived_at ? { has_data: false, metrics: [], workouts: [], imports: 0 } : dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
+  ['GET', '/app/api/exercises/:id/cue/audio', 'client', 'Client app', 'Your coach\'s recorded cue for an exercise (an audio file).', (ctx, r) => cues.audioFile(ctx, r.params.id)],
+  ['GET', '/app/api/exercises/:id/cue/video', 'client', 'Client app', 'A short-lived address to play your coach\'s "why this matters" clip for an exercise.', (ctx, r) => cues.clipUrl(ctx, r.params.id)],
   ['GET', '/app/api/form-checks', 'client', 'Client app', 'Your form checks and the coach\'s answers, newest first, and whether sending is set up.', (ctx, r) => ({ data: formchecks.listForClient(ctx, r.client.id), ready: formchecks.config().ready, max_bytes: formchecks.MAX_BYTES, max_seconds: formchecks.MAX_SECONDS })],
   ['POST', '/app/api/form-checks', 'client', 'Client app', 'Send a form check, step 1: content_type, bytes, duration_s, note, and workout_exercise_id or exercise_id. Answers a one-time address to upload the clip to (PUT, 15 minutes); then call /done.', (ctx, r) => formchecks.startUpload(ctx, r.client, r.body), 201],
   ['POST', '/app/api/form-checks/:id/done', 'client', 'Client app', 'Send a form check, step 2: the clip is uploaded. It is checked and the coach is told.', (ctx, r) => formchecks.finishUpload(ctx, r.client, r.params.id)],

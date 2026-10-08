@@ -282,6 +282,12 @@ td .dp-badge{white-space:nowrap}
 .td-day{min-width:46px;min-height:40px;padding:0 6px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel-muted);font:600 13px/1 var(--font-sans);cursor:pointer}
 .td-day[aria-pressed="true"]{background:var(--green-deep);color:var(--green-soft);border-color:var(--green-mid)}
 .td-day:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+/* The start-up questions (startup-ui.js): a row of toggles for a goal, experience, where, gear */
+.su-choices{display:flex;gap:6px;flex-wrap:wrap}
+.su-choice{min-height:44px;padding:0 14px;border:1px solid var(--control-border);border-radius:999px;background:var(--surface);color:var(--steel);font:500 14px/1 var(--font-sans);cursor:pointer}
+.su-choice[aria-checked="true"]{background:var(--green-deep);color:var(--green-soft);border-color:var(--green-mid)}
+.su-choice:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}
+.su-rule{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
 .tc-row{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 0;border-top:1px solid var(--line-subtle);flex-wrap:wrap}
 .tc-row--today{background:var(--surface)}
 .tc-date{min-width:110px;font-variant-numeric:tabular-nums}

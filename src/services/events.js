@@ -22,7 +22,8 @@ export const EVENT_TYPES = [
   'form_check.sent', 'form_check.answered',   // version 53 (form checks)
   'progression.suggested', 'progression.approved',   // version 55 (progression steps)
   'exercise.swapped',   // version 56 (the live session view)
-  'monthly_report.sent'   // version 59 (monthly parent reports)
+  'monthly_report.sent',   // version 59 (monthly parent reports)
+  'startup.answered', 'program.auto_assigned'   // version 67 (the start-up questions)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -94,6 +95,8 @@ const INFO = {
   'monthly_report.sent': ['A monthly progress report was emailed to an athlete\'s parents (by a coach, or on its own in auto mode).', { report_id: 'mrep_sample', ...C, month: '2026-08', parents: 2, by: 'Riley' }],
   'form_check.sent': ['An athlete sends a form-check clip from the app.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', bytes: 24000000 }],
   'form_check.answered': ['A coach answers a form check.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', coach_name: 'Head Coach' }],
+  'startup.answered': ['An athlete (or a parent, or a coach for them) answered the start-up questions: goal, experience, days a week, where they train and the gear they have.', { ...C, by: 'athlete', goal: 'speed', experience: 'new', days_per_week: 3, trains_at: 'home', equipment: ['dumbbell', 'band'] }],
+  'program.auto_assigned': ['A start-up rule put an athlete on a program from their answers (by: athlete or parent), or a coach approved the suggested one (by: coach).', { assignment_id: 'asg_sample', ...C, program_id: 'prog_sample', program_name: 'Youth Speed Foundations', rule_id: 'rule_sample', rule_name: 'New to speed, 3 days', by: 'athlete', start_date: '2026-10-05', training_days: [1, 3, 5] }],
   'client.claimed': ['A parent adds a team athlete to their family with the Athlete ID (name and birthday matched).', { ...C, athlete_id: 'AVALOP2026', family_id: 'fam_sample', guardian_name: 'Maria Lopez' }]
 };
 export const EVENT_INFO = Object.fromEntries(EVENT_TYPES.map((t) => [t, { about: INFO[t]?.[0] ?? '', sample: INFO[t]?.[1] ?? {} }]));

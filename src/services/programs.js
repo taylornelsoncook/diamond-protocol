@@ -10,6 +10,7 @@ import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, 
 import { trimPhases, copyPhases } from './planner.js';
 import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday, weekOf, weekStats } from './training-calendar.js';
 import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
+import { equipmentSwaps, getProfile as trainingProfile } from './startup.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -867,13 +868,23 @@ function alternativesFor(ctx, x) {
   return ctx.db.all(`SELECT a.id, a.alt_exercise_id AS exercise_id, e.name, a.tag, a.note FROM exercise_alternatives a JOIN exercises e ON e.id = a.alt_exercise_id WHERE a.exercise_id = ? ORDER BY e.name COLLATE NOCASE`, x.exercise_id)
     .map((a) => ({ ...a, tag_label: ALT_TAGS[a.tag] ?? a.tag }));
 }
-export function clientHome(ctx, client) {
+// What the start-up questions (startup.js) mean for the home screen: with no program, whether to ask them, and what
+// to say while a coach is choosing.
+const NO_PROGRAM_TEXT = { no_match: 'Your answers are with your coach. They\'re picking the right program for you.', suggested: 'Your answers are with your coach. They\'re picking the right program for you.', coach: 'Your coach is building your program. Check back soon.' };
+function startupState(ctx, clientId, hasProgram) {
+  const profile = trainingProfile(ctx, clientId);
+  const gear = profile?.equipment_answered ? { trains_at: profile.trains_at, equipment: profile.equipment, labels: profile.equipment_labels } : null;
+  return { profile: profile ? { goal: profile.goal, goal_label: profile.goal_label, experience: profile.experience, days_per_week: profile.days_per_week, training_days: profile.training_days, trains_at: profile.trains_at, equipment: profile.equipment, outcome: profile.outcome, answered_at: profile.answered_at } : null,
+    gear, needed: !hasProgram && !profile, message: hasProgram ? null : NO_PROGRAM_TEXT[profile?.outcome] ?? (profile ? NO_PROGRAM_TEXT.suggested : 'Answer a few questions and your first program is ready.') };
+}
+// at: 'home' when a "both" athlete says they're training at home today (the gear swaps apply).
+export function clientHome(ctx, client, { at = null } = {}) {
   const access = appAccess(ctx, client);
   const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status };
   if (!access.open) return { ...base, locked: true, message: access.message };
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
   const own = nextWorkoutFor(ctx, client.id);
-  if (!own) return { ...base, locked: false, program: null, history, reopen_id, upcoming: [], message: 'Your coach is building your program. Check back soon.' };
+  if (!own) { const st = startupState(ctx, client.id, false); return { ...base, locked: false, program: null, history, reopen_id, upcoming: [], startup: st, message: st.message }; }
   const { program, left, next, calendar } = own;
   const readiness = next ? readinessToday(ctx, client.id) : null;
   const { dates, moves, ...cal } = calendar;
@@ -882,7 +893,8 @@ export function clientHome(ctx, client) {
     program: { id: program.id, name: program.name, weeks: program.weeks },
     progress: { completed: program.workouts.length - left.length, total: program.workouts.length, missed: cal.counts.missed },
     readiness,
-    workout: next && appWorkout(ctx, client.id, next, readiness),
+    startup: startupState(ctx, client.id, true),
+    workout: next && appWorkout(ctx, client.id, next, readiness, { at }),
     upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
     calendar: cal,
     history, reopen_id,
@@ -890,12 +902,12 @@ export function clientHome(ctx, client) {
   };
 }
 // A workout as the athlete does it today: each exercise with their weight, steps, swaps and form-check asks.
-function appWorkout(ctx, clientId, w, readiness) {
-  const swaps = swapsFor(ctx, clientId, w.id);
+function appWorkout(ctx, clientId, w, readiness, { at = null } = {}) {
+  const swaps = equipmentSwaps(ctx, clientId, w, swapsFor(ctx, clientId, w.id), { at });   // the gear the athlete has at home (startup.js)
   return { ...w, exercises: withAsks(ctx, clientId, w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps), alternatives: alternativesFor(ctx, x) }))) };
 }
 // A workout the athlete picked on the calendar (a missed one, or a day ahead) instead of the one the app opened on.
-export function openWorkout(ctx, client, workoutId) {
+export function openWorkout(ctx, client, workoutId, { at = null } = {}) {
   const access = appAccess(ctx, client);
   if (!access.open) throw conflict(access.message);
   const own = nextWorkoutFor(ctx, client.id);
@@ -904,7 +916,7 @@ export function openWorkout(ctx, client, workoutId) {
   if (!item) throw notFound('That workout in your program');
   if (item.status === 'done') throw Object.assign(conflict('You already logged this workout. It\'s under Finished workouts.'), { details: { log_id: item.log_id } });
   const w = own.program.workouts.find((x) => x.id === item.id);
-  return appWorkout(ctx, client.id, { ...w, date: item.date, status: item.status, moved: item.moved }, readinessToday(ctx, client.id));
+  return appWorkout(ctx, client.id, { ...w, date: item.date, status: item.status, moved: item.moved }, readinessToday(ctx, client.id), { at });
 }
 
 // What the done screen shows.

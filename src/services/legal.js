@@ -8,6 +8,7 @@ import { forExport as sprintClipsOf, removeAllFor as removeSprintClips } from '.
 import { forExport as progressionsOf } from './progression.js';
 import { forExport as swapsOf } from './live.js';
 import { forExport as monthlyOf } from './monthly.js';
+import { forExport as trainingProfileOf, forgetClient as forgetTrainingProfile } from './startup.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -94,6 +95,7 @@ export function exportFamily(ctx, familyId) {
       progression_steps: progressionsOf(ctx, k.id),
       exercise_swaps: swapsOf(ctx, k.id),
       monthly_reports: monthlyOf(ctx, k.id),
+      training_profile: trainingProfileOf(ctx, k.id),   // the start-up answers and the gear at home (version 67)
       wearables_linked: per(`SELECT provider, status, connected_by_kind, connected_at, last_sync_at FROM wearable_connections WHERE client_id = ? ORDER BY provider`, k.id),
       outside_data_imports: per(`SELECT source, file_kind, filename, days, workouts, from_day, to_day, created_by, created_by_kind, created_at, undone_at FROM data_imports WHERE client_id = ? ORDER BY created_at`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),
@@ -148,6 +150,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       // Team rosters: the athlete comes off, and the line keeps no name or ID (team attendance counts stay).
       ctx.db.run(`UPDATE team_roster SET name = 'Deleted athlete', athlete_id = NULL, position = NULL, grad_year = NULL, active = 0 WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
+      forgetTrainingProfile(ctx, id);
       for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced', 'data_imports', 'progressions', 'exercise_swaps', 'monthly_reports']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);

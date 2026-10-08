@@ -3,6 +3,7 @@ import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js
 import { athleteSprint } from './sprint-ui.js';
 import { detailsOf, groupTag, groupTitle, withGroups } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
+import { startupForm, summaryText } from './startup-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 // An athlete who signed in at /portal with their own email has no token: the portal cookie opens the app, and
@@ -88,8 +89,8 @@ function show(tab) {
 window.addEventListener('hashchange', () => { const k = hashTab() ?? 'workout'; if (k !== state.tab && root.contains(tabs)) show(k); });
 async function refresh() {
   try {
-    const home = await api('GET', '/app/api/home'); state.home = home;
-    if (state.pick) { try { state.pickWorkout = await api('GET', `/app/api/workouts/${state.pick}`); } catch (e) { if (e.status) { state.pick = null; state.pickWorkout = null; } } }   // logged since, or gone
+    const home = await api('GET', `/app/api/home${atQ()}`); state.home = home;
+    if (state.pick) { try { state.pickWorkout = await api('GET', `/app/api/workouts/${state.pick}${atQ()}`); } catch (e) { if (e.status) { state.pick = null; state.pickWorkout = null; } } }   // logged since, or gone
     if (state.tab === 'workout' && !state.done && !editing()) render();
   } catch { /* offline: keep what's on screen */ }
 }
@@ -98,7 +99,7 @@ const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn d
 async function load() {
   let home;
   if (!tokenValue || viaCookie(tokenValue)) {                   // no private link on this phone: the portal cookie, if they signed in there
-    try { home = await api('GET', '/app/api/home'); if (!String(tokenValue ?? '').startsWith('family:')) tokenValue = `session:${home.client?.id ?? 'me'}`; }
+    try { home = await api('GET', `/app/api/home${atQ()}`); if (!String(tokenValue ?? '').startsWith('family:')) tokenValue = `session:${home.client?.id ?? 'me'}`; }
     catch (e) {
       const cached = tokenValue ? store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`) : null;
       if (e.status === 401 || !tokenValue) return message('Sign in with your email to see your workouts, or open the link your coach sent you.', signInLink());
@@ -106,7 +107,7 @@ async function load() {
       home = cached.home;
     }
   } else {
-    try { home = await api('GET', '/app/api/home'); }
+    try { home = await api('GET', `/app/api/home${atQ()}`); }
     catch (e) {
       const cached = store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`);
       if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
@@ -192,8 +193,10 @@ function drawPending() {
 }
 
 // ---------- Rest timer ----------
-const prefs = Object.assign({ rest: true, rest_sec: 90 }, store.get('dp_wo_prefs') ?? {});
+const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false }, store.get('dp_wo_prefs') ?? {});
 const savePrefs = () => store.set('dp_wo_prefs', prefs);
+// An athlete who trains both places says where they are today; at home, the gear swaps apply (startup.js).
+const atQ = () => (prefs.at_home && state.home?.startup?.gear?.trains_at === 'both' ? '?at=home' : '');
 const restBar = h('div', { class: 'c-rest', hidden: true, role: 'timer', 'aria-label': 'Rest timer' });
 let rest = null;
 const clock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -222,6 +225,51 @@ function drawRest() {
 }
 
 // ---------- How ready the athlete is today ----------
+// ---------- The start-up questions and the athlete's gear (startup.js) ----------
+// First open with no program: a few questions, and the first program is ready (or the coach is told). Later, the same
+// form changes the gear on file; the program stays.
+let startupQuestions = null, gearOpen = false;
+const whoAnswers = () => (familyAthlete ? 'parent' : 'athlete');
+function startupPanel(home, { change = false } = {}) {
+  const box = h('div', { class: 'dp-panel stack' }, h('p', { class: 'muted small', style: 'margin:0' }, 'Loading the questions…'));
+  (async () => {
+    try {
+      startupQuestions ??= (await api('GET', '/app/api/startup')).questions;
+      const profile = home.startup?.profile ? { ...home.startup.profile, equipment_answered: !!home.startup.gear } : null;
+      const form = startupForm(startupQuestions, profile, { who: whoAnswers(), name: home.client.first_name });
+      const err = h('div', { class: 'dp-error', role: 'alert' });
+      fill(box, change ? null : h('div', { class: 'stack-tight' }, h('h2', { class: 'c-title', style: 'font-size:26px' }, 'Let\'s set up your training'),
+          h('p', { class: 'muted', style: 'margin:0' }, `A few questions and ${whoAnswers() === 'parent' ? `${home.client.first_name}'s` : 'your'} first program is ready, built for the days and gear ${whoAnswers() === 'parent' ? 'they have' : 'you have'}. Your coach sees the answers and can change anything.`)),
+        form.el, err,
+        h('div', { class: 'row wrap' }, btn(change ? 'Save' : 'Start my training', (e) => { const p = form.problem(); if (p) { err.textContent = p; return; } err.textContent = ''; busy(e.currentTarget, async () => {
+          const r = await api('PUT', '/app/api/startup', form.body());
+          gearOpen = false;
+          const placed = r.placed;
+          if (placed?.outcome === 'assigned') toast(`You're on ${placed.program.name}. Your first workout is ready.`);
+          else if (placed?.outcome === 'suggested' || placed?.outcome === 'no_match') toast('Saved. Your coach is picking your program.');
+          else toast('Saved.');
+          await refresh(); render();
+        }); }, 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' }),
+          change ? btn('Cancel', () => { gearOpen = false; render(); }, 'ghost') : null));
+    } catch (e) { fill(box, h('p', { class: 'warn-text' }, e.message)); }
+  })();
+  return box;
+}
+// "Your gear": what's on file, Change, and for an athlete who trains both places, where they are today.
+function gearCard(home) {
+  const st = home.startup;
+  if (!st || st.needed || !st.profile) return null;
+  if (gearOpen) return startupPanel(home, { change: true });
+  const gear = st.gear;
+  const both = gear?.trains_at === 'both';
+  return h('div', { class: 'dp-panel stack-tight su-gear' },
+    h('div', { class: 'row wrap', style: 'align-items:center' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'dp-label' }, gear ? 'Your gear' : 'Your answers'),
+        h('span', { class: 'small' }, gear ? `${gear.labels.length ? gear.labels.join(', ') : 'Bodyweight only'} · ${gear.trains_at === 'home' ? 'training at home' : both ? 'home and the facility' : ''}`.replace(/ · $/, '') : summaryText({ ...st.profile, goal_label: st.profile.goal_label, equipment_answered: false })),
+        gear && gear.trains_at !== 'facility' ? h('span', { class: 'small muted' }, 'Exercises that need gear you don\'t have are swapped for ones you can do. Tap Back to the plan on any you\'d rather keep.') : null),
+      btn('Change', () => { gearOpen = true; render(); }, 'ghost')),
+    both ? h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.at_home, onChange: async (e) => { prefs.at_home = e.target.checked; savePrefs(); await refresh(); render(); } }), 'Training at home today') : null);
+}
 function readinessCard(r) {
   if (!r) return null;
   if (!r.level) return h('div', { class: 'c-ready' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.headline), h('span', { class: 'small muted' }, r.advice)), btn('Check in', () => show('accountability'), 'secondary'));
@@ -249,7 +297,8 @@ function render() {
   const w = home.locked ? null : currentWorkout();
   if (!w) {
     stopRest();
-    fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox, h('div', { class: 'dp-panel' }, h('p', null, home.message)),
+    fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
+      !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home),
       strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
@@ -321,7 +370,7 @@ async function openPick(id) {
   if (id === state.home?.workout?.id) { state.pick = null; state.pickWorkout = null; state.open = null; render(); window.scrollTo(0, 0); return; }
   const d = store.get(DRAFT_KEY());
   if (d && d.token === tokenValue && !d.log_id && d.workout_id !== id && hasSets(d)) throw new Error(`You've logged sets in ${d.title}. Finish it or discard those sets first.`);
-  try { state.pickWorkout = await api('GET', `/app/api/workouts/${id}`); }
+  try { state.pickWorkout = await api('GET', `/app/api/workouts/${id}${atQ()}`); }
   catch (e) { if (e.status === 409) { await refresh(); } throw e; }
   state.pick = id; state.open = null;
   render();
@@ -401,8 +450,8 @@ const exStarted = (x) => (draft.sets[x.id] ?? []).some((r) => r.done);
 // undone until the workout is logged; a coach's own swap is left alone.
 function altBlock(x) {
   if (draft?.log_id) return null;                                    // a reopened workout is history, not a plan to change
-  if (x.swapped?.by_kind === 'athlete') {
-    return h('div', { class: 'row wrap small', style: 'align-items:center;gap:8px' }, h('span', { class: 'muted grow' }, `You picked ${x.name} instead of ${x.swapped.from}.`),
+  if (x.swapped?.by_kind === 'athlete' || x.swapped?.by_kind === 'equipment') {
+    return h('div', { class: 'stack-tight small' }, h('span', { class: 'muted' }, x.swapped.by_kind === 'equipment' ? `${x.name} fits your gear (${x.swapped.reason.toLowerCase()}). Back to the plan if you have what ${x.swapped.from} needs today.` : `You picked ${x.name} instead of ${x.swapped.from}.`),
       exStarted(x) ? null : btn(`Back to ${x.swapped.from}`, (e) => busy(e.currentTarget, async () => { await api('DELETE', `/app/api/swaps/${x.swapped.id}`); say(`Back to ${x.swapped.from}.`); await refresh(); }), 'ghost'));
   }
   if (x.swapped || !x.alternatives?.length || exStarted(x)) return null;
@@ -448,7 +497,7 @@ function renderLogger(w) {
       h('span', { class: `c-ex-mark${x.poster_url && !exDone(x) ? ' c-ex-mark--still' : ''}`, 'aria-hidden': 'true' }, exDone(x) ? '✓' : x.poster_url ? [h('img', { src: x.poster_url, alt: '', loading: 'lazy' }), h('span', { class: 'c-ex-mark-play' }, playIcon())] : playIcon()),
       h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
         h('span', { class: 'dp-ex-sets' }, [detailsOf(x), x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
-        x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason.toLowerCase()})` : ''}` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
+        x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason.toLowerCase()})` : ''}` : x.swapped.by_kind === 'equipment' ? `For your gear instead of ${x.swapped.from} (${x.swapped.reason.toLowerCase()})` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
         x.form_check ? h('span', { class: 'small strong', style: x.form_check_sent ? 'color:var(--green-bright)' : 'color:var(--amber)' }, x.form_check_sent ? '✓ Form check sent' : 'Form check asked') : null,
         x.progression?.text ? h('span', { class: 'small strong', style: 'color:var(--green-bright)' }, `Your progression: ${x.progression.text} on the plan`) : null,
         x.load ? h('span', { class: `small ${x.load.missing ? 'muted' : 'strong'}`, style: x.load.missing ? null : `color:var(${x.load.planned_pct ? '--amber' : '--green-bright'})` }, x.load.text) : null),
@@ -600,6 +649,7 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
     reopened ? null : readinessCard(home.readiness),
+    reopened ? null : gearCard(home),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,
     reopened ? null : routineBlock(w.cooldown, 'Cool-down'),

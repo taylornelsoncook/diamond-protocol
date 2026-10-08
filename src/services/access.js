@@ -6,6 +6,7 @@ import { queueCount } from './queue.js';
 import { inventory } from './inventory.js';
 import { unreadReplies } from './engage.js';
 import { waiting as startupWaiting } from './startup.js';
+import { waiting as adaptWaiting } from './adapt.js';
 import { OWNER_EVENTS, LEAD_EVENTS, can } from './security.js';
 import { clientCounts } from './clients.js';
 import { moneyIn, todayBounds, lateChargeAlerts } from './billing.js';
@@ -311,6 +312,11 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
   if (role !== 'front_desk') {
     const su = startupWaiting(ctx);
     if (su.length) waiting.unshift({ kind: 'startups', count: su.length, items: su.slice(0, 6) });
+  }
+  // The adaptive plan (version 69): calendar changes waiting for a coach's OK.
+  if (role !== 'front_desk') {
+    const adj = adaptWaiting(ctx);
+    if (adj.length) waiting.unshift({ kind: 'plan_adjustments', count: adj.length, items: adj.slice(0, 6).map((x) => ({ id: x.id, client_id: x.client_id, name: x.client_name, kind: x.kind, text: x.text, created_at: x.created_at })) });
   }
   // Monthly parent reports written and waiting for a coach's line and Send.
   if (role !== 'front_desk') {

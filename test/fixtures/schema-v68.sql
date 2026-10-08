@@ -1874,28 +1874,3 @@ CREATE TABLE IF NOT EXISTS exercise_cues (
   pending_at TEXT,
   updated_at TEXT NOT NULL
 );
--- Version 69: the adaptive plan (services/adapt.js). A plan is shared; what changes is one athlete's calendar: a whole
--- week missed shifts their start date so the week comes round again (shift); three misses in a row make the rest of the
--- week a minimum week, half the sets (minimum); every planned workout done for two weeks offers the next phase early,
--- skipping the rest of the current one (advance). Suggested to the coach, or applied at once (adapt_mode); undoable.
-CREATE TABLE IF NOT EXISTS plan_adjustments (
-  id TEXT PRIMARY KEY,
-  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('shift','minimum','advance')),
-  status TEXT NOT NULL DEFAULT 'suggested' CHECK (status IN ('suggested','approved','dismissed','undone')),
-  detail TEXT NOT NULL,    -- JSON: what was seen and what the change is (weeks, dates, phase names)
-  applied TEXT,            -- JSON: what changed, so Undo can put it back
-  created_at TEXT NOT NULL,
-  decided_at TEXT,
-  decided_by TEXT
-);
-CREATE INDEX IF NOT EXISTS plan_adjustments_client ON plan_adjustments(client_id, status);
--- Version 69: workouts one athlete skips (the rest of a phase they advanced past): dated in the past but never missed.
-CREATE TABLE IF NOT EXISTS assignment_skips (
-  assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
-  workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
-  adjustment_id TEXT REFERENCES plan_adjustments(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (assignment_id, workout_id)
-);

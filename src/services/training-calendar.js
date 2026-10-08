@@ -61,14 +61,15 @@ export function datedWorkouts(ctx, a, program) {
   const s = scheduleOf(ctx, a, program);
   const day = today(ctx);
   const logged = new Map(ctx.db.all('SELECT id, workout_id, completed_at FROM workout_logs WHERE assignment_id = ?', a.id).map((l) => [l.workout_id, l]));
+  const skipped = new Set(ctx.db.all('SELECT workout_id FROM assignment_skips WHERE assignment_id = ?', a.id).map((r) => r.workout_id));   // version 69: a phase advanced past
   const workouts = program.workouts.map((w) => {
     const date = s.dates.get(w.id), log = logged.get(w.id) ?? null;
     return { id: w.id, week: w.week, day: w.day, title: w.title, date, moved: s.moves.has(w.id), exercises: w.exercises.length,
-      status: log ? 'done' : date === day ? 'today' : date < day ? 'missed' : 'upcoming', log_id: log?.id ?? null, completed_at: log?.completed_at ?? null };
+      status: log ? 'done' : skipped.has(w.id) ? 'skipped' : date === day ? 'today' : date < day ? 'missed' : 'upcoming', log_id: log?.id ?? null, completed_at: log?.completed_at ?? null };
   }).sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : x.week - y.week || x.day - y.day));
   const count = (st) => workouts.filter((w) => w.status === st).length;
   return { today: day, start_date: s.start_date, training_days: s.training_days, days_default: s.days_default, days_needed: s.days_needed, days_text: dayList(s.training_days),
-    end_date: workouts.at(-1)?.date ?? null, workouts, counts: { done: count('done'), missed: count('missed'), upcoming: count('upcoming') + count('today'), total: workouts.length } };
+    end_date: workouts.at(-1)?.date ?? null, workouts, counts: { done: count('done'), missed: count('missed'), upcoming: count('upcoming') + count('today'), skipped: count('skipped'), total: workouts.length - count('skipped') } };
 }
 // The Monday-to-Sunday week a date falls in.
 export function weekOf(date) {
@@ -79,16 +80,16 @@ export function weekOf(date) {
 // many planned workouts dated before today were missed in a row, counting back from the latest (a done one ends the run).
 export function weekStats(workouts, day) {
   const { start, end } = weekOf(day);
-  const inWeek = workouts.filter((w) => w.date >= start && w.date <= end);
+  const inWeek = workouts.filter((w) => w.date >= start && w.date <= end && w.status !== 'skipped');
   let streak = 0;
-  for (const w of [...workouts].reverse()) { if (w.date >= day) continue; if (w.status === 'missed') streak++; else break; }
+  for (const w of [...workouts].reverse()) { if (w.date >= day || w.status === 'skipped') continue; if (w.status === 'missed') streak++; else break; }
   return { start, end, planned: inWeek.length, done: inWeek.filter((w) => w.status === 'done').length, missed: inWeek.filter((w) => w.status === 'missed').length,
     today: inWeek.filter((w) => w.status === 'today').length, upcoming: inWeek.filter((w) => w.status === 'upcoming').length, missed_streak: streak };
 }
 // What the app opens on: today's workout; on a rest day, the earliest one missed (pick up where you left off), else
 // the next one coming up. The athlete can open any other workout from the calendar.
 export function pickNext(workouts) {
-  const open = workouts.filter((w) => w.status !== 'done');
+  const open = workouts.filter((w) => w.status !== 'done' && w.status !== 'skipped');
   return open.find((w) => w.status === 'today') ?? open.find((w) => w.status === 'missed') ?? open[0] ?? null;
 }
 

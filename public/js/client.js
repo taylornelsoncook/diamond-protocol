@@ -308,6 +308,15 @@ function gearCard(home) {
       btn('Change', () => { gearOpen = true; render(); }, 'ghost')),
     both ? h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.at_home, onChange: async (e) => { prefs.at_home = e.target.checked; savePrefs(); await refresh(); render(); } }), 'Training at home today') : null);
 }
+// The adaptive plan (adapt.js): a minimum week in force, and why the calendar moved this week.
+function adjustmentsCard(home) {
+  const a = home.adjustments;
+  if (!a || (!a.minimum && !a.recent?.length)) return null;
+  return h('div', { class: 'stack-tight' },
+    a.minimum ? h('div', { class: 'c-ready c-ready--yellow', role: 'status' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, 'Minimum week'),
+      h('span', { class: 'small' }, `Half the sets on every exercise through ${dayName(a.minimum.until, { weekday: 'long' })}. Just get the work in; the full plan is back next week.`))) : null,
+    ...(a.recent ?? []).map((r) => h('div', { class: 'c-note' }, r.text)));
+}
 function readinessCard(r) {
   if (!r) return null;
   if (!r.level) return h('div', { class: 'c-ready' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.headline), h('span', { class: 'small muted' }, r.advice)), btn('Check in', () => show('accountability'), 'secondary'));
@@ -357,7 +366,7 @@ function render() {
 const addDays = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const mondayOf = (d) => addDays(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
 const dayName = (d, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
-const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up' };
+const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up', skipped: 'Skipped' };
 // The line under the title: when this workout is (or was) planned.
 const whenText = (w) => (!w.date ? null : w.status === 'today' ? 'Today' : w.status === 'missed' ? `Missed · was ${dayName(w.date)}` : `Up next · ${dayName(w.date)}`);
 function calendarStrip(home) {
@@ -695,6 +704,7 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
     reopened ? null : readinessCard(home.readiness),
+    reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,

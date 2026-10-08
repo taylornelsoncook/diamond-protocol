@@ -31,7 +31,7 @@ const alerts = (job) => db().all('SELECT * FROM outbox WHERE subject LIKE ? ORDE
 const runsOf = (job) => db().all('SELECT * FROM job_runs WHERE job = ? ORDER BY started_at, rowid', job);
 
 test('the server registers every background job, once', () => {
-  assert.deepEqual(app.ctx.jobs.jobs.map((j) => j.name).sort(), ['billing', 'extend-schedule', 'form-check-cleanup', 'hawkin-sync', 'lead-follow-ups', 'money-checks', 'monthly-reports', 'open-spots', 'review-requests', 'team-billing', 'text-reminders', 'wearable-sync', 'webhooks', 'weekly-digest'].sort());
+  assert.deepEqual(app.ctx.jobs.jobs.map((j) => j.name).sort(), ['billing', 'extend-schedule', 'form-check-cleanup', 'hawkin-sync', 'lead-follow-ups', 'money-checks', 'monthly-reports', 'open-spots', 'plan-adapt', 'review-requests', 'team-billing', 'text-reminders', 'wearable-sync', 'webhooks', 'weekly-digest'].sort());
   assert.throws(() => app.ctx.jobs.define('billing', 1000, () => {}), /Two jobs/);
 });
 

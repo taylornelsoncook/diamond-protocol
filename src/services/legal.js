@@ -10,6 +10,7 @@ import { forExport as swapsOf } from './live.js';
 import { forExport as monthlyOf } from './monthly.js';
 import { forExport as trainingProfileOf, forgetClient as forgetTrainingProfile } from './startup.js';
 import { forExport as adjustmentsOf, forgetClient as forgetAdjustments } from './adapt.js';
+import { forgetClient as forgetPush } from './push.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -154,6 +155,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       ctx.db.run(`DELETE FROM workout_logs WHERE client_id = ?`, id);
       forgetTrainingProfile(ctx, id);
       forgetAdjustments(ctx, id);
+      forgetPush(ctx, id);
       for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced', 'data_imports', 'progressions', 'exercise_swaps', 'monthly_reports']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);

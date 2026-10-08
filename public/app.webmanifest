@@ -1,0 +1,8 @@
+{ "name": "Diamond Protocol", "short_name": "DP Train", "description": "Your workouts, check-ins, progress and lessons.",
+  "start_url": "/app", "scope": "/app", "display": "standalone", "orientation": "portrait", "background_color": "#000000", "theme_color": "#000000",
+  "icons": [{ "src": "/brand/logo.png", "sizes": "1254x1254", "type": "image/png", "purpose": "any" }],
+  "shortcuts": [
+    { "name": "Today's workout", "short_name": "Workout", "url": "/app" },
+    { "name": "Check in", "url": "/app#accountability" },
+    { "name": "Sprint", "url": "/app#sprint" }
+  ] }

@@ -3,6 +3,7 @@
 // (lessons, courses, assigned reading). Athletes are clients; a team is a contract's roster, and
 // team goals, messages and reading reach its roster athletes (every one has a client profile).
 import { newId, token, v, notFound, badRequest, conflict, localDate, zonedToUtc, addDaysToDate, weekdayOf, ageOn, isDate, HttpError } from '../util.js';
+import { notify as pushNotify } from './push.js';
 import { updateSettings, getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
@@ -279,6 +280,7 @@ export function markRead(ctx, clientId, { guardianId } = {}) {
 function notifyAthlete(ctx, c, subject, text, { tab = null } = {}) {
   const base = ctx.publicUrl ?? '';
   const biz = getSetting(ctx, 'business_name');
+  try { pushNotify(ctx, c.id, { title: subject, body: text.split('\n').filter(Boolean).slice(-1)[0] ?? '', url: `/app${tab ? `#${tab}` : ''}`, kind: 'message' }); } catch (e) { console.error('push:', e.message); }   // the phone, when it's subscribed (push.js)
   if (c.family_id) notifyFamily(ctx, c.family_id, subject, `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}`);
   if (c.email) sendEmail(ctx, { to: c.email, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}${tab ? `#${tab}` : ''}\n\n${biz}` }).catch(() => {});
 }

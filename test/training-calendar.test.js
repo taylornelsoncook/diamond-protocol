@@ -88,7 +88,7 @@ test('assigning sets the calendar: a start date and training days, checked again
   assert.deepEqual(c.workouts.map((w) => [w.title, w.date, w.status]), [
     ['Lower A', '2026-10-05', 'missed'], ['Upper A', '2026-10-07', 'today'], ['Speed A', '2026-10-09', 'upcoming'],
     ['Lower B', '2026-10-12', 'upcoming'], ['Upper B', '2026-10-14', 'upcoming'], ['Speed B', '2026-10-16', 'upcoming']]);
-  assert.deepEqual(c.counts, { done: 0, missed: 1, upcoming: 5, total: 6 });
+  assert.deepEqual(c.counts, { done: 0, missed: 1, upcoming: 5, skipped: 0, total: 6 });
   assert.equal(c.next.title, 'Upper A', 'the app opens on today\'s workout, not the missed one');
   // The program page says the same.
   const onProgram = (await coach('GET', `/v1/programs/${program.id}`)).body.clients.find((x) => x.id === maya.id);
@@ -120,7 +120,7 @@ test('the app opens on today\'s workout, shows the calendar, and the athlete can
   assert.equal(again.body.error.details.log_id, fin.body.id);
   home = (await athlete('GET', '/app/api/home')).body;
   assert.deepEqual(home.calendar.workouts.find((w) => w.title === 'Lower A').status, 'done');
-  assert.deepEqual(home.calendar.counts, { done: 1, missed: 0, upcoming: 5, total: 6 });
+  assert.deepEqual(home.calendar.counts, { done: 1, missed: 0, upcoming: 5, skipped: 0, total: 6 });
 });
 
 test('a rest day opens on the next workout coming up; a missed workout comes first', async () => {
@@ -195,7 +195,7 @@ test('a version 61 database gains the training days and the moves table, opened 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 67, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 71, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(assignments)').some((c) => c.name === 'training_days'));
       assert.deepEqual(d.all('PRAGMA table_info(assignment_moves)').map((c) => c.name), ['id', 'assignment_id', 'workout_id', 'date', 'moved_by', 'created_at']);
       assert.equal(d.get('SELECT start_date FROM assignments WHERE id = ?', 'asg_1').start_date, '2026-09-01T12:00:00.000Z', 'kept as it was');

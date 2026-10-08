@@ -302,6 +302,15 @@ async function viewToday(main) {
         a.count === 1 ? btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/approve`); toast(`${first(a.items[0].name)} steps up ${a.items[0].text} on ${a.items[0].exercise_name}.`); refresh(); }), 'outline') : null,
         a.count === 1 ? btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/progressions/${a.items[0].id}/dismiss`); toast('Dismissed. Two more good workouts bring it back.'); refresh(); }), 'ghost') : null,
         h('a', { class: 'dp-btn dp-btn--outline', href: `#/clients/${a.items[0].client_id}?tab=training` }, a.count === 1 ? 'Open' : 'Review')));
+    if (a.kind === 'weekly_notes') return h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, `${a.count} weekly ${a.count === 1 ? 'note is' : 'notes are'} drafted and waiting`), h('span', { class: 'small muted' }, 'Read each line, change the words, send. Athletes see it on their Workout tab.')),
+      h('a', { class: 'dp-btn dp-btn--outline', href: '#/programs' }, 'Review'));
+    if (a.kind === 'plan_adjustments') return h('div', { class: 'stack-tight' }, a.items.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+      h('div', { class: 'grow stack-tight', style: 'min-width:220px' }, h('span', { class: 'strong' }, `${x.name}: ${x.kind === 'shift' ? 'a missed week' : x.kind === 'minimum' ? 'a minimum week' : 'ready for the next phase'}`), h('span', { class: 'small muted' }, x.text)),
+      h('div', { class: 'row wrap', style: 'gap:6px' },
+        btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/plan-adjustments/${x.id}/approve`); toast(`${first(x.name)}'s plan adjusted.`); refresh(); }), 'outline'),
+        btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/plan-adjustments/${x.id}/dismiss`); toast('Dismissed.'); refresh(); }), 'ghost'),
+        h('a', { class: 'dp-btn dp-btn--ghost', href: `#/clients/${x.client_id}?tab=training` }, 'Open')))));
     if (a.kind === 'startups') return h('div', { class: 'stack-tight' }, a.items.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
       h('div', { class: 'grow stack-tight', style: 'min-width:220px' },
         h('span', { class: 'strong' }, x.outcome === 'assigned' ? `${x.name} started ${x.program_name} on their own` : x.outcome === 'suggested' ? `${x.name} is ready for ${x.program_name}` : `${x.name} needs a program`),
@@ -824,6 +833,7 @@ async function viewClient(main, id) {
       role === 'front_desk' ? null : btn('Reset link', (e) => { if (confirm('Issue a new link? The current one stops working.')) busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/app-link`); toast('New app link issued.'); render(); }); }, 'ghost')),
     logs.data.length ? h('div', null, logs.data.slice(0, 5).map(workoutRow)) : null,
     startupBlock(id, first, c, role),
+    role === 'front_desk' || !c.program ? null : adaptBlock(id, first),
     role === 'front_desk' ? null : progressionsBlock(id, first));
 
   // Profile form. Edits are kept in profileDrafts, so a redraw (a note saved, a check-in) doesn't lose them, and
@@ -1205,6 +1215,29 @@ function startupBlock(clientId, first, c, role) {
           h('span', { class: 'small' }, match ? `The rules say: ${match.program_name} (${match.name ?? 'rule'}).` : d.match?.reason === 'unanswered' ? 'Goal, experience and days are needed before the rules can place them.' : 'No start-up rule fits these answers. Assign a program above, or add a rule on the Programs page.'),
           match && canEdit ? btn(`Put ${first} on ${match.program_name}`, (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${clientId}/training-profile/approve`); toast(`${first} is on ${match.program_name}.`); render(); }), 'secondary') : null) : null)
         : h('span', { class: 'small muted' }, `${first} hasn't answered the start-up questions. The app asks on first open with no program; ${canEdit ? 'or answer for them here.' : 'a coach can answer for them.'}`));
+  };
+  draw().catch((e) => fill(box, h('p', { class: 'small muted' }, e.message)));
+  return box;
+}
+// The adaptive plan (services/adapt.js): what the athlete's calendar calls for (a missed week coming round again, a minimum
+// week after misses in a row, the next phase early after two clean weeks), approve or dismiss, undo what was applied.
+const ADJ_KIND = { shift: 'Missed week', minimum: 'Minimum week', advance: 'Next phase early' };
+function adaptBlock(clientId, first) {
+  const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
+  const draw = async () => {
+    const { data, settings } = await get(`/v1/plan-adjustments?client_id=${clientId}`);
+    const open = data.filter((p) => p.status === 'suggested'), applied = data.filter((p) => p.status === 'approved').slice(0, 5);
+    fill(box, h('div', { class: 'row wrap', style: 'align-items:center' }, h('span', { class: 'dp-label grow' }, 'Adaptive plan'),
+        btn('Check now', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${clientId}/plan-adjustments/check`); toast(r.data.length ? `${r.data.length} ${r.data.length === 1 ? 'suggestion' : 'suggestions'}.` : 'Nothing to change: the calendar is as it should be.'); draw(); }), 'ghost')),
+      h('span', { class: 'small muted' }, `A whole week missed moves the plan forward; ${settings.minimum_streak} misses in a row make the rest of the week a minimum week (half the sets); two clean weeks offer the next phase early. ${settings.mode === 'auto' ? 'Changes are made at once.' : settings.mode === 'off' ? 'Off right now (Settings).' : 'You approve each change.'} The plan itself never changes.`),
+      open.map((p) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
+        h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, ADJ_KIND[p.kind]), h('span', { class: 'small muted' }, p.text)),
+        h('div', { class: 'row wrap', style: 'gap:6px' }, btn('Approve', (e) => busy(e.currentTarget, async () => { await post(`/v1/plan-adjustments/${p.id}/approve`); toast('Done. The calendar moved.'); render(); }), 'primary'),
+          btn('Not yet', (e) => busy(e.currentTarget, async () => { await post(`/v1/plan-adjustments/${p.id}/dismiss`); draw(); }), 'ghost')))),
+      applied.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Applied'), applied.map((p) => h('div', { class: 'list-item small' },
+        h('span', { class: 'grow' }, `${ADJ_KIND[p.kind]}: ${p.text}`), h('span', { class: 'muted' }, `${p.decided_by ?? 'coach'}, ${ago(p.decided_at).toLowerCase()}`),
+        btn('Undo', (e) => { if (!confirm(`Put ${first}'s calendar back as it was before this change?`)) return; busy(e.currentTarget, async () => { await del(`/v1/plan-adjustments/${p.id}`); toast('Undone.'); render(); }); }, 'ghost')))) : null,
+      !open.length && !applied.length ? h('span', { class: 'small muted' }, 'Nothing suggested yet.') : null);
   };
   draw().catch((e) => fill(box, h('p', { class: 'small muted' }, e.message)));
   return box;

@@ -193,7 +193,7 @@ function drawPending() {
 }
 
 // ---------- Rest timer ----------
-const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false }, store.get('dp_wo_prefs') ?? {});
+const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true }, store.get('dp_wo_prefs') ?? {});
 const savePrefs = () => store.set('dp_wo_prefs', prefs);
 // An athlete who trains both places says where they are today; at home, the gear swaps apply (startup.js).
 const atQ = () => (prefs.at_home && state.home?.startup?.gear?.trains_at === 'both' ? '?at=home' : '');
@@ -206,15 +206,53 @@ function startRest(x = null) {
   stopRest();
   const secs = x?.rest_seconds != null ? x.rest_seconds : prefs.rest_sec;
   if (!secs) return;
-  rest = { ends: Date.now() + secs * 1000, tick: setInterval(drawRest, 250) };
+  rest = { ends: Date.now() + secs * 1000, tick: setInterval(drawRest, 250), spoken: new Set() };
   say(`Rest ${clock(secs)}.`);
+  speak(secs >= 60 ? `Rest. ${Math.floor(secs / 60)} ${secs >= 120 ? 'minutes' : 'minute'}${secs % 60 ? ` ${secs % 60}` : ''}.` : `Rest. ${secs} seconds.`);
   drawRest();
+}
+// ---------- The coach's voice (cues.js) ----------
+// The phone talks when Voice is on: the rest timer's start, 30 and 10 seconds out and the end, and an exercise's cue
+// where the coach left none recorded (speechSynthesis reads the words). A recorded cue plays as it is.
+const canSpeak = () => prefs.voice && typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisUtterance !== 'undefined';
+function speak(text) {
+  if (!canSpeak() || !text) return;
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = 1.05; speechSynthesis.speak(u); } catch { /* no voice on this device */ }
+}
+const cueAudio = new Map();   // exercise id → object URL of the recording, fetched once with the app's own headers
+let cuePlaying = null;
+function stopCue() { if (cuePlaying) { cuePlaying.pause(); cuePlaying = null; } if (canSpeak()) { try { speechSynthesis.cancel(); } catch { /* fine */ } } }
+async function cueUrl(x) {
+  if (cueAudio.has(x.exercise_id)) return cueAudio.get(x.exercise_id);
+  const res = await fetch(`/app/api/exercises/${x.exercise_id}/cue/audio`, { headers: { 'x-client-token': viaCookie(tokenValue) ? '' : tokenValue || '', ...athleteHeader(tokenValue) }, credentials: 'same-origin' });
+  if (!res.ok) throw new ApiError('The cue couldn\'t be loaded.', res.status);
+  const url = URL.createObjectURL(await res.blob());
+  cueAudio.set(x.exercise_id, url);
+  return url;
+}
+// Play the coach's cue for an open exercise: the recording where there is one, else the words read aloud.
+async function playCue(x, { auto = false } = {}) {
+  if (!prefs.voice && auto) return;
+  stopCue();
+  if (x.cue?.audio) {
+    try { const a = new Audio(await cueUrl(x)); cuePlaying = a; a.onended = () => { if (cuePlaying === a) cuePlaying = null; }; await a.play(); return; }
+    catch { /* blocked or offline: fall back to the words */ }
+  }
+  const words = x.cue?.transcript ?? x.instructions;
+  if (words) speak(auto ? words : `${x.name}. ${words}`);
+}
+// "Why this matters": the coach's short clip, from a short-lived link.
+async function cueClip(x, holder) {
+  const r = await api('GET', `/app/api/exercises/${x.exercise_id}/cue/video`);
+  stopCue();
+  fill(holder, h('div', { class: 'video-frame c-demo' }, h('video', { src: r.url, controls: true, autoplay: true, playsinline: true, 'aria-label': `${x.name}: why this matters` }), h('span', { class: 'c-demo-tag' }, 'Your coach')));
 }
 function stopRest() { if (rest) clearInterval(rest.tick); rest = null; restBar.hidden = true; document.body.classList.remove('c-resting'); }
 function drawRest() {
   if (!rest) return;
   const left = Math.max(0, Math.round((rest.ends - Date.now()) / 1000));
-  if (!left) { stopRest(); try { navigator.vibrate?.([300, 120, 300]); } catch { /* no buzz */ } say('Rest over. Next set.'); toast('Rest over. Next set.'); return; }
+  if (!left) { stopRest(); try { navigator.vibrate?.([300, 120, 300]); } catch { /* no buzz */ } say('Rest over. Next set.'); speak('Rest over. Next set.'); toast('Rest over. Next set.'); return; }
+  for (const mark of [30, 10]) if (left === mark && !rest.spoken.has(mark)) { rest.spoken.add(mark); speak(`${mark} seconds.`); }
   restBar.hidden = false; document.body.classList.add('c-resting');   // room to scroll the page above the timer
   const bump = (s) => { rest.ends += s * 1000; drawRest(); };
   if (!restBar.firstChild) {
@@ -225,6 +263,67 @@ function drawRest() {
 }
 
 // ---------- How ready the athlete is today ----------
+// ---------- On the home screen, and notifications (sw.js, push.js) ----------
+// The app installs like a native one (the manifest and the service worker); a push taps the athlete when the coach writes,
+// the first program is ready, or a workout is on today. Shown until both are done, then folded away (Settings keeps it).
+let installPrompt = null, swReg = null, pushState = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; if (state.home && state.tab === 'workout' && !editing()) render(); });
+if ('serviceWorker' in navigator && !embedded) navigator.serviceWorker.register('/sw.js', { scope: '/app' }).then((r) => { swReg = r; }).catch(() => {});
+const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.MSStream;
+const pushSupported = () => 'PushManager' in window && 'Notification' in window && 'serviceWorker' in navigator;
+const keyBytes = (b64) => { const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b64.length / 4) * 4, '=')); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+async function pushStatus() {
+  if (pushState) return pushState;
+  const d = await api('GET', '/app/api/push');
+  const reg = swReg ?? (await navigator.serviceWorker?.ready?.catch?.(() => null));
+  const sub = await reg?.pushManager?.getSubscription?.().catch(() => null);
+  pushState = { ...d, on: !!sub && d.subscriptions.some((x) => sub.endpoint.includes(x.endpoint_host)), sub };
+  return pushState;
+}
+async function pushOn() {
+  if (!pushSupported()) throw new Error(isIOS() && !standalone() ? 'On iPhone, add the app to your home screen first (Share, then Add to Home Screen), then turn notifications on from there.' : 'This browser can\'t show notifications.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('Notifications were blocked. Allow them in the browser\'s settings for this site and try again.');
+  const reg = swReg ?? await navigator.serviceWorker.ready;
+  const { public_key } = await api('GET', '/app/api/push');
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(public_key) });
+  await api('POST', '/app/api/push/subscribe', { subscription: sub.toJSON() });
+  pushState = null;
+}
+async function pushOff() {
+  const reg = swReg ?? await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub) { await api('POST', '/app/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe(); }
+  pushState = null;
+}
+function installCard(home) {
+  if (embedded || !home?.client) return null;
+  const hide = store.get('dp_install_hidden') === true;
+  const box = h('div', { class: 'dp-panel stack-tight su-install', hidden: true });
+  (async () => {
+    const st = pushSupported() ? await pushStatus().catch(() => null) : null;
+    const installed = standalone(), notifOn = !!st?.on;
+    if (hide && (installed || !installPrompt) && (notifOn || !pushSupported())) return;   // nothing left to do, or folded away
+    const rows = [];
+    if (!installed) {
+      rows.push(h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, 'Put the app on your home screen'),
+        h('span', { class: 'small muted' }, installPrompt ? 'Opens full screen, like any app, and works with no signal.' : isIOS() ? 'In Safari: tap Share, then Add to Home Screen. It opens full screen and works with no signal.' : 'In your browser\'s menu, choose Install app or Add to Home screen.')),
+        installPrompt ? btn('Add', async (e) => { const p = installPrompt; installPrompt = null; await busy(e.currentTarget, async () => { p.prompt(); await p.userChoice; render(); }); }, 'secondary') : null));
+    }
+    if (pushSupported() || isIOS()) {
+      rows.push(h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, notifOn ? 'Notifications are on' : 'Notifications'),
+        h('span', { class: 'small muted' }, notifOn ? `A tap when your coach writes, and a nudge at ${st.reminder_hour > 12 ? `${st.reminder_hour - 12} pm` : `${st.reminder_hour} am`} on a day with a workout.` : 'Hear from your coach, and get a nudge on the days you train.')),
+        notifOn ? btn('Test', (e) => busy(e.currentTarget, async () => { await api('POST', '/app/api/push/test'); toast('Sent. It shows in a moment.'); }), 'ghost') : null,
+        notifOn ? btn('Turn off', (e) => busy(e.currentTarget, async () => { await pushOff(); toast('Notifications are off.'); render(); }), 'ghost')
+          : btn('Turn on', (e) => busy(e.currentTarget, async () => { await pushOn(); toast('Notifications are on.'); render(); }), 'secondary')));
+    }
+    if (!rows.length) return;
+    fill(box, ...rows, installed && notifOn ? null : h('div', { class: 'row', style: 'justify-content:flex-end' }, btn('Not now', () => { store.set('dp_install_hidden', true); box.hidden = true; }, 'ghost', { class: 'dp-btn dp-btn--ghost small' })));
+    box.hidden = false;
+  })().catch(() => {});
+  return box;
+}
 // ---------- The start-up questions and the athlete's gear (startup.js) ----------
 // First open with no program: a few questions, and the first program is ready (or the coach is told). Later, the same
 // form changes the gear on file; the program stays.
@@ -270,6 +369,21 @@ function gearCard(home) {
       btn('Change', () => { gearOpen = true; render(); }, 'ghost')),
     both ? h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.at_home, onChange: async (e) => { prefs.at_home = e.target.checked; savePrefs(); await refresh(); render(); } }), 'Training at home today') : null);
 }
+// The coach's note for the week (weekly.js), once a coach sent it.
+function weeklyNoteCard(home) {
+  const n = home.weekly_note;
+  if (!n) return null;
+  return h('div', { class: 'dp-panel stack-tight su-note', role: 'note' }, h('span', { class: 'dp-label' }, `This week, from ${n.by ? `Coach ${n.by.split(' ')[0]}` : 'your coach'}`), h('p', { style: 'margin:0' }, n.body), h('span', { class: 'small muted' }, `About ${n.week_label}.`));
+}
+// The adaptive plan (adapt.js): a minimum week in force, and why the calendar moved this week.
+function adjustmentsCard(home) {
+  const a = home.adjustments;
+  if (!a || (!a.minimum && !a.recent?.length)) return null;
+  return h('div', { class: 'stack-tight' },
+    a.minimum ? h('div', { class: 'c-ready c-ready--yellow', role: 'status' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, 'Minimum week'),
+      h('span', { class: 'small' }, `Half the sets on every exercise through ${dayName(a.minimum.until, { weekday: 'long' })}. Just get the work in; the full plan is back next week.`))) : null,
+    ...(a.recent ?? []).map((r) => h('div', { class: 'c-note' }, r.text)));
+}
 function readinessCard(r) {
   if (!r) return null;
   if (!r.level) return h('div', { class: 'c-ready' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, r.headline), h('span', { class: 'small muted' }, r.advice)), btn('Check in', () => show('accountability'), 'secondary'));
@@ -298,7 +412,7 @@ function render() {
   if (!w) {
     stopRest();
     fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
-      !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home),
+      !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home), home.locked ? null : installCard(home),
       strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
@@ -319,7 +433,7 @@ function render() {
 const addDays = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const mondayOf = (d) => addDays(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
 const dayName = (d, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
-const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up' };
+const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up', skipped: 'Skipped' };
 // The line under the title: when this workout is (or was) planned.
 const whenText = (w) => (!w.date ? null : w.status === 'today' ? 'Today' : w.status === 'missed' ? `Missed · was ${dayName(w.date)}` : `Up next · ${dayName(w.date)}`);
 function calendarStrip(home) {
@@ -357,6 +471,7 @@ function calendarStrip(home) {
       picked ? h('div', { class: 'c-day-info stack-tight' }, h('span', { class: 'small strong' }, dayName(state.calDay, { weekday: 'long', month: 'long', day: 'numeric' })),
         picked.length ? picked.map(line) : h('span', { class: 'small muted' }, 'Rest day. Nothing planned.')) : null,
       h('div', { class: 'row wrap small muted', style: 'align-items:center' }, h('span', { class: 'grow' }, `${cal.counts.done} done · ${cal.counts.missed} missed · ${cal.counts.upcoming} to go · ${cal.days_text}`),
+        home.week ? h('span', { class: home.week.streak ? 'good-text strong' : 'muted' }, home.week.streak ? `${home.week.streak} clean ${home.week.streak === 1 ? 'week' : 'weeks'} in a row` : home.week.planned ? `${home.week.done} of ${home.week.planned} this week · ${home.week.sets} sets` : '') : null,
         btn(showPlan ? 'Hide the plan' : 'Whole plan', () => { showPlan = !showPlan; draw(); }, 'ghost')),
       showPlan ? h('div', { class: 'c-plan stack-tight' }, [...new Set(cal.workouts.map((w) => w.week))].map((week) => [h('span', { class: 'small strong' }, `Week ${week}`),
         ...cal.workouts.filter((w) => w.week === week).map((w) => h('div', { class: 'c-plan-row' }, h('span', { class: 'small muted', style: 'min-width:92px' }, dayName(w.date)), h('span', { class: 'grow small' }, h('span', { class: w.status === 'done' ? 'muted' : 'strong' }, w.title), w.moved ? ' · moved' : ''),
@@ -509,8 +624,16 @@ function renderLogger(w) {
     box.append(headOf(x));
     if (isOpen) {
       // The demo plays on its own, muted and looping, the moment the card opens (tap it for sound); Send a form check sits right under it.
+      // The coach's cue plays as the card opens (the recording, or the words read aloud); Why this matters plays their clip.
+      const clipHolder = h('div');
+      const cueRow = x.cue?.audio || x.cue?.clip || x.cue?.transcript || x.instructions ? h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' },
+        x.cue?.audio || x.cue?.transcript || x.instructions ? btn(x.cue?.audio ? '🔊 Coach\'s cue' : '🔊 Read the cue', (e) => busy(e.currentTarget, () => playCue(x)), 'ghost') : null,
+        x.cue?.clip ? btn('Why this matters', (e) => busy(e.currentTarget, () => cueClip(x, clipHolder)), 'ghost') : null,
+        h('label', { class: 'row muted', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.voice, onChange: (e) => { prefs.voice = e.target.checked; savePrefs(); if (!prefs.voice) stopCue(); } }), 'Voice')) : null;
+      if (!draft?.log_id && !exStarted(x)) playCue(x, { auto: true }).catch(() => {});
       box.append(h('div', { class: 'stack c-ex-media' },
         x.video_url !== undefined ? demoVideo(x) : null,
+        cueRow, clipHolder,
         formCheckSend(x),
         x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
@@ -606,7 +729,7 @@ function renderLogger(w) {
   const groupHeading = (x) => h('div', { class: 'sf-group' }, groupTitle(x),
     flowOf(x) ? h('span', { style: 'text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)' }, ` · one set of each${x.group_kind === 'circuit' ? ' in turn' : ''}, then rest`) : null);
   const list = h('div', { class: 'stack', style: 'gap:8px' });
-  const redrawCards = () => { cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); };
+  const redrawCards = () => { stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
   const redrawHead = (x) => { const box = cards.get(x.id); if (!box) return; box.querySelector('.c-ex-head').replaceWith(headOf(x)); box.classList.toggle('c-ex--done', exDone(x)); };
 
@@ -649,7 +772,10 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
     reopened ? null : readinessCard(home.readiness),
+    reopened ? null : weeklyNoteCard(home),
+    reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
+    reopened ? null : installCard(home),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
     count, list,
     reopened ? null : routineBlock(w.cooldown, 'Cool-down'),

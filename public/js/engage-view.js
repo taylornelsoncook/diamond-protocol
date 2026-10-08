@@ -80,9 +80,26 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
   function streaks(a) {
     const s = a.streaks;
     return h('div', { class: 'eg-streaks', role: 'group', 'aria-label': 'Streaks' },
+      s.plan_weeks != null ? h('div', { class: 'eg-streak' }, h('b', { class: s.plan_weeks ? 'good-text' : '' }, s.plan_weeks), h('span', { class: 'strong' }, `Clean ${s.plan_weeks === 1 ? 'week' : 'weeks'} in a row`), h('span', { class: 'small muted' }, 'Every planned workout done')) : null,
       h('div', { class: 'eg-streak' }, h('b', { class: s.active_weeks ? 'good-text' : '' }, s.active_weeks), h('span', { class: 'strong' }, `${s.active_weeks === 1 ? 'Active week' : 'Active weeks'} in a row`), h('span', { class: 'small muted' }, '2 or more training days a week')),
       h('div', { class: 'eg-streak' }, h('b', { class: s.checkin_days ? 'good-text' : '' }, s.checkin_days), h('span', { class: 'strong' }, `${s.checkin_days === 1 ? 'Check-in day' : 'Check-in days'} in a row`),
         h('span', { class: 'small muted' }, [a.checkin_today ? 'Checked in today' : 'Check in today to keep it going', s.best_checkin_days > s.checkin_days ? `Best run: ${plural(s.best_checkin_days, 'day')}` : s.best_checkin_days > 1 ? 'Best run yet' : null].filter(Boolean).join('. '))));
+  }
+  // The team board (weekly.js): this week's workouts and clean weeks for everyone who opted in on the athlete's teams and
+  // program, first name and last initial. The athlete opts in here; nothing shows until they do.
+  function teamBoard() {
+    const box = h('div');
+    api.get('leaderboard').then((b) => {
+      if (!b.enabled || (!b.teams && !b.opted_in)) return;
+      const toggle = (on) => (e) => busy(e.currentTarget, async () => { await api.post('leaderboard/opt-in', { on }); fill(box, await draw(await api.get('leaderboard'))); });
+      const draw = async (d) => section('Team board', d.opted_in ? 'This week\'s workouts and clean weeks. First names only, and only athletes who chose to be on it.' : `See how ${parent ? name() : 'you'} stack${parent ? 's' : ''} up this week against teammates who chose to be on the board.`,
+        d.opted_in ? [d.groups.length ? d.groups.map((g) => h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, g.label), h('ol', { class: 'eg-board' }, g.rows.map((r) => h('li', { class: r.me ? 'eg-board-me' : '' },
+          h('span', { class: 'eg-board-rank' }, String(r.rank)), h('span', { class: 'grow' }, r.me ? (parent ? name() : 'You') : r.name), h('span', { class: 'small' }, `${r.done}${r.planned ? ` of ${r.planned}` : ''} done`), r.streak ? h('span', { class: 'small good-text' }, `${r.streak} clean`) : null))))) : h('p', { class: 'muted small', style: 'margin:0' }, 'Not enough teammates on the board yet (it shows once three have joined).'),
+          h('div', null, btn('Leave the board', toggle(false), 'ghost'))]
+          : h('div', null, btn(parent ? `Put ${name()} on the board` : 'Join the board', toggle(true), 'secondary')));
+      draw(b).then((el2) => fill(box, el2));
+    }).catch(() => {});
+    return box;
   }
   function checkinSummary(c) {
     const tips = advice(c, parent);
@@ -248,7 +265,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
   }
   function renderAccountability() {
     const a = data.accountability;
-    fill(el, newBanner(a), streaks(a), !a.checkin_today || editing ? checkinForm(a) : checkinSummary(a.checkin_today), goals(a), messages(a), calendar(a), recentCheckins(a), countsTable(a));
+    fill(el, newBanner(a), streaks(a), !a.checkin_today || editing ? checkinForm(a) : checkinSummary(a.checkin_today), goals(a), messages(a), teamBoard(), calendar(a), recentCheckins(a), countsTable(a));
     // Opening the tab marks messages read; they keep their "New" label until the next visit.
     if (!readPosted && a.unread) {
       readPosted = true;

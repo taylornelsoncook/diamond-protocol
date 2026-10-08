@@ -9,6 +9,10 @@ import * as progression from './services/progression.js';
 import * as live from './services/live.js';
 import * as substitutions from './services/substitutions.js';
 import * as startup from './services/startup.js';
+import * as cues from './services/cues.js';
+import * as adapt from './services/adapt.js';
+import * as push from './services/push.js';
+import * as weekly from './services/weekly.js';
 import * as routines from './services/routines.js';
 import * as monthly from './services/monthly.js';
 import * as exerciseimport from './services/exerciseimport.js';
@@ -150,6 +154,19 @@ export const routes = [
   ['POST', '/v1/progressions/:id/approve', 'session', 'Training', 'Approve a suggested step: it applies to that athlete\'s workouts from now on, on top of the plan.', (ctx, r) => progression.decide(ctx, r.params.id, 'approve', r.user)],
   ['POST', '/v1/progressions/:id/dismiss', 'session', 'Training', 'Dismiss a suggested step (a new one needs two more good workouts).', (ctx, r) => progression.decide(ctx, r.params.id, 'dismiss', r.user)],
   ['POST', '/v1/clients/:id/progressions', 'session', 'Training', 'Add a step by hand for one athlete: exercise_id, kind (weight, reps, sets), amount (pounds, reps a set or sets; a minus takes some off). Applies at once.', (ctx, r) => progression.add(ctx, r.params.id, r.body, r.user), 201],
+  // The weekly coach's note (version 71, services/weekly.js). Owners and coaches.
+  ['GET', '/v1/weekly-notes', 'session', 'Training', 'Weekly notes: ?week=YYYY-MM-DD (a Monday; default last week), ?status=draft|sent|skipped, ?client_id. weeks lists the weeks on file; mode the setting.', (ctx, r) => ({ data: weekly.list(ctx, { week: r.query.week ?? undefined, status: r.query.status, clientId: r.query.client_id }), weeks: weekly.weeks(ctx), mode: families.getSetting(ctx, 'weekly_notes') })],
+  ['POST', '/v1/weekly-notes/generate', 'session', 'Training', 'Draft last week\'s notes now (week: a Monday; default last week). Athletes who already have one are left alone; a quiet week gets none.', (ctx, r) => weekly.generateWeek(ctx, r.body?.week ?? undefined)],
+  ['POST', '/v1/weekly-notes/send-all', 'session', 'Training', 'Send every draft of a week (week: a Monday; default last week). Empty drafts are skipped and named.', (ctx, r) => weekly.sendAll(ctx, r.body?.week, r.user)],
+  ['PATCH', '/v1/weekly-notes/:id', 'session', 'Training', 'Change the note\'s words (body, up to 600 characters). Not after it was sent.', (ctx, r) => weekly.update(ctx, r.params.id, r.body)],
+  ['POST', '/v1/weekly-notes/:id/send', 'session', 'Training', 'Send this note: it shows on the athlete\'s Workout tab and taps their phone.', (ctx, r) => weekly.send(ctx, r.params.id, r.user)],
+  ['POST', '/v1/weekly-notes/:id/skip', 'session', 'Training', 'Don\'t send this one.', (ctx, r) => weekly.skip(ctx, r.params.id)],
+  // The adaptive plan (version 69, services/adapt.js): one athlete's calendar bends around what they did. Owners and coaches.
+  ['GET', '/v1/plan-adjustments', 'session', 'Training', 'The adaptive plan\'s suggestions and changes: status=suggested|approved|dismissed|undone, client_id. Kinds: shift (a missed week comes round again), minimum (half the sets for the rest of the week after misses in a row), advance (the next phase early after two clean weeks). settings says the mode and the streak.', (ctx, r) => ({ data: adapt.list(ctx, { clientId: r.query.client_id, status: r.query.status, limit: r.query.limit }), settings: adapt.settings(ctx) })],
+  ['POST', '/v1/plan-adjustments/:id/approve', 'session', 'Training', 'Make the change on the athlete\'s calendar.', (ctx, r) => adapt.apply(ctx, r.params.id, r.user)],
+  ['POST', '/v1/plan-adjustments/:id/dismiss', 'session', 'Training', 'Not this time (the same suggestion waits a week, or for the next phase).', (ctx, r) => adapt.dismiss(ctx, r.params.id, r.user)],
+  ['DELETE', '/v1/plan-adjustments/:id', 'session', 'Training', 'Undo a change: the calendar goes back as it was (logged workouts are never touched). A suggestion is dismissed.', (ctx, r) => adapt.undo(ctx, r.params.id, r.user)],
+  ['POST', '/v1/clients/:id/plan-adjustments/check', 'session', 'Training', 'Look at this athlete\'s calendar now and suggest (or in auto mode make) what it calls for.', (ctx, r) => ({ data: adapt.checkAthlete(ctx, r.params.id, { by: r.user?.name }) })],
   ['DELETE', '/v1/progressions/:id', 'session', 'Training', 'Take a step back out (or drop a suggestion).', (ctx, r) => progression.remove(ctx, r.params.id, r.user)],
   // Form checks (version 53): owners and coaches watch and answer, signed in only (never an API key; front desk isn't on the allow-list). The clips live in a private bucket.
   ['GET', '/v1/form-checks/status', 'session', 'Clients', 'Whether form-check clips are set up (the private bucket), how long clips are kept, and how many are waiting.', (ctx) => formchecks.status(ctx)],
@@ -272,7 +289,17 @@ export const routes = [
   ['POST', '/v1/exercises/import', 'session', 'Training', 'Owner: bring the list in, all or nothing (the same fields as the preview; checked again first).', (ctx, r) => exerciseimport.saveExerciseImport(ctx, r.body), 201],
   ['POST', '/v1/exercises', 'any', 'Training', 'Add an exercise: name (not already in the library), video_url (YouTube, Vimeo or a direct video file), poster_url (the still shown before a video file plays), instructions, category.', (ctx, r) => programs.createExercise(ctx, r.body), 201],
   ['PATCH', '/v1/exercises/:id', 'any', 'Training', 'Update an exercise.', (ctx, r) => programs.updateExercise(ctx, r.params.id, r.body)],
-  ['DELETE', '/v1/exercises/:id', 'any', 'Training', 'Delete an exercise no workout uses. Sets athletes logged keep its name.', (ctx, r) => programs.deleteExercise(ctx, r.params.id)],
+  ['DELETE', '/v1/exercises/:id', 'any', 'Training', 'Delete an exercise no workout uses. Sets athletes logged keep its name.', async (ctx, r) => { await cues.forgetExercise(ctx, r.params.id); return programs.deleteExercise(ctx, r.params.id); }],
+  // The coach's cue (version 68, services/cues.js): a recording the app plays when the exercise opens, its words, and a short clip.
+  ['GET', '/v1/exercises/:id/cue', 'any', 'Training', 'The coach\'s cue for an exercise: whether a recording and a clip are on file, who made them and when, the words read aloud without a recording (transcript, else the exercise\'s cue text), and the limits.', (ctx, r) => cues.getCue(ctx, r.params.id)],
+  ['GET', '/v1/exercises/:id/cue/audio', 'any', 'Training', 'The recorded cue itself (an audio file).', (ctx, r) => cues.audioFile(ctx, r.params.id)],
+  ['PUT', '/v1/exercises/:id/cue/audio', 'any', 'Training', 'Save a recorded cue (owner and coach): audio_base64, content_type (audio/webm, audio/mp4, audio/mpeg, audio/ogg, audio/wav), duration_s (up to 60), transcript (what was said). Up to 2 MB; replaces the one on file.', (ctx, r) => cues.saveAudio(ctx, r.params.id, r.body, r.user)],
+  ['DELETE', '/v1/exercises/:id/cue/audio', 'any', 'Training', 'Remove the recorded cue (the words stay).', (ctx, r) => cues.removeAudio(ctx, r.params.id)],
+  ['PATCH', '/v1/exercises/:id/cue', 'any', 'Training', 'The words of the cue (transcript, up to 1,000 characters; empty falls back to the exercise\'s cue text).', (ctx, r) => cues.saveTranscript(ctx, r.params.id, r.body)],
+  ['POST', '/v1/exercises/:id/cue/clip', 'any', 'Training', 'Add a short "why this matters" clip, step 1 (owner and coach): content_type (MP4, MOV, WebM), bytes (up to 60 MB), duration_s (up to 20). Answers a one-time address to upload the file to.', (ctx, r) => cues.startClip(ctx, r.params.id, r.body, r.user), 201],
+  ['POST', '/v1/exercises/:id/cue/clip/done', 'any', 'Training', 'Step 2: the clip is uploaded. It is checked and replaces the one on file.', (ctx, r) => cues.finishClip(ctx, r.params.id, r.user)],
+  ['GET', '/v1/exercises/:id/cue/video', 'any', 'Training', 'A short-lived address to play the cue clip.', (ctx, r) => cues.clipUrl(ctx, r.params.id)],
+  ['DELETE', '/v1/exercises/:id/cue/clip', 'any', 'Training', 'Remove the cue clip.', (ctx, r) => cues.removeClip(ctx, r.params.id)],
   ['GET', '/v1/programs', 'any', 'Training', 'List programs with workout and client counts, days per week and workouts logged in the last 7 days. ?kind=template lists program templates instead.', (ctx, r) => list(programs.listPrograms(ctx, { kind: r.query.kind || 'program' }))],
   ['POST', '/v1/programs', 'any', 'Training', 'Create a program: name, weeks, level, description. copy_from (a program or template id) starts it as a copy of that one\'s workouts and phases. kind: template makes a program template (never assigned or sold).', (ctx, r) => programs.createProgram(ctx, r.body), 201],
   ['GET', '/v1/workout-templates', 'any', 'Training', 'Workout templates: name, exercises, warm-up and cool-down. Start a day from one with template_id on POST /v1/programs/:id/workouts.', (ctx) => list(programs.listWorkoutTemplates(ctx))],
@@ -735,6 +762,16 @@ export const routes = [
 
   // Client app (authenticated by the client's private link token)
   ['GET', '/app/api/outside-data', 'client', 'Client app', 'Your recovery, sleep and other numbers brought in from a wearable or another app, with trends.', (ctx, r) => r.client.archived_at ? { has_data: false, metrics: [], workouts: [], imports: 0 } : dataimport.athleteData(ctx, r.client.id, { days: r.query.days })],
+  // Push notifications (version 70, services/push.js): the phone subscribes from the app; the service worker asks what to show.
+  ['GET', '/app/api/leaderboard', 'client', 'Client app', 'The team board: this week\'s workouts and clean weeks for everyone opted in on your teams and program (first name and last initial), once you opt in and the owner has rankings on.', (ctx, r) => weekly.board(ctx, r.client.id)],
+  ['POST', '/app/api/leaderboard/opt-in', 'client', 'Client app', 'Be on the team board, or leave it: on (true or false).', (ctx, r) => weekly.setOptIn(ctx, r.client.id, r.body?.on === true)],
+  ['GET', '/app/api/push', 'client', 'Client app', 'Notifications: the server\'s public key to subscribe with, the phones subscribed, and the reminder hour.', (ctx, r) => push.status(ctx, r.client.id)],
+  ['POST', '/app/api/push/subscribe', 'client', 'Client app', 'Turn notifications on for this phone: subscription (what the browser\'s push manager answered: endpoint, keys.p256dh, keys.auth).', (ctx, r) => push.subscribe(ctx, r.client, r.body, { userAgent: r.userAgent ?? null }), 201],
+  ['POST', '/app/api/push/unsubscribe', 'client', 'Client app', 'Turn notifications off for this phone: endpoint.', (ctx, r) => push.unsubscribe(ctx, r.client, r.body)],
+  ['POST', '/app/api/push/test', 'client', 'Client app', 'Send yourself a test notification.', (ctx, r) => push.sendTest(ctx, r.client)],
+  ['POST', '/push/pending', 'public', 'Client app', 'The phone\'s service worker asks what to show after a push: endpoint (its own subscription). Answers the notices not yet shown and marks them shown.', (ctx, r) => push.pending(ctx, r.body, { ip: r.ip })],
+  ['GET', '/app/api/exercises/:id/cue/audio', 'client', 'Client app', 'Your coach\'s recorded cue for an exercise (an audio file).', (ctx, r) => cues.audioFile(ctx, r.params.id)],
+  ['GET', '/app/api/exercises/:id/cue/video', 'client', 'Client app', 'A short-lived address to play your coach\'s "why this matters" clip for an exercise.', (ctx, r) => cues.clipUrl(ctx, r.params.id)],
   ['GET', '/app/api/form-checks', 'client', 'Client app', 'Your form checks and the coach\'s answers, newest first, and whether sending is set up.', (ctx, r) => ({ data: formchecks.listForClient(ctx, r.client.id), ready: formchecks.config().ready, max_bytes: formchecks.MAX_BYTES, max_seconds: formchecks.MAX_SECONDS })],
   ['POST', '/app/api/form-checks', 'client', 'Client app', 'Send a form check, step 1: content_type, bytes, duration_s, note, and workout_exercise_id or exercise_id. Answers a one-time address to upload the clip to (PUT, 15 minutes); then call /done.', (ctx, r) => formchecks.startUpload(ctx, r.client, r.body), 201],
   ['POST', '/app/api/form-checks/:id/done', 'client', 'Client app', 'Send a form check, step 2: the clip is uploaded. It is checked and the coach is told.', (ctx, r) => formchecks.finishUpload(ctx, r.client, r.params.id)],

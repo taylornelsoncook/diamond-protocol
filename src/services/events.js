@@ -23,7 +23,9 @@ export const EVENT_TYPES = [
   'progression.suggested', 'progression.approved',   // version 55 (progression steps)
   'exercise.swapped',   // version 56 (the live session view)
   'monthly_report.sent',   // version 59 (monthly parent reports)
-  'startup.answered', 'program.auto_assigned'   // version 67 (the start-up questions)
+  'startup.answered', 'program.auto_assigned',   // version 67 (the start-up questions)
+  'plan.adjustment_suggested', 'plan.adjustment_applied',   // version 69 (the adaptive plan)
+  'weekly_note.sent'   // version 71 (the weekly coach's note)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -97,6 +99,9 @@ const INFO = {
   'form_check.answered': ['A coach answers a form check.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', coach_name: 'Head Coach' }],
   'startup.answered': ['An athlete (or a parent, or a coach for them) answered the start-up questions: goal, experience, days a week, where they train and the gear they have.', { ...C, by: 'athlete', goal: 'speed', experience: 'new', days_per_week: 3, trains_at: 'home', equipment: ['dumbbell', 'band'] }],
   'program.auto_assigned': ['A start-up rule put an athlete on a program from their answers (by: athlete or parent), or a coach approved the suggested one (by: coach).', { assignment_id: 'asg_sample', ...C, program_id: 'prog_sample', program_name: 'Youth Speed Foundations', rule_id: 'rule_sample', rule_name: 'New to speed, 3 days', by: 'athlete', start_date: '2026-10-05', training_days: [1, 3, 5] }],
+  'plan.adjustment_suggested': ['The adaptive plan suggests a change to one athlete\'s calendar: kind shift (a missed week comes round again), minimum (half the sets for the rest of the week) or advance (the next phase early).', { adjustment_id: 'adj_sample', ...C, kind: 'minimum', text: 'A minimum week through 2026-10-11: half the sets on every exercise.', streak: 3, from: '2026-10-06', until: '2026-10-11' }],
+  'plan.adjustment_applied': ['A coach approved an adaptive-plan change (or auto mode made it): the athlete\'s calendar moved.', { adjustment_id: 'adj_sample', ...C, kind: 'shift', text: 'Move the plan a week forward.', weeks: 1, by: 'Riley' }],
+  'weekly_note.sent': ['A coach sent an athlete their weekly note (or auto mode sent the draft): it shows on the Workout tab and taps the phone.', { weekly_note_id: 'wn_sample', ...C, week_start: '2026-10-12', by: 'Riley' }],
   'client.claimed': ['A parent adds a team athlete to their family with the Athlete ID (name and birthday matched).', { ...C, athlete_id: 'AVALOP2026', family_id: 'fam_sample', guardian_name: 'Maria Lopez' }]
 };
 export const EVENT_INFO = Object.fromEntries(EVENT_TYPES.map((t) => [t, { about: INFO[t]?.[0] ?? '', sample: INFO[t]?.[1] ?? {} }]));

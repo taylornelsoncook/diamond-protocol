@@ -32,6 +32,11 @@ import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
 import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
+import { cleanup as cleanupCues } from './services/cues.js';
+import { runAdapt } from './services/adapt.js';
+import { runReminders as runPushReminders, cleanup as cleanupPush } from './services/push.js';
+import { workoutToday } from './services/programs.js';
+import { runWeekly } from './services/weekly.js';
 import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
@@ -42,7 +47,7 @@ import { calendarFeed } from './services/portal.js';
 const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(0, 120); return /^[^\s@]+@[^\s@]+$/.test(t) ? t : t ? '(not an email address)' : null; };
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video|sprint-clips\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json' };
 const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/portal': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "img-src 'self' data: https:", "media-src 'self' https: blob:",
@@ -116,7 +121,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       const r = { params: url.pathname.match(route.regex).groups ?? {}, query: Object.fromEntries(url.searchParams), body: {}, baseUrl };
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) r.body = await readJson(req, ['/v1/imports', '/v1/results', '/v1/uploads/preview', '/v1/uploads/commit', '/v1/client-import/preview', '/v1/leads/import', '/v1/data-imports/preview', '/v1/data-imports', '/v1/programs/import/draft', '/v1/exercises/import/preview', '/v1/exercises/import'].includes(url.pathname)
-        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? (/data-imports/.test(url.pathname) ? 90_000_000 : 30_000_000) : 1_000_000);   // files come base64-encoded; Apple Health and Fitbit zips are big
+        || /^\/portal\/api\/athletes\/[^/]+\/data-imports(\/preview)?$/.test(url.pathname) ? (/data-imports/.test(url.pathname) ? 90_000_000 : 30_000_000) : /^\/v1\/exercises\/[^/]+\/cue\/audio$/.test(url.pathname) ? 4_000_000 : 1_000_000);   // a coach's recorded cue, base64   // files come base64-encoded; Apple Health and Fitbit zips are big
       const ip = clientIp(req);
       r.ip = ip;
       r.connection = { forwardedFor: req.headers['x-forwarded-for'] ?? null, socketAddress: req.socket.remoteAddress, clientIp: ip, trustProxy: process.env.TRUST_PROXY ?? null, hops: proxyHops() };
@@ -187,7 +192,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       // A public route that hands the person on (a wearable's sign-in coming back): a redirect instead of JSON.
       if (out?.__redirect && route.auth === 'public') { res.writeHead(302, { location: out.__redirect, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); return res.end(); }
       if (out?.__file) {
-        res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': `attachment; filename="${out.__file.filename}"`, 'cache-control': 'no-store' });
+        res.writeHead(200, { 'content-type': out.__file.type, 'content-disposition': out.__file.inline ? 'inline' : `attachment; filename="${out.__file.filename}"`, 'cache-control': out.__file.cache ?? 'no-store', ...(out.__file.inline && out.__file.body ? { 'content-length': String(out.__file.body.length) } : {}) });
         if (out.__file.stream) return out.__file.stream.pipe(res);
         return res.end(out.__file.body);
       }
@@ -224,8 +229,12 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
-  runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx) }));
+  runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx), cues: await cleanupCues(ctx), push: cleanupPush(ctx) }));
   runner.define('monthly-reports', HOUR, () => runMonthly(ctx));
+  runner.define('plan-adapt', HOUR, () => runAdapt(ctx));   // the adaptive plan: a missed week, misses in a row, two clean weeks (adapt.js)
+  ctx.workoutToday = (clientId) => workoutToday(ctx, clientId);
+  runner.define('push-reminders', HOUR, () => runPushReminders(ctx));   // the morning nudge on a day with a workout (push.js)
+  runner.define('weekly-notes', HOUR, () => runWeekly(ctx));   // Monday: last week's coach's notes drafted (weekly.js)
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };

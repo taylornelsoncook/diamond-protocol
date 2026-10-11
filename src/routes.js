@@ -509,7 +509,14 @@ export const routes = [
     const to = r.query.to ? v.date(r.query.to, 'to') : new Date(Date.now() + 14 * 86400000).toISOString();
     if (r.query.coach_id === 'me' && !r.user) throw badRequest('coach_id=me needs a staff sign-in. Pass a staff id instead.');
     const coachId = r.query.coach_id === 'me' ? r.user.id : r.query.coach_id || undefined;
-    return list(schedule.listSessions(ctx, { from, to, kind: r.query.kind, locationId: r.query.location_id, coachId, includeCanceled: r.query.include_canceled === 'true' }));
+    const out = list(schedule.listSessions(ctx, { from, to, kind: r.query.kind, locationId: r.query.location_id, coachId, includeCanceled: r.query.include_canceled === 'true' }));
+    // ?project=true adds the classes past the 8-week horizon, worked out from their series (not sessions yet: no id, nothing to book).
+    if (r.query.project === 'true') out.projected = schedule.projectedSessions(ctx, { from: localDate(from, families.getSetting(ctx, 'timezone')), to: localDate(to, families.getSetting(ctx, 'timezone')), kind: r.query.kind, locationId: r.query.location_id, coachId });
+    return out;
+  }],
+  ['GET', '/v1/schedule/month', 'any', 'Schedule', 'One month for the calendar (?month=YYYY-MM, default this month): per day, sessions (and how many booked), canceled, and past the 8-week horizon the classes projected from their series. Same filters: ?kind=, ?location_id=, ?coach_id= (me for your own).', (ctx, r) => {
+    if (r.query.coach_id === 'me' && !r.user) throw badRequest('coach_id=me needs a staff sign-in. Pass a staff id instead.');
+    return schedule.monthView(ctx, { month: r.query.month, kind: r.query.kind, locationId: r.query.location_id, coachId: r.query.coach_id === 'me' ? r.user.id : r.query.coach_id || undefined });
   }],
   ['GET', '/v1/agenda', 'any', 'Schedule', 'One day (?date=YYYY-MM-DD, default today) with every roster.', (ctx, r) => schedule.agenda(ctx, r.query.date)],
   ['GET', '/v1/class-series', 'any', 'Schedule', 'Recurring classes, camps, clinics and team series.', (ctx, r) => list(schedule.listSeries(ctx, { kind: r.query.kind, includeInactive: r.query.include_inactive === 'true' }))],

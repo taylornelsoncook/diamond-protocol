@@ -2556,6 +2556,14 @@ async function keepPlace(run) {
 }
 let lastScheduleHash = '#/schedule';     // the week and filters the Schedule button on a session goes back to
 
+// A class past the 8-week horizon, worked out from its series: planned, not a session yet (nothing to open or book).
+function projectedRow(x) {
+  return h('div', { class: 'list-item', style: 'flex-wrap:wrap;opacity:.8' },
+    h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
+    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, x.name),
+      h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.capacity} spots · planned from the class list, created 8 weeks ahead`)),
+    h('div', { class: 'row wrap', style: 'gap:6px;justify-content:flex-end' }, h('span', { class: 'dp-badge dp-badge--muted' }, 'Planned'), kindBadge(x.kind)));
+}
 function sessionRow(x, { showState = false, state } = {}) {
   const st = state ?? sessionState(x);
   const full = x.booked_count >= x.capacity;
@@ -2617,10 +2625,11 @@ async function viewSchedule(main) {
   const today = bizDate();
   const week = /^\d{4}-\d{2}-\d{2}$/.test(q.get('week') ?? '') ? q.get('week') : today;     // seven days from this date (today by default)
   const mine = leads() && q.get('mine') === '1', onlyCoach = q.get('coach'), kind = q.get('kind') ?? '', loc = q.get('loc') ?? '';
-  const params = new URLSearchParams({ from: bizIso(week), to: bizIso(addDaysStr(week, 7)) });
+  const params = new URLSearchParams({ from: bizIso(week), to: bizIso(addDaysStr(week, 7)), project: 'true' });
   if (onlyCoach) params.set('coach_id', onlyCoach); else if (mine) params.set('coach_id', 'me');
   if (kind) params.set('kind', kind);
   if (loc) params.set('location_id', loc);
+  const monthParams = new URLSearchParams(params); monthParams.delete('from'); monthParams.delete('to'); monthParams.delete('project');
   const [sched, series, locs, coachList] = await Promise.all([get(`/v1/schedule?${params}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/coaches')]);
   const coaches = coachList.data;
   lastScheduleHash = location.hash || '#/schedule';
@@ -2644,7 +2653,10 @@ async function viewSchedule(main) {
     const byDay = new Map();
     for (const x of rows) { const d = bizDay(x.starts_at); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(x); }
     const now = new Date().toISOString();
-    fill(list, byDay.size ? [...byDay].map(([d, xs]) => panel(`${dayOf(bizIso(d, '12:00'))}${d === today ? ' · Today' : ''}`, {}, xs.map((x) => sessionRow(x, { showState: d <= today, state: sessionState(x, now) }))))
+    // Past the 8-week horizon the classes are projected from their series: shown as planned lines, nothing to open or book yet.
+    for (const x of (sched.projected ?? []).filter((x) => words.every((w) => `${x.name} ${x.location_name} ${x.coach_name ?? 'no coach set'}`.toLowerCase().includes(w)))) { if (!byDay.has(x.date)) byDay.set(x.date, []); byDay.get(x.date).push(x); }
+    const ordered = [...byDay].sort(([a], [b]) => (a < b ? -1 : 1));
+    fill(list, byDay.size ? ordered.map(([d, xs]) => panel(`${dayOf(bizIso(d, '12:00'))}${d === today ? ' · Today' : ''}`, {}, xs.map((x) => (x.projected ? projectedRow(x) : sessionRow(x, { showState: d <= today, state: sessionState(x, now) })))))
       : h('div', { class: 'empty' }, words.length ? `Nothing in these 7 days matches "${search.value.trim()}".` : onlyCoach ? `${coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach'} doesn't lead anything in these 7 days.` : mine ? 'You don\'t lead anything in these 7 days. Untick My sessions to see everything.' : 'Nothing scheduled in these 7 days.'));
   };
   let t = null;
@@ -2656,6 +2668,43 @@ async function viewSchedule(main) {
   draw();
 
   const weekLabel = `${shortDate(week)} – ${shortDate(addDaysStr(week, 6))}`;
+  // The month calendar (owner's ask: click a day and go there, at least a year ahead): sessions per day, projected
+  // classes past the horizon in a lighter tone, the week on screen outlined, a jump menu two years wide.
+  const calUi = { month: week.slice(0, 7) };
+  const calBody = h('div', { class: 'sc-cal' });
+  const calTitle = h('span', { class: 'strong', style: 'min-width:150px;text-align:center' });
+  const monthLabel = (m) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const addMonths = (m, n) => { const [y, mo] = m.split('-').map(Number); const t = y * 12 + (mo - 1) + n; return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`; };
+  const jump = select(Array.from({ length: 31 }, (_, i) => addMonths(today.slice(0, 7), i - 6)).map((m) => [m, monthLabel(m)]), { value: calUi.month, 'aria-label': 'Jump to a month', style: 'width:auto' });
+  async function drawCal() {
+    calTitle.textContent = monthLabel(calUi.month);
+    jump.value = calUi.month;
+    let mv;
+    try { mv = await get(`/v1/schedule/month?${new URLSearchParams({ ...Object.fromEntries(monthParams), month: calUi.month })}`); } catch (e) { return fill(calBody, h('p', { class: 'warn-text small' }, e.message)); }
+    const byDate = new Map(mv.days.map((d) => [d.date, d]));
+    const first = `${calUi.month}-01`, lead = (new Date(`${first}T12:00:00Z`).getUTCDay() + 6) % 7;   // Monday first
+    const cells = [];
+    for (let i = 0; i < lead; i++) cells.push(h('div', { class: 'sc-cal-pad' }));
+    for (let d = first; d.slice(0, 7) === calUi.month; d = addDaysStr(d, 1)) {
+      const x = byDate.get(d), inWeek = d >= week && d <= addDaysStr(week, 6), past = d < today;
+      const n = x ? x.sessions + x.projected : 0;
+      cells.push(h('button', { type: 'button', class: `sc-cal-day${d === today ? ' is-today' : ''}${inWeek ? ' in-week' : ''}${past ? ' is-past' : ''}${x?.projected && !x.sessions ? ' is-planned' : ''}`,
+        'aria-label': `${shortDate(d)}: ${n ? `${nplural(x.sessions, 'session')}${x.projected ? `, ${x.projected} planned` : ''}${x.booked ? `, ${x.booked} booked` : ''}` : 'nothing scheduled'}. Show this week.`, 'aria-pressed': String(d === week),
+        onClick: () => go({ week: d }) },
+        h('span', { class: 'sc-cal-num' }, String(Number(d.slice(8)))),
+        n ? h('span', { class: 'sc-cal-count' }, `${n}${x.projected && !x.sessions ? '*' : ''}`) : null,
+        x?.booked ? h('span', { class: 'sc-cal-booked' }, `${x.booked} booked`) : null));
+    }
+    fill(calBody, h('div', { class: 'sc-cal-head' }, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('span', null, d))), h('div', { class: 'sc-cal-grid' }, cells),
+      h('p', { class: 'small muted', style: 'margin:0' }, `Click a day to show that week. Sessions exist 8 weeks ahead (to ${shortDate(mv.horizon)}); past that, * counts the weekly classes planned from your class list, created as the date nears.`));
+  }
+  jump.addEventListener('change', () => { calUi.month = jump.value; drawCal(); });
+  const calPanel = h('details', { class: 'dp-panel sc-cal-wrap', open: true },
+    h('summary', { class: 'row wrap', style: 'gap:8px;align-items:center;cursor:pointer' }, h('h2', { class: 'dp-panel-title grow', style: 'margin:0' }, 'Calendar'),
+      btn('‹', (e) => { e.preventDefault(); calUi.month = addMonths(calUi.month, -1); drawCal(); }, 'ghost', { 'aria-label': 'Previous month' }), calTitle, btn('›', (e) => { e.preventDefault(); calUi.month = addMonths(calUi.month, 1); drawCal(); }, 'ghost', { 'aria-label': 'Next month' }),
+      btn('This month', (e) => { e.preventDefault(); calUi.month = today.slice(0, 7); drawCal(); }, 'ghost'), jump),
+    calBody);
+  drawCal();
   const weekNav = h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
     btn('Previous week', () => go({ week: addDaysStr(week, -7) }), 'secondary', { 'aria-label': 'Previous week' }),
     h('span', { class: 'strong', style: 'min-width:170px;text-align:center' }, weekLabel),
@@ -2752,7 +2801,7 @@ async function viewSchedule(main) {
     header('Schedule', 'Classes, camps, clinics, privates and evaluations, seven days at a time.', h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
       leads() && locs.data.length ? oneBtn : null, leads() && locs.data.length ? addBtn : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
-    filterBar, list,
+    calPanel, filterBar, list,
     panel('Classes & camps', { subtitle: leads() ? 'Edit a class and every upcoming session follows.' : null }, ...seriesList),
     leads() && locs.data.length ? [onePanel, addPanel] : null);
 }

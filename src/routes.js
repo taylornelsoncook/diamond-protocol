@@ -22,6 +22,7 @@ import * as clients from './services/clients.js';
 import * as programs from './services/programs.js';
 import * as trainingCalendar from './services/training-calendar.js';
 import * as maxes from './services/maxes.js';
+import * as maxreport from './services/maxreport.js';
 import * as progress from './services/progress.js';
 import * as programexport from './services/programexport.js';
 import * as events from './services/events.js';
@@ -317,6 +318,8 @@ export const routes = [
   ['POST', '/v1/workout-exercises/:id/move', 'any', 'Training', 'Drag and drop: move an exercise in one call: workout_id (another day of the same program; default its own), block_id (null = no block), before_id (the exercise it lands ahead of; none = the end of the block or the day). Answers the day it landed on.', (ctx, r) => programs.moveExercise(ctx, r.params.id, r.body)],
   ['POST', '/v1/programs/:id/publish', 'any', 'Training', 'Publish, schedule or unpublish this program for the athletes on it (owner and coach): published_from null = published now, a date = they see it from that date, "unpublished" = hidden until you publish; client_ids or contract_id narrow it. Until the date nothing counts as missed and the app says when it opens.', (ctx, r) => programs.publishProgram(ctx, r.params.id, r.body)],
   ['GET', '/v1/calendar', 'any', 'Training', 'The month calendar: ?month=YYYY-MM (default this month) and a pick: program_id (everyone on it), contract_id (a team\'s roster), client_id (one athlete), or nothing (everyone on a program). days[] carry each day\'s workouts with the athletes on them, done, missed, upcoming, unpublished and the average effort; assignments[] say who is published, scheduled or unpublished.', (ctx, r) => programs.calendarMonth(ctx, r.query)],
+  ['GET', '/v1/testing/max-report', 'any', 'Testing', 'The max report (owner and coach): athletes down, lifts across (every active test whose one metric is a load in pounds), each athlete\'s maxes (the max on file, or the estimate from logged sets marked estimated; ?estimates=false leaves estimates out), a total per athlete and an average per lift. ?contract_id= a team\'s roster, ?program_id= everyone on a program, else current athletes.', (ctx, r) => maxreport.maxReport(ctx, r.query)],
+  ['GET', '/v1/testing/max-report.csv', 'any', 'Testing', 'The max report as a CSV file (the same filters).', (ctx, r) => maxreport.maxReportCsv(ctx, r.query)],
   ['GET', '/v1/workout-templates', 'any', 'Training', 'Workout templates: name, exercises, warm-up and cool-down. Start a day from one with template_id on POST /v1/programs/:id/workouts.', (ctx) => list(programs.listWorkoutTemplates(ctx))],
   ['DELETE', '/v1/workout-templates/:id', 'any', 'Training', 'Delete a workout template.', (ctx, r) => programs.deleteWorkoutTemplate(ctx, r.params.id)],
   ['POST', '/v1/workouts/:id/save-template', 'any', 'Training', 'Save a workout as a template (its exercises, set details, groups and blocks) under name (default its title).', (ctx, r) => programs.saveWorkoutTemplate(ctx, r.params.id, r.body), 201],

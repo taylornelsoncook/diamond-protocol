@@ -9,6 +9,7 @@ import { maxesBlock, volumeBlock } from './maxes-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
+import { viewMaxReport } from './maxreport-ui.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
@@ -95,7 +96,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'maxes' ? (m) => viewMaxReport(m, { api, header }) : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -3674,6 +3675,7 @@ async function viewTesting(main) {
     days.waiting ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${days.waiting} ${days.waiting === 1 ? 'result is' : 'results are'} waiting to be linked to a profile.${desk ? ' An owner or coach links them.' : ''}`), desk ? null : h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
     header('Testing', 'Combines, evaluations and team testing. Enter results by hand or stopwatch, upload sheets, or connect your devices.', h('div', { class: 'row wrap' },
       h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/library' }, 'Test library'),
+      desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/maxes' }, 'Max report'),
       desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/connections' }, 'Devices'),
       desk ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'),
       desk ? null : h('a', { class: 'dp-btn dp-btn--primary', href: '#/testing/new' }, 'New testing day'))),

@@ -218,12 +218,41 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
 
   const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : {};
   const saveState = () => { writeFileSync(`${stateFile}.tmp`, JSON.stringify(state)); renameSync(`${stateFile}.tmp`, stateFile); };
+  // A folder that was renamed or moved since the last run: the same file name, size and date is the same video, so its
+  // record follows it to the new path instead of being uploaded again.
+  const byFile = new Map();
+  for (const [path, s] of Object.entries(state)) if (s?.video_url) byFile.set(`${basename(path).toLowerCase()}|${s.size}|${s.mtime}`, { path, s });
+  let moved = 0;
+  for (const f of found) {
+    if (state[f.path]) continue;
+    const hit = byFile.get(`${basename(f.path).toLowerCase()}|${f.size}|${f.mtime}`);
+    if (!hit || found.some((g) => g.path === hit.path)) continue;
+    state[f.path] = { ...hit.s, name: f.name, category: f.category };
+    delete state[hit.path];
+    moved++;
+  }
+  if (moved) { saveState(); log(`${moved.toLocaleString()} videos moved to another folder since the last run: their uploads were found by name, size and date.`); }
   const done = (f) => { const s = state[f.path]; return s && s.size === f.size && s.mtime === f.mtime && s.video_url; };
   const todo = found.filter((f) => !done(f) && (convert || AS_IS.has(extname(f.path).toLowerCase())));
   if (found.length - todo.length) log(`${(found.length - todo.length).toLocaleString()} already uploaded on an earlier run.`);
   const work = join(tmpdir(), `dp-videos-${process.pid}`);
   mkdirSync(work, { recursive: true });
-  const rows = () => found.filter(done).map((f) => ({ name: f.name, category: f.category, video_url: state[f.path].video_url, poster_url: state[f.path].poster_url }));
+  // The list is everything uploaded so far, not only this run's folders: videos uploaded on earlier runs from folders not
+  // named this time stay in it (by the name and category the state remembers, or the file name for older records), so
+  // one import always brings the whole library in. The same name twice: this run's folders win.
+  const rows = () => {
+    const out = found.filter(done).map((f) => ({ name: f.name, category: f.category, video_url: state[f.path].video_url, poster_url: state[f.path].poster_url }));
+    const seen = new Set(out.map((r) => r.name.toLowerCase())), here = new Set(found.map((f) => f.path));
+    for (const [path, s] of Object.entries(state)) {
+      if (here.has(path) || !s?.video_url) continue;
+      const name = s.name ?? exerciseName(path);
+      if (!name || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      out.push({ name, category: s.category ?? '', video_url: s.video_url, poster_url: s.poster_url ?? null });
+    }
+    return out;
+  };
+  const earlier = () => rows().length - found.filter(done).length;
   const started = Date.now();
   let n = 0, failed = 0, sent = 0, stop = false;
   const failures = [];
@@ -253,7 +282,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
       const vExt = convert ? '.mp4' : ext;
       await put(c, `${stem}${vExt}`, video, TYPES[vExt]);
       if (poster) await put(c, `${stem}.jpg`, poster, 'image/jpeg');
-      state[f.path] = { size: f.size, mtime: f.mtime, video_url: `${c.publicUrl}/${stem}${vExt}`, poster_url: poster ? `${c.publicUrl}/${stem}.jpg` : null };
+      state[f.path] = { size: f.size, mtime: f.mtime, name: f.name, category: f.category, video_url: `${c.publicUrl}/${stem}${vExt}`, poster_url: poster ? `${c.publicUrl}/${stem}.jpg` : null };
       saveState();
       sent += video.length + (poster?.length ?? 0);
       if (freeSpace) brctl('evict', f.path);         // the original goes back to being an iCloud placeholder; the copy is safe in the bucket
@@ -288,8 +317,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
     finish();
   }
   if (fatal) throw fatal;
-  const ready = rows().length;
-  log(`Done: ${ready.toLocaleString()} exercises in ${outFile} (${mb(sent)} uploaded this run).${failed ? ` ${failed} failed; run the same command again to retry them (details in ${reportFile}).` : ''}`);
+  const ready = rows().length, fromBefore = earlier();
+  log(`Done: ${ready.toLocaleString()} exercises in ${outFile}${fromBefore ? ` (${fromBefore.toLocaleString()} of them uploaded on earlier runs from other folders)` : ''} (${mb(sent)} uploaded this run).${failed ? ` ${failed} failed; run the same command again to retry them (details in ${reportFile}).` : ''}`);
   log('Next: in the app, Settings → Exercise library → Import a list, and choose that file.');
   return { found: found.length, uploaded: n - failed, failed, duplicates: duplicates.length, csv: outFile };
 }

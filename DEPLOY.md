@@ -96,7 +96,7 @@ Your exercise videos live in your own Cloudflare R2 bucket, played from your own
    It lists what it found and writes `video-upload-report.txt` with any name that appears twice (the first folder wins) and any file it can't use.
 5. The real run, kept awake overnight: `caffeinate -i node tools/upload-videos.mjs "/Users/you/Movies/Exercises" "/Volumes/Your Drive/Exercises"`
    It checks the bucket and the address first, then converts and uploads two videos at a time (5,000 clips take several hours). Stop it with Ctrl+C whenever you like; the same command carries on where it stopped and retries anything that failed.
-6. When it says Done, it has written `video-library.csv`.
+6. When it says Done, it has written `video-library.csv`. The list is everything uploaded so far, including earlier runs from folders you didn't name this time, so one import always brings the whole library in (the same name in two places goes in once, from the folders in this run first). It's rewritten every 25 videos and whenever the run stops. A folder you rename or move between runs isn't uploaded again: its videos are known by file name, size and date.
 
 **3. In the app:** Settings → Exercise library → **Import a list** (owner), choose `video-library.csv`, press **Check the list**, then **Bring them in**. Exercises already in the library are left as they are unless you choose to add or replace their video.
 

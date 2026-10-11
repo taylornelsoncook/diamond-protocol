@@ -86,9 +86,10 @@ test('a coach uploads a top-speed rep, marks it, and gets angles, grades, timing
   let r = await mark(1, 'mvp', 0.16, { hip: [500, 300], knee_swing: [600, 300], knee_stance: [500, 400], ankle_swing: [600, 400] });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const mvp = r.body.analysis.positions.find((p) => p.step === 1 && p.position === 'mvp');
-  assert.deepEqual(mvp.measures.map((m) => [m.label, m.value, m.grade]), [['Thigh separation', 90, 'A'], ['Front knee', 90, 'B']]);
-  assert.equal(mvp.grade, 'B');
-  assert.match(mvp.measures[1].cue, /more folded/);
+  assert.deepEqual(mvp.measures.map((m) => [m.label, m.value, m.grade]), [['Thigh separation', 90, 'A'], ['Front knee', 90, 'A']], 'the front knee reads 90°, within 15° of the 105° reference');
+  assert.equal(mvp.grade, 'A');
+  assert.equal(mvp.measures[1].cue, null);
+  assert.match(mvp.look, /front thigh at or above horizontal/); assert.match(mvp.cue, /Knee to the sky/);
   // The timing frames, with the stance foot for distance per step.
   await mark(1, 'toe_off', 0.100, { foot: [300, 600] });
   await mark(1, 'touchdown', 0.225, { knee_stance: [520, 400], ankle_stance: [520, 500] });
@@ -110,8 +111,8 @@ test('a coach uploads a top-speed rep, marks it, and gets angles, grades, timing
   await coach('PATCH', `/v1/sprint-clips/${clip.id}`, { file_fps: 240 });
   // Touchdown's shin is vertical (A); the swing knee wasn't tapped, so only the shin counts. Rep grade from the positions.
   const td = r.body.analysis.positions.find((p) => p.step === 1 && p.position === 'touchdown');
-  assert.deepEqual(td.measures.map((m) => [m.value, m.grade]), [[0, 'A'], [null, null]]);
-  assert.equal((await coach('GET', `/v1/sprint-clips/${clip.id}`)).body.analysis.grade, 'B+');
+  assert.deepEqual(td.measures.map((m) => [m.value, m.grade]), [[0, 'A'], [null, null], [null, null]], 'the swing knee and stance knee were not tapped');
+  assert.equal((await coach('GET', `/v1/sprint-clips/${clip.id}`)).body.analysis.grade, 'A', 'both marked positions grade A');
   // Refused: a position the kind doesn't have, step 3 other than toe-off, a point outside the video, an unknown point.
   assert.equal((await mark(1, 'plant', 0.2)).status, 400);
   assert.equal((await mark(3, 'mvp', 0.6)).status, 400);
@@ -139,7 +140,7 @@ test('a change of direction: contact, braking and push from the plant to the pus
   const r = await mark('push_off', 1.3);
   assert.deepEqual(r.body.analysis.timing.steps[0], { step: 1, contact_s: 0.3, braking_s: 0.15, propulsion_s: 0.15 });
   const plant = r.body.analysis.positions.find((p) => p.position === 'plant');
-  assert.deepEqual(plant.measures.map((m) => [m.measure, m.value]), [['shin_lean', 31], ['trunk_lean_any', 11]]);
+  assert.deepEqual(plant.measures.map((m) => [m.measure, m.value]), [['stance_knee', 149], ['shin_lean', 31], ['trunk_lean_any', 11]], 'the knee at contact is graded first (the injury number)');
 });
 
 test('an athlete sends a rep and marks it; the coach marks and sends it with a message, then the marks are the coach\'s', async () => {
@@ -208,7 +209,7 @@ test('the owner sets the references; coaches read them; every clip is re-graded'
   const refs = (await coach('GET', '/v1/sprint/references')).body;
   const ts = refs.kinds.find((k) => k.key === 'top_speed');
   assert.deepEqual(ts.positions.map((p) => p.key), ['toe_off', 'mvp', 'strike', 'touchdown', 'full_support']);
-  assert.deepEqual(ts.positions[1].measures.map((m) => [m.measure, m.target]), [['thigh_separation', 90], ['swing_knee', 115]]);
+  assert.deepEqual(ts.positions[1].measures.map((m) => [m.measure, m.target]), [['thigh_separation', 90], ['swing_knee', 105]]);
   assert.equal(refs.customized, false);
   assert.equal((await coach('PATCH', '/v1/sprint/references', { references: { top_speed: { mvp: [{ measure: 'thigh_separation', target: 80, a: 10, b: 20 }] } } })).status, 403);
   assert.equal((await desk('GET', '/v1/sprint/references')).status, 403);
@@ -247,9 +248,9 @@ test('the breakdown per step: projection and switching, as in the owner\'s scree
   assert.equal(val('projection', 'hip_displacement_m').summary, 'Below average on the step');
   assert.deepEqual(val('projection', 'hip_displacement_m').values[0].at, { step: 2, position: 'toe_off' }, 'drawn once the next toe-off is passed');
   const [proj, sw, re] = b.chapters;
-  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Very good', '2. Switching', 'Very good']);
+  assert.deepEqual([proj.label, proj.score, proj.word, sw.label, sw.word], ['1. Projection', 75, 'Very good', '2. Switching', 'Good']);
   // 3. Reactivity: contact from touchdown to the next toe-off (0.1 s, short), and no hip drop to full support (minimal).
-  assert.deepEqual([re.label, val('reactivity', 'gct_s').values[0].value, val('reactivity', 'gct_s').summary, val('reactivity', 'compression_m').values[0].word], ['3. Reactivity', 0.1, 'Short on the step', 'Minimal']);
+  assert.deepEqual([re.label, val('reactivity', 'gct_s').values[0].value, val('reactivity', 'gct_s').summary, val('reactivity', 'compression_m').values[0].word], ['3. Reactivity', 0.1, 'Average on the step', 'Minimal']);
   // The four thigh phases, split at the ALTIS positions: with MVP's front thigh, the landing thigh and the second toe-off's thighs tapped, every phase reads.
   await mark(1, 'mvp', 0.16, { hip: [550, 290], knee_swing: [640, 320], knee_stance: [520, 340] });
   await mark(1, 'touchdown', 0.225, { hip: [600, 300], knee_swing: [618, 350], knee_stance: [640, 345], foot: [647, 500] });   // the landing thigh 42° forward
@@ -330,7 +331,7 @@ test('suggested marks: saved as suggestions, graded at once, never over a person
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.deepEqual([r.body.suggested_added, r.body.kept_manual, r.body.auto_note, r.body.steps, r.body.direction], [1, 1, 'Found 3 steps.', 2, 1], 'a person had marked already: their steps, direction and touchdown stay');
   const pos = (b, p) => b.analysis.positions.find((x) => x.step === 1 && x.position === p);
-  assert.deepEqual([pos(r.body, 'mvp').suggested, pos(r.body, 'mvp').grade, pos(r.body, 'touchdown').suggested, pos(r.body, 'touchdown').t], [true, 'B', false, 0.3]);
+  assert.deepEqual([pos(r.body, 'mvp').suggested, pos(r.body, 'mvp').grade, pos(r.body, 'touchdown').suggested, pos(r.body, 'touchdown').t], [true, 'A', false, 0.3]);
   assert.equal(r.body.analysis.suggested, 1);
   // Running it again replaces only the earlier suggestions.
   const again = (await coach('PUT', `/v1/sprint-clips/${clip.id}/auto`, { marks: [{ step: 1, position: 'strike', t: 0.2, points: {} }] })).body;

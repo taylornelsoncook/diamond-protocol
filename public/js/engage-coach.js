@@ -573,6 +573,12 @@ export async function viewEducation(main) {
         cat === 'coach' ? h('div', { class: 'row wrap', style: 'gap:8px' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
           btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website.')).catch(() => toast('Copy did not work here. Select the link and copy it.', 'warn')), 'ghost'),
           h('a', { class: 'dp-btn dp-btn--ghost', href: '/learn', target: '_blank', rel: 'noopener' }, 'View')) : null,
+        // Coach's references that ship with the platform (the sprint research brief, as a PDF and a printable page).
+        cat === 'coach' ? panel('Coach\'s references', { subtitle: 'Reading that comes with the platform. Download or print it for the staff room.' },
+          h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, 'Sprint positions: the angles that make athletes fast'),
+            h('span', { class: 'small muted' }, 'Max velocity, acceleration and change of direction: what to look for at each position, the common faults and cues, and the numbers the Sprint tab grades against.')),
+            h('a', { class: 'dp-btn dp-btn--secondary', href: '/education/sprint-positions.pdf', target: '_blank', rel: 'noopener' }, 'PDF'),
+            h('a', { class: 'dp-btn dp-btn--ghost', href: '/education/sprint-positions.html', target: '_blank', rel: 'noopener' }, 'Printable page'))) : null,
         hasCourses ? panel('Courses', { subtitle: cat === 'parent' ? 'Lessons in order, in the parent portal.' : 'Lessons in order. Athletes see the next lesson when they finish one.', action: manage ? btn('New course', () => courseDialog(null, { audience: cat === 'parent' ? 'parents' : 'athletes' }), 'secondary') : null },
           starter,
           courses.length ? courses.map(({ c, lessons }) => courseBlock(c, lessons)) : h('p', { class: 'muted' }, edu.courses.some((c) => courseCat(c) === cat) ? 'No courses match.' : 'No courses yet. A course is a short series of lessons, like "Recovery basics".')) : null,

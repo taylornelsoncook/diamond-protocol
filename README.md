@@ -97,6 +97,8 @@ The seed prints your login and a sample client app link. To start over, delete t
 
 **The max report:** Testing → Max report puts every athlete's maxes side by side, lifts across, with a total per athlete and the team's average per lift; a grey number is estimated from logged sets. Filter by team or program, sort any column, type a tested max straight into a cell, print it or download the CSV.
 
+**The timeline:** every athlete's profile has a Timeline tab, everything they did newest first (workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges, reading, steps up), filtered by kind. The app's new Profile tab shows the same timeline with their maxes, streaks and links to the family's account, so one link reaches everything; parents see it under each athlete in the portal.
+
 **Drag, drop and send:** drag an exercise anywhere in the week, and drag a day (or the ticked days) onto a school, a team or an athlete in the Send to panel to put those days on their calendars from a date you pick.
 
 **The week grid:** a program's week is seven day columns, each a list of lettered blocks with one line per exercise and the day's instructions on top; tick days and copy, move, repeat, save or delete them together; the day's and the week's reps show as you build.

@@ -191,3 +191,14 @@
 .eg-board li{display:flex;align-items:center;gap:10px;min-height:40px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--surface)}
 .eg-board-me{border:1px solid var(--green-mid)}
 .eg-board-rank{width:22px;text-align:center;font:600 13px/1 var(--font-display);color:var(--steel-muted)}
+
+/* The timeline (the client page's Timeline tab, the app's Profile tab, the portal's Timeline sub-tab). */
+.tl-chips{gap:6px}
+.tl-chips .tm-view{min-height:36px;padding:0 10px;font-size:13px}
+.tl-list{display:flex;flex-direction:column}
+.tl-list>*+*{border-top:1px solid var(--line-subtle)}
+.tl-item{display:flex;align-items:flex-start;gap:12px;padding:10px 0}
+.tl-icon{flex:0 0 26px;width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;background:var(--surface-raised);color:var(--steel-muted);border:1px solid var(--line)}
+.tl-item--workout .tl-icon,.tl-item--step .tl-icon{color:var(--green-soft, #7DBA70);border-color:var(--green-mid)}
+.tl-item--max .tl-icon,.tl-item--result .tl-icon,.tl-item--badge .tl-icon{color:var(--steel)}
+.tl-when{flex:0 0 auto;white-space:nowrap;padding-top:4px}

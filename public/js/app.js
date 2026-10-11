@@ -10,6 +10,7 @@ import { formChecksBlock } from './formchecks-ui.js';
 import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
 import { viewMaxReport } from './maxreport-ui.js';
+import { timelineBlock } from './timeline-ui.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
@@ -1147,7 +1148,12 @@ async function viewClient(main, id) {
   const formChecksPanel = canAnswer ? panel('Form checks', { subtitle: 'Clips sent from the app. Your answer goes to the athlete as a message too; add a clip of your own if it helps.' }, fcBlock.el) : null;
   // The page's sections as tabs. Each panel is built once above; a tab shows only its own panels, so the page stays
   // short and money stays where the roles rules put it (panels the signed-in role can't have are already null).
+  // Everything the athlete did, newest first (the builder redesign, step 5): one line each, linking to the tab that holds it.
+  const TL_TABS = { workout: 'training', step: 'training', checkin: 'training', result: 'testing', max: 'testing', badge: 'testing', sprint: 'sprint', form_check: 'form-checks', attendance: 'schedule', reading: 'education', purchase: 'membership' };
+  const timelinePanel = panel('Timeline', { subtitle: `Everything ${first} did, newest first: workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges, reading and steps up.` },
+    timelineBlock(get, `/v1/clients/${id}/athlete-timeline`, { linkFor: (it) => (TL_TABS[it.kind] && TABS_HAVE(TL_TABS[it.kind]) ? `#/clients/${id}?tab=${TL_TABS[it.kind]}` : null) }));
   const TABS = [
+    ['timeline', 'Timeline', [timelinePanel]],
     ['family', 'Family', [familyPanel ?? noFamilyPanel, requestsPanel, mergePanel]],
     ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
     ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
@@ -1162,6 +1168,7 @@ async function viewClient(main, id) {
     ['contact', 'Contact history', [contactHistoryPanel(id, c)]],
     ['profile', 'Profile', [account]]
   ].map(([key, label, panels]) => [key, label, panels.filter(Boolean)]).filter(([, , panels]) => panels.length);
+  function TABS_HAVE(key) { return TABS.some(([k]) => k === key); }
   // Older links name a section (Today's "Watch" is ?tab=form-checks, "Open" ?tab=training, the card ?tab=sessions).
   const TAB_ALIASES = { requests: 'family', merge: 'family', sessions: 'membership', upcoming: 'schedule', attendance: 'schedule', outside: 'recovery' };
   const tabBar = h('nav', { class: 'tm-jump', role: 'tablist', 'aria-label': 'Sections' }, TABS.map(([key, label]) => h('button', { type: 'button', role: 'tab', 'aria-selected': 'false', 'data-tab': key }, label)));

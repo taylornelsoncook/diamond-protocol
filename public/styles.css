@@ -369,3 +369,6 @@ td .dp-badge{white-space:nowrap}
 .sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}
 .sp-pos--suggested{border-style:dashed;border-color:var(--amber)}
 .sp-suggest-note{border-left:3px solid var(--amber);padding-left:8px}
+/* Example figures for the sprint positions (sprint-figure.js). */
+.sp-figure-pic{flex:0 0 auto;width:120px;height:142px}
+.sp-figure-pic svg{width:100%;height:100%;display:block}

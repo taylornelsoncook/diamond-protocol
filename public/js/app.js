@@ -3300,9 +3300,11 @@ async function viewTeams(main) {
       metric('Waiting on payment', money(sum.open_cents), nplural(sum.open_count, 'open invoice')),
       metric('Overdue', money(overdue.reduce((t, i) => t + i.amount_cents, 0)), `${overdue.length} past due`, overdue.length ? 'warn' : null),
       metric('Collected', money(sum.collected_30_cents), 'Last 30 days')),
-    panel('Contracts', { subtitle: `${nplural(sum.athletes, 'athlete')} on active rosters.`, action: all.length > 1 ? views : null }, search, box),
+    // Active contracts and unpaid invoices are the front of the page (owner's ask); Ended and All show every team ever
+    // in the system, whatever the count.
+    panel('Contracts', { subtitle: `${nplural(sum.athletes, 'athlete')} on active rosters.`, action: all.length ? views : null }, search, box),
     panel('Unpaid invoices', { subtitle: 'Invoices email the school\'s billing contact with a link to view, print or pay online. Overdue ones get a reminder each week.', action: remind },
-      unpaid.data.length ? unpaid.data.map((i) => invoiceRow(i, { showTeam: true })) : h('p', { class: 'muted' }, 'Nothing unpaid. Every school invoice is settled.')));
+      unpaid.data.length ? [...unpaid.data].sort((a, b) => (a.status === 'overdue' ? 0 : 1) - (b.status === 'overdue' ? 0 : 1) || a.due_on.localeCompare(b.due_on)).map((i) => invoiceRow(i, { showTeam: true })) : h('p', { class: 'muted' }, 'Nothing unpaid. Every school invoice is settled.')));
 }
 
 async function viewNewTeam(main) {

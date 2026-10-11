@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL DEFAULT 'owner' CHECK (role IN ('owner','coach','front_desk')),
   active INTEGER NOT NULL DEFAULT 1,
   must_change_password INTEGER NOT NULL DEFAULT 0,
+  title TEXT,       -- version 72: shown on a program's sales page ("Head speed coach")
+  bio TEXT,         -- version 72: how this coach trains, in their words
+  photo_url TEXT,   -- version 72: an https picture link (jpg, png or webp)
   failed_logins INTEGER NOT NULL DEFAULT 0,
   locked_until TEXT,
   last_login_at TEXT,
@@ -175,7 +178,10 @@ CREATE TABLE IF NOT EXISTS programs (
   created_at TEXT NOT NULL,
   for_sale INTEGER NOT NULL DEFAULT 0,   -- sold online in the parent portal and at /shop (version 26)
   price_cents INTEGER,
-  kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts'))   -- version 63: a program, a program template, or the one holder of workout templates
+  kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts')),   -- version 63: a program, a program template, or the one holder of workout templates
+  pitch TEXT,                                                   -- version 72: the sales page's longer text
+  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,        -- version 72: the coach shown on the sales page
+  trial_days INTEGER NOT NULL DEFAULT 0 CHECK (trial_days BETWEEN 0 AND 30)   -- version 72: a free trial before the card is charged (0 = none)
 );
 CREATE TABLE IF NOT EXISTS workouts (
   id TEXT PRIMARY KEY,
@@ -1158,9 +1164,13 @@ CREATE TABLE IF NOT EXISTS purchases (
   amount_cents INTEGER NOT NULL,
   sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
   guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','refunded')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','refunded','trial','canceled')),   -- version 72: trial = free days before the charge; canceled = a trial ended without paying
   created_at TEXT NOT NULL,
-  refunded_at TEXT
+  refunded_at TEXT,
+  trial_ends_at TEXT,                          -- version 72: when the card is charged (a trial)
+  charge_tries INTEGER NOT NULL DEFAULT 0,     -- version 72: charges tried at the end of the trial
+  last_try_at TEXT,
+  canceled_at TEXT
 );
 CREATE INDEX IF NOT EXISTS purchases_client ON purchases(client_id, item_kind, item_id);
 -- Open-spot offers (version 27): a family is told a class it fits has room; the first to tap the link gets the spot.

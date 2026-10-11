@@ -476,7 +476,7 @@ export async function viewProgram(main, id) {
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/v1/programs/${encodeURIComponent(id)}/export.xlsx` }, 'Excel')) : null,
     isTemplate ? null : clientsPanel(p, edit),
     modeBar, tabsBox, weekBox, planBox,
-    shop && !isTemplate ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render())) : null,
+    shop && !isTemplate ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render(), { get })) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
       edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
   go(week);

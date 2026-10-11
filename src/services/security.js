@@ -109,7 +109,7 @@ export function workload(ctx, userId) {
 const hasWork = (w) => w.sessions + w.classes + w.hours > 0;
 export function listStaff(ctx) {
   const now = ctx.now();
-  return ctx.db.all(`SELECT id, email, name, role, active, must_change_password, locked_until, last_login_at, created_at,
+  return ctx.db.all(`SELECT id, email, name, role, active, must_change_password, locked_until, last_login_at, created_at, title, bio, photo_url,
       (SELECT COUNT(*) FROM sessions s WHERE s.user_id = users.id AND s.expires_at > ?) AS devices FROM users ORDER BY active DESC, role, name`, now)
     .map((u) => {
       const work = workload(ctx, u.id);
@@ -146,9 +146,17 @@ export function updateStaff(ctx, id, body, actor) {
   if (u.role === 'owner' && u.active && (role !== 'owner' || !active) && activeOwners(ctx) <= 1) throw conflict('There has to be at least one active owner. Make someone else an owner first.');
   if (actor?.id === id && !active) throw conflict('You can\'t turn off your own account. Ask another owner.');
   if (actor?.id === id && role !== u.role) throw conflict('You can\'t change your own role. Ask another owner.');
+  // The sales page's coach card (version 72): a title, a bio and a picture link.
+  const title = body.title === undefined ? u.title ?? null : (v.str(body.title, 'title', { max: 80, optional: true }) || null);
+  const bio = body.bio === undefined ? u.bio ?? null : (v.str(body.bio, 'bio', { max: 1500, optional: true }) || null);
+  let photo = u.photo_url ?? null;
+  if (body.photo_url !== undefined) {
+    photo = v.str(body.photo_url, 'photo_url', { max: 500, optional: true }) || null;
+    if (photo && !/^https:\/\/[^\s]+\.(jpe?g|png|webp)(\?[^\s]*)?$/i.test(photo)) throw badRequest('The photo link must start with https:// and end in .jpg, .png or .webp.');
+  }
   ctx.db.tx(() => {
-    ctx.db.run('UPDATE users SET name = ?, email = ?, role = ?, active = ?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END, failed_logins = CASE WHEN ? THEN 0 ELSE failed_logins END WHERE id = ?',
-      body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : u.name, email, role, active ? 1 : 0, body.unlock ? 1 : 0, body.unlock ? 1 : 0, id);
+    ctx.db.run('UPDATE users SET name = ?, email = ?, role = ?, active = ?, title = ?, bio = ?, photo_url = ?, locked_until = CASE WHEN ? THEN NULL ELSE locked_until END, failed_logins = CASE WHEN ? THEN 0 ELSE failed_logins END WHERE id = ?',
+      body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : u.name, email, role, active ? 1 : 0, title, bio, photo, body.unlock ? 1 : 0, body.unlock ? 1 : 0, id);
     if (!active || role !== u.role) ctx.db.run('DELETE FROM sessions WHERE user_id = ?', id);       // takes effect immediately
     if (!active || emailChanged) cancelResets(ctx, id);                                             // a link sent to the old address stops working
   });

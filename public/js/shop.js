@@ -25,14 +25,16 @@ function render(d) {
       h('div', { class: 'grow stack-tight' },
         h('span', { class: 'small muted', style: 'text-transform:uppercase;letter-spacing:.04em' }, x.kind === 'program' ? 'Training program' : 'Course'),
         h('h2', { class: 'dp-panel-title', style: 'margin:0' }, x.title),
-        h('span', { class: 'small muted' }, facts(x))),
+        h('span', { class: 'small muted' }, facts(x)),
+        x.trial_days > 0 ? h('span', { class: 'dp-badge dp-badge--good', style: 'align-self:flex-start' }, `Free for ${x.trial_days} days`) : null),
       h('span', { class: 'p-title', style: 'margin:0;font-size:28px' }, money(x.price_cents))),
     x.description ? h('p', { style: 'margin:0' }, x.description) : null,
     x.outline.length ? h('details', null, h('summary', { class: 'small', style: 'cursor:pointer' }, x.kind === 'program' ? 'What week 1 looks like' : 'What\'s inside'),
       h('ul', { class: 'small muted', style: 'margin:8px 0 0;padding-left:20px' }, x.outline.map((t) => h('li', null, t)))) : null,
     h('p', { class: 'small muted', style: 'margin:0' }, x.kind === 'program' ? 'Your athlete follows it in their own app, with demo videos for every exercise.' : 'Your athlete reads and watches it in their own app.'),
     h('div', { class: 'row wrap', style: 'gap:8px' },
-      h('a', { class: 'dp-btn dp-btn--primary', href: `/parent?buy=${x.kind}:${x.id}` }, 'I have an account: buy'),
+      x.kind === 'program' ? h('a', { class: 'dp-btn dp-btn--secondary', href: `/shop/${encodeURIComponent(x.id)}` }, 'See the program') : null,
+      h('a', { class: 'dp-btn dp-btn--primary', href: `/parent?buy=${x.kind}:${x.id}` }, x.trial_days > 0 ? 'I have an account: start the trial' : 'I have an account: buy'),
       h('a', { class: 'dp-btn dp-btn--secondary', href: newFamily(x) }, d.signup_open ? 'New? Sign up and buy' : 'New? Ask about it')));
 
   fill(root, h('main', { class: 'p-wrap' },

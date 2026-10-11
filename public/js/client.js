@@ -357,8 +357,14 @@ function startupPanel(home, { change = false } = {}) {
 // "Your gear": what's on file, Change, and for an athlete who trains both places, where they are today.
 function gearCard(home) {
   const st = home.startup;
-  if (!st || st.needed || !st.profile) return null;
+  if (!st || st.needed) return null;
   if (gearOpen) return startupPanel(home, { change: true });
+  // A program bought online comes with no answers yet (the sales page): ask where they train and what gear they have.
+  if (st.ask_gear && !st.profile) return h('div', { class: 'dp-panel stack-tight su-gear' },
+    h('span', { class: 'dp-label' }, 'Make it fit'),
+    h('span', { class: 'small' }, 'Tell us where you train and what gear you have, and exercises that need gear you don\'t have are swapped for ones you can do.'),
+    h('div', null, btn('Answer a few questions', () => { gearOpen = true; render(); }, 'secondary')));
+  if (!st.profile) return null;
   const gear = st.gear;
   const both = gear?.trains_at === 'both';
   return h('div', { class: 'dp-panel stack-tight su-gear' },

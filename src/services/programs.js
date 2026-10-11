@@ -619,7 +619,7 @@ export function appAccess(ctx, client) {
   const status = sub?.status ?? 'none';
   if (client.archived_at) return { status, open: false, message: 'Your profile is on hold. Message your coach to get back in.' };
   if (clientLock(ctx, client.id)) return { status, open: false, payment_locked: true, message: athleteLockMessage };
-  const bought = !ACCESS[status] && ctx.db.get(`SELECT a.id FROM assignments a JOIN purchases b ON b.client_id = a.client_id AND b.item_kind = 'program' AND b.item_id = a.program_id AND b.status = 'active' WHERE a.client_id = ? AND a.active = 1`, client.id);
+  const bought = !ACCESS[status] && ctx.db.get(`SELECT a.id FROM assignments a JOIN purchases b ON b.client_id = a.client_id AND b.item_kind = 'program' AND b.item_id = a.program_id AND b.status IN ('active', 'trial') WHERE a.client_id = ? AND a.active = 1`, client.id);
   if (ACCESS[status] || bought) return { status, open: true };
   return { status, open: false, message: status === 'paused' ? 'Your membership is paused. Message your coach to pick back up.' : 'You don\'t have an active membership. Message your coach to get started.' };
 }
@@ -886,7 +886,10 @@ const NO_PROGRAM_TEXT = { no_match: 'Your answers are with your coach. They\'re 
 function startupState(ctx, clientId, hasProgram) {
   const profile = trainingProfile(ctx, clientId);
   const gear = profile?.equipment_answered ? { trains_at: profile.trains_at, equipment: profile.equipment, labels: profile.equipment_labels } : null;
-  return { profile: profile ? { goal: profile.goal, goal_label: profile.goal_label, experience: profile.experience, days_per_week: profile.days_per_week, training_days: profile.training_days, trains_at: profile.trains_at, equipment: profile.equipment, outcome: profile.outcome, answered_at: profile.answered_at } : null,
+  // A program bought online (the sales page, version 72) comes with no answers yet: the app asks where they train and
+  // what gear they have, so the first workout already fits.
+  const bought = hasProgram && !profile && !!ctx.db.get(`SELECT b.id FROM purchases b JOIN assignments a ON a.client_id = b.client_id AND a.program_id = b.item_id AND a.active = 1 WHERE b.client_id = ? AND b.item_kind = 'program' AND b.status IN ('active', 'trial')`, clientId);
+  return { ask_gear: bought, profile: profile ? { goal: profile.goal, goal_label: profile.goal_label, experience: profile.experience, days_per_week: profile.days_per_week, training_days: profile.training_days, trains_at: profile.trains_at, equipment: profile.equipment, outcome: profile.outcome, answered_at: profile.answered_at } : null,
     gear, needed: !hasProgram && !profile, message: hasProgram ? null : NO_PROGRAM_TEXT[profile?.outcome] ?? (profile ? NO_PROGRAM_TEXT.suggested : 'Answer a few questions and your first program is ready.') };
 }
 // at: 'home' when a "both" athlete says they're training at home today (the gear swaps apply).

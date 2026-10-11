@@ -18,7 +18,7 @@ import { newId, v, notFound, badRequest, conflict } from '../util.js';
 import { getSetting } from './families.js';
 import { emit } from './events.js';
 import { sendEmail } from './mail.js';
-import { parseDays, daysNeeded, defaultDays, today as localToday } from './training-calendar.js';
+import { parseDays, daysNeeded, defaultDays, setSchedule, today as localToday } from './training-calendar.js';
 import * as programs from './programs.js';
 import { insertSwaps } from './live.js';
 import { notify as pushNotify } from './push.js';
@@ -105,6 +105,12 @@ export function answer(ctx, clientId, body = {}, who = { by: 'athlete' }, { plac
       trains_at = excluded.trains_at, equipment = excluded.equipment, note = excluded.note, answered_by = excluded.answered_by, updated_at = excluded.answered_at`,
     c.id, f.goal, f.sport ?? c.sport ?? null, f.experience, f.days_per_week, f.training_days, f.trains_at, f.equipment, f.note, who.by, now);
   if (f.sport && f.sport !== c.sport) ctx.db.run('UPDATE clients SET sport = ? WHERE id = ?', f.sport, c.id);
+  // First answers from an athlete already on a program they bought online (version 72): their training days set the calendar.
+  if (!cur.client_id && f.training_days) {
+    const a = ctx.db.get('SELECT program_id FROM assignments WHERE client_id = ? AND active = 1', c.id);
+    const days = a ? parseDays(f.training_days) : null;
+    if (a && days.length >= daysNeeded(ctx, a.program_id)) setSchedule(ctx, c.id, { training_days: days });
+  }
   emit(ctx, 'startup.answered', { client_id: c.id, client_name: c.name, by: who.by, goal: f.goal, experience: f.experience, days_per_week: f.days_per_week, trains_at: f.trains_at, equipment: splitList(f.equipment) });
   const placed = place ? placeAthlete(ctx, c, who) : null;
   return { profile: getProfile(ctx, c.id), placed };

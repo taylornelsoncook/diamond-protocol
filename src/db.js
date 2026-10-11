@@ -3,7 +3,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { newId, token } from './util.js';
 import { newAthleteId } from './services/athlete-ids.js';
-import { splitRx } from './services/rx.js';
+import { splitRx, splitDistance, normalizeTempo } from './services/rx.js';
 
 // Thin wrapper over node:sqlite. Every query in the app goes through all/get/run/tx,
 // so moving to Postgres later means reimplementing this file and adjusting SQL dialect.
@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 72;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials)
+const SCHEMA_VERSION = 73;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -121,7 +121,8 @@ const ADDED_COLUMNS = {
   locations: ['checkin_code TEXT'],                                       // version 16
   products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
   sale_items: ['variant_id TEXT'],                                        // version 17
-  workout_exercises: ['form_check INTEGER NOT NULL DEFAULT 0', 'form_check_note TEXT',   // version 61: a form check asked on the exercise
+  workout_exercises: ['distance TEXT',   // version 73: a distance per set, beside the reps
+    'form_check INTEGER NOT NULL DEFAULT 0', 'form_check_note TEXT',   // version 61: a form check asked on the exercise
     'load_test TEXT', 'load_pct INTEGER',              // version 21: weights from tested maxes
     'sets INTEGER', 'reps TEXT', 'tempo TEXT', 'rest_seconds INTEGER', 'target_rpe REAL', 'load_text TEXT',   // version 49: structured set details
     'group_label TEXT', "group_kind TEXT CHECK (group_kind IN ('superset','circuit','block'))", 'note TEXT'],
@@ -257,7 +258,28 @@ function migrate(raw, schema) {
       raw.exec('COMMIT');
     } catch (e) { raw.exec('ROLLBACK'); throw e; }
   }
+  if (version < 73) splitDistances(raw);
 }
+
+// ---------- Version 73: distance and tempo ----------
+// Reps that were only a distance ("20 yd", "5 × 20 yd") move to the distance field, and a tempo gets its fourth count
+// ("3-1-1" → "3-1-1-0"). Text that isn't a tempo is left as it is. The short text is rebuilt where the reps moved.
+function splitDistances(raw) {
+  if (!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workout_exercises'`).get()) return;
+  const upd = raw.prepare('UPDATE workout_exercises SET reps = ?, distance = ?, tempo = ?, prescription = ? WHERE id = ?');
+  raw.exec('BEGIN');
+  try {
+    for (const r of raw.prepare('SELECT id, sets, reps, distance, tempo, load_text, prescription FROM workout_exercises WHERE distance IS NULL AND (reps IS NOT NULL OR tempo IS NOT NULL)').all()) {
+      const d = r.reps ? splitDistance(r.reps) : { reps: r.reps, distance: null };
+      const tempo = r.tempo ? normalizeTempo(r.tempo) ?? r.tempo : r.tempo;
+      if (d.distance == null && tempo === r.tempo) continue;
+      const text = d.distance == null ? r.prescription : rxLine({ sets: r.sets, reps: d.reps, distance: d.distance, load_text: r.load_text });
+      upd.run(d.reps, d.distance, tempo, text, r.id);
+    }
+    raw.exec('COMMIT');
+  } catch (e) { raw.exec('ROLLBACK'); throw e; }
+}
+const rxLine = (f) => { const core = f.sets && (f.reps || f.distance) ? [f.sets, f.reps, f.distance].filter(Boolean).join(' × ') : f.sets ? `${f.sets} sets` : [f.reps, f.distance].filter(Boolean).join(' × '); return [core, f.load_text ? `@ ${f.load_text}` : null].filter(Boolean).join(' '); };
 
 // ---------- Version 45: CRM ----------
 // Leads gain a trial stage and more sources, so the table is rebuilt (rows copied as they are); a group text has no email,

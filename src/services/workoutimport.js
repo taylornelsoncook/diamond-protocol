@@ -8,6 +8,7 @@
 // Needs ANTHROPIC_API_KEY (the owner adds it in Render). The file goes to Anthropic to be read and nothing else.
 import { newId, v, badRequest, notFound, HttpError } from '../util.js';
 import { CATEGORIES, LOAD_TESTS, GROUP_KINDS, getProgram, loadInput, slotFields, insertSlot, rxText, splitRx } from './programs.js';
+import { splitDistance, normalizeTempo } from './rx.js';
 import { rateLimit } from './security.js';
 
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;      // Anthropic takes up to 32 MB a request; base64 adds a third
@@ -67,9 +68,9 @@ const DRAFT_SCHEMA = {
     workouts: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['week', 'day', 'title', 'exercises'], properties: {
       week: { type: 'integer' }, day: { type: 'integer' }, title: { type: 'string' },
       exercises: { type: 'array', items: { type: 'object', additionalProperties: false,
-        required: ['name', 'library_match', 'sets', 'reps', 'tempo', 'rest_seconds', 'rpe', 'load_text', 'group', 'group_kind', 'load_lift', 'load_pct', 'note'], properties: {
+        required: ['name', 'library_match', 'sets', 'reps', 'distance', 'tempo', 'rest_seconds', 'rpe', 'load_text', 'group', 'group_kind', 'load_lift', 'load_pct', 'note'], properties: {
           name: { type: 'string' }, library_match: { type: 'string' },
-          sets: { type: 'integer' }, reps: { type: 'string' }, tempo: { type: 'string' }, rest_seconds: { type: 'integer' }, rpe: { type: 'number' }, load_text: { type: 'string' },
+          sets: { type: 'integer' }, reps: { type: 'string' }, distance: { type: 'string' }, tempo: { type: 'string' }, rest_seconds: { type: 'integer' }, rpe: { type: 'number' }, load_text: { type: 'string' },
           group: { type: 'string' }, group_kind: { type: 'string', enum: [...Object.keys(GROUP_KINDS), ''] },
           load_lift: { type: 'string', enum: [...Object.keys(LOAD_TESTS), ''] }, load_pct: { type: 'integer' }, note: { type: 'string' } } } } } } },
     unclear: { type: 'array', items: { type: 'string' } }
@@ -85,7 +86,7 @@ The app's format:
 
 The app's format:
 - A program has weeks (1 to 52). Each week has days (1 to 7). Each day is one workout with a short title (for example "Lower body" or "Day 1"). A workout has exercises in order.
-- Each exercise has separate fields: sets (a whole number, 1 to 12; 0 when the ${spoken ? 'coach gives' : 'file gives'} none), reps as short text exactly as the file means it ("8", "8-10", "5/side", "30 sec", "20 yd", "max"; "" when none), tempo ("3-1-1", "" when none), rest_seconds (the rest after each set in seconds, 0 when none is given), rpe (the target RPE 1 to 10, 0 when none), and load_text (a load written as text, like "135 lb", "BW", "moderate", "60% 1RM" for a lift that isn't below; "" when none).
+- Each exercise has separate fields: sets (a whole number, 1 to 12; 0 when the ${spoken ? 'coach gives' : 'file gives'} none), reps as short text exactly as the file means it ("8", "8-10", "5/side", "30 sec", "max"; "" when none), distance per rep or set when the exercise is run or carried over a distance ("20 yd", "40 m"; "" when none; never put a distance in reps), tempo as four counts down-pause-up-pause ("3-1-1-0"; "" when none), rest_seconds (the rest after each set in seconds, 0 when none is given), rpe (the target RPE 1 to 10, 0 when none), and load_text (a load written as text, like "135 lb", "BW", "moderate", "60% 1RM" for a lift that isn't below; "" when none).
 - When the file gives a weight as a percent of a tested max of the back squat, bench press or power clean, set load_lift to squat_1rm, bench_1rm or power_clean_1rm and load_pct to the whole-number percent (30 to 110). Otherwise load_lift is "" and load_pct is 0. Coaching cues go in note (short).
 - If the file says a workout repeats (for example "weeks 1-4" or "repeat for 3 weeks"), list it once for every week it covers. If weeks change the sets or percents, use each week's own numbers.
 - If the ${spoken ? 'coach names no weeks' : 'file has no weeks'}, everything is week 1. Number days in the order they appear (Day 1, Day 2...), or by weekday (Monday = 1).${spoken ? ' A single workout with no day is week 1, day 1; give it a short title from what the coach said ("Lower body", "Speed day").' : ''}
@@ -247,12 +248,15 @@ function draftFields(x, dropped = () => {}) {
   const rest = Math.trunc(Number(x?.rest_seconds));
   const rpe = Number(x?.rpe);
   const group = clean(x?.group, 5).toUpperCase();   // one letter; "ZZ" or "A1" is dropped
-  const reps = clean(x?.reps, 80) || null;
-  const f = { sets: sets >= 1 && sets <= 12 ? sets : null, reps, tempo: clean(x?.tempo, 20) || null,
+  const split = splitDistance(clean(x?.reps, 80) || null);
+  const reps = split.reps, distance = clean(x?.distance, 20) || split.distance || null;
+  const tempoIn = clean(x?.tempo, 20) || null, tempo = tempoIn ? normalizeTempo(tempoIn) ?? null : null;
+  if (tempoIn && !tempo) dropped(`the tempo "${tempoIn}" isn't four counts like 3-1-1-0, so it was left blank.`);
+  const f = { sets: sets >= 1 && sets <= 12 ? sets : null, reps, distance, tempo,
     rest_seconds: Number.isInteger(rest) && rest > 0 && rest <= 1800 ? rest : null,
     target_rpe: rpe >= 1 && rpe <= 10 && Math.round(rpe * 2) === rpe * 2 ? rpe : null, load_text: clean(x?.load_text, 40) || null,
     group_label: /^[A-Z]$/.test(group) ? group : null, group_kind: null };
-  if (sets > 12) { f.reps = [sets, reps].filter(Boolean).join(' × ') || null; dropped(`${sets} sets is more than the ${12} an athlete logs, so "${f.reps}" is kept as text.`); }   // like splitRx
+  if (sets > 12) { f.reps = [sets, reps, distance].filter(Boolean).join(' × ') || null; f.distance = null; dropped(`${sets} sets is more than the ${12} an athlete logs, so "${f.reps}" is kept as text.`); }   // like splitRx
   if (rest > 1800) dropped(`a rest of ${rest} seconds is more than 30 minutes, so it was left blank.`);
   if (x?.rpe && f.target_rpe === null) dropped(`an RPE of ${x.rpe} isn't 1 to 10 in halves, so it was left blank.`);
   if (group && !f.group_label) dropped(`the group "${group}" isn't one letter, so the exercise is on its own.`);

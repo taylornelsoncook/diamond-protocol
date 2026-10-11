@@ -27,6 +27,14 @@
 .c-ex-head:focus-visible,.c-hist-head:focus-visible,.c-effort-n:focus-visible{outline:2px solid var(--green-bright);outline-offset:-2px}
 .c-ex-mark{width:44px;height:44px;flex-shrink:0;border-radius:var(--radius-sm);background:var(--black);display:flex;align-items:center;justify-content:center;font-weight:700}
 .c-ex-media{padding:0 12px}
+/* What to do, at a glance: Sets · Reps · Distance · Weight · % max · Tempo (then Rest and RPE where set). */
+.c-rx{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 8px;margin-top:6px}
+.c-rx-cell b{display:block;font:600 10px/14px var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--steel-muted)}
+.c-rx-cell span{display:block;font:600 15px/20px var(--font-sans);color:var(--steel);overflow-wrap:anywhere}
+.c-rx--compact .c-rx-cell span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-rx-cell--empty span{color:var(--steel-muted);font-weight:400}
+.c-rx--compact .c-rx-cell--empty{display:none}
+.c-rx--compact{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
 .c-sets{display:flex;flex-direction:column;gap:6px;padding:10px 12px 12px}
 .c-set{display:flex;align-items:center;gap:8px;min-height:52px}
 .c-set--done .c-set-no{color:var(--green-bright)}

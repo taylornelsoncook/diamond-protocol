@@ -1,7 +1,7 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 import { athleteSprint } from './sprint-ui.js';
-import { detailsOf, groupTag, groupTitle, withGroups } from './set-fields.js';
+import { groupTag, groupTitle, withGroups, rxTable } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 import { startupForm, summaryText } from './startup-ui.js';
 
@@ -28,7 +28,7 @@ try {
 if (params.has('token')) history.replaceState(null, '', `/app${location.hash}`);   // keep #education and the like
 // Inside the portal: report the page's height so the frame fits, whenever it changes.
 if (embedded && window.parent !== window) {
-  const tell = () => window.parent.postMessage({ dpAppHeight: document.documentElement.scrollHeight, athlete: familyAthlete }, location.origin);
+  const tell = () => window.parent.postMessage({ dpAppHeight: document.documentElement.scrollHeight, athlete: familyAthlete ?? 'me' }, location.origin);
   new ResizeObserver(tell).observe(document.body);
   window.addEventListener('load', tell);
 }
@@ -102,7 +102,7 @@ async function load() {
     try { home = await api('GET', `/app/api/home${atQ()}`); if (!String(tokenValue ?? '').startsWith('family:')) tokenValue = `session:${home.client?.id ?? 'me'}`; }
     catch (e) {
       const cached = tokenValue ? store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`) : null;
-      if (e.status === 401 || !tokenValue) return message('Sign in with your email to see your workouts, or open the link your coach sent you.', signInLink());
+      if (e.status === 401 || !tokenValue) { if (!embedded) { location.replace('/portal'); return; } return message('Sign in with your email to see your workouts.', signInLink()); }
       if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
       home = cached.home;
     }
@@ -605,6 +605,10 @@ function routineBlock(r, label) {
 function renderLogger(w) {
   const home = state.home;
   const reopened = !!draft.log_id;
+  // Opening a workout shows what to do (every exercise with its sets, reps, distance, weight, percent of max and tempo);
+  // Start workout turns the set rows on. A draft with sets already logged is in the middle of it.
+  const logging = reopened || !!draft.started || hasSets(draft);
+  const startBtn = () => btn('Start workout', () => { draft.started = true; draft.started_at ??= new Date().toISOString(); saveDraft(); state.open = (w.exercises.find((x) => !exDone(x)) ?? w.exercises[0])?.id ?? null; render(); window.scrollTo(0, 0); say('Workout started. Log each set as you go.'); }, 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' });
   if (!state.open || !w.exercises.some((x) => x.id === state.open)) state.open = (w.exercises.find((x) => !exDone(x)) ?? w.exercises[0])?.id ?? null;
   const pct = home.progress?.total ? Math.round((home.progress.completed / home.progress.total) * 100) : 0;
   const cards = new Map();
@@ -617,7 +621,7 @@ function renderLogger(w) {
     return h('button', { type: 'button', class: 'c-ex-head', 'aria-expanded': String(isOpen), onClick: () => { state.open = isOpen ? null : x.id; redrawCards(); if (!isOpen) cards.get(x.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
       h('span', { class: `c-ex-mark${x.poster_url && !exDone(x) ? ' c-ex-mark--still' : ''}`, 'aria-hidden': 'true' }, exDone(x) ? '✓' : x.poster_url ? [h('img', { src: x.poster_url, alt: '', loading: 'lazy' }), h('span', { class: 'c-ex-mark-play' }, playIcon())] : playIcon()),
       h('span', { class: 'dp-ex-body' }, h('span', { class: 'dp-ex-name' }, groupTag(x), x.group_tag ? ' ' : null, x.name),
-        h('span', { class: 'dp-ex-sets' }, [detailsOf(x), x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
+        rxTable(x, { compact: !isOpen }), h('span', { class: 'dp-ex-sets' }, [x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null, logged ? `${logged} of ${rowsFor(x).length} sets logged` : null].filter(Boolean).join(' · ')),
         x.swapped ? h('span', { class: 'small', style: 'color:var(--amber)' }, x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason.toLowerCase()})` : ''}` : x.swapped.by_kind === 'equipment' ? `For your gear instead of ${x.swapped.from} (${x.swapped.reason.toLowerCase()})` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}${x.swapped.reason ? ` (${x.swapped.reason})` : ''}`) : null,
         x.form_check ? h('span', { class: 'small strong', style: x.form_check_sent ? 'color:var(--green-bright)' : 'color:var(--amber)' }, x.form_check_sent ? '✓ Form check sent' : 'Form check asked') : null,
         x.progression?.text ? h('span', { class: 'small strong', style: 'color:var(--green-bright)' }, `Your progression: ${x.progression.text} on the plan`) : null,
@@ -646,9 +650,11 @@ function renderLogger(w) {
         x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
         x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null,
         altBlock(x)));
-      const setsBox = h('div', { class: 'c-sets' });
-      box.append(setsBox);
-      drawSets(x, setsBox);
+      if (logging) {
+        const setsBox = h('div', { class: 'c-sets' });
+        box.append(setsBox);
+        drawSets(x, setsBox);
+      }
     }
     return box;
   }
@@ -778,19 +784,20 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
     blocked,
     reopened ? null : readinessCard(home.readiness),
+    logging ? null : h('div', { class: 'stack-tight' }, startBtn(), h('p', { class: 'small muted', style: 'margin:0;text-align:center' }, `${w.exercises.length} ${w.exercises.length === 1 ? 'exercise' : 'exercises'} · tap one to see the demo and your last numbers`)),
+    reopened ? null : routineBlock(w.warmup, 'Warm-up'),
+    logging ? count : null, list,
+    reopened ? null : routineBlock(w.cooldown, 'Cool-down'),
+    logging ? h('div', { class: 'dp-panel stack' },
+      h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
+      h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
+      h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen,
+        w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null)) : null,
+    logging ? finishBtn : startBtn(),
     reopened ? null : weeklyNoteCard(home),
     reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
     reopened ? null : installCard(home),
-    reopened ? null : routineBlock(w.warmup, 'Warm-up'),
-    count, list,
-    reopened ? null : routineBlock(w.cooldown, 'Cool-down'),
-    h('div', { class: 'dp-panel stack' },
-      h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
-      h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
-      h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen,
-        w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null)),
-    finishBtn,
     reopened ? null : comingUp(home.upcoming),
     reopened ? null : formChecksSection(),
     reopened ? null : historyPanel(home),

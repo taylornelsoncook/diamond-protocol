@@ -32,7 +32,7 @@ before(async () => {
   program = (await coach('POST', '/v1/programs', { name: 'Fall strength', weeks: 4 })).body;
   for (const week of [1, 2, 3, 4]) {
     const w = (await coach('POST', `/v1/programs/${program.id}/workouts`, { week, day: 1, title: `Lower ${week}` })).body;
-    await coach('POST', `/v1/workouts/${w.id}/exercises`, { exercise_id: squat.id, sets: 3, reps: '5', tempo: '2-0-1', rest_seconds: 120, target_rpe: 7, load_test: 'squat_1rm', load_pct: 70 });
+    await coach('POST', `/v1/workouts/${w.id}/exercises`, { exercise_id: squat.id, sets: 3, reps: '5', tempo: '2-0-1-0', rest_seconds: 120, target_rpe: 7, load_test: 'squat_1rm', load_pct: 70 });
     await coach('POST', `/v1/workouts/${w.id}/exercises`, { exercise_id: bench.id, sets: 3, reps: '8', target_rpe: 7 });
   }
   maya = (await coach('POST', '/v1/clients', { name: 'Maya Okafor', parent: { name: 'Ada Okafor', email: 'ada@example.com' } })).body;
@@ -51,7 +51,7 @@ test('one exercise changes across a run of weeks; other weeks and exercises stay
   assert.deepEqual([r.body.slots, r.body.changed, r.body.changes.map((c) => c.week)], [3, 3, [2, 3, 4]]);
   const sq = await squats();
   assert.deepEqual(sq.map((x) => [x.week, x.sets, x.load_pct, x.target_rpe, x.rest_seconds, x.reps, x.tempo]), [
-    [1, 3, 70, 7, 120, '5', '2-0-1'], [2, 4, 75, 7.5, 150, '3', null], [3, 4, 75, 7.5, 150, '3', null], [4, 4, 75, 7.5, 150, '3', null]]);
+    [1, 3, 70, 7, 120, '5', '2-0-1-0'], [2, 4, 75, 7.5, 150, '3', null], [3, 4, 75, 7.5, 150, '3', null], [4, 4, 75, 7.5, 150, '3', null]]);
   assert.match(sq[1].prescription, /^4 × 3/, 'the short text is rebuilt');
   const benchRows = (await coach('GET', `/v1/programs/${program.id}`)).body.workouts.map((w) => w.exercises.find((x) => x.exercise_id === bench.id));
   assert.ok(benchRows.every((x) => x.sets === 3 && x.reps === '8'), 'the other exercise is untouched');

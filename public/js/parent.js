@@ -1136,7 +1136,9 @@ function renderAthleteHome() {
   const s = state.session;
   const main = h('main', { class: 'p-wrap' },
     h('div', { class: 'p-top' }, h('img', { src: '/brand/mark.png', alt: '' }), h('div', { class: 'stack-tight grow' }, h('div', { class: 'p-title' }, `Hi ${s.first_name}`), h('div', { class: 'small muted' }, s.email))),
-    panel('Your workouts', { subtitle: 'Today\'s workout, check-ins, progress and lessons.' }, h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/app' }, 'Open my workouts')),
+    // The athlete's own app, right here: one sign-in place for parents and athletes alike.
+    h('iframe', { class: 'p-frame', src: '/app?embed=1', title: 'Your workouts', 'data-athlete': 'me', style: `height:${Math.max(520, (frameHeights.get('me') ?? 0) + 8)}px` }),
+    h('p', { class: 'small muted', style: 'margin:0' }, h('a', { href: '/app', target: '_blank', rel: 'noopener' }, 'Open full screen')),
     signInPanel(), devicesPanel(),
     btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.session = null; render(); }), 'ghost'));
   fill(root, main);

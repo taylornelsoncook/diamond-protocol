@@ -5,6 +5,7 @@ import { getProgram, appExercise, swapsFor, LOAD_TESTS, readLog, saveSets, start
 import { teamRosterFor } from './teams.js';
 import { readinessToday } from './engage.js';
 import { emit } from './events.js';
+import { forScreen as feedForScreen } from './feed.js';
 
 // The weight-room screen: a TV or shared tablet opened with a check-in tablet's secret link at /tv#<key>. It shows the
 // workout a coach picked for each session running now at that location, big enough to read across the room. Athletes
@@ -55,6 +56,7 @@ export function screenBoard(ctx, key, asOf = ctx.now()) {
   const sessions = openSessions(ctx, k.location_id, asOf).map((s) => ({ ...s, ...ctx.db.get('SELECT series_id, workout_id FROM class_sessions WHERE id = ?', s.id) }));
   return {
     business_name: getSetting(ctx, 'business_name'), location_name: k.location_name, screen: k.name,
+    posts: feedForScreen(ctx, sessions),   // pinned team-feed posts for the screen (version 78)
     sessions: sessions.map((s) => {
       const logged = loggedIn(ctx, s.id);
       return { id: s.id, name: s.name, starts_at: s.starts_at, ends_at: s.ends_at, workout: s.workout_id ? workoutView(ctx, s.workout_id) : null,

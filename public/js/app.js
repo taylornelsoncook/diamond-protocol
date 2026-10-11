@@ -11,6 +11,7 @@ import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
 import { viewMaxReport } from './maxreport-ui.js';
 import { timelineBlock } from './timeline-ui.js';
+import { feedBlock } from './feed-ui.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
@@ -427,6 +428,7 @@ async function viewToday(main) {
       h('div', { class: 'stack', style: 'gap:24px' }, trainingWeekPanel(board.training), followPanel, bdays, followPanel || bdays ? null : panel('Birthdays this week', {}, h('p', { class: 'muted', style: 'margin:0' }, 'No birthdays this week.')))),
     team ? coachesPanel(team) : null,
     spots ? spotsPanel(spots, { mine: mineSpots }) : null,
+    teamFeedPanel(),
     panel('Recent activity', {}, act),
     revPanel);
   // Refresh every minute while Today is open, unless someone is typing or a dialog is open.
@@ -566,6 +568,51 @@ async function trialOfferDialog(x) {
     h('div', { class: 'row wrap' }, btn('Send trial offer', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   d.addEventListener('close', () => fill(d), { once: true });
   d.showModal();
+}
+
+// The team feed (the builder redesign, step 6): posts to everyone, a team or a program; athletes and parents bump and
+// comment in the app and the portal; pinned posts show on the weight-room screen. Owners and coaches post and hide
+// comments; front desk reads.
+function teamFeedPanel() {
+  const staff = state.user.role !== 'front_desk';
+  const api = { get: (q) => get(`/v1/feed${q}`), post: (p, b) => post(`/v1/feed${p}`, b), del: (p) => del(`/v1/feed${p}`) };
+  const block = feedBlock(api, { staff: true, canPost: staff, onPost: (reload) => feedPostDialog(null, reload), onEdit: staff ? (p, reload) => feedPostDialog(p, reload) : null, limit: 8,
+    empty: staff ? 'Nothing posted yet. Post a note for everyone, a team or a program: athletes and parents see it in the app and the portal.' : 'Nothing posted yet.' });
+  return panel('Team feed', { subtitle: 'Posts to everyone, a team or a program. Athletes and parents fist-bump and comment; a pinned post shows on the weight-room screen until it unpins.' }, block);
+}
+async function feedPostDialog(existing, reload) {
+  const d = document.getElementById('dialog');
+  const [teams, programs] = await Promise.all([get('/v1/teams'), get('/v1/programs')]);
+  const current = existing ? (existing.audience === 'team' ? `team:${existing.contract_id}` : existing.audience === 'program' ? `program:${existing.program_id}` : 'everyone') : 'everyone';
+  const audience = select([['everyone', 'Everyone'], ...teams.data.map((t) => [`team:${t.id}`, `Team: ${t.org_name} ${t.name}`]), ...programs.data.map((x) => [`program:${x.id}`, `Program: ${x.name}`])], { value: current, disabled: !!existing, 'aria-label': 'Who sees it' });
+  const title = input({ value: existing?.title ?? '', maxlength: '120', placeholder: 'Optional' });
+  const body = h('textarea', { class: 'dp-input', rows: '5', maxlength: '2000', placeholder: 'What the team should know. A blank line starts a new paragraph.' }); body.value = existing?.body ?? '';
+  const link = input({ type: 'url', value: existing?.link_url ?? '', placeholder: 'https://… (optional)' });
+  const pinOptions = [...(existing?.pinned ? [['keep', `Pinned until ${date(existing.pinned_until)}`]] : []), ['0', existing?.pinned ? 'Unpin' : 'Not pinned'], ['1', '1 day'], ['3', '3 days'], ['7', '1 week'], ['14', '2 weeks'], ['30', '30 days'], ['90', '90 days']];
+  const pin = select(pinOptions, { value: existing?.pinned ? 'keep' : '0', 'aria-label': 'Pin for' });
+  const onScreen = h('input', { type: 'checkbox', checked: existing ? existing.on_screen : true });
+  const commentsOpen = h('input', { type: 'checkbox', checked: existing ? existing.comments_open : true });
+  const err = h('div', { class: 'dp-error', role: 'alert' });
+  const save = async (e) => {
+    e.preventDefault(); err.textContent = '';
+    const payload = { title: title.value.trim() || null, body: body.value, link_url: link.value.trim() || null, on_screen: onScreen.checked, comments_open: commentsOpen.checked };
+    if (pin.value !== 'keep') payload.pin_days = Number(pin.value);
+    if (!existing) { const [kind, id] = audience.value.split(':'); payload.audience = kind; if (kind === 'team') payload.contract_id = id; if (kind === 'program') payload.program_id = id; }
+    try { if (existing) await patch(`/v1/feed/${existing.id}`, payload); else await post('/v1/feed', payload); d.close(); toast(existing ? 'Post updated.' : 'Posted.'); reload?.(); }
+    catch (x) { err.textContent = x.message; }
+  };
+  const remove = existing ? btn('Remove post', async (e) => { if (!confirm('Remove this post, with its bumps and comments?')) return; await busy(e.currentTarget, async () => { await del(`/v1/feed/${existing.id}`); d.close(); toast('Post removed.'); reload?.(); }); }, 'ghost') : null;
+  fill(d, h('form', { class: 'stack', onSubmit: save },
+    h('h2', { class: 'week-title', style: 'color:var(--steel)' }, existing ? 'Edit the post' : 'Post to the team feed'),
+    field('Who sees it', audience, existing ? 'The audience can\'t change once posted; remove and post again instead.' : 'Everyone = every current athlete and their family. A team = its roster. A program = everyone on it.'),
+    field('Title', title), field('Post', body), field('Link', link),
+    field('Pin', pin, 'A pinned post stays first in the feed and shows on the weight-room screen until it unpins.'),
+    h('div', { class: 'row wrap' }, h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, onScreen, 'Show on the weight-room screen while pinned'), h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, commentsOpen, 'Athletes and parents may comment')),
+    err,
+    h('div', { class: 'row wrap' }, btn(existing ? 'Save' : 'Post', null, 'primary', { type: 'submit' }), remove, btn('Cancel', () => d.close(), 'ghost'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
+  body.focus();
 }
 
 // Owner only: every active coach at a glance (today, the next 7 days, attendance, days off). Tap a coach for their schedule.

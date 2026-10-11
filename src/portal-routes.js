@@ -16,6 +16,7 @@ import * as wearables from './services/wearables.js';
 import * as monthly from './services/monthly.js';
 import * as maxes from './services/maxes.js';
 import * as timeline from './services/timeline.js';
+import * as feed from './services/feed.js';
 import * as progress from './services/progress.js';
 import * as formchecks from './services/formchecks.js';
 import * as sms from './services/sms.js';
@@ -195,6 +196,10 @@ export const portalRoutes = [
   ['POST', '/portal/api/athletes/:id/data-imports', 'guardian', 'Save a checked file for your athlete (the same body as the preview). All or nothing.', (ctx, r) => dataimport.commitImport(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { kind: 'parent', name: r.guardian.name }), 201],
   ['POST', '/portal/api/data-imports/:id/undo', 'guardian', 'Undo a file brought in for one of your athletes.', (ctx, r) => dataimport.undoImport(ctx, r.params.id, { kind: 'parent', name: r.guardian.name }, { familyId: r.guardian.family_id })],
   ['GET', '/portal/api/athletes/:id/progress', 'guardian', 'Your athlete\'s training volume: the last 12 weeks of workouts, sets, tonnage and minutes, their most-logged exercises, and their program\'s phases with what they did in each.', (ctx, r) => progress.volumeFor(ctx, athleteOf(ctx, r, r.params.id).id)],
+  ['GET', '/portal/api/feed', 'guardian', 'The team feed for your family: posts to everyone, your athletes\' teams and their programs, pinned first; with the bumps and comments. ?before=, ?limit=.', (ctx, r) => feed.listForFamily(ctx, r.guardian, r.query)],
+  ['POST', '/portal/api/feed/:id/react', 'guardian', 'Fist bump a post (toggles; on: true|false to set).', (ctx, r) => feed.react(ctx, r.params.id, { guardian_id: r.guardian.id, family_id: r.guardian.family_id, name: r.guardian.name }, r.body.on)],
+  ['POST', '/portal/api/feed/:id/comments', 'guardian', 'Comment on a post: body (up to 1,000 characters).', (ctx, r) => feed.comment(ctx, r.params.id, { guardian_id: r.guardian.id, family_id: r.guardian.family_id, name: r.guardian.name }, r.body), 201],
+  ['DELETE', '/portal/api/feed/comments/:id', 'guardian', 'Take back your own comment.', (ctx, r) => feed.removeComment(ctx, r.params.id, { guardian_id: r.guardian.id, family_id: r.guardian.family_id })],
   ['GET', '/portal/api/athletes/:id/timeline', 'guardian', 'Your athlete\'s timeline: everything they did, newest first (workouts, results once the testing day is shared, maxes, sprint reps, form checks, check-ins, sessions, badges, reading, steps up, purchases). ?kind=, ?before=, ?limit=.', (ctx, r) => timeline.timelineFor(ctx, athleteOf(ctx, r, r.params.id).id, { kind: r.query.kind || null, before: r.query.before || null, limit: r.query.limit, view: 'family' })],
   ['GET', '/portal/api/athletes/:id/maxes', 'guardian', 'Your athlete\'s maxes for the lifts their program loads from: on file, estimated from their sets, history and trend, and strength by exercise.', (ctx, r) => maxes.maxesFor(ctx, athleteOf(ctx, r, r.params.id).id, { parentView: true })],
   ['POST', '/portal/api/athletes/:id/maxes', 'guardian', 'Enter or update a max for your athlete: test (squat_1rm, bench_1rm, power_clean_1rm), value (lb, or unit kg), optional date and note.', (ctx, r) => maxes.saveMax(ctx, athleteOf(ctx, r, r.params.id).id, r.body, { by: 'parent', name: r.guardian.name }), 201],

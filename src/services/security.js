@@ -21,7 +21,7 @@ const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/referenc
 const FRONT_DESK = [
   ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
-  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
+  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges|feed)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
   ['POST', /^\/v1\/clients\/:id\/notes$/], ['PATCH', /^\/v1\/client-notes\/:id$/], ['DELETE', /^\/v1\/client-notes\/:id$/],   // staff notes (never coach-only ones)
   ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],

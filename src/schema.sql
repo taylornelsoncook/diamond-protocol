@@ -2007,3 +2007,45 @@ CREATE TABLE IF NOT EXISTS leaderboard_optins (
   client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL
 );
+-- Version 78: the team feed (services/feed.js): coaches post to a team, a program or everyone, pinned for a period and
+-- shown on the weight-room screen; athletes and parents react (a fist bump) and comment; coaches hide comments.
+CREATE TABLE IF NOT EXISTS feed_posts (
+  id TEXT PRIMARY KEY,
+  audience TEXT NOT NULL CHECK (audience IN ('everyone','team','program')),
+  contract_id TEXT REFERENCES team_contracts(id) ON DELETE CASCADE,   -- audience team
+  program_id TEXT REFERENCES programs(id) ON DELETE CASCADE,          -- audience program
+  author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  author_name TEXT NOT NULL,
+  title TEXT,
+  body TEXT NOT NULL,
+  link_url TEXT,
+  pinned_until TEXT,                             -- pinned (first in the feed, on the screen) until then
+  on_screen INTEGER NOT NULL DEFAULT 1,          -- a pinned post shows on the weight-room screen
+  comments_open INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS feed_posts_created ON feed_posts(created_at);
+CREATE TABLE IF NOT EXISTS feed_reactions (
+  post_id TEXT NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+  who TEXT NOT NULL,                             -- client:<id>, guardian:<id> or user:<id>
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  guardian_id TEXT REFERENCES guardians(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (post_id, who)
+);
+CREATE TABLE IF NOT EXISTS feed_comments (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL REFERENCES feed_posts(id) ON DELETE CASCADE,
+  by_kind TEXT NOT NULL CHECK (by_kind IN ('athlete','parent','staff')),
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  guardian_id TEXT REFERENCES guardians(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  author_name TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  hidden_at TEXT,                                -- hidden by a coach (kept for the record, shown to staff only)
+  hidden_by TEXT
+);
+CREATE INDEX IF NOT EXISTS feed_comments_post ON feed_comments(post_id, created_at);

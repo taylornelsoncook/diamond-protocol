@@ -5,6 +5,7 @@ import { importForm, importsList, dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { timelineBlock } from './timeline-ui.js';
+import { feedBlock } from './feed-ui.js';
 wearableReturnNotice();
 
 // ---------- API ----------
@@ -373,8 +374,13 @@ async function viewOverview(main) {
   fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(),
     state.session?.kind === 'both' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '/app' }, 'My workouts') : null,   // a parent who trains here too
     h('div', { id: 'p-install-slot' }, installCard()),
-    state.me.athletes.length ? [cards, calendarPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
+    state.me.athletes.length ? [cards, calendarPanel(), teamFeedPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
   drawSubtabs();
+}
+// The team feed (version 78): the coaches' posts to everyone, your athletes' teams and their programs; bump and comment as the parent.
+function teamFeedPanel() {
+  return panel('Team feed', { subtitle: 'From the coaches, for everyone, your athletes\' teams and their programs.' },
+    feedBlock({ get: (q) => get(`feed${q}`), post: (p, b) => post(`feed${p}`, b), del: (p) => api('DELETE', `feed${p}`) }, { compact: true, limit: 5, empty: 'Nothing from the coaches yet.' }));
 }
 
 // A session row (Home, Book "Booked for"): Today/Tomorrow, coach, waitlist place, On now / Checked in. Tap for details.

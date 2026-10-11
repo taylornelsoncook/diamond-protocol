@@ -99,6 +99,8 @@ The seed prints your login and a sample client app link. To start over, delete t
 
 **The timeline:** every athlete's profile has a Timeline tab, everything they did newest first (workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges, reading, steps up), filtered by kind. The app's new Profile tab shows the same timeline with their maxes, streaks and links to the family's account, so one link reaches everything; parents see it under each athlete in the portal.
 
+**The team feed:** coaches post to everyone, a team or a program from Today, pin a post for a period, and it shows first in the app and the portal and on the weight-room screen while pinned. Athletes and parents fist-bump and comment; coaches hide comments or close them on a post.
+
 **Drag, drop and send:** drag an exercise anywhere in the week, and drag a day (or the ticked days) onto a school, a team or an athlete in the Send to panel to put those days on their calendars from a date you pick.
 
 **The week grid:** a program's week is seven day columns, each a list of lettered blocks with one line per exercise and the day's instructions on top; tick days and copy, move, repeat, save or delete them together; the day's and the week's reps show as you build.

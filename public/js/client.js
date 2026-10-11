@@ -5,6 +5,7 @@ import { groupTag, groupTitle, withGroups, rxTable } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 import { startupForm, summaryText } from './startup-ui.js';
 import { timelineBlock } from './timeline-ui.js';
+import { feedBlock } from './feed-ui.js';
 import { maxesBlock } from './maxes-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
@@ -102,6 +103,14 @@ async function refresh() {
   } catch { /* offline: keep what's on screen */ }
 }
 
+// The team feed (the builder redesign, step 6): the coaches' posts to everyone, your teams and your program, with a
+// fist bump and comments. One card, kept between renders so the feed isn't fetched again every minute.
+let feedEl = null;
+function feedCard() {
+  if (!feedEl) feedEl = h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Team feed'),
+    feedBlock({ get: (q) => api('GET', `/app/api/feed${q}`), post: (p, b) => api('POST', `/app/api/feed${p}`, b), del: (p) => api('DELETE', `/app/api/feed${p}`) }, { compact: true, limit: 5, empty: 'Nothing from your coaches yet.' }));
+  return feedEl;
+}
 // The Profile tab (the builder redesign, step 5; owner's ask: "everything under one link"): who they are, their
 // streaks, their maxes, everything they did as a timeline, and the account pages in the portal (family, payments,
 // sign-in), so one link reaches everything. Inside the family portal's frame the portal's own tabs hold the account.
@@ -448,7 +457,7 @@ function render() {
     stopRest();
     fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
       !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home), home.locked ? null : installCard(home),
-      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
+      home.locked ? null : feedCard(), strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.
@@ -829,6 +838,7 @@ function renderLogger(w) {
     reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
     reopened ? null : installCard(home),
+    reopened ? null : feedCard(),
     reopened ? null : comingUp(home.upcoming),
     reopened ? null : formChecksSection(),
     reopened ? null : historyPanel(home),

@@ -25,7 +25,8 @@ export const EVENT_TYPES = [
   'monthly_report.sent',   // version 59 (monthly parent reports)
   'startup.answered', 'program.auto_assigned',   // version 67 (the start-up questions)
   'plan.adjustment_suggested', 'plan.adjustment_applied',   // version 69 (the adaptive plan)
-  'weekly_note.sent'   // version 71 (the weekly coach's note)
+  'weekly_note.sent',   // version 71 (the weekly coach's note)
+  'feed.posted'   // version 78 (the team feed)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -102,6 +103,7 @@ const INFO = {
   'plan.adjustment_suggested': ['The adaptive plan suggests a change to one athlete\'s calendar: kind shift (a missed week comes round again), minimum (half the sets for the rest of the week) or advance (the next phase early).', { adjustment_id: 'adj_sample', ...C, kind: 'minimum', text: 'A minimum week through 2026-10-11: half the sets on every exercise.', streak: 3, from: '2026-10-06', until: '2026-10-11' }],
   'plan.adjustment_applied': ['A coach approved an adaptive-plan change (or auto mode made it): the athlete\'s calendar moved.', { adjustment_id: 'adj_sample', ...C, kind: 'shift', text: 'Move the plan a week forward.', weeks: 1, by: 'Riley' }],
   'weekly_note.sent': ['A coach sent an athlete their weekly note (or auto mode sent the draft): it shows on the Workout tab and taps the phone.', { weekly_note_id: 'wn_sample', ...C, week_start: '2026-10-12', by: 'Riley' }],
+  'feed.posted': ['A coach posted to the team feed: to everyone, a team (contract_id) or a program (program_id), pinned until pinned_until when pinned.', { post_id: 'fp_sample', audience: 'team', contract_id: 'tc_sample', program_id: null, title: 'Saturday sprints', author_name: 'Coach Riley', pinned_until: '2026-10-18T00:00:00.000Z' }],
   'client.claimed': ['A parent adds a team athlete to their family with the Athlete ID (name and birthday matched).', { ...C, athlete_id: 'AVALOP2026', family_id: 'fam_sample', guardian_name: 'Maria Lopez' }]
 };
 export const EVENT_INFO = Object.fromEntries(EVENT_TYPES.map((t) => [t, { about: INFO[t]?.[0] ?? '', sample: INFO[t]?.[1] ?? {} }]));

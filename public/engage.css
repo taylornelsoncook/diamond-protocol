@@ -202,3 +202,18 @@
 .tl-item--workout .tl-icon,.tl-item--step .tl-icon{color:var(--green-soft, #7DBA70);border-color:var(--green-mid)}
 .tl-item--max .tl-icon,.tl-item--result .tl-icon,.tl-item--badge .tl-icon{color:var(--steel)}
 .tl-when{flex:0 0 auto;white-space:nowrap;padding-top:4px}
+
+/* The team feed (Today, the app's Workout tab, the portal's Home). */
+.fd-list{display:flex;flex-direction:column;gap:12px}
+.fd-post{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.fd-post--pinned{border-color:var(--green-mid)}
+.fd-title{margin:0;font:600 18px/1.25 var(--font-display);color:var(--steel);letter-spacing:.02em}
+.fd-body p{font-size:15px;line-height:22px}
+.fd-bump{appearance:none;border:1px solid var(--control-border);background:var(--ground);color:var(--steel);border-radius:var(--radius-pill);min-height:36px;padding:0 12px;font:600 14px/1 var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.fd-bump.is-on{background:var(--green);color:var(--on-green);border-color:var(--green-mid)}
+.fd-thread{flex:1;min-width:200px}
+.fd-thread summary{cursor:pointer;min-height:36px;display:flex;align-items:center}
+.fd-comments{display:flex;flex-direction:column;gap:8px;margin:4px 0 8px}
+.fd-comment{display:flex;gap:8px;align-items:flex-start;padding:6px 10px;border-left:2px solid var(--line);}
+.fd-comment--hidden{opacity:.6;border-left-color:var(--amber)}
+.fd-thread textarea{min-height:40px;resize:vertical}

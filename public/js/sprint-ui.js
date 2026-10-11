@@ -26,15 +26,15 @@ const posKey = (p) => `${p.step}:${p.position}`;
 const gradeChip = (g, big = false) => (g ? h('span', { class: `sp-grade sp-grade--${g[0]}${big ? ' sp-grade--big' : ''}`, title: `Grade ${g}` }, g) : h('span', { class: 'sp-grade sp-grade--none', title: 'Not graded yet' }, '–'));
 const once = (el, ev) => new Promise((res, rej) => { const ok = () => { el.removeEventListener('error', bad); res(); }; const bad = () => { el.removeEventListener(ev, ok); rej(new Error('The video couldn\'t be read.')); }; el.addEventListener(ev, ok, { once: true }); el.addEventListener('error', bad, { once: true }); });
 const svgEl = (tag, attrs) => { const e = document.createElementNS(SVG, tag); for (const [k, val] of Object.entries(attrs)) e.setAttribute(k, val); return e; };
-// The points a position needs: every measure's points, plus the stance foot where distance per step is read.
-const needsOf = (pos, kind) => {
-  const need = new Set(pos.measures.flatMap((m) => m.needs));
-  // The breakdown (hip displacement, hip height, touchdown and take-off distances, thigh speed) reads the hip and foot.
-  if (kind !== 'cod' && ['toe_off', 'touchdown', 'full_support'].includes(pos.position)) { need.add('hip'); need.add('foot'); }
-  if (kind !== 'cod' && pos.position === 'toe_off') { need.add('knee_swing'); need.add('knee_stance'); }   // the next toe-off too: the thigh phases end there
-  if (kind !== 'cod' && ['touchdown', 'full_support'].includes(pos.position)) need.add('knee_stance');
-  if (kind !== 'cod' && pos.position === 'touchdown') need.add('knee_swing');
-  return LANDMARK_ORDER.filter((k) => need.has(k));
+// Five taps for every position (owner's ask): hip, both knees, both ankles, in plain words for that position ("knee of
+// the pushing leg"). The stance ankle stands in for the foot on the ground. The shoulder is a sixth, optional tap for
+// trunk lean (skip it and the trunk measures are left out).
+const FIVE = ['hip', 'knee_stance', 'ankle_stance', 'knee_swing', 'ankle_swing'];
+const needsOf = (pos) => [...FIVE, ...(pos.measures.some((m) => m.needs.includes('shoulder')) ? ['shoulder'] : [])];
+const OPTIONAL = new Set(['shoulder']);
+const tapLabel = (k, pos) => {
+  const w = pos.words ?? { stance: 'the stance leg', swing: 'the swing leg' };
+  return { hip: 'Hip', shoulder: 'Shoulder (optional, for trunk lean)', knee_stance: `Knee of ${w.stance}`, ankle_stance: `Ankle of ${w.stance}`, knee_swing: `Knee of ${w.swing}`, ankle_swing: `Ankle of ${w.swing}`, foot: `Foot of ${w.stance}` }[k] ?? LANDMARK_LABEL[k];
 };
 // ---------- The breakdown drawn on the video (Speedworks style) ----------
 const TONE = { good: '#3FA34D', ok: '#D9A43A', bad: '#C0392B' };
@@ -371,14 +371,17 @@ export async function sprintViewer(opts) {
     const refLine = p.measures.length ? `Reference: ${p.measures.map((m) => `${m.label.toLowerCase()} ≈${m.target}°`).join(', ')}` : null;
     const items = p.measures.map((m) => h('div', { class: 'sp-measure' },
       h('div', { class: 'row', style: 'gap:8px;align-items:center' }, gradeChip(m.grade), h('span', { class: 'strong grow' }, m.label), h('span', { class: 'sp-num' }, m.value == null ? '—' : `≈${m.value}°`)),
-      m.grade ? h('div', { class: 'small' }, h('span', { class: 'strong' }, m.verdict), m.cue ? ` · ${m.cue}` : ` · within ${m.a}° of ${m.target}°.`) : h('div', { class: 'small muted' }, !editable ? 'Not measured on this rep.' : p.marked ? `Tap ${m.needs.map((n) => LANDMARK_LABEL[n].toLowerCase()).join(', ')} to measure it.` : 'Not marked yet.')));
+      m.grade ? h('div', { class: 'small' }, h('span', { class: 'strong' }, m.verdict), m.cue ? ` · ${m.cue}` : ` · within ${m.a}° of ${m.target}°.`) : h('div', { class: 'small muted' }, !editable ? 'Not measured on this rep.' : p.marked ? `Tap ${m.needs.map((n) => tapLabel(n, p).toLowerCase().replace(' (optional, for trunk lean)', '')).join(', ')} to measure it.` : 'Not marked yet.')));
     const actions = editable ? h('div', { class: 'row wrap', style: 'gap:8px' },
-      tap ? null : btn(p.marked ? 'Use this frame instead' : 'Use this frame', () => { tap = { need: needsOf(p, clip.kind), points: Math.abs(video.currentTime - (p.t ?? -1)) < 0.75 / fps() ? { ...p.points } : {}, skipped: new Set(), t: video.currentTime }; video.pause(); drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, p.marked ? 'secondary' : 'primary'),
-      !tap && p.marked && needsOf(p, clip.kind).length ? btn('Redo the points', () => { video.currentTime = p.t; tap = { need: needsOf(p, clip.kind), points: {}, skipped: new Set(), t: p.t }; drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'secondary') : null,
+      tap ? null : btn(p.marked ? 'Use this frame instead' : 'Use this frame', () => { tap = { need: needsOf(p), points: Math.abs(video.currentTime - (p.t ?? -1)) < 0.75 / fps() ? { ...p.points } : {}, skipped: new Set(), t: video.currentTime }; video.pause(); drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, p.marked ? 'secondary' : 'primary'),
+      !tap && p.marked ? btn('Redo the points', () => { video.currentTime = p.t; tap = { need: needsOf(p), points: {}, skipped: new Set(), t: p.t }; drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'secondary') : null,
       !tap && p.marked ? btn('Clear', (e) => busy(e.currentTarget, async () => { clip = await api('DELETE', `${prefix}/sprint-clips/${id}/marks`, { step: p.step, position: p.position }); draw(); }), 'ghost') : null) : null;
     return h('div', { class: 'stack-tight' },
       h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('h3', { class: 'sp-h grow' }, `${p.finish ? '' : clip.kind === 'cod' ? '' : `Step ${p.step} · `}${p.label}`), p.grade ? gradeChip(p.grade, true) : null),
       h('p', { class: 'small muted', style: 'margin:0' }, p.hint, p.marked ? ` Marked at frame ${frameOf(p.t)}.` : ''),
+      p.look ? h('details', { class: 'sp-look' }, h('summary', { class: 'small strong' }, 'What to look for'),
+        h('p', { class: 'small', style: 'margin:4px 0 0' }, p.look), p.fault ? h('p', { class: 'small', style: 'margin:4px 0 0' }, h('span', { class: 'strong' }, 'Common fault: '), p.fault) : null,
+        p.cue ? h('p', { class: 'small', style: 'margin:4px 0 0' }, h('span', { class: 'strong' }, 'Cue: '), p.cue) : null) : null,
       editable && p.legs ? h('p', { class: 'small', style: 'margin:0' }, p.legs) : null,
       refLine ? h('p', { class: 'small', style: 'margin:0' }, refLine) : null,
       items.length ? h('div', { class: 'stack-tight' }, items) : null,
@@ -389,12 +392,12 @@ export async function sprintViewer(opts) {
   function tapPanel(p) {
     const next = tap.need.find((k) => !tap.points[k] && !tap.skipped.has(k));
     return h('div', { class: 'sp-tap stack-tight' },
-      h('div', { class: 'strong' }, next ? `Tap: ${LANDMARK_LABEL[next]}` : 'All points tapped.'),
-      p.legs ? h('div', { class: 'small' }, p.legs) : null,
-      h('div', { class: 'small muted' }, `${Object.keys(tap.points).length} of ${tap.need.length} points. Swing leg is green, stance leg amber. Frame ${frameOf(tap.t)}.`),
+      h('div', { class: 'strong' }, next ? `Tap ${Object.keys(tap.points).length + 1}: ${tapLabel(next, p)}` : 'All points tapped. Save to see the angles and the grade.'),
+      next && OPTIONAL.has(next) ? h('div', { class: 'small' }, 'The five points are in. Tap the shoulder for trunk lean, or Save without it.') : p.legs ? h('div', { class: 'small' }, p.legs) : null,
+      h('div', { class: 'small muted' }, `${Object.keys(tap.points).length} of ${tap.need.length} points: hip, both knees, both ankles${tap.need.includes('shoulder') ? ', then the shoulder if you want trunk lean' : ''}. Swing leg is green, stance leg amber. Frame ${frameOf(tap.t)}.`),
       h('div', { class: 'row wrap', style: 'gap:8px' },
         btn('Save', (e) => busy(e.currentTarget, async () => { clip = await api('PUT', `${prefix}/sprint-clips/${id}/marks`, { step: p.step, position: p.position, t: tap.t, points: tap.points }); tap = null; toast(`${p.label} saved.`); draw(); }), 'primary'),
-        next ? btn('Skip this point', () => { tap.skipped.add(next); drawSide(); }, 'secondary') : null,
+        next ? btn(OPTIONAL.has(next) ? 'Skip the shoulder' : 'Skip this point', () => { tap.skipped.add(next); drawSide(); }, 'secondary') : null,
         Object.keys(tap.points).length ? btn('Undo last', () => { const last = [...tap.need].reverse().find((k) => tap.points[k]); delete tap.points[last]; drawSide(); drawOverlay(); }, 'ghost') : null,
         btn('Cancel', () => { tap = null; drawSide(); drawOverlay(); }, 'ghost')));
   }
@@ -787,8 +790,8 @@ async function referencesView(main, { api, header, role }) {
     }
     await api('PATCH', '/v1/sprint/references', { references: refs, step_references: steps }); toast('References saved. Every clip is graded against them now.');
   });
-  fill(main, header('Sprint references', 'What each position is graded against: A within the first band of the target, B within the second, C beyond.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sprint' }, 'Sprint')),
-    h('p', { class: 'small muted' }, r.customized ? 'These are your references.' : 'These are starting values. Replace them with your own numbers.', ' The positions follow the kinogram method ALTIS teaches.'),
+  fill(main, header('Sprint references', 'What each position is graded against: A within the first band of the target, B within the second, C beyond.', h('div', { class: 'row wrap', style: 'gap:8px' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '/education/sprint-positions.pdf', target: '_blank', rel: 'noopener' }, 'The research (PDF)'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/sprint' }, 'Sprint'))),
+    h('p', { class: 'small muted' }, r.customized ? 'These are your references.' : 'These are starting values from the research brief (published values where they exist, coaching estimates elsewhere). Replace them with your own numbers.', ' The positions follow the kinogram method ALTIS teaches.'),
     ...sections, ...stepSections,
     owner ? h('div', { class: 'row wrap', style: 'gap:8px' }, btn('Save the references', save, 'primary'), btn('Back to the starting values', (e) => { if (confirm('Put every reference back to the starting values?')) busy(e.currentTarget, async () => { await api('PATCH', '/v1/sprint/references', { reset: true }); toast('Back to the starting values.'); referencesView(main, { api, header, role }); }); }, 'ghost'))
       : h('p', { class: 'small muted' }, 'The owner changes these.'));

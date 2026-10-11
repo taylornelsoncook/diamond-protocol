@@ -193,3 +193,45 @@ test('the weekly summary counts inquiries and asks the owner to reach out to one
   assert.match(d.actions.join(' '), /Reach out to a family who asked about training \(Leads\)\./);
   assert.match(digestText(app.ctx, buildDigest(app.ctx)), /New inquiries: \d+ \(\d+ signed up so far\)\./);
 });
+
+test('the sign-up link: /start?from=<channel> tags the lead with where it came from, anything else is the website form', async () => {
+  const { resetRateLimits } = await import('../src/services/security.js');
+  resetRateLimits();
+  for (const [from, source] of [['qr', 'qr'], ['Social', 'social'], ['nonsense', 'inquiry']]) {
+    const email = `link-${source}-${from}@example.com`.toLowerCase();
+    assert.equal((await ask({ parent_name: 'Link Parent', email, athlete_name: 'Kid', from })).status, 200);
+    assert.equal(lead(email).source, source, `from=${from}`);
+  }
+  const list = (await owner('GET', '/v1/leads?source=qr')).body;
+  assert.deepEqual(list.data.map((l) => [l.email, l.source_label]), [['link-qr-qr@example.com', 'QR code']]);
+  assert.equal(list.sources.flyer, 'Flyer');
+  assert.match(app.ctx.db.get(`SELECT reason FROM lead_stage_history WHERE lead_id = ? ORDER BY rowid LIMIT 1`, lead('link-qr-qr@example.com').id)?.reason ?? '', /Scanned the QR code/);
+  // A link lead who buys a program online moves to Member on its own (purchases count as buying).
+  const c = (await owner('POST', '/v1/clients', { name: 'Kid Parent', parent: { name: 'Link Parent', email: 'link-qr-qr@example.com' } })).body;
+  assert.equal((await owner('GET', `/v1/leads/${lead('link-qr-qr@example.com').id}`)).body.status, 'signed_up');
+  app.ctx.db.run(`INSERT INTO purchases (id, client_id, item_kind, item_id, title, amount_cents, created_at) VALUES ('pur_link', ?, 'program', 'prg_x', 'Speed', 4900, ?)`, c.id, app.ctx.now());
+  assert.equal((await owner('GET', `/v1/leads/${lead('link-qr-qr@example.com').id}`)).body.status, 'member');
+});
+
+test('a version 74 database is rebuilt for the new sources, keeping its leads, opened twice', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { DatabaseSync } = await import('node:sqlite');
+  const { openDb } = await import('../src/db.js');
+  const tmp = mkdtempSync(join(tmpdir(), 'dp-v74-')), file = join(tmp, 'dp.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v74.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 74');
+    old.exec(`INSERT INTO leads (id, parent_name, email, source, status, created_at, updated_at) VALUES ('ld_old', 'Old Lead', 'old@example.com', 'inquiry', 'new', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const d = openDb(file);
+      assert.equal(d.get('PRAGMA user_version').user_version, 75, `round ${round}`);
+      assert.deepEqual(d.get('SELECT parent_name, source, status FROM leads WHERE id = ?', 'ld_old'), { parent_name: 'Old Lead', source: 'inquiry', status: 'new' });
+      d.run(`INSERT INTO leads (id, parent_name, email, source, status, created_at, updated_at) VALUES (?, 'QR Lead', ?, 'qr', 'new', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')`, `ld_qr${round}`, `qr${round}@example.com`);
+      d.close();
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});

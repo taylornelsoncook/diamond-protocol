@@ -369,3 +369,8 @@ td .dp-badge{white-space:nowrap}
 .sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}
 .sp-pos--suggested{border-style:dashed;border-color:var(--amber)}
 .sp-suggest-note{border-left:3px solid var(--amber);padding-left:8px}
+/* Leads: the sign-up link panel with its QR code. */
+.ld-share>summary{list-style:none} .ld-share>summary::-webkit-details-marker{display:none}
+.ld-share>summary::after{content:'▾';color:var(--steel-muted)} .ld-share[open]>summary::after{content:'▴'}
+.ld-share .row.wrap{margin-top:12px}
+.ld-qr{width:150px;height:150px;background:#fff;border-radius:var(--radius-sm);padding:4px} .ld-qr svg{width:100%;height:100%;display:block}

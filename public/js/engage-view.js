@@ -359,7 +359,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
   // ======== Education ========
   function lessonRow(l) {
     if (l.locked) return h('div', { class: 'eg-lesson', 'aria-disabled': 'true' }, h('span', { class: 'eg-lesson-i', 'aria-hidden': 'true' }, '🔒'),
-      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null].filter(Boolean).join(' · ') || 'Lesson')));
+      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.locked_by ? `Finish "${l.locked_by}" first` : null, l.minutes ? `${l.minutes} min` : null, l.has_video ? 'Video' : null, l.has_quiz ? 'Quiz' : null].filter(Boolean).join(' · ') || 'Lesson')));
     return h('button', { type: 'button', class: 'eg-lesson', 'data-lesson': l.id, onClick: () => openLesson(l.id) },
       h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
       h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title),

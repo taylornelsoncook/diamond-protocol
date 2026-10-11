@@ -229,7 +229,7 @@ test('targets accept feet and inches, and rankings follow the setting without na
 });
 
 test('education: lessons, courses, assignments and completion, with unpublished lessons hidden', async () => {
-  const c = (await coach('POST', '/v1/courses', { title: 'Speed school', description: 'Run faster.' })).body;
+  const c = (await coach('POST', '/v1/courses', { title: 'Speed school', description: 'Run faster.', in_order: false })).body;
   const l1 = (await coach('POST', '/v1/lessons', { title: 'Arm action', body: 'Cheek to pocket.\n\nRelax the hands.', course_id: c.id, minutes: 3 })).body;
   const l2 = (await coach('POST', '/v1/lessons', { title: 'Shin angles', body: 'Push the ground back.', course_id: c.id })).body;
   const hidden = (await coach('POST', '/v1/lessons', { title: 'Draft', published: false })).body;

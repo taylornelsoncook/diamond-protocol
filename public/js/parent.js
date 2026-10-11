@@ -291,9 +291,12 @@ async function viewParentEd(main) {
       h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [KIND[l.category], l.minutes ? `${l.minutes} min` : null, l.done ? 'Read' : null].filter(Boolean).join(' · ')))))) : null;
   fill(where, data.length || articles.length ? [reading, h('p', { class: 'small muted', style: 'margin:0' }, 'Short reads from our coaches for parents, picked for your athletes\' ages.'), data.map((c) => {
     const open = openCourse.has(c.id);
-    const list = h('div', { class: 'eg-list', hidden: !open }, c.description ? h('p', { class: 'small muted' }, c.description) : null, c.lessons.map((l) => h('button', { type: 'button', class: 'eg-lesson', onClick: () => openParentLesson(l.id) },
+    const list = h('div', { class: 'eg-list', hidden: !open }, c.description ? h('p', { class: 'small muted' }, c.description) : null, c.lessons.map((l) => (l.locked
+      ? h('div', { class: 'eg-lesson', 'aria-disabled': 'true' }, h('span', { class: 'eg-lesson-i', 'aria-hidden': 'true' }, '🔒'),
+        h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, `Finish "${l.locked_by}" first`)))
+      : h('button', { type: 'button', class: 'eg-lesson', onClick: () => openParentLesson(l.id) },
       h('span', { class: `eg-lesson-i${l.done ? ' eg-lesson-i--done' : ''}`, 'aria-hidden': 'true' }, l.done ? '✓' : l.has_video ? '▶' : '›'),
-      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.done ? 'Read' : null].filter(Boolean).join(' · ') || 'Lesson')))));
+      h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, l.title), h('span', { class: 'small muted' }, [l.minutes ? `${l.minutes} min` : null, l.done ? 'Read' : null].filter(Boolean).join(' · ') || 'Lesson'))))));
     return h('div', { class: 'dp-panel eg-course' },
       h('button', { type: 'button', class: 'eg-course-h', 'aria-expanded': String(open), onClick: (ev) => { const now = !openCourse.has(c.id); now ? openCourse.add(c.id) : openCourse.delete(c.id); ev.currentTarget.setAttribute('aria-expanded', String(now)); list.hidden = !now; } },
         h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, c.title), h('span', { class: 'small muted' }, `${c.done} of ${c.total} read${c.complete ? ' · Finished' : ''}`)), h('span', { class: 'eg-chev', 'aria-hidden': 'true' }, '›')),

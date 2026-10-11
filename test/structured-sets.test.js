@@ -144,7 +144,7 @@ test('remove and undo, and copying a workout, keep every field', async () => {
   let list = slots(await detail(program.id), w1.id);
   const sq = list[0];
   const gone = (await coach('DELETE', `/v1/workout-exercises/${sq.id}`)).body;
-  assert.deepEqual(gone.restore, { workout_id: w1.id, exercise_id: squat.id, prescription: '4 × 5 @ 185 lb', load_test: null, load_pct: null, position: 1,
+  assert.deepEqual(gone.restore, { workout_id: w1.id, exercise_id: squat.id, prescription: '4 × 5 @ 185 lb', load_test: null, load_pct: null, position: 1, block_id: sq.block_id,
     sets: 4, reps: '5', distance: null, tempo: '3-1-1-0', rest_seconds: 120, target_rpe: 8, load_text: '185 lb', group_label: 'A', group_kind: 'circuit', note: 'Pause at the bottom', form_check: 0, form_check_note: null });
   const { workout_id, ...back } = gone.restore;
   await coach('POST', `/v1/workouts/${workout_id}/exercises`, back);
@@ -234,7 +234,7 @@ test('a version 48 database gains the fields and its prescriptions are split, op
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 73, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 74, `round ${round}`);
       const rows = d.all('SELECT id, prescription, sets, reps, load_text, target_rpe, load_test, load_pct, group_label FROM workout_exercises ORDER BY position').map((r) => ({ ...r }));
       assert.deepEqual(rows, [
         { id: 'wex_1', prescription: '3 × 8 @ 135 lb', sets: 3, reps: '8', load_text: '135 lb', target_rpe: null, load_test: null, load_pct: null, group_label: null },
@@ -298,7 +298,7 @@ test('a version 72 database: reps that were a distance move over and tempos get 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 73, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 74, `round ${round}`);
       const rows = d.all('SELECT id, reps, distance, tempo, prescription FROM workout_exercises ORDER BY position');
       assert.deepEqual(rows, [
         { id: 'x1', reps: null, distance: '20 yd', tempo: null, prescription: '6 × 20 yd' },

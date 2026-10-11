@@ -49,7 +49,7 @@ function athleteLive(ctx, s, a, onScreen, program) {
   const swaps = w ? swapsFor(ctx, a.client_id, w.id) : null;
   const exercises = w ? w.exercises.map((x) => {
     const e = appExercise(ctx, a.client_id, x, readiness, swaps), n = setsBySlot.get(x.id) ?? 0;
-    return { id: e.id, exercise_id: e.exercise_id, name: e.name, group_tag: e.group_tag, prescription: e.prescription, details: e.details,
+    return { id: e.id, exercise_id: e.exercise_id, name: e.name, group_tag: e.group_tag, block_name: e.block_name ?? null, prescription: e.prescription, details: e.details,
       load: e.load ? { lb: e.load.lb ?? null, text: e.load.text, missing: !!e.load.missing } : null,
       target_sets: e.target_sets, planned_sets: e.planned_sets ?? null, target_reps: e.target_reps, progression: e.progression?.text ?? null, swapped: e.swapped ?? null,
       sets_logged: n, done: doneSlots.has(x.id) || n >= e.target_sets };

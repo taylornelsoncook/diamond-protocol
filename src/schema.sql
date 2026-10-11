@@ -181,7 +181,11 @@ CREATE TABLE IF NOT EXISTS programs (
   kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts')),   -- version 63: a program, a program template, or the one holder of workout templates
   pitch TEXT,                                                   -- version 72: the sales page's longer text
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,        -- version 72: the coach shown on the sales page
-  trial_days INTEGER NOT NULL DEFAULT 0 CHECK (trial_days BETWEEN 0 AND 30)   -- version 72: a free trial before the card is charged (0 = none)
+  trial_days INTEGER NOT NULL DEFAULT 0 CHECK (trial_days BETWEEN 0 AND 30),   -- version 72: a free trial before the card is charged (0 = none)
+  sport TEXT,                                                   -- version 74: the Programs list filters on these
+  setting TEXT CHECK (setting IN ('facility','remote','both')), -- in the facility, out of it (home, remote), or both
+  author_id TEXT REFERENCES users(id) ON DELETE SET NULL,       -- who wrote it (the staff account that created it)
+  author_name TEXT
 );
 CREATE TABLE IF NOT EXISTS workouts (
   id TEXT PRIMARY KEY,
@@ -192,6 +196,48 @@ CREATE TABLE IF NOT EXISTS workouts (
   warmup_id TEXT REFERENCES routines(id) ON DELETE SET NULL,     -- version 58: the warm-up block attached to this workout
   cooldown_id TEXT REFERENCES routines(id) ON DELETE SET NULL,   -- version 58: the cool-down block
   UNIQUE (program_id, week, day)
+);
+-- Version 74: a complex is a named group of exercises written once (Settings → Exercise library → Complexes) and loaded
+-- into any workout as a block in one click ("Acceleration Primer": backwards sprint, broad jump, sled sprint).
+CREATE TABLE IF NOT EXISTS complexes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'block' CHECK (kind IN ('block','superset','circuit')),   -- how its exercises run in the app
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS complex_exercises (
+  id TEXT PRIMARY KEY,
+  complex_id TEXT NOT NULL REFERENCES complexes(id) ON DELETE CASCADE,
+  exercise_id TEXT NOT NULL REFERENCES exercises(id),
+  position INTEGER NOT NULL,
+  prescription TEXT NOT NULL,
+  load_test TEXT,
+  load_pct INTEGER,
+  sets INTEGER,
+  reps TEXT,
+  distance TEXT,
+  tempo TEXT,
+  rest_seconds INTEGER,
+  target_rpe REAL,
+  load_text TEXT,
+  note TEXT,
+  form_check INTEGER NOT NULL DEFAULT 0,
+  form_check_note TEXT
+);
+-- Version 74: the named blocks of a workout (Warm up, Speed, Power, Strength, Cool down...), in order. A block's kind
+-- says how its exercises run in the app: one after another (block), or one set of each then rest (superset, circuit).
+-- The exercises' group_label/group_kind are kept in step with the block (its letter by position, its kind) for
+-- everything that reads them.
+CREATE TABLE IF NOT EXISTS workout_blocks (
+  id TEXT PRIMARY KEY,
+  workout_id TEXT NOT NULL REFERENCES workouts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'block' CHECK (kind IN ('block','superset','circuit')),
+  position INTEGER NOT NULL,
+  complex_id TEXT REFERENCES complexes(id) ON DELETE SET NULL   -- the complex it was loaded from or saved as
 );
 CREATE TABLE IF NOT EXISTS workout_exercises (
   id TEXT PRIMARY KEY,
@@ -212,7 +258,8 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   group_kind TEXT CHECK (group_kind IN ('superset','circuit','block')),
   note TEXT,                                     -- a cue for this slot
   form_check INTEGER NOT NULL DEFAULT 0,         -- version 61: the coach asks for a form check clip on this exercise (the app shows the ask)
-  form_check_note TEXT                           -- what to film
+  form_check_note TEXT,                          -- what to film
+  block_id TEXT REFERENCES workout_blocks(id) ON DELETE CASCADE   -- version 74: the named block this exercise sits in (removing a block takes its exercises)
 );
 CREATE INDEX IF NOT EXISTS workout_exercises_exercise ON workout_exercises(exercise_id);   -- the library's use counts (a big video library)
 CREATE TABLE IF NOT EXISTS program_phases (           -- version 50: the planner's phases (base, build, peak, deload...) as bands across weeks

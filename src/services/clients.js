@@ -389,12 +389,28 @@ export function updateClient(ctx, id, body) {
 // A client without a family (a team roster athlete, or an adult paying for themselves) joins one: a family you already
 // have (family_id), or a new family with its first parent (parent { name, email, phone }), who is emailed how to sign in.
 // Their parents then see them in the portal. Someone already in a family isn't moved.
-export async function joinFamily(ctx, id, body = {}) {
+// A sibling (sibling { name, birth_date... }, owner's ask) makes a new family for the two of them with no parent yet,
+// named after the athlete; the sibling is created through the Clients screen's rules (duplicate checks and all) and a
+// refused sibling leaves nothing behind.
+export async function joinFamily(ctx, id, body = {}, { staff } = {}) {
   const c = getClient(ctx, id);
   const first = c.name.split(' ')[0];
   if (c.family) throw conflict(`${first} is already in the ${c.family.name}.`);
   if (c.archived_at) throw conflict(`${first} is archived. Bring them back first.`);
-  if (!body.family_id && !body.parent) throw badRequest('Choose a family, or enter a parent\'s name and email.');
+  if (!body.family_id && !body.parent && !body.sibling) throw badRequest('Choose a family, enter a parent\'s name and email, or a sibling\'s name.');
+  if (body.sibling) {
+    if (typeof body.sibling !== 'object' || Array.isArray(body.sibling)) throw badRequest('sibling is the new athlete: name and birth_date.');
+    const famId = newId('fam'), last = c.name.trim().split(/\s+/).pop();
+    ctx.db.tx(() => {
+      ctx.db.run('INSERT INTO families (id, name, created_at) VALUES (?, ?, ?)', famId, v.str(body.family_name, 'family name', { max: 120, optional: true }) ?? `${last} family`, ctx.now());
+      ctx.db.run('UPDATE clients SET family_id = ? WHERE id = ? AND family_id IS NULL', famId, id);
+    });
+    let sib;
+    try { sib = await createClient(ctx, { ...body.sibling, family_id: famId, check_duplicates: body.check_duplicates }, { staff }); }
+    catch (e) { ctx.db.tx(() => { ctx.db.run('UPDATE clients SET family_id = NULL WHERE id = ? AND family_id = ?', id, famId); ctx.db.run('DELETE FROM families WHERE id = ?', famId); }); throw e; }
+    emit(ctx, 'client.updated', { client_id: id, client_name: c.name, email: c.email });
+    return { ...getClient(ctx, id, { withSecrets: true }), sibling: { id: sib.id, name: sib.name, athlete_id: sib.athlete_id } };
+  }
   let newFamily = null;
   ctx.db.tx(() => {
     const familyId = body.family_id ? getFamily(ctx, String(body.family_id)).id : (newFamily = createFamilyWithGuardian(ctx, body.parent, body.family_name));

@@ -1004,12 +1004,26 @@ async function viewClient(main, id) {
   const noFamilyPanel = !fam && famList && !c.archived_at ? (() => {
     const np = { name: input({ autocomplete: 'off' }), email: input({ type: 'email', autocomplete: 'off' }), phone: input({ type: 'tel', autocomplete: 'off' }) };
     const pick = famList.data.length ? select([['', 'Choose a family'], ...famList.data.map((x) => [x.id, `${x.name}${x.guardians ? ` (${x.guardians})` : ''}`])], { 'aria-label': 'Family' }) : null;
-    return panel('Family', { subtitle: `${first} isn't in a family yet. Add a parent so they can sign in to the parent portal and see ${first}'s results and team news.` },
+    // Add a sibling with no parent yet (owner's ask): a family of the two athletes, a parent can be added later.
+    const ns = { name: input({ autocomplete: 'off' }), birth: input({ type: 'date', max: bizDate() }) };
+    const addSib = async (checked = true) => {
+      try {
+        const r = await post(`/v1/clients/${id}/family`, { sibling: { name: ns.name.value, birth_date: ns.birth.value || undefined }, check_duplicates: checked });
+        toast(`${r.sibling.name} added as ${first}'s sibling. Add a parent from either profile when you have one.`); location.hash = `#/clients/${r.sibling.id}`;
+      } catch (err) {
+        if (err.code !== 'possible_duplicate') throw err;
+        const d = err.details.duplicates;
+        if (confirm(`${err.message}\n\n${d.map((x) => `${x.name} (${x.athlete_id}${x.archived ? ', archived' : ''})`).join('\n')}\n\nAdd ${ns.name.value.trim()} as a new athlete anyway?`)) await addSib(false);
+      }
+    };
+    return panel('Family', { subtitle: `${first} isn't in a family yet. Add a parent so they can sign in to the parent portal and see ${first}'s results and team news, or a sibling.` },
       h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!np.name.value.trim() || !np.email.value.trim()) throw new Error('Enter the parent\'s name and email.');
         await post(`/v1/clients/${id}/family`, { parent: { name: np.name.value, email: np.email.value, phone: np.phone.value || undefined } });
         toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/portal with ${np.email.value.trim()}.`); render();
       }); } }, h('div', { class: 'grow', style: 'min-width:160px' }, field('Parent name', np.name)), field('Email', np.email), field('Phone', np.phone), btn('Add parent', null, 'secondary', { type: 'submit' })),
+      h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { if (!ns.name.value.trim()) throw new Error('Enter the sibling\'s full name.'); await addSib(); }); } },
+        h('div', { class: 'grow', style: 'min-width:180px' }, field('Sibling name', ns.name)), field('Birthday', ns.birth), btn('Add sibling', null, 'secondary', { type: 'submit' })),
       pick ? h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!pick.value) throw new Error('Choose the family first.');
         const name = pick.selectedOptions[0].textContent;
@@ -2813,7 +2827,7 @@ function livePanel(id, st, canSwap) {
     return h('div', { class: 'list-item small', style: 'flex-wrap:wrap;padding:6px 0' },
       h('span', { class: e.done ? 'good-text' : 'muted', style: 'width:18px', 'aria-hidden': 'true' }, e.done ? '✓' : e.sets_logged ? '·' : ''),
       h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
-        h('span', null, h('span', { class: 'strong' }, `${e.group_tag ? `${e.group_tag} ` : ''}${e.name}`), e.swapped ? h('span', { class: 'muted' }, ` instead of ${e.swapped.from}${e.swapped.reason ? ` (${e.swapped.reason})` : ''}`) : null),
+        h('span', null, h('span', { class: 'strong' }, `${e.group_tag ? `${e.group_tag.replace(/^[A-Z]/, "")} ` : ""}${e.name}`), e.swapped ? h('span', { class: 'muted' }, ` instead of ${e.swapped.from}${e.swapped.reason ? ` (${e.swapped.reason})` : ''}`) : null),
         h('span', { class: 'muted' }, [e.prescription, e.details, e.load ? (e.load.missing ? 'No tested max yet' : e.load.text) : null, e.progression ? `progression ${e.progression}` : null, setsText].filter(Boolean).join(' · '))),
       canSwap && !a.logged && !isSwapping ? (e.swapped ? btn('Undo swap', (ev) => busy(ev.currentTarget, async () => { await del(`/v1/swaps/${e.swapped.id}`); toast(`Back to ${e.swapped.from}.`); draw(); }), 'ghost') : btn('Swap', () => { swapping = `${a.client_id}:${e.id}`; draw(); }, 'ghost', { 'aria-label': `Swap ${e.name} for ${a.name}` })) : null,
       isSwapping ? swapForm(a, e) : null);
@@ -2938,7 +2952,7 @@ async function viewSession(main, id) {
     wkSel.disabled = false;
   });
   const screenPanel = panel('Weight-room screen', { subtitle: x.workout ? `Showing ${x.workout.title} (${x.workout.program_name}, week ${x.workout.week} day ${x.workout.day}) from 30 minutes before the start. Athletes tap their name to see their weights and log it.` : 'Pick a workout to show on the weight-room TV during this session. Athletes tap their name there to see their weights and log it. Set up the screen from Schedule → Hours & settings.' },
-    x.workout ? h('ol', { class: 'small', style: 'margin:0;padding-left:20px' }, x.workout.exercises.map((e) => h('li', null, `${e.group_tag ? `${e.group_tag} ` : ''}${e.name} · ${[e.prescription, e.details, e.load].filter(Boolean).join(' · ')}`))) : null,
+    x.workout ? h('ol', { class: 'small', style: 'margin:0;padding-left:20px' }, x.workout.exercises.map((e) => h('li', null, `${e.group_tag ? `${e.group_tag.replace(/^[A-Z]/, '')} ` : ''}${e.name} · ${[e.prescription, e.details, e.load].filter(Boolean).join(' · ')}`))) : null,
     canPick && x.status === 'scheduled' ? h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       if (!wkSel.value) throw new Error('Choose a program, then a workout.');
       await put(`/v1/sessions/${id}/workout`, { workout_id: wkSel.value }); toast('The screen shows it now.'); again();

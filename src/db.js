@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import crypto from 'node:crypto';
 import { newId, token } from './util.js';
 import { newAthleteId } from './services/athlete-ids.js';
 import { splitRx, splitDistance, normalizeTempo } from './services/rx.js';
@@ -42,7 +43,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 73;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count)
+const SCHEMA_VERSION = 74;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count), 74 named blocks and complexes (workout_blocks, complexes, complex_exercises, workout_exercises.block_id; lettered groups become blocks)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -103,7 +104,8 @@ const ADDED_TABLES = {
   68: ['exercise_cues'],                                                                              // the coach's recorded cue, its words and a short clip per exercise
   69: ['plan_adjustments', 'assignment_skips'],                                                       // the adaptive plan: shifts, minimum weeks, advancing a phase; skipped workouts
   70: ['push_subscriptions', 'push_notices'],                                                         // push notifications for the athlete app
-  71: ['weekly_notes', 'leaderboard_optins']                                                          // the weekly coach's note; who is on the team board
+  71: ['weekly_notes', 'leaderboard_optins'],                                                         // the weekly coach's note; who is on the team board
+  74: ['complexes', 'workout_blocks', 'complex_exercises']                                            // named blocks in a workout; complexes written once and loaded into any workout
 };
 const ADDED_COLUMNS = {
   users: ['title TEXT', 'bio TEXT', 'photo_url TEXT'],   // version 72: the coach on a sales page
@@ -121,7 +123,8 @@ const ADDED_COLUMNS = {
   locations: ['checkin_code TEXT'],                                       // version 16
   products: ['track_stock INTEGER NOT NULL DEFAULT 0', 'low_stock_at INTEGER'],   // version 17
   sale_items: ['variant_id TEXT'],                                        // version 17
-  workout_exercises: ['distance TEXT',   // version 73: a distance per set, beside the reps
+  workout_exercises: ['block_id TEXT REFERENCES workout_blocks(id) ON DELETE CASCADE',   // version 74: the named block the exercise sits in
+    'distance TEXT',   // version 73: a distance per set, beside the reps
     'form_check INTEGER NOT NULL DEFAULT 0', 'form_check_note TEXT',   // version 61: a form check asked on the exercise
     'load_test TEXT', 'load_pct INTEGER',              // version 21: weights from tested maxes
     'sets INTEGER', 'reps TEXT', 'tempo TEXT', 'rest_seconds INTEGER', 'target_rpe REAL', 'load_text TEXT',   // version 49: structured set details
@@ -135,7 +138,8 @@ const ADDED_COLUMNS = {
     'program_id TEXT', 'program_name TEXT', 'workout_title TEXT', 'workout_week INTEGER', 'workout_day INTEGER', 'exercises_snapshot TEXT'],   // version 43: what a deleted workout was
   lessons: ['quiz TEXT', "category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))"],   // version 24: lesson quizzes; 46: Education tabs
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
-  programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER',                  // version 26: sold online
+  programs: ['sport TEXT', "setting TEXT CHECK (setting IN ('facility','remote','both'))", 'author_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'author_name TEXT',   // version 74: the Programs list's filters
+    'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER',                  // version 26: sold online
     "kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts'))",   // version 63: templates
     'pitch TEXT', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'trial_days INTEGER NOT NULL DEFAULT 0'],   // version 72: the sales page
   spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
@@ -259,6 +263,7 @@ function migrate(raw, schema) {
     } catch (e) { raw.exec('ROLLBACK'); throw e; }
   }
   if (version < 73) splitDistances(raw);
+  if (version < 74) groupsToBlocks(raw);
 }
 
 // ---------- Version 73: distance and tempo ----------
@@ -275,6 +280,38 @@ function splitDistances(raw) {
       if (d.distance == null && tempo === r.tempo) continue;
       const text = d.distance == null ? r.prescription : rxLine({ sets: r.sets, reps: d.reps, distance: d.distance, load_text: r.load_text });
       upd.run(d.reps, d.distance, tempo, text, r.id);
+    }
+    raw.exec('COMMIT');
+  } catch (e) { raw.exec('ROLLBACK'); throw e; }
+}
+// Version 74: exercises that shared a group letter in a workout become a named block ("Superset A", "Circuit B",
+// "Block C") of that kind, in the order the groups first appear; exercises in no group stay where they are. Every
+// workout's positions are renumbered so a block's exercises sit together where the block starts.
+function groupsToBlocks(raw) {
+  if (!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workout_exercises'`).get()) return;
+  const KIND = { superset: 'Superset', circuit: 'Circuit', block: 'Block' };
+  const insBlock = raw.prepare('INSERT INTO workout_blocks (id, workout_id, name, kind, position) VALUES (?, ?, ?, ?, ?)');
+  const setBlock = raw.prepare('UPDATE workout_exercises SET block_id = ? WHERE workout_id = ? AND group_label = ?');
+  const setPos = raw.prepare('UPDATE workout_exercises SET position = ? WHERE id = ?');
+  raw.exec('BEGIN');
+  try {
+    const grouped = raw.prepare(`SELECT workout_id, group_label, MIN(position) AS first, COALESCE(MAX(group_kind), 'block') AS kind FROM workout_exercises
+      WHERE group_label IS NOT NULL AND block_id IS NULL GROUP BY workout_id, group_label ORDER BY workout_id, first`).all();
+    const seen = new Map();
+    for (const g of grouped) {
+      const n = (seen.get(g.workout_id) ?? 0) + 1; seen.set(g.workout_id, n);
+      const id = 'wb_' + crypto.randomBytes(8).toString('hex');
+      const kind = KIND[g.kind] ? g.kind : 'block';
+      insBlock.run(id, g.workout_id, `${KIND[kind]} ${g.group_label}`, kind, n);
+      setBlock.run(id, g.workout_id, g.group_label);
+    }
+    for (const wid of seen.keys()) {
+      const rows = raw.prepare('SELECT id, block_id, position FROM workout_exercises WHERE workout_id = ? ORDER BY position, rowid').all(wid);
+      const anchor = new Map();
+      for (const r of rows) if (r.block_id && !anchor.has(r.block_id)) anchor.set(r.block_id, r.position);
+      const key = (r) => (r.block_id ? anchor.get(r.block_id) : r.position);
+      rows.sort((a, b) => key(a) - key(b) || a.position - b.position);
+      rows.forEach((r, i) => setPos.run(i + 1, r.id));
     }
     raw.exec('COMMIT');
   } catch (e) { raw.exec('ROLLBACK'); throw e; }

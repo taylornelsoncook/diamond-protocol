@@ -15,9 +15,35 @@ button.pg-title{min-height:44px;display:flex;align-items:center}
 .pg-pick-item[aria-pressed="true"]{background:var(--surface-raised);box-shadow:inset 3px 0 0 var(--green-mid)}
 .pg-pick-new .strong{color:var(--green-bright)}
 .pg-inline{border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-4);background:var(--ground)}
+/* The Programs list (version 74): one line per program. */
+.pg-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);overflow:hidden}
+.pg-row{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;padding:10px 14px;min-height:44px;text-decoration:none;color:inherit;border-bottom:1px solid var(--line-subtle)}
+.pg-row:last-child{border-bottom:0}
+.pg-row:hover{background:var(--surface-raised)}
+.pg-row-name{font:600 15px var(--font-sans);color:var(--steel)}
+.pg-row:hover .pg-row-name{text-decoration:underline}
+/* The week's workouts (version 74): compact cards, staggered so short days don't stretch the row. */
+.pg-week-grid{columns:320px;column-gap:var(--space-4)}
+.pg-week-grid>.workout{break-inside:avoid;margin-bottom:var(--space-4);padding:12px 14px;gap:6px;display:flow-root}
+.pg-week-grid>.workout>*{margin-bottom:6px}
+.pg-week-grid .pg-ex{gap:6px}
+.pg-week-grid .pg-ex-body{min-height:30px}
+.pg-ex-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}
+.pg-ex-name{color:var(--steel)}
+.pg-block-head{align-items:center;gap:4px;margin-top:4px}
+.pg-block-head .dp-btn{min-height:28px;padding:2px 8px;font-size:12px}
+button.pg-block-name{background:none;border:0;padding:0;cursor:pointer;text-align:left}
+button.pg-block-name:hover{text-decoration:underline}
+.sf-group-how{text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)}
+@media (hover:hover){
+  .pg-block-acts{opacity:.25;transition:opacity .15s}
+  .pg-block-head:hover .pg-block-acts,.pg-block-head:focus-within .pg-block-acts{opacity:1}
+}
+.dp-dialog-stacked{z-index:1}
 @media (max-width: 760px){
   .pg-client{flex-wrap:wrap}
   .workouts{grid-template-columns:1fr}
+  .pg-week-grid{columns:1}
 }
 div.pg-ex-body{align-items:flex-start;justify-content:center}
 @media (max-width: 760px){

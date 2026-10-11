@@ -116,6 +116,8 @@ export function deleteExercise(ctx, id) {
   const e = getExercise(ctx, id);
   const used = ctx.db.all(`SELECT DISTINCT p.name FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id JOIN programs p ON p.id = w.program_id WHERE we.exercise_id = ? ORDER BY p.name`, id).map((r) => r.name);
   if (used.length) throw conflict(`${e.name} is in ${used.join(', ')}. Remove it from ${used.length === 1 ? 'that program' : 'those programs'} first.`);
+  const inComplex = ctx.db.all('SELECT DISTINCT c.name FROM complex_exercises cx JOIN complexes c ON c.id = cx.complex_id WHERE cx.exercise_id = ? ORDER BY c.name', id).map((r) => r.name);
+  if (inComplex.length) throw conflict(`${e.name} is in the ${inComplex.length === 1 ? 'complex' : 'complexes'} ${inComplex.join(', ')}. Take it out there first (Settings → Exercise library → Complexes).`);
   const swapped = ctx.db.get('SELECT COUNT(DISTINCT client_id) AS n FROM exercise_swaps WHERE exercise_id = ?', id).n;
   if (swapped) throw conflict(`${e.name} is swapped in for ${swapped === 1 ? 'an athlete' : `${swapped} athletes`} right now. Undo those swaps first.`);
   ctx.db.run('DELETE FROM exercises WHERE id = ?', id);
@@ -124,7 +126,14 @@ export function deleteExercise(ctx, id) {
 
 // ---- Programs ----
 const WEEK_AGO = (ctx) => new Date(Date.parse(ctx.now()) - 7 * 86400000).toISOString();
-export function listPrograms(ctx, { kind = 'program' } = {}) {
+export const SETTINGS = { facility: 'In the facility', remote: 'Out of the facility', both: 'Both' };
+// The Programs list (version 74, owner's ask): one line per program, filtered by sport, setting (in or out of the
+// facility), who wrote it (author) and level. Filters match exactly, ignoring case; 'unset' matches programs with none.
+export function listPrograms(ctx, { kind = 'program', sport, setting, author, level } = {}) {
+  const where = ['p.kind = ?'], args = [WEEK_AGO(ctx), v.oneOf(kind, 'kind', ['program', 'template'])];
+  const filter = (col, val) => { if (val === undefined || val === null || val === '') return; if (val === 'unset') where.push(`${col} IS NULL`); else { where.push(`lower(${col}) = lower(?)`); args.push(String(val)); } };
+  if (setting && setting !== 'unset') v.oneOf(setting, 'setting', Object.keys(SETTINGS));
+  filter('p.sport', sport); filter('p.setting', setting); filter('p.author_id', author); filter('p.level', level);
   return ctx.db.all(
     `SELECT p.*,
       (SELECT COUNT(*) FROM workouts w WHERE w.program_id = p.id) AS workout_count,
@@ -132,20 +141,24 @@ export function listPrograms(ctx, { kind = 'program' } = {}) {
       (SELECT MAX(n) FROM (SELECT COUNT(*) AS n FROM workouts w WHERE w.program_id = p.id GROUP BY w.week)) AS days_per_week,
       (SELECT COUNT(*) FROM workout_logs l JOIN workouts w ON w.id = l.workout_id JOIN clients c ON c.id = l.client_id
         WHERE w.program_id = p.id AND c.archived_at IS NULL AND l.completed_at >= ?) AS logged_7d
-     FROM programs p WHERE p.kind = ? ORDER BY p.created_at`, WEEK_AGO(ctx), v.oneOf(kind, 'kind', ['program', 'template']));
+     FROM programs p WHERE ${where.join(' AND ')} ORDER BY p.name COLLATE NOCASE`, ...args);
 }
 export function getProgram(ctx, id) {
   const p = ctx.db.get('SELECT * FROM programs WHERE id = ?', id);
   if (!p) throw notFound('Program');
   const items = ctx.db.all(
     `SELECT we.id, we.workout_id, we.position, we.prescription, we.load_test, we.load_pct, ${SLOT_COLS.map((c) => `we.${c}`).join(', ')},
+       we.block_id, b.name AS block_name, b.kind AS block_kind,
        e.id AS exercise_id, e.name, e.video_url, e.poster_url, e.instructions, e.category
-     FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id
+     FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id LEFT JOIN workout_blocks b ON b.id = we.block_id
      JOIN workouts w ON w.id = we.workout_id WHERE w.program_id = ? ORDER BY we.position`, id);
   const rows = ctx.db.all('SELECT * FROM workouts WHERE program_id = ? ORDER BY week, day', id);
   const blocks = blocksFor(ctx, rows);   // every warm-up and cool-down the program uses, read once
+  const named = ctx.db.all('SELECT b.* FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id WHERE w.program_id = ? ORDER BY b.position', id);   // the named blocks (version 74), empty ones too
   p.workouts = rows.map((w) => ({
-    ...w, warmup: blocks.get(w.warmup_id) ?? null, cooldown: blocks.get(w.cooldown_id) ?? null, exercises: tagGroups(items.filter((i) => i.workout_id === w.id).map(({ workout_id, ...rest }) => rest))
+    ...w, warmup: blocks.get(w.warmup_id) ?? null, cooldown: blocks.get(w.cooldown_id) ?? null,
+    blocks: named.filter((b) => b.workout_id === w.id).map(({ workout_id, ...b }) => ({ ...b, count: items.filter((i) => i.block_id === b.id).length })),
+    exercises: tagGroups(items.filter((i) => i.workout_id === w.id).map(({ workout_id, ...rest }) => rest))
   }));
   p.clients = ctx.db.all(
     `SELECT c.id, c.name FROM assignments a JOIN clients c ON c.id = a.client_id WHERE a.program_id = ? AND a.active = 1 AND c.archived_at IS NULL ORDER BY c.name`, id);
@@ -170,29 +183,40 @@ const setWeeks = (ctx, programId, weeks) => { ctx.db.run('UPDATE programs SET we
 function copyWorkoutInto(ctx, src, programId, week, day, title, adjust = null) {
   const id = newId('wo');
   ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title, src.warmup_id ?? null, src.cooldown_id ?? null);
-  for (const x of ctx.db.all('SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY position', src.id)) insertSlot(ctx, id, x.exercise_id, x.position, adjust ? adjust(x) : x);
+  const blockIds = new Map();   // the named blocks come along (version 74)
+  for (const b of ctx.db.all('SELECT * FROM workout_blocks WHERE workout_id = ? ORDER BY position', src.id)) {
+    const bid = newId('wb');
+    ctx.db.run('INSERT INTO workout_blocks (id, workout_id, name, kind, position, complex_id) VALUES (?, ?, ?, ?, ?, ?)', bid, id, b.name, b.kind, b.position, b.complex_id);
+    blockIds.set(b.id, bid);
+  }
+  for (const x of ctx.db.all('SELECT * FROM workout_exercises WHERE workout_id = ? ORDER BY position', src.id)) insertSlot(ctx, id, x.exercise_id, x.position, { ...(adjust ? adjust(x) : x), block_id: blockIds.get(x.block_id) ?? null });
   return id;
 }
 // The set-detail columns of workout_exercises, and one row written with them (the builder, a copy, a program read from a PDF).
 const SLOT_COLS = SET_FIELDS;
 const slotVal = (c, f) => (c === 'form_check' ? (f.form_check ? 1 : 0) : f[c] ?? null);   // the ask is 0 or 1, never empty
 export function insertSlot(ctx, workoutId, exerciseId, position, f, id = newId('wex')) {
-  ctx.db.run(`INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription, load_test, load_pct, ${SLOT_COLS.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ${SLOT_COLS.map(() => '?').join(', ')})`,
-    id, workoutId, exerciseId, position, f.prescription, f.load_test ?? null, f.load_pct ?? null, ...SLOT_COLS.map((c) => slotVal(c, f)));
+  ctx.db.run(`INSERT INTO workout_exercises (id, workout_id, exercise_id, position, prescription, load_test, load_pct, block_id, ${SLOT_COLS.join(', ')}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${SLOT_COLS.map(() => '?').join(', ')})`,
+    id, workoutId, exerciseId, position, f.prescription, f.load_test ?? null, f.load_pct ?? null, f.block_id ?? null, ...SLOT_COLS.map((c) => slotVal(c, f)));
   return id;
 }
 // A new program, empty or as a copy of another (copy_from: its workouts in the weeks kept).
-export function createProgram(ctx, body) {
+const listFields = (body, cur = null) => ({
+  sport: body.sport !== undefined ? v.str(body.sport, 'sport', { max: 40, optional: true }) || null : cur?.sport ?? null,
+  setting: body.setting !== undefined ? (body.setting === null || body.setting === '' ? null : v.oneOf(body.setting, 'setting', Object.keys(SETTINGS))) : cur?.setting ?? null
+});
+export function createProgram(ctx, body, user = null) {
   const src = body.copy_from ? getProgram(ctx, v.str(body.copy_from, 'copy_from')) : null;
   const id = newId('prog');
   const weeks = v.int(body.weeks ?? src?.weeks ?? 4, 'weeks', { min: 1, max: 52 });
   const kind = body.kind === undefined ? 'program' : v.oneOf(body.kind, 'kind', ['program', 'template']);
+  const lf = listFields(body, src);
   ctx.db.tx(() => {
-    ctx.db.run('INSERT INTO programs (id, name, description, level, weeks, created_at, kind) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ctx.db.run('INSERT INTO programs (id, name, description, level, weeks, created_at, kind, sport, setting, author_id, author_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       id, v.str(body.name, 'name', { max: 120 }),
       body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : src?.description ?? null,
       body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : src?.level ?? null,
-      weeks, ctx.now(), kind);
+      weeks, ctx.now(), kind, lf.sport, lf.setting, user?.id ?? null, user?.name ?? null);
     if (src) { for (const w of src.workouts.filter((x) => x.week <= weeks)) copyWorkoutInto(ctx, w, id, w.week, w.day); copyPhases(ctx, src.id, id, weeks); }
   });
   return getProgram(ctx, id);
@@ -266,8 +290,9 @@ export function updateProgram(ctx, id, body) {
   const name = body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : p.name;
   const description = body.description !== undefined ? v.str(body.description, 'description', { max: 2000, optional: true }) : p.description;
   const level = body.level !== undefined ? v.str(body.level, 'level', { max: 40, optional: true }) : p.level;
+  const lf = listFields(body, p);
   ctx.db.tx(() => {
-    ctx.db.run('UPDATE programs SET name = ?, description = ?, level = ?, weeks = ? WHERE id = ?', name, description, level, weeks, id);
+    ctx.db.run('UPDATE programs SET name = ?, description = ?, level = ?, weeks = ?, sport = ?, setting = ? WHERE id = ?', name, description, level, weeks, lf.sport, lf.setting, id);
     if (weeks < p.weeks) trimPhases(ctx, id, weeks);       // a shorter program cuts its phases back too
   });
   return getProgram(ctx, id);
@@ -280,7 +305,7 @@ function keepLogsOf(ctx, workoutIds) {
   for (const wid of workoutIds) {
     const w = ctx.db.get('SELECT w.*, p.name AS program_name FROM workouts w JOIN programs p ON p.id = w.program_id WHERE w.id = ?', wid);
     if (!w) continue;
-    const items = tagGroups(ctx.db.all(`SELECT we.id, we.exercise_id, e.name, we.prescription, ${SLOT_COLS.map((c) => `we.${c}`).join(', ')} FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position`, wid));
+    const items = tagGroups(ctx.db.all(`SELECT we.id, we.exercise_id, e.name, we.prescription, ${SLOT_COLS.map((c) => `we.${c}`).join(', ')}, b.name AS block_name FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id LEFT JOIN workout_blocks b ON b.id = we.block_id WHERE we.workout_id = ? ORDER BY we.position`, wid));
     for (const l of ctx.db.all('SELECT id, client_id FROM workout_logs WHERE workout_id = ?', wid)) {
       const done = new Set(ctx.db.all('SELECT workout_exercise_id FROM exercise_logs WHERE workout_log_id = ?', l.id).map((r) => r.workout_exercise_id));
       const swaps = swapsFor(ctx, l.client_id, wid);   // the snapshot keeps the exercise this athlete actually did
@@ -412,28 +437,147 @@ export function addWorkoutExercise(ctx, workoutId, body) {
   const w = ctx.db.get('SELECT * FROM workouts WHERE id = ?', workoutId);
   if (!w) throw notFound('Workout');
   getExercise(ctx, v.str(body.exercise_id, 'exercise_id'));
-  const last = ctx.db.get('SELECT COALESCE(MAX(position), 0) AS n FROM workout_exercises WHERE workout_id = ?', workoutId).n;
   const load = loadInput(body);
-  const f = adoptKind(ctx, workoutId, slotFields(body), body);
-  // No position given: last, or right after the group it joins (a superset's second exercise goes under its first).
-  const group = f.group_label ? ctx.db.get('SELECT MIN(position) AS lo, MAX(position) AS hi FROM workout_exercises WHERE workout_id = ? AND group_label = ?', workoutId, f.group_label) : null;
-  let at = body.position === undefined || body.position === null ? (group?.hi ? group.hi + 1 : last + 1) : Math.min(v.int(body.position, 'position', { min: 1, max: 1000 }), last + 1);
-  if (group?.hi) at = Math.min(Math.max(at, group.lo), group.hi + 1);   // a given place still keeps the group together
+  const f = slotFields(body);
   const id = newId('wex');
   ctx.db.tx(() => {
+    const block = blockFor(ctx, workoutId, body, f, null);
+    const last = ctx.db.get('SELECT COALESCE(MAX(position), 0) AS n FROM workout_exercises WHERE workout_id = ?', workoutId).n;
+    // No position given: last in its block (or last of the exercises in no block). A given place is kept within the block.
+    const scope = block ? ['block_id = ?', block.id] : ['block_id IS NULL', null];
+    const span = ctx.db.get(`SELECT MIN(position) AS lo, MAX(position) AS hi FROM workout_exercises WHERE workout_id = ? AND ${scope[0]}`, ...[workoutId, scope[1]].filter((x) => x !== null));
+    let at = body.position === undefined || body.position === null ? (span?.hi ? span.hi + 1 : block ? firstPlaceFor(ctx, block) ?? last + 1 : last + 1) : Math.min(v.int(body.position, 'position', { min: 1, max: 1000 }), last + 1);
+    if (span?.hi) at = Math.min(Math.max(at, span.lo), span.hi + 1);
     if (at <= last) ctx.db.run('UPDATE workout_exercises SET position = position + 1 WHERE workout_id = ? AND position >= ?', workoutId, at);
-    insertSlot(ctx, workoutId, body.exercise_id, at, { ...f, load_test: load.test, load_pct: load.pct }, id);
-    if (f.group_label) sameKind(ctx, workoutId, f.group_label, f.group_kind);
+    insertSlot(ctx, workoutId, body.exercise_id, at, { ...f, load_test: load.test, load_pct: load.pct, block_id: block?.id ?? null }, id);
+    syncBlocks(ctx, workoutId);
   });
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
-// Every exercise in a group shares its kind (one superset can't be half circuit): joining a group without saying the
-// kind takes the group's; saying it changes the whole group.
-const sameKind = (ctx, workoutId, label, kind) => ctx.db.run('UPDATE workout_exercises SET group_kind = ? WHERE workout_id = ? AND group_label = ?', kind, workoutId, label);
-function adoptKind(ctx, workoutId, f, body, exceptId = null) {
-  if (!f.group_label || body.group_kind) return f;
-  const other = ctx.db.get('SELECT group_kind FROM workout_exercises WHERE workout_id = ? AND group_label = ? AND id IS NOT ? AND group_kind IS NOT NULL LIMIT 1', workoutId, f.group_label, exceptId);
-  return other ? { ...f, group_kind: other.group_kind } : f;
+// ---- Named blocks (version 74) ----
+// A workout's exercises sit in named blocks (Warm up, Speed, Power, Strength, Cool down...), each with a kind: one after
+// another (block), or one set of each then rest (superset, circuit). The exercises' group_label/group_kind are kept in
+// step with their block (a letter by the block's position, the block's kind) for everything that reads them: the app's
+// flows, the A1/A2 tags, the snapshot a deleted workout leaves. Exercises in no block come first.
+export const MAX_BLOCKS = 20, MAX_BLOCK_NAME = 40;
+const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+export const BLOCK_NAMES = ['Warm up', 'Activation', 'Acceleration', 'Speed', 'Plyometrics', 'Power', 'Strength', 'Accessory', 'Conditioning', 'Core', 'Cool down'];   // offered in the builder; any name goes
+// Keeps a block's exercises together where the block sits in the workout (its first exercise's place), leaves loose
+// exercises where they are, renumbers positions 1..n, orders the blocks (ones with exercises by where they sit, then
+// empty ones) and writes each exercise's letter and kind from its block.
+export function syncBlocks(ctx, workoutId) {
+  const blocks = ctx.db.all('SELECT id, kind, position FROM workout_blocks WHERE workout_id = ? ORDER BY position, rowid', workoutId);
+  const rows = ctx.db.all('SELECT id, block_id, position, group_label, group_kind FROM workout_exercises WHERE workout_id = ? ORDER BY position, rowid', workoutId);
+  const anchor = new Map();
+  for (const r of rows) if (r.block_id && !anchor.has(r.block_id)) anchor.set(r.block_id, r.position);
+  const key = (r) => (r.block_id && anchor.has(r.block_id) ? anchor.get(r.block_id) : r.position);
+  rows.sort((a, b) => key(a) - key(b) || a.position - b.position);
+  // Blocks with exercises are ordered by where they sit; an empty block keeps the slot it was made in.
+  const members = blocks.filter((b) => anchor.has(b.id)).sort((a, b) => anchor.get(a.id) - anchor.get(b.id));
+  const order = blocks.map((b) => (anchor.has(b.id) ? members.shift() : b));
+  order.forEach((b, i) => { if (b.position !== i + 1) ctx.db.run('UPDATE workout_blocks SET position = ? WHERE id = ?', i + 1, b.id); });
+  const letter = new Map(order.map((b, i) => [b.id, { label: LETTERS[Math.min(i, LETTERS.length - 1)], kind: b.kind }]));
+  rows.forEach((r, i) => {
+    const g = r.block_id ? letter.get(r.block_id) : null;
+    const label = g?.label ?? null, kind = g?.kind ?? null;
+    if (r.position !== i + 1 || r.group_label !== label || r.group_kind !== kind) ctx.db.run('UPDATE workout_exercises SET position = ?, group_label = ?, group_kind = ? WHERE id = ?', i + 1, label, kind, r.id);
+  });
+}
+// Where an empty block's first exercise goes: ahead of the blocks made after it (by their place), so blocks stay in
+// the order the coach made them; null when nothing follows (the end of the workout).
+const firstPlaceFor = (ctx, block) => ctx.db.get(`SELECT MIN(we.position) AS at FROM workout_exercises we JOIN workout_blocks b ON b.id = we.block_id WHERE we.workout_id = ? AND b.position > ?`, block.workout_id, block.position)?.at ?? null;
+const blockOf = (ctx, id) => { const b = ctx.db.get('SELECT * FROM workout_blocks WHERE id = ?', id); if (!b) throw notFound('Block'); return b; };
+// The block an exercise goes in: block_id (null = none), or, for older integrations and the PDF draft, a group letter
+// (the block named after it, "Superset A", made if it isn't there; group_kind changes that block's kind).
+function blockFor(ctx, workoutId, body, f, cur) {
+  if (body.block_id !== undefined) {
+    if (body.block_id === null || body.block_id === '') return null;
+    const b = blockOf(ctx, v.str(body.block_id, 'block_id'));
+    if (b.workout_id !== workoutId) throw badRequest('That block is in another workout.');
+    return b;
+  }
+  if (body.group_label === undefined) {
+    if (!cur?.block_id) return null;
+    const b = blockOf(ctx, cur.block_id);
+    if (body.group_kind !== undefined && f.group_kind && f.group_kind !== b.kind) { ctx.db.run('UPDATE workout_blocks SET kind = ? WHERE id = ?', f.group_kind, b.id); b.kind = f.group_kind; }
+    return b;
+  }
+  if (!f.group_label) return null;
+  const blocks = ctx.db.all('SELECT * FROM workout_blocks WHERE workout_id = ? ORDER BY position', workoutId);
+  let b = blocks.find((x) => Object.values(GROUP_KINDS).some((k) => x.name === `${k} ${f.group_label}`)) ?? blocks[LETTERS.indexOf(f.group_label)] ?? null;
+  const kind = body.group_kind ? f.group_kind : b?.kind ?? f.group_kind ?? 'superset';
+  if (!b) {
+    if (blocks.length >= MAX_BLOCKS) throw badRequest(`A workout can have up to ${MAX_BLOCKS} blocks.`);
+    const id = newId('wb');
+    ctx.db.run('INSERT INTO workout_blocks (id, workout_id, name, kind, position) VALUES (?, ?, ?, ?, ?)', id, workoutId, `${GROUP_KINDS[kind]} ${f.group_label}`, kind, blocks.length + 1);
+    b = blockOf(ctx, id);
+  } else if (kind !== b.kind) { ctx.db.run('UPDATE workout_blocks SET kind = ? WHERE id = ?', kind, b.id); b.kind = kind; }
+  return b;
+}
+const blockFields = (body, cur = null) => {
+  const f = { name: cur?.name ?? null, kind: cur?.kind ?? 'block' };
+  if (body.name !== undefined || !cur) { f.name = v.str(body.name, 'name', { max: MAX_BLOCK_NAME }).trim(); if (!f.name) throw badRequest('Name the block, like Warm up or Strength.'); }
+  if (body.kind !== undefined) f.kind = body.kind === null || body.kind === '' ? 'block' : v.oneOf(body.kind, 'kind', Object.keys(GROUP_KINDS));
+  return f;
+};
+// Add a block to a workout: a name and a kind, or a complex (complex_id: its name, kind and every exercise come in).
+export function addBlock(ctx, workoutId, body = {}) {
+  const w = ctx.db.get('SELECT * FROM workouts WHERE id = ?', workoutId);
+  if (!w) throw notFound('Workout');
+  const complex = body.complex_id ? ctx.db.get('SELECT * FROM complexes WHERE id = ?', v.str(body.complex_id, 'complex_id')) : null;
+  if (body.complex_id && !complex) throw notFound('Complex');
+  const f = blockFields({ ...body, name: body.name ?? complex?.name, kind: body.kind ?? complex?.kind }, null);
+  const n = ctx.db.get('SELECT COUNT(*) AS n FROM workout_blocks WHERE workout_id = ?', workoutId).n;
+  if (n >= MAX_BLOCKS) throw badRequest(`A workout can have up to ${MAX_BLOCKS} blocks.`);
+  const id = newId('wb');
+  ctx.db.tx(() => {
+    ctx.db.run('INSERT INTO workout_blocks (id, workout_id, name, kind, position, complex_id) VALUES (?, ?, ?, ?, ?, ?)', id, workoutId, f.name, f.kind, n + 1, complex?.id ?? null);
+    if (complex) {
+      let at = ctx.db.get('SELECT COALESCE(MAX(position), 0) AS n FROM workout_exercises WHERE workout_id = ?', workoutId).n;
+      for (const x of ctx.db.all('SELECT * FROM complex_exercises WHERE complex_id = ? ORDER BY position', complex.id)) insertSlot(ctx, workoutId, x.exercise_id, ++at, { ...x, block_id: id });
+    }
+    syncBlocks(ctx, workoutId);
+  });
+  const out = getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
+  return { ...out, block_id: id };
+}
+// Rename a block, change how it runs, or move it among the workout's blocks (position 1..n).
+export function updateBlock(ctx, id, body = {}) {
+  const b = blockOf(ctx, id);
+  const f = blockFields(body, b);
+  ctx.db.tx(() => {
+    ctx.db.run('UPDATE workout_blocks SET name = ?, kind = ? WHERE id = ?', f.name, f.kind, id);
+    if (body.position !== undefined && body.position !== null) {
+      // Moving a block moves its exercises to sit just before (up) or after (down) the block now at that place; an
+      // empty block only moves among the empty ones at the end.
+      syncBlocks(ctx, b.workout_id);
+      const order = ctx.db.all('SELECT id, position FROM workout_blocks WHERE workout_id = ? ORDER BY position', b.workout_id);
+      const to = v.int(body.position, 'position', { min: 1, max: order.length }), from = order.findIndex((x) => x.id === id) + 1;
+      if (to !== from) {
+        const target = order[to - 1];
+        const mine = ctx.db.get('SELECT COUNT(*) AS n FROM workout_exercises WHERE block_id = ?', id).n;
+        const span = ctx.db.get('SELECT MIN(position) AS lo, MAX(position) AS hi FROM workout_exercises WHERE block_id = ?', target.id);
+        if (mine && span.lo != null) ctx.db.run('UPDATE workout_exercises SET position = ? WHERE block_id = ?', to < from ? span.lo - 0.5 : span.hi + 0.5, id);
+        else if (!mine && span.lo == null) ctx.db.run('UPDATE workout_blocks SET position = ? WHERE id = ?', to < from ? target.position - 0.5 : target.position + 0.5, id);
+        else throw badRequest(mine ? 'An empty block sits after the ones with exercises. Add exercises to it first.' : 'Add exercises to this block before moving it among the others.');
+      }
+    }
+    syncBlocks(ctx, b.workout_id);
+  });
+  const w = ctx.db.get('SELECT program_id FROM workouts WHERE id = ?', b.workout_id);
+  return getProgram(ctx, w.program_id).workouts.find((x) => x.id === b.workout_id);
+}
+// Remove a block: its exercises go with it, unless keep_exercises puts them back among the workout's loose exercises.
+export function removeBlock(ctx, id, body = {}) {
+  const b = blockOf(ctx, id);
+  const n = ctx.db.get('SELECT COUNT(*) AS n FROM workout_exercises WHERE block_id = ?', id).n;
+  ctx.db.tx(() => {
+    if (body.keep_exercises) ctx.db.run('UPDATE workout_exercises SET block_id = NULL WHERE block_id = ?', id);
+    else ctx.db.run('DELETE FROM workout_exercises WHERE block_id = ?', id);
+    ctx.db.run('DELETE FROM workout_blocks WHERE id = ?', id);
+    syncBlocks(ctx, b.workout_id);
+  });
+  return { id, deleted: true, exercises_removed: body.keep_exercises ? 0 : n, exercises_kept: body.keep_exercises ? n : 0 };
 }
 // The set details of one slot from a request: the fields given, over the row as it is (cur) for a change. A body with
 // a prescription but no sets or reps (an older integration, the PDF draft) has the text split into them. Blank clears.
@@ -507,27 +651,22 @@ export function updateWorkoutExercise(ctx, id, body) {
   if (!x) throw notFound('Workout exercise');
   const load = body.load_test === undefined ? { test: x.load_test, pct: x.load_pct } : loadInput(body);
   const exerciseId = body.exercise_id !== undefined ? getExercise(ctx, v.str(body.exercise_id, 'exercise_id')).id : x.exercise_id;
-  const f = adoptKind(ctx, x.workout_id, slotFields(body, x), body, id);
+  const f = slotFields(body, x);
   ctx.db.tx(() => {
-    ctx.db.run(`UPDATE workout_exercises SET prescription = ?, load_test = ?, load_pct = ?, exercise_id = ?, ${SLOT_COLS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
-      f.prescription, load.test, load.pct, exerciseId, ...SLOT_COLS.map((c) => slotVal(c, f)), id);
-    if (f.group_label) {
-      sameKind(ctx, x.workout_id, f.group_label, f.group_kind);
-      // Joining a group moves the exercise to sit right after the others in it.
-      if (f.group_label !== x.group_label) {
-        const end = ctx.db.get('SELECT MAX(position) AS n FROM workout_exercises WHERE workout_id = ? AND group_label = ? AND id != ?', x.workout_id, f.group_label, id).n;
-        if (end) moveSlot(ctx, x, x.position < end ? end : end + 1);
-      }
+    const block = blockFor(ctx, x.workout_id, body, f, x);
+    ctx.db.run(`UPDATE workout_exercises SET prescription = ?, load_test = ?, load_pct = ?, exercise_id = ?, block_id = ?, ${SLOT_COLS.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+      f.prescription, load.test, load.pct, exerciseId, block?.id ?? null, ...SLOT_COLS.map((c) => slotVal(c, f)), id);
+    // Joining a block that already has exercises moves this one to sit right after them; starting a block, or leaving
+    // one, keeps the exercise where it is (the block starts there, or the exercise stays put on its own).
+    if (block && block.id !== x.block_id) {
+      const end = ctx.db.get('SELECT MAX(position) AS n FROM workout_exercises WHERE block_id = ? AND id != ?', block.id, id).n;
+      const at = end != null ? end + 0.5 : firstPlaceFor(ctx, block);
+      if (at != null) ctx.db.run('UPDATE workout_exercises SET position = ? WHERE id = ?', end != null ? at : at - 0.5, id);
     }
+    syncBlocks(ctx, x.workout_id);
   });
-  const rows = tagGroups(ctx.db.all('SELECT we.*, e.name FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position', x.workout_id));
+  const rows = tagGroups(ctx.db.all('SELECT we.*, e.name, b.name AS block_name, b.kind AS block_kind FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id LEFT JOIN workout_blocks b ON b.id = we.block_id WHERE we.workout_id = ? ORDER BY we.position', x.workout_id));
   return rows.find((r) => r.id === id);
-}
-function moveSlot(ctx, x, to) {
-  if (to === x.position) return;
-  if (to < x.position) ctx.db.run('UPDATE workout_exercises SET position = position + 1 WHERE workout_id = ? AND position >= ? AND position < ?', x.workout_id, to, x.position);
-  else ctx.db.run('UPDATE workout_exercises SET position = position - 1 WHERE workout_id = ? AND position > ? AND position <= ?', x.workout_id, x.position, to);
-  ctx.db.run('UPDATE workout_exercises SET position = ? WHERE id = ?', to, x.id);
 }
 export function latestMax(ctx, clientId, testKey, { visibleOnly = false } = {}) {
   return ctx.db.get(`SELECT r.value, r.recorded_at FROM perf_results r JOIN perf_tests t ON t.id = r.test_id
@@ -558,8 +697,9 @@ export function removeWorkoutExercise(ctx, id) {
   ctx.db.tx(() => {
     ctx.db.run('DELETE FROM workout_exercises WHERE id = ?', id);
     ctx.db.run('UPDATE workout_exercises SET position = position - 1 WHERE workout_id = ? AND position > ?', x.workout_id, x.position);
+    syncBlocks(ctx, x.workout_id);
   });
-  return { id, deleted: true, restore: { workout_id: x.workout_id, exercise_id: x.exercise_id, prescription: x.prescription, load_test: x.load_test, load_pct: x.load_pct, position: x.position, ...Object.fromEntries(SET_FIELDS.map((k) => [k, x[k]])) } };
+  return { id, deleted: true, restore: { workout_id: x.workout_id, exercise_id: x.exercise_id, prescription: x.prescription, load_test: x.load_test, load_pct: x.load_pct, position: x.position, block_id: x.block_id ?? null, ...Object.fromEntries(SET_FIELDS.map((k) => [k, x[k]])) } };
 }
 
 // ---- Assignments ----

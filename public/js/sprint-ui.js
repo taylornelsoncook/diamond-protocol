@@ -6,7 +6,7 @@
 // Clips play from 10-minute signed addresses on the private bucket; nothing is downloaded or kept by the page.
 import { h, fill, btn, busy, toast, field, input, select, ago } from './ui.js';
 import { sendClip, CLIP_TYPES } from './formchecks-ui.js';
-import { suggest, canSuggest } from './sprint-auto.js';
+import { suggest, canSuggest, trackSuggest, TRACK_KEYS } from './sprint-auto.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const FPS = [240, 120, 60, 30, 960, 480, 50, 25, 24];
@@ -34,7 +34,7 @@ const needsOf = (pos) => [...FIVE, ...(pos.measures.some((m) => m.needs.includes
 const OPTIONAL = new Set(['shoulder']);
 const tapLabel = (k, pos) => {
   const w = pos.words ?? { stance: 'the stance leg', swing: 'the swing leg' };
-  return { hip: 'Hip', shoulder: 'Shoulder (optional, for trunk lean)', knee_stance: `Knee of ${w.stance}`, ankle_stance: `Ankle of ${w.stance}`, knee_swing: `Knee of ${w.swing}`, ankle_swing: `Ankle of ${w.swing}`, foot: `Foot of ${w.stance}` }[k] ?? LANDMARK_LABEL[k];
+  return { hip: 'Hip', shoulder: 'Shoulder (optional, for trunk lean)', knee_stance: `Knee of ${w.stance}`, ankle_stance: `Ankle of ${w.stance}`, knee_swing: `Knee of ${w.swing}`, ankle_swing: `Ankle of ${w.swing}`, foot: `Foot of ${w.stance}`, knee_near: 'Knee of the leg nearer the camera', ankle_near: 'Ankle of the nearer leg', knee_far: 'Knee of the far leg', ankle_far: 'Ankle of the far leg' }[k] ?? LANDMARK_LABEL[k];
 };
 // ---------- The breakdown drawn on the video (Speedworks style) ----------
 const TONE = { good: '#3FA34D', ok: '#D9A43A', bad: '#C0392B' };
@@ -202,7 +202,7 @@ function drawPose(target, points, { w, scale = 1, cones = null }) {
     return;
   }
   for (const [a, b, part] of BONES) if (points[a] && points[b]) target.append(svgEl('line', { x1: points[a][0], y1: points[a][1], x2: points[b][0], y2: points[b][1], stroke: COLOR[part], 'stroke-width': lw, 'stroke-linecap': 'round' }));
-  for (const [k, p] of Object.entries(points)) target.append(svgEl('circle', { cx: p[0], cy: p[1], r, fill: '#fff', stroke: k.includes('swing') ? COLOR.swing : k.includes('stance') || k === 'foot' ? COLOR.stance : COLOR.trunk, 'stroke-width': lw / 1.5 }));
+  for (const [k, p] of Object.entries(points)) target.append(svgEl('circle', { cx: p[0], cy: p[1], r, fill: '#fff', stroke: k.includes('swing') || k.includes('far') ? COLOR.swing : k.includes('stance') || k.includes('near') || k === 'foot' ? COLOR.stance : COLOR.trunk, 'stroke-width': lw / 1.5 }));
   if (cones) for (const p of [cones.a, cones.b].filter(Boolean)) target.append(svgEl('path', { d: `M${p[0]} ${p[1] - r * 3}L${p[0] - r * 1.6} ${p[1]}H${p[0] + r * 1.6}Z`, fill: '#F0B458', stroke: '#000', 'stroke-width': lw / 2 }));
 }
 
@@ -387,7 +387,7 @@ export async function sprintViewer(opts) {
       items.length ? h('div', { class: 'stack-tight' }, items) : null,
       p.suggested && !tap ? h('div', { class: 'row wrap sp-suggest-note', style: 'gap:8px;align-items:center' }, h('span', { class: 'small grow' }, 'Suggested by the app.'),
         editable ? btn('Looks right', (e) => busy(e.currentTarget, async () => { clip = await api('POST', `${prefix}/sprint-clips/${id}/confirm`, { step: p.step, position: p.position }); draw(); }), 'secondary') : null) : null,
-      tap ? tapPanel(p) : actions);
+      tap && !tap.track ? tapPanel(p) : actions);
   }
   function tapPanel(p) {
     const next = tap.need.find((k) => !tap.points[k] && !tap.skipped.has(k));
@@ -415,13 +415,50 @@ export async function sprintViewer(opts) {
     } catch (e) { toast(`The positions couldn't be suggested: ${e.message}`, 'bad'); }
     finally { suggesting = null; draw(); }
   }
+  // Tracked taps (owner's ask): tap the hip, both knees and both ankles on one frame, and the browser follows them
+  // through the whole clip (lk-track.js) and finds the positions from the tracks, saved as suggestions like the model's.
+  function startTrack() {
+    if (suggesting) return;
+    video.pause();
+    tap = { need: [...TRACK_KEYS, 'shoulder'], points: {}, skipped: new Set(), t: video.currentTime, track: true };
+    drawSide(); drawOverlay(); stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  async function runTrack() {
+    if (!tap?.track || suggesting) return;
+    const seeds = { t: tap.t, points: Object.fromEntries(TRACK_KEYS.map((k) => [k, tap.points[k] ?? null])) };
+    if (TRACK_KEYS.some((k) => !seeds.points[k])) { toast('Tap the hip, both knees and both ankles first.', 'warn'); return; }
+    if (tap.points.shoulder) seeds.points.shoulder = tap.points.shoulder;
+    tap = null; suggesting = 'Tracking the points…'; drawSide(); drawOverlay();
+    try {
+      const found = await trackSuggest({ src: url, crossOrigin: true, kind: clip.kind, steps: clip.steps ?? 2, fileFps: clip.file_fps, seeds, onProgress: (text) => { suggesting = text; drawSide(); } });
+      if (!found.marks.length) { toast(`${found.note} Try the taps on a clearer frame, or mark the positions by hand.`, 'bad'); return; }
+      clip = await api('PUT', `${prefix}/sprint-clips/${id}/auto`, { marks: found.marks, steps: found.steps, direction: found.direction, video_w: found.video_w, video_h: found.video_h, note: found.note });
+      toast(`Positions found from your taps. ${found.note} Check each one.`);
+      const first = positions().find((p) => p.marked); if (first) { sel = posKey(first); video.currentTime = first.t; }
+    } catch (e) { toast(`The points couldn't be tracked: ${e.message}`, 'bad'); }
+    finally { suggesting = null; draw(); }
+  }
+  function trackPanel() {
+    const next = tap.need.find((k) => !tap.points[k] && !tap.skipped.has(k));
+    const n = TRACK_KEYS.filter((k) => tap.points[k]).length;
+    return h('div', { class: 'sp-tap stack-tight' },
+      h('div', { class: 'strong' }, next ? `Tap ${Object.keys(tap.points).length + 1}: ${tapLabel(next, {})}` : 'All points tapped. Press Track to follow them through the clip.'),
+      h('div', { class: 'small' }, 'Pause on a frame where the whole body is clear (the first step is best). Tap the hip, then the knee and ankle of the leg nearer the camera, then the far leg\'s. The shoulder is optional, for trunk lean.'),
+      h('div', { class: 'small muted' }, `${n} of 5 points. The app follows each one frame by frame from here, both ways, and works out the positions from where the feet stop and go.`),
+      h('div', { class: 'row wrap', style: 'gap:8px' },
+        btn('Track from here', (e) => busy(e.currentTarget, runTrack), 'primary', { disabled: n < 5 }),
+        next === 'shoulder' ? btn('Skip the shoulder', () => { tap.skipped.add('shoulder'); drawSide(); }, 'secondary') : null,
+        Object.keys(tap.points).length ? btn('Undo last', () => { const last = [...tap.need].reverse().find((k) => tap.points[k]); delete tap.points[last]; drawSide(); drawOverlay(); }, 'ghost') : null,
+        btn('Cancel', () => { tap = null; drawSide(); drawOverlay(); }, 'ghost')));
+  }
   const confirmAll = (e) => busy(e.currentTarget, async () => { clip = await api('POST', `${prefix}/sprint-clips/${id}/confirm`, {}); toast('Kept as they are.'); draw(); });
   function drawSide() {
     const a = clip.analysis;
     const auto = editable && canSuggest() ? h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
       suggesting ? h('span', { class: 'small', role: 'status' }, suggesting) : btn(a?.marked ? 'Suggest the points again' : 'Suggest the points', () => runSuggest(), a?.marked ? 'ghost' : 'primary'),
+      !suggesting && !tap ? btn('Track my taps', startTrack, 'secondary', { title: 'Tap the hip, knees and ankles on one frame; the app follows them through the clip' }) : null,
       a?.suggested && !suggesting ? btn(`Looks right: keep all ${a.suggested}`, confirmAll, 'secondary') : null) : null;
-    fill(side, h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('div', { class: 'grow' }, h('div', { class: 'strong' }, 'Motion & positions'), h('div', { class: 'small muted' }, `${a?.marked ?? 0} of ${a?.total ?? 0} marked${a?.suggested ? ` · ${a.suggested} suggested by the app` : ''}`)),
+    fill(side, tap?.track ? trackPanel() : null, h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('div', { class: 'grow' }, h('div', { class: 'strong' }, 'Motion & positions'), h('div', { class: 'small muted' }, `${a?.marked ?? 0} of ${a?.total ?? 0} marked${a?.suggested ? ` · ${a.suggested} suggested by the app` : ''}`)),
       h('span', { class: 'small muted' }, 'Rep grade'), gradeChip(a?.grade, true)),
       a?.suggested ? h('p', { class: 'small sp-suggest-note', style: 'margin:0' }, 'Dashed positions were suggested by the app. Step through each one: press Looks right, or Redo the points where a point is off.') : null,
       auto, picker(), detail());

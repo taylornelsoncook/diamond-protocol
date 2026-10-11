@@ -3,7 +3,7 @@
 // direction. The real model's points come from the browser; this checks what we do with them.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findEvents, framePoints } from '../public/js/sprint-detect.js';
+import { findEvents, framePoints, framesFromTracks } from '../public/js/sprint-detect.js';
 
 const FPS = 240, GROUND = 900;
 // A runner moving at `speed` px/s to the right; contacts alternate legs: [leg, from, to] in seconds.
@@ -95,4 +95,22 @@ test('nothing to go on: no athlete, or no foot contacts, says why', () => {
   assert.deepEqual(framePoints([], 100, 100), null);
   const lm = Array.from({ length: 33 }, (_, i) => ({ x: i / 100, y: 0.5 }));
   assert.deepEqual(framePoints(lm, 1000, 500).hipL, [230, 250]);
+});
+
+test('tracked taps: the hip, both knees and both ankles followed through the clip find the same steps as the model', () => {
+  const contacts = [['A', 0.10, 0.21], ['B', 0.32, 0.43], ['A', 0.54, 0.65], ['B', 0.76, 0.87]];
+  const frames = run({ contacts, seconds: 1.0 });
+  // What a tracker hands back: the five tapped points per frame (the near leg = L, the far leg = R), no heel or toe.
+  const tracks = frames.map((f) => ({ t: f.t, pts: { hip: f.pts.hipL, knee_near: f.pts.kneeL, ankle_near: f.pts.ankleL, knee_far: f.pts.kneeR, ankle_far: f.pts.ankleR } }));
+  const shaped = framesFromTracks(tracks);
+  assert.equal(shaped.length, frames.length);
+  assert.ok(shaped[0].pts.toeL[0] > shaped[0].pts.heelL[0], 'the foot points the way the hip travels');
+  const found = findEvents(shaped, { kind: 'top_speed', steps: 2 });
+  const toeOffs = found.marks.filter((m) => m.position === 'toe_off').map((m) => m.t);
+  assert.ok(toeOffs.length >= 2, `toe-offs found: ${toeOffs}`);
+  for (const t of toeOffs) assert.ok(contacts.some(([, , b]) => Math.abs(b - t) < 3 / FPS), `toe-off ${t} ends a contact`);
+  // A frame where a point was lost is skipped, not guessed.
+  const holed = tracks.map((f, i) => (i % 50 === 25 ? { t: f.t, pts: { ...f.pts, knee_far: null } } : f));
+  assert.equal(framesFromTracks(holed)[25].pts, null);
+  assert.ok(findEvents(framesFromTracks(holed), { kind: 'top_speed', steps: 2 }).marks.length >= 4, 'a few lost frames do not stop the steps being found');
 });

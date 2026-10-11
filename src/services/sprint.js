@@ -31,17 +31,47 @@ export const KINDS = {
 export const SEGMENTS = { '0-10': '0–10 yd', '10-20': '10–20 yd', '20-30': '20–30 yd', '30-40': '30–40 yd', '40+': '40+ yd' };
 const segmentOf = (val) => { if (val === undefined || val === null || val === '') return null; if (!Object.hasOwn(SEGMENTS, String(val))) throw badRequest(`segment must be one of ${Object.keys(SEGMENTS).join(', ')}.`); return String(val); };
 export const POSITIONS = {
-  // ALTIS's definitions; legs says which leg is which for the points (the app shows it while tapping).
-  toe_off: { label: 'Toe-off', hint: 'The last frame the pushing foot is on the ground. ALTIS: about 90° between the thighs, the pushing knee not fully straight.', legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.' },
-  mvp: { label: 'MVP', hint: 'Max vertical projection: the highest point of the flight. ALTIS: about 90° between the thighs, the front knee open more than 110°.', legs: 'Swing leg = the front leg. Stance leg = the back leg that just pushed off.' },
-  strike: { label: 'Strike', hint: 'The back thigh is straight up and down, just before the front foot comes down. ALTIS: 20 to 40° between the thighs, the back knee right under the hip.', legs: 'Swing leg = the back leg coming through. Stance leg = the front leg about to land.' },
-  touchdown: { label: 'Touchdown', hint: 'The first frame the landing foot touches the ground.', legs: 'Stance leg = the leg landing. Swing leg = the back leg coming through.' },
-  full_support: { label: 'Full support', hint: 'ALTIS: the toe straight under the hip.', legs: 'Stance leg = the leg on the ground. Swing leg = the leg coming through.' },
-  finish: { label: 'Next toe-off', hint: 'The step after the last leaving the ground: it closes the last step\'s contact.', legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.' },
-  penultimate: { label: 'Penultimate step', hint: 'The step before the plant, where braking starts.' },
-  plant: { label: 'Plant', hint: 'The plant foot touching down.' },
-  deepest: { label: 'Deepest point', hint: 'The lowest point over the plant leg.' },
-  push_off: { label: 'Push-off', hint: 'The plant foot leaving the ground.' }
+  // ALTIS's frames, with what to look for, the common fault and the cue from the research brief (docs/sprint-positions.md);
+  // legs says which leg is which while tapping, and words gives each leg its plain name for the tap prompts.
+  toe_off: { label: 'Toe-off', hint: 'The last frame the pushing foot is on the ground.',
+    look: 'Thighs about 90° apart; the pushing knee not locked (about 155° at top speed, straighter in the first steps); trunk 5 to 10° forward at top speed, 35 to 50° in the first steps; the free foot toe-up and tucked.',
+    fault: 'The heel flicking up behind, pushing to a straight knee, or sitting with the hip low.', cue: '"Step over the knee", "run tall"; first steps: "push the ground away".',
+    legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.', words: { stance: 'the pushing leg', swing: 'the front leg' } },
+  mvp: { label: 'MVP', hint: 'Max vertical projection: the feet level in flight, the hip at its highest.',
+    look: 'Thighs still about 90° apart; the front thigh at or above horizontal; the front knee bent around 90 to 120° with the shin hanging straight down; the back heel rising toward the glute.',
+    fault: 'A low front thigh, the shin reaching forward early, or the back leg hanging.', cue: '"Knee to the sky, foot under the knee".',
+    legs: 'Swing leg = the front leg. Stance leg = the back leg that just pushed off.', words: { stance: 'the back leg', swing: 'the front leg' } },
+  strike: { label: 'Strike', hint: 'The back thigh straight up and down, just before the front foot comes down.',
+    look: 'The front thigh 20 to 40° ahead with the shin already swinging down and back, the foot toe-up; the swing knee closing from about 110° toward 45°.',
+    fault: 'The shin flicked out ahead (overstriding) or the toe pointing down.', cue: '"Pull the ground under you".',
+    legs: 'Swing leg = the back leg coming through. Stance leg = the front leg about to land.', words: { stance: 'the front leg', swing: 'the back leg' } },
+  touchdown: { label: 'Touchdown', hint: 'The first frame the landing foot touches the ground.',
+    look: 'At top speed the shin vertical (within about 5°) and the foot close under the hip, the stance knee 150 to 160°, the free knee folded to about 45° and already past the stance leg. In the first steps the shin leans well forward (25 to 55°) and the foot lands under or behind the hip.',
+    fault: 'Landing ahead of the knee (braking), heel first, or the knee collapsing.', cue: '"Land under the hip", "stiff ankle, pop off the ground"; first steps: "foot under the hip, shin pointing where you\'re going".',
+    legs: 'Stance leg = the leg landing. Swing leg = the back leg coming through.', words: { stance: 'the landing leg', swing: 'the back leg' } },
+  full_support: { label: 'Full support', hint: 'The hip straight over the foot, at its lowest.',
+    look: 'The ankle under the hip (within 4 cm); no extra knee bend or ankle collapse; the recovery knee already ahead of the stance knee; the hip at 95% or more of standing height. In the first steps the trunk and shin are parallel, both 35 to 45° forward.',
+    fault: 'Sitting, the swing leg lagging behind the glute, or the hips drifting back.', cue: '"Hips tall through the foot"; first steps: "parallel shins and chest".',
+    legs: 'Stance leg = the leg on the ground. Swing leg = the leg coming through.', words: { stance: 'the leg on the ground', swing: 'the leg coming through' } },
+  finish: { label: 'Next toe-off', hint: 'The step after the last leaving the ground: it closes the last step\'s contact.',
+    look: 'As at toe-off.', fault: 'As at toe-off.', cue: 'As at toe-off.',
+    legs: 'Stance leg = the leg pushing off the ground. Swing leg = the front leg.', words: { stance: 'the pushing leg', swing: 'the front leg' } },
+  penultimate: { label: 'Penultimate step', hint: 'The step before the plant, where braking starts.',
+    look: 'The foot lands ahead of the hip to brake; the trunk upright or leaning slightly back; the knee bends deep (about 110 to 130° inside angle at its deepest); hips, knees and ankles bend together so the body sinks before the plant.',
+    fault: 'No braking here, so it all lands on the plant foot.', cue: '"Brake early, sink before you plant".',
+    legs: 'Stance leg = the braking leg on the ground. Swing leg = the other leg.', words: { stance: 'the braking leg', swing: 'the other leg' } },
+  plant: { label: 'Plant', hint: 'The plant foot touching down.',
+    look: 'The foot pointed toward the new direction, wide enough to push but not wide; the shin leaning into the new direction about 35 to 45°; the knee bent at least 30° at contact (150° or less); the trunk leaning toward the new direction.',
+    fault: 'A stiff, straight-knee plant with the trunk falling away, or a wide plant with the knee caving in.', cue: '"Knee over the toes, nose over the knee", "lean where you\'re going".',
+    legs: 'Stance leg = the plant leg. Swing leg = the other leg.', words: { stance: 'the plant leg', swing: 'the other leg' } },
+  deepest: { label: 'Deepest point', hint: 'The lowest point over the plant leg.',
+    look: 'The plant knee about 100 to 120°, tracking over the foot; the trunk 15 to 25° toward the new direction.',
+    fault: 'The knee caving in, or the trunk rotated away.', cue: '"Knee over the foot".',
+    legs: 'Stance leg = the plant leg. Swing leg = the other leg.', words: { stance: 'the plant leg', swing: 'the other leg' } },
+  push_off: { label: 'Push-off', hint: 'The plant foot leaving the ground.',
+    look: 'Hip, knee and ankle fully extended along the new line; the shin and trunk parallel, both 40 to 45° into the new direction; the first step out lands under the hip.',
+    fault: 'Standing up before pushing, or a hopping vertical push.', cue: '"Push the ground away on the new line".',
+    legs: 'Stance leg = the plant leg pushing off. Swing leg = the other leg.', words: { stance: 'the plant leg', swing: 'the other leg' } }
 };
 // The points a coach taps. "Swing" is the leg in the air moving forward (the recovery leg); "stance" is the leg that
 // pushed, is about to land or is on the ground. foot = where the stance foot meets the ground (for distance per step).
@@ -65,25 +95,27 @@ export const MEASURES = {
 // Starting references in degrees: target, A within ±a, B within ±b, C beyond. The owner replaces them with their own.
 const R = (measure, target, a, b) => ({ measure, target, a, b });
 export const DEFAULT_REFERENCES = {
+  // From the research brief (docs/sprint-positions.md): published values where they exist (the thigh angles at toe-off
+  // and strike, the take-off knee, the acceleration shin and trunk, the knee at the plant), coaching estimates elsewhere.
   top_speed: {
-    toe_off: [R('thigh_separation', 90, 15, 30), R('stance_knee', 160, 12, 25)],
-    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 115, 10, 25)],
-    strike: [R('thigh_separation', 30, 10, 20), R('back_thigh', 0, 10, 20)],
-    touchdown: [R('shin_angle', 0, 6, 14), R('swing_knee', 45, 15, 30)],
-    full_support: [R('foot_under_hip', 0, 4, 9), R('recovery_thigh', 45, 12, 25)]
+    toe_off: [R('thigh_separation', 90, 12, 25), R('stance_knee', 155, 10, 20), R('trunk_lean', 7, 7, 15)],
+    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 105, 15, 30)],
+    strike: [R('thigh_separation', 30, 10, 20), R('back_thigh', 0, 8, 15)],
+    touchdown: [R('shin_angle', 0, 6, 12), R('swing_knee', 42, 12, 25), R('stance_knee', 155, 10, 20)],
+    full_support: [R('foot_under_hip', 0, 4, 9), R('recovery_thigh', 30, 15, 30)]
   },
   acceleration: {
-    toe_off: [R('trunk_lean', 45, 10, 20), R('thigh_separation', 90, 15, 30)],
-    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 115, 10, 25)],
+    toe_off: [R('trunk_lean', 35, 10, 20), R('thigh_separation', 90, 15, 30), R('stance_knee', 168, 10, 20)],
+    mvp: [R('thigh_separation', 90, 15, 30), R('swing_knee', 95, 15, 30)],
     strike: [R('thigh_separation', 30, 10, 20), R('back_thigh', 0, 10, 20)],
-    touchdown: [R('shin_angle', 0, 8, 18), R('swing_knee', 45, 15, 30)],
-    full_support: [R('recovery_thigh', 45, 12, 25), R('trunk_lean', 40, 10, 20)]
+    touchdown: [R('shin_angle', 35, 12, 25), R('stance_knee', 145, 12, 25)],
+    full_support: [R('recovery_thigh', 45, 12, 25), R('trunk_lean', 35, 10, 20)]
   },
   cod: {
-    penultimate: [R('trunk_lean_any', 5, 10, 20), R('stance_knee', 130, 15, 30)],
-    plant: [R('shin_lean', 40, 10, 20), R('trunk_lean_any', 15, 10, 20)],
-    deepest: [R('stance_knee', 110, 15, 30), R('trunk_lean_any', 20, 10, 20)],
-    push_off: [R('shin_lean', 45, 10, 20), R('stance_knee', 160, 12, 25)]
+    penultimate: [R('stance_knee', 120, 15, 30), R('trunk_lean_any', 5, 10, 20)],
+    plant: [R('stance_knee', 145, 10, 20), R('shin_lean', 40, 10, 20), R('trunk_lean_any', 15, 10, 20)],   // the knee at contact first: the one number with injury evidence (30° or more of bend)
+    deepest: [R('stance_knee', 115, 15, 30), R('trunk_lean_any', 20, 10, 20)],
+    push_off: [R('shin_lean', 45, 10, 20), R('stance_knee', 165, 10, 20)]
   }
 };
 
@@ -109,8 +141,8 @@ export const STEP_METRICS = {
 };
 export const CHAPTERS = { projection: '1. Projection', switching: '2. Switching', reactivity: '3. Reactivity' };
 export const DEFAULT_STEP_REFS = {
-  top_speed: { hip_displacement_m: [1.95, 2.25], hip_flexion_deg: [60, 75], hip_extension_deg: [20, 35], hip_height_m: [0.8, 0.88], thigh_velocity_dps: [300, 380], early_flexion_dps: [300, 400], late_flexion_dps: [300, 400], early_extension_dps: [280, 380], late_extension_dps: [350, 450], touchdown_dist_m: [0.3, 0.45], takeoff_dist_m: [0.45, 0.65], gct_s: [0.12, 0.15], compression_m: [0.03, 0.06] },
-  acceleration: { hip_displacement_m: [1.1, 1.5], hip_flexion_deg: [55, 75], hip_extension_deg: [30, 50], hip_height_m: [0.7, 0.82], thigh_velocity_dps: [250, 350], early_flexion_dps: [250, 350], late_flexion_dps: [250, 350], early_extension_dps: [230, 330], late_extension_dps: [300, 400], touchdown_dist_m: [-0.1, 0.15], takeoff_dist_m: [0.6, 0.9], gct_s: [0.16, 0.22], compression_m: [0.03, 0.07] }
+  top_speed: { hip_displacement_m: [1.95, 2.25], hip_flexion_deg: [60, 75], hip_extension_deg: [20, 35], hip_height_m: [0.8, 0.88], thigh_velocity_dps: [360, 440], early_flexion_dps: [340, 440], late_flexion_dps: [340, 440], early_extension_dps: [320, 420], late_extension_dps: [380, 480], touchdown_dist_m: [0.2, 0.32], takeoff_dist_m: [0.45, 0.65], gct_s: [0.095, 0.125], compression_m: [0.03, 0.06] },
+  acceleration: { hip_displacement_m: [1.1, 1.5], hip_flexion_deg: [55, 75], hip_extension_deg: [30, 50], hip_height_m: [0.7, 0.82], thigh_velocity_dps: [250, 350], early_flexion_dps: [250, 350], late_flexion_dps: [250, 350], early_extension_dps: [230, 330], late_extension_dps: [300, 400], touchdown_dist_m: [-0.1, 0.1], takeoff_dist_m: [0.6, 0.9], gct_s: [0.15, 0.2], compression_m: [0.03, 0.07] }
 };
 
 // ---------- References (owner setting sprint_references, JSON over the defaults) ----------
@@ -187,7 +219,11 @@ const fromVertical = (top, bottom, dir) => {   // how far the segment top→bott
   const dx = (top[0] - bottom[0]) * dir, dy = bottom[1] - top[1];
   return dy === 0 && dx === 0 ? null : deg(Math.atan2(dx, dy));
 };
-export function measure(key, p, dir = 1) {
+// Five taps are enough (owner's ask): hip, both knees, both ankles. The stance ankle stands in for the foot on the
+// ground where no foot point was tapped (the shoulder is a sixth, optional tap for trunk lean).
+export const withFoot = (p) => (p && !Array.isArray(p.foot) && Array.isArray(p.ankle_stance) ? { ...p, foot: p.ankle_stance } : p);
+export function measure(key, p0, dir = 1) {
+  const p = withFoot(p0);
   if (!MEASURES[key] || MEASURES[key].needs.some((n) => !Array.isArray(p?.[n]))) return null;
   let val;
   switch (key) {
@@ -227,7 +263,7 @@ export const stepsOf = (clip) => (KINDS[clip.kind].steps === 1 ? 1 : Math.min(4,
 // Everything worked out for one clip: positions with measures and grades, timing per step, the rep's grade.
 export function analyse(ctx, clip, marks, refs = references(ctx), stepRefs = null) {
   const kind = KINDS[clip.kind], dir = clip.direction === -1 ? -1 : 1, nSteps = stepsOf(clip);
-  const byKey = new Map(marks.map((m) => [markKey(m.step, m.position), { ...m, points: parse(m.points) ?? {} }]));
+  const byKey = new Map(marks.map((m) => [markKey(m.step, m.position), { ...m, points: withFoot(parse(m.points) ?? {}) }]));
   const real = (dt) => (dt * clip.file_fps) / clip.capture_fps;   // media seconds → real seconds (a slowed-down file plays longer)
   const positions = [], grades = [];
   for (let step = 1; step <= nSteps; step++) {
@@ -242,12 +278,12 @@ export function analyse(ctx, clip, marks, refs = references(ctx), stepRefs = nul
       const got = measures.filter((x) => x.grade);
       const grade = got.length ? got.reduce((w, x) => (SCORE[x.grade] < SCORE[w] ? x.grade : w), 'A') : null;   // the weakest measure
       if (grade) grades.push(grade);
-      positions.push({ step, position: pos, label: POSITIONS[pos].label, hint: POSITIONS[pos].hint, legs: POSITIONS[pos].legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, suggested: m?.source === 'auto', measures, grade });
+      positions.push({ step, position: pos, label: POSITIONS[pos].label, hint: POSITIONS[pos].hint, look: POSITIONS[pos].look, fault: POSITIONS[pos].fault, cue: POSITIONS[pos].cue, legs: POSITIONS[pos].legs, words: POSITIONS[pos].words, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, suggested: m?.source === 'auto', measures, grade });
     }
   }
   if (kind.finish) {
     const m = byKey.get(markKey(nSteps + 1, 'toe_off'));
-    positions.push({ step: nSteps + 1, position: 'toe_off', label: POSITIONS.finish.label, hint: POSITIONS.finish.hint, legs: POSITIONS.finish.legs, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, suggested: m?.source === 'auto', measures: [], grade: null, finish: true });
+    positions.push({ step: nSteps + 1, position: 'toe_off', label: POSITIONS.finish.label, hint: POSITIONS.finish.hint, look: POSITIONS.finish.look, fault: POSITIONS.finish.fault, cue: POSITIONS.finish.cue, legs: POSITIONS.finish.legs, words: POSITIONS.finish.words, t: m?.t ?? null, points: m?.points ?? {}, marked: !!m, suggested: m?.source === 'auto', measures: [], grade: null, finish: true });
   }
   const at = (step, pos) => byKey.get(markKey(step, pos));
   const cal = parse(clip.calibration);

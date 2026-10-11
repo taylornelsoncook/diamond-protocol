@@ -11,7 +11,13 @@ export function saleForm(put, kind, info, onSaved, { get } = {}) {
   // The sales page (/shop/<id>): a longer pitch, the coach shown with their bio, and a free trial before the charge.
   const program = kind === 'program';
   const pitch = program ? h('textarea', { class: 'dp-input', rows: '5', maxlength: '3000', placeholder: 'Who it\'s for, what changes in 6 weeks, how the weeks build. Blank lines start a new paragraph.', 'aria-label': 'Sales page text' }, info.pitch ?? '') : null;
-  const trial = program ? input({ type: 'number', min: '0', max: '30', step: '1', inputmode: 'numeric', value: String(info.trial_days ?? 0), 'aria-label': 'Free trial days', style: 'width:100px' }) : null;
+  // A free trial is the coach's choice per program (owner decision): off unless "Offer a free trial" is ticked.
+  const days = Number(info.trial_days) || 0;
+  const trialOn = program ? h('input', { type: 'checkbox', checked: days > 0 }) : null;
+  const trial = program ? input({ type: 'number', min: '1', max: '30', step: '1', inputmode: 'numeric', value: String(days > 0 ? days : 7), 'aria-label': 'Free trial days', style: 'width:90px' }) : null;
+  const trialBox = program ? h('div', { class: 'row', style: 'gap:8px;align-items:center', hidden: !(days > 0) }, trial, h('span', { class: 'small muted' }, 'days, then the card is charged')) : null;
+  if (program) trialOn.addEventListener('change', () => { trialBox.hidden = !trialOn.checked; if (trialOn.checked) trial.focus(); });
+  const trialDays = () => (program && trialOn.checked ? Number(trial.value) || 0 : 0);
   const coach = program ? select([['', 'Nobody (just the business)']], { 'aria-label': 'Coach shown on the page', value: '' }) : null;
   if (program && get) get('/v1/staff').then((r) => {
     for (const u of r.data.filter((u) => u.active && u.role !== 'front_desk')) coach.append(h('option', { value: u.id }, `${u.name}${u.title ? ` (${u.title})` : ''}${u.bio ? '' : ' · no bio yet'}`));
@@ -19,7 +25,8 @@ export function saleForm(put, kind, info, onSaved, { get } = {}) {
   }).catch(() => {});
   return h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const cents = price.value ? Math.round(Number(price.value) * 100) : null;
-    const extra = program ? { pitch: pitch.value, trial_days: Number(trial.value) || 0, coach_id: coach.value || null } : {};
+    if (trialDays() > 30) throw new Error('A free trial can be up to 30 days.');
+    const extra = program ? { pitch: pitch.value, trial_days: trialDays(), coach_id: coach.value || null } : {};
     const r = await put(`/v1/shop/${kind}s/${info.id}`, { for_sale: on.checked, price_cents: cents, ...extra });
     toast(r.for_sale ? (r.listed ? `${r.title} is in the store.` : `Saved. ${r.not_listed_because}`) : 'Saved. It\'s not for sale.');
     onSaved?.(r);
@@ -30,7 +37,7 @@ export function saleForm(put, kind, info, onSaved, { get } = {}) {
       h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, on, h('span', null, 'Sell online'))),
     program ? field('Sales page text', pitch, 'Shown on the program\'s own page, under the price.') : null,
     program ? h('div', { class: 'row wrap', style: 'gap:12px;align-items:flex-end' },
-      field('Free trial (days)', trial, '0 = pay up front. With a trial, the card is charged when it ends unless the family ends it first.'),
+      field('Free trial', h('div', { class: 'stack-tight' }, h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, trialOn, h('span', null, 'Offer a free trial')), trialBox), 'Off: families pay up front. On: the card is charged when the trial ends unless the family ends it first.'),
       field('Coach on the page', coach, 'Their title, bio and photo come from Settings → Staff.')) : null,
     program && info.listed ? h('p', { class: 'small', style: 'margin:0' }, h('a', { href: `/shop/${encodeURIComponent(info.id)}`, target: '_blank', rel: 'noopener' }, 'See the sales page'), ' · put that link on the website and Instagram.') : null,
     info.sold ? h('p', { class: 'small muted', style: 'margin:0' }, `${info.sold} sold, ${money(info.sold_cents)} in all (refunds taken out).`) : null,

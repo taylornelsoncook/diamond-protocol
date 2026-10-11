@@ -1763,20 +1763,31 @@ async function viewBilling(main) {
       : h('p', { class: 'muted' }, billingUi.mq || billingUi.mplan ? 'Nobody matches. Clear the search or choose another plan.' : 'Nobody here.')));
 
   // ---- plans ----
-  const pname = input({ maxlength: '80' }), price = dollarsIn(null, { min: '0' }), trial = input({ type: 'number', min: '0', max: '90', value: '7', inputmode: 'numeric' });
+  // A free trial is the owner's choice per plan (owner decision): off unless "Offer a free trial" is ticked.
+  const trialField = (days) => {
+    const on = h('input', { type: 'checkbox', checked: days > 0 });
+    const n = input({ type: 'number', min: '1', max: '90', value: String(days > 0 ? days : 7), inputmode: 'numeric', 'aria-label': 'Free trial days', style: 'width:90px' });
+    const box = h('div', { class: 'row', style: 'gap:8px;align-items:center', hidden: !(days > 0) }, n, h('span', { class: 'small muted' }, 'days, then the first charge'));
+    on.addEventListener('change', () => { box.hidden = !on.checked; if (on.checked) n.focus(); });
+    const el = h('div', { class: 'stack-tight' }, h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, on, h('span', null, 'Offer a free trial')), box);
+    return { el, value: () => (on.checked ? Number(n.value) || 0 : 0) };
+  };
+  const pname = input({ maxlength: '80' }), price = dollarsIn(null, { min: '0' }), trial = trialField(0);
   const addPlan = h('details', { class: 'bl-add' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add a plan'),
     h('form', { class: 'stack', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const cents = toCents(price);
       if (!pname.value.trim()) throw new Error('Name the plan.');
       if (!(cents >= 0)) throw new Error('Enter a monthly price.');
-      await post('/v1/plans', { name: pname.value.trim(), price_cents: cents, trial_days: Number(trial.value) || 0 }); toast('Plan created.'); render();
-    }); } }, h('div', { class: 'form-grid cols-3' }, field('Plan name', pname), field('Monthly price ($)', price), field('Free trial (days)', trial, 'Up to 90. 0 charges the first month right away.')), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' }))));
+      if (trial.value() > 90) throw new Error('A free trial can be up to 90 days.');
+      await post('/v1/plans', { name: pname.value.trim(), price_cents: cents, trial_days: trial.value() }); toast('Plan created.'); render();
+    }); } }, h('div', { class: 'form-grid cols-3' }, field('Plan name', pname), field('Monthly price ($)', price), field('Free trial', trial.el, 'Off: the first month is charged right away.')), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' }))));
   const editPlan = (p) => {
-    const f = { name: input({ maxlength: '80', value: p.name }), price: dollarsIn(p.price_cents, { min: '0' }), trial: input({ type: 'number', min: '0', max: '90', value: String(p.trial_days), inputmode: 'numeric' }) };
-    setupDialog(`Change ${p.name}`, [h('div', { class: 'form-grid cols-3' }, field('Plan name', f.name), field('Monthly price ($)', f.price), field('Free trial (days)', f.trial))], 'Save', async () => {
+    const f = { name: input({ maxlength: '80', value: p.name }), price: dollarsIn(p.price_cents, { min: '0' }), trial: trialField(p.trial_days) };
+    setupDialog(`Change ${p.name}`, [h('div', { class: 'form-grid cols-3' }, field('Plan name', f.name), field('Monthly price ($)', f.price), field('Free trial', f.trial.el))], 'Save', async () => {
       const cents = toCents(f.price);
       if (!f.name.value.trim() || !(cents >= 0)) throw new Error('Enter a name and a monthly price.');
-      await patch(`/v1/plans/${p.id}`, { name: f.name.value.trim(), price_cents: cents, trial_days: Number(f.trial.value) || 0 });
+      if (f.trial.value() > 90) throw new Error('A free trial can be up to 90 days.');
+      await patch(`/v1/plans/${p.id}`, { name: f.name.value.trim(), price_cents: cents, trial_days: f.trial.value() });
       return cents !== p.price_cents ? `Saved. ${plural(p.subscribers, 'member')} pay the new price from their next charge.` : 'Saved.';
     }, 'A new price applies from each member\'s next charge. Nobody is charged when you save.');
   };
@@ -3314,9 +3325,11 @@ async function viewTeams(main) {
       metric('Waiting on payment', money(sum.open_cents), nplural(sum.open_count, 'open invoice')),
       metric('Overdue', money(overdue.reduce((t, i) => t + i.amount_cents, 0)), `${overdue.length} past due`, overdue.length ? 'warn' : null),
       metric('Collected', money(sum.collected_30_cents), 'Last 30 days')),
-    panel('Contracts', { subtitle: `${nplural(sum.athletes, 'athlete')} on active rosters.`, action: all.length > 1 ? views : null }, search, box),
+    // Active contracts and unpaid invoices are the front of the page (owner's ask); Ended and All show every team ever
+    // in the system, whatever the count.
+    panel('Contracts', { subtitle: `${nplural(sum.athletes, 'athlete')} on active rosters.`, action: all.length ? views : null }, search, box),
     panel('Unpaid invoices', { subtitle: 'Invoices email the school\'s billing contact with a link to view, print or pay online. Overdue ones get a reminder each week.', action: remind },
-      unpaid.data.length ? unpaid.data.map((i) => invoiceRow(i, { showTeam: true })) : h('p', { class: 'muted' }, 'Nothing unpaid. Every school invoice is settled.')));
+      unpaid.data.length ? [...unpaid.data].sort((a, b) => (a.status === 'overdue' ? 0 : 1) - (b.status === 'overdue' ? 0 : 1) || a.due_on.localeCompare(b.due_on)).map((i) => invoiceRow(i, { showTeam: true })) : h('p', { class: 'muted' }, 'Nothing unpaid. Every school invoice is settled.')));
 }
 
 async function viewNewTeam(main) {

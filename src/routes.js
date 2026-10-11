@@ -232,7 +232,7 @@ export const routes = [
 
   // Billing
   ['GET', '/v1/plans', 'any', 'Billing', 'List plans. ?include_inactive=true to include retired plans.', (ctx, r) => list(billing.listPlans(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
-  ['POST', '/v1/plans', 'any', 'Billing', 'Create a monthly plan: name, price_cents, trial_days.', (ctx, r) => billing.createPlan(ctx, r.body), 201],
+  ['POST', '/v1/plans', 'any', 'Billing', 'Create a monthly plan: name, price_cents, trial_days (0, the default, means no free trial).', (ctx, r) => billing.createPlan(ctx, r.body), 201],
   ['PATCH', '/v1/plans/:id', 'any', 'Billing', 'Update a plan. Set active=false to stop offering it.', (ctx, r) => billing.updatePlan(ctx, r.params.id, r.body)],
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
   ['GET', '/v1/invoices', 'any', 'Billing', 'List invoices. Filter with ?status= (open, paid, failed, void).', (ctx, r) => list(billing.listInvoices(ctx, { status: r.query.status }))],

@@ -419,6 +419,17 @@ test('plan names on offer are unique: create, rename and bring back', async () =
   assert.equal((await owner('POST', '/v1/plans', { name: 'Long trial', price_cents: 100, trial_days: 91 })).status, 400);
 });
 
+test('a plan offers no free trial unless the owner turns one on (owner decision)', async () => {
+  const p = (await owner('POST', '/v1/plans', { name: 'No trial by default', price_cents: 12000 })).body;
+  assert.equal(p.trial_days, 0);
+  const listed = (await owner('GET', '/v1/plans')).body.data.find((x) => x.id === p.id);
+  assert.equal(listed.trial_days, 0);
+  const on = (await owner('PATCH', `/v1/plans/${p.id}`, { trial_days: 7 })).body;
+  assert.equal(on.trial_days, 7, 'the owner can turn a trial on per plan');
+  const off = (await owner('PATCH', `/v1/plans/${p.id}`, { trial_days: 0 })).body;
+  assert.equal(off.trial_days, 0, 'and off again');
+});
+
 // ---------------------------------------------------------------- roles
 test('coaches and front desk can\'t reach any of Billing', async () => {
   const inv = db().get(`SELECT id FROM invoices LIMIT 1`).id;

@@ -4,7 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
@@ -270,5 +270,24 @@ test('the list keeps videos uploaded on earlier runs from folders the command do
     const again = readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n');
     assert.ok(again.some((l) => l.startsWith('Earlier squat,,')), 'still listed, named from its file');
     assert.equal(again.length, 4);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('a folder renamed or moved since the last run is not uploaded again: its videos are known by name, size and date', async () => {
+  const before = join(dir, 'Moved-Before'); mkdirSync(join(before, 'Speed'), { recursive: true });
+  writeFileSync(join(before, 'Speed', 'Moved sprint.mp4'), 'the same bytes'); writeFileSync(join(before, 'Moved jump.mp4'), 'other bytes');
+  const cwd = mkdtempSync(join(tmpdir(), 'dp-moved-'));
+  const lines = [];
+  try {
+    assert.equal((await upload([before, '--skip-check'], { env: ENV(), log: () => {}, cwd })).uploaded, 2);
+    const after = join(dir, 'Moved After'); renameSync(before, after);
+    const r = await upload([after, '--skip-check'], { env: ENV(), log: (l) => lines.push(l), cwd });
+    assert.deepEqual([r.found, r.uploaded, r.failed], [2, 0, 0], 'nothing uploaded again');
+    assert.ok(lines.some((l) => /2 videos moved to another folder/.test(l)), lines.join('\n'));
+    const csv = readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n');
+    assert.equal(csv.length, 3);
+    assert.ok(csv.some((l) => l.startsWith('Moved sprint,Speed,')), 'the category follows the new place');
+    const state = JSON.parse(readFileSync(join(cwd, 'video-upload-state.json'), 'utf8'));
+    assert.ok(Object.keys(state).every((k) => k.startsWith(after)), 'the records moved to the new path');
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

@@ -218,6 +218,20 @@ export async function main(argv = process.argv.slice(2), { env = process.env, lo
 
   const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : {};
   const saveState = () => { writeFileSync(`${stateFile}.tmp`, JSON.stringify(state)); renameSync(`${stateFile}.tmp`, stateFile); };
+  // A folder that was renamed or moved since the last run: the same file name, size and date is the same video, so its
+  // record follows it to the new path instead of being uploaded again.
+  const byFile = new Map();
+  for (const [path, s] of Object.entries(state)) if (s?.video_url) byFile.set(`${basename(path).toLowerCase()}|${s.size}|${s.mtime}`, { path, s });
+  let moved = 0;
+  for (const f of found) {
+    if (state[f.path]) continue;
+    const hit = byFile.get(`${basename(f.path).toLowerCase()}|${f.size}|${f.mtime}`);
+    if (!hit || found.some((g) => g.path === hit.path)) continue;
+    state[f.path] = { ...hit.s, name: f.name, category: f.category };
+    delete state[hit.path];
+    moved++;
+  }
+  if (moved) { saveState(); log(`${moved.toLocaleString()} videos moved to another folder since the last run: their uploads were found by name, size and date.`); }
   const done = (f) => { const s = state[f.path]; return s && s.size === f.size && s.mtime === f.mtime && s.video_url; };
   const todo = found.filter((f) => !done(f) && (convert || AS_IS.has(extname(f.path).toLowerCase())));
   if (found.length - todo.length) log(`${(found.length - todo.length).toLocaleString()} already uploaded on an earlier run.`);

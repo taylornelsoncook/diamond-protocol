@@ -50,3 +50,4 @@ body{background:var(--black)}
 .tv-demo-dots span.on{background:var(--green-bright)}
 .tv-ex li.tv-ex--clip{cursor:pointer}
 .tv-ex li.tv-ex--showing{border-color:var(--green-bright);box-shadow:inset 0 0 0 1px var(--green-bright)}
+.tv-instr{margin:4px 0 0;color:var(--steel);font:400 clamp(15px,1.3vw,22px)/1.35 var(--font-sans);white-space:pre-line;border-left:4px solid var(--green-mid);padding-left:12px}

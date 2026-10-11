@@ -474,7 +474,7 @@ function exerciseDialog(x, cats, tags = null) {
 }
 
 // ---------- Program builder ----------
-const builder = { focusTab: false };
+const builder = { focusTab: false, selected: new Set() };   // selected: the ticked days (workout ids) on the week grid
 
 export async function viewProgram(main, id) {
   const [p, exs, shop] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), isOwner() ? get('/v1/shop') : null]);
@@ -521,25 +521,48 @@ export async function viewProgram(main, id) {
     else { drawTabs(); drawWeek(); }
   };
 
+  // The week grid (the redesign, step 1): the seven days across, each a column of blocks with one line per exercise;
+  // ticks on days raise an action bar (copy, move, repeat, save to library, delete); arrows step the weeks.
+  const selected = builder.selected;
+  const barBox = h('div', { class: 'pg-bar', hidden: true, role: 'region', 'aria-label': 'Selected days' });
+  const drawBar = () => {
+    const ids = [...selected].filter((id) => p.workouts.some((w) => w.id === id));
+    for (const id of selected) if (!ids.includes(id)) selected.delete(id);
+    barBox.hidden = !ids.length;
+    if (!ids.length) return;
+    const after = (r) => { selected.clear(); reload(r?.days?.[0]?.week ?? week); };
+    fill(barBox, h('span', { class: 'strong' }, `${plural(ids.length, 'day')} selected`),
+      btn('Copy to', () => bulkDialog(p, ids, 'copy', after), 'secondary'), btn('Move', () => bulkDialog(p, ids, 'move', after), 'ghost'), btn('Repeat', () => bulkDialog(p, ids, 'repeat', after), 'ghost'),
+      btn('Save to library', (e) => busy(e.currentTarget, async () => { for (const id of ids) { const w = p.workouts.find((x) => x.id === id); await post(`/v1/workouts/${id}/save-template`, { name: w.title }); } toast(`${plural(ids.length, 'workout template')} saved. Start a day from them with Add day.`); selected.clear(); drawBar(); drawWeek(); }), 'ghost'),
+      btn('Delete', (e) => { const logged = ids.reduce((n, id) => n + (p.workouts.find((x) => x.id === id)?.logs ?? 0), 0); if (!confirm(`Delete ${plural(ids.length, 'day')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in their history.` : ''}`)) return;
+        busy(e.currentTarget, async () => { const r = await post(`/v1/programs/${id}/days/delete`, { workouts: ids, confirm: true }); toast(`${plural(r.deleted, 'day')} deleted.`); after(); }); }, 'ghost'),
+      btn('Clear', () => { selected.clear(); drawBar(); drawWeek(); }, 'ghost'));
+  };
   const drawWeek = () => {
     weekBox.setAttribute('aria-labelledby', `pg-week-${week}`);
     const days = daysIn(week);
     const isLast = week === p.weeks;
     const logged = days.reduce((n, w) => n + w.logs, 0);
+    const weekReps = days.reduce((n, w) => n + repsOf(w), 0);
+    const step = (d) => { const n = week + d; if (n < 1 || n > p.weeks) return; week = n; go(n); draw(); };
     const weekActions = edit ? h('div', { class: 'row wrap' },
       days.length < 7 ? btn('Add day', () => dayDialog(p, week, reload), 'secondary') : null,
       days.length ? btn('Copy week', () => copyWeekDialog(p, week, reload), 'ghost') : null,
       days.length || (isLast && p.weeks > 1) ? btn('Delete week', (e) => {
-        const msg = days.length ? `Delete week ${week}'s ${plural(days.length, 'workout')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''}${isLast && p.weeks > 1 ? ' The program becomes shorter.' : ''}` : `Delete the empty week ${week}? The program becomes ${plural(p.weeks - 1, 'week')}.`;
+        const msg = days.length ? `Delete week ${week}'s ${plural(days.length, 'workout')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''}${isLast && p.weeks > 1 ? ' The program becomes shorter.' : ''}` : `Remove week ${week}? The program becomes shorter.`;
         if (!confirm(msg)) return;
         busy(e.currentTarget, async () => { await del(`/v1/programs/${id}/weeks/${week}`, { confirm: true }); toast(`Week ${week} deleted.`); reload(Math.min(week, isLast && p.weeks > 1 ? p.weeks - 1 : p.weeks)); });
       }, 'ghost') : null) : null;
+    const columns = [1, 2, 3, 4, 5, 6, 7].map((d) => { const w = days.find((x) => x.day === d); return w ? dayColumn(p, w, exs, edit, reload, { selected, onSelect: drawBar }) : emptyDay(p, week, d, edit, reload); });
     fill(weekBox,
-      h('div', { class: 'row wrap' }, h('h2', { class: 'week-title grow' }, `Week ${week}`), weekActions),
-      days.length ? h('div', { class: 'pg-week-grid' }, days.map((w) => workoutCard(p, w, exs, edit, reload)))
-        : h('div', { class: 'empty' }, edit ? (isLast && p.weeks > 1 ? `Week ${week} is empty. Add a day, copy another week here, or delete this week.` : `No workouts in week ${week} yet. Add a day, or copy another week here.`) : `No workouts in week ${week} yet.`));
+      h('div', { class: 'row wrap', style: 'align-items:center' },
+        h('div', { class: 'row', style: 'gap:4px;align-items:center' },
+          btn('◀', () => step(-1), 'ghost', { 'aria-label': 'Previous week', disabled: week <= 1 }), h('h2', { class: 'week-title', style: 'margin:0' }, `Week ${week} of ${p.weeks}`), btn('▶', () => step(1), 'ghost', { 'aria-label': 'Next week', disabled: week >= p.weeks })),
+        h('span', { class: 'small muted grow' }, days.length ? `${plural(days.length, 'day')} · ${weekReps.toLocaleString()} reps planned${logged ? ` · logged ${plural(logged, 'time')}` : ''}` : ''),
+        weekActions),
+      h('div', { class: 'pg-days', role: 'group', 'aria-label': `Week ${week}, days across` }, columns));
+    drawBar();
   };
-
   const isTemplate = p.kind === 'template';
   const header = deps.header(isTemplate ? `${p.name} (template)` : p.name, isTemplate ? `Template · ${plural(p.weeks, 'week')} · ${p.level ?? 'Any level'} · nobody is assigned to a template: start a program from it` : `${plural(p.weeks, 'week')} · ${p.level ?? 'Any level'} · ${plural(p.clients.length, 'client')} · ${plural(p.logged_7d, 'workout')} logged in the last 7 days`,
     edit ? isTemplate ? btn('Start a program from it', () => get('/v1/programs?kind=template').then((t) => newProgramDialog([], t.data, p.id))) : btn('Assign to a client', () => assignDialog(p)) : null);
@@ -549,8 +572,8 @@ export async function viewProgram(main, id) {
       btn(isTemplate ? 'Copy as a new template' : 'Save as template', () => saveTemplateDialog(p), 'ghost'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/program.html?id=${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener' }, 'Print or PDF'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/v1/programs/${encodeURIComponent(id)}/export.xlsx` }, 'Excel')) : null,
-    isTemplate ? null : clientsPanel(p, edit),
-    modeBar, tabsBox, weekBox, planBox,
+    modeBar, tabsBox, weekBox, barBox, planBox,
+    isTemplate ? null : clientsPanel(p, edit),   // the grid comes first (the redesign); who is on the program sits under it
     shop && !isTemplate ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render(), { get })) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
       edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
@@ -785,10 +808,10 @@ function duplicateDialog(p) {
     { label: 'Cancel', variant: 'ghost' }]);
   name.select();
 }
-function dayDialog(p, week, reload) {
+function dayDialog(p, week, reload, preset = null) {
   const used = new Set(p.workouts.filter((w) => w.week === week).map((w) => w.day));
   const free = [1, 2, 3, 4, 5, 6, 7].filter((d) => !used.has(d));
-  const day = select(free.map((d) => [String(d), `Day ${d}`]));
+  const day = select(free.map((d) => [String(d), `Day ${d}`]), { value: preset && free.includes(preset) ? String(preset) : String(free[0]) });
   const title = input({ placeholder: 'Lower body' });
   const from = select([['', 'An empty day']], { 'aria-label': 'Start from a template' });
   const fromBox = h('div', { hidden: true }, field('Start from', from, 'A workout template brings its exercises, set details, groups and blocks.'));
@@ -919,57 +942,103 @@ function copyWeekDialog(p, week, reload) {
   to.addEventListener('input', () => { if (Number(through.value) < Number(to.value)) through.value = to.value; });
 }
 
-function workoutCard(p, w, exs, edit, reload) {
-  const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
-  const body = (x) => h('span', { class: 'pg-ex-line grow' }, h('span', { class: 'pg-ex-name' }, x.name), h('span', { class: 'small muted' }, line(x)),
-    x.form_check ? h('span', { class: 'dp-badge dp-badge--neutral', title: x.form_check_note || 'The athlete is asked to send a clip of this one' }, 'Form check') : null,
-    x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
-  const row = (x, n) => h('div', { class: `row pg-ex${x.block_id ? ' sf-in-group' : ''}` },
-    n != null ? h('span', { class: 'sf-tag', 'aria-hidden': 'true' }, String(n)) : null, playBtn(x),
-    edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
-      body(x), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit'))
-      : h('div', { class: 'grow pg-ex-body' }, body(x)));
-  // Named blocks (version 74): exercises in no block first, then each block with its name, how it runs and its own
-  // Add exercise. A block can be renamed, moved, saved as a complex for other workouts, or removed.
+// Reps planned in a day: sets × the number to count from the reps text (a time, distance or max counts nothing).
+const repNum = (reps) => { const m = /^(\d{1,3})/.exec(String(reps ?? '').trim()); return m && !/\d\s*(s|sec|min|yd|m|ft|km|mi)\b|:\d/i.test(reps) ? Number(m[1]) : 0; };
+const repsOf = (w) => w.exercises.reduce((n, x) => n + (x.sets || 1) * repNum(x.reps), 0);
+// A block's letter circle takes a colour from its name: warm-ups amber, speed and conditioning green, cool-downs blue, lifts steel.
+const blockTone = (name = '') => (/warm|activ|mobil|prep/i.test(name) ? 'warm' : /sprint|accel|speed|condition|plyo|agil|jump|tempo run/i.test(name) ? 'speed' : /cool|stretch|recover|breath/i.test(name) ? 'cool' : 'lift');
+const letterOf = (i) => String.fromCharCode(65 + Math.min(i, 25));
+
+// One day of the week grid: the tick, the title, the day's instructions, each block with its letter and its exercises
+// one line each, and the adds at the foot.
+function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
+  const line = (x) => [x.prescription, x.rest_seconds != null ? (x.rest_seconds === 0 ? 'no rest' : `${restWord(x.rest_seconds)} rest`) : null, x.tempo ? `tempo ${x.tempo}` : null, x.target_rpe != null ? `RPE ${x.target_rpe}` : null, loadText(x)].filter(Boolean).join(' · ');
+  const row = (x, n) => h('div', { class: 'pg-line' },
+    n != null ? h('span', { class: 'pg-line-n' }, String(n)) : null,
+    edit ? h('button', { type: 'button', class: 'pg-line-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
+      h('span', { class: 'pg-line-name' }, x.name, x.form_check ? h('span', { class: 'pg-flag', title: x.form_check_note || 'The athlete is asked to send a clip' }, 'FC') : null), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null)
+      : h('div', { class: 'pg-line-body' }, h('span', { class: 'pg-line-name' }, x.name), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null),
+    x.video_url ? playBtn(x) : null);
   const blocks = w.blocks ?? [];
-  const blockHead = (b, i) => h('div', { class: 'row wrap pg-block-head' },
-    h('div', { class: 'grow stack-tight' },
-      edit ? h('button', { type: 'button', class: 'sf-group pg-block-name', 'aria-label': `Rename or change ${b.name}`, onClick: () => blockDialog(w, b, reload) }, b.name, KIND_WORDS[b.kind] && b.kind !== 'block' ? h('span', { class: 'sf-group-how' }, ` · ${KIND_WORDS[b.kind]}`) : null)
-        : h('div', { class: 'sf-group' }, b.name, b.kind !== 'block' ? h('span', { class: 'sf-group-how' }, ` · ${KIND_WORDS[b.kind]}`) : null)),
-    edit ? h('div', { class: 'row wrap pg-block-acts', style: 'gap:2px' },
-      btn('+ Exercise', () => pickExercise({ title: `Add to ${b.name}`, exs, program: p, workout: w, block: b, onAdd: () => reload() }), 'ghost', { 'aria-label': `Add an exercise to ${b.name}` }),
+  const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
+  const blockHead = (b, i) => h('div', { class: 'pg-bhead' },
+    h('span', { class: `pg-letter pg-letter--${blockTone(b.name)}`, 'aria-hidden': 'true' }, letterOf(i)),
+    edit ? h('button', { type: 'button', class: 'pg-bname', 'aria-label': `${b.name}: rename, change or remove`, onClick: () => blockDialog(w, b, reload) }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null)
+      : h('span', { class: 'pg-bname' }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null),
+    edit ? h('div', { class: 'pg-bacts' },
+      btn('+', () => pickExercise({ title: `Add to ${b.name}`, exs, program: p, workout: w, block: b, onAdd: () => reload() }), 'ghost', { 'aria-label': `Add an exercise to ${b.name}`, title: 'Add an exercise' }),
       b.count && i > 0 && blocks[i - 1].count ? btn('↑', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} up` }) : null,
       b.count && i < blocks.length - 1 && blocks[i + 1].count ? btn('↓', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i + 2 }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} down` }) : null,
-      b.count ? btn('Save', () => saveComplexDialog(b), 'ghost', { 'aria-label': `Save ${b.name} as a complex`, title: 'Save as a complex for other workouts' }) : null,
-      btn('Remove', (e) => {
-        const keep = b.count ? confirm(`Remove the block ${b.name}?\n\nOK removes its ${plural(b.count, 'exercise')} too. Cancel keeps everything.`) : true;
-        if (!keep) return;
-        busy(e.currentTarget, async () => { await del(`/v1/workout-blocks/${b.id}`); toast(`${b.name} removed.`); reload(); });
-      }, 'ghost', { 'aria-label': `Remove ${b.name}` })) : null);
-  const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
+      b.count ? btn('Save', () => saveComplexDialog(b), 'ghost', { 'aria-label': `Save ${b.name} as a complex`, title: 'Save as a complex' }) : null,
+      btn('×', (e) => { if (b.count && !confirm(`Remove the block ${b.name} and its ${plural(b.count, 'exercise')}?`)) return; busy(e.currentTarget, async () => { await del(`/v1/workout-blocks/${b.id}`); toast(`${b.name} removed.`); reload(); }); }, 'ghost', { 'aria-label': `Remove ${b.name}` })) : null);
   const rows = [];
   let n = 0;
   w.exercises.forEach((x, i) => {
     if (x.block_id && w.exercises[i - 1]?.block_id !== x.block_id && byId.has(x.block_id)) { const { b, i: bi } = byId.get(x.block_id); rows.push(blockHead(b, bi)); n = 0; }
     rows.push(row(x, x.block_id ? ++n : null));
   });
-  for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 12px' }, edit ? 'Empty. Add an exercise to this block.' : 'Empty.'));
-  const routines = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
-    h('span', { class: 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
-    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
-  return h('div', { class: 'workout' },
-    h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
-      edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title))),
-    routines,
-    rows.length ? rows : h('p', { class: 'small muted' }, edit ? 'No exercises yet. Add a block (Warm up, Speed, Strength...) or load a complex, then add exercises to it.' : 'No exercises yet.'),
-    edit ? h('div', { class: 'row wrap pg-foot' },
-      btn('Add a block', () => blockDialog(w, null, reload), 'secondary'),
-      btn('Load a complex', () => loadComplexDialog(w, reload), 'secondary'),
-      btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' }),
-      h('span', { class: 'grow' }),
-      btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost', { 'aria-label': `Copy ${w.title}` }),
-      btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost', { 'aria-label': `Save ${w.title} as a template` }),
-      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
+  for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 30px' }, edit ? 'Empty. Press + to add an exercise.' : 'Empty.'));
+  const tick = edit ? h('input', { type: 'checkbox', class: 'pg-tick', checked: selected.has(w.id), 'aria-label': `Select day ${w.day}, ${w.title}`, onChange: (e) => { if (e.target.checked) selected.add(w.id); else selected.delete(w.id); onSelect(); } }) : null;
+  const menu = edit ? h('details', { class: 'pg-menu' }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
+    h('div', { class: 'pg-menu-list' },
+      btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
+      btn('Warm-up and cool-down', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost'),
+      btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost'),
+      btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost'),
+      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost'))) : null;
+  const reps = repsOf(w);
+  return h('div', { class: `pg-day${selected.has(w.id) ? ' pg-day--selected' : ''}`, 'data-day': String(w.day) },
+    h('div', { class: 'pg-day-head' }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
+      h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${w.logs}×` : ''}${reps ? ` · ${reps} reps` : ''}`),
+      edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title)), menu),
+    w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
+    w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
+    rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),
+    edit ? h('div', { class: 'pg-day-foot' },
+      btn('+ Block', () => blockDialog(w, null, reload), 'ghost'), btn('Load a complex', () => loadComplexDialog(w, reload), 'ghost'),
+      btn('+ Exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' })) : null);
+}
+const restWord = (secs) => (secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`);
+// A day of the week with no workout yet.
+function emptyDay(p, week, day, edit, reload) {
+  return h('div', { class: 'pg-day pg-day--empty', 'data-day': String(day) },
+    h('div', { class: 'pg-day-head' }, h('span', { class: 'small muted' }, `Day ${day}`)),
+    edit ? btn('+ Add day', () => dayDialog(p, week, reload, day), 'ghost', { 'aria-label': `Add a workout on day ${day} of week ${week}` }) : h('p', { class: 'small muted', style: 'margin:0' }, 'Rest'));
+}
+// The day's instructions (version 75): what the coach wants the athlete to read first.
+function instructionsDialog(w, reload) {
+  const t = textarea(w.instructions ?? '', { rows: '6', maxlength: '2000', placeholder: 'Start with the dynamic warm-up, then the speed work before the lifts. Rest 2 minutes between the heavy sets.' });
+  dialog(`Instructions for ${w.title}`, h('div', { class: 'stack' }, field('What the athlete reads first', t, 'Shows at the top of the day in the app and on the weight-room screen.')), [
+    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workouts/${w.id}`, { instructions: t.value.trim() || null }); toast('Instructions saved.'); reload(); } },
+    { label: 'Cancel', variant: 'ghost' }]);
+  t.focus();
+}
+// The ticked days at once: copy to a week (here, another program or a template), move to a week, or repeat for N weeks.
+function bulkDialog(p, ids, action, after) {
+  const days = ids.map((id) => p.workouts.find((w) => w.id === id)).filter(Boolean);
+  const weeks = [...new Set(days.map((w) => w.week))].sort((a, b) => a - b);
+  const weekSel = select(Array.from({ length: 52 }, (_, i) => [String(i + 1), `Week ${i + 1}${i + 1 > p.weeks ? ' (new)' : ''}`]), { value: String(Math.min(weeks.at(-1) + 1, 52)), 'aria-label': 'To week' });
+  const times = input({ type: 'number', min: '1', max: '26', value: '4', inputmode: 'numeric', 'aria-label': 'How many times' });
+  const target = select([[p.id, `This program (${p.name})`]], { 'aria-label': 'Which program' });
+  if (action === 'copy') Promise.all([get('/v1/programs'), get('/v1/programs?kind=template')]).then(([a, b]) => {
+    for (const x of [...a.data, ...b.data]) if (x.id !== p.id) target.append(h('option', { value: x.id }, `${x.kind === 'template' ? 'Template: ' : ''}${x.name}`));
+  }).catch(() => {});
+  const what = `${plural(days.length, 'day')} (${days.map((w) => `wk ${w.week} d${w.day}`).join(', ')})`;
+  const body = action === 'copy' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Copy ${what}. Each keeps its weekday; days from several weeks land in consecutive weeks.`), h('div', { class: 'form-grid' }, field('To week', weekSel), field('In', target)))
+    : action === 'move' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Move ${what}. Each keeps its weekday.`), field('To week', weekSel))
+    : h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Repeat ${what} into the weeks after week ${weeks.at(-1)}.`), field('How many times', times, 'Each repeat is the same run of days again; the program grows as needed.'));
+  const send = async (extra = {}) => {
+    const payload = { workouts: ids, ...(action === 'repeat' ? { times: Number(times.value) } : { to_week: Number(weekSel.value) }), ...(action === 'copy' && target.value !== p.id ? { to_program_id: target.value } : {}), ...extra };
+    try { return await post(`/v1/programs/${p.id}/days/${action}`, payload); }
+    catch (e) {
+      if (e.code === 'replace_needed') { if (!confirm(`${e.message}`)) return null; return send({ ...extra, replace: true }); }
+      if (e.code === 'confirm_needed') { if (!confirm(`${e.message} Go on?`)) return null; return send({ ...extra, confirm: true }); }
+      throw e;
+    }
+  };
+  dialog({ copy: 'Copy days', move: 'Move days', repeat: 'Repeat days' }[action], body, [
+    { label: { copy: 'Copy', move: 'Move', repeat: 'Repeat' }[action], variant: 'primary', onClick: async () => { const r = await send(); if (!r) return false; toast(`${plural(r.days.length, 'day')} ${action === 'copy' ? 'copied' : action === 'move' ? 'moved' : 'repeated'}${r.replaced ? `, ${r.replaced} replaced` : ''}.`); after(r.to_program_id && r.to_program_id !== p.id ? null : r); } },
+    { label: 'Cancel', variant: 'ghost' }]);
 }
 // A block's name and how it runs (version 74): new, or renaming one. Any name goes; the usual ones are offered.
 const BLOCK_NAMES = ['Warm up', 'Activation', 'Acceleration', 'Speed', 'Plyometrics', 'Power', 'Strength', 'Accessory', 'Conditioning', 'Core', 'Cool down'];

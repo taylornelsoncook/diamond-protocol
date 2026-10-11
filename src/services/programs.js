@@ -182,7 +182,7 @@ const setWeeks = (ctx, programId, weeks) => { ctx.db.run('UPDATE programs SET we
 // adjust (the planner's progression) changes each exercise's fields on the way.
 function copyWorkoutInto(ctx, src, programId, week, day, title, adjust = null) {
   const id = newId('wo');
-  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title, src.warmup_id ?? null, src.cooldown_id ?? null);
+  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title, src.warmup_id ?? null, src.cooldown_id ?? null, src.instructions ?? null);
   const blockIds = new Map();   // the named blocks come along (version 74)
   for (const b of ctx.db.all('SELECT * FROM workout_blocks WHERE workout_id = ? ORDER BY position', src.id)) {
     const bid = newId('wb');
@@ -346,6 +346,9 @@ function freeDay(ctx, programId, week, day) {
   if (ctx.db.get('SELECT id FROM workouts WHERE program_id = ? AND week = ? AND day = ?', programId, week, d)) throw conflict(`Week ${week}, day ${d} already has a workout. Pick another day.`);
   return d;
 }
+// The day's instructions (version 75, from the TeamBuildr screenshots): a text the coach writes for the day, shown
+// first in the app and at the top of the day in the builder.
+const instructionsOf = (body) => (body.instructions === undefined || body.instructions === null || body.instructions === '' ? null : v.str(body.instructions, 'instructions', { max: 2000 }));
 export function addWorkout(ctx, programId, body) {
   if (body.template_id) return workoutFromTemplate(ctx, programId, body);
   const p = getProgram(ctx, programId);
@@ -353,7 +356,7 @@ export function addWorkout(ctx, programId, body) {
   const day = freeDay(ctx, programId, week, body.day);
   const id = newId('wo');
   const blocks = routineFields(ctx, {}, body);
-  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? `Day ${day}`, blocks.warmup_id ?? null, blocks.cooldown_id ?? null);
+  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? `Day ${day}`, blocks.warmup_id ?? null, blocks.cooldown_id ?? null, instructionsOf(body));
   return getProgram(ctx, programId).workouts.find((w) => w.id === id);
 }
 // Rename a workout, or attach or clear its warm-up and cool-down blocks (warmup_id / cooldown_id, null clears).
@@ -361,7 +364,8 @@ export function updateWorkout(ctx, workoutId, body = {}) {
   const w = workoutRow(ctx, workoutId);
   const title = body.title !== undefined ? v.str(body.title, 'title', { max: 120 }) : w.title;
   const blocks = routineFields(ctx, w, body);
-  ctx.db.run('UPDATE workouts SET title = ?, warmup_id = ?, cooldown_id = ? WHERE id = ?', title, blocks.warmup_id, blocks.cooldown_id, workoutId);
+  const instructions = body.instructions !== undefined ? instructionsOf(body) : w.instructions ?? null;
+  ctx.db.run('UPDATE workouts SET title = ?, warmup_id = ?, cooldown_id = ?, instructions = ? WHERE id = ?', title, blocks.warmup_id, blocks.cooldown_id, instructions, workoutId);
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
 // Like clearing a week, removing a workout athletes logged needs confirm: true (their logs stay in their history).
@@ -417,6 +421,62 @@ export function copyWeek(ctx, programId, fromWeek, body = {}, adjustFor = null) 
     if (through > p.weeks) setWeeks(ctx, programId, through);
   });
   return programDetail(ctx, programId);
+}
+// ---- Days in bulk (the builder's ticked days, version 75): copy, move, repeat, delete ----
+// workouts: ids of this program's workouts. copy: to_week (each keeps its weekday; days from several weeks land in
+// consecutive weeks from to_week), to_program_id for another program (or a template); move: to_week in this program;
+// repeat: into the next `times` weeks (1 to 26). A target day that already has a workout needs replace: true, and
+// replacing or deleting logged workouts needs confirm: true (their logs stay in the athletes' history). The program
+// grows to the last week written to. All or nothing.
+export function bulkDays(ctx, programId, action, body = {}) {
+  const p = getProgram(ctx, programId);
+  const ids = Array.isArray(body.workouts) ? [...new Set(body.workouts.map(String))] : [];
+  if (!ids.length) throw badRequest('Tick at least one day.');
+  const src = ids.map((id) => p.workouts.find((w) => w.id === id) ?? (() => { throw notFound('Workout'); })());
+  const act = v.oneOf(action, 'action', ['copy', 'move', 'repeat', 'delete']);
+  const weeksOf = [...new Set(src.map((w) => w.week))].sort((a, b) => a - b);
+  const span = weeksOf.length;
+  if (act === 'delete') {
+    guardLogged(ctx, ids, body.confirm, ids.length === 1 ? 'That day' : `${ids.length} days`);
+    ctx.db.tx(() => deleteWorkouts(ctx, ids));
+    return { deleted: ids.length, ...programDetail(ctx, programId) };
+  }
+  // Where each source day lands: (week, day) pairs in the target program.
+  const targetProgram = act === 'copy' && body.to_program_id && String(body.to_program_id) !== programId ? getProgram(ctx, v.str(body.to_program_id, 'to_program_id')) : p;
+  if (targetProgram.kind === 'workouts') throw badRequest('Choose a program or a template to copy to.');
+  const plan = [];   // { src, week, day }
+  if (act === 'repeat') {
+    const times = v.int(body.times ?? 1, 'times', { min: 1, max: 26 });
+    const last = weeksOf.at(-1);
+    for (let k = 1; k <= times; k++) for (const w of src) plan.push({ src: w, week: w.week - weeksOf[0] + last + 1 + (k - 1) * span, day: w.day });
+  } else {
+    const toWeek = v.int(body.to_week, 'to_week', { min: 1, max: 52 });
+    for (const w of src) plan.push({ src: w, week: toWeek + (w.week - weeksOf[0]), day: w.day });
+  }
+  const lastWeek = Math.max(...plan.map((x) => x.week));
+  if (lastWeek > 52) throw badRequest('That goes past week 52.');
+  if (act === 'move' && plan.some((x) => src.some((s) => s.week === x.week && s.day === x.day && s.id !== x.src.id))) throw badRequest('Those days would land on each other.');
+  const taken = plan.map((x) => targetProgram.workouts.find((w) => w.week === x.week && w.day === x.day && !ids.includes(w.id))).filter(Boolean);
+  if (taken.length && body.replace !== true) {
+    const e = new HttpError(409, 'replace_needed', `${taken.length === 1 ? `Week ${taken[0].week}, day ${taken[0].day} already has a workout` : `${taken.length} of those days already have workouts`}. Replace ${taken.length === 1 ? 'it' : 'them'} to go on.`);
+    e.details = { days: taken.map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title })) };
+    throw e;
+  }
+  guardLogged(ctx, taken.map((w) => w.id), body.confirm, taken.length === 1 ? `Week ${taken[0]?.week}, day ${taken[0]?.day}` : `${taken.length} days`);
+  if (act === 'move') guardLogged(ctx, ids, body.confirm, ids.length === 1 ? 'That day' : `${ids.length} days`);
+  const made = [];
+  ctx.db.tx(() => {
+    deleteWorkouts(ctx, taken.map((w) => w.id));
+    if (act === 'move') {
+      // Two passes so a day never collides with another being moved: park them, then place them.
+      for (const x of plan) ctx.db.run('UPDATE workouts SET week = ?, day = ? WHERE id = ?', 100 + x.week, x.day, x.src.id);
+      for (const x of plan) { ctx.db.run('UPDATE workouts SET week = ? WHERE id = ?', x.week, x.src.id); made.push({ id: x.src.id, week: x.week, day: x.day }); }
+    } else {
+      for (const x of plan) made.push({ id: copyWorkoutInto(ctx, x.src, targetProgram.id, x.week, x.day), week: x.week, day: x.day });
+    }
+    if (lastWeek > targetProgram.weeks) setWeeks(ctx, targetProgram.id, lastWeek);
+  });
+  return { action: act, days: made, replaced: taken.length, to_program_id: targetProgram.id, ...programDetail(ctx, programId) };
 }
 // Clear a week. The last week also comes off the program (down to the last week that still has workouts).
 export function deleteWeek(ctx, programId, week, body = {}) {

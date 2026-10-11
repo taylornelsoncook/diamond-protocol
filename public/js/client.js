@@ -776,6 +776,8 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title),
       !reopened && whenText(w) ? h('div', { class: `small strong${w.status === 'missed' ? ' warn-text' : ''}` }, whenText(w)) : null),
+    // The coach's instructions for the day (version 75): read first, before anything else.
+    w.instructions ? h('div', { class: 'c-note', style: 'white-space:pre-line' }, h('div', { class: 'small strong', style: 'margin-bottom:4px' }, 'From your coach'), w.instructions) : null,
     pendingBox,
     !reopened && state.pickWorkout && home.workout ? h('div', { class: 'c-note row', style: 'align-items:center' }, h('span', { class: 'grow' }, `You opened this one from your calendar. ${home.workout.title} is what's up ${home.workout.status === 'today' ? 'today' : 'next'}.`),
       btn(`Back to ${home.workout.title}`, () => openPick(home.workout.id), 'ghost')) : null,

@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS workouts (
   title TEXT NOT NULL,
   warmup_id TEXT REFERENCES routines(id) ON DELETE SET NULL,     -- version 58: the warm-up block attached to this workout
   cooldown_id TEXT REFERENCES routines(id) ON DELETE SET NULL,   -- version 58: the cool-down block
+  instructions TEXT,                                             -- version 75: the coach's instructions for the day, shown first in the app and the builder
   UNIQUE (program_id, week, day)
 );
 -- Version 74: a complex is a named group of exercises written once (Settings → Exercise library → Complexes) and loaded

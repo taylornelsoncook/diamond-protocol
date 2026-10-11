@@ -98,7 +98,7 @@ function render() {
       : h('p', { class: 'muted' }, 'Nobody is booked yet.'));
   fill(root, h('main', { class: 'tv-wrap' }, head,
     h('div', { class: 'tv-grid' },
-      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), demoPane(w), routineLine(w.warmup, 'Warm-up'), workoutList(w), routineLine(w.cooldown, 'Cool-down')),
+      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), w.instructions ? h('p', { class: 'tv-instr' }, w.instructions) : null, demoPane(w), routineLine(w.warmup, 'Warm-up'), workoutList(w), routineLine(w.cooldown, 'Cool-down')),
       h('aside', { class: 'tv-side' }, side))));
 }
 

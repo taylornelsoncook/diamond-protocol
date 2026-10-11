@@ -47,7 +47,7 @@ function workoutList(w) {
   const showing = clips[demo.index % Math.max(1, clips.length)];
   return h('ol', { class: 'tv-ex' }, withGroups(w.exercises, (x) => h('li', { class: [x.group_label ? 'tv-ex--grouped' : null, showing && x.id === showing.id ? 'tv-ex--showing' : null, isVideoFile(x.video_url) ? 'tv-ex--clip' : null].filter(Boolean).join(' ') || null,
     onClick: isVideoFile(x.video_url) ? () => { demo.index = clips.findIndex((c) => c.id === x.id); demo.holdUntil = Date.now() + 60000; render(); } : null },
-    h('span', { class: 'tv-ex-name' }, x.group_tag ? `${x.group_tag} · ${x.name}` : x.name), h('span', { class: 'tv-ex-rx' }, x.prescription || ''),
+    h('span', { class: 'tv-ex-name' }, x.group_tag ? `${x.group_tag.replace(/^[A-Z]/, "")} · ${x.name}` : x.name), h('span', { class: 'tv-ex-rx' }, x.prescription || ''),
     x.load || x.details ? h('span', { class: 'tv-ex-load' }, [x.load, x.details].filter(Boolean).join(' · ')) : null),
   (x) => h('li', { class: 'tv-ex-group' }, groupTitle(x))));
 }
@@ -70,7 +70,7 @@ function demoPane(w) {
   clearTimeout(demo.timer);
   if (clips.length > 1) demo.timer = setTimeout(() => { if (Date.now() >= demo.holdUntil) { demo.index = (demo.index + 1) % clips.length; if (!athlete && !message) render(); } else demoPane(w); }, DEMO_SECONDS * 1000);
   return h('div', { class: 'tv-demo' }, demo.video,
-    h('div', { class: 'tv-demo-label' }, h('span', { class: 'tv-demo-name' }, x.group_tag ? `${x.group_tag} · ${x.name}` : x.name), h('span', { class: 'tv-demo-rx' }, [x.prescription, x.details].filter(Boolean).join(' · '))),
+    h('div', { class: 'tv-demo-label' }, h('span', { class: 'tv-demo-name' }, x.group_tag ? `${x.group_tag.replace(/^[A-Z]/, "")} · ${x.name}` : x.name), h('span', { class: 'tv-demo-rx' }, [x.prescription, x.details].filter(Boolean).join(' · '))),
     clips.length > 1 ? h('div', { class: 'tv-demo-dots' }, clips.map((c, i) => h('span', { class: i === demo.index % clips.length ? 'on' : null }))) : null);
 }
 function render() {

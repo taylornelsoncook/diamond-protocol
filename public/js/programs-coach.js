@@ -5,7 +5,7 @@
 import { h, fill, toast, copyText, busy, btn, field, input, select, panel, ago, money, videoEmbed, playIcon } from './ui.js';
 import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
-import { setFields, detailsOf, groupTag, withGroups } from './set-fields.js';
+import { setFields, detailsOf, groupTag, withGroups, GROUP_KINDS, KIND_WORDS } from './set-fields.js';
 import { scheduleFields, fmtDay, statusBadge } from './training-days.js';
 import { choices, ALL_WORD } from './startup-ui.js';
 import { sendClip } from './formchecks-ui.js';
@@ -22,13 +22,19 @@ const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 const first = (name) => name.split(' ')[0];
 const LOAD_LIFT = { squat_1rm: 'back squat', bench_1rm: 'bench press', power_clean_1rm: 'power clean' };
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced', 'All levels'];
+const SETTINGS = { facility: 'In the facility', remote: 'Out of the facility', both: 'Both' };
+const sportInput = (value = '') => input({ value: value ?? '', maxlength: '40', list: 'dp-sport-list', placeholder: 'Baseball, Football, Any', autocomplete: 'off', 'aria-label': 'Sport' });
+const sportList = (progs) => h('datalist', { id: 'dp-sport-list' }, [...new Set(['Baseball', 'Softball', 'Football', 'Basketball', 'Soccer', 'Volleyball', 'Track', 'Any sport', ...progs.map((p) => p.sport).filter(Boolean)])].map((x) => h('option', { value: x })));
 const loadText = (x) => (x.load_test ? `${x.load_pct}% of ${LOAD_LIFT[x.load_test]} max` : null);
 const textarea = (value = '', attrs = {}) => { const t = h('textarea', { class: 'dp-input', ...attrs }); t.value = value ?? ''; return t; };
 const bar = (pct, label) => h('div', { class: 'eg-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(Math.round(pct)), 'aria-label': label }, h('span', { style: `width:${Math.max(0, Math.min(100, pct))}%` }));
 
 // A dialog with a title, a body and buttons. An action's onClick returns false to keep the dialog open; errors show in it.
 function dialog(title, body, actions) {
-  const d = document.getElementById('dialog');
+  const main = document.getElementById('dialog');
+  // A dialog opened from inside another (the complex editor's exercise picker) gets its own element on top.
+  const d = main.open ? document.body.appendChild(h('dialog', { class: 'dp-dialog-stacked' })) : main;
+  if (d !== main) d.addEventListener('close', () => d.remove(), { once: true });
   const err = h('div', { class: 'dp-error', role: 'alert' });
   fill(d, h('div', { class: 'stack' }, h('h2', { class: 'week-title', style: 'color:var(--steel)' }, title), body, err,
     h('div', { class: 'row wrap' }, actions.map((a) => btn(a.label, async (e) => {
@@ -67,7 +73,7 @@ async function sendLink(c) {
 }
 
 // ---------- Programs page ----------
-const pageState = { q: '', level: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
+const pageState = { q: '', level: '', sport: '', setting: '', author: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
 
 export async function viewPrograms(main) {
   const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules, notes] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
@@ -75,22 +81,29 @@ export async function viewPrograms(main) {
   const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
-  // Programs: search and level filter.
-  const cards = h('div', { class: 'workouts' });
+  // Programs (version 74, owner's ask): one line per program, filtered by sport, setting, who wrote it and level.
+  const cards = h('div', { class: 'pg-list' });
   const search = input({ type: 'search', placeholder: 'Search programs', 'aria-label': 'Search programs', value: pageState.q });
-  const levels = [...new Set([...LEVELS, ...progs.data.map((p) => p.level).filter(Boolean)])];
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const levels = uniq([...LEVELS, ...progs.data.map((p) => p.level)]);
   const levelSel = select([['', 'Every level'], ...levels.map((l) => [l, l])], { value: pageState.level, 'aria-label': 'Level' });
+  const sportSel = select([['', 'Every sport'], ...uniq(progs.data.map((p) => p.sport)).map((x) => [x, x]), ['unset', 'No sport set']], { value: pageState.sport ?? '', 'aria-label': 'Sport' });
+  const settingSel = select([['', 'Anywhere'], ...Object.entries(SETTINGS), ['unset', 'Not set']], { value: pageState.setting ?? '', 'aria-label': 'Where' });
+  const authors = uniq(progs.data.map((p) => p.author_name));
+  const authorSel = select([['', 'Anyone'], ...authors.map((a) => [a, a]), ['unset', 'No author']], { value: pageState.author ?? '', 'aria-label': 'Written by' });
   const drawCards = () => {
     const q = pageState.q.trim().toLowerCase();
-    const shown = progs.data.filter((p) => (!q || p.name.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q)) && (!pageState.level || p.level === pageState.level));
-    fill(cards, shown.length ? shown.map((p) => h('a', { href: `#/programs/${p.id}`, class: 'dp-panel pg-card' },
-      h('div', { class: 'week-title', style: 'color:var(--steel)' }, p.name),
-      h('div', { class: 'small muted' }, [`${plural(p.weeks, 'week')}`, p.level ?? 'Any level', p.days_per_week ? `${p.days_per_week} ${p.days_per_week === 1 ? 'day' : 'days'} a week` : null, plural(p.workout_count, 'workout')].filter(Boolean).join(' · ')),
-      h('div', { class: 'small' }, `${plural(p.client_count, 'client')} · `, h('span', { class: p.logged_7d ? 'good-text' : 'muted' }, `${plural(p.logged_7d, 'workout')} logged in the last 7 days`))))
-      : h('div', { class: 'empty', style: 'grid-column:1/-1' }, progs.data.length ? 'No programs match. Clear the search or level.' : edit ? 'No programs yet. Use New program to build your first one.' : 'No programs yet.'));
+    const is = (val, want) => !want || (want === 'unset' ? !val : (val ?? '').toLowerCase() === want.toLowerCase());
+    const shown = progs.data.filter((p) => (!q || p.name.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q))
+      && is(p.level, pageState.level) && is(p.sport, pageState.sport) && is(p.setting, pageState.setting) && is(p.author_name, pageState.author));
+    fill(cards, shown.length ? shown.map((p) => h('a', { href: `#/programs/${p.id}`, class: 'pg-row' },
+      h('span', { class: 'pg-row-name' }, p.name),
+      h('span', { class: 'small muted pg-row-meta' }, [p.sport, p.setting ? SETTINGS[p.setting] : null, p.level, p.author_name ? `by ${p.author_name}` : null, plural(p.weeks, 'week'), p.client_count ? plural(p.client_count, 'client') : null].filter(Boolean).join(' · '))))
+      : h('div', { class: 'empty' }, progs.data.length ? 'No programs match. Clear the search or filters.' : edit ? 'No programs yet. Use New program to build your first one.' : 'No programs yet.'));
   };
   search.addEventListener('input', () => { pageState.q = search.value; drawCards(); });
-  levelSel.addEventListener('change', () => { pageState.level = levelSel.value; drawCards(); });
+  const bind = (sel, key) => sel.addEventListener('change', () => { pageState[key] = sel.value; drawCards(); });
+  bind(levelSel, 'level'); bind(sportSel, 'sport'); bind(settingSel, 'setting'); bind(authorSel, 'author');
   drawCards();
 
   const pulse = h('div', { class: 'pulse' },
@@ -115,7 +128,7 @@ export async function viewPrograms(main) {
     pulse,
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
-        h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, search), h('div', { style: 'width:180px' }, levelSel)),
+        h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
         cards, weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
@@ -172,10 +185,11 @@ function newProgramDialog(list, templates = [], startFrom = '') {
   const from = select([['', 'An empty program'], ...templates.map((p) => [p.id, `Template: ${p.name}`]), ...list.map((p) => [p.id, `A copy of ${p.name}`])], { value: startFrom });
   from.addEventListener('change', () => { const src = all.find((p) => p.id === from.value); if (src) { weeks.value = String(src.weeks); if (src.level && LEVELS.includes(src.level)) level.value = src.level; } });
   if (startFrom) from.dispatchEvent(new Event('change'));
-  dialog('New program', h('div', { class: 'stack' }, field('Program name', name), h('div', { class: 'form-grid' }, field('Weeks', weeks), field('Level', level)),
+  const sport = sportInput(''), setting = select([['', 'Not set'], ...Object.entries(SETTINGS)], { 'aria-label': 'Where' });
+  dialog('New program', h('div', { class: 'stack' }, sportList(list), field('Program name', name), h('div', { class: 'form-grid' }, field('Weeks', weeks), field('Level', level), field('Sport', sport), field('In or out of the facility', setting)),
     field('Start from', from, templates.length ? 'A template or a copy brings its workouts and phases in the weeks you keep.' : 'A copy brings the workouts in the weeks you keep.')), [
     { label: 'Create program', variant: 'primary', onClick: async () => {
-      const p = await post('/v1/programs', { name: name.value, weeks: Number(weeks.value), level: level.value, copy_from: from.value || undefined });
+      const p = await post('/v1/programs', { name: name.value, weeks: Number(weeks.value), level: level.value, sport: sport.value || null, setting: setting.value || null, copy_from: from.value || undefined });
       toast(from.value ? 'Program created from the copy.' : 'Program created. Add its first workout.'); location.hash = `#/programs/${p.id}`;
     } },
     { label: 'Cancel', variant: 'ghost' }]);
@@ -195,7 +209,68 @@ function storePanel(shop) {
 }
 
 // ---------- Exercise library (the first tab of Settings) ----------
-export async function exerciseLibrary() { return libraryPanel(await get('/v1/exercises'), canEdit()); }
+export async function exerciseLibrary() {
+  const [exs, cx] = await Promise.all([get('/v1/exercises'), get('/v1/complexes').catch(() => ({ data: [] }))]);
+  return h('div', { class: 'stack', style: 'gap:24px' }, libraryPanel(exs, canEdit()), complexesPanel(cx.data, exs, canEdit()));
+}
+// Complexes (version 74, owner's ask): a named group of exercises written once ("Acceleration Primer") and loaded into any
+// workout as a block with Load a complex. Edited here; workouts already built from one keep what they have.
+function complexesPanel(list, exs, edit) {
+  const row = (c) => h('div', { class: 'list-item' },
+    h('div', { class: 'grow stack-tight' }, h('span', null, h('span', { class: 'strong' }, c.name), c.kind !== 'block' ? h('span', { class: 'small muted' }, ` · ${c.kind_label.toLowerCase()}`) : null),
+      h('span', { class: 'small muted' }, `${c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${c.used_in ? ` · loaded into ${plural(c.used_in, 'workout')}` : ''}`),
+      c.note ? h('span', { class: 'small pg-note' }, c.note) : null),
+    edit ? btn('Edit', () => complexDialog(c, exs), 'ghost', { 'aria-label': `Edit ${c.name}` }) : null);
+  return panel('Complexes', { subtitle: 'A named group of exercises, like Acceleration Primer, loaded into any workout in one click (the builder\'s Load a complex). Changes here don\'t touch workouts already built from it.',
+    action: edit ? btn('New complex', () => complexDialog(null, exs), 'secondary') : null },
+    list.length ? list.map(row) : h('p', { class: 'small muted' }, 'No complexes yet. Build a block in a workout and Save as complex, or start one here.'));
+}
+function complexDialog(c, exs) {
+  const name = input({ value: c?.name ?? '', maxlength: '60', required: true, placeholder: 'Acceleration Primer' });
+  const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, `${GROUP_KINDS[k]} · ${KIND_WORDS[k]}`]), { value: c?.kind ?? 'block', 'aria-label': 'How it runs' });
+  const note = input({ value: c?.note ?? '', maxlength: '500', placeholder: 'What it\'s for (optional)' });
+  const rows = (c?.exercises ?? []).map((x) => ({ ...x }));
+  const rowsBox = h('div', { class: 'stack-tight' });
+  const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
+  const editRow = (x, i) => {
+    const sf = setFields(x, { hint: false }), load = loadFields(x);
+    dialog(x.name, h('div', { class: 'stack' }, sf.el, load.el), [
+      { label: 'Done', variant: 'primary', onClick: () => { Object.assign(rows[i], sf.body(), load.body(), { prescription: rxLine(sf.body()) }); draw(); } },
+      { label: 'Cancel', variant: 'ghost' }]);
+    sf.focus();
+  };
+  const draw = () => fill(rowsBox, rows.length ? rows.map((x, i) => h('div', { class: 'row pg-ex sf-in-group' },
+    h('span', { class: 'sf-tag', 'aria-hidden': 'true' }, String(i + 1)),
+    h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}: change sets and reps`, onClick: () => editRow(x, i) },
+      h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, line(x) || 'Set the sets and reps')), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit')),
+    i > 0 ? btn('↑', () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} up` }) : null,
+    i < rows.length - 1 ? btn('↓', () => { [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} down` }) : null,
+    btn('Remove', () => { rows.splice(i, 1); draw(); }, 'ghost', { 'aria-label': `Remove ${x.name}` })))
+    : h('p', { class: 'small muted', style: 'margin:0' }, 'No exercises yet.'));
+  draw();
+  const addEx = () => pickExercise({ title: `Add to ${name.value.trim() || 'the complex'}`, exs, program: { workouts: [] }, onPick: async (ex) => {
+    rows.push({ exercise_id: ex.id, name: ex.name, sets: 3, reps: '8', prescription: '3 × 8' }); draw();
+  } });
+  const body = () => ({ name: name.value.trim(), kind: kind.value, note: note.value.trim() || null, exercises: rows.map((x) => {
+    const { name: _n, prescription: _p, id: _i, position: _pos, video_url: _v, poster_url: _po, category: _c, details: _d, group_tag: _g, ...f } = x;
+    return f;
+  }) });
+  const actions = [{ label: c ? 'Save complex' : 'Add complex', variant: 'primary', onClick: async () => {
+    if (!name.value.trim()) throw new Error('Name the complex.');
+    if (!rows.length) throw new Error('Add at least one exercise.');
+    if (c) await patch(`/v1/complexes/${c.id}`, body()); else await post('/v1/complexes', body());
+    toast(c ? 'Complex saved. Workouts already built from it keep what they have.' : 'Complex added. Load it into a workout from the builder.'); deps.render();
+  } }, { label: 'Add exercise', onClick: () => { addEx(); return false; } }, { label: 'Cancel', variant: 'ghost' }];
+  if (c) actions.push({ label: 'Delete', variant: 'ghost', onClick: async () => {
+    if (!confirm(`Delete ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`)) return false;
+    await del(`/v1/complexes/${c.id}`); toast(`${c.name} deleted.`); deps.render();
+  } });
+  dialog(c ? `Edit ${c.name}` : 'New complex', h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('How the athlete runs it', kind)), field('Note', note),
+    h('div', { class: 'dp-label' }, 'Exercises, in order'), rowsBox), actions);
+  name.focus();
+}
+// The short text for a row edited in a dialog, the way the server builds it (rx.js rxText).
+const rxLine = (f) => { const core = f.sets && (f.reps || f.distance) ? [f.sets, f.reps, f.distance].filter(Boolean).join(' × ') : f.sets ? `${f.sets} sets` : [f.reps, f.distance].filter(Boolean).join(' × '); return [core, f.load_text ? `@ ${f.load_text}` : null].filter(Boolean).join(' '); };
 function libraryPanel(exs, edit) {
   const cats = exs.categories ?? [];
   const q = input({ type: 'search', placeholder: 'Search exercises', 'aria-label': 'Search exercises', value: pageState.exQ });
@@ -461,7 +536,7 @@ export async function viewProgram(main, id) {
       }, 'ghost') : null) : null;
     fill(weekBox,
       h('div', { class: 'row wrap' }, h('h2', { class: 'week-title grow' }, `Week ${week}`), weekActions),
-      days.length ? h('div', { class: 'workouts' }, days.map((w) => workoutCard(p, w, exs, edit, reload)))
+      days.length ? h('div', { class: 'pg-week-grid' }, days.map((w) => workoutCard(p, w, exs, edit, reload)))
         : h('div', { class: 'empty' }, edit ? (isLast && p.weeks > 1 ? `Week ${week} is empty. Add a day, copy another week here, or delete this week.` : `No workouts in week ${week} yet. Add a day, or copy another week here.`) : `No workouts in week ${week} yet.`));
   };
 
@@ -697,8 +772,10 @@ function detailsDialog(p) {
   const levels = [...new Set([...LEVELS, ...(p.level ? [p.level] : [])])];
   const level = select([['', 'Any level'], ...levels.map((l) => [l, l])], { value: p.level ?? '' });
   const desc = textarea(p.description ?? '');
-  dialog('Edit details', h('div', { class: 'stack' }, field('Program name', name), h('div', { class: 'form-grid' }, field('Weeks', weeks, p.last_week ? `At least ${p.last_week}: week ${p.last_week} has workouts.` : null), field('Level', level)), field('Description', desc)), [
-    { label: 'Save details', variant: 'primary', onClick: async () => { await patch(`/v1/programs/${p.id}`, { name: name.value, weeks: Number(weeks.value), level: level.value || null, description: desc.value || null }); toast('Program saved.'); deps.render(); } },
+  const sport = sportInput(p.sport), setting = select([['', 'Not set'], ...Object.entries(SETTINGS)], { value: p.setting ?? '', 'aria-label': 'Where' });
+  dialog('Edit details', h('div', { class: 'stack' }, sportList([]), field('Program name', name), h('div', { class: 'form-grid' }, field('Weeks', weeks, p.last_week ? `At least ${p.last_week}: week ${p.last_week} has workouts.` : null), field('Level', level), field('Sport', sport), field('In or out of the facility', setting)), field('Description', desc),
+    p.author_name ? h('p', { class: 'small muted', style: 'margin:0' }, `Written by ${p.author_name}.`) : null), [
+    { label: 'Save details', variant: 'primary', onClick: async () => { await patch(`/v1/programs/${p.id}`, { name: name.value, weeks: Number(weeks.value), level: level.value || null, description: desc.value || null, sport: sport.value || null, setting: setting.value || null }); toast('Program saved.'); deps.render(); } },
     { label: 'Cancel', variant: 'ghost' }]);
 }
 function duplicateDialog(p) {
@@ -844,28 +921,94 @@ function copyWeekDialog(p, week, reload) {
 
 function workoutCard(p, w, exs, edit, reload) {
   const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
-  const body = (x) => h('span', { class: 'stack-tight grow' }, h('span', null, x.name, x.form_check ? h('span', { class: 'dp-badge dp-badge--neutral', style: 'margin-left:8px', title: x.form_check_note || 'The athlete is asked to send a clip of this one' }, 'Form check') : null),
-    h('span', { class: 'small muted' }, line(x)), x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
-  const rows = withGroups(w.exercises, (x) => h('div', { class: `row pg-ex${x.group_label ? ' sf-in-group' : ''}` },
-    groupTag(x), playBtn(x),
-    edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${line(x)}: change, swap or remove`, onClick: () => slotDialog(x, { p, exs, reload }) },
+  const body = (x) => h('span', { class: 'pg-ex-line grow' }, h('span', { class: 'pg-ex-name' }, x.name), h('span', { class: 'small muted' }, line(x)),
+    x.form_check ? h('span', { class: 'dp-badge dp-badge--neutral', title: x.form_check_note || 'The athlete is asked to send a clip of this one' }, 'Form check') : null,
+    x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
+  const row = (x, n) => h('div', { class: `row pg-ex${x.block_id ? ' sf-in-group' : ''}` },
+    n != null ? h('span', { class: 'sf-tag', 'aria-hidden': 'true' }, String(n)) : null, playBtn(x),
+    edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
       body(x), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit'))
-      : h('div', { class: 'grow pg-ex-body' }, body(x)),
-  ));
-  const blocks = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
+      : h('div', { class: 'grow pg-ex-body' }, body(x)));
+  // Named blocks (version 74): exercises in no block first, then each block with its name, how it runs and its own
+  // Add exercise. A block can be renamed, moved, saved as a complex for other workouts, or removed.
+  const blocks = w.blocks ?? [];
+  const blockHead = (b, i) => h('div', { class: 'row wrap pg-block-head' },
+    h('div', { class: 'grow stack-tight' },
+      edit ? h('button', { type: 'button', class: 'sf-group pg-block-name', 'aria-label': `Rename or change ${b.name}`, onClick: () => blockDialog(w, b, reload) }, b.name, KIND_WORDS[b.kind] && b.kind !== 'block' ? h('span', { class: 'sf-group-how' }, ` · ${KIND_WORDS[b.kind]}`) : null)
+        : h('div', { class: 'sf-group' }, b.name, b.kind !== 'block' ? h('span', { class: 'sf-group-how' }, ` · ${KIND_WORDS[b.kind]}`) : null)),
+    edit ? h('div', { class: 'row wrap pg-block-acts', style: 'gap:2px' },
+      btn('+ Exercise', () => pickExercise({ title: `Add to ${b.name}`, exs, program: p, workout: w, block: b, onAdd: () => reload() }), 'ghost', { 'aria-label': `Add an exercise to ${b.name}` }),
+      b.count && i > 0 && blocks[i - 1].count ? btn('↑', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} up` }) : null,
+      b.count && i < blocks.length - 1 && blocks[i + 1].count ? btn('↓', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i + 2 }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} down` }) : null,
+      b.count ? btn('Save', () => saveComplexDialog(b), 'ghost', { 'aria-label': `Save ${b.name} as a complex`, title: 'Save as a complex for other workouts' }) : null,
+      btn('Remove', (e) => {
+        const keep = b.count ? confirm(`Remove the block ${b.name}?\n\nOK removes its ${plural(b.count, 'exercise')} too. Cancel keeps everything.`) : true;
+        if (!keep) return;
+        busy(e.currentTarget, async () => { await del(`/v1/workout-blocks/${b.id}`); toast(`${b.name} removed.`); reload(); });
+      }, 'ghost', { 'aria-label': `Remove ${b.name}` })) : null);
+  const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
+  const rows = [];
+  let n = 0;
+  w.exercises.forEach((x, i) => {
+    if (x.block_id && w.exercises[i - 1]?.block_id !== x.block_id && byId.has(x.block_id)) { const { b, i: bi } = byId.get(x.block_id); rows.push(blockHead(b, bi)); n = 0; }
+    rows.push(row(x, x.block_id ? ++n : null));
+  });
+  for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 12px' }, edit ? 'Empty. Add an exercise to this block.' : 'Empty.'));
+  const routines = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
     h('span', { class: 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
     edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
   return h('div', { class: 'workout' },
     h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
       edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title))),
-    blocks,
-    rows.length ? rows : h('p', { class: 'small muted' }, 'No exercises yet.'),
+    routines,
+    rows.length ? rows : h('p', { class: 'small muted' }, edit ? 'No exercises yet. Add a block (Warm up, Speed, Strength...) or load a complex, then add exercises to it.' : 'No exercises yet.'),
     edit ? h('div', { class: 'row wrap pg-foot' },
-      btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'secondary'),
+      btn('Add a block', () => blockDialog(w, null, reload), 'secondary'),
+      btn('Load a complex', () => loadComplexDialog(w, reload), 'secondary'),
+      btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' }),
       h('span', { class: 'grow' }),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost', { 'aria-label': `Copy ${w.title}` }),
       btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost', { 'aria-label': `Save ${w.title} as a template` }),
       btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
+}
+// A block's name and how it runs (version 74): new, or renaming one. Any name goes; the usual ones are offered.
+const BLOCK_NAMES = ['Warm up', 'Activation', 'Acceleration', 'Speed', 'Plyometrics', 'Power', 'Strength', 'Accessory', 'Conditioning', 'Core', 'Cool down'];
+function blockFields(b = null) {
+  const datalist = h('datalist', { id: 'dp-block-names' }, BLOCK_NAMES.map((n) => h('option', { value: n })));
+  const name = input({ value: b?.name ?? '', maxlength: '40', list: 'dp-block-names', placeholder: 'Warm up, Speed, Strength, Acceleration Primer…', autocomplete: 'off', required: true, 'aria-label': 'Block name' });
+  const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, `${GROUP_KINDS[k]} · ${KIND_WORDS[k]}`]), { value: b?.kind ?? 'block', 'aria-label': 'How it runs' });
+  return { name, kind, el: h('div', { class: 'stack' }, datalist, field('Name', name), field('How the athlete runs it', kind, 'A block runs one exercise after another. A superset or circuit runs one set of each exercise, then the rest.')) };
+}
+function blockDialog(w, b, reload) {
+  const f = blockFields(b);
+  dialog(b ? `Change ${b.name}` : `Add a block to ${w.title}`, f.el, [
+    { label: b ? 'Save' : 'Add block', variant: 'primary', onClick: async () => {
+      if (!f.name.value.trim()) throw new Error('Name the block, like Warm up or Strength.');
+      if (b) { await patch(`/v1/workout-blocks/${b.id}`, { name: f.name.value, kind: f.kind.value }); toast('Block saved.'); }
+      else { await post(`/v1/workouts/${w.id}/blocks`, { name: f.name.value, kind: f.kind.value }); toast(`${f.name.value.trim()} added. Now add its exercises.`); }
+      reload();
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
+  f.name.focus();
+}
+// Load a complex from the library into this workout as a block with every exercise in it, in one go.
+async function loadComplexDialog(w, reload) {
+  const all = (await get('/v1/complexes')).data;
+  if (!all.length) return toast('No complexes yet. Build a block, then Save as complex, or write one under Settings → Exercise library → Complexes.', 'warn');
+  const pick = select(all.map((c) => [c.id, `${c.name} (${plural(c.exercises.length, 'exercise')}${c.kind !== 'block' ? `, ${GROUP_KINDS[c.kind].toLowerCase()}` : ''})`]), { 'aria-label': 'Complex' });
+  const preview = h('p', { class: 'small muted', style: 'margin:0' });
+  const draw = () => { const c = all.find((x) => x.id === pick.value); preview.textContent = c ? c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ') : ''; };
+  pick.addEventListener('change', draw); draw();
+  dialog(`Load a complex into ${w.title}`, h('div', { class: 'stack' }, field('Complex', pick), preview, h('p', { class: 'small muted', style: 'margin:0' }, 'It comes in as a block with its name and every exercise. Changes you make here stay in this workout; the complex itself is edited under Settings → Exercise library → Complexes.')), [
+    { label: 'Load it', variant: 'primary', onClick: async () => { const c = all.find((x) => x.id === pick.value); await post(`/v1/workouts/${w.id}/blocks`, { complex_id: pick.value }); toast(`${c.name} loaded: ${plural(c.exercises.length, 'exercise')}.`); reload(); } },
+    { label: 'Cancel', variant: 'ghost' }]);
+}
+function saveComplexDialog(b) {
+  const name = input({ value: b.name, maxlength: '60', required: true, 'aria-label': 'Complex name' });
+  dialog(`Save ${b.name} as a complex`, h('div', { class: 'stack' }, field('Name', name, 'Load it into any workout, in any program, with Load a complex. Edit it later under Settings → Exercise library → Complexes.')), [
+    { label: 'Save complex', variant: 'primary', onClick: async () => { const c = await post(`/v1/workout-blocks/${b.id}/save-complex`, { name: name.value }); toast(`${c.name} is in the library (${plural(c.exercises.length, 'exercise')}).`); } },
+    { label: 'Cancel', variant: 'ghost' }]);
+  name.select();
 }
 // Attach a warm-up and a cool-down to a workout, from the blocks written on the Programs page.
 async function blocksDialog(w, reload) {
@@ -946,11 +1089,13 @@ function loadFields(x) {
 }
 // One exercise in a workout: change its sets and weight, swap it for another exercise in the same slot, or remove it
 // (with Undo, which puts it back in the same place).
-function slotDialog(x, { p, exs, reload }) {
+function slotDialog(x, { p, w, exs, reload }) {
   const sf = setFields(x);
   const load = loadFields(x);
-  dialog(x.name, h('div', { class: 'stack' }, sf.el, load.el), [
-    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workout-exercises/${x.id}`, { ...sf.body(), ...load.body() }); toast('Saved.'); reload(); } },
+  const blocks = w?.blocks ?? [];
+  const blockSel = blocks.length ? select([['', 'Not in a block'], ...blocks.map((b) => [b.id, b.name])], { value: x.block_id ?? '', 'aria-label': 'Block' }) : null;
+  dialog(x.name, h('div', { class: 'stack' }, sf.el, load.el, blockSel ? field('Block', blockSel, 'Moving it to another block puts it last in that block.') : null), [
+    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workout-exercises/${x.id}`, { ...sf.body(), ...load.body(), ...(blockSel && blockSel.value !== (x.block_id ?? '') ? { block_id: blockSel.value || null } : {}) }); toast('Saved.'); reload(); } },
     { label: 'Swap exercise', onClick: (d) => { d.addEventListener('close', () => setTimeout(() => pickExercise({ title: `Swap ${x.name}`, exs, program: p, onPick: async (ex) => { await patch(`/v1/workout-exercises/${x.id}`, { exercise_id: ex.id }); toast(`${x.name} swapped for ${ex.name}. Sets and weight stay.`); reload(); } })), { once: true }); } },
     { label: 'Remove', variant: 'ghost', onClick: async () => {
       const r = await del(`/v1/workout-exercises/${x.id}`);
@@ -963,7 +1108,7 @@ function slotDialog(x, { p, exs, reload }) {
 
 // Find an exercise in the library: search, category, and add a new one on the spot. For adding (workout) it then asks for
 // sets and reps (filled in from the last time the exercise was used in this program) and offers Add and add another.
-function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
+function pickExercise({ title, exs, program, workout, block = null, onAdd, onPick }) {
   const cats = exs.categories ?? [];
   const q = input({ type: 'search', placeholder: 'Search the library', 'aria-label': 'Search the library' });
   const cat = select([['', 'Every category'], ...cats.map((c) => [c, c])], { 'aria-label': 'Category' });
@@ -1002,7 +1147,7 @@ function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
     picked = x; drawResults();
     if (onPick) return;
     const prev = lastRx(x.id);
-    sf = setFields(prev ? { ...prev, group_label: null, group_kind: null } : null);
+    sf = setFields(prev ?? null);
     load = loadFields(prev);
     const from = prev && program.workouts.find((w) => w.exercises.includes(prev));
     fill(chosen, h('div', { class: 'stack pg-inline' }, h('div', { class: 'strong' }, x.name),
@@ -1011,9 +1156,9 @@ function pickExercise({ title, exs, program, workout, onAdd, onPick }) {
   };
   const add = async (again) => {
     if (!picked) throw new Error('Choose an exercise from the list first.');
-    await post(`/v1/workouts/${workout.id}/exercises`, { exercise_id: picked.id, ...sf.body(), ...(load.body().load_test ? load.body() : {}) });
+    await post(`/v1/workouts/${workout.id}/exercises`, { exercise_id: picked.id, ...sf.body(), ...(load.body().load_test ? load.body() : {}), ...(block ? { block_id: block.id } : {}) });
     added++;
-    toast(`${picked.name} added to ${workout.title}.`);
+    toast(`${picked.name} added to ${block ? block.name : workout.title}.`);
     workout.exercises.push({ exercise_id: picked.id, name: picked.name, ...sf.body() });
     if (!again) return;                  // closing the dialog reloads the builder
     picked = null; q.value = ''; fill(chosen); drawResults(); q.focus();

@@ -93,6 +93,8 @@ The seed prints your login and a sample client app link. To start over, delete t
 
 **The workout page:** opening a workout shows what to do first, every exercise with sets, reps, distance, weight, percent of max and tempo (four counts, 3-1-1-0) in one table, with the demo, the coach's cue and last time's numbers a tap away; Start workout turns on the set rows, with the rest timer and effort at the end. Distance is its own field in the builder beside reps, and tempo is always written as four counts. Parents and athletes share one sign-in place at `/portal`: an athlete with their own email lands straight on their workouts, a younger athlete opens theirs through the parent's account.
 
+**The calendar:** a month of what every athlete, a team or one athlete has on each day, with who logged it and the effort they gave; click a day for the details. Publish a program when it is ready, release it from a date, or unpublish it while you rewrite it; athletes see nothing before the date and nothing counts as missed.
+
 **Drag, drop and send:** drag an exercise anywhere in the week, and drag a day (or the ticked days) onto a school, a team or an athlete in the Send to panel to put those days on their calendars from a date you pick.
 
 **The week grid:** a program's week is seven day columns, each a list of lettered blocks with one line per exercise and the day's instructions on top; tick days and copy, move, repeat, save or delete them together; the day's and the week's reps show as you build.

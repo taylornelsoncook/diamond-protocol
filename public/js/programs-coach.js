@@ -129,11 +129,84 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
-        cards, weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
+        cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
 
+// The month calendar (the redesign, step 3): a pick (everyone on a program, one program, a team or one athlete), a month
+// of day cells with a card per workout the picked people have that day, a day view beside it, and Publish / Release
+// from / Unpublish for a program pick.
+const calUi = { month: null, pick: '', day: null };
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const ymd = (d) => d.toISOString().slice(0, 10);
+const monthOf = (s) => { const [y, m] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, 1)); };
+const shiftMonth = (s, n) => { const d = monthOf(s); d.setUTCMonth(d.getUTCMonth() + n); return ymd(d).slice(0, 7); };
+function calendarPanel(progs, edit) {
+  const box = h('div', { class: 'stack', style: 'gap:10px' });
+  const pick = select([['', 'Everyone on a program']], { 'aria-label': 'Whose calendar', value: calUi.pick });
+  const title = h('h3', { class: 'week-title', style: 'margin:0' });
+  const grid = h('div', { class: 'cal-grid', role: 'grid', 'aria-label': 'Month' });
+  const side = h('div', { class: 'cal-day' });
+  const pubBox = h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' });
+  let data = null;
+  const query = () => { const [kind, id] = calUi.pick.split(':'); return kind === 'program' ? `program_id=${id}` : kind === 'team' ? `contract_id=${id}` : kind === 'client' ? `client_id=${id}` : ''; };
+  const load = async () => {
+    fill(grid, h('p', { class: 'small muted' }, 'Loading…'));
+    data = await get(`/v1/calendar?month=${calUi.month}&${query()}`);
+    draw();
+  };
+  const draw = () => {
+    title.textContent = `${MONTHS[Number(calUi.month.split('-')[1]) - 1]} ${calUi.month.split('-')[0]}`;
+    const byDate = new Map(data.days.map((d) => [d.date, d]));
+    const firstDay = monthOf(calUi.month), startPad = (firstDay.getUTCDay() + 6) % 7;   // Monday first
+    const cells = [['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('div', { class: 'cal-head', role: 'columnheader' }, d))];
+    const n = new Date(Date.UTC(firstDay.getUTCFullYear(), firstDay.getUTCMonth() + 1, 0)).getUTCDate();
+    const items = [];
+    for (let i = 0; i < startPad; i++) items.push(h('div', { class: 'cal-cell cal-cell--pad' }));
+    for (let d = 1; d <= n; d++) {
+      const date = `${calUi.month}-${String(d).padStart(2, '0')}`, day = byDate.get(date);
+      items.push(h('button', { type: 'button', role: 'gridcell', class: `cal-cell${date === data.today ? ' cal-cell--today' : ''}${calUi.day === date ? ' cal-cell--picked' : ''}${day ? ' cal-cell--has' : ''}`, 'aria-label': `${date}${day ? `, ${plural(day.workouts.length, 'workout')}` : ''}`,
+        onClick: () => { calUi.day = date; draw(); } },
+        h('span', { class: 'cal-n' }, String(d)),
+        day ? day.workouts.slice(0, 3).map((w) => h('span', { class: `cal-card${w.done === w.athletes.length ? ' cal-card--done' : w.missed ? ' cal-card--missed' : w.unpublished ? ' cal-card--hidden' : ''}` }, w.title, h('span', { class: 'cal-card-n' }, `${w.done}/${w.athletes.length}`))) : null,
+        day && day.workouts.length > 3 ? h('span', { class: 'small muted' }, `+${day.workouts.length - 3}`) : null));
+    }
+    fill(grid, ...cells, ...items);
+    // The day view: every workout that day, who has it, and the numbers.
+    const day = calUi.day ? byDate.get(calUi.day) : null;
+    fill(side, h('div', { class: 'strong' }, calUi.day ? fmtDay(calUi.day) : 'Pick a day'),
+      !calUi.day ? h('p', { class: 'small muted', style: 'margin:0' }, 'Click a day to see its workouts and who has them.')
+        : !day ? h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing on this day for these athletes.')
+          : day.workouts.map((w) => h('div', { class: 'cal-wo' },
+            h('a', { class: 'strong', href: `#/programs/${w.program_id}?week=${w.week}`, style: 'color:inherit' }, w.title),
+            h('div', { class: 'small muted' }, `${w.program_name} · week ${w.week} day ${w.day} · ${plural(w.exercises, 'exercise')}${w.blocks.length ? ` · ${w.blocks.join(', ')}` : ''}`),
+            h('div', { class: 'small' }, `${w.done} of ${w.athletes.length} logged${w.missed ? ` · ${w.missed} missed` : ''}${w.unpublished ? ` · ${w.unpublished} can't see it yet` : ''}${w.effort_avg != null ? ` · effort ${w.effort_avg}` : ''}`),
+            h('div', { class: 'row wrap', style: 'gap:4px' }, w.athletes.map((a) => h('a', { class: `dp-badge ${a.status === 'done' ? 'dp-badge--good' : a.status === 'missed' ? 'dp-badge--warn' : 'dp-badge--muted'}`, href: `#/clients/${a.id}?tab=training`, style: 'text-decoration:none' }, first(a.name)))))));
+    // Publish controls for a program pick.
+    const [kind, id] = calUi.pick.split(':');
+    const states = data.assignments.reduce((m, a) => { m[a.state] = (m[a.state] ?? 0) + 1; return m; }, {});
+    const summary = data.people ? Object.entries(states).map(([k, c]) => `${c} ${k}`).join(' · ') : 'nobody on a program';
+    const doPub = (body, msg) => busy(null, async () => { const r = await post(`/v1/programs/${id}/publish`, body); toast(`${msg} for ${plural(r.athletes.length, 'athlete')}.`); await load(); });
+    fill(pubBox, h('span', { class: 'small muted' }, `${plural(data.people, 'athlete')} · ${summary}`),
+      edit && kind === 'program' ? [btn('Publish now', () => doPub({ published_from: null }, 'Published'), 'secondary'),
+        btn('Release from a date', () => { const d = prompt('Athletes see the program from (YYYY-MM-DD):', data.today); if (d) doPub({ published_from: d }, `Released from ${d}`); }, 'ghost'),
+        btn('Unpublish', () => { if (confirm('Hide this program from its athletes until you publish it again? Nothing counts as missed meanwhile.')) doPub({ published_from: 'unpublished' }, 'Unpublished'); }, 'ghost')] : null);
+  };
+  pick.addEventListener('change', () => { calUi.pick = pick.value; calUi.day = null; load().catch((e) => toast(e.message, 'warn')); });
+  const nav = (n) => { calUi.month = shiftMonth(calUi.month, n); calUi.day = null; load().catch((e) => toast(e.message, 'warn')); };
+  calUi.month ??= new Date().toISOString().slice(0, 7);
+  fill(box, h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, btn('◀', () => nav(-1), 'ghost', { 'aria-label': 'Previous month' }), title, btn('▶', () => nav(1), 'ghost', { 'aria-label': 'Next month' }), btn('Today', () => { calUi.month = new Date().toISOString().slice(0, 7); calUi.day = null; load(); }, 'ghost'), h('span', { class: 'grow' }), h('div', { style: 'min-width:220px' }, pick)),
+    pubBox, h('div', { class: 'cal-wrap' }, grid, side));
+  Promise.all([get('/v1/teams').catch(() => ({ data: [] })), get('/v1/clients?status=current').catch(() => ({ data: [] }))]).then(([teams, clients]) => {
+    for (const p of progs) pick.append(h('option', { value: `program:${p.id}` }, `Program: ${p.name}`));
+    for (const t of teams.data) pick.append(h('option', { value: `team:${t.id}` }, `Team: ${t.label}`));
+    for (const c of clients.data.filter((c) => c.program)) pick.append(h('option', { value: `client:${c.id}` }, c.name));
+    pick.value = calUi.pick;
+  }).catch(() => {});
+  load().catch((e) => fill(grid, h('p', { class: 'dp-error' }, e.message)));
+  return panel('Calendar', { subtitle: 'What each athlete has on each day. Pick a program, a team or one athlete; click a day for the details; publish a program when it\'s ready.' }, box);
+}
 // The roster this week (the training calendar): every athlete on a program with planned, done and missed, behind first.
 // Behind = two planned workouts missed in a row. A team filter narrows it; the coach opens the athlete's Training tab.
 const rosterUi = { team: '', only: '' };

@@ -32,7 +32,7 @@ function weeksOf(ctx, clientId, program = null) {
   const cal = datedWorkouts(ctx, a, program ?? getProgram(ctx, a.program_id));
   const out = new Map();
   for (const w of cal.workouts) {
-    if (w.status === 'skipped') continue;
+    if (w.status === 'skipped' || w.status === 'unpublished') continue;
     const ws = mondayOf(w.date), row = out.get(ws) ?? { planned: 0, done: 0, missed: 0, upcoming: 0 };
     row.planned++; if (w.status === 'done') row.done++; else if (w.status === 'missed') row.missed++; else row.upcoming++;
     out.set(ws, row);

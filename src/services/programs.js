@@ -557,6 +557,57 @@ export function sendDays(ctx, programId, body = {}) {
   });
   return { program: { id: newId_, name, weeks: weeksOf.length, days: src.length }, start_date: start, teams, schools, assigned, skipped };
 }
+// ---- Publish and unpublish (step 3, schema 77) ----
+// published_from on the active assignments of this program (all of them, or client_ids / contract_id): null = published
+// now, a date = released from that date, 'unpublished' = hidden until the coach publishes (stored as 9999-12-31).
+export const UNPUBLISHED = '9999-12-31';
+export function publishProgram(ctx, programId, body = {}) {
+  const p = ctx.db.get('SELECT id, name FROM programs WHERE id = ?', programId);
+  if (!p) throw notFound('Program');
+  const from = body.published_from === 'unpublished' ? UNPUBLISHED : body.published_from === undefined || body.published_from === null || body.published_from === '' ? null : parseDate(body.published_from, 'published_from');
+  const where = ['a.program_id = ?', 'a.active = 1'], args = [programId];
+  if (Array.isArray(body.client_ids) && body.client_ids.length) { where.push(`a.client_id IN (${body.client_ids.map(() => '?').join(', ')})`); args.push(...body.client_ids.map(String)); }
+  if (body.contract_id) { where.push('a.client_id IN (SELECT client_id FROM team_roster WHERE contract_id = ? AND active = 1)'); args.push(v.str(body.contract_id, 'contract_id')); }
+  const rows = ctx.db.all(`SELECT a.id, a.client_id, c.name FROM assignments a JOIN clients c ON c.id = a.client_id WHERE ${where.join(' AND ')} AND c.archived_at IS NULL`, ...args);
+  if (!rows.length) throw conflict('Nobody on this program matches.');
+  ctx.db.tx(() => { for (const r of rows) ctx.db.run('UPDATE assignments SET published_from = ? WHERE id = ?', from, r.id); });
+  return { program_id: programId, published_from: from, state: from === null ? 'published' : from === UNPUBLISHED ? 'unpublished' : 'scheduled', athletes: rows.map((r) => ({ id: r.client_id, name: r.name })) };
+}
+// ---- The month calendar (step 3): what the picked people have on each day ----
+// pick: program_id (everyone on it), contract_id (the team's roster, whatever programs they are on), client_id (one
+// athlete), or nothing (everyone on a program). Each day lists its workouts grouped by program and workout, with how
+// many athletes have it, how many logged it, missed it or can't see it yet, and the average effort they gave.
+export function calendarMonth(ctx, { month, program_id, contract_id, client_id } = {}) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(month ?? ''));
+  const first = m ? `${m[1]}-${m[2]}-01` : `${localToday(ctx).slice(0, 7)}-01`;
+  const [y, mo] = first.split('-').map(Number);
+  const last = `${first.slice(0, 7)}-${String(new Date(Date.UTC(y, mo, 0)).getUTCDate()).padStart(2, '0')}`;
+  const where = ['a.active = 1', 'c.archived_at IS NULL'], args = [];
+  if (program_id) { where.push('a.program_id = ?'); args.push(String(program_id)); }
+  if (contract_id) { where.push('a.client_id IN (SELECT client_id FROM team_roster WHERE contract_id = ? AND active = 1)'); args.push(String(contract_id)); }
+  if (client_id) { where.push('a.client_id = ?'); args.push(String(client_id)); }
+  const rows = ctx.db.all(`SELECT a.*, c.name AS client_name FROM assignments a JOIN clients c ON c.id = a.client_id WHERE ${where.join(' AND ')} ORDER BY c.name COLLATE NOCASE`, ...args);
+  const programs = new Map();
+  const days = {};
+  const effort = new Map(rows.length ? ctx.db.all(`SELECT workout_id, assignment_id, rpe FROM workout_logs WHERE assignment_id IN (${rows.map(() => '?').join(', ')}) AND rpe IS NOT NULL`, ...rows.map((r) => r.id)).map((l) => [`${l.assignment_id}:${l.workout_id}`, l.rpe]) : []);
+  for (const a of rows) {
+    if (!programs.has(a.program_id)) programs.set(a.program_id, getProgram(ctx, a.program_id));
+    const program = programs.get(a.program_id);
+    const cal = datedWorkouts(ctx, a, program);
+    for (const w of cal.workouts) {
+      if (w.date < first || w.date > last) continue;
+      const day = (days[w.date] ??= { date: w.date, workouts: [] });
+      let card = day.workouts.find((x) => x.workout_id === w.id);
+      if (!card) { const full = program.workouts.find((x) => x.id === w.id); card = { workout_id: w.id, program_id: program.id, program_name: program.name, week: w.week, day: w.day, title: w.title, blocks: (full?.blocks ?? []).map((b) => b.name), exercises: w.exercises, athletes: [], done: 0, missed: 0, upcoming: 0, unpublished: 0, efforts: [] }; day.workouts.push(card); }
+      card.athletes.push({ id: a.client_id, name: a.client_name, status: w.status, log_id: w.log_id });
+      if (w.status === 'done') card.done++; else if (w.status === 'missed') card.missed++; else if (w.status === 'unpublished') card.unpublished++; else card.upcoming++;
+      const rpe = effort.get(`${a.id}:${w.id}`); if (rpe != null) card.efforts.push(rpe);
+    }
+  }
+  for (const d of Object.values(days)) for (const c of d.workouts) { c.effort_avg = c.efforts.length ? Math.round((c.efforts.reduce((s, x) => s + x, 0) / c.efforts.length) * 10) / 10 : null; delete c.efforts; }
+  const assignments = rows.map((a) => ({ id: a.id, client_id: a.client_id, name: a.client_name, program_id: a.program_id, program_name: programs.get(a.program_id).name, published_from: a.published_from ?? null, state: !a.published_from ? 'published' : a.published_from === UNPUBLISHED ? 'unpublished' : a.published_from > localToday(ctx) ? 'scheduled' : 'published' }));
+  return { month: first.slice(0, 7), first, last, today: localToday(ctx), days: Object.values(days).sort((x, y) => x.date.localeCompare(y.date)), assignments, people: rows.length };
+}
 // Clear a week. The last week also comes off the program (down to the last week that still has workouts).
 export function deleteWeek(ctx, programId, week, body = {}) {
   const p = getProgram(ctx, programId);
@@ -1143,7 +1194,7 @@ export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)
   const calendar = datedWorkouts(ctx, a, program);
   const byId = new Map(program.workouts.map((w) => [w.id, w]));
   const dated = (item) => ({ ...byId.get(item.id), date: item.date, status: item.status, moved: item.moved });
-  const left = calendar.workouts.filter((w) => w.status !== 'done' && w.status !== 'skipped').map(dated);
+  const left = calendar.workouts.filter((w) => w.status !== 'done' && w.status !== 'skipped' && w.status !== 'unpublished').map(dated);
   const pick = pickNext(calendar.workouts, calendar.today);
   return { assignment: a, program, left, next: pick ? dated(pick) : null, calendar };
 }
@@ -1202,7 +1253,7 @@ export function clientHome(ctx, client, { at = null } = {}) {
     upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
     calendar: cal,
     history, reopen_id,
-    message: next ? null : 'Program complete. Your coach will set your next block.'
+    message: next ? null : !calendar.published ? `Your next workout opens ${calendar.published_from === '9999-12-31' ? 'when your coach releases it' : `on ${calendar.published_from}`}.` : 'Program complete. Your coach will set your next block.'
   };
 }
 // A workout as the athlete does it today: each exercise with their weight, steps, swaps and form-check asks.

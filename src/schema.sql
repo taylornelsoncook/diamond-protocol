@@ -282,7 +282,8 @@ CREATE TABLE IF NOT EXISTS assignments (
   start_date TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  training_days TEXT   -- version 62: the weekdays this athlete trains, 0 (Sunday) to 6, comma list; empty = the program's default
+  training_days TEXT,  -- version 62: the weekdays this athlete trains, 0 (Sunday) to 6, comma list; empty = the program's default
+  published_from TEXT  -- version 77: the date the athlete can see the program from (NULL = at once; a far date = unpublished while the coach rewrites it)
 );
 CREATE INDEX IF NOT EXISTS assignments_client ON assignments(client_id, active);
 -- Version 62: one workout of an athlete's program moved to another date on their own calendar (services/training-calendar.js).

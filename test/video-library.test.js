@@ -243,3 +243,32 @@ test('--free-space fetches each video from iCloud just before its turn and hands
     assert.ok(!asked.some((l) => l.startsWith('evict') && /Cloudy|Nevercloud/.test(l)), 'without the flag nothing is handed back');
   } finally { delete process.env.DP_TEST_CLOUD; rmSync(cwd, { recursive: true, force: true }); }
 });
+
+test('the list keeps videos uploaded on earlier runs from folders the command does not name', async () => {
+  const a = join(dir, 'folder-a'), b = join(dir, 'folder-b'); mkdirSync(a); mkdirSync(join(b, 'Core'), { recursive: true });
+  writeFileSync(join(a, 'Earlier squat.mp4'), 'from folder a'); writeFileSync(join(a, 'Shared lunge.mp4'), 'from folder a too');
+  writeFileSync(join(b, 'Core', 'Later plank.mp4'), 'from folder b'); writeFileSync(join(b, 'Core', 'Shared lunge.mp4'), 'folder b has it too');
+  const cwd = mkdtempSync(join(tmpdir(), 'dp-earlier-'));
+  const lines = [];
+  try {
+    assert.deepEqual([(await upload([a, '--skip-check'], { env: ENV(), log: () => {}, cwd })).uploaded], [2]);
+    const r = await upload([b, '--skip-check'], { env: ENV(), log: (l) => lines.push(l), cwd });
+    assert.deepEqual([r.found, r.uploaded], [2, 2]);
+    const csv = readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n');
+    assert.equal(csv.length, 4, 'a header, folder a\'s two and folder b\'s new one: the shared name once');
+    assert.ok(csv.some((l) => l.startsWith('Earlier squat,,')), 'folder a\'s video is still listed');
+    assert.ok(csv.some((l) => l.startsWith('Later plank,Core,')), 'folder b\'s video with its category');
+    assert.equal(csv.filter((l) => l.startsWith('Shared lunge,')).length, 1);
+    assert.ok(csv.find((l) => l.startsWith('Shared lunge,')).startsWith('Shared lunge,Core,'), 'this run\'s folder wins the shared name');
+    assert.ok(lines.some((l) => /Done: 3 exercises .*1 of them uploaded on earlier runs/.test(l)), lines.join('\n'));
+    // A state file from before names were recorded: the name comes from the file's path.
+    const stateFile = join(cwd, 'video-upload-state.json');
+    const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+    for (const v of Object.values(state)) { delete v.name; delete v.category; }
+    writeFileSync(stateFile, JSON.stringify(state));
+    await upload([b, '--skip-check'], { env: ENV(), log: () => {}, cwd });
+    const again = readFileSync(join(cwd, 'video-library.csv'), 'utf8').trim().split('\n');
+    assert.ok(again.some((l) => l.startsWith('Earlier squat,,')), 'still listed, named from its file');
+    assert.equal(again.length, 4);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});

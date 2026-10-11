@@ -866,19 +866,37 @@ async function viewPrograms(main) {
     ...storeData.products.map((p) => h('div', { class: 'p-row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, p.name), h('span', { class: `small ${p.saves_cents ? 'good-text' : 'muted'}` }, packLine(p))),
       buy('Buy', p.price_cents, async () => { await post('purchase', { product_id: p.id, athlete_id: a.id }); toast('Added to your account.'); await reload(); }, 'programs', p.fee_cents))));
 
-  // Programs and courses sold online: pay once, it shows in the athlete's app.
-  const owns = (x) => shop.owned.some((o) => o.client_id === a.id && o.item_kind === x.kind && o.item_id === x.id);
+  // Programs and courses sold online: pay once, it shows in the athlete's app. A program with a free trial starts the
+  // trial instead (the card is charged when it ends, unless the family ends it first on this tab).
+  const owned = (x) => shop.owned.find((o) => o.client_id === a.id && o.item_kind === x.kind && o.item_id === x.id);
+  const owns = (x) => !!owned(x);
+  const fromStore = !!state.buy;
+  const afterBuy = async (x) => {
+    state.buy = null;
+    await reload();
+    // From the sales page: straight into the athlete's app, which asks where they train and what gear they have.
+    if (fromStore && x.kind === 'program') { state.athleteId = a.id; state.homeTab = 'workout'; go('home'); }
+  };
+  const trialBtn = (x) => btn(`Start free ${x.trial_days}-day trial`, (e) => {
+    if (!f.card.on_file || f.card.expired) return cardProblem(`The trial is free; the card is charged ${money(x.price_cents + (x.fee_cents ?? 0))} when it ends.`, 'programs');
+    if (x.kind === 'program' && a.program && !confirm(`${x.title} replaces ${a.first_name}'s current program, ${a.program.name}. Start it anyway?`)) return;
+    if (!confirm(`Start ${x.title} free for ${x.trial_days} days? On day ${x.trial_days + 1} we charge ${money(x.price_cents + (x.fee_cents ?? 0))} to the ${cardName(f.card)}${x.fee_cents ? ` (${money(x.price_cents)} plus a ${money(x.fee_cents)} ${feeWord})` : ''}, unless you end the trial first on this tab.`)) return;
+    busy(e.currentTarget, async () => { try { await post('shop/buy', { kind: x.kind, item_id: x.id, athlete_id: a.id }); toast(`${x.title} is in ${a.first_name}'s app now, free for ${x.trial_days} days.`); await afterBuy(x); } catch (err) { if (err.status === 402) return cardProblem(err.message, 'programs'); throw err; } });
+  }, 'secondary');
   const onlineRow = (x) => {
-    const picked = state.buy === `${x.kind}:${x.id}`;
+    const picked = state.buy === `${x.kind}:${x.id}`, o = owned(x);
     return h('div', { class: 'p-row', id: picked ? 'buy-pick' : null, style: picked ? 'outline:2px solid var(--green);outline-offset:4px;border-radius:var(--radius-md)' : null },
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, x.title),
         h('span', { class: 'small muted' }, x.kind === 'program' ? `Training program · ${x.weeks} ${x.weeks === 1 ? 'week' : 'weeks'}${x.level ? ` · ${x.level}` : ''}` : `Course · ${x.lessons} ${x.lessons === 1 ? 'lesson' : 'lessons'}`),
-        x.description ? h('span', { class: 'small muted' }, x.description) : null),
-      owns(x) ? h('span', { class: 'dp-badge dp-badge--good' }, 'In the app') : buy('Buy', x.price_cents, async () => {
+        x.description ? h('span', { class: 'small muted' }, x.description) : null,
+        o?.status === 'trial' ? h('span', { class: 'small' }, `Free trial until ${fmtDay(o.trial_ends_at)}, then ${money(x.price_cents + (x.fee_cents ?? 0))} to the card. `,
+          h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', style: 'padding:2px 8px;min-height:32px', onClick: () => { if (!confirm(`End ${a.first_name}'s free trial of ${x.title}? The program closes in their app and nothing is charged.`)) return; api('DELETE', `purchases/${o.id}`).then(async () => { toast('Trial ended. Nothing was charged.'); await reload(); }).catch((err) => toast(err.message, 'warn')); } }, 'End the trial')) : null,
+        x.kind === 'program' ? h('a', { class: 'small', href: `/shop/${encodeURIComponent(x.id)}`, target: '_blank', rel: 'noopener' }, 'About this program') : null),
+      o ? h('span', { class: 'dp-badge dp-badge--good' }, o.status === 'trial' ? 'Trial, in the app' : 'In the app')
+        : x.kind === 'program' && x.trial_days > 0 ? trialBtn(x) : buy('Buy', x.price_cents, async () => {
         if (x.kind === 'program' && a.program && !confirm(`${x.title} replaces ${a.first_name}'s current program, ${a.program.name}. Buy it anyway?`)) return;
-        await post('shop/buy', { kind: x.kind, item_id: x.id, athlete_id: a.id });
-        state.buy = null;
-        toast(`${x.title} is in ${a.first_name}'s app now. We emailed you the link.`); await reload();
+        await post('shop/buy', { kind: x.kind, item_id: x.id, athlete_id: a.id, trial: false });
+        toast(`${x.title} is in ${a.first_name}'s app now. We emailed you the link.`); await afterBuy(x);
       }, 'programs', x.fee_cents));
   };
   const onlinePanel = shop.items.length ? panel('Online programs & courses', { subtitle: `Pay once and ${a.first_name} gets it in their app. No membership needed.` }, shop.items.map(onlineRow)) : null;

@@ -42,7 +42,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 71;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins)
+const SCHEMA_VERSION = 72;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -106,6 +106,7 @@ const ADDED_TABLES = {
   71: ['weekly_notes', 'leaderboard_optins']                                                          // the weekly coach's note; who is on the team board
 };
 const ADDED_COLUMNS = {
+  users: ['title TEXT', 'bio TEXT', 'photo_url TEXT'],   // version 72: the coach on a sales page
   sprint_clips: ['segment TEXT', 'auto_at TEXT', 'auto_note TEXT'],   // version 66: which part of the run the clip shows (0-10 … 40+ yards); when the app last suggested its marks
   sprint_marks: ["source TEXT NOT NULL DEFAULT 'manual'"],   // version 66: 'auto' = suggested by the app, 'manual' = placed or confirmed by a person
   assignments: ['training_days TEXT'],   // version 62: the weekdays the athlete trains (the training calendar)
@@ -134,7 +135,8 @@ const ADDED_COLUMNS = {
   lessons: ['quiz TEXT', "category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))"],   // version 24: lesson quizzes; 46: Education tabs
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER'],   // version 25: parent education; 26: sold online
   programs: ['for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER',                  // version 26: sold online
-    "kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts'))"],   // version 63: templates
+    "kind TEXT NOT NULL DEFAULT 'program' CHECK (kind IN ('program','template','workouts'))",   // version 63: templates
+    'pitch TEXT', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'trial_days INTEGER NOT NULL DEFAULT 0'],   // version 72: the sales page
   spot_offers: ['price_cents INTEGER'],                                                       // version 32: trial offers at a special price
   // ---- version 34 (batch B10): coach-written protocols, edits to built-in tests that survive the library refresh, possible ranges
   perf_tests: ['protocol TEXT', "edited TEXT NOT NULL DEFAULT '[]'"],
@@ -191,6 +193,7 @@ function migrate(raw, schema) {
   if (version < 54) rebuild(raw, schema, ['data_imports']);                           // version 54: files from any system (Apple Health and Fitbit zips), no fixed list of kinds
   if (version < 60) rebuild(raw, schema, ['login_codes', 'portal_sessions']);        // version 60: a code or session can be an athlete's (guardian_id may be empty, client_id added)
   if (version < 67) rebuild(raw, schema, ['exercise_swaps']);                         // version 67: a swap made for the athlete's gear at home (by_kind 'equipment')
+  if (version < 72) rebuild(raw, schema, ['purchases']);                              // version 72: a purchase can be a free trial ('trial') or a trial that ended unpaid ('canceled')
   for (const [v, tables] of Object.entries(ADDED_TABLES)) if (version < Number(v)) for (const t of tables) raw.exec(createStatement(schema, t));
   // Version 35: device names are matched in lower case, so results that waited under "Swift" join "swift".
   if (version < 35 && raw.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'results_queue'`).get()) {

@@ -109,7 +109,7 @@ export function exportFamily(ctx, familyId) {
       quizzes: per(`SELECT l.title AS lesson, q.score, q.total, q.passed, q.created_at FROM quiz_attempts q JOIN lessons l ON l.id = q.lesson_id WHERE q.client_id = ? ORDER BY q.created_at`, k.id),
       certificates: per(`SELECT c.title AS course, x.issued_at FROM course_certificates x JOIN courses c ON c.id = x.course_id WHERE x.client_id = ? ORDER BY x.issued_at`, k.id),
       progress_notes: per(`SELECT s.name AS testing_day, s.date, n.body AS note, n.approved_at FROM progress_notes n JOIN perf_sessions s ON s.id = n.perf_session_id WHERE n.client_id = ? AND n.approved_at IS NOT NULL ORDER BY s.date`, k.id),
-      bought_online: per(`SELECT item_kind AS kind, title, amount_cents, status, created_at, refunded_at FROM purchases WHERE client_id = ? ORDER BY created_at`, k.id),
+      bought_online: per(`SELECT item_kind AS kind, title, amount_cents, status, created_at, refunded_at, trial_ends_at, canceled_at FROM purchases WHERE client_id = ? ORDER BY created_at`, k.id),
       skill_badges: per(`SELECT b.name AS badge, a.note, a.awarded_by, a.awarded_at FROM badge_awards a JOIN skill_badges b ON b.id = a.badge_id WHERE a.client_id = ? ORDER BY a.awarded_at`, k.id),
       // Owner decision: coach-only notes never go to a family (this export is what parents download, and what the owner
       // hands over for a data request); there is no separate staff export.

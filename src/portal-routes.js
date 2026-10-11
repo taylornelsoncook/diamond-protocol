@@ -62,6 +62,7 @@ export const portalRoutes = [
   ['GET', '/portal/api/public/spot/:token', 'public', 'An open-spot offer: the session, how many spots are left, and the family\'s athletes who fit. No sign-in.', (ctx, r) => spots.publicOffer(ctx, r.params.token)],
   ['POST', '/portal/api/public/spot/:token/book', 'public', 'Book from an open-spot offer: athlete_id, optional pay=card_on_file. First to book gets the spot.', (ctx, r) => spots.bookOffer(ctx, r.params.token, r.body)],
   ['GET', '/portal/api/public/shop', 'public', 'The online store page: programs and courses for sale with prices and what\'s inside. No names.', (ctx) => shop.publicShop(ctx)],
+  ['GET', '/portal/api/public/shop/:id', 'public', 'One program\'s sales page (/shop/:id): the pitch, every week\'s workouts, demo video and cue counts, the coach (name, title, bio, photo), the price and the free trial. Only programs in the store; nothing about buyers.', (ctx, r) => shop.publicProgram(ctx, r.params.id)],
   ['GET', '/portal/api/public/schedule', 'public', 'The Book now page: classes, clinics and camp days in the next 2 weeks with open spots, and the next evaluation times. No names.', (ctx) => booknow.publicSchedule(ctx)],
   ['GET', '/portal/api/public/report', 'public', 'A progress report from a share link: send the link\'s secret in the X-Report-Link header. The family view without the date of birth. ?from= and ?to= limit the period; ?open=1 counts an open. Wrong, expired and turned-off links all get 410.', (ctx, r) => reports.openReportLink(ctx, r.reportLink, { count: r.query.open === '1', ...reports.reportPeriod(r.query) })],
   ['GET', '/portal/api/public/learn', 'public', 'Coach\'s education for the public page (/learn): published stand-alone lessons under Coach\'s education, newest first. No sign-in.', (ctx) => engage.publicLearn(ctx)],
@@ -244,11 +245,12 @@ export const portalRoutes = [
     return { sale, athlete: athleteSummary(ctx, c.id, r.guardian.id) };
   }],
   ['GET', '/portal/api/shop', 'guardian', 'Programs and courses for sale, and what your athletes already have.', (ctx, r) => shop.familyShop(ctx, r.guardian.family_id)],
-  ['POST', '/portal/api/shop/buy', 'guardian', 'Buy a program or course for an athlete with the family card: kind (program or course), item_id, athlete_id. A program replaces their current one.', async (ctx, r) => {
+  ['POST', '/portal/api/shop/buy', 'guardian', 'Buy a program or course for an athlete with the family card: kind (program or course), item_id, athlete_id. A program replaces their current one. A program with a free trial starts the trial instead (status trial, charged when it ends; trial: false pays now).', async (ctx, r) => {
     legal.requireAgreements(ctx, r.guardian);
     const c = athleteOf(ctx, r, r.body.athlete_id);
     return { ...(await shop.buyForAthlete(ctx, r.guardian, c, r.body)), athlete: athleteSummary(ctx, c.id, r.guardian.id) };
   }, 201],
+  ['DELETE', '/portal/api/purchases/:id', 'guardian', 'End a free trial of a program before it is charged: the program closes in the athlete\'s app and nothing is owed. A paid purchase can\'t be ended here.', (ctx, r) => shop.cancelTrial(ctx, r.guardian, r.params.id)],
   ['POST', '/portal/api/membership', 'guardian', 'Start a membership: plan_id, athlete_id. Needs a card on file.', async (ctx, r) => {
     requireWaiver(ctx, r);
     const c = athleteOf(ctx, r, r.body.athlete_id);

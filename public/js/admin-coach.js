@@ -604,6 +604,9 @@ async function manageDialog(id, roles) {
   const reopen = () => manageDialog(id, roles);
   const name = input({ value: u.name, maxlength: '120' }), email = input({ type: 'email', value: u.email });
   const role = select(Object.keys(roles).map((k) => [k, ROLE[k]]), { value: u.role, disabled: self });
+  // The coach card on a program's sales page (/shop/<id>).
+  const title = input({ value: u.title ?? '', maxlength: '80', placeholder: 'Head speed coach' }), photo = input({ type: 'url', value: u.photo_url ?? '', placeholder: 'https://… .jpg' });
+  const bio = h('textarea', { class: 'dp-input', rows: '4', maxlength: '1500', placeholder: 'How this coach trains, in their words.' }, u.bio ?? '');
   const roleHelp = h('p', { class: 'small muted', style: 'margin:0' }, roles[u.role]);
   role.addEventListener('change', () => { roleHelp.textContent = roles[role.value]; });
   const err = h('div', { class: 'dp-error', role: 'alert' });
@@ -612,6 +615,9 @@ async function manageDialog(id, roles) {
     const body = {};
     if (name.value.trim() !== u.name) body.name = name.value;
     if (email.value.trim().toLowerCase() !== u.email.toLowerCase()) body.email = email.value;
+    if (title.value.trim() !== (u.title ?? '')) body.title = title.value;
+    if (bio.value.trim() !== (u.bio ?? '')) body.bio = bio.value;
+    if (photo.value.trim() !== (u.photo_url ?? '')) body.photo_url = photo.value;
     if (role.value !== u.role) {
       if (role.value === 'owner' && !confirm(`Make ${u.name} an owner? Owners see all money, staff and API keys, and can change anyone's account.`)) return;
       if (role.value === 'front_desk' && (u.work.sessions || u.work.classes || u.work.hours) && !confirm(`${u.name} still leads ${workText(u.work)}. Front desk accounts don't lead sessions: hand them over next. Change the role?`)) return;
@@ -639,7 +645,10 @@ async function manageDialog(id, roles) {
     h('div', { class: 'row wrap' }, h('h2', { class: 'dp-panel-title grow' }, u.name, self ? ' (you)' : ''), tag(u.role === 'owner' ? 'neutral' : 'muted', ROLE[u.role]), u.locked ? tag('warn', 'Locked') : null, u.active ? null : tag('muted', 'Off')),
     h('form', { class: 'stack', onSubmit: save },
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(200px,1fr))' }, field('Name', name), field('Email', email, 'A new email cancels any reset link sent to the old one.'), field('Role', role, self ? 'Another owner can change your role.' : null)),
-      roleHelp, err, h('div', null, btn('Save changes', null, 'primary', { type: 'submit' }))),
+      roleHelp,
+      u.role === 'front_desk' ? null : h('details', { open: u.bio || u.title ? '' : null }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'On the sales page (programs sold online)'),
+        h('div', { class: 'stack', style: 'gap:8px' }, h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(200px,1fr))' }, field('Title', title), field('Photo link', photo, 'An https link ending in .jpg, .png or .webp.')), field('How they train', bio, 'Shown under their name when a program names them as its coach.'))),
+      err, h('div', null, btn('Save changes', null, 'primary', { type: 'submit' }))),
     section('What they lead', h('p', { class: 'small', style: 'margin:0' }, workText(u.work) ? `${workText(u.work)}${u.work.booked_clients ? `, with ${plural(u.work.booked_clients, 'client')} booked` : ''}.` : 'Nothing from now on.'),
       workText(u.work) ? h('div', null, btn('Hand over their sessions', () => handOverDialog(u), 'secondary')) : null),
     section('Signed in on', devices, u.devices.some((d) => !d.current) ? h('div', null, btn(self ? 'Sign out my other devices' : 'Sign out everywhere', (e) => busy(e.currentTarget, async () => {

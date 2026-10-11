@@ -37,6 +37,7 @@ import { runAdapt } from './services/adapt.js';
 import { runReminders as runPushReminders, cleanup as cleanupPush } from './services/push.js';
 import { workoutToday } from './services/programs.js';
 import { runWeekly } from './services/weekly.js';
+import { runTrials } from './services/shop.js';
 import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
@@ -141,7 +142,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path.startsWith('/here-api/')) rateLimit(`here:${ip}`, 60, 15 * 60000);
       if (route.path === '/portal/api/public/schedule') rateLimit(`schedule:${ip}`, 120, 15 * 60000);
       if (route.path === '/portal/api/public/certificates/:token') rateLimit(`certificate:${ip}`, 60, 15 * 60000);
-      if (route.path === '/portal/api/public/shop') rateLimit(`shop:${ip}`, 120, 15 * 60000);
+      if (route.path.startsWith('/portal/api/public/shop')) rateLimit(`shop:${ip}`, 120, 15 * 60000);
       if (route.path.startsWith('/portal/api/public/learn')) rateLimit(`learn:${ip}`, 120, 15 * 60000);
       if (/data-imports(\/preview)?$/.test(route.path) && req.method === 'POST') rateLimit(`dataimport:${ip}`, 60, 15 * 60000);   // big files, and Google Sheets links we fetch
       if (route.path.startsWith('/portal/api/public/spot/')) rateLimit(`spot:${ip}`, 60, 15 * 60000);
@@ -235,6 +236,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   ctx.workoutToday = (clientId) => workoutToday(ctx, clientId);
   runner.define('push-reminders', HOUR, () => runPushReminders(ctx));   // the morning nudge on a day with a workout (push.js)
   runner.define('weekly-notes', HOUR, () => runWeekly(ctx));   // Monday: last week's coach's notes drafted (weekly.js)
+  runner.define('program-trials', HOUR, () => runTrials(ctx));   // free trials of online programs that ended: charge the card (shop.js)
   if (jobs) runner.start();
   server.on('close', () => { runner.stop(); ctx.db.close(); });
   return { server, ctx };
@@ -363,7 +365,7 @@ async function readJson(req, limit = 1_000_000) {
 
 async function serveStatic(res, pathname) {
   pathname = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;   // /parent/ is /parent: a slash typed on the end shouldn't 404
-  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : /^\/receipt\/[\w-]+$/.test(pathname) ? 'receipt.html' : pathname.slice(1));
+  const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : /^\/receipt\/[\w-]+$/.test(pathname) ? 'receipt.html' : /^\/shop\/[\w-]+$/.test(pathname) ? 'shop-program.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });
   try {

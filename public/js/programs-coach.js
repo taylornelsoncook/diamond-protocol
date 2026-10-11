@@ -475,6 +475,7 @@ function exerciseDialog(x, cats, tags = null) {
 
 // ---------- Program builder ----------
 const builder = { focusTab: false, selected: new Set() };   // selected: the ticked days (workout ids) on the week grid
+const drag = { kind: null, id: null, days: [] };            // what is being dragged: an exercise line, or a day (with the ticked days)
 
 export async function viewProgram(main, id) {
   const [p, exs, shop] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), isOwner() ? get('/v1/shop') : null]);
@@ -536,6 +537,7 @@ export async function viewProgram(main, id) {
       btn('Save to library', (e) => busy(e.currentTarget, async () => { for (const id of ids) { const w = p.workouts.find((x) => x.id === id); await post(`/v1/workouts/${id}/save-template`, { name: w.title }); } toast(`${plural(ids.length, 'workout template')} saved. Start a day from them with Add day.`); selected.clear(); drawBar(); drawWeek(); }), 'ghost'),
       btn('Delete', (e) => { const logged = ids.reduce((n, id) => n + (p.workouts.find((x) => x.id === id)?.logs ?? 0), 0); if (!confirm(`Delete ${plural(ids.length, 'day')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in their history.` : ''}`)) return;
         busy(e.currentTarget, async () => { const r = await post(`/v1/programs/${id}/days/delete`, { workouts: ids, confirm: true }); toast(`${plural(r.deleted, 'day')} deleted.`); after(); }); }, 'ghost'),
+      btn('Send to athletes', () => sendDialog(p, ids, [], () => { selected.clear(); drawBar(); }), 'secondary'),
       btn('Clear', () => { selected.clear(); drawBar(); drawWeek(); }, 'ghost'));
   };
   const drawWeek = () => {
@@ -560,7 +562,8 @@ export async function viewProgram(main, id) {
           btn('◀', () => step(-1), 'ghost', { 'aria-label': 'Previous week', disabled: week <= 1 }), h('h2', { class: 'week-title', style: 'margin:0' }, `Week ${week} of ${p.weeks}`), btn('▶', () => step(1), 'ghost', { 'aria-label': 'Next week', disabled: week >= p.weeks })),
         h('span', { class: 'small muted grow' }, days.length ? `${plural(days.length, 'day')} · ${weekReps.toLocaleString()} reps planned${logged ? ` · logged ${plural(logged, 'time')}` : ''}` : ''),
         weekActions),
-      h('div', { class: 'pg-days', role: 'group', 'aria-label': `Week ${week}, days across` }, columns));
+      h('div', { class: 'pg-grid-wrap' }, h('div', { class: 'pg-days', role: 'group', 'aria-label': `Week ${week}, days across` }, columns),
+        edit && p.kind !== 'template' ? sendPanel(p, { selected, onSend: () => { selected.clear(); drawBar(); drawWeek(); } }) : null));
     drawBar();
   };
   const isTemplate = p.kind === 'template';
@@ -953,7 +956,17 @@ const letterOf = (i) => String.fromCharCode(65 + Math.min(i, 25));
 // one line each, and the adds at the foot.
 function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
   const line = (x) => [x.prescription, x.rest_seconds != null ? (x.rest_seconds === 0 ? 'no rest' : `${restWord(x.rest_seconds)} rest`) : null, x.tempo ? `tempo ${x.tempo}` : null, x.target_rpe != null ? `RPE ${x.target_rpe}` : null, loadText(x)].filter(Boolean).join(' · ');
-  const row = (x, n) => h('div', { class: 'pg-line' },
+  // Drag and drop (step 2): a line is dragged within the day, into a block, or onto another day; the drop lands it
+  // ahead of the line it is dropped on, at the end of a block dropped on its heading, or at the end of a day.
+  const drop = async (payload) => { try { await post(`/v1/workout-exercises/${drag.id}/move`, { workout_id: w.id, ...payload }); reload(); } catch (e) { toast(e.message, 'warn'); } };
+  const dragProps = (x) => (edit ? { draggable: 'true',
+    onDragstart: (e) => { drag.id = x.id; drag.kind = 'exercise'; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', x.id); e.currentTarget.classList.add('pg-dragging'); },
+    onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.id = null; } } : {});
+  const target = (payloadOf) => (edit ? {
+    onDragover: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('pg-over'); },
+    onDragleave: (e) => e.currentTarget.classList.remove('pg-over'),
+    onDrop: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.currentTarget.classList.remove('pg-over'); const pl = payloadOf(); if (pl.before_id === drag.id) return; drop(pl); } } : {});
+  const row = (x, n) => h('div', { class: 'pg-line', ...dragProps(x), ...target(() => ({ before_id: x.id, block_id: x.block_id ?? null })) },
     n != null ? h('span', { class: 'pg-line-n' }, String(n)) : null,
     edit ? h('button', { type: 'button', class: 'pg-line-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
       h('span', { class: 'pg-line-name' }, x.name, x.form_check ? h('span', { class: 'pg-flag', title: x.form_check_note || 'The athlete is asked to send a clip' }, 'FC') : null), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null)
@@ -961,7 +974,7 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
     x.video_url ? playBtn(x) : null);
   const blocks = w.blocks ?? [];
   const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
-  const blockHead = (b, i) => h('div', { class: 'pg-bhead' },
+  const blockHead = (b, i) => h('div', { class: 'pg-bhead', ...target(() => ({ block_id: b.id })) },
     h('span', { class: `pg-letter pg-letter--${blockTone(b.name)}`, 'aria-hidden': 'true' }, letterOf(i)),
     edit ? h('button', { type: 'button', class: 'pg-bname', 'aria-label': `${b.name}: rename, change or remove`, onClick: () => blockDialog(w, b, reload) }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null)
       : h('span', { class: 'pg-bname' }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null),
@@ -987,18 +1000,94 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
       btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost'),
       btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost'))) : null;
   const reps = repsOf(w);
+  const dayDrag = edit ? { draggable: 'true',
+    onDragstart: (e) => { drag.kind = 'day'; drag.days = selected.has(w.id) ? [...selected] : [w.id]; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', drag.days.join(',')); e.currentTarget.classList.add('pg-dragging'); },
+    onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.kind = null; } } : {};
   return h('div', { class: `pg-day${selected.has(w.id) ? ' pg-day--selected' : ''}`, 'data-day': String(w.day) },
-    h('div', { class: 'pg-day-head' }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
+    h('div', { class: 'pg-day-head', ...dayDrag, title: edit ? 'Drag onto an athlete, a team or a school in Send to' : null }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
       h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${w.logs}×` : ''}${reps ? ` · ${reps} reps` : ''}`),
       edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title)), menu),
     w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
     w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
     rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),
+    edit ? h('div', { class: 'pg-dropzone', ...target(() => ({ block_id: null })) }, 'Drop here: end of the day, outside the blocks') : null,
     edit ? h('div', { class: 'pg-day-foot' },
       btn('+ Block', () => blockDialog(w, null, reload), 'ghost'), btn('Load a complex', () => loadComplexDialog(w, reload), 'ghost'),
       btn('+ Exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' })) : null);
 }
 const restWord = (secs) => (secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`);
+// Send to (step 2): a panel of schools, teams and athletes beside the grid that takes dragged days, and the dialog that
+// sends the days (a short program of their own) from a date.
+async function sendTargets() {
+  const [orgs, teams, clients] = await Promise.all([get('/v1/organizations').catch(() => ({ data: [] })), get('/v1/teams').catch(() => ({ data: [] })), get('/v1/clients')]);
+  const activeOrg = new Set(teams.data.map((t) => t.org_id));
+  return { schools: orgs.data.filter((o) => activeOrg.has(o.id)).map((o) => ({ kind: 'org', id: o.id, label: o.name, sub: `${plural(teams.data.filter((t) => t.org_id === o.id).length, 'team')} · the whole school` })),
+    teams: teams.data.map((t) => ({ kind: 'team', id: t.id, label: t.label, sub: plural(t.roster_count, 'athlete') })),
+    athletes: clients.data.filter((c) => !c.archived_at).map((c) => ({ kind: 'client', id: c.id, label: c.name, sub: c.program ? `On ${c.program.name}` : 'No program' })) };
+}
+function sendPanel(p, { selected, onSend }) {
+  const box = h('aside', { class: 'pg-send', 'aria-label': 'Send to' });
+  const q = input({ type: 'search', placeholder: 'Find a school, team or athlete', 'aria-label': 'Find a school, team or athlete' });
+  const list = h('div', { class: 'pg-send-list' });
+  let targets = null;
+  const item = (t) => h('div', { class: 'pg-send-item', role: 'button', tabindex: '0', 'aria-label': `Send the ticked days to ${t.label}`,
+    onClick: () => { const days = [...selected]; if (!days.length) return toast('Tick the days to send first, or drag a day here.', 'warn'); sendDialog(p, days, [t], onSend); },
+    onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); } },
+    onDragover: (e) => { if (drag.kind !== 'day') return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; e.currentTarget.classList.add('pg-over'); },
+    onDragleave: (e) => e.currentTarget.classList.remove('pg-over'),
+    onDrop: (e) => { if (drag.kind !== 'day') return; e.preventDefault(); e.currentTarget.classList.remove('pg-over'); sendDialog(p, [...drag.days], [t], onSend); } },
+    h('span', { class: `pg-send-k pg-send-k--${t.kind}` }, { org: 'School', team: 'Team', client: '' }[t.kind]), h('span', { class: 'grow stack-tight', style: 'gap:0;min-width:0' }, h('span', { class: 'strong small' }, t.label), h('span', { class: 'small muted' }, t.sub)));
+  const draw = () => {
+    if (!targets) return fill(list, h('p', { class: 'small muted' }, 'Loading…'));
+    const needle = q.value.trim().toLowerCase();
+    const hit = (t) => !needle || t.label.toLowerCase().includes(needle);
+    const groups = [['Schools', targets.schools.filter(hit)], ['Teams', targets.teams.filter(hit)], ['Athletes', targets.athletes.filter(hit).slice(0, 40)]].filter(([, xs]) => xs.length);
+    fill(list, groups.length ? groups.flatMap(([title, xs]) => [h('div', { class: 'pg-send-group' }, title), ...xs.map(item)]) : h('p', { class: 'small muted' }, 'Nobody matches.'));
+  };
+  q.addEventListener('input', draw);
+  fill(box, h('div', { class: 'strong' }, 'Send to'), h('p', { class: 'small muted', style: 'margin:0' }, 'Drag a day (or the ticked days) onto a school, a team or an athlete, or tick days and click one.'), q, list);
+  draw();
+  sendTargets().then((t) => { targets = t; draw(); }).catch((e) => fill(list, h('p', { class: 'dp-error' }, e.message)));
+  return box;
+}
+function sendDialog(p, dayIds, picked, onSend) {
+  const days = dayIds.map((id) => p.workouts.find((w) => w.id === id)).filter(Boolean);
+  if (!days.length) return toast('Tick the days to send first.', 'warn');
+  const need = Math.max(1, ...days.map((w) => w.day));
+  const sched = scheduleFields({ need });
+  const name = input({ maxlength: '120', value: `${p.name} · ${days.length === 1 ? days[0].title : plural(days.length, 'day')}`, 'aria-label': 'Name for these days' });
+  const replace = h('input', { type: 'checkbox' });
+  const chosen = new Map(picked.map((t) => [`${t.kind}:${t.id}`, t]));
+  const chosenBox = h('div', { class: 'row wrap', style: 'gap:6px' });
+  const q = input({ type: 'search', placeholder: 'Add a school, team or athlete', 'aria-label': 'Add a school, team or athlete' });
+  const found = h('div', { class: 'pg-send-list', style: 'max-height:28vh' });
+  let targets = null;
+  const drawChosen = () => fill(chosenBox, chosen.size ? [...chosen.values()].map((t) => h('span', { class: 'dp-badge dp-badge--good', style: 'gap:6px' }, t.label, h('button', { type: 'button', class: 'pg-x', 'aria-label': `Remove ${t.label}`, onClick: () => { chosen.delete(`${t.kind}:${t.id}`); drawChosen(); } }, '×'))) : h('span', { class: 'small muted' }, 'Nobody chosen yet.'));
+  const drawFound = () => {
+    const needle = q.value.trim().toLowerCase();
+    if (!targets || !needle) return fill(found);
+    const all = [...targets.schools, ...targets.teams, ...targets.athletes].filter((t) => t.label.toLowerCase().includes(needle) && !chosen.has(`${t.kind}:${t.id}`)).slice(0, 12);
+    fill(found, all.map((t) => h('button', { type: 'button', class: 'pg-send-item', onClick: () => { chosen.set(`${t.kind}:${t.id}`, t); q.value = ''; drawChosen(); drawFound(); } },
+      h('span', { class: `pg-send-k pg-send-k--${t.kind}` }, { org: 'School', team: 'Team', client: '' }[t.kind]), h('span', { class: 'grow small strong' }, t.label), h('span', { class: 'small muted' }, t.sub))));
+  };
+  q.addEventListener('input', drawFound);
+  sendTargets().then((t) => { targets = t; drawFound(); }).catch(() => {});
+  drawChosen();
+  dialog(`Send ${plural(days.length, 'day')}`, h('div', { class: 'stack' },
+    h('p', { class: 'small muted', style: 'margin:0' }, `${days.map((w) => `wk ${w.week} d${w.day} ${w.title}`).join(', ')}. They go out as a short program of their own, so logging, progression and the calendar work as usual.`),
+    field('To', chosenBox), q, found,
+    field('Name on their app', name),
+    sched.el,
+    h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, replace, h('span', null, 'Move athletes who are on another program onto these days ', h('span', { class: 'muted' }, '(otherwise they are skipped and named)')))), [
+    { label: 'Send', variant: 'primary', onClick: async () => {
+      if (!chosen.size) throw new Error('Choose at least one school, team or athlete.');
+      const ids = (k) => [...chosen.values()].filter((t) => t.kind === k).map((t) => t.id);
+      const r = await post(`/v1/programs/${p.id}/days/send`, { workouts: dayIds, client_ids: ids('client'), contract_ids: ids('team'), org_ids: ids('org'), name: name.value.trim() || undefined, replace: replace.checked, ...sched.body() });
+      toast(`${plural(r.assigned.length, 'athlete')} got ${r.program.name}.${r.skipped.length ? ` Skipped: ${r.skipped.map((x) => `${first(x.name)} (${x.reason})`).join(', ')}.` : ''}`, r.skipped.length ? 'warn' : 'good');
+      onSend?.(r);
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
+}
 // A day of the week with no workout yet.
 function emptyDay(p, week, day, edit, reload) {
   return h('div', { class: 'pg-day pg-day--empty', 'data-day': String(day) },

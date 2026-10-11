@@ -185,7 +185,8 @@ CREATE TABLE IF NOT EXISTS programs (
   sport TEXT,                                                   -- version 74: the Programs list filters on these
   setting TEXT CHECK (setting IN ('facility','remote','both')), -- in the facility, out of it (home, remote), or both
   author_id TEXT REFERENCES users(id) ON DELETE SET NULL,       -- who wrote it (the staff account that created it)
-  author_name TEXT
+  author_name TEXT,
+  sent_from TEXT REFERENCES programs(id) ON DELETE SET NULL     -- version 76: a short program made by Send to athletes from this program's days; left out of the Programs list
 );
 CREATE TABLE IF NOT EXISTS workouts (
   id TEXT PRIMARY KEY,

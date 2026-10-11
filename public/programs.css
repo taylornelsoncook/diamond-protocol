@@ -114,3 +114,22 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 .pg-day-foot .dp-btn{min-height:28px;padding:2px 8px;font-size:12px}
 .pg-bar{position:sticky;bottom:12px;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;background:var(--surface);border:1px solid var(--green-mid);border-radius:var(--radius-md);box-shadow:0 8px 24px rgba(0,0,0,.45)}
 @media (max-width: 1100px){.pg-days{grid-template-columns:repeat(7,220px)}}
+
+/* Drag and drop and Send to (step 2). */
+.pg-grid-wrap{display:grid;grid-template-columns:minmax(0,1fr) 230px;gap:10px;align-items:start}
+.pg-dragging{opacity:.4}
+.pg-over{outline:2px dashed var(--green-bright);outline-offset:2px;background:var(--surface-raised)}
+.pg-line[draggable="true"]{cursor:grab}
+.pg-day-head[draggable="true"]{cursor:grab}
+.pg-dropzone{border:1px dashed var(--line-subtle);border-radius:var(--radius-sm);padding:4px 8px;font:400 11px var(--font-sans);color:var(--steel-muted);text-align:center;margin-top:2px}
+.pg-send{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:10px;display:flex;flex-direction:column;gap:8px;position:sticky;top:12px;max-height:calc(100vh - 40px)}
+.pg-send-list{display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:0}
+.pg-send-group{font:600 10px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted);margin:8px 0 2px}
+.pg-send-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid transparent;border-radius:var(--radius-sm);background:none;color:inherit;text-align:left;cursor:pointer;font:inherit;width:100%}
+.pg-send-item:hover,.pg-send-item:focus-visible{border-color:var(--green-mid);background:var(--surface-raised)}
+.pg-send-k{font:700 9px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;padding:3px 5px;border-radius:3px;background:var(--surface-raised);color:var(--steel-muted);flex-shrink:0;min-width:0}
+.pg-send-k--org{background:#F0B458;color:#0B0D0C}
+.pg-send-k--team{background:var(--green-bright);color:#0B0D0C}
+.pg-send-k:empty{display:none}
+.pg-x{background:none;border:0;color:inherit;cursor:pointer;font:700 14px/1 var(--font-sans);padding:0 2px}
+@media (max-width: 1100px){.pg-grid-wrap{grid-template-columns:1fr}.pg-send{position:static;max-height:none}}

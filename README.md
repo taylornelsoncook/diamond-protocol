@@ -139,7 +139,7 @@ Leads show as a list (search, stage, source, stale only, sort) or a pipeline boa
 **Client app** (`/app?token=…`): each client gets a private link. It shows their next workout and progress through the program. Each exercise opens with its demo video, cues, last time's numbers and best weight; athletes log every set (weight and reps), with a rest timer between sets, rate how hard it was (1 to 10) and leave a note. Everything is kept on the phone as it's logged, so a workout done with no signal is sent when the connection returns, and never twice. The done screen shows sets, time, effort and new bests; the latest workout can be reopened for 2 hours. Coming up lists the next three workouts, and finished workouts open to show every set. Logging a workout on the weight-room screen and in the app counts once. Paused, canceled or archived athletes see a message instead of workouts.
 
 **Billing rules**
-- New subscriptions start with the plan's free trial; the first charge happens when it ends.
+- A plan has no free trial unless the owner ticks "Offer a free trial" on it (Billing → Plans); with one, a new subscription starts free and the first charge happens when the trial ends.
 - Renewals charge monthly on the same day of the month.
 - A failed charge makes the membership past due (the client keeps app access) and retries every 3 days. After 4 failed automatic attempts (the scheduled retries and the charge when a family saves a new card) the subscription is canceled; retries you or a parent start don't count.
 - Pause stops charges and app access. Resume starts a new month and charges that day.

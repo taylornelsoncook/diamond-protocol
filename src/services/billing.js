@@ -41,7 +41,7 @@ export function createPlan(ctx, body) {
     id: newId('plan'),
     name,
     price_cents: v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }),
-    trial_days: v.int(body.trial_days ?? 7, 'trial_days', { min: 0, max: 90 }),
+    trial_days: v.int(body.trial_days ?? 0, 'trial_days', { min: 0, max: 90 }),   // no trial unless the owner turns one on
     created_at: ctx.now()
   };
   ctx.db.run('INSERT INTO plans (id, name, price_cents, interval, trial_days, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',

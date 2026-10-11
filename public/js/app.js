@@ -986,11 +986,17 @@ async function viewClient(main, id) {
       }); } }, h('div', { class: 'grow', style: 'min-width:200px' }, field('Signed on paper at the desk by', paperBy)), btn('Record paper waiver', null, 'secondary', { type: 'submit' })),
       fam.siblings.length ? h('p', { class: 'small' }, 'Siblings: ', ...fam.siblings.map((x, i) => [i ? ', ' : '', h('a', { href: `#/clients/${x.id}` }, x.name)])) : null,
       famData,
-      h('details', { open: openAdd }, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add sibling or parent'),
-        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { if (!sibName.value.trim()) throw new Error('Enter the sibling\'s full name.'); await addSibling(); }); } },
-          h('div', { class: 'grow' }, field('Sibling name', sibName)), field('Birthday', sibBirth), h('div', { style: 'align-self:flex-end' }, btn('Add sibling', null, 'secondary', { type: 'submit' }))),
-        h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { await post(`/v1/families/${fam.id}/guardians`, { name: gName.value, email: gEmail.value, phone: gPhone.value || undefined }); toast(`Parent added. ${gName.value.trim().split(' ')[0]} signs in with ${gEmail.value.trim()}.`); render(); }); } },
-          h('div', { class: 'grow' }, field('Parent name', gName)), field('Email', gEmail), field('Phone', gPhone), h('div', { style: 'align-self:flex-end' }, btn('Add parent', null, 'secondary', { type: 'submit' })))))
+      // Add a parent or a sibling: two plain buttons (owner's ask), each opening its short form.
+      (() => {
+        const sibBox = h('div', { hidden: !openAdd }, h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { if (!sibName.value.trim()) throw new Error('Enter the sibling\'s full name.'); await addSibling(); }); } },
+          h('div', { class: 'grow', style: 'min-width:180px' }, field('Sibling name', sibName)), field('Birthday', sibBirth), h('div', { style: 'align-self:flex-end' }, btn('Add sibling', null, 'secondary', { type: 'submit' }))));
+        const parBox = h('div', { hidden: true }, h('form', { class: 'row wrap', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { await post(`/v1/families/${fam.id}/guardians`, { name: gName.value, email: gEmail.value, phone: gPhone.value || undefined }); toast(`Parent added. ${gName.value.trim().split(' ')[0]} signs in with ${gEmail.value.trim()}.`); render(); }); } },
+          h('div', { class: 'grow', style: 'min-width:180px' }, field('Parent name', gName)), field('Email', gEmail), field('Phone', gPhone), h('div', { style: 'align-self:flex-end' }, btn('Add parent', null, 'secondary', { type: 'submit' }))));
+        const show = (box, other) => { box.hidden = !box.hidden; other.hidden = true; if (!box.hidden) box.querySelector('input')?.focus(); };
+        return h('div', { class: 'stack-tight' },
+          h('div', { class: 'row wrap', style: 'gap:8px' }, btn('Add a parent', () => show(parBox, sibBox), 'secondary'), btn('Add a sibling', () => show(sibBox, parBox), 'secondary')),
+          parBox, sibBox);
+      })())
     : null;
 
   // No family yet (a team roster athlete, or an adult): add a parent, or put them in a family you already have, so the
@@ -1002,7 +1008,7 @@ async function viewClient(main, id) {
       h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!np.name.value.trim() || !np.email.value.trim()) throw new Error('Enter the parent\'s name and email.');
         await post(`/v1/clients/${id}/family`, { parent: { name: np.name.value, email: np.email.value, phone: np.phone.value || undefined } });
-        toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/parent with ${np.email.value.trim()}.`); render();
+        toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/portal with ${np.email.value.trim()}.`); render();
       }); } }, h('div', { class: 'grow', style: 'min-width:160px' }, field('Parent name', np.name)), field('Email', np.email), field('Phone', np.phone), btn('Add parent', null, 'secondary', { type: 'submit' })),
       pick ? h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!pick.value) throw new Error('Choose the family first.');

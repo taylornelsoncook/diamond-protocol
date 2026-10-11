@@ -28,8 +28,8 @@ export function workbook(ctx, programId) {
   const taken = new Set(['plan', 'phases']);
   const sheets = [{ name: 'Plan', rows: [[`${p.name} · ${business}`], [[p.weeks === 1 ? '1 week' : `${p.weeks} weeks`, p.level ?? 'Any level', p.description ?? ''].filter(Boolean).join(' · ')], [], ...planRows], widths: [8, 14, ...Array.from({ length: days }, () => 26), 8] }];
   for (const w of [...p.workouts].sort((a, b) => a.week - b.week || a.day - b.day)) {
-    const rows = [['#', 'Exercise', 'Sets', 'Reps', 'Load', 'Tempo', 'Rest', 'Target RPE', 'Group', 'Cue', 'Form check']];
-    for (const x of w.exercises) rows.push([x.group_tag ?? '', x.name, x.sets ?? '', x.reps ?? x.prescription ?? '', loadText(x), x.tempo ?? '', restText(x.rest_seconds), x.target_rpe ?? '', x.group_kind ? `${x.group_kind} ${x.group_label}` : '', x.note ?? '', x.form_check ? `Yes${x.form_check_note ? `: ${x.form_check_note}` : ''}` : '']);
+    const rows = [['#', 'Exercise', 'Sets', 'Reps', 'Distance', 'Load', 'Tempo', 'Rest', 'Target RPE', 'Group', 'Cue', 'Form check']];
+    for (const x of w.exercises) rows.push([x.group_tag ?? '', x.name, x.sets ?? '', x.reps ?? (x.distance ? '' : x.prescription ?? ''), x.distance ?? '', loadText(x), x.tempo ?? '', restText(x.rest_seconds), x.target_rpe ?? '', x.group_kind ? `${x.group_kind} ${x.group_label}` : '', x.note ?? '', x.form_check ? `Yes${x.form_check_note ? `: ${x.form_check_note}` : ''}` : '']);
     rows.push([]);
     rows.push([`Week ${w.week}, day ${w.day}: ${w.title}`]);
     if (w.warmup) rows.push([`Warm-up: ${w.warmup.name}`, ...(w.warmup.exercises ?? []).map((e) => `${e.name} ${e.prescription ?? ''}`.trim())]);

@@ -203,7 +203,8 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   load_pct INTEGER,
   sets INTEGER,                                  -- version 49: structured set details; prescription is the short text built from them
   reps TEXT,                                     -- "8", "8-10", "5/side", "40 sec", "max"
-  tempo TEXT,
+  distance TEXT,                                 -- version 73: a distance per set ("20 yd"), beside the reps
+  tempo TEXT,                                    -- version 73: four counts, down-pause-up-pause ("3-1-1-0", X = as fast as possible)
   rest_seconds INTEGER,
   target_rpe REAL,
   load_text TEXT,                                -- a load the coach types ("135 lb", "BW"), beside the percent of a tested max

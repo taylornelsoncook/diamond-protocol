@@ -34,7 +34,7 @@ before(async () => {
   squat = (await coach('POST', '/v1/exercises', { name: 'Back squat' })).body; bench = (await coach('POST', '/v1/exercises', { name: 'Bench press' })).body;
   program = (await coach('POST', '/v1/programs', { name: 'Fall strength', weeks: 2, level: 'Beginner' })).body;
   lower = (await coach('POST', `/v1/programs/${program.id}/workouts`, { week: 1, day: 1, title: 'Lower' })).body;
-  await coach('POST', `/v1/workouts/${lower.id}/exercises`, { exercise_id: squat.id, sets: 4, reps: '6', tempo: '3-1-1', rest_seconds: 120, group_label: 'A', group_kind: 'superset', form_check: true, form_check_note: 'Side view' });
+  await coach('POST', `/v1/workouts/${lower.id}/exercises`, { exercise_id: squat.id, sets: 4, reps: '6', tempo: '3-1-1-0', rest_seconds: 120, group_label: 'A', group_kind: 'superset', form_check: true, form_check_note: 'Side view' });
   await coach('POST', `/v1/workouts/${lower.id}/exercises`, { exercise_id: bench.id, sets: 4, reps: '8', group_label: 'A' });
   const warm = (await coach('POST', '/v1/routines', { name: 'Hips', kind: 'warmup', exercises: [{ exercise_id: squat.id, prescription: '2 × 10 bodyweight' }] })).body;
   assert.equal((await coach('PATCH', `/v1/workouts/${lower.id}`, { warmup_id: warm.id })).status, 200);
@@ -48,7 +48,7 @@ test('a program becomes a template and a new program starts from it; templates s
   assert.equal(t.status, 201, JSON.stringify(t.body));
   assert.deepEqual([t.body.kind, t.body.name, t.body.weeks, t.body.level, t.body.workouts.length], ['template', 'Fall strength template', 2, 'Beginner', 2]);
   const tl = t.body.workouts.find((w) => w.title === 'Lower');
-  assert.deepEqual([tl.exercises.length, tl.exercises[0].tempo, tl.exercises[0].group_tag, tl.exercises[0].form_check, tl.warmup?.name], [2, '3-1-1', 'A1', 1, 'Hips'], 'every field, group and block comes along');
+  assert.deepEqual([tl.exercises.length, tl.exercises[0].tempo, tl.exercises[0].group_tag, tl.exercises[0].form_check, tl.warmup?.name], [2, '3-1-1-0', 'A1', 1, 'Hips'], 'every field, group and block comes along');
   assert.equal((await coach('GET', `/v1/programs/${t.body.id}/plan`)).body.phases.length, 1, 'phases too');
   // Lists: programs by default, templates on request.
   assert.deepEqual((await coach('GET', '/v1/programs')).body.data.map((p) => p.name), ['Fall strength']);
@@ -111,7 +111,7 @@ test('a version 62 database gains the kind column with every program a program, 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 72, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 73, `round ${round}`);
       assert.equal(d.get('SELECT kind FROM programs WHERE id = ?', 'prg_1').kind, 'program');
       d.close();
     }

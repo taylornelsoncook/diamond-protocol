@@ -6,7 +6,7 @@ import { readinessToday } from './engage.js';
 import { suggestAfterLog, appliedFor } from './progression.js';
 import { blocksFor, attachFields as routineFields } from './routines.js';
 import { getSetting } from './families.js';
-import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups } from './rx.js';
+import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups, splitDistance, normalizeTempo } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
 import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday, weekOf, weekStats } from './training-calendar.js';
 import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
@@ -443,7 +443,14 @@ export function slotFields(body = {}, cur = null) {
   const blankOr = (k, fn) => (body[k] === null || body[k] === '' ? null : fn());
   if (has('sets')) f.sets = blankOr('sets', () => v.int(body.sets, 'sets', { min: 1, max: MAX_SETS }));
   if (has('reps')) f.reps = blankOr('reps', () => v.str(body.reps, 'reps', { max: 80 }));
-  if (has('tempo')) f.tempo = blankOr('tempo', () => v.str(body.tempo, 'tempo', { max: 20 }));
+  if (has('distance')) f.distance = blankOr('distance', () => v.str(body.distance, 'distance', { max: 20 }));
+  // Reps typed as a distance ("20 yd", "5 × 20 yd") land in the distance field (version 73).
+  if (has('reps') && f.reps && !has('distance')) { const d = splitDistance(f.reps); if (d.distance) { f.reps = d.reps; f.distance = d.distance; } }
+  if (has('tempo')) f.tempo = blankOr('tempo', () => {
+    const t = normalizeTempo(v.str(body.tempo, 'tempo', { max: 20 }));
+    if (t === undefined) throw badRequest('Write the tempo as four counts, down-pause-up-pause, like 3-1-1-0 (X for as fast as possible).');
+    return t;
+  });
   if (has('rest_seconds')) f.rest_seconds = blankOr('rest_seconds', () => v.int(body.rest_seconds, 'rest_seconds', { min: 0, max: REST_MAX }));
   if (has('target_rpe')) f.target_rpe = blankOr('target_rpe', () => {
     const n = typeof body.target_rpe === 'number' || typeof body.target_rpe === 'string' ? Number(body.target_rpe) : NaN;
@@ -464,7 +471,7 @@ export function slotFields(body = {}, cur = null) {
     if (body.prescription !== null && typeof body.prescription !== 'string') throw badRequest('The sets and reps must be text, like 3 × 8.');
     const s = splitRx(body.prescription);
     if (String(body.prescription ?? '').trim().length > 80) throw badRequest('Keep the sets and reps to 80 characters.');
-    f.sets = s.sets; f.reps = s.reps;
+    f.sets = s.sets; f.reps = s.reps; f.distance = s.distance;
     if (!has('load_text')) f.load_text = s.load_text;       // the text is the whole story: a load or RPE it no longer has goes too
     if (!has('target_rpe')) f.target_rpe = s.target_rpe;
   }

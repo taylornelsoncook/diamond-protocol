@@ -1179,7 +1179,8 @@ CREATE TABLE IF NOT EXISTS courses (
   age_min INTEGER,                                                                           -- for parents of athletes this age (version 25)
   age_max INTEGER,
   for_sale INTEGER NOT NULL DEFAULT 0,                                                       -- sold online; locked for athletes who haven't bought it (version 26)
-  price_cents INTEGER
+  price_cents INTEGER,
+  in_order INTEGER NOT NULL DEFAULT 1                                                        -- version 75: lessons unlock in order (finish one to open the next)
 );
 CREATE TABLE IF NOT EXISTS lessons (
   id TEXT PRIMARY KEY,

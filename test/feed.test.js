@@ -166,7 +166,7 @@ test('a version 77 database gains the feed tables, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 79, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 80, `round ${round}`);
       assert.deepEqual(d.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'feed_%' ORDER BY name`).map((t) => t.name), ['feed_comments', 'feed_posts', 'feed_reactions']);
       assert.equal(d.get('SELECT name FROM programs WHERE id = ?', 'p1').name, 'Speed');
       d.close();

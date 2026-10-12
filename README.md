@@ -113,6 +113,7 @@ The seed prints your login and a sample client app link. To start over, delete t
 **Sprint position examples:** every position card shows a stick-figure example of the position (toe-off, MVP, strike, touchdown, full support, and the cut's four), the stance leg amber and the swing leg green like the overlay; while tapping, the next point to tap is ringed on it.
 **The Schedule calendar:** the Schedule page opens with a month calendar, sessions and bookings per day, that jumps up to two years ahead; click a day to show that week. Past the eight weeks that sessions exist, the weekly classes show as planned from the class list.
 **The sign-up link:** one link at the top of Leads for QR codes, the website, social posts, emails, texts, flyers and ads, with a QR code to download. Everyone who fills it in lands in Leads tagged with where they came from, and moves to Member on their first purchase.
+**Courses in order:** a course's lessons unlock one at a time: finish a lesson (and pass its quiz, where there is one) to open the next, for athletes and parents alike. The coach can turn the order off per course.
 
 **Sprint marking in five taps:** every position is marked with the hip, both knees and both ankles (the shoulder optional, for trunk lean), named in plain words for that position, and the angles, grades and cues show on Save. The references start from a research brief on max velocity, acceleration and change of direction, which also lives under Education as a PDF for the staff.
 

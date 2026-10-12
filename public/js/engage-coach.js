@@ -403,17 +403,19 @@ function courseDialog(course, preset = {}) {
   const audience = select([['athletes', 'Athletes (and their parents with them)'], ['parents', 'Parents only: shows under For parents in the parent portal']], { value: course?.audience ?? preset.audience ?? 'athletes' });
   const ageMin = input({ type: 'number', min: '3', max: '25', inputmode: 'numeric', value: course?.age_min ?? '', placeholder: 'Any' }), ageMax = input({ type: 'number', min: '3', max: '25', inputmode: 'numeric', value: course?.age_max ?? '', placeholder: 'Any' });
   const ages = h('div', { class: 'form-grid', hidden: audience.value !== 'parents' }, field('For parents of athletes aged from', ageMin), field('to', ageMax));
+  const inOrder = h('input', { type: 'checkbox', checked: course ? course.in_order !== false : true });
   audience.addEventListener('change', () => { ages.hidden = audience.value !== 'parents'; });
   const err = h('div', { class: 'dp-error', role: 'alert' });
   const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
     try {
-      const body = { title: title.value, description: desc.value || null, published: pub.checked, audience: audience.value, age_min: ageMin.value || null, age_max: ageMax.value || null };
+      const body = { title: title.value, description: desc.value || null, published: pub.checked, audience: audience.value, age_min: ageMin.value || null, age_max: ageMax.value || null, in_order: inOrder.checked };
       if (course) await patch(`/v1/courses/${course.id}`, body); else await post('/v1/courses', body);
       d.close(); toast(course ? 'Course saved.' : 'Course created. Add lessons to it.'); refresh();
     } catch (x) { err.textContent = x.message; }
   }); } },
     h('h2', { class: 'week-title', style: 'color:var(--steel)' }, course ? 'Edit course' : 'New course'),
     field('Title', title), field('Description', desc), field('Who it\'s for', audience), ages,
+    h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, inOrder, h('span', null, 'Lessons unlock in order: finish one (and pass its quiz, where there is one) to open the next')),
     h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, pub, h('span', null, 'Published')),
     err, h('div', { class: 'row' }, btn(course ? 'Save course' : 'Create course', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
   title.focus();

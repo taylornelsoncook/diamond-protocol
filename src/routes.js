@@ -68,7 +68,7 @@ import * as today from './services/today.js';
 import * as portal from './services/portal.js';
 import * as profiles from './services/profiles.js';
 import { portalRoutes } from './portal-routes.js';
-import { portalInvite } from './services/notify.js';
+import { portalInvite, finishProfile } from './services/notify.js';
 import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocalDay } from './util.js';
 
 // Coaches work only with the sales they rang up; anyone else's reads as not found.
@@ -665,6 +665,13 @@ export const routes = [
   ['GET', '/v1/testing-sessions/:id', 'any', 'Performance', 'A testing day with every athlete\'s results and previous best (from before this day) per test, metric and side.', (ctx, r) => perf.getSession(ctx, r.params.id)],
   ['PATCH', '/v1/testing-sessions/:id', 'any', 'Performance', 'Change the name, date, tests or athletes. Taking off a test or athlete with results on this day deletes those results: send confirm: true (409 confirmation_required with the count otherwise).', (ctx, r) => perf.updateSession(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/testing-sessions/:id', 'any', 'Performance', 'Delete a testing day and its results (?confirm=true when it has results). Only the owner can delete a shared day.', (ctx, r) => perf.deleteSession(ctx, r.params.id, { confirm: r.query.confirm === 'true', role: r.user?.role ?? 'owner' })],
+  ['POST', '/v1/testing-sessions/:id/quick-athlete', 'any', 'Performance', 'New athlete at a testing day: first_name, last_name, email, phone, and parent_name when the email is a parent\'s. Makes the profile and the family account on that email, adds them to the day and emails them to finish the profile (the waiver is the only thing required). 409 when the email already signs in somewhere. Owners, coaches and front desk.', async (ctx, r) => {
+    const day = perf.getSession(ctx, r.params.id);
+    const c = await clients.quickAdd(ctx, r.body, { staff: r.user });
+    const session = perf.addSessionAthlete(ctx, r.params.id, { client_id: c.id });
+    const sent_to = await finishProfile(ctx, c.id, { dayName: day.name });
+    return { client: { id: c.id, name: c.name, athlete_id: c.athlete_id, family_id: c.family?.id ?? null }, session, sent_to };
+  }, 201],
   ['POST', '/v1/testing-sessions/:id/athletes', 'any', 'Performance', 'Add a walk-up to a testing day: athlete_id, client_id or roster_id (their profile). Archived clients are refused.', (ctx, r) => perf.addSessionAthlete(ctx, r.params.id, r.body)],
   ['DELETE', '/v1/testing-sessions/:id/athletes/:athlete', 'any', 'Performance', 'Take an athlete (client or roster id) off a testing day. Their results on the day are deleted, so that needs ?confirm=true.', (ctx, r) => perf.removeSessionAthlete(ctx, r.params.id, r.params.athlete, { confirm: r.query.confirm === 'true' })],
   ['GET', '/v1/testing-sessions/:id/share-preview', 'any', 'Performance', 'Who sharing reaches: athletes with and without results, families that will be emailed, athletes with no parent email, and (after sharing) who has results added since families were last emailed.', (ctx, r) => perf.sharePreview(ctx, r.params.id)],

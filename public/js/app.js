@@ -3896,6 +3896,23 @@ async function viewTestingDay(main, id) {
   addTest?.addEventListener('change', () => busy(addTest, async () => { if (!addTest.value) return; await patch(`/v1/testing-sessions/${id}`, { tests: [...day.tests.map((t) => t.key), addTest.value] }); testingState.testKey = addTest.value; toast('Test added.'); redraw(); }));
   const walkUp = select([['', 'Add a walk-up athlete…'], ...clientsList.data.filter((c) => !athletes.some((a) => a.client_id === c.id)).map((c) => [c.id, `${c.name} (${c.athlete_id})`])], { 'aria-label': 'Add a walk-up athlete' });
   walkUp.addEventListener('change', () => busy(walkUp, async () => { if (!walkUp.value) return; await post(`/v1/testing-sessions/${id}/athletes`, { client_id: walkUp.value }); toast('Added.'); redraw(); }));
+  // A brand-new athlete at the door: name, email and phone make the profile and the account, and an email asks them to
+  // finish the profile (the waiver is the only thing required). Owners, coaches and front desk.
+  const newAthlete = btn('New athlete', () => {
+    const fn = input({ 'aria-label': 'First name', autocomplete: 'off' }), ln = input({ 'aria-label': 'Last name', autocomplete: 'off' }), em = input({ type: 'email', 'aria-label': 'Email', autocomplete: 'off' }), ph = input({ type: 'tel', 'aria-label': 'Phone', autocomplete: 'off' });
+    const isParent = h('input', { type: 'checkbox' }), pn = input({ 'aria-label': 'Parent name', placeholder: 'Parent\'s name' });
+    const parentRow = h('div', { hidden: true }, field('Parent\'s name', pn));
+    isParent.addEventListener('change', () => { parentRow.hidden = !isParent.checked; if (isParent.checked) pn.focus(); });
+    teamDialog('New athlete', h('div', { class: 'stack' },
+      h('div', { class: 'form-grid' }, field('First name', fn), field('Last name', ln), field('Email', em), field('Phone', ph)),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, isParent, 'The email and phone are a parent\'s'), parentRow,
+      h('p', { class: 'small muted', style: 'margin:0' }, 'This makes the profile and the account on that email, adds them to today, and emails them to finish the profile. The waiver is the only thing they must do; birthday, sport and the rest can wait.')),
+      [{ label: 'Add and email', variant: 'primary', onClick: async () => {
+        const r = await post(`/v1/testing-sessions/${id}/quick-athlete`, { first_name: fn.value, last_name: ln.value, email: em.value, phone: ph.value || null, parent_name: isParent.checked ? pn.value : null });
+        toast(`${r.client.name} added (${r.client.athlete_id}). Email sent to ${r.sent_to.join(', ')}.`); redraw();
+      } }, { label: 'Cancel' }]);
+    fn.focus();
+  }, 'secondary');
   const headerActions = h('div', { class: 'row wrap' },
     manage ? (day.shared_at ? btn('Shared with parents ✓', (e) => { if (confirm('Hide these results from families again?')) busy(e.currentTarget, async () => { await del(`/v1/testing-sessions/${id}/share`); toast('Hidden from families.'); redraw(); }); }, 'outline')
       : btn('Share with parents', (e) => busy(e.currentTarget, share), day.tests.some((t) => t.timed) ? 'secondary' : 'primary')) : null,
@@ -4069,7 +4086,7 @@ async function viewTestingDay(main, id) {
       test.description && testingState.view === 'entry' ? h('p', { class: 'small muted' }, test.description) : null,
       find,
       testingState.view === 'rankings' ? rankings() : athletes.length ? (rows.flat().length ? rows : h('p', { class: 'muted small' }, 'No athletes match. Clear the search.')) : h('p', { class: 'muted' }, 'No athletes yet. Add a walk-up below.'),
-      h('div', { style: 'max-width:360px;margin-top:8px' }, walkUp)),
+      h('div', { class: 'row wrap', style: 'margin-top:8px;align-items:center' }, h('div', { style: 'max-width:360px;flex:1 1 240px' }, walkUp), newAthlete)),
     notes?.data.length ? notesPanel(id, notes) : null);
   // Put the cursor back where the coach was typing.
   const f = testingState.focus; testingState.focus = null;

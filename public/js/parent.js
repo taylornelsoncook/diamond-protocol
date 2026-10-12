@@ -59,7 +59,10 @@ async function boot() {
   const buy = q.get('buy');
   const buying = state.me && /^(program|course):[\w-]+$/.test(buy ?? '');
   if (buying) state.buy = buy;
-  if (state.me && q.has('welcome')) {
+  if (state.me && q.has('finish')) {   // added at a testing day: the waiver is the one thing needed, the rest can wait
+    state.tab = 'family'; state.finishFirst = true; history.replaceState(null, '', HERE);
+    setTimeout(() => toast('Welcome! Sign the waiver first. Birthday, sport, an emergency contact and a card can wait.'), 300);
+  } else if (state.me && q.has('welcome')) {
     state.tab = 'family'; history.replaceState(null, '', HERE);
     const claim = q.has('claim') ? ' We\'ll check the Athlete ID you gave with your coach.' : '';
     setTimeout(() => toast(buying ? `Welcome! Add a card here, then buy it on the Programs tab.${claim}` : `Welcome! Sign the waiver and add a card, then you can book.${claim}`), 300);
@@ -961,7 +964,7 @@ async function viewFamily(main) {
   const scrollTo = (id) => { const el = document.getElementById(id); if (el) { if (el.tagName === 'DETAILS') el.open = true; el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } };
   const TARGET = { terms: 'fam-terms', waiver: 'fam-waiver', card: 'fam-card', card_expired: 'fam-card', card_expiring: 'fam-card', declined: 'fam-card' };
   const fin = state.me.to_finish ?? [];
-  const finish = fin.length ? panel('To finish', { subtitle: `${fin.length} ${fin.length === 1 ? 'thing' : 'things'} left` }, fin.map((x) => h('div', { class: 'p-row' },
+  const finish = fin.length ? panel('To finish', { subtitle: state.finishFirst ? `${fin.length} ${fin.length === 1 ? 'thing' : 'things'} left. The waiver is the one thing needed before training; the rest can wait.` : `${fin.length} ${fin.length === 1 ? 'thing' : 'things'} left` }, fin.map((x) => h('div', { class: 'p-row' },
     h('span', { class: `grow ${['card_expired', 'declined'].includes(x.key) ? 'warn-text' : ''}` }, x.text),
     btn('Go', () => (x.athlete_id ? (openAthletes.add(x.athlete_id), render({ keepScroll: true }), setTimeout(() => scrollTo(`ath-${x.athlete_id}`), 50)) : scrollTo(TARGET[x.key])), 'outline')))) : null;
 

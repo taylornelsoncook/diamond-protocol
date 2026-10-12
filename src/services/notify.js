@@ -32,6 +32,21 @@ export async function welcomeFamily(ctx, familyId, { selfSignup = false } = {}) 
       `Before the first session:\n1. Sign the waiver (Family tab)\n2. Add a card for memberships, packs and camps (Family tab)\n3. Book a class, private session or evaluation (Book tab)\n\nSee you soon,\n${biz(ctx)}`);
   }
 }
+// A new athlete added at a testing day: the account holder (a parent, or the athlete) is asked to finish the profile.
+// The waiver is the one thing needed before training; everything else can wait. Always sent (it is the point of the add).
+export async function finishProfile(ctx, clientId, { dayName = null } = {}) {
+  const c = ctx.db.get('SELECT name, athlete_id, family_id FROM clients WHERE id = ?', clientId);
+  const out = [];
+  for (const g of familyEmails(ctx, c.family_id)) {
+    const self = g.relationship === 'self' || g.name === c.name;
+    await sendEmail(ctx, { to: g.email, subject: `Finish ${self ? 'your' : `${first(c.name)}'s`} profile at ${biz(ctx)}`,
+      text: `Hi ${first(g.name)},\n\n${biz(ctx)} added ${self ? 'you' : c.name} to ${dayName ? `the testing day "${dayName}"` : 'a testing day'} and set up ${self ? 'your' : 'your family'} account (Athlete ID ${c.athlete_id}).\n\n` +
+        `Sign in at ${base(ctx)}/portal?finish=1 with this email address. We'll email you a code, and once you're in you can set a password if you'd rather.\n\n` +
+        `One thing we need before ${self ? 'you train' : `${first(c.name)} trains`}: sign the waiver (Family tab). Everything else (birthday, sport, an emergency contact, a card) can wait until you're ready.\n\nSee you soon,\n${biz(ctx)}` });
+    out.push(g.email);
+  }
+  return out;
+}
 export async function welcomeClient(ctx, clientId) {
   if (!on(ctx, 'welcome')) return;
   const c = ctx.db.get('SELECT name, email, access_token, family_id FROM clients WHERE id = ?', clientId);

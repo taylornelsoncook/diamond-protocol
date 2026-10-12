@@ -710,7 +710,7 @@ CREATE TABLE IF NOT EXISTS leads (
   sport TEXT,
   message TEXT,
   -- version 45: social, camp, team (a school or club), import (CSV) and client (put back in the pipeline from a profile)
-  source TEXT NOT NULL CHECK (source IN ('inquiry','signup_unfinished','manual','phone','walk_in','event','referral','social','camp','team','import','client')),
+  source TEXT NOT NULL CHECK (source IN ('inquiry','signup_unfinished','manual','phone','walk_in','event','referral','social','camp','team','import','client','qr','website','email','text','flyer','ad')),   -- version 75: the sign-up link's channels
   -- version 45: trial (a free trial membership) between evaluation and member
   status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','signed_up','evaluation','trial','member','lost')),
   texts_ok INTEGER NOT NULL DEFAULT 0,       -- they ticked "text me about this" on the form

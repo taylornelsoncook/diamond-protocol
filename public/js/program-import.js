@@ -24,6 +24,51 @@ function readFile(file) {
   });
 }
 
+// One exercise line of a draft, shared by Build from a PDF, Dictate a workout and Build from a picture. Library mode:
+// type or pick a library name (an exact match starts filled in; a close one is only offered, with Use it). New mode:
+// the file's name goes into the library as a new exercise. where: the words before the name ("In the file", "On the board").
+export function exerciseRow(x, { byName, listId, status, remove, where = 'In the file' }) {
+  let mode = x.how === 'exact' || x.how === 'suggested' ? 'library' : 'new';
+  const pick = input({ list: listId, value: x.how === 'exact' ? x.exercise_name : '', placeholder: 'Type to search your library', 'aria-label': `Library exercise for ${x.name}`, autocomplete: 'off' });
+  const newName = input({ value: x.name, maxlength: '120', 'aria-label': 'New exercise name' });
+  const cat = select([['', 'No category'], ...status.categories.map((c) => [c, c])], { 'aria-label': 'New exercise category' });
+  const badge = h('span', { class: 'small' });
+  const useIt = x.how === 'suggested' ? btn(`Use ${x.exercise_name}`, () => { pick.value = x.exercise_name; mode = 'library'; sync(); }, 'ghost') : null;
+  const addNew = btn(`Add "${x.name}" as a new exercise`, () => { mode = 'new'; sync(); }, 'ghost');
+  const libBox = h('div', { class: 'stack-tight' }, pick, h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, useIt, addNew));
+  const newBox = h('div', { class: 'stack-tight' }, h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { class: 'grow', style: 'min-width:160px' }, newName), h('div', { style: 'width:160px' }, cat)),
+    h('div', null, btn('Choose from the library instead', () => { mode = 'library'; sync(); }, 'ghost')));
+  const chosen = () => byName.get(pick.value.trim().toLowerCase()) ?? null;
+  const sync = () => {
+    libBox.style.display = mode === 'library' ? '' : 'none';
+    newBox.style.display = mode === 'new' ? '' : 'none';
+    const e = chosen();
+    if (useIt) useIt.style.display = mode === 'library' && !e ? '' : 'none';
+    addNew.style.display = e ? 'none' : '';
+    if (mode === 'new') { badge.className = 'small muted'; badge.textContent = byName.has(newName.value.trim().toLowerCase()) ? 'Already in your library: choose it instead' : 'New to your library'; }
+    else if (!e) { badge.className = 'small warn-text'; badge.textContent = pick.value.trim() ? 'Not in your library: pick a name from the list' : x.how === 'suggested' ? `Closest match: ${x.exercise_name}. Use it, or choose another` : 'Choose one'; }
+    else { badge.className = 'small good-text'; badge.textContent = x.how === 'exact' && e.id === x.exercise_id ? 'Matched' : 'Chosen'; }
+  };
+  pick.addEventListener('input', sync); newName.addEventListener('input', sync); sync();
+  const useSuggestion = () => { if (x.how === 'suggested' && mode === 'library' && !chosen()) { pick.value = x.exercise_name; sync(); return 1; } return 0; };
+  const sf = setFields(x, { hint: false });
+  const lt = select(LOAD_OPTIONS, { value: x.load_test ?? '', 'aria-label': 'Weight from a tested max' });
+  const lp = input({ type: 'number', min: '30', max: '110', inputmode: 'numeric', placeholder: '%', value: x.load_pct ? String(x.load_pct) : '', 'aria-label': 'Percent of max' });
+  const syncLoad = () => { lp.disabled = !lt.value; };
+  lt.addEventListener('change', syncLoad); syncLoad();
+  const el = h('div', { class: 'list-item', style: 'align-items:flex-start' },
+    h('div', { class: 'grow stack-tight', style: 'min-width:0' },
+      h('div', { class: 'row', style: 'gap:8px;align-items:center' },
+        h('div', { class: 'grow row wrap', style: 'gap:8px;align-items:center' }, h('span', { class: 'small muted' }, `${where}: `, h('strong', null, x.name)), badge),
+        btn('Remove', () => remove(), 'ghost', { 'aria-label': `Remove ${x.name}` })),
+      libBox, newBox,
+      sf.el,
+      h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { style: 'flex:1 1 180px;min-width:0' }, lt), h('div', { style: 'flex:0 0 5.5rem' }, lp))));
+  return { el, useSuggestion, value: () => ({
+    ...(mode === 'new' ? { new_exercise: { name: newName.value.trim(), category: cat.value || null } } : { exercise_id: chosen()?.id ?? null }),
+    ...sf.body(), ...(lt.value ? { load_test: lt.value, load_pct: Number(lp.value) } : { load_test: null }) }) };
+}
+
 export async function importView(main, deps, mode = 'file') {
   const spoken = mode === 'dictate';
   const get = (p) => deps.api('GET', p), post = (p, b) => deps.api('POST', p, b);
@@ -103,49 +148,7 @@ export async function importView(main, deps, mode = 'file') {
     const days = [];
     const list = h('div', { class: 'stack' });
 
-    // One exercise line. Library mode: type or pick a library name (an exact match starts filled in; a close one is
-    // only offered, with Use it). New mode: the file's name goes into the library as a new exercise.
-    function rowFor(x, remove) {
-      let mode = x.how === 'exact' || x.how === 'suggested' ? 'library' : 'new';
-      const pick = input({ list: listId, value: x.how === 'exact' ? x.exercise_name : '', placeholder: 'Type to search your library', 'aria-label': `Library exercise for ${x.name}`, autocomplete: 'off' });
-      const newName = input({ value: x.name, maxlength: '120', 'aria-label': 'New exercise name' });
-      const cat = select([['', 'No category'], ...status.categories.map((c) => [c, c])], { 'aria-label': 'New exercise category' });
-      const badge = h('span', { class: 'small' });
-      const useIt = x.how === 'suggested' ? btn(`Use ${x.exercise_name}`, () => { pick.value = x.exercise_name; mode = 'library'; sync(); }, 'ghost') : null;
-      const addNew = btn(`Add "${x.name}" as a new exercise`, () => { mode = 'new'; sync(); }, 'ghost');
-      const libBox = h('div', { class: 'stack-tight' }, pick, h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, useIt, addNew));
-      const newBox = h('div', { class: 'stack-tight' }, h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { class: 'grow', style: 'min-width:160px' }, newName), h('div', { style: 'width:160px' }, cat)),
-        h('div', null, btn('Choose from the library instead', () => { mode = 'library'; sync(); }, 'ghost')));
-      const chosen = () => byName.get(pick.value.trim().toLowerCase()) ?? null;
-      const sync = () => {
-        libBox.style.display = mode === 'library' ? '' : 'none';
-        newBox.style.display = mode === 'new' ? '' : 'none';
-        const e = chosen();
-        if (useIt) useIt.style.display = mode === 'library' && !e ? '' : 'none';
-        addNew.style.display = e ? 'none' : '';
-        if (mode === 'new') { badge.className = 'small muted'; badge.textContent = byName.has(newName.value.trim().toLowerCase()) ? 'Already in your library: choose it instead' : 'New to your library'; }
-        else if (!e) { badge.className = 'small warn-text'; badge.textContent = pick.value.trim() ? 'Not in your library: pick a name from the list' : x.how === 'suggested' ? `Closest match: ${x.exercise_name}. Use it, or choose another` : 'Choose one'; }
-        else { badge.className = 'small good-text'; badge.textContent = x.how === 'exact' && e.id === x.exercise_id ? 'Matched' : 'Chosen'; }
-      };
-      pick.addEventListener('input', sync); newName.addEventListener('input', sync); sync();
-      const useSuggestion = () => { if (x.how === 'suggested' && mode === 'library' && !chosen()) { pick.value = x.exercise_name; sync(); return 1; } return 0; };
-      const sf = setFields(x, { hint: false });
-      const lt = select(LOAD_OPTIONS, { value: x.load_test ?? '', 'aria-label': 'Weight from a tested max' });
-      const lp = input({ type: 'number', min: '30', max: '110', inputmode: 'numeric', placeholder: '%', value: x.load_pct ? String(x.load_pct) : '', 'aria-label': 'Percent of max' });
-      const syncLoad = () => { lp.disabled = !lt.value; };
-      lt.addEventListener('change', syncLoad); syncLoad();
-      const el = h('div', { class: 'list-item', style: 'align-items:flex-start' },
-        h('div', { class: 'grow stack-tight', style: 'min-width:0' },
-          h('div', { class: 'row', style: 'gap:8px;align-items:center' },
-            h('div', { class: 'grow row wrap', style: 'gap:8px;align-items:center' }, h('span', { class: 'small muted' }, 'In the file: ', h('strong', null, x.name)), badge),
-            btn('Remove', () => remove(), 'ghost', { 'aria-label': `Remove ${x.name}` })),
-          libBox, newBox,
-          sf.el,
-          h('div', { class: 'row wrap', style: 'gap:8px' }, h('div', { style: 'flex:1 1 180px;min-width:0' }, lt), h('div', { style: 'flex:0 0 5.5rem' }, lp))));
-      return { el, useSuggestion, value: () => ({
-        ...(mode === 'new' ? { new_exercise: { name: newName.value.trim(), category: cat.value || null } } : { exercise_id: chosen()?.id ?? null }),
-        ...sf.body(), ...(lt.value ? { load_test: lt.value, load_pct: Number(lp.value) } : { load_test: null }) }) };
-    }
+    const rowFor = (x, remove) => exerciseRow(x, { byName, listId, status, remove });
 
     function dayFor(w) {
       const week = input({ type: 'number', min: '1', max: '52', inputmode: 'numeric', value: String(Math.min(52, w.week + shift)), 'aria-label': 'Week', style: 'width:5rem' });

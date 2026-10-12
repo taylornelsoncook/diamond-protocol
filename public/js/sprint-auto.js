@@ -2,7 +2,8 @@
 // here in the browser (served from our own /vendor/mediapipe, Apache 2.0) on every frame, sprint-detect.js turns the
 // body points into marks, and the page saves them as suggestions people can override. The clip never leaves the
 // device for this: it's read where it plays (the phone's own file right after upload, or the private play link).
-import { findEvents, framePoints } from './sprint-detect.js';
+import { findEvents, framePoints, framesFromTracks } from './sprint-detect.js';
+import { toGray, pyramid, trackPoints } from './lk-track.js';
 
 const BASE = '/vendor/mediapipe/';
 let model = null, clock = 0;
@@ -51,4 +52,54 @@ export async function suggest({ src, kind, steps = 2, fileFps = 30, crossOrigin 
   v.removeAttribute('src'); v.load();
   onProgress('Working out the steps…', 1);
   return { ...findEvents(frames, { kind, steps }), video_w: w, video_h: h, frames };   // frames: the raw points, for checking (not saved)
+}
+
+// Tracked taps (owner's ask: "manually select the points and have them track the points through the full video and
+// decipher the 5 positions on their own"): the coach taps the hip, the near knee and ankle, the far knee and ankle
+// (and the shoulder) on one frame; each point is followed frame by frame both ways from there with lk-track.js on a
+// scaled-down grey copy of the picture (at most 640 wide, so a phone keeps up), a lost point stays lost for that frame,
+// and the tracks become the frames findEvents reads. seeds: { t, points: { hip, knee_near, ankle_near, knee_far,
+// ankle_far, shoulder? } } in the video's own pixels. Returns the same shape as suggest, plus tracks for the overlay.
+export const TRACK_KEYS = ['hip', 'knee_near', 'ankle_near', 'knee_far', 'ankle_far'];
+export async function trackSuggest({ src, kind, steps = 2, fileFps = 30, crossOrigin = false, seeds, onProgress = () => {} }) {
+  onProgress('Reading the clip…', 0);
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto';
+  if (crossOrigin) v.crossOrigin = 'anonymous';
+  v.src = src;
+  await once(v, 'loadeddata');
+  const w = v.videoWidth, h = v.videoHeight, fps = fileFps || 30, total = Math.floor((v.duration || 0) * fps);
+  if (!total) throw new Error('The video has no frames to read.');
+  const scale = Math.min(1, 640 / w), cw = Math.round(w * scale), ch = Math.round(h * scale);
+  const canvas = document.createElement('canvas'); canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const every = Math.max(1, Math.round(fps / 120), Math.ceil(total / 1500));
+  const grab = async (i) => { v.currentTime = (i + 0.5) / fps; await once(v, 'seeked'); ctx.drawImage(v, 0, 0, cw, ch); return pyramid(toGray(ctx.getImageData(0, 0, cw, ch).data, cw, ch), cw, ch); };
+  const seedFrame = Math.min(total - 1, Math.max(0, Math.round(seeds.t * fps - 0.5)));
+  const start = seedFrame - (seedFrame % every);
+  const down = Object.fromEntries(Object.entries(seeds.points).map(([k, p]) => [k, p ? [p[0] * scale, p[1] * scale] : null]));
+  const up = (pts) => Object.fromEntries(Object.entries(pts).map(([k, p]) => [k, p ? [p[0] / scale, p[1] / scale] : null]));
+  const byFrame = new Map();
+  byFrame.set(start, { t: (start + 0.5) / fps, pts: up(down) });
+  let done = 0;
+  const walk = async (step) => {
+    let prev = await grab(start), pts = down;
+    for (let i = start + step; i >= 0 && i < total; i += step) {
+      const next = await grab(i);
+      pts = trackPoints(prev, next, pts);
+      byFrame.set(i, { t: (i + 0.5) / fps, pts: up(pts) });
+      prev = next;
+      if (++done % 10 === 0) onProgress(`Tracking the points… ${Math.round((done / (total / every)) * 100)}%`, done / (total / every));
+      if (Object.values(pts).every((p) => !p)) break;   // every point lost: nothing more to follow this way
+    }
+  };
+  await walk(every);
+  await walk(-every);
+  v.removeAttribute('src'); v.load();
+  onProgress('Working out the steps…', 1);
+  const tracks = [...byFrame.keys()].sort((a, b) => a - b).map((i) => byFrame.get(i));
+  const frames = framesFromTracks(tracks);
+  const found = findEvents(frames, { kind, steps });
+  const lost = tracks.filter((f) => !f.pts.hip).length;
+  return { ...found, note: `${found.note ? `${found.note} ` : ''}Tracked from your taps${lost ? ` (the points were lost in ${lost} of ${tracks.length} frames)` : ''}.`.trim(), video_w: w, video_h: h, frames, tracks };
 }

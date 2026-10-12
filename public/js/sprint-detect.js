@@ -164,3 +164,25 @@ export function contactsOf(frames, { kind = 'top_speed' } = {}) {
   const dir = Math.sign(pointing.reduce((a, b) => a + b, 0)) || 1;
   return contacts(rows, legLen, dir, kind === 'cod').map((c) => ({ leg: c.leg, from: rows[c.from].t, to: rows[c.to].t }));
 }
+
+// Frames from tracked taps (owner's ask: tap the points once and have them tracked through the clip): the five or six
+// tapped points (hip, the near and far knee and ankle, and the shoulder where tapped), followed frame by frame, become
+// the shape findEvents reads (the model's 33 points reduced to the ones it uses). The near leg stands in for L and the
+// far leg for R (findEvents sorts the legs out by motion anyway), and the heel and toe are set from the ankle along the
+// way the athlete runs (the hip's travel across the clip), so foot direction and the ground line read the same way.
+export function framesFromTracks(tracks) {
+  const seen = tracks.filter((f) => f.pts?.hip);
+  if (!seen.length) return [];
+  const first = seen[0].pts.hip, last = seen[seen.length - 1].pts.hip;
+  const dir = (last[0] - first[0]) >= 0 ? 1 : -1;
+  const legs = seen.map((f) => [f.pts.ankle_near, f.pts.ankle_far].filter(Boolean).map((a) => dist(f.pts.hip, a))).flat();
+  const legLen = median(legs) || 100;
+  const foot = (ankle) => (ankle ? { heel: [ankle[0] - dir * legLen * 0.05, ankle[1] + legLen * 0.09], toe: [ankle[0] + dir * legLen * 0.12, ankle[1] + legLen * 0.1] } : { heel: null, toe: null });
+  return tracks.map((f) => {
+    const p = f.pts;
+    if (!p?.hip || !p.knee_near || !p.ankle_near || !p.knee_far || !p.ankle_far) return { t: f.t, pts: null };
+    const shoulder = p.shoulder ?? [p.hip[0], p.hip[1] - legLen * 1.1];
+    const n = foot(p.ankle_near), r = foot(p.ankle_far);
+    return { t: f.t, pts: { shoulderL: shoulder, shoulderR: shoulder, hipL: p.hip, hipR: p.hip, kneeL: p.knee_near, kneeR: p.knee_far, ankleL: p.ankle_near, ankleR: p.ankle_far, heelL: n.heel, heelR: r.heel, toeL: n.toe, toeR: r.toe } };
+  });
+}

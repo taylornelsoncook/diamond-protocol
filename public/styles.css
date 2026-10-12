@@ -384,3 +384,6 @@ td .dp-badge{white-space:nowrap}
 
 /* The help sentences are hidden for everyone but the owner, and for the owner when the setting says so (ui.js). */
 html[data-help="off"] .dp-help{display:none}
+/* Example figures for the sprint positions (sprint-figure.js). */
+.sp-figure-pic{flex:0 0 auto;width:120px;height:142px}
+.sp-figure-pic svg{width:100%;height:100%;display:block}

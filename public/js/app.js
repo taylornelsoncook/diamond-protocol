@@ -42,7 +42,7 @@ initCrm({ api, render, header, pulseTile: (...a) => pulseTile(...a), download: (
 
 // ---------- Shell ----------
 async function boot() {
-  try { const me = await get('/auth/me'); state.user = me.user; state.roles = me.roles; state.testMode = me.test_mode; state.payments = me.payments || {}; } catch { state.user = null; }
+  try { const me = await get('/auth/me'); state.user = me.user; state.roles = me.roles; state.testMode = me.test_mode; state.payments = me.payments || {}; document.documentElement.dataset.help = me.help_text === 'on' ? 'on' : 'off'; } catch { state.user = null; }
   NAV = state.user ? ALL_NAV.filter(([k]) => !NAV_FOR[state.user.role] || NAV_FOR[state.user.role].includes(k)) : ALL_NAV;
   render();
 }

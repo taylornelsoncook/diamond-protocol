@@ -112,7 +112,8 @@ export const routes = [
     sign_ins: security.listAudit(ctx, { staff_id: r.user.id, kind: 'sign_ins', limit: 10 }).map((a) => ({ at: a.at, action: a.action, status: a.status, ip: a.ip })) })],
   ['POST', '/auth/devices/:id/sign-out', 'session', 'Auth', 'Sign out one of your other devices.', (ctx, r) => access.endSession(ctx, r.user.id, r.params.id, r.user.session_id)],
   ['POST', '/auth/sign-out-others', 'session', 'Auth', 'Sign out every device but this one.', (ctx, r) => ({ ok: true, signed_out: access.endSessions(ctx, r.user.id, { exceptId: r.user.session_id }) })],
-  ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { id: r.user.id, email: r.user.email, name: r.user.name, role: r.user.role, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate } })],
+  ['GET', '/auth/me', 'session', 'Auth', 'The signed-in coach.', (ctx, r) => ({ user: { id: r.user.id, email: r.user.email, name: r.user.name, role: r.user.role, must_change_password: !!r.user.must_change_password }, roles: security.ROLES, test_mode: ctx.testMode, payments: { provider: ctx.payments.name, live: ctx.payments.live, can_simulate: !!ctx.payments.simulate },
+    help_text: r.user.role === 'owner' && families.getSetting(ctx, 'help_text') !== 'off' ? 'on' : 'off' })],   // the help sentences: the owner's, and only while the owner wants them
 
   // Dashboard
   ['GET', '/v1/dashboard', 'any', 'Dashboard', 'Revenue, client counts, items that need attention and recent activity.', (ctx, r) => access.dashboard(ctx, { role: r.user?.role ?? 'owner', userId: r.user?.id ?? null })],

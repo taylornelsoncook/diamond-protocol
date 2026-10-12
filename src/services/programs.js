@@ -129,8 +129,8 @@ const WEEK_AGO = (ctx) => new Date(Date.parse(ctx.now()) - 7 * 86400000).toISOSt
 export const SETTINGS = { facility: 'In the facility', remote: 'Out of the facility', both: 'Both' };
 // The Programs list (version 74, owner's ask): one line per program, filtered by sport, setting (in or out of the
 // facility), who wrote it (author) and level. Filters match exactly, ignoring case; 'unset' matches programs with none.
-export function listPrograms(ctx, { kind = 'program', sport, setting, author, level } = {}) {
-  const where = ['p.kind = ?'], args = [WEEK_AGO(ctx), v.oneOf(kind, 'kind', ['program', 'template'])];
+export function listPrograms(ctx, { kind = 'program', sport, setting, author, level, sent = false } = {}) {
+  const where = ['p.kind = ?', sent ? 'p.sent_from IS NOT NULL' : 'p.sent_from IS NULL'], args = [WEEK_AGO(ctx), v.oneOf(kind, 'kind', ['program', 'template'])];
   const filter = (col, val) => { if (val === undefined || val === null || val === '') return; if (val === 'unset') where.push(`${col} IS NULL`); else { where.push(`lower(${col}) = lower(?)`); args.push(String(val)); } };
   if (setting && setting !== 'unset') v.oneOf(setting, 'setting', Object.keys(SETTINGS));
   filter('p.sport', sport); filter('p.setting', setting); filter('p.author_id', author); filter('p.level', level);
@@ -182,7 +182,7 @@ const setWeeks = (ctx, programId, weeks) => { ctx.db.run('UPDATE programs SET we
 // adjust (the planner's progression) changes each exercise's fields on the way.
 function copyWorkoutInto(ctx, src, programId, week, day, title, adjust = null) {
   const id = newId('wo');
-  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title, src.warmup_id ?? null, src.cooldown_id ?? null);
+  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, title ?? src.title, src.warmup_id ?? null, src.cooldown_id ?? null, src.instructions ?? null);
   const blockIds = new Map();   // the named blocks come along (version 74)
   for (const b of ctx.db.all('SELECT * FROM workout_blocks WHERE workout_id = ? ORDER BY position', src.id)) {
     const bid = newId('wb');
@@ -346,6 +346,9 @@ function freeDay(ctx, programId, week, day) {
   if (ctx.db.get('SELECT id FROM workouts WHERE program_id = ? AND week = ? AND day = ?', programId, week, d)) throw conflict(`Week ${week}, day ${d} already has a workout. Pick another day.`);
   return d;
 }
+// The day's instructions (version 75, from the TeamBuildr screenshots): a text the coach writes for the day, shown
+// first in the app and at the top of the day in the builder.
+const instructionsOf = (body) => (body.instructions === undefined || body.instructions === null || body.instructions === '' ? null : v.str(body.instructions, 'instructions', { max: 2000 }));
 export function addWorkout(ctx, programId, body) {
   if (body.template_id) return workoutFromTemplate(ctx, programId, body);
   const p = getProgram(ctx, programId);
@@ -353,7 +356,7 @@ export function addWorkout(ctx, programId, body) {
   const day = freeDay(ctx, programId, week, body.day);
   const id = newId('wo');
   const blocks = routineFields(ctx, {}, body);
-  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id) VALUES (?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? `Day ${day}`, blocks.warmup_id ?? null, blocks.cooldown_id ?? null);
+  ctx.db.run('INSERT INTO workouts (id, program_id, week, day, title, warmup_id, cooldown_id, instructions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, programId, week, day, v.str(body.title, 'title', { max: 120, optional: true }) ?? `Day ${day}`, blocks.warmup_id ?? null, blocks.cooldown_id ?? null, instructionsOf(body));
   return getProgram(ctx, programId).workouts.find((w) => w.id === id);
 }
 // Rename a workout, or attach or clear its warm-up and cool-down blocks (warmup_id / cooldown_id, null clears).
@@ -361,7 +364,8 @@ export function updateWorkout(ctx, workoutId, body = {}) {
   const w = workoutRow(ctx, workoutId);
   const title = body.title !== undefined ? v.str(body.title, 'title', { max: 120 }) : w.title;
   const blocks = routineFields(ctx, w, body);
-  ctx.db.run('UPDATE workouts SET title = ?, warmup_id = ?, cooldown_id = ? WHERE id = ?', title, blocks.warmup_id, blocks.cooldown_id, workoutId);
+  const instructions = body.instructions !== undefined ? instructionsOf(body) : w.instructions ?? null;
+  ctx.db.run('UPDATE workouts SET title = ?, warmup_id = ?, cooldown_id = ?, instructions = ? WHERE id = ?', title, blocks.warmup_id, blocks.cooldown_id, instructions, workoutId);
   return getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
 }
 // Like clearing a week, removing a workout athletes logged needs confirm: true (their logs stay in their history).
@@ -417,6 +421,192 @@ export function copyWeek(ctx, programId, fromWeek, body = {}, adjustFor = null) 
     if (through > p.weeks) setWeeks(ctx, programId, through);
   });
   return programDetail(ctx, programId);
+}
+// ---- Days in bulk (the builder's ticked days, version 75): copy, move, repeat, delete ----
+// workouts: ids of this program's workouts. copy: to_week (each keeps its weekday; days from several weeks land in
+// consecutive weeks from to_week), to_program_id for another program (or a template); move: to_week in this program;
+// repeat: into the next `times` weeks (1 to 26). A target day that already has a workout needs replace: true, and
+// replacing or deleting logged workouts needs confirm: true (their logs stay in the athletes' history). The program
+// grows to the last week written to. All or nothing.
+export function bulkDays(ctx, programId, action, body = {}) {
+  const p = getProgram(ctx, programId);
+  const ids = Array.isArray(body.workouts) ? [...new Set(body.workouts.map(String))] : [];
+  if (!ids.length) throw badRequest('Tick at least one day.');
+  const src = ids.map((id) => p.workouts.find((w) => w.id === id) ?? (() => { throw notFound('Workout'); })());
+  const act = v.oneOf(action, 'action', ['copy', 'move', 'repeat', 'delete']);
+  const weeksOf = [...new Set(src.map((w) => w.week))].sort((a, b) => a - b);
+  const span = weeksOf.length;
+  if (act === 'delete') {
+    guardLogged(ctx, ids, body.confirm, ids.length === 1 ? 'That day' : `${ids.length} days`);
+    ctx.db.tx(() => deleteWorkouts(ctx, ids));
+    return { deleted: ids.length, ...programDetail(ctx, programId) };
+  }
+  // Where each source day lands: (week, day) pairs in the target program.
+  const targetProgram = act === 'copy' && body.to_program_id && String(body.to_program_id) !== programId ? getProgram(ctx, v.str(body.to_program_id, 'to_program_id')) : p;
+  if (targetProgram.kind === 'workouts') throw badRequest('Choose a program or a template to copy to.');
+  const plan = [];   // { src, week, day }
+  if (act === 'repeat') {
+    const times = v.int(body.times ?? 1, 'times', { min: 1, max: 26 });
+    const last = weeksOf.at(-1);
+    for (let k = 1; k <= times; k++) for (const w of src) plan.push({ src: w, week: w.week - weeksOf[0] + last + 1 + (k - 1) * span, day: w.day });
+  } else {
+    const toWeek = v.int(body.to_week, 'to_week', { min: 1, max: 52 });
+    for (const w of src) plan.push({ src: w, week: toWeek + (w.week - weeksOf[0]), day: w.day });
+  }
+  const lastWeek = Math.max(...plan.map((x) => x.week));
+  if (lastWeek > 52) throw badRequest('That goes past week 52.');
+  if (act === 'move' && plan.some((x) => src.some((s) => s.week === x.week && s.day === x.day && s.id !== x.src.id))) throw badRequest('Those days would land on each other.');
+  const taken = plan.map((x) => targetProgram.workouts.find((w) => w.week === x.week && w.day === x.day && !ids.includes(w.id))).filter(Boolean);
+  if (taken.length && body.replace !== true) {
+    const e = new HttpError(409, 'replace_needed', `${taken.length === 1 ? `Week ${taken[0].week}, day ${taken[0].day} already has a workout` : `${taken.length} of those days already have workouts`}. Replace ${taken.length === 1 ? 'it' : 'them'} to go on.`);
+    e.details = { days: taken.map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title })) };
+    throw e;
+  }
+  guardLogged(ctx, taken.map((w) => w.id), body.confirm, taken.length === 1 ? `Week ${taken[0]?.week}, day ${taken[0]?.day}` : `${taken.length} days`);
+  if (act === 'move') guardLogged(ctx, ids, body.confirm, ids.length === 1 ? 'That day' : `${ids.length} days`);
+  const made = [];
+  ctx.db.tx(() => {
+    deleteWorkouts(ctx, taken.map((w) => w.id));
+    if (act === 'move') {
+      // Two passes so a day never collides with another being moved: park them, then place them.
+      for (const x of plan) ctx.db.run('UPDATE workouts SET week = ?, day = ? WHERE id = ?', 100 + x.week, x.day, x.src.id);
+      for (const x of plan) { ctx.db.run('UPDATE workouts SET week = ? WHERE id = ?', x.week, x.src.id); made.push({ id: x.src.id, week: x.week, day: x.day }); }
+    } else {
+      for (const x of plan) made.push({ id: copyWorkoutInto(ctx, x.src, targetProgram.id, x.week, x.day), week: x.week, day: x.day });
+    }
+    if (lastWeek > targetProgram.weeks) setWeeks(ctx, targetProgram.id, lastWeek);
+  });
+  return { action: act, days: made, replaced: taken.length, to_program_id: targetProgram.id, ...programDetail(ctx, programId) };
+}
+// ---- Drag and drop (step 2): move one exercise to a place, in one call ----
+// { workout_id (another day of the same program; default its own), block_id (null = no block), before_id (the exercise
+// it lands ahead of; none = the end of that block, or of the day) }. Both days' blocks and letters are put back in step.
+export function moveExercise(ctx, id, body = {}) {
+  const x = ctx.db.get('SELECT * FROM workout_exercises WHERE id = ?', id);
+  if (!x) throw notFound('Workout exercise');
+  const from = workoutRow(ctx, x.workout_id);
+  const toId = body.workout_id ? v.str(body.workout_id, 'workout_id') : x.workout_id;
+  const to = toId === x.workout_id ? from : workoutRow(ctx, toId);
+  if (to.program_id !== from.program_id) throw badRequest('An exercise moves within one program.');
+  let block = null;
+  if (body.block_id) { block = blockOf(ctx, v.str(body.block_id, 'block_id')); if (block.workout_id !== to.id) throw badRequest('That block is on another day.'); }
+  let before = null;
+  if (body.before_id) {
+    before = ctx.db.get('SELECT * FROM workout_exercises WHERE id = ?', v.str(body.before_id, 'before_id'));
+    if (!before || before.workout_id !== to.id) throw badRequest('Drop it on an exercise of that day.');
+    if (before.id === id) return getProgram(ctx, to.program_id).workouts.find((w) => w.id === to.id);
+    if (!block && before.block_id) block = blockOf(ctx, before.block_id);   // dropping on a block's exercise puts it in that block
+  }
+  ctx.db.tx(() => {
+    const last = ctx.db.get('SELECT COALESCE(MAX(position), 0) AS n FROM workout_exercises WHERE workout_id = ?', to.id).n;
+    let at;
+    if (before) at = before.position - 0.5;
+    else if (block) { const end = ctx.db.get('SELECT MAX(position) AS n FROM workout_exercises WHERE block_id = ? AND id != ?', block.id, id).n; at = end != null ? end + 0.5 : (firstPlaceFor(ctx, block) ?? last + 1) - 0.5; }
+    else at = last + 1;
+    ctx.db.run('UPDATE workout_exercises SET workout_id = ?, block_id = ?, position = ? WHERE id = ?', to.id, block?.id ?? null, at, id);
+    syncBlocks(ctx, to.id);
+    if (to.id !== from.id) syncBlocks(ctx, from.id);
+  });
+  return getProgram(ctx, to.program_id).workouts.find((w) => w.id === to.id);
+}
+// ---- Send days to athletes, teams or whole schools (step 2) ----
+// The ticked days become a short program of their own (weeks packed from 1, each day keeping its weekday; sent_from
+// says where it came from; left out of the Programs list), assigned from start_date to every client_id, every active
+// roster athlete of every contract_id, and every active roster of every org_id (a whole school). An athlete on another
+// program is skipped unless replace: true; one already on a program sent from these days is skipped. All or nothing.
+export function sendDays(ctx, programId, body = {}) {
+  const p = getProgram(ctx, programId);
+  if (p.kind !== 'program' && p.kind !== 'template') throw badRequest('Send days from a program or a template.');
+  const ids = Array.isArray(body.workouts) ? [...new Set(body.workouts.map(String))] : [];
+  if (!ids.length) throw badRequest('Tick at least one day.');
+  const src = ids.map((id) => p.workouts.find((w) => w.id === id) ?? (() => { throw notFound('Workout'); })());
+  const weeksOf = [...new Set(src.map((w) => w.week))].sort((a, b) => a - b);
+  const list = (k) => (Array.isArray(body[k]) ? [...new Set(body[k].map(String))] : []);
+  const clientIds = list('client_ids'), contractIds = list('contract_ids'), orgIds = list('org_ids');
+  if (!clientIds.length && !contractIds.length && !orgIds.length) throw badRequest('Choose at least one athlete, team or school.');
+  // Everyone it goes to, once each, with where they came from.
+  const people = new Map();
+  for (const id of clientIds) { const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', id); if (!c) throw notFound('Client'); if (!c.archived_at) people.set(c.id, { ...c, via: 'athlete' }); }
+  const rosterOf = (contractId, via) => { for (const c of ctx.db.all(`SELECT c.id, c.name FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = ? AND r.active = 1 AND c.archived_at IS NULL`, contractId)) if (!people.has(c.id)) people.set(c.id, { ...c, via }); };
+  const teams = [];
+  for (const id of contractIds) { const t = ctx.db.get('SELECT t.id, t.name, o.name AS org_name FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.id = ?', id); if (!t) throw notFound('Team'); teams.push(`${t.org_name} ${t.name}`); rosterOf(t.id, `${t.org_name} ${t.name}`); }
+  const schools = [];
+  for (const id of orgIds) {
+    const o = ctx.db.get('SELECT id, name FROM organizations WHERE id = ?', id); if (!o) throw notFound('School');
+    schools.push(o.name);
+    for (const t of ctx.db.all(`SELECT id FROM team_contracts WHERE org_id = ? AND status = 'active'`, o.id)) rosterOf(t.id, o.name);
+  }
+  if (!people.size) throw conflict('Nobody to send to: the rosters are empty or everyone is archived.');
+  const start = parseDate(body.start_date, 'start_date', localToday(ctx));
+  const name = v.str(body.name, 'name', { max: 120, optional: true }) ?? `${p.name} · sent ${start}`;
+  const assigned = [], skipped = [];
+  const newId_ = newId('prog');
+  ctx.db.tx(() => {
+    ctx.db.run('INSERT INTO programs (id, name, description, level, weeks, created_at, kind, sport, setting, author_id, author_name, sent_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      newId_, name, p.description ?? null, p.level ?? null, weeksOf.length, ctx.now(), 'program', p.sport ?? null, p.setting ?? null, p.author_id ?? null, p.author_name ?? null, p.id);
+    for (const w of src) copyWorkoutInto(ctx, w, newId_, weeksOf.indexOf(w.week) + 1, w.day);
+    const days = daysFor(ctx, newId_, body.training_days);
+    for (const c of people.values()) {
+      const cur = ctx.db.get('SELECT a.program_id, pr.name, pr.sent_from FROM assignments a JOIN programs pr ON pr.id = a.program_id WHERE a.client_id = ? AND a.active = 1', c.id);
+      if (cur && cur.sent_from === p.id && cur.name === name) { skipped.push({ id: c.id, name: c.name, reason: 'already has these days' }); continue; }
+      if (cur && !body.replace) { skipped.push({ id: c.id, name: c.name, reason: `on ${cur.name}`, program_name: cur.name }); continue; }
+      const r = assign(ctx, newId_, c.id, start, { training_days: days ? days.split(',').map(Number) : undefined });
+      assigned.push({ id: c.id, name: c.name, via: c.via, previous_program: r.previous_program });
+    }
+    if (!assigned.length) throw conflict(`Nobody could take these days: ${skipped.map((s) => `${s.name} is ${s.reason}`).join(', ')}. Send again with replace to move them.`);
+  });
+  return { program: { id: newId_, name, weeks: weeksOf.length, days: src.length }, start_date: start, teams, schools, assigned, skipped };
+}
+// ---- Publish and unpublish (step 3, schema 77) ----
+// published_from on the active assignments of this program (all of them, or client_ids / contract_id): null = published
+// now, a date = released from that date, 'unpublished' = hidden until the coach publishes (stored as 9999-12-31).
+export const UNPUBLISHED = '9999-12-31';
+export function publishProgram(ctx, programId, body = {}) {
+  const p = ctx.db.get('SELECT id, name FROM programs WHERE id = ?', programId);
+  if (!p) throw notFound('Program');
+  const from = body.published_from === 'unpublished' ? UNPUBLISHED : body.published_from === undefined || body.published_from === null || body.published_from === '' ? null : parseDate(body.published_from, 'published_from');
+  const where = ['a.program_id = ?', 'a.active = 1'], args = [programId];
+  if (Array.isArray(body.client_ids) && body.client_ids.length) { where.push(`a.client_id IN (${body.client_ids.map(() => '?').join(', ')})`); args.push(...body.client_ids.map(String)); }
+  if (body.contract_id) { where.push('a.client_id IN (SELECT client_id FROM team_roster WHERE contract_id = ? AND active = 1)'); args.push(v.str(body.contract_id, 'contract_id')); }
+  const rows = ctx.db.all(`SELECT a.id, a.client_id, c.name FROM assignments a JOIN clients c ON c.id = a.client_id WHERE ${where.join(' AND ')} AND c.archived_at IS NULL`, ...args);
+  if (!rows.length) throw conflict('Nobody on this program matches.');
+  ctx.db.tx(() => { for (const r of rows) ctx.db.run('UPDATE assignments SET published_from = ? WHERE id = ?', from, r.id); });
+  return { program_id: programId, published_from: from, state: from === null ? 'published' : from === UNPUBLISHED ? 'unpublished' : 'scheduled', athletes: rows.map((r) => ({ id: r.client_id, name: r.name })) };
+}
+// ---- The month calendar (step 3): what the picked people have on each day ----
+// pick: program_id (everyone on it), contract_id (the team's roster, whatever programs they are on), client_id (one
+// athlete), or nothing (everyone on a program). Each day lists its workouts grouped by program and workout, with how
+// many athletes have it, how many logged it, missed it or can't see it yet, and the average effort they gave.
+export function calendarMonth(ctx, { month, program_id, contract_id, client_id } = {}) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(month ?? ''));
+  const first = m ? `${m[1]}-${m[2]}-01` : `${localToday(ctx).slice(0, 7)}-01`;
+  const [y, mo] = first.split('-').map(Number);
+  const last = `${first.slice(0, 7)}-${String(new Date(Date.UTC(y, mo, 0)).getUTCDate()).padStart(2, '0')}`;
+  const where = ['a.active = 1', 'c.archived_at IS NULL'], args = [];
+  if (program_id) { where.push('a.program_id = ?'); args.push(String(program_id)); }
+  if (contract_id) { where.push('a.client_id IN (SELECT client_id FROM team_roster WHERE contract_id = ? AND active = 1)'); args.push(String(contract_id)); }
+  if (client_id) { where.push('a.client_id = ?'); args.push(String(client_id)); }
+  const rows = ctx.db.all(`SELECT a.*, c.name AS client_name FROM assignments a JOIN clients c ON c.id = a.client_id WHERE ${where.join(' AND ')} ORDER BY c.name COLLATE NOCASE`, ...args);
+  const programs = new Map();
+  const days = {};
+  const effort = new Map(rows.length ? ctx.db.all(`SELECT workout_id, assignment_id, rpe FROM workout_logs WHERE assignment_id IN (${rows.map(() => '?').join(', ')}) AND rpe IS NOT NULL`, ...rows.map((r) => r.id)).map((l) => [`${l.assignment_id}:${l.workout_id}`, l.rpe]) : []);
+  for (const a of rows) {
+    if (!programs.has(a.program_id)) programs.set(a.program_id, getProgram(ctx, a.program_id));
+    const program = programs.get(a.program_id);
+    const cal = datedWorkouts(ctx, a, program);
+    for (const w of cal.workouts) {
+      if (w.date < first || w.date > last) continue;
+      const day = (days[w.date] ??= { date: w.date, workouts: [] });
+      let card = day.workouts.find((x) => x.workout_id === w.id);
+      if (!card) { const full = program.workouts.find((x) => x.id === w.id); card = { workout_id: w.id, program_id: program.id, program_name: program.name, week: w.week, day: w.day, title: w.title, blocks: (full?.blocks ?? []).map((b) => b.name), exercises: w.exercises, athletes: [], done: 0, missed: 0, upcoming: 0, unpublished: 0, efforts: [] }; day.workouts.push(card); }
+      card.athletes.push({ id: a.client_id, name: a.client_name, status: w.status, log_id: w.log_id });
+      if (w.status === 'done') card.done++; else if (w.status === 'missed') card.missed++; else if (w.status === 'unpublished') card.unpublished++; else card.upcoming++;
+      const rpe = effort.get(`${a.id}:${w.id}`); if (rpe != null) card.efforts.push(rpe);
+    }
+  }
+  for (const d of Object.values(days)) for (const c of d.workouts) { c.effort_avg = c.efforts.length ? Math.round((c.efforts.reduce((s, x) => s + x, 0) / c.efforts.length) * 10) / 10 : null; delete c.efforts; }
+  const assignments = rows.map((a) => ({ id: a.id, client_id: a.client_id, name: a.client_name, program_id: a.program_id, program_name: programs.get(a.program_id).name, published_from: a.published_from ?? null, state: !a.published_from ? 'published' : a.published_from === UNPUBLISHED ? 'unpublished' : a.published_from > localToday(ctx) ? 'scheduled' : 'published' }));
+  return { month: first.slice(0, 7), first, last, today: localToday(ctx), days: Object.values(days).sort((x, y) => x.date.localeCompare(y.date)), assignments, people: rows.length };
 }
 // Clear a week. The last week also comes off the program (down to the last week that still has workouts).
 export function deleteWeek(ctx, programId, week, body = {}) {
@@ -1004,7 +1194,7 @@ export function nextWorkoutFor(ctx, clientId, load = (id) => getProgram(ctx, id)
   const calendar = datedWorkouts(ctx, a, program);
   const byId = new Map(program.workouts.map((w) => [w.id, w]));
   const dated = (item) => ({ ...byId.get(item.id), date: item.date, status: item.status, moved: item.moved });
-  const left = calendar.workouts.filter((w) => w.status !== 'done' && w.status !== 'skipped').map(dated);
+  const left = calendar.workouts.filter((w) => w.status !== 'done' && w.status !== 'skipped' && w.status !== 'unpublished').map(dated);
   const pick = pickNext(calendar.workouts, calendar.today);
   return { assignment: a, program, left, next: pick ? dated(pick) : null, calendar };
 }
@@ -1063,7 +1253,7 @@ export function clientHome(ctx, client, { at = null } = {}) {
     upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
     calendar: cal,
     history, reopen_id,
-    message: next ? null : 'Program complete. Your coach will set your next block.'
+    message: next ? null : !calendar.published ? `Your next workout opens ${calendar.published_from === '9999-12-31' ? 'when your coach releases it' : `on ${calendar.published_from}`}.` : 'Program complete. Your coach will set your next block.'
   };
 }
 // A workout as the athlete does it today: each exercise with their weight, steps, swaps and form-check asks.

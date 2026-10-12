@@ -357,6 +357,20 @@ export async function createClient(ctx, body, { staff, inTx } = {}) {
   return getClient(ctx, id, { withSecrets: true });
 }
 
+// New athlete at a testing day (owner's ask: "an option for new athlete ... first name, last name, email and phone,
+// create their account, then send an email to prompt them to finish their profile; allow them to skip everything
+// except the waiver"): one family account on that email. With parent_name the email and phone are a parent's;
+// without, the athlete is their own account holder (an adult, or an athlete who manages their own sign-in). The
+// welcome email is the finish-your-profile one (notify.finishProfile), sent by the caller, not the usual welcome.
+export async function quickAdd(ctx, body = {}, { staff } = {}) {
+  const firstName = v.str(body.first_name, 'first name', { max: 60 }), lastName = v.str(body.last_name, 'last name', { max: 60 });
+  const email = v.email(body.email);
+  const phone = v.str(body.phone, 'phone', { max: 40, optional: true });
+  const parentName = v.str(body.parent_name, 'parent name', { max: 120, optional: true });
+  const name = `${firstName} ${lastName}`;
+  return createClient(ctx, { name, parent: { name: parentName ?? name, email, phone, relationship: parentName ? null : 'self' }, send_welcome: false, check_duplicates: false }, { staff });
+}
+
 export function updateClient(ctx, id, body) {
   const c = getClient(ctx, id);
   const name = body.name !== undefined ? v.str(body.name, 'name', { max: 120 }) : c.name;

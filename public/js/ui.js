@@ -68,14 +68,20 @@ export async function busy(button, fn) {
 let fieldSeq = 0;
 export function field(label, input, hint) {
   const id = input.id || (input.id = `f${++fieldSeq}`);
-  return h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: id }, label), input, hint ? h('div', { class: 'dp-hint' }, hint) : null);
+  return h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: id }, label), input, hint ? h('div', { class: 'dp-hint dp-help' }, hint) : null);
 }
+// The help sentences (owner's ask): a field's hint and a panel's explanatory subtitle are marked dp-help and hidden
+// when <html data-help="off">: always on the coach and front-desk dashboard, the portal and the athlete app, and for the
+// owner when the setting says so. A subtitle that carries data (a count, a name, a date) is kept: the mark goes only on
+// a sentence with no digits of 40 characters or more.
+export const isHelp = (text) => typeof text === 'string' && text.length >= 40 && !/\d/.test(text);
+export function helpOff() { document.documentElement.dataset.help = 'off'; }
 export const input = (attrs = {}) => h('input', { class: 'dp-input', ...attrs });
 export const select = (options, attrs = {}) => h('select', { class: 'select', ...attrs }, options.map(([value, label]) => h('option', { value, selected: attrs.value === value }, label)));
 
 export function panel(title, { subtitle, action } = {}, ...children) {
   return h('section', { class: 'dp-panel' },
-    title || action ? h('div', { class: 'dp-panel-head' }, h('div', null, title ? h('h2', { class: 'dp-panel-title' }, title) : null, subtitle ? h('p', { class: 'dp-panel-sub' }, subtitle) : null), action || null) : null,
+    title || action ? h('div', { class: 'dp-panel-head' }, h('div', null, title ? h('h2', { class: 'dp-panel-title' }, title) : null, subtitle ? h('p', { class: `dp-panel-sub${isHelp(subtitle) ? ' dp-help' : ''}` }, subtitle) : null), action || null) : null,
     ...children);
 }
 

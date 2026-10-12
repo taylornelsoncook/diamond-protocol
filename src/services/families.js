@@ -22,6 +22,7 @@ const DEFAULTS = {
   privacy_updated: '',
   public_signup: 'on',
   rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
+  help_text: 'on',                        // the owner sees the help sentences (field hints, panel explanations); 'off' hides them for the owner too. Coaches, front desk, parents and athletes never see them.
   readiness_adjust: 'on',                 // lighter weights in the athlete app after a rough daily check-in
   readiness_wearable: 'on',               // ...and after a rough night the athlete's wearable saw (recovery, sleep, HRV from athlete_metrics)
   readiness_yellow_drop: '10',            // points of the tested max taken off on a "go a little lighter" day (0 to 40)
@@ -69,6 +70,7 @@ export function updateSettings(ctx, body) {
   if (body.late_cancel_hours !== undefined) next.late_cancel_hours = String(v.int(body.late_cancel_hours, 'late_cancel_hours', { min: 0, max: 168 }));
   if (body.business_name !== undefined) next.business_name = v.str(body.business_name, 'business_name', { max: 80 });
   if (body.share_results !== undefined) next.share_results = v.oneOf(body.share_results, 'share_results', ['reviewed', 'all']);
+  if (body.help_text !== undefined) next.help_text = v.oneOf(body.help_text, 'help_text', ['on', 'off']);
   if (body.business_address !== undefined) next.business_address = v.str(body.business_address, 'business_address', { max: 400, optional: true }) ?? '';
   if (body.payment_instructions !== undefined) next.payment_instructions = v.str(body.payment_instructions, 'payment_instructions', { max: 1000, optional: true }) ?? '';
   if (body.waiver_text !== undefined) {

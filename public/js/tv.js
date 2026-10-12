@@ -73,6 +73,9 @@ function demoPane(w) {
     h('div', { class: 'tv-demo-label' }, h('span', { class: 'tv-demo-name' }, x.group_tag ? `${x.group_tag.replace(/^[A-Z]/, "")} · ${x.name}` : x.name), h('span', { class: 'tv-demo-rx' }, [x.prescription, x.details].filter(Boolean).join(' · '))),
     clips.length > 1 ? h('div', { class: 'tv-demo-dots' }, clips.map((c, i) => h('span', { class: i === demo.index % clips.length ? 'on' : null }))) : null);
 }
+// Pinned team-feed posts for this screen (everyone's, and the team on now's), under the board.
+const postsStrip = () => (board.posts?.length ? h('section', { class: 'tv-posts', 'aria-label': 'From the coaches' }, board.posts.map((p) => h('article', { class: 'tv-post' },
+  h('p', { class: 'tv-post-kicker' }, `${p.author_name} · ${p.audience_label}`), p.title ? h('h3', { class: 'tv-post-title' }, p.title) : null, h('p', { class: 'tv-post-body' }, p.body)))) : null);
 function render() {
   const sessions = board.sessions.filter((s) => s.workout);
   const s = sessions.find((x) => x.id === picked) ?? sessions[0] ?? null;
@@ -82,7 +85,7 @@ function render() {
   if (!s) {
     const waiting = board.sessions[0];
     return fill(root, h('main', { class: 'tv-wrap' }, head, h('div', { class: 'tv-center' }, h('p', { class: 'tv-empty' },
-      waiting ? `No workout picked for ${waiting.name} yet. Coaches pick one on the session page.` : `Nothing running at ${board.location_name} right now. The workout shows here 30 minutes before a session starts.`))));
+      waiting ? `No workout picked for ${waiting.name} yet. Coaches pick one on the session page.` : `Nothing running at ${board.location_name} right now. The workout shows here 30 minutes before a session starts.`)), postsStrip()));
   }
   const w = s.workout;
   let side;
@@ -98,8 +101,8 @@ function render() {
       : h('p', { class: 'muted' }, 'Nobody is booked yet.'));
   fill(root, h('main', { class: 'tv-wrap' }, head,
     h('div', { class: 'tv-grid' },
-      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), demoPane(w), routineLine(w.warmup, 'Warm-up'), workoutList(w), routineLine(w.cooldown, 'Cool-down')),
-      h('aside', { class: 'tv-side' }, side))));
+      h('section', { class: 'tv-workout' }, h('p', { class: 'tv-kicker' }, `${s.name} · ${time(s.starts_at)}–${time(s.ends_at)} · ${w.program_name}, week ${w.week} day ${w.day}`), h('h1', { class: 'tv-title' }, w.title), w.instructions ? h('p', { class: 'tv-instr' }, w.instructions) : null, demoPane(w), routineLine(w.warmup, 'Warm-up'), workoutList(w), routineLine(w.cooldown, 'Cool-down')),
+      h('aside', { class: 'tv-side' }, side)), postsStrip()));
 }
 
 load();

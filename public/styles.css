@@ -369,6 +369,41 @@ td .dp-badge{white-space:nowrap}
 .sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}
 .sp-pos--suggested{border-style:dashed;border-color:var(--amber)}
 .sp-suggest-note{border-left:3px solid var(--amber);padding-left:8px}
+
+/* Testing → Max report: athletes down, lifts across; grey = estimated from logged sets; click a cell to type a max. */
+.mr-table th.num,.mr-table td.num{text-align:right}
+.mr-table tfoot td{border-top:2px solid var(--line);border-bottom:0;color:var(--steel)}
+.mr-sort{appearance:none;background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;white-space:nowrap}
+.mr-sort:hover,.mr-sort.is-on{color:var(--steel)} .mr-sort.is-on{font-weight:600}
+.mr-val{font-family:var(--font-mono)} .mr-est{font-family:var(--font-mono);color:var(--steel-muted);font-style:italic}
+.mr-cell{padding:0 !important}
+.mr-edit{appearance:none;background:none;border:0;width:100%;min-height:44px;padding:12px;text-align:right;font:inherit;color:inherit;cursor:text;border-radius:0}
+.mr-edit:hover,.mr-edit:focus-visible{background:var(--surface-raised);outline:none;box-shadow:inset 0 0 0 1px var(--green-mid)}
+.mr-input{width:92px;text-align:right;margin:4px 6px}
+.mr-filters .select{width:auto;min-width:160px;max-width:260px}
+
+/* The help sentences are hidden for everyone but the owner, and for the owner when the setting says so (ui.js). */
+html[data-help="off"] .dp-help{display:none}
+/* Example figures for the sprint positions (sprint-figure.js). */
+.sp-figure-pic{flex:0 0 auto;width:120px;height:142px}
+.sp-figure-pic svg{width:100%;height:100%;display:block}
+/* The Schedule page's month calendar (click a day to show that week; planned classes past the horizon in a lighter tone). */
+.sc-cal-wrap>summary{list-style:none} .sc-cal-wrap>summary::-webkit-details-marker{display:none}
+.sc-cal{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+.sc-cal-head{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;font:500 11px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted);padding:0 4px}
+.sc-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.sc-cal-pad{min-height:56px}
+.sc-cal-day{appearance:none;display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:56px;padding:6px 8px;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel);font:inherit;cursor:pointer;text-align:left}
+.sc-cal-day:hover{background:var(--surface-raised);border-color:var(--control-border)}
+.sc-cal-day.is-past{color:var(--steel-muted)}
+.sc-cal-day.is-today .sc-cal-num{color:var(--green-soft, #7DBA70);font-weight:700}
+.sc-cal-day.in-week{border-color:var(--green-mid);background:var(--green-deep)}
+.sc-cal-day[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--green-mid)}
+.sc-cal-day.is-planned .sc-cal-count{color:var(--steel-muted);font-style:italic}
+.sc-cal-num{font:600 14px/1 var(--font-display)}
+.sc-cal-count{font:600 13px/1 var(--font-sans);color:var(--green-soft, #7DBA70)}
+.sc-cal-booked{font-size:11px;color:var(--steel-muted)}
+@media (max-width:640px){.sc-cal-day{min-height:48px;padding:4px 6px}.sc-cal-booked{display:none}}
 /* Leads: the sign-up link panel with its QR code. */
 .ld-share>summary{list-style:none} .ld-share>summary::-webkit-details-marker{display:none}
 .ld-share>summary::after{content:'▾';color:var(--steel-muted)} .ld-share[open]>summary::after{content:'▴'}

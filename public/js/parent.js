@@ -4,6 +4,8 @@ import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js
 import { importForm, importsList, dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
+import { timelineBlock } from './timeline-ui.js';
+import { feedBlock } from './feed-ui.js';
 wearableReturnNotice();
 
 // ---------- API ----------
@@ -57,7 +59,10 @@ async function boot() {
   const buy = q.get('buy');
   const buying = state.me && /^(program|course):[\w-]+$/.test(buy ?? '');
   if (buying) state.buy = buy;
-  if (state.me && q.has('welcome')) {
+  if (state.me && q.has('finish')) {   // added at a testing day: the waiver is the one thing needed, the rest can wait
+    state.tab = 'family'; state.finishFirst = true; history.replaceState(null, '', HERE);
+    setTimeout(() => toast('Welcome! Sign the waiver first. Birthday, sport, an emergency contact and a card can wait.'), 300);
+  } else if (state.me && q.has('welcome')) {
     state.tab = 'family'; history.replaceState(null, '', HERE);
     const claim = q.has('claim') ? ' We\'ll check the Athlete ID you gave with your coach.' : '';
     setTimeout(() => toast(buying ? `Welcome! Add a card here, then buy it on the Programs tab.${claim}` : `Welcome! Sign the waiver and add a card, then you can book.${claim}`), 300);
@@ -235,7 +240,7 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ['timeline', 'Timeline'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
   const cur = subtabs.querySelector('[aria-current]');
   if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
@@ -245,6 +250,13 @@ async function viewHome(main) {
   if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
   if (state.homeTab === 'workout') return viewWorkout(main);
+  if (state.homeTab === 'timeline') {   // everything the athlete did, newest first (the same lines the coach sees)
+    const a = athlete();
+    fill(main, top('Timeline'), subtabs, athleteChips(() => render()), h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, `Everything ${a.name.split(' ')[0]} did`), h('p', { class: 'dp-panel-sub' }, 'Workouts, results once a testing day is shared, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
+      timelineBlock((p) => get(p.replace(/^\/portal\/api\//, '')), `/portal/api/athletes/${a.id}/timeline`)));
+    drawSubtabs();
+    return;
+  }
   const a = athlete(), eng = engageFor(a);
   const where = h('div', { class: 'eg-view' });
   fill(main, top(ENGAGE_TABS.find(([k]) => k === state.homeTab)[1]), subtabs, athleteChips(() => render()), where);
@@ -365,8 +377,13 @@ async function viewOverview(main) {
   fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(),
     state.session?.kind === 'both' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '/app' }, 'My workouts') : null,   // a parent who trains here too
     h('div', { id: 'p-install-slot' }, installCard()),
-    state.me.athletes.length ? [cards, calendarPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
+    state.me.athletes.length ? [cards, calendarPanel(), teamFeedPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
   drawSubtabs();
+}
+// The team feed (version 78): the coaches' posts to everyone, your athletes' teams and their programs; bump and comment as the parent.
+function teamFeedPanel() {
+  return panel('Team feed', { subtitle: 'From the coaches, for everyone, your athletes\' teams and their programs.' },
+    feedBlock({ get: (q) => get(`feed${q}`), post: (p, b) => post(`feed${p}`, b), del: (p) => api('DELETE', `feed${p}`) }, { compact: true, limit: 5, empty: 'Nothing from the coaches yet.' }));
 }
 
 // A session row (Home, Book "Booked for"): Today/Tomorrow, coach, waitlist place, On now / Checked in. Tap for details.
@@ -947,7 +964,7 @@ async function viewFamily(main) {
   const scrollTo = (id) => { const el = document.getElementById(id); if (el) { if (el.tagName === 'DETAILS') el.open = true; el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } };
   const TARGET = { terms: 'fam-terms', waiver: 'fam-waiver', card: 'fam-card', card_expired: 'fam-card', card_expiring: 'fam-card', declined: 'fam-card' };
   const fin = state.me.to_finish ?? [];
-  const finish = fin.length ? panel('To finish', { subtitle: `${fin.length} ${fin.length === 1 ? 'thing' : 'things'} left` }, fin.map((x) => h('div', { class: 'p-row' },
+  const finish = fin.length ? panel('To finish', { subtitle: state.finishFirst ? `${fin.length} ${fin.length === 1 ? 'thing' : 'things'} left. The waiver is the one thing needed before training; the rest can wait.` : `${fin.length} ${fin.length === 1 ? 'thing' : 'things'} left` }, fin.map((x) => h('div', { class: 'p-row' },
     h('span', { class: `grow ${['card_expired', 'declined'].includes(x.key) ? 'warn-text' : ''}` }, x.text),
     btn('Go', () => (x.athlete_id ? (openAthletes.add(x.athlete_id), render({ keepScroll: true }), setTimeout(() => scrollTo(`ath-${x.athlete_id}`), 50)) : scrollTo(TARGET[x.key])), 'outline')))) : null;
 

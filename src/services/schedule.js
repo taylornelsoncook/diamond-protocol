@@ -408,6 +408,51 @@ async function generateNow(ctx, seriesId) {
   }
   return made;
 }
+// ---------- The month calendar (owner's ask: click a day on a calendar, at least a year ahead) ----------
+// Sessions exist 8 weeks ahead (HORIZON_DAYS); past that, the open-ended classes are projected from their series
+// (same rules as generateNow: active, weekday, start and end dates) so a day a year out still shows what will be there.
+export function projectedSessions(ctx, { from, to, kind, locationId, coachId } = {}) {
+  const zone = tz(ctx), today = localDate(ctx.now(), zone), horizon = addDaysToDate(today, HORIZON_DAYS);
+  const first = from > horizon ? from : addDaysToDate(horizon, 1);
+  if (first > to) return [];
+  const where = ['s.active = 1'], args = [];
+  if (kind) { where.push('s.kind = ?'); args.push(kind); }
+  if (locationId) { where.push('s.location_id = ?'); args.push(locationId); }
+  if (coachId) { where.push('s.coach_id = ?'); args.push(coachId); }
+  const series = ctx.db.all(`SELECT s.*, l.name AS location_name, u.name AS coach_name FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id WHERE ${where.join(' AND ')} ORDER BY s.start_time, s.name`, ...args)
+    .map((x) => ({ ...x, days: JSON.parse(x.weekdays) }));
+  const out = [];
+  for (let d = first; d <= to; d = addDaysToDate(d, 1)) {
+    for (const x of series) {
+      if (!x.days.includes(weekdayOf(d)) || x.start_date > d || (x.end_date && x.end_date < d)) continue;
+      const starts = zonedToUtc(d, x.start_time, zone);
+      out.push({ projected: true, series_id: x.id, name: x.name, kind: x.kind, location_id: x.location_id, location_name: x.location_name, coach_id: x.coach_id ?? null, coach_name: x.coach_name ?? null,
+        starts_at: starts, ends_at: new Date(Date.parse(starts) + x.duration_min * 60000).toISOString(), capacity: x.capacity, date: d });
+    }
+  }
+  return out;
+}
+// One month: each day's sessions (booked, canceled) and, past the horizon, the classes projected from their series.
+export function monthView(ctx, { month, kind, locationId, coachId } = {}) {
+  const zone = tz(ctx), today = localDate(ctx.now(), zone);
+  const m = /^\d{4}-\d{2}$/.test(month ?? '') ? month : today.slice(0, 7);
+  const from = `${m}-01`;
+  const [y, mo] = m.split('-').map(Number);
+  if (mo < 1 || mo > 12) throw badRequest('month must look like 2027-03.');
+  const to = addDaysToDate(`${mo === 12 ? y + 1 : y}-${String(mo === 12 ? 1 : mo + 1).padStart(2, '0')}-01`, -1);
+  const where = ['s.starts_at >= ?', 's.starts_at < ?'], args = [zonedToUtc(from, '00:00', zone), zonedToUtc(addDaysToDate(to, 1), '00:00', zone)];
+  if (kind) { where.push('s.kind = ?'); args.push(kind); }
+  if (locationId) { where.push('s.location_id = ?'); args.push(locationId); }
+  if (coachId) { where.push('s.coach_id = ?'); args.push(coachId); }
+  const days = new Map();
+  const at = (d) => { if (!days.has(d)) days.set(d, { date: d, sessions: 0, booked: 0, canceled: 0, projected: 0 }); return days.get(d); };
+  for (const s of ctx.db.all(`SELECT s.starts_at, s.status, (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked', 'attended')) AS booked FROM class_sessions s WHERE ${where.join(' AND ')}`, ...args)) {
+    const row = at(localDate(s.starts_at, zone));
+    if (s.status === 'canceled') row.canceled += 1; else { row.sessions += 1; row.booked += s.booked; }
+  }
+  for (const p of projectedSessions(ctx, { from, to, kind, locationId, coachId })) at(p.date).projected += 1;
+  return { month: m, from, to, today, horizon: addDaysToDate(today, HORIZON_DAYS), days: [...days.values()].sort((a, b) => (a.date < b.date ? -1 : 1)) };
+}
 export async function extendSchedule(ctx) {
   let made = 0;
   for (const s of ctx.db.all('SELECT id FROM class_series WHERE active = 1')) made += await generateSessions(ctx, s.id);

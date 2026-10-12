@@ -222,13 +222,13 @@ test('a version 74 database is rebuilt for the new sources, keeping its leads, o
   const tmp = mkdtempSync(join(tmpdir(), 'dp-v74-')), file = join(tmp, 'dp.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v74.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 74');
+    old.exec(readFileSync(new URL('./fixtures/schema-v78.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 78');
     old.exec(`INSERT INTO leads (id, parent_name, email, source, status, created_at, updated_at) VALUES ('ld_old', 'Old Lead', 'old@example.com', 'inquiry', 'new', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`);
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 75, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 79, `round ${round}`);
       assert.deepEqual(d.get('SELECT parent_name, source, status FROM leads WHERE id = ?', 'ld_old'), { parent_name: 'Old Lead', source: 'inquiry', status: 'new' });
       d.run(`INSERT INTO leads (id, parent_name, email, source, status, created_at, updated_at) VALUES (?, 'QR Lead', ?, 'qr', 'new', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')`, `ld_qr${round}`, `qr${round}@example.com`);
       d.close();

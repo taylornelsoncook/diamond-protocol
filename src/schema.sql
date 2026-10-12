@@ -2050,3 +2050,54 @@ CREATE TABLE IF NOT EXISTS feed_comments (
   hidden_by TEXT
 );
 CREATE INDEX IF NOT EXISTS feed_comments_post ON feed_comments(post_id, created_at);
+
+-- Bar speed (velocity-based training, version 81): one row per set from a VBT device or app (Output, GymAware, FLEX,
+-- Vitruve, Enode, Perch, RepOne, Metric...), pushed to the open API with a results-scope key or imported from the
+-- system's export. A set whose athlete isn't known yet waits with client_id NULL (identity = how the sender named them)
+-- until the coach links that device ID or name; it is never matched by name on its own. Loads in pounds, velocities in
+-- m/s, power in watts, range of motion in centimetres. Nothing worked out is stored (services/vbt.js profileFor).
+CREATE TABLE IF NOT EXISTS vbt_imports (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  filename TEXT,
+  rows INTEGER NOT NULL DEFAULT 0,
+  saved INTEGER NOT NULL DEFAULT 0,
+  waiting INTEGER NOT NULL DEFAULT 0,
+  duplicates INTEGER NOT NULL DEFAULT 0,
+  problems TEXT NOT NULL DEFAULT '[]',
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  undone_at TEXT,
+  undone_by TEXT
+);
+CREATE TABLE IF NOT EXISTS vbt_sets (
+  id TEXT PRIMARY KEY,
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,                        -- output, gymaware, flex, vitruve, enode, perch, repone, metric, other
+  identity TEXT,                                 -- waiting only: id:<device id> or name:<name>, as performance.identityOf writes it
+  athlete_ref TEXT,                              -- waiting only: {external_id, name, email} as sent
+  exercise_id TEXT REFERENCES exercises(id) ON DELETE SET NULL,
+  exercise_name TEXT NOT NULL,
+  performed_at TEXT NOT NULL,
+  day TEXT NOT NULL,                             -- the business day
+  set_no INTEGER,
+  reps INTEGER,
+  load_lb REAL,
+  mean_velocity REAL,                            -- the set's mean concentric velocity (the average of its reps)
+  peak_velocity REAL,                            -- the fastest instant of the fastest rep
+  best_velocity REAL,                            -- the fastest rep's mean velocity
+  last_velocity REAL,                            -- the last rep's mean velocity
+  velocity_loss_pct REAL,                        -- (best - last) / best, in percent
+  mean_power REAL,
+  peak_power REAL,
+  rom_cm REAL,
+  duration_s REAL,
+  reps_detail TEXT,                              -- JSON [{velocity, peak_velocity, power}] when the system sent the reps
+  external_id TEXT,                              -- the system's own id for the set
+  dedupe_key TEXT NOT NULL,                      -- external_id, or athlete|exercise|time|set, so a resend changes nothing
+  source TEXT NOT NULL,                          -- api:<key label>, csv:<provider>
+  import_id TEXT REFERENCES vbt_imports(id) ON DELETE SET NULL,
+  received_at TEXT NOT NULL,
+  UNIQUE (provider, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS vbt_sets_client ON vbt_sets(client_id, day);

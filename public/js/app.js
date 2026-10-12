@@ -6,6 +6,7 @@ import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
 import { startupForm, summaryText, OUTCOME_TEXT } from './startup-ui.js';
 import { maxesBlock, volumeBlock } from './maxes-ui.js';
+import { vbtBlock, vbtImportPanel, vbtWaitingPanel } from './vbt-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
@@ -820,7 +821,7 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 async function viewClient(main, id) {
   if (id === 'new') return viewNewClient(main);
   if (id === 'import') return viewImport(main);
-  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks, calendar, maxData, volume] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`), get(`/v1/clients/${id}/training-calendar`), get(`/v1/clients/${id}/maxes`), get(`/v1/clients/${id}/progress`)]);   // front desk doesn't link devices
+  const [c, plans, progs, inv, logs, locs, sales, visits, upcoming, settings, perfData, devLinks, calendar, maxData, volume, barSpeed] = await Promise.all([get(`/v1/clients/${id}`), get('/v1/plans'), get('/v1/programs'), get(`/v1/clients/${id}/invoices`), get(`/v1/clients/${id}/workouts`), get('/v1/locations'), get(`/v1/sales?client_id=${id}`), get(`/v1/check-ins?client_id=${id}`), get(`/v1/clients/${id}/bookings`), get('/v1/settings'), get(`/v1/clients/${id}/performance`), state.user?.role === 'front_desk' ? { data: [] } : get(`/v1/athlete-links?client_id=${id}`), get(`/v1/clients/${id}/training-calendar`), get(`/v1/clients/${id}/maxes`), get(`/v1/clients/${id}/progress`), get(`/v1/clients/${id}/vbt`).catch(() => null)]);   // front desk doesn't link devices
   const [en, testLib, owed, products, badgeLib, notesList, att, famList, outside] = await Promise.all([get(`/v1/clients/${id}/engagement`), get('/v1/tests'), isOwner() ? get(`/v1/clients/${id}/owed`) : null, isOwner() ? get('/v1/products') : null, get('/v1/skill-badges'), get(`/v1/clients/${id}/notes`), get(`/v1/clients/${id}/attendance`), !c.family && state.user.role !== 'front_desk' ? get('/v1/families').catch(() => null) : null, get(`/v1/clients/${id}/outside-data`).catch(() => null)]);
   const eng = clientPanels(c, en, testLib.data, badgeLib.data);
   const [reqList, claimList] = isOwner() ? await Promise.all([get(`/v1/membership-requests?client_id=${id}&status=all`).catch(() => ({ data: [] })), get('/v1/profile-claims').catch(() => ({ data: [] }))]) : [{ data: [] }, { data: [] }];
@@ -1156,6 +1157,9 @@ async function viewClient(main, id) {
   // Maxes (owner decision): the lifts a program loads from, on file or estimated from logged sets; the athlete and the family enter their own too.
   const maxesPanel = panel('Maxes', { subtitle: `The weights in ${first}'s program come from these. A max entered here shows to the family at once; with nothing on file the estimate from logged sets stands in.` },
     maxesBlock(maxData, { who: 'coach', first, canEdit: role !== 'front_desk', save: (b) => post(`/v1/clients/${id}/maxes`, b), remove: (rid) => del(`/v1/clients/${id}/maxes/${rid}`), reload: render }));
+  // Bar speed from a velocity device (version 81): per exercise, the load-velocity profile and the estimated max it points to.
+  const barSpeedPanel = panel('Bar speed', { subtitle: `Sets from ${first}'s velocity device (Output, GymAware, Vitruve and others): how fast each load moved, the estimated max the line points to, and recent sessions. Connect a device or import its export under Testing → Devices & imports.` },
+    vbtBlock(barSpeed, { who: 'coach', first }));
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
   // Archive: owners and coaches. Refused with a membership; upcoming bookings are canceled only after a second yes.
@@ -1196,8 +1200,8 @@ async function viewClient(main, id) {
   // The page's sections as tabs. Each panel is built once above; a tab shows only its own panels, so the page stays
   // short and money stays where the roles rules put it (panels the signed-in role can't have are already null).
   // Everything the athlete did, newest first (the builder redesign, step 5): one line each, linking to the tab that holds it.
-  const TL_TABS = { workout: 'training', step: 'training', checkin: 'training', result: 'testing', max: 'testing', badge: 'testing', sprint: 'sprint', form_check: 'form-checks', attendance: 'schedule', reading: 'education', purchase: 'membership' };
-  const timelinePanel = panel('Timeline', { subtitle: `Everything ${first} did, newest first: workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges, reading and steps up.` },
+  const TL_TABS = { workout: 'training', step: 'training', checkin: 'training', result: 'testing', max: 'testing', badge: 'testing', sprint: 'sprint', form_check: 'form-checks', attendance: 'schedule', reading: 'education', purchase: 'membership', bar_speed: 'testing' };
+  const timelinePanel = panel('Timeline', { subtitle: `Everything ${first} did, newest first: workouts, results, maxes, bar speed, sprint reps, form checks, check-ins, sessions, badges, reading and steps up.` },
     timelineBlock(get, `/v1/clients/${id}/athlete-timeline`, { linkFor: (it) => (TL_TABS[it.kind] && TABS_HAVE(TL_TABS[it.kind]) ? `#/clients/${id}?tab=${TL_TABS[it.kind]}` : null) }));
   const TABS = [
     ['timeline', 'Timeline', [timelinePanel]],
@@ -1205,7 +1209,7 @@ async function viewClient(main, id) {
     ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
     ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
     ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), volumePanel, eng.accountability, eng.goals, eng.badges]],
-    ['testing', 'Testing', [maxesPanel, perfPanel, eng.targets]],
+    ['testing', 'Testing', [maxesPanel, barSpeedPanel, perfPanel, eng.targets]],
     ['recovery', 'Recovery & sleep', [outsidePanel]],
     ['form-checks', 'Form checks', [formChecksPanel]],
     ['sprint', 'Sprint', [sprintPanel]],
@@ -4573,8 +4577,8 @@ async function viewQueue(main) {
 async function viewConnections(main) {
   if (deskStop(main, 'Devices & imports')) return;
   const owner = isOwner();
-  const [integ, links, everyone, waitingQ] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue')]);
-  const sysName = (p) => (p === 'api' ? 'Open API' : integ.data.find((i) => i.provider === p)?.name.split(' (')[0] ?? p);
+  const [integ, links, everyone, waitingQ, vbtSystems, vbtWaiting, vbtImports] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue'), get('/v1/vbt/systems'), get('/v1/vbt/waiting'), get('/v1/vbt/imports')]);
+  const sysName = (p) => (p === 'api' ? 'Open API' : integ.data.find((i) => i.provider === p)?.name.split(' (')[0] ?? vbtSystems.data.find((x) => x.key === p)?.label.split(' (')[0] ?? p);
 
   // Hawkin: a failed sync shows Needs attention, and the owner can paste a new token right there.
   const hawkin = integ.data.find((i) => i.provider === 'hawkin');
@@ -4592,7 +4596,7 @@ async function viewConnections(main) {
     !owner && !hawkin.connected ? h('p', { class: 'small muted' }, 'The owner connects Hawkin.') : null);
 
   // Link a device ahead of time.
-  const providers = [...new Set(['api', ...integ.data.map((i) => i.provider).filter((p) => p !== 'generic'), ...waitingQ.data.map((g) => g.provider)])];
+  const providers = [...new Set(['api', ...integ.data.map((i) => i.provider).filter((p) => p !== 'generic'), ...vbtSystems.data.map((x) => x.key).filter((k) => k !== 'other'), ...waitingQ.data.map((g) => g.provider)])];   // bar-speed systems too: one link covers results and sets
   const sys = select(providers.map((p) => [p, sysName(p)]), { value: 'freelap', 'aria-label': 'System' });
   const kind = select([['id', 'A device ID'], ['name', 'A name the device uses']], { value: 'id', 'aria-label': 'What you\'re typing' });
   const ext = input({ placeholder: 'Like 1047 or A-17', 'aria-label': 'Device ID or name' });
@@ -4655,9 +4659,13 @@ async function viewConnections(main) {
     h('pre', { class: 'small', style: 'white-space:pre-wrap;overflow-x:auto;background:var(--ground);padding:12px;border-radius:6px;margin:0' }, example),
     h('div', { class: 'row wrap' }, owner ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/integrations' }, 'API keys') : null, h('a', { class: 'dp-btn dp-btn--ghost', href: '/v1/openapi.json', target: '_blank' }, 'Full API reference')));
 
-  fill(main, header('Devices & imports', 'Get results in from anywhere: live connections, file imports, the open API, or by hand.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
+  fill(main, header('Devices & imports', 'Get results and bar speed in from anywhere: live connections, file imports, the open API, or by hand.', h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing' }, 'Testing')),
+    vbtWaiting.data.length ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${vbtWaiting.data.reduce((n, w) => n + w.sets, 0)} bar-speed ${vbtWaiting.data.reduce((n, w) => n + w.sets, 0) === 1 ? 'set is' : 'sets are'} waiting from ${vbtWaiting.data.length} unrecognized ${vbtWaiting.data.length === 1 ? 'athlete' : 'athletes'}. Link them below.`)) : null,
     waitingQ.n ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waitingQ.n} ${waitingQ.n === 1 ? 'result is' : 'results are'} waiting from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
     linkPanel, linksPanel, hawkinPanel,
+    // Bar speed (version 81): a device's export, and sets waiting under a name or ID we don't know.
+    vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render }),
+    vbtWaiting.data.length || vbtImports.data.length ? vbtWaitingPanel({ waiting: vbtWaiting.data, imports: vbtImports.data, everyone, athletePicker, post, onDone: render }) : null,
     panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
     apiPanel);
 }

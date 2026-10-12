@@ -2,6 +2,7 @@ import { v, badRequest } from '../util.js';
 import { parentFilter } from './performance.js';
 import { LOAD_TESTS } from './programs.js';
 import { KINDS as SPRINT_KINDS, list as sprintList } from './sprint.js';
+import { timelineRows as barSpeedRows, SYSTEMS as VBT_SYSTEMS } from './vbt.js';
 
 // One athlete's timeline (the builder redesign, step 5; owner's ask: "everything they complete blends into their
 // profile"): everything the athlete did, newest first, one line each, read from the tables that already hold it.
@@ -10,7 +11,7 @@ import { KINDS as SPRINT_KINDS, list as sprintList } from './sprint.js';
 // 'athlete' (the app's Profile tab, the same as the family's).
 export const KINDS = {
   workout: 'Workouts', result: 'Test results', max: 'Maxes', sprint: 'Sprint reps', form_check: 'Form checks', checkin: 'Check-ins',
-  attendance: 'Sessions', badge: 'Badges', reading: 'Reading', step: 'Steps up', purchase: 'Purchases'
+  attendance: 'Sessions', badge: 'Badges', reading: 'Reading', step: 'Steps up', purchase: 'Purchases', bar_speed: 'Bar speed'
 };
 const MAX_EACH = 400;         // rows read per source; the merge keeps the newest
 const num = (x, d = 2) => (x == null ? '' : Number(x).toFixed(d).replace(/\.?0+$/, ''));
@@ -63,6 +64,12 @@ export function timelineFor(ctx, clientId, { kind = null, before = null, limit =
       const what = `${SPRINT_KINDS[c.kind]?.label ?? c.kind}${c.segment ? ` · ${c.segment} yd` : ''}`;
       if (c.reviewed_at) push({ at: c.reviewed_at, kind: 'sprint', text: `Sprint rep graded${c.grade ? ` ${c.grade}` : ''}: ${what}`, detail: [c.reviewed_by_name ? `By ${c.reviewed_by_name}` : null, c.timing?.contact_s ? `contact ${num(c.timing.contact_s, 3)} s` : null].filter(Boolean).join(' · '), ref: { clip_id: c.id } });
       if (c.sent_at) push({ at: c.sent_at, kind: 'sprint', text: `Sprint rep sent: ${what}`, detail: c.uploaded_by_name && c.uploaded_by_kind === 'staff' ? `Filmed by ${c.uploaded_by_name}` : '', ref: { clip_id: c.id } });
+    }
+  }
+  if (want('bar_speed')) {
+    for (const r of barSpeedRows(ctx, id, MAX_EACH)) {
+      push({ at: r.at, kind: 'bar_speed', text: `Bar speed: ${r.exercise_name}${r.best != null ? `, best ${num(r.best, 2)} m/s${r.best_load != null ? ` at ${num(r.best_load, 0)} lb` : ''}` : ''}`,
+        detail: [`${r.sets} ${r.sets === 1 ? 'set' : 'sets'}`, r.top_load != null ? `top load ${num(r.top_load, 0)} lb` : null, VBT_SYSTEMS[r.provider]?.label.split(' (')[0] ?? r.provider].filter(Boolean).join(' · '), ref: { day: r.day, exercise: r.exercise_name } });
     }
   }
   if (want('form_check')) {

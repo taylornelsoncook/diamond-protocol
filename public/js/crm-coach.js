@@ -3,7 +3,8 @@
 // family's contact history on the client profile. The server checks every rule (who sees which lead, consent, opt-outs);
 // these screens only follow. Owner decision: owners and front desk work every lead; a coach sees only the leads the
 // owner gave them. Reports, import, export, templates and group messages are the owner's.
-import { h, fill, toast, date, ago, btn, busy, field, input, select, panel } from './ui.js';
+import { h, fill, toast, date, ago, btn, busy, field, input, select, panel, copyText } from './ui.js';
+import { qrSvg } from './qr.js';
 
 let api, render, header, pulseTile, download, me;
 export function initCrm(deps) { ({ api, render, header, pulseTile, download, me } = deps); }
@@ -191,7 +192,35 @@ export async function viewLeads(main) {
   const summary = coachView ? 'Families the owner asked you to follow up with. Only you, the owner and the front desk see them.'
     : `${plural(res.last_30_days.leads, 'family', 'families')} asked about training in the last 30 days; ${res.last_30_days.signed_up} signed up.${res.stale ? ` ${plural(res.stale, 'lead')} nobody has worked for a week.` : ''}`;
   fill(main, header('Leads', summary, coachView ? null : btn('Add lead', () => addLeadDialog((l) => { location.hash = `#/leads/${l.id}`; }), 'primary')),
-    leadNav(''), toolbar, box);
+    leadNav(''), shareLinkPanel(), toolbar, box);
+}
+// The one sign-up link (owner's ask): /start?from=<channel> for QR codes, the website, social posts, emails, texts,
+// flyers and ads. Everyone who fills it in lands here as a lead tagged with the channel, and moves to Member on their
+// first purchase. The QR code is drawn here (public/js/qr.js) and downloads as an SVG for print.
+const CHANNELS = [['qr', 'QR code'], ['website', 'Website'], ['social', 'Social media'], ['email', 'Email'], ['text', 'Text'], ['flyer', 'Flyer'], ['ad', 'Ad']];
+const shareUi = { channel: 'qr', open: false };
+function shareLinkPanel() {
+  const urlFor = (c) => `${location.origin}/start?from=${c}`;
+  const link = input({ readonly: true, 'aria-label': 'Your sign-up link', value: urlFor(shareUi.channel), onFocus: (e) => e.target.select() });
+  const qr = h('div', { class: 'ld-qr', 'aria-hidden': 'true' });
+  const chips = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Where it goes' });
+  const drawQr = () => { qr.innerHTML = qrSvg(urlFor(shareUi.channel), { label: 'QR code for the sign-up link' }); };
+  const pick = (c) => { shareUi.channel = c; link.value = urlFor(c); for (const b of chips.children) b.setAttribute('aria-pressed', String(b.dataset.c === c)); drawQr(); };
+  fill(chips, CHANNELS.map(([c, label]) => h('button', { type: 'button', class: 'tm-view', 'data-c': c, 'aria-pressed': String(shareUi.channel === c), onClick: () => pick(c) }, label)));
+  drawQr();
+  const downloadQr = () => { const blob = new Blob([qr.innerHTML], { type: 'image/svg+xml' }); const a = h('a', { href: URL.createObjectURL(blob), download: `sign-up-qr-${shareUi.channel}.svg` }); document.body.append(a); a.click(); a.remove(); };
+  const body = h('div', { class: 'row wrap', style: 'gap:16px;align-items:flex-start' },
+    h('div', { class: 'stack-tight grow', style: 'min-width:260px' },
+      h('p', { class: 'small muted', style: 'margin:0' }, 'One link for everything that brings people in: put it behind a QR code, on the website, in social posts, emails and texts. Pick where it goes so each lead says how they found you; everyone who fills it in lands here and moves to Member on their first purchase.'),
+      chips,
+      h('div', { class: 'row', style: 'gap:8px' }, link, btn('Copy', () => copyText(link.value, 'Link copied.'), 'secondary')),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'The plain link ', h('code', null, `${location.origin}/start`), ' works too (it shows as "Website form").')),
+    h('div', { class: 'stack-tight', style: 'align-items:center' }, qr, btn('Download QR', downloadQr, 'ghost')));
+  const d = h('details', { class: 'dp-panel ld-share', open: shareUi.open ? true : null },
+    h('summary', { class: 'row wrap', style: 'gap:8px;align-items:center;cursor:pointer' }, h('h2', { class: 'dp-panel-title grow', style: 'margin:0' }, 'Your sign-up link'), h('span', { class: 'small muted' }, `${location.origin}/start`)),
+    body);
+  d.addEventListener('toggle', () => { shareUi.open = d.open; });
+  return d;
 }
 
 // ---------- A lead's page ----------

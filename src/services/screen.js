@@ -5,6 +5,7 @@ import { getProgram, appExercise, swapsFor, LOAD_TESTS, readLog, saveSets, start
 import { teamRosterFor } from './teams.js';
 import { readinessToday } from './engage.js';
 import { emit } from './events.js';
+import { forScreen as feedForScreen } from './feed.js';
 
 // The weight-room screen: a TV or shared tablet opened with a check-in tablet's secret link at /tv#<key>. It shows the
 // workout a coach picked for each session running now at that location, big enough to read across the room. Athletes
@@ -27,7 +28,7 @@ export function workoutView(ctx, workoutId) {
   const p = getProgram(ctx, w.program_id);
   const full = p.workouts.find((x) => x.id === w.id);
   const block = (r) => (r ? { id: r.id, name: r.name, note: r.note, exercises: r.exercises.map((x) => ({ name: x.name, prescription: x.prescription, note: x.note, video_url: x.video_url, poster_url: x.poster_url })) } : null);
-  return { id: w.id, title: w.title, week: w.week, day: w.day, program_id: p.id, program_name: p.name, warmup: block(full.warmup), cooldown: block(full.cooldown),
+  return { id: w.id, title: w.title, week: w.week, day: w.day, program_id: p.id, program_name: p.name, instructions: w.instructions ?? null, warmup: block(full.warmup), cooldown: block(full.cooldown),
     exercises: full.exercises.map((x) => ({ id: x.id, name: x.name, prescription: x.prescription, instructions: x.instructions, details: x.details, note: x.note,
       video_url: x.video_url ?? null, poster_url: x.poster_url ?? null,   // the screen plays the demos in turn
       group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag, block_id: x.block_id ?? null, block_name: x.block_name ?? null,
@@ -55,6 +56,7 @@ export function screenBoard(ctx, key, asOf = ctx.now()) {
   const sessions = openSessions(ctx, k.location_id, asOf).map((s) => ({ ...s, ...ctx.db.get('SELECT series_id, workout_id FROM class_sessions WHERE id = ?', s.id) }));
   return {
     business_name: getSetting(ctx, 'business_name'), location_name: k.location_name, screen: k.name,
+    posts: feedForScreen(ctx, sessions),   // pinned team-feed posts for the screen (version 78)
     sessions: sessions.map((s) => {
       const logged = loggedIn(ctx, s.id);
       return { id: s.id, name: s.name, starts_at: s.starts_at, ends_at: s.ends_at, workout: s.workout_id ? workoutView(ctx, s.workout_id) : null,

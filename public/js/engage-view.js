@@ -15,7 +15,9 @@ const PATHS = {
   overview: ['M3 11l9-7 9 7', 'M5 10v10h14V10'],
   accountability: ['M4 5h16v15H4z', 'M4 9h16', 'M8 3v4', 'M16 3v4', 'M8.5 14.5l2.5 2.5 4.5-4.5'],
   performance: ['M4 19l5-6 4 3 7-9', 'M15 7h5v5'],
-  education: ['M12 6C9.5 4.3 6.5 3.8 3.5 4.3v14c3-.5 6 0 8.5 1.7 2.5-1.7 5.5-2.2 8.5-1.7v-14c-3-.5-6 0-8.5 1.7z', 'M12 6v14']
+  education: ['M12 6C9.5 4.3 6.5 3.8 3.5 4.3v14c3-.5 6 0 8.5 1.7 2.5-1.7 5.5-2.2 8.5-1.7v-14c-3-.5-6 0-8.5 1.7z', 'M12 6v14'],
+  profile: ['M12 12a4 4 0 100-8 4 4 0 000 8z', 'M4 21c0-4 3.5-7 8-7s8 3 8 7'],
+  timeline: ['M6 4v16', 'M6 7h10', 'M6 12h13', 'M6 17h8']
 };
 export function tabIcon(name) {
   const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');

@@ -315,7 +315,7 @@ test('a version 65 database gains the distance column, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 75, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 80, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(sprint_clips)').some((c) => c.name === 'segment'));
       d.close();
     }
@@ -362,7 +362,7 @@ test('a version 64 database gains the sprint tables, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 75, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 80, `round ${round}`);
       const cols = d.all('PRAGMA table_info(sprint_clips)').map((c) => c.name);
       assert.ok(['kind', 'capture_fps', 'file_fps', 'calibration', 'etag'].every((c) => cols.includes(c)));
       assert.ok(d.all('PRAGMA table_info(sprint_marks)').length >= 6);

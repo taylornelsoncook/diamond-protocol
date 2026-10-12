@@ -95,13 +95,13 @@ test('a parent course goes in order too; a version 74 database gains in_order on
   const tmp = mkdtempSync(join(tmpdir(), 'dp-v74-')), file = join(tmp, 'dp.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v74.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 74');
+    old.exec(readFileSync(new URL('./fixtures/schema-v79.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 79');
     old.exec(`INSERT INTO courses (id, title, created_at) VALUES ('crs_old', 'Old course', '2026-01-01T00:00:00Z')`);
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 75, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 80, `round ${round}`);
       assert.deepEqual(d.get('SELECT title, in_order FROM courses WHERE id = ?', 'crs_old'), { title: 'Old course', in_order: 1 }, 'existing courses go in order');
       d.close();
     }

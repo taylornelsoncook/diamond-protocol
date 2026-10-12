@@ -7,6 +7,8 @@ const logoBlock = () => h('img', { src: '/brand/logo.png', alt: 'Diamond Protoco
 let info = { business_name: 'Diamond Protocol' };
 
 async function boot() {
+  // The sign-up link's channel (/start?from=qr) is kept for this visit so the lead says where it came from.
+  try { const from = new URLSearchParams(location.search).get('from'); if (from) sessionStorage.setItem('dp_from', from); } catch { /* storage off */ }
   info = await (await fetch('/portal/api/public/info')).json().catch(() => info);
   document.title = `Ask about training · ${info.business_name}`;
   renderForm();
@@ -24,7 +26,8 @@ function renderForm() {
     err.textContent = '';
     if (textsOk.checked && !phone.value.trim()) { err.textContent = 'Add your mobile number to get texts, or untick the box.'; return; }
     const res = await fetch('/portal/api/public/inquiry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-      parent_name: name.value, email: email.value, phone: phone.value, athlete_name: athlete.value, athlete_age: age.value, sport: sport.value, message: message.value, texts_ok: textsOk.checked, website: trap.value }) });
+      parent_name: name.value, email: email.value, phone: phone.value, athlete_name: athlete.value, athlete_age: age.value, sport: sport.value, message: message.value, texts_ok: textsOk.checked, website: trap.value,
+      from: new URLSearchParams(location.search).get('from') ?? sessionStorage.getItem('dp_from') ?? null }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { err.textContent = data.error?.message ?? 'Something went wrong. Try again.'; return; }
     renderThanks(email.value);

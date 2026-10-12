@@ -4,6 +4,9 @@ import { athleteSprint } from './sprint-ui.js';
 import { groupTag, groupTitle, withGroups, rxTable } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 import { startupForm, summaryText } from './startup-ui.js';
+import { timelineBlock } from './timeline-ui.js';
+import { feedBlock } from './feed-ui.js';
+import { maxesBlock } from './maxes-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 // An athlete who signed in at /portal with their own email has no token: the portal cookie opens the app, and
@@ -49,7 +52,7 @@ let spoken = [];
 const say = (msg) => { spoken.push(msg); if (spoken.length === 1) queueMicrotask(() => { live.textContent = spoken.join(' '); spoken = []; }); };
 
 // A link like /app?token=…#education opens that tab, and changing the # while the app is open switches tabs.
-const TAB_KEYS = ['workout', 'sprint', 'accountability', 'performance', 'education'];
+const TAB_KEYS = ['workout', 'sprint', 'accountability', 'performance', 'education', 'profile'];
 const hashTab = () => { const k = location.hash.replace(/^#\/?/, '').toLowerCase(); return TAB_KEYS.includes(k) ? k : null; };
 const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map(),
   pick: null, pickWorkout: null,                       // a workout opened from the calendar instead of the one the app opens on
@@ -61,7 +64,7 @@ const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), po
 const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
 function drawTabs() {
   const dots = engageDots(engage.data);
-  fill(tabs, [['workout', 'Workout'], ['sprint', 'Sprint'], ...ENGAGE_TABS].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
+  fill(tabs, [['workout', 'Workout'], ['sprint', 'Sprint'], ...ENGAGE_TABS, ['profile', 'Profile']].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
     tabIcon(k), label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
 }
 function show(tab) {
@@ -78,6 +81,11 @@ function show(tab) {
   }
   stopRest();
   const where = h('div', { class: 'eg-view' });
+  if (tab === 'profile') {  // one place for everything: the timeline, maxes, streaks and the account pages
+    fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, 'Profile')), where);
+    renderProfile(where);
+    return;
+  }
   if (tab === 'sprint') {   // sprint reps sent to the coach and the analysis they send back (sprint-ui.js)
     fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, 'Sprint')), where);
     athleteSprint(where, { api });
@@ -93,6 +101,36 @@ async function refresh() {
     if (state.pick) { try { state.pickWorkout = await api('GET', `/app/api/workouts/${state.pick}${atQ()}`); } catch (e) { if (e.status) { state.pick = null; state.pickWorkout = null; } } }   // logged since, or gone
     if (state.tab === 'workout' && !state.done && !editing()) render();
   } catch { /* offline: keep what's on screen */ }
+}
+
+// The team feed (the builder redesign, step 6): the coaches' posts to everyone, your teams and your program, with a
+// fist bump and comments. One card, kept between renders so the feed isn't fetched again every minute.
+let feedEl = null;
+function feedCard() {
+  if (!feedEl) feedEl = h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Team feed'),
+    feedBlock({ get: (q) => api('GET', `/app/api/feed${q}`), post: (p, b) => api('POST', `/app/api/feed${p}`, b), del: (p) => api('DELETE', `/app/api/feed${p}`) }, { compact: true, limit: 5, empty: 'Nothing from your coaches yet.' }));
+  return feedEl;
+}
+// The Profile tab (the builder redesign, step 5; owner's ask: "everything under one link"): who they are, their
+// streaks, their maxes, everything they did as a timeline, and the account pages in the portal (family, payments,
+// sign-in), so one link reaches everything. Inside the family portal's frame the portal's own tabs hold the account.
+function renderProfile(where) {
+  const home = state.home, c = home?.client ?? {};
+  const s = engage.data?.accountability?.streaks;
+  const streaks = s ? h('div', { class: 'eg-streaks' },
+    s.plan_weeks != null ? h('div', { class: 'eg-streak' }, h('b', { class: s.plan_weeks ? 'good-text' : '' }, s.plan_weeks), h('span', { class: 'strong' }, `Clean ${s.plan_weeks === 1 ? 'week' : 'weeks'} in a row`), h('span', { class: 'small muted' }, 'Every planned workout done')) : null,
+    h('div', { class: 'eg-streak' }, h('b', { class: s.checkin_days ? 'good-text' : '' }, s.checkin_days), h('span', { class: 'strong' }, `Check-in ${s.checkin_days === 1 ? 'day' : 'days'} in a row`), s.best_checkin_days ? h('span', { class: 'small muted' }, `Best ${s.best_checkin_days}`) : null)) : null;
+  const maxes = h('div');
+  api('GET', '/app/api/maxes').then((d) => { if (d?.lifts?.length) fill(maxes, h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, 'Your maxes'), maxesBlock(d, { who: 'athlete', canEdit: true, save: (b) => api('POST', '/app/api/maxes', b), remove: (id) => api('DELETE', `/app/api/maxes/${id}`), reload: () => show('profile') }))); }).catch(() => {});
+  const links = embedded ? null : h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Your account'),
+    h('p', { class: 'small muted' }, 'Family, payments, bookings, programs and your sign-in live in the portal. Sign in with your email if it asks.'),
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=family' }, 'Family & payments'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=book' }, 'Book a session'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=progress' }, 'Progress & reports'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=programs' }, 'Programs & store')));
+  fill(where,
+    h('section', { class: 'dp-panel stack-tight' }, h('div', { class: 'c-title', style: 'font-size:24px' }, c.name ?? 'You'), c.athlete_id ? h('div', { class: 'small muted' }, 'Athlete ID ', h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id)) : null, streaks),
+    maxes,
+    h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, 'Everything you did'), h('p', { class: 'dp-panel-sub' }, 'Workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
+      timelineBlock((p) => api('GET', p), '/app/api/timeline', { empty: 'Nothing here yet. Log a workout or check in and it lands here.' })),
+    links);
 }
 
 const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn dp-btn--primary', href: '/portal' }, 'Sign in with your email'));
@@ -419,7 +457,7 @@ function render() {
     stopRest();
     fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
       !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home), home.locked ? null : installCard(home),
-      strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
+      home.locked ? null : feedCard(), strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.
@@ -439,7 +477,7 @@ function render() {
 const addDays = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
 const mondayOf = (d) => addDays(d, -((new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7));
 const dayName = (d, opts = { weekday: 'short', month: 'short', day: 'numeric' }) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
-const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up', skipped: 'Skipped' };
+const STATUS_WORD = { done: 'Done', today: 'Today', missed: 'Missed', upcoming: 'Coming up', skipped: 'Skipped', unpublished: 'Not open yet' };
 // The line under the title: when this workout is (or was) planned.
 const whenText = (w) => (!w.date ? null : w.status === 'today' ? 'Today' : w.status === 'missed' ? `Missed · was ${dayName(w.date)}` : `Up next · ${dayName(w.date)}`);
 function calendarStrip(home) {
@@ -776,6 +814,8 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title),
       !reopened && whenText(w) ? h('div', { class: `small strong${w.status === 'missed' ? ' warn-text' : ''}` }, whenText(w)) : null),
+    // The coach's instructions for the day (version 75): read first, before anything else.
+    w.instructions ? h('div', { class: 'c-note', style: 'white-space:pre-line' }, h('div', { class: 'small strong', style: 'margin-bottom:4px' }, 'From your coach'), w.instructions) : null,
     pendingBox,
     !reopened && state.pickWorkout && home.workout ? h('div', { class: 'c-note row', style: 'align-items:center' }, h('span', { class: 'grow' }, `You opened this one from your calendar. ${home.workout.title} is what's up ${home.workout.status === 'today' ? 'today' : 'next'}.`),
       btn(`Back to ${home.workout.title}`, () => openPick(home.workout.id), 'ghost')) : null,
@@ -798,6 +838,7 @@ function renderLogger(w) {
     reopened ? null : adjustmentsCard(home),
     reopened ? null : gearCard(home),
     reopened ? null : installCard(home),
+    reopened ? null : feedCard(),
     reopened ? null : comingUp(home.upcoming),
     reopened ? null : formChecksSection(),
     reopened ? null : historyPanel(home),

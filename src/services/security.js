@@ -19,9 +19,9 @@ const OWNER_ONLY = [
 const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/];   // sprint references (version 65): the owner sets them, coaches read them
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
-  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges)(\/|$)/],
+  ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges|feed)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
   ['POST', /^\/v1\/clients\/:id\/notes$/], ['PATCH', /^\/v1\/client-notes\/:id$/], ['DELETE', /^\/v1\/client-notes\/:id$/],   // staff notes (never coach-only ones)
   ['POST', /^\/v1\/clients\/:id\/(check-ins|card\/setup-link|card\/test)$/],
@@ -33,7 +33,7 @@ const FRONT_DESK = [
   ['POST', /^\/v1\/sessions\/:id\/(bookings|team-attendance|message)$/], ['POST', /^\/v1\/bookings\/:id\/(cancel|attendance|pay|promote)$/],   // run a roster: add, check in, collect, move up, email families (not change the session)
   ['POST', /^\/v1\/class-series\/:id\/(enroll|register)$/], ['POST', /^\/v1\/slots\/book$/],
   ['POST', /^\/v1\/results$/], ['GET', /^\/v1\/clients\/:id\/report$/],
-  ['POST', /^\/v1\/testing-sessions\/:id\/athletes$/],   // walk-ups on a testing day (not removing athletes, editing or deleting days)
+  ['POST', /^\/v1\/testing-sessions\/:id\/(athletes|quick-athlete)$/],   // walk-ups and brand-new athletes on a testing day (not removing athletes, editing or deleting days)
   ['GET', /^\/v1\/kiosks$/], ['POST', /^\/v1\/kiosks$/],   // set up the check-in tablet at the desk
   ['GET', /^\/v1\/inventory$/], ['POST', /^\/v1\/products\/:id\/stock$/],   // receive deliveries and count the shelf
   ['GET', /^\/v1\/review-requests$/], ['GET', /^\/v1\/leads(\/|$)/], ['POST', /^\/v1\/leads$/], ['PATCH', /^\/v1\/leads\/:id$/],   // inquiries at the counter and on the phone

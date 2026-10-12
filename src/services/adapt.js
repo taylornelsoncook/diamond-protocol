@@ -44,7 +44,7 @@ const openOne = (ctx, clientId, kind) => ctx.db.get(`SELECT id FROM plan_adjustm
 export function evaluate(ctx, a, program = getProgram(ctx, a.program_id)) {
   const cal = datedWorkouts(ctx, a, program);
   const day = cal.today, out = [];
-  const planned = cal.workouts.filter((w) => w.status !== 'skipped');
+  const planned = cal.workouts.filter((w) => w.status !== 'skipped' && w.status !== 'unpublished');
   const sinceDecision = (kind, days) => { const d = lastDecision(ctx, a.client_id, kind); return !d || Date.parse(d.decided_at ?? d.created_at) < Date.parse(ctx.now()) - days * 86400000; };
   // shift: whole training weeks (Monday to Sunday, fully before this week) with every planned workout missed, counting back from last week.
   const thisMonday = weekStartOf(day);
@@ -149,7 +149,7 @@ export function apply(ctx, id, user) {
       const moves = ctx.db.all('SELECT workout_id, date FROM assignment_moves WHERE assignment_id = ?', a.id);
       for (const m of moves) ctx.db.run('UPDATE assignment_moves SET date = ? WHERE assignment_id = ? AND workout_id = ?', addDaysToDate(m.date, -7 * d.weeks_skipped), a.id, m.workout_id);
       // This week's remaining workouts keep their dates (pinned as moves), so only the weeks after move up.
-      const pinned = cal.workouts.filter((w) => w.week < d.from_week && w.date >= cal.today && w.status !== 'done' && w.status !== 'skipped' && !moves.some((m) => m.workout_id === w.id));
+      const pinned = cal.workouts.filter((w) => w.week < d.from_week && w.date >= cal.today && w.status !== 'done' && w.status !== 'skipped' && w.status !== 'unpublished' && !moves.some((m) => m.workout_id === w.id));
       for (const w of pinned) ctx.db.run('INSERT OR REPLACE INTO assignment_moves (id, assignment_id, workout_id, date, moved_by, created_at) VALUES (?, ?, ?, ?, ?, ?)', newId('mv'), a.id, w.id, w.date, 'adaptive plan', ctx.now());
       applied = { start_date_before: from, start_date_after: to, skipped: skip.map((w) => w.id), pinned: pinned.map((w) => w.id), moves: moves.length };
     }

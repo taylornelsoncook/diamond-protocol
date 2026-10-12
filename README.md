@@ -95,7 +95,21 @@ The seed prints your login and a sample client app link. To start over, delete t
 
 **The workout page:** opening a workout shows what to do first, every exercise with sets, reps, distance, weight, percent of max and tempo (four counts, 3-1-1-0) in one table, with the demo, the coach's cue and last time's numbers a tap away; Start workout turns on the set rows, with the rest timer and effort at the end. Distance is its own field in the builder beside reps, and tempo is always written as four counts. Parents and athletes share one sign-in place at `/portal`: an athlete with their own email lands straight on their workouts, a younger athlete opens theirs through the parent's account.
 
+**The calendar:** a month of what every athlete, a team or one athlete has on each day, with who logged it and the effort they gave; click a day for the details. Publish a program when it is ready, release it from a date, or unpublish it while you rewrite it; athletes see nothing before the date and nothing counts as missed.
+
+**The max report:** Testing → Max report puts every athlete's maxes side by side, lifts across, with a total per athlete and the team's average per lift; a grey number is estimated from logged sets. Filter by team or program, sort any column, type a tested max straight into a cell, print it or download the CSV.
+
+**The timeline:** every athlete's profile has a Timeline tab, everything they did newest first (workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges, reading, steps up), filtered by kind. The app's new Profile tab shows the same timeline with their maxes, streaks and links to the family's account, so one link reaches everything; parents see it under each athlete in the portal.
+
+**The team feed:** coaches post to everyone, a team or a program from Today, pin a post for a period, and it shows first in the app and the portal and on the weight-room screen while pinned. Athletes and parents fist-bump and comment; coaches hide comments or close them on a post.
+
+**Drag, drop and send:** drag an exercise anywhere in the week, and drag a day (or the ticked days) onto a school, a team or an athlete in the Send to panel to put those days on their calendars from a date you pick.
+
+**The week grid:** a program's week is seven day columns, each a list of lettered blocks with one line per exercise and the day's instructions on top; tick days and copy, move, repeat, save or delete them together; the day's and the week's reps show as you build.
+
 **Blocks and complexes in the builder:** a workout is built in named blocks (Warm up, Acceleration, Speed, Power, Strength, Cool down, or any name) with exercises under each; a block runs its exercises one after another, or as a superset or circuit (one set of each, then rest). A block with exercises is saved as a **complex** ("Acceleration Primer": backwards sprint, broad jump, sled sprint) and loaded into any workout in any program in one click; complexes are edited under Settings → Exercise library → Complexes, and a change there never touches workouts already built from one. The Programs page lists one line per program and filters by sport, in or out of the facility, who wrote it and level.
+
+**Help sentences, owner only:** the short explanations under titles and fields show for the owner alone, with a tick on Settings to hide them; coaches, front desk, parents and athletes never see them.
 
 **Sprint marking in five taps:** every position is marked with the hip, both knees and both ankles (the shoulder optional, for trunk lean), named in plain words for that position, and the angles, grades and cues show on Save. The references start from a research brief on max velocity, acceleration and change of direction, which also lives under Education as a PDF for the staff.
 

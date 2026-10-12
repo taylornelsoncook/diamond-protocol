@@ -12,6 +12,7 @@ import { forExport as trainingProfileOf, forgetClient as forgetTrainingProfile }
 import { forExport as adjustmentsOf, forgetClient as forgetAdjustments } from './adapt.js';
 import { forgetClient as forgetPush } from './push.js';
 import { forExport as weeklyOf, forgetClient as forgetWeekly } from './weekly.js';
+import { forExport as feedOf } from './feed.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -58,6 +59,7 @@ export function exportFamily(ctx, familyId) {
     exported_at: ctx.now(), business: getSetting(ctx, 'business_name'),
     family: { ...f, card: f.card_last4 ? `${f.card_brand} ending ${f.card_last4}${f.card_exp ? `, expires ${f.card_exp}` : ''}` : null, card_brand: undefined, card_last4: undefined, card_exp: undefined },
     parents: ctx.db.all('SELECT name, email, phone, relationship, sms_opt_in_at AS texts_turned_on_at, sms_opt_out_at AS texts_stopped_at, created_at FROM guardians WHERE family_id = ?', familyId),
+    ...feedOf(ctx, familyId),   // team_feed_comments and team_feed_bumps (version 78)
     parent_lessons_read: ctx.db.all('SELECT g.name AS parent, l.title AS lesson, p.completed_at FROM guardian_lesson_progress p JOIN guardians g ON g.id = p.guardian_id JOIN lessons l ON l.id = p.lesson_id WHERE g.family_id = ? ORDER BY p.completed_at', familyId),
     texts: ctx.db.all('SELECT direction, phone, body, status, created_at FROM texts WHERE family_id = ? ORDER BY created_at', familyId),
     pay_links: ctx.db.all(`SELECT description, amount_cents, status, sent_to, sent_at, paid_at, created_at FROM pay_links WHERE client_id IN (SELECT id FROM clients WHERE family_id = ?) ORDER BY created_at`, familyId),

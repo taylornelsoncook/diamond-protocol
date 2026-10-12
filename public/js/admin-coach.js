@@ -537,6 +537,8 @@ async function importTab(box) {
       h('div', { class: 'grow stack-tight', style: 'min-width:240px' }, h('span', { class: 'strong' }, p.label),
         h('span', { class: `small ${p.ready ? 'good-text' : 'muted'}` }, p.ready ? 'Set up. Families can connect.' : 'Not set up yet.'),
         p.ready ? null : h('span', { class: 'small muted' }, p.help),
+        p.client_id_hint ? h('span', { class: 'small muted' }, `Client ID in Render: ${p.client_id_hint}. It must match the Client ID on the ${p.label} developer page; a sign-in page saying "invalid_client" means it doesn't.`) : null,
+        ...(p.problems ?? []).map((t) => h('span', { class: 'small warn-text' }, t)),
         h('span', { class: 'small muted' }, 'Redirect address to register with them: ', h('code', { style: 'user-select:all' }, p.redirect_uri))))),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Apple Health and Garmin don\'t offer this kind of link, so their exports still come in as files below.')));
   fill(box, wearPanel, panel('Bring in data', { subtitle: 'An athlete\'s numbers from any system: pick where the file comes from (WHOOP, Oura, Garmin, Apple Health, Fitbit, Strava, TrainingPeaks) and the menu says how to get the export; any other spreadsheet you match up once, saving its columns as the measures we track. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },

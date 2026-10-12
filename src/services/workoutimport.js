@@ -99,6 +99,37 @@ ${library.length > MAX_LIBRARY_NAMES ? 'The coach\'s library is too big to list 
 ${library.length ? library.map((e) => e.name).join('\n') : '(empty)'}`}`;
 }
 
+// Anthropic said no: the owner reads the reason in plain words, with Anthropic's own sentence, instead of a guess
+// about the file. The account's state (no credits, a key that doesn't work, a model the account can't use) is told
+// apart from the file (damaged, too long).
+export function refused(status, why, model, kind = 'document') {
+  console.error(`workout import: Anthropic answered ${status}: ${why}`);
+  if (status === 401 || status === 403) return new HttpError(502, 'ai_key', `The Anthropic key in Render isn't working (Anthropic said: ${why}). The owner checks ANTHROPIC_API_KEY at console.anthropic.com → API keys.`);
+  if (/credit balance|purchase credits|plans & billing|billing/i.test(why)) return new HttpError(502, 'ai_credits', `The Anthropic account has no credits left (Anthropic said: ${why}). The owner adds credits at console.anthropic.com → Plans & Billing, then this works.`);
+  if (status === 404 || /model.*(not found|does not exist|not exist|not available|not supported)|(no such|unknown|invalid) model/i.test(why)) return new HttpError(502, 'ai_model', `The AI model this is set to (${model}) isn't available to the Anthropic account (Anthropic said: ${why}). The owner can set DP_WORKOUT_MODEL in Render to a model the account has, for example claude-opus-5-5.`);
+  if (status === 429 || status === 529 || status >= 500) return new HttpError(502, 'ai_busy', `Anthropic is busy right now (${why}). Try again in a minute.`);
+  if (/pages?|too (large|long)|exceed/i.test(why)) return badRequest(kind === 'image' ? 'That photo is too big to read. Take a screenshot of it, or send a smaller size.' : 'That file is too long to read in one go. Split the PDF into parts (a few weeks each) and bring them in one at a time.');
+  if (/could not (process|parse|read)|corrupt|invalid pdf|unable to (process|parse|read)|not a valid/i.test(why)) return badRequest(`Anthropic couldn't open that PDF (it said: ${why}). Open it on your Mac and choose File → Print → Save as PDF, then try that copy; a scan or a photo of the pages works too.`);
+  return badRequest(`We couldn't read that file. Anthropic said: ${why}. If that names the account or the key, the owner fixes it at console.anthropic.com; otherwise save the program as a PDF again and try once more.`);
+}
+// Check the connection without a file: one tiny request to the Messages API. Says what works and, when it doesn't,
+// what Anthropic answered, so the owner sees the reason on the page instead of in the server log.
+export async function checkConnection(ctx, user) {
+  if (ctx.readWorkoutFile) return { ok: true, model: MODEL(), took_ms: 0, note: 'Stand-in reader (tests).' };
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return { ok: false, code: 'ai_not_set_up', message: 'The Anthropic key isn\'t set. The owner adds ANTHROPIC_API_KEY in Render (see CHECKLIST.md).' };
+  rateLimit(ctx, `workout-check:${user?.id ?? 'anon'}`, 20, 3600);
+  const model = MODEL(), started = Date.now();
+  const body = { model, max_tokens: 16, messages: [{ role: 'user', content: 'Reply with the single word OK.' }] };
+  const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  let res;
+  try { res = await fetch(`${API()}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) }); }
+  catch (e) { return { ok: false, code: 'ai_unavailable', message: e?.name === 'TimeoutError' ? 'Anthropic didn\'t answer within a minute. Try again shortly.' : `We couldn't reach Anthropic (${e?.message ?? 'network error'}). Try again in a minute.` }; }
+  const d = await res.json().catch(() => null);
+  if (!res.ok) { const e = refused(res.status, d?.error?.message ?? `status ${res.status}`, model); return { ok: false, code: e.code, status: res.status, message: e.message, model }; }
+  return { ok: true, model: d?.model ?? model, took_ms: Date.now() - started, usage: d?.usage ? { input_tokens: d.usage.input_tokens, output_tokens: d.usage.output_tokens } : null };
+}
+
 // Calls the Messages API with the file and asks for the draft as JSON. Tests and local runs can set ctx.readWorkoutFile.
 async function askClaude(ctx, file, library) {
   const system = instructions(library, file.source);
@@ -119,12 +150,7 @@ async function askClaude(ctx, file, library) {
   catch (e) { throw new HttpError(502, 'ai_unavailable', e?.name === 'TimeoutError' ? 'Reading the file took too long. Try again, or split a long PDF into parts.' : 'We couldn\'t reach Anthropic to read the file. Try again in a minute.'); }
   if (!res.ok) {
     const d = await res.json().catch(() => null);
-    const why = d?.error?.message ?? `status ${res.status}`;
-    console.error('workout import: Anthropic said', why);
-    if (res.status === 401 || res.status === 403) throw new HttpError(502, 'ai_key', 'The Anthropic key in Render isn\'t working. The owner checks ANTHROPIC_API_KEY.');
-    if (res.status === 429 || res.status === 529 || res.status >= 500) throw new HttpError(502, 'ai_busy', 'Anthropic is busy right now. Try again in a minute.');
-    if (/pages?|too (large|long)|exceed/i.test(why)) throw badRequest(file.block.type === 'image' ? 'That photo is too big to read. Take a screenshot of it, or send a smaller size.' : 'That file is too long to read in one go. Split the PDF into parts (a few weeks each) and bring them in one at a time.');
-    throw badRequest('We couldn\'t read that file. Check it opens, or save it as a PDF again and try once more.');
+    throw refused(res.status, d?.error?.message ?? `status ${res.status}`, model, file.block.type);
   }
   let d;
   try { d = await readStream(res); }

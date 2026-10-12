@@ -29,14 +29,29 @@ export const PROVIDERS = {
     scopes: 'personal daily heartrate workout spo2', env: ['OURA_CLIENT_ID', 'OURA_CLIENT_SECRET'],
     help: 'cloud.ouraring.com/oauth/applications: create an application, add the redirect address below, and copy its Client ID and Client Secret into Render as OURA_CLIENT_ID and OURA_CLIENT_SECRET.' }
 };
-const creds = (p) => ({ id: process.env[PROVIDERS[p].env[0]] || '', secret: process.env[PROVIDERS[p].env[1]] || '' });
+// A value pasted into Render with a space or quote marks around it is used without them (the status still points it out).
+const clean = (x) => String(x ?? '').trim().replace(/^["']+|["']+$/g, '').trim();
+const creds = (p) => ({ id: clean(process.env[PROVIDERS[p].env[0]]), secret: clean(process.env[PROVIDERS[p].env[1]]) });
 const ready = (p) => !!(creds(p).id && creds(p).secret);
 const providerKey = (p) => v.oneOf(String(p ?? ''), 'provider', Object.keys(PROVIDERS));
 export const redirectUri = (ctx, p) => `${(ctx.publicUrl ?? '').replace(/\/$/, '')}/wearables/${p}/callback`;
 
 // What's set up, for Settings and the connect buttons.
 export function status(ctx) {
-  return { providers: Object.entries(PROVIDERS).map(([key, p]) => ({ key, label: p.label, ready: ready(key), redirect_uri: redirectUri(ctx, key), help: p.help, env: p.env })) };
+  return { providers: Object.entries(PROVIDERS).map(([key, p]) => ({ key, label: p.label, ready: ready(key), redirect_uri: redirectUri(ctx, key), help: p.help, env: p.env, ...idCheck(key) })) };
+}
+// The owner compares the Client ID in Render with the one on the provider's developer page without the secret ever
+// leaving the server: the first and last characters and the length, plus the usual copy-and-paste slips. A provider
+// answering "invalid_client" means this value isn't an app it knows.
+function idCheck(p) {
+  const id = creds(p).id, secret = creds(p).secret;
+  if (!id) return { client_id_hint: null, problems: [] };
+  const problems = [];
+  const raw = process.env[PROVIDERS[p].env[0]] ?? '';
+  if (/^\s|\s$|["']/.test(raw)) problems.push(`${PROVIDERS[p].env[0]} has a space or a quote mark around it: paste the ID on its own.`);
+  if (secret && id === secret) problems.push(`${PROVIDERS[p].env[0]} and ${PROVIDERS[p].env[1]} are the same value: one of them is the wrong field.`);
+  if (id.length < 8) problems.push(`${PROVIDERS[p].env[0]} is only ${id.length} characters: that isn't a Client ID.`);
+  return { client_id_hint: `${id.slice(0, 4)}…${id.slice(-4)} (${id.length} characters)`, problems };
 }
 
 // ---------- Connecting ----------

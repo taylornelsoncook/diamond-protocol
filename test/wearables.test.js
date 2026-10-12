@@ -104,6 +104,13 @@ test('days follow the provider\'s offset, else the business zone', () => {
 
 test('which providers are set up, and who may connect: parents for their own athlete, owners and coaches, never front desk', async () => {
   const s = (await owner('GET', '/v1/wearables/status')).body;
+  assert.match(s.providers.find((p) => p.key === 'whoop').client_id_hint ?? '', /…/, 'the Client ID is shown as a hint to compare with the developer page');
+  process.env.WHOOP_CLIENT_ID = ' "whoop-app-id-1234" ';
+  try {
+    const w = (await owner('GET', '/v1/wearables/status')).body.providers.find((p) => p.key === 'whoop');
+    assert.equal(w.client_id_hint, 'whoo…1234 (17 characters)', 'the hint reads the ID without the stray space and quotes');
+    assert.match(w.problems.join(' '), /space or a quote mark/);
+  } finally { process.env.WHOOP_CLIENT_ID = 'whoop-client-test'; }
   assert.deepEqual(s.providers.map((p) => [p.key, p.ready, p.redirect_uri]), [['whoop', true, 'https://app.example.org/wearables/whoop/callback'], ['oura', false, 'https://app.example.org/wearables/oura/callback']]);
   assert.equal((await desk('GET', '/v1/wearables/status')).status, 200, 'front desk can look');
   assert.equal((await desk('POST', `/v1/clients/${maya.id}/wearables/whoop/connect`)).status, 403, 'but not connect');

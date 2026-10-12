@@ -56,6 +56,10 @@ const DEFAULTS = {
   card_fee_flat: '0',                     // ...plus a flat amount in whole cents (0 to 100; not named _cents so the counter, which staff run, can read it)...
   card_fee_label: 'Card processing fee',  // ...shown as its own line under this name...
   card_fee_on: '',                        // ...on these card payments: a comma list of memberships, counter, pay_links, store (empty = off everywhere, the default)
+  vbt_mvt_squat: '0.30',                  // bar speed (services/vbt.js): the mean velocity of a true one-rep max, per lift family, used to estimate a max from a load-velocity profile...
+  vbt_mvt_bench: '0.17',                  // ...starting values from the research brief (docs/vbt-devices.md); the owner changes them on API & integrations → Bar speed devices
+  vbt_mvt_deadlift: '0.15',
+  vbt_mvt_other: '0.30',
   form_check_keep_days: '90'              // how long an athlete's form-check clip is kept in the private bucket (30 to 365 days; services/formchecks.js)
 };
 export function getSetting(ctx, key) { return ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? DEFAULTS[key]; }
@@ -93,6 +97,12 @@ export function updateSettings(ctx, body) {
   if (body.readiness_sleep_red_min !== undefined) next.readiness_sleep_red_min = String(v.int(body.readiness_sleep_red_min, 'readiness_sleep_red_min', { min: 60, max: 720 }));
   if (Number(next.readiness_sleep_red_min ?? cur.readiness_sleep_red_min) >= Number(next.readiness_sleep_yellow_min ?? cur.readiness_sleep_yellow_min)) throw badRequest('The easy-day sleep has to be shorter than the lighter-day sleep.');
   if (body.readiness_hrv_drop_pct !== undefined) { const n = v.int(body.readiness_hrv_drop_pct, 'readiness_hrv_drop_pct', { min: 0, max: 60 }); if (n && n < 5) throw badRequest('The HRV drop is 5 to 60 percent, or 0 to ignore HRV.'); next.readiness_hrv_drop_pct = String(n); }
+  for (const k of ['squat', 'bench', 'deadlift', 'other']) {
+    if (body[`vbt_mvt_${k}`] === undefined) continue;
+    const n = Number(body[`vbt_mvt_${k}`]);
+    if (!Number.isFinite(n) || n < 0.05 || n > 0.6) throw badRequest(`vbt_mvt_${k} is a velocity in m/s between 0.05 and 0.60.`);
+    next[`vbt_mvt_${k}`] = String(Math.round(n * 100) / 100);
+  }
   if (body.progression_mode !== undefined) next.progression_mode = v.oneOf(String(body.progression_mode), 'progression_mode', ['suggest', 'auto', 'off']);
   if (body.auto_program !== undefined) next.auto_program = v.oneOf(String(body.auto_program), 'auto_program', ['auto', 'review', 'off']);
   if (body.weekly_notes !== undefined) next.weekly_notes = v.oneOf(String(body.weekly_notes), 'weekly_notes', ['review', 'auto', 'off']);

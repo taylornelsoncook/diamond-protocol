@@ -13,6 +13,7 @@ import { forExport as adjustmentsOf, forgetClient as forgetAdjustments } from '.
 import { forgetClient as forgetPush } from './push.js';
 import { forExport as weeklyOf, forgetClient as forgetWeekly } from './weekly.js';
 import { forExport as feedOf } from './feed.js';
+import { forExport as barSpeedOf, forgetClient as forgetBarSpeed } from './vbt.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -99,6 +100,7 @@ export function exportFamily(ctx, familyId) {
       sprint_analyses: sprintClipsOf(ctx, k.id),   // grades, timing and the coach's notes; never the clips
       progression_steps: progressionsOf(ctx, k.id),
       exercise_swaps: swapsOf(ctx, k.id),
+      bar_speed: barSpeedOf(ctx, k.id),   // sets from velocity-based training devices (version 81)
       monthly_reports: monthlyOf(ctx, k.id),
       training_profile: trainingProfileOf(ctx, k.id),   // the start-up answers and the gear at home (version 67)
       plan_adjustments: adjustmentsOf(ctx, k.id),   // the adaptive plan's changes to their calendar (version 69)
@@ -161,6 +163,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       forgetAdjustments(ctx, id);
       forgetPush(ctx, id);
       forgetWeekly(ctx, id);
+      forgetBarSpeed(ctx, id);
       for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced', 'data_imports', 'progressions', 'exercise_swaps', 'monthly_reports']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);

@@ -26,7 +26,8 @@ export const EVENT_TYPES = [
   'startup.answered', 'program.auto_assigned',   // version 67 (the start-up questions)
   'plan.adjustment_suggested', 'plan.adjustment_applied',   // version 69 (the adaptive plan)
   'weekly_note.sent',   // version 71 (the weekly coach's note)
-  'feed.posted'   // version 78 (the team feed)
+  'feed.posted',   // version 78 (the team feed)
+  'bar_speed.recorded'   // version 81 (bar speed from VBT devices)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -94,6 +95,7 @@ const INFO = {
   'client.merged': ['The owner merges two profiles of one athlete (the other Athlete ID keeps finding this one).', { ...C, athlete_id: 'AVALOP2026', merged_client_id: 'cli_sample2', merged_athlete_id: 'AVALOP2026-2' }],
   'progression.suggested': ['Two workouts hit every set at the top of the range: a step up is suggested for the coach.', { progression_id: 'prog_sample', ...C, exercise_id: 'ex_sample', exercise_name: 'Back squat', kind: 'weight', amount: 10, by: null }],
   'progression.approved': ['A coach approves a step (or one is added by hand, or approved automatically).', { progression_id: 'prog_sample', ...C, exercise_id: 'ex_sample', exercise_name: 'Back squat', kind: 'weight', amount: 10, by: 'Head Coach' }],
+  'bar_speed.recorded': ['Sets from a velocity-based training device landed on an athlete\'s profile (pushed to /v1/vbt/sets, imported from a file, or linked from the waiting list).', { ...C, provider: 'output', sets: 4, exercises: ['Back squat'], linked: false }],
   'exercise.swapped': ['A coach swapped one athlete\'s exercise in the live session view, or the athlete picked a swap the coach listed (by_kind): the app and the screen show the new one.', { swap_id: 'swap_sample', ...C, exercise_id: 'ex_sample2', exercise_name: 'Goblet squat', instead_of: 'Back squat', reason: 'Knee', workouts: 1, scope: 'workout', by: 'Riley', by_kind: 'coach' }],
   'monthly_report.sent': ['A monthly progress report was emailed to an athlete\'s parents (by a coach, or on its own in auto mode).', { report_id: 'mrep_sample', ...C, month: '2026-08', parents: 2, by: 'Riley' }],
   'form_check.sent': ['An athlete sends a form-check clip from the app.', { form_check_id: 'fc_sample', ...C, exercise_name: 'Back squat', bytes: 24000000 }],

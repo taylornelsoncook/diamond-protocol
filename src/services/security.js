@@ -19,7 +19,7 @@ const OWNER_ONLY = [
 const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/];   // sprint references (version 65): the owner sets them, coaches read them
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|daily-check-ins|engagement|education|lessons|courses|skill-badges|feed)(\/|$)/],
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
@@ -65,7 +65,7 @@ export function can(role, method, path) {
 // API keys act for the owner on the routes an API key can use at all (auth 'any'), within their access level: read only
 // keys only read (GET), "read and send results" keys may also send test results and device files, and full-access keys
 // do everything. Anything unknown is treated as read only. Checked on every request in server.js.
-const RESULTS_WRITES = [['POST', /^\/v1\/results$/], ['POST', /^\/v1\/imports$/]];
+const RESULTS_WRITES = [['POST', /^\/v1\/results$/], ['POST', /^\/v1\/imports$/], ['POST', /^\/v1\/vbt\/sets$/]];   // bar speed from VBT devices too
 export function keyAllows(scope, method, path) {
   if (scope === 'full') return true;
   if (method === 'GET' || method === 'HEAD') return true;

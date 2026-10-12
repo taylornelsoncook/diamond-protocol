@@ -1,48 +1,107 @@
-# Velocity-based training devices: getting their data into an athlete's profile
+# Velocity-based training devices: how their data gets out, and how it gets into Diamond Protocol
 
-The owner wants every VBT system on the market to feed an athlete's profile: sets with velocity, and maxes updated
-from them. This note says what each system offers today, from their public pages (read on 2026-09-30), and how we'd
-bring each one in. Our own rules stay: results land in a profile only by Athlete ID, our internal ids or a device id the
-coach linked by hand, never by name; imports are all or nothing with every problem listed; the athlete is always chosen
-by the person doing the import.
+Research brief behind the bar-speed connection (`services/vbt.js`, schema 81). Written October 2026 from the vendors'
+own pages and the research below; vendors change plans and exports often, so check the current page before relying on
+a tier name or a menu path. Where a page couldn't be reached the fact is marked *(unverified)*.
+
+## What every system has in common
+
+Every device measures the barbell (or the body) moving and reports, per rep or per set:
+
+- **Mean velocity** (m/s): the average speed of the concentric (lifting) phase. The number most coaches program with.
+  Vitruve reports the *mean propulsive* velocity (the braking part of the lift left out), which runs a little higher
+  at light loads; at heavy loads the two are the same.
+- **Peak velocity** (m/s): the fastest instant of the rep. Noisier; best for jumps, cleans and throws.
+- **Mean and peak power** (W), sometimes **range of motion** (cm or m), **duration**, and a **velocity loss** or
+  "fatigue" percentage (how much slower the last rep was than the fastest).
+
+Exports come as a CSV (sometimes Excel), one row per rep or one per set, with an athlete name or an athlete ID the
+system made up, a date and time, the exercise, the load (kg or lb) and the numbers above. That is what the import
+reads: it matches the columns by their names, folds reps into sets, and refuses anything outside what a person can
+lift or move.
 
 ## The systems
 
-| System | What it is | Gets data out how | What we'd build |
+| System | What it is | Export | Live connection |
 | --- | --- | --- | --- |
-| **GymAware RS / FLEX** (Kinetic) | Tethered unit (RS) and a laser barbell tracker (FLEX); GymAware Cloud | A **Cloud API** (free with the Premium cloud license): `GET https://cloud.gymaware.com/api/summaries` streams one JSON object per set. Also multi-day **CSV export** from the Cloud (Standard and Premium). FLEX Stronger syncs to the Cloud on Premium and exports CSV on its own. | An automatic pull like WHOOP and Oura (API key in Render, a job every few hours, athletes matched by the device's athlete id linked once by the coach), plus a CSV import format. |
-| **Vitruve** | Tethered unit; Vitruve Hub (teams) | **API access** (an API key made in the Hub's settings, owners only) and **export integrations** that push data to other platforms automatically; **CSV or Excel** export of an athlete's history (30 or 180 days or all, by plan). | A pull with the API key, and the CSV/Excel format. |
-| **Output Sports** | Wearable sensor (IMU); Output Capture app | A **Sports Data API** (used by TeamBuildr, Teamworks/Smartabase, Kinduct, Rockdaisy); **spreadsheet export** by athlete or group, any time range, by exercise or metric. | A pull once we have API access from Output, and the spreadsheet format. |
-| **Perch** (Catapult) | Camera on the rack; Perch web app | **Open API** for athlete-management systems (TeamBuildr has an integration guide) and **CSV export** at set and rep level with chosen columns (mean and peak velocity, mean and peak power, eccentric time, and more). | The CSV format first (columns are chosen, so we match them by name), then the API. |
-| **Enode Pro** | Sensor on the bar; Enode portal | **CSV export** of everything or by athlete, exercise, metric and date range; **API documentation** for pulling data into your own system (they already connect TeamBuildr and RockDaisy). | The CSV format, then the API. |
-| **RepOne** (Tether) | Tethered unit; RepOne Personal and RepOne Coach apps | Public pages describe the coach software and Bluetooth metrics (velocity, position, range of motion); no public export or API page found. | Ask RepOne. Until then, a spreadsheet mapped by hand. |
-| **Metric VBT** | Phone camera app | **Spreadsheet export** (Metric Pro) with 13 rep-level metrics (mean and peak velocity, range of motion, tempo, power) and an estimated 1RM. No API. | The spreadsheet format. |
-| **Tendo Unit / Tendo Power Analyzer** | Tethered unit | **Excel export** from the Power Analyzer software; the MyUnit app keeps profiles on the phone. | The Excel format. |
-| **EliteForm** | Rack-mounted camera system | Emails coaches an **Excel** "EF Data Points" report (all reps and sets from the previous day). No public API. | The Excel format; the coach uploads the emailed file. |
-| **Spleeft, Qwik VBT and other phone apps** | Camera apps | Exports vary; Spleeft has coach features. | The generic spreadsheet mapping (already built for outside data). |
+| **Output Sports** (Capture app, Output Hub) | IMU sensor on the bar or body | Output Hub exports a CSV over any date range, per athlete or group, by exercise and metric. The Capture app syncs to the Hub when online. | An **Open API** on the Pro Teams plan, with pre-built connections to TeamBuildr, Movella and Teamworks AMS (formerly Smartabase). No public documentation found; Output grants access. |
+| **GymAware** (RS, PowerTool, GymAware Cloud) | Linear position transducer (the research gold standard) | CSV export on the Essentials+ Cloud tiers. | **Cloud API**: `GET https://cloud.gymaware.com/api/summaries` streams one JSON object per set with `athleteName`, `athleteReference`, `recorded` (UTC seconds), `activityName`, `meanVelocity` and `peakVelocity` (m/s), `meanPower` and `peakPower` (W), `velocityZone`. Included with the Premium or Pro Cloud licence; Cloud 2.0 added "activities" endpoints. Our push endpoint accepts these objects as they are. |
+| **GymAware FLEX** | Laser bar tracker | CSV from the FLEX app or GymAware Cloud (Essentials and higher). | Same cloud as GymAware. |
+| **Vitruve** (Encoder, Teams) | Linear position transducer | Vitruve Teams: Progress → athlete → exercise → Export → CSV or Excel (30 days, 180 days or everything by plan; mean and peak acceleration included). The athlete app exports one day of one exercise. | No public API. |
+| **Enode Pro** (formerly Vmaxpro) | IMU sensor | CSV export on every plan, chosen by athlete, exercise, metric and date range. | API access from the Trainer plan up; documentation on request *(unverified)*. |
+| **Perch** | 3D camera over the rack | CSV export of collected data. | A read-only **RPC-style JSON API** (optional add-on) with customer-generated tokens; documentation on GitHub (SBGSports/perch-api-docs, an OpenAPI file). Perch's agreement forbids passing its data to third parties, so a coach's own script forwards their own data. |
+| **RepOne Strength** | Linear position transducer | Export from the RepOne app / StrengthOS *(unverified)*. Set metrics: first and last rep average velocity, peak velocity, fastest-ever at a load. | No public API. |
+| **Metric VBT** | Phone camera app | Pro plan exports training data for spreadsheets. | No API. |
+| **Qwik VBT**, **Spleeft**, **MyLift** | Phone camera apps | CSV/JSON exports (Qwik includes velocity loss). | None. |
+| **Tendo**, **EliteForm** | LPT; camera and rack system | Not documented online; export from the system and use "Another device or spreadsheet". | Unknown. |
 
-## How it plugs into what we have
+Discontinued but still in gyms: **PUSH Band** (bought by WHOOP, 2021), **Beast**, **OpenBarbell**, **Bar Sensei**. Their
+old CSV exports import as "Another device or spreadsheet".
 
-1. **Import formats.** `services/dataimport.js` already recognizes files by their columns (WHOOP, Oura, Garmin, Strava,
-   TrainingPeaks) and has a hand mapping for any spreadsheet. Each VBT system becomes a `SOURCES` entry with where its
-   export lives, and a format that reads athlete, date, exercise, set, rep, weight, reps and velocity (mean and peak),
-   power and range of motion. Sets land as logged sets against the athlete's profile with the velocity kept beside
-   them; the best set of a lift updates the estimated max the same day (the same Epley estimate the app uses), and a
-   true 1RM attempt lands as a max on file. Everything is all or nothing with a preview, like every import.
-2. **Automatic pulls.** For GymAware, Vitruve, Output, Perch and Enode, a job like `wearable-sync`: keys in Render,
-   a pull every few hours, the device's athletes linked once to profiles by the coach (the same `athlete_links` the
-   testing devices use), nothing ever matched by name.
-3. **Where it shows.** The athlete app's Performance tab (maxes, strength by exercise) and the client page's Testing
-   tab, with velocity beside each set in the workout history. Later: a load-velocity profile per lift.
+## How Diamond Protocol takes the data
 
-## What we need from the owner before building
+Two doors, both landing on the athlete's profile (Testing → Bar speed, the app's and portal's Performance tab, the
+Timeline):
 
-- **Which devices the business owns or plans to buy.** The first format should be one we can test against a real file.
-- **A real export file from each** (a CSV or Excel from the coach app or portal, with the athlete names changed if you
-  like). The public pages don't show the exact column names, and the container this is built in can't open the
-  vendors' sites, so a sample file is the only reliable way to match columns right the first time.
-- **API keys where a system has an API** (GymAware Premium cloud, Vitruve Hub, Output, Perch, Enode), set in Render
-  like the WHOOP and Oura keys, never pasted in chat.
+1. **Push** (`POST /v1/vbt/sets` with a *results*-scope API key): a device vendor, an integrator, or a short script
+   posts sets. Fields: `provider`, and per set `athlete` (`athlete_id` ours, `client_id`, or `external_id` + `name` as the
+   device knows them), `exercise`, `performed_at`, `set_no`, `reps`, `load` with `load_unit` (lb or kg), `mean_velocity`,
+   `peak_velocity`, `best_velocity`, `last_velocity`, `velocity_loss_pct`, `mean_power`, `peak_power`, `rom_cm`,
+   `duration_s`, `reps_detail` (per-rep velocities, folded into the set), `external_id` (a resend changes nothing).
+   GymAware's camelCase names and epoch times are read as they are.
+2. **Import** (Testing → Devices & imports → Import a bar-speed export): the system's CSV or Excel file. Columns are
+   matched by name (Athlete, Date, Exercise, Set, Rep, Load (kg), Mean Velocity (m/s)…), one row per rep is folded into
+   sets, the load unit is read from the header, problems are listed by row and column, and nothing saves until the
+   file is clean. Undo removes what an import brought in.
 
-Build order once files are in hand: the device the business uses first, then GymAware and Vitruve (the two with public
-APIs and the largest install base), then Perch, Enode and Output, then the phone apps and Excel-only systems.
+**Who the set belongs to** follows the results rule: our Athlete ID, our ids, or a device ID or name the coach linked
+once. Anything else waits (never matched by name on its own); linking a waiting name or ID sends those sets to the
+athlete and remembers the link, so the next export lands straight away. One link covers test results and bar speed.
+
+## What the profile shows
+
+- **Load-velocity profile**: the fastest rep at each load over the last 90 days, a straight line fitted through them
+  (least squares; needs three loads spread at least 15% apart and a downward slope; r² says how straight).
+- **Estimated max**: the load where the line reaches the **minimum velocity threshold** (MVT), the mean velocity of a
+  true one-rep max. It is an estimate: the owner sets the thresholds on API & integrations → Bar speed devices.
+- **Loads for a target speed** (1.00, 0.75 and 0.50 m/s), the fastest and heaviest set, the typical velocity loss, and
+  the **speed at the athlete's usual load** over time (the trend that shows strength changing without testing).
+- **Recent sessions** set by set; a loss over 20% is flagged (the set was pushed close to the limit).
+
+### Threshold starting values
+
+| Lift family | MVT (mean velocity at 1RM) | Basis |
+| --- | --- | --- |
+| Squat (and lunges) | 0.30 m/s | Adult back squat studies cluster near 0.30; untrained early-adolescent girls 0.28 to 0.29 (mean propulsive). |
+| Bench press (and presses) | 0.17 m/s | Adult values 0.15 to 0.20; youth bench studies tested 0.10 to 0.20. |
+| Deadlift (pulls, rows) | 0.15 m/s | Adult deadlift values 0.10 to 0.20; no youth value found. |
+| Anything else | 0.30 m/s | A conservative default. |
+| Cleans, snatches, jumps, throws | none | Ballistic lifts have no 1RM velocity; speed and power are the measure. |
+
+Individual thresholds beat group ones for the squat (errors of 5 to 6 kg against 8 to 10 kg in trained women);
+the bench press is forgiving either way. A two-point profile (two loads) is valid in research, but we ask for three so a
+single bad rep can't set the max.
+
+## Sources
+
+- Output Sports: product features and API integrations pages (Open API; TeamBuildr, Movella, Teamworks); the Hub
+  features post; "VBT unpacked: mean and peak velocity"; "Guide to load-velocity profiling".
+- GymAware: Cloud API integration guide (summaries endpoint and fields); Zendesk "API Integration", "Export",
+  "Parameters explained", "What's changing in the new GymAware Cloud" (Cloud 2.0 activities endpoints); FLEX metrics
+  pages; the SimpliFaster FLEX review.
+- Vitruve: support "Metrics calculated by Vitruve", "Export training history (Vitruve Teams)", "How to export the
+  training history"; validity studies (PLOS ONE 2024; MPEES 2023).
+- Enode: Enode Pro plans page (CSV on every plan, API from Trainer); "How is power calculated"; the TeamBuildr Enode
+  integration guide; reliability study (Life, 2024).
+- Perch: "Does Perch integrate with third-party software?"; API agreement; SBGSports/perch-api-docs on GitHub; the
+  TeamBuildr Perch integration guide.
+- RepOne: metrics and privacy pages. Metric VBT: App Store listing and VBTcoach review. Qwik VBT: store listings.
+- Thresholds and profiles: "Prediction of one repetition maximum using reference minimum velocity threshold values in
+  young and middle-aged resistance-trained males" (2021); "Group versus individualised minimum velocity thresholds in
+  the prediction of maximal strength in trained female athletes" (2020); "Load–velocity relationship and 1RM estimation
+  of the free-weight squat in untrained early-adolescent females" (Sports, 2026); "Can the velocity profile in the
+  bench press and the bench pull sufficiently estimate the one repetition maximum in youth elite cross-country ski and
+  biathlon athletes?" (2025); Weakley et al., "Velocity-based training: from theory to application" (Strength and
+  Conditioning Journal, 2021).
+- Device validity overview: "A systematic review using a multi-layered criteria framework for assessing the validity
+  and reliability of velocity monitoring devices in resistance training" (2025).

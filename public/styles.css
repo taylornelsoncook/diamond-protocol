@@ -409,3 +409,23 @@ html[data-help="off"] .dp-help{display:none}
 .ld-share>summary::after{content:'▾';color:var(--steel-muted)} .ld-share[open]>summary::after{content:'▴'}
 .ld-share .row.wrap{margin-top:12px}
 .ld-qr{width:150px;height:150px;background:#fff;border-radius:var(--radius-sm);padding:4px} .ld-qr svg{width:100%;height:100%;display:block}
+
+/* Bar speed (vbt-ui.js): tiles, one card per exercise with the load-velocity chart, sessions set by set, the import's column matching. */
+.vb-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+.vb-tile{display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:var(--surface-raised);border-radius:var(--radius-sm)}
+.vb-tile b{font:600 22px/1.1 var(--font-display);color:var(--steel)} .vb-tile span{font:400 12px/16px var(--font-sans);color:var(--steel-muted)}
+.vb-ex-list{display:flex;flex-direction:column;gap:10px}
+.vb-ex-body{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:flex-start;margin-top:6px}
+.vb-est b{font:600 20px/1.1 var(--font-display);color:var(--steel)}
+.vb-chart{width:220px;max-width:100%;height:auto;flex:0 0 auto}
+.vb-axis{font:400 9px var(--font-sans);fill:var(--steel-muted)} .vb-axis--amber{fill:var(--amber)}
+.vb-session{padding:8px 0;border-top:1px solid var(--line-subtle)}
+.vb-session-ex{margin-top:6px}
+.vb-table{width:100%;border-collapse:collapse;font:400 12px/16px var(--font-sans);margin-top:4px}
+.vb-table th{text-align:left;font-weight:500;color:var(--steel-muted);padding:3px 6px 3px 0;border-bottom:1px solid var(--line-subtle)}
+.vb-table td{padding:4px 6px 4px 0;border-bottom:1px solid var(--line-subtle);font-variant-numeric:tabular-nums}
+.vb-map summary{cursor:pointer;min-height:44px;display:flex;align-items:center;font-size:13px}
+.vb-map-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:6px 16px;margin:8px 0}
+.vb-map-row{display:flex;align-items:center;justify-content:space-between;gap:8px} .vb-map-row .select{max-width:200px}
+.vb-problems{border-left:3px solid var(--amber);padding-left:10px} .vb-problems ul{margin:4px 0 0;padding-left:16px}
+.vb-summary td,.vb-summary th{vertical-align:top;padding-top:8px;padding-bottom:8px} .vb-summary b{font-size:15px}

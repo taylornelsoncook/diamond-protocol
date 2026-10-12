@@ -80,7 +80,7 @@ test('API keys have access levels, enforced on every route; renaming or changing
   assert.equal((await req('GET', '/v1/clients', null, { key: results.secret })).status, 401);
 });
 
-test('every route that changes something refuses read-only keys, and every one but results and device files refuses results keys', async () => {
+test('every route that changes something refuses read-only keys, and every one but results, device files and bar-speed sets refuses results keys', async () => {
   const read = (await owner('POST', '/v1/api-keys', { label: 'Sweep read' })).body;
   const results = (await owner('POST', '/v1/api-keys', { label: 'Sweep results', scope: 'results' })).body;
   const path = (p) => p.replace(/:(\w+)/g, 'x_$1');
@@ -91,7 +91,7 @@ test('every route that changes something refuses read-only keys, and every one b
     swept.add(`${method} ${p}`);
     for (const k of [read, results]) {
       const res = await req(method, path(p), {}, { key: k.secret });
-      const allowed = k === results && ((method === 'POST' && p === '/v1/results') || (method === 'POST' && p === '/v1/imports'));
+      const allowed = k === results && ((method === 'POST' && p === '/v1/results') || (method === 'POST' && p === '/v1/imports') || (method === 'POST' && p === '/v1/vbt/sets'));   // bar speed too
       if (auth === 'any') {
         if (allowed) assert.notEqual(res.status, 403, `${method} ${p}`);
         else assert.deepEqual([res.status, res.body?.error?.code], [403, 'key_scope'], `${method} ${p} (${k.scope})`);

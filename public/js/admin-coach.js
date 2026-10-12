@@ -4,6 +4,7 @@
 import { h, fill, toast, date, ago, btn, busy, field, input, select, panel } from './ui.js';
 import { exerciseLibrary } from './programs-coach.js';
 import { importForm, importsList } from './dataimport-ui.js';
+import { vbtDevicesPanel } from './vbt-ui.js';
 
 let api, render, header, pulseTile, download, me, saveAnyway;
 export function initAdmin(deps) { ({ api, render, header, pulseTile, download, me, saveAnyway } = deps); }
@@ -64,7 +65,7 @@ const SCOPE_HELP = {
   full: 'Full access: everything the open API can do, including adding clients and bookings. Give it only to systems you trust.'
 };
 const SCOPE_TONE = { read: 'muted', results: 'neutral', full: 'warn' };
-const INT_TABS = [['keys', 'API keys'], ['webhooks', 'Webhooks'], ['email', 'Email outbox'], ['texts', 'Texts'], ['video', 'Exercise video']];
+const INT_TABS = [['keys', 'API keys'], ['devices', 'Bar speed devices'], ['webhooks', 'Webhooks'], ['email', 'Email outbox'], ['texts', 'Texts'], ['video', 'Exercise video']];
 const DELIVERY_BADGE = { succeeded: ['good', 'Delivered'], failed: ['warn', 'Failed'], pending: ['neutral', 'Waiting to retry'], sending: ['neutral', 'Sending'] };
 
 export async function viewIntegrations(main) {
@@ -83,7 +84,7 @@ export async function viewIntegrations(main) {
       tile('texts', 'Texts', mode[s.texts.mode], s.texts.failed_7d ? `${plural(s.texts.failed_7d, 'text')} failed this week` : `${s.texts.counts.sent} sent`, s.texts.failed_7d ? 'warn' : null),
       tile('video', 'Exercise video', s.video.total ? `${s.video.pct}%` : '—', s.video.in_use_missing ? `${plural(s.video.in_use_missing, 'exercise')} in programs need one` : s.video.unplayable ? `${s.video.unplayable} won't play` : 'Every exercise in a program has one', s.video.in_use_missing || s.video.unplayable ? 'warn' : 'good'));
   }
-  const loaders = { keys: keysTab, webhooks: webhooksTab, email: emailTab, texts: textsTab, video: videoTab };
+  const loaders = { keys: keysTab, devices: devicesTab, webhooks: webhooksTab, email: emailTab, texts: textsTab, video: videoTab };
   let loading = 0;
   async function loadTab() {
     const n = ++loading;
@@ -94,6 +95,12 @@ export async function viewIntegrations(main) {
   const t$ = tabs(INT_TABS, current, (key) => { current = key; setQuery('integrations', { tab: key === 'keys' ? '' : key }); loadTab(); });
   fill(main, header('API & integrations', 'Connect Diamond Protocol to your other systems, and see every email and text it sends.'), strip, t$.bar, body);
   await Promise.all([loadStrip().catch((e) => fill(strip, h('p', { class: 'dp-error', style: 'padding:12px' }, e.message))), loadTab()]);
+}
+
+// ---- Bar speed devices (version 81): every VBT system, how its data gets here, the push address, the thresholds ----
+async function devicesTab(box) {
+  const { data, thresholds } = await get('/v1/vbt/systems');
+  fill(box, ...vbtDevicesPanel({ systems: data, thresholds, owner: me()?.role === 'owner', origin: location.origin, saveThresholds: (b) => patch('/v1/settings', b) }));
 }
 
 // ---- API keys ----

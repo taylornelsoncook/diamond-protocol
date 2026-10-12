@@ -2,6 +2,7 @@ import { v, badRequest, notFound, conflict, HttpError } from '../util.js';
 import { recordResults, linkAthlete, resolveAthlete, getTest, identityOf } from './performance.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { emit } from './events.js';
+import { adopt as adoptVbt } from './vbt.js';
 
 const SOURCE_NAMES = { api: 'Open API', hawkin: 'Hawkin Dynamics', ovr: 'OVR Performance', vald: 'VALD', swift: 'Swift', freelap: 'Freelap', brower: 'Brower', dashr: 'Dashr', just_jump: 'Jump mat', rapsodo: 'Rapsodo', pocket_radar: 'Radar', generic: 'File import' };
 
@@ -117,6 +118,7 @@ export function linkDevice(ctx, body) {
     const link = linkAthlete(ctx, { provider, external_id: externalId, external_name: deviceName, client_id: target.client_id });
     const moved = !!before && before.client_id !== target.client_id;
     const linked = waiting.length ? linkQueue(ctx, { client_id: target.client_id, ids: waiting.map((w) => w.id) }) : { linked: 0, prs: 0 };
-    return { ...link, external_name: deviceName, athlete_id: target.athlete_id, moved_from: moved ? { name: before.name, athlete_id: before.athlete_id } : null, already_linked: !!before && !moved, linked: linked.linked, prs: linked.prs };
+    const bar_speed_linked = adoptVbt(ctx, provider, identity, target.client_id);   // waiting bar-speed sets from that device too
+    return { ...link, external_name: deviceName, athlete_id: target.athlete_id, moved_from: moved ? { name: before.name, athlete_id: before.athlete_id } : null, already_linked: !!before && !moved, linked: linked.linked, bar_speed_linked, prs: linked.prs };
   });
 }

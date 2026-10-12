@@ -5,6 +5,7 @@
 import { h, fill, toast, copyText, busy, btn, field, input, select, panel, ago, money, videoEmbed, playIcon } from './ui.js';
 import { saleForm } from './shop-admin.js';
 import { importView } from './program-import.js';
+import { boardView } from './board-import.js';
 import { setFields, detailsOf, groupTag, withGroups, GROUP_KINDS, KIND_WORDS } from './set-fields.js';
 import { scheduleFields, fmtDay, statusBadge } from './training-days.js';
 import { choices, ALL_WORD } from './startup-ui.js';
@@ -15,6 +16,8 @@ export function initPrograms(d) { deps = d; }
 // Programs → Build from a PDF and Programs → Dictate a workout (program-import.js).
 export const viewProgramImport = (main) => importView(main, deps);
 export const viewProgramDictate = (main) => importView(main, deps, 'dictate');
+// Programs → Build from a picture (board-import.js): a photo of the whiteboard becomes one workout with its blocks.
+export const viewProgramBoard = (main) => boardView(main, deps);
 const get = (p) => deps.api('GET', p), post = (p, b = {}) => deps.api('POST', p, b), patch = (p, b) => deps.api('PATCH', p, b), put = (p, b) => deps.api('PUT', p, b), del = (p, b) => deps.api('DELETE', p, b);
 const canEdit = () => ['owner', 'coach'].includes(deps.role());
 const isOwner = () => deps.role() === 'owner';
@@ -124,7 +127,7 @@ export async function viewPrograms(main) {
     act.recent.length ? act.recent.map(workoutRow) : h('p', { class: 'muted small' }, 'Workouts show up here as athletes log them in the app or on the weight-room screen.'));
 
   fill(main,
-    deps.header('Programs', 'Build training, attach demo videos and assign to clients.', edit ? h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs/monthly' }, 'Monthly reports'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/dictate' }, 'Dictate a workout'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/import' }, 'Build from a PDF'), btn('New program', () => newProgramDialog(progs.data, tmpl.data))) : null),
+    deps.header('Programs', 'Build training, attach demo videos and assign to clients.', edit ? h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs/monthly' }, 'Monthly reports'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/dictate' }, 'Dictate a workout'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/board' }, 'Build from a picture'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/import' }, 'Build from a PDF'), btn('New program', () => newProgramDialog(progs.data, tmpl.data))) : null),
     pulse,
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },

@@ -16,7 +16,7 @@ export const MAX_TEXT_CHARS = 20000;                  // dictated or typed: a wh
 const MAX_IMAGE_BYTES = 3.7 * 1024 * 1024;            // Anthropic's 5 MB image limit counts the base64 text
 const MAX_PAGES = 100;
 const MAX_LIBRARY_NAMES = 1500;                         // a bigger library isn't listed for Claude; names are matched here
-const DAILY_READS = 150;                                // for the whole business, so a slip can't run up a bill
+export const DAILY_READS = 150;                                // for the whole business, so a slip can't run up a bill
 const MAX_WORKOUTS = 7 * 52, MAX_EXERCISES = 30, MAX_LINES = 1500;
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced', 'All levels'];
 const MODEL = () => process.env.DP_WORKOUT_MODEL || 'claude-opus-5';
@@ -29,7 +29,7 @@ export function importStatus(ctx) {
 
 // ---------- The file ----------
 const KINDS = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
-function fileBlock(body) {
+export function fileBlock(body) {
   const f = body?.file;
   if (!f || typeof f !== 'object') throw badRequest('Choose a PDF of the program, or a photo of it.');
   const name = v.str(f.name, 'file name', { max: 200 });
@@ -118,7 +118,7 @@ export async function checkConnection(ctx, user) {
   if (ctx.readWorkoutFile) return { ok: true, model: MODEL(), took_ms: 0, note: 'Stand-in reader (tests).' };
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return { ok: false, code: 'ai_not_set_up', message: 'The Anthropic key isn\'t set. The owner adds ANTHROPIC_API_KEY in Render (see CHECKLIST.md).' };
-  rateLimit(ctx, `workout-check:${user?.id ?? 'anon'}`, 20, 3600);
+  rateLimit(`workout-check:${user?.id ?? 'anon'}`, 20, 60 * 60000);
   const model = MODEL(), started = Date.now();
   const body = { model, max_tokens: 16, messages: [{ role: 'user', content: 'Reply with the single word OK.' }] };
   const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
@@ -131,17 +131,19 @@ export async function checkConnection(ctx, user) {
 }
 
 // Calls the Messages API with the file and asks for the draft as JSON. Tests and local runs can set ctx.readWorkoutFile.
-async function askClaude(ctx, file, library) {
-  const system = instructions(library, file.source);
-  if (ctx.readWorkoutFile) return ctx.readWorkoutFile({ block: file.block, system, schema: DRAFT_SCHEMA });
+export async function askClaude(ctx, file, library, opts = {}) {
+  const system = opts.system ?? instructions(library, file.source);
+  const schema = opts.schema ?? DRAFT_SCHEMA;
+  const prompt = opts.prompt ?? (file.source === 'text' ? 'Turn what the coach said above into the draft.' : 'Read this program and fill in the draft.');
+  if (ctx.readWorkoutFile) return ctx.readWorkoutFile({ block: file.block, system, schema, prompt });
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new HttpError(503, 'ai_not_set_up', 'Reading a PDF needs the Anthropic key. The owner adds ANTHROPIC_API_KEY in Render (see CHECKLIST.md), then this works.');
   const model = MODEL();
   // Streamed, so a long program never hits a timeout halfway (after it's been paid for). Medium effort: copying a program
   // out of a file needs care, not long reasoning, and it keeps the coach's wait short.
   const body = { model, max_tokens: 64000, stream: true, system,
-    thinking: { type: 'adaptive' }, output_config: { effort: 'medium', format: { type: 'json_schema', schema: DRAFT_SCHEMA } },
-    messages: [{ role: 'user', content: [file.block, { type: 'text', text: file.source === 'text' ? 'Turn what the coach said above into the draft.' : 'Read this program and fill in the draft.' }] }] };
+    thinking: { type: 'adaptive' }, output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
+    messages: [{ role: 'user', content: [file.block, { type: 'text', text: prompt }] }] };
   const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
   if (model === 'claude-opus-5') { body.fallbacks = 'default'; headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; }   // a declined read is retried on another model
   let res;
@@ -194,7 +196,7 @@ export function normName(s) {
     .map((w) => ABBR[w] ?? w).join(' ').split(' ')
     .map((w) => (w.length >= 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w)).join(' ');
 }
-function closest(name, library) {
+export function closest(name, library) {
   const a = new Set(normName(name).split(' '));
   let best = null, score = 0;
   for (const e of library) {
@@ -207,7 +209,7 @@ function closest(name, library) {
 }
 // exact: the same name (after abbreviations and plurals); suggested: Claude's or our closest match, for the coach to
 // check; null: no match, so it's offered as a new exercise.
-function matchExercise(name, claudeMatch, library) {
+export function matchExercise(name, claudeMatch, library) {
   const byNorm = new Map(library.map((e) => [normName(e.name), e]));
   const exact = byNorm.get(normName(name));
   if (exact) return { exercise_id: exact.id, exercise_name: exact.name, how: 'exact' };
@@ -217,7 +219,7 @@ function matchExercise(name, claudeMatch, library) {
 }
 
 // ---------- The draft ----------
-const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+export const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 export async function draftFromFile(ctx, body, user) {
   return draft(ctx, fileBlock(body), user);
 }
@@ -269,7 +271,7 @@ async function draft(ctx, file, user) {
 
 // The set details of one exercise in Claude's draft, within the builder's limits (anything outside them is dropped, the
 // coach fills it in). A draft with only a prescription (an older draft) is split into sets and reps.
-function draftFields(x, dropped = () => {}) {
+export function draftFields(x, dropped = () => {}) {
   const sets = Math.trunc(Number(x?.sets));
   const rest = Math.trunc(Number(x?.rest_seconds));
   const rpe = Number(x?.rpe);

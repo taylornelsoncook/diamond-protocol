@@ -229,6 +229,12 @@ test('the request to Anthropic: the file, the model, structured output and the f
     assert.deepEqual([bad.ok, bad.code, bad.status], [false, 'ai_credits', 400]);
     assert.match(bad.message, /no credits left/);
     assert.equal((await desk('POST', '/v1/programs/import/check')).status, 403);
+    // 20 checks an hour per person: the 21st is refused (the owner's checks don't count against the coach's).
+    reply = { status: 200, body: { model: 'claude-opus-5', content: [{ type: 'text', text: 'OK' }] } };
+    let last = null;
+    for (let i = 0; i < 19; i++) last = await coach('POST', '/v1/programs/import/check');
+    assert.equal(last.status, 429, 'the 21st check in the hour');
+    assert.equal((await owner('POST', '/v1/programs/import/check')).status, 200, 'another person still can');
   } finally {
     fake.close();
     if (saved.key) process.env.ANTHROPIC_API_KEY = saved.key; else delete process.env.ANTHROPIC_API_KEY;

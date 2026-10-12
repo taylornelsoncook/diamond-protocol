@@ -61,7 +61,7 @@ export function splitRx(text) {
 // The short text: "3 × 8", "3 × 8 @ 135 lb", "3 sets", "4 × 20 yd", "3 × 5 × 20 yd", "Warm-up 5 min".
 export function rxText(f) {
   const sets = f.sets ?? null, reps = f.reps ? String(f.reps).trim() : '', distance = f.distance ? String(f.distance).trim() : '';
-  const core = sets && (reps || distance) ? [sets, reps, distance].filter(Boolean).join(' × ') : sets ? `${sets} sets` : [reps, distance].filter(Boolean).join(' × ');
+  const core = sets && (reps || distance) ? [sets, reps, distance].filter(Boolean).join(' × ') : sets ? `${sets} ${sets === 1 ? 'set' : 'sets'}` : [reps, distance].filter(Boolean).join(' × ');
   return [core, f.load_text ? `@ ${String(f.load_text).trim()}` : null].filter(Boolean).join(' ');
 }
 export function restText(s) {

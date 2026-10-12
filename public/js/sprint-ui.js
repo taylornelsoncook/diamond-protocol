@@ -5,6 +5,7 @@
 // a side-by-side compare of reps. Coaches mark frames and tap points; athletes watch what their coach sent.
 // Clips play from 10-minute signed addresses on the private bucket; nothing is downloaded or kept by the page.
 import { h, fill, btn, busy, toast, field, input, select, ago } from './ui.js';
+import { figureSpec, figureSvg } from './sprint-figure.js';
 import { sendClip, CLIP_TYPES } from './formchecks-ui.js';
 import { suggest, canSuggest, trackSuggest, TRACK_KEYS } from './sprint-auto.js';
 
@@ -23,6 +24,17 @@ const ms = (s) => (s == null ? '—' : `${Math.round(s * 1000)} ms`);
 const m2 = (x) => (x == null ? '—' : `${x.toFixed(2)} m`);
 const ft = (x) => (x == null ? '' : ` (${(x * 3.281).toFixed(1)} ft)`);
 const posKey = (p) => `${p.step}:${p.position}`;
+// An example of the position (owner's ask): a stick figure from the reference angles, the stance leg amber and the
+// swing leg green like the overlay, with the point to tap ringed while tapping. clipKind is set by the viewer.
+let clipKind = 'top_speed';
+function figure(position, mark = null) {
+  const spec = figureSpec(clipKind, position);
+  if (!spec) return null;
+  const box = h('div', { class: 'sp-figure row', style: 'gap:10px;align-items:center' });
+  const pic = h('div', { class: 'sp-figure-pic' }); pic.innerHTML = figureSvg(spec, { mark });
+  box.append(pic, h('div', { class: 'small muted grow' }, `Example: ${spec.mark}.${mark ? ` The ring is the point to tap.` : ''}`));
+  return box;
+}
 const gradeChip = (g, big = false) => (g ? h('span', { class: `sp-grade sp-grade--${g[0]}${big ? ' sp-grade--big' : ''}`, title: `Grade ${g}` }, g) : h('span', { class: 'sp-grade sp-grade--none', title: 'Not graded yet' }, '–'));
 const once = (el, ev) => new Promise((res, rej) => { const ok = () => { el.removeEventListener('error', bad); res(); }; const bad = () => { el.removeEventListener(ev, ok); rej(new Error('The video couldn\'t be read.')); }; el.addEventListener(ev, ok, { once: true }); el.addEventListener('error', bad, { once: true }); });
 const svgEl = (tag, attrs) => { const e = document.createElementNS(SVG, tag); for (const [k, val] of Object.entries(attrs)) e.setAttribute(k, val); return e; };
@@ -380,6 +392,7 @@ export async function sprintViewer(opts) {
       h('div', { class: 'row', style: 'gap:10px;align-items:center' }, h('h3', { class: 'sp-h grow' }, `${p.finish ? '' : clip.kind === 'cod' ? '' : `Step ${p.step} · `}${p.label}`), p.grade ? gradeChip(p.grade, true) : null),
       h('p', { class: 'small muted', style: 'margin:0' }, p.hint, p.marked ? ` Marked at frame ${frameOf(p.t)}.` : ''),
       p.look ? h('details', { class: 'sp-look' }, h('summary', { class: 'small strong' }, 'What to look for'),
+        figure(p.position),
         h('p', { class: 'small', style: 'margin:4px 0 0' }, p.look), p.fault ? h('p', { class: 'small', style: 'margin:4px 0 0' }, h('span', { class: 'strong' }, 'Common fault: '), p.fault) : null,
         p.cue ? h('p', { class: 'small', style: 'margin:4px 0 0' }, h('span', { class: 'strong' }, 'Cue: '), p.cue) : null) : null,
       editable && p.legs ? h('p', { class: 'small', style: 'margin:0' }, p.legs) : null,
@@ -393,6 +406,7 @@ export async function sprintViewer(opts) {
     const next = tap.need.find((k) => !tap.points[k] && !tap.skipped.has(k));
     return h('div', { class: 'sp-tap stack-tight' },
       h('div', { class: 'strong' }, next ? `Tap ${Object.keys(tap.points).length + 1}: ${tapLabel(next, p)}` : 'All points tapped. Save to see the angles and the grade.'),
+      figure(p.position, next === 'shoulder' ? 'shoulder' : next),
       next && OPTIONAL.has(next) ? h('div', { class: 'small' }, 'The five points are in. Tap the shoulder for trunk lean, or Save without it.') : p.legs ? h('div', { class: 'small' }, p.legs) : null,
       h('div', { class: 'small muted' }, `${Object.keys(tap.points).length} of ${tap.need.length} points: hip, both knees, both ankles${tap.need.includes('shoulder') ? ', then the shoulder if you want trunk lean' : ''}. Swing leg is green, stance leg amber. Frame ${frameOf(tap.t)}.`),
       h('div', { class: 'row wrap', style: 'gap:8px' },
@@ -566,6 +580,7 @@ export async function sprintViewer(opts) {
       h('p', { class: 'small muted', style: 'margin:0' }, 'Average bands are the owner\'s references. Distances need the cones; hip height reads the stance foot at full support.'));
   }
   function draw() {
+    clipKind = clip.kind;
     const head = h('div', { class: 'row wrap', style: 'gap:10px;align-items:center' },
       h('div', { class: 'grow' }, h('div', { class: 'sp-kicker' }, `${clip.kind_label}${clip.segment_label ? ` · ${clip.segment_label}` : ''}${clip.client_name && !opts.athlete ? ` · ${clip.client_name}` : ''}`),
         h('h2', { class: 'sp-title' }, clip.title || `${clip.kind_label} rep`), h('div', { class: 'small muted' }, [clip.sent_at ? `Sent ${ago(clip.sent_at).toLowerCase()}` : null, clip.uploaded_by_kind !== 'staff' && clip.uploaded_by_name ? `by ${clip.uploaded_by_name}` : null, clip.note].filter(Boolean).join(' · '))),

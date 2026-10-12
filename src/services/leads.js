@@ -24,8 +24,14 @@ export const STAGES = ['new', 'contacted', 'signed_up', 'evaluation', 'trial', '
 export const OPEN_STAGES = ['new', 'contacted', 'signed_up', 'evaluation', 'trial'];
 export const STAGE_LABELS = { new: 'New', contacted: 'Contacted', signed_up: 'Signed up', evaluation: 'Evaluation booked', trial: 'Trial', member: 'Member', lost: 'Lost' };
 export const SOURCE_LABELS = { inquiry: 'Website form', signup_unfinished: 'Unfinished sign-up', manual: 'Added by staff', phone: 'Phone call', walk_in: 'Walk-in', event: 'Event',
-  referral: 'Referral', social: 'Social media', camp: 'Camp', team: 'Team or school', import: 'Imported', client: 'Back from a client profile' };
+  referral: 'Referral', social: 'Social media', camp: 'Camp', team: 'Team or school', import: 'Imported', client: 'Back from a client profile',
+  qr: 'QR code', website: 'Website link', email: 'Email link', text: 'Text link', flyer: 'Flyer', ad: 'Ad' };
 export const STAFF_SOURCES = ['manual', 'phone', 'walk_in', 'event', 'referral', 'social', 'camp', 'team'];
+// The one sign-up link (owner's ask: "1 link ... linked to QR codes, websites, social media posts, emails, text, and
+// anything that could help bring more clients in the door"): /start?from=<channel>. Everyone who fills it in is a lead
+// tagged with the channel as its source, and moves to Member on their first purchase (advance). Unknown = the form.
+export const LINK_CHANNELS = { qr: 'QR code', website: 'Website', social: 'Social media', email: 'Email', text: 'Text', flyer: 'Flyer', ad: 'Ad' };
+export const channelOf = (from) => (LINK_CHANNELS[String(from ?? '').toLowerCase()] ? String(from).toLowerCase() : null);
 export const LOST_REASONS = { price: 'Price', schedule: 'Schedule', distance: 'Too far', elsewhere: 'Went elsewhere', no_response: 'No response', not_ready: 'Not ready yet', other: 'Other' };
 export const STALE_DAYS = 7;
 const RANK = { new: 0, contacted: 1, signed_up: 2, evaluation: 3, trial: 4, member: 5, lost: -1 };
@@ -95,7 +101,7 @@ function createLead(ctx, data, { source, textsOk = false, textsOkSource = null, 
       id, data.parent_name, data.email, data.phone, data.athlete_name, data.athlete_age, data.sport, data.message, source, status, textsOk ? 1 : 0, textsOk ? textsOkSource : null, textsOk ? now : null,
       followUp && data.email && getSetting(ctx, 'lead_follow_up') === 'on' ? now : null, createdBy, familyId, clientId, now, now, data.notes ?? null, now, now);
     ctx.db.run('INSERT INTO lead_stage_history (id, lead_id, from_stage, to_stage, auto, reason, by_id, by_name, at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)',
-      newId('lsh'), id, status, user ? 0 : 1, { inquiry: 'Asked on the website form', signup_unfinished: 'Started signing up', import: 'Imported', client: 'Put back in the pipeline' }[source] ?? 'Added', user?.id ?? null, user?.name ?? createdBy, now);
+      newId('lsh'), id, status, user ? 0 : 1, { inquiry: 'Asked on the website form', signup_unfinished: 'Started signing up', import: 'Imported', client: 'Put back in the pipeline', qr: 'Scanned the QR code', website: 'Came through the website link', social: 'Came through a social post', email: 'Came through an email link', text: 'Came through a text link', flyer: 'Came through a flyer', ad: 'Came through an ad' }[source] ?? 'Added', user?.id ?? null, user?.name ?? createdBy, now);
   });
   emit(ctx, 'lead.created', { lead_id: id, source, parent_name: data.parent_name, athlete_name: data.athlete_name });
   return id;
@@ -157,7 +163,7 @@ export async function submitInquiry(ctx, body) {
     await sendEmail(ctx, { to: data.email, subject: `Your ${biz(ctx)} account`, text: `Thanks for reaching out! You already have a family account. Sign in to book: ${base(ctx)}/parent\n\n${biz(ctx)}` });
     return out;
   }
-  const id = createLead(ctx, data, { source: 'inquiry', textsOk, textsOkSource: textsOk ? 'Ticked "text me" on the website form' : null });
+  const id = createLead(ctx, data, { source: channelOf(body.from) ?? 'inquiry', textsOk, textsOkSource: textsOk ? 'Ticked "text me" on the website form' : null });
   for (const o of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
     sendEmail(ctx, { to: o.email, subject: `New inquiry: ${data.parent_name}${data.athlete_name ? ` for ${data.athlete_name}` : ''}`,
       text: `${data.parent_name} asked about training.\n\n${[data.athlete_name && `Athlete: ${data.athlete_name}${data.athlete_age ? `, ${data.athlete_age}` : ''}`, data.sport && `Sport: ${data.sport}`, `Email: ${data.email}`, data.phone && `Phone: ${data.phone}`].filter(Boolean).join('\n')}${data.message ? `\n\n"${data.message}"` : ''}\n\nThey've been sent a thank-you with the sign-up link. See the lead: ${base(ctx)}/#/leads/${id}` }).catch(() => {});
@@ -229,7 +235,8 @@ function advance(ctx, lead) {
   const inList = ids.map(() => '?').join(',');
   const member = ctx.db.get(`SELECT 1 FROM subscriptions WHERE client_id IN (${inList}) AND status IN ('active','past_due') AND updated_at >= ?`, ...ids, since)
     || ctx.db.get(`SELECT 1 FROM session_credits WHERE client_id IN (${inList}) AND reason = 'purchase' AND created_at >= ?`, ...ids, since)
-    || ctx.db.get(`SELECT 1 FROM enrollments WHERE client_id IN (${inList}) AND status = 'active' AND created_at >= ?`, ...ids, since);
+    || ctx.db.get(`SELECT 1 FROM enrollments WHERE client_id IN (${inList}) AND status = 'active' AND created_at >= ?`, ...ids, since)
+    || ctx.db.get(`SELECT 1 FROM purchases WHERE client_id IN (${inList}) AND status IN ('active', 'trial') AND created_at >= ?`, ...ids, since);   // a program or course bought online counts as buying
   const trial = ctx.db.get(`SELECT 1 FROM subscriptions WHERE client_id IN (${inList}) AND status = 'trialing' AND created_at >= ?`, ...ids, since);
   const evaluation = ctx.db.get(`SELECT 1 FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id IN (${inList}) AND s.kind = 'evaluation' AND b.status IN ('booked','attended') AND b.created_at >= ?`, ...ids, since);
   const stage = member ? 'member' : trial ? 'trial' : evaluation ? 'evaluation' : lead.source === 'client' ? null : familyId ? 'signed_up' : null;

@@ -489,7 +489,15 @@ export async function viewSettings(main) {
     if (n === loading) fill(body, box);
   }
   const t$ = list.length > 1 ? tabs(list, current, (key) => { current = key; setQuery('settings', { tab: key === 'exercises' ? '' : key }); loadTab(); }) : null;
-  fill(main, header('Settings', owner ? 'Your exercise library, data import, staff, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and bringing in athletes\' data from wearables and spreadsheets.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), t$?.bar, body);
+  // The help sentences (owner's ask): only the owner sees them, and the owner can turn them off here. Coaches, front
+  // desk, parents and athletes never see them.
+  const helpOn = h('input', { type: 'checkbox', checked: document.documentElement.dataset.help !== 'off' });
+  helpOn.addEventListener('change', () => busy(null, async () => {
+    try { await patch('/v1/settings', { help_text: helpOn.checked ? 'on' : 'off' }); document.documentElement.dataset.help = helpOn.checked ? 'on' : 'off'; toast(helpOn.checked ? 'Help sentences are shown on your screens.' : 'Help sentences are hidden. Turn them back on here any time.'); }
+    catch (err) { helpOn.checked = !helpOn.checked; toast(err.message, 'warn'); }
+  }));
+  const helpRow = owner ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px;margin-top:8px' }, helpOn, h('span', null, 'Show the help sentences on my screens ', h('span', { class: 'muted' }, '(the short explanations under titles and fields; coaches, parents and athletes never see them)'))) : null;
+  fill(main, header('Settings', owner ? 'Your exercise library, data import, staff, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and bringing in athletes\' data from wearables and spreadsheets.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), helpRow, t$?.bar, body);
   await loadTab();
 }
 

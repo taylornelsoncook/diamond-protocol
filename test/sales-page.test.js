@@ -67,7 +67,7 @@ test('a version 71 database gains the sales page columns and keeps its purchases
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 74, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 80, `round ${round}`);
       const b = d.get('SELECT * FROM purchases WHERE id = ?', 'b1');
       assert.deepEqual([b.status, b.amount_cents, b.charge_tries, b.trial_ends_at], ['active', 4900, 0, null]);
       assert.deepEqual(d.get('SELECT pitch, coach_id, trial_days FROM programs WHERE id = ?', 'p1'), { pitch: null, coach_id: null, trial_days: 0 });

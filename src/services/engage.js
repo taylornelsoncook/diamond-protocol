@@ -613,6 +613,27 @@ function lockedCourses(ctx, clientId) {
 }
 function requireOpen(ctx, clientId, l) {
   if (l.course_id && lockedCourses(ctx, clientId).has(l.course_id)) throw conflict('This lesson is part of a course for sale. A parent can buy it on the Programs tab of the parent portal.');
+  const before = orderGate(ctx, l, doneSet(ctx, clientId));
+  if (before) { const e = new HttpError(409, 'locked', `Finish "${before.title}" first. This course goes in order.`); e.details = { locked_by: before.id }; throw e; }
+}
+// Courses in order (owner's ask: "you have to complete the one before to get the next level"): in a course with
+// in_order on, a lesson opens only once every published lesson before it is done. The first one not done is the
+// gate; `done` is the reader's finished lessons (lesson_progress for athletes, guardian_lesson_progress for parents).
+function orderGate(ctx, l, done) {
+  if (!l.course_id) return null;
+  const c = ctx.db.get('SELECT in_order FROM courses WHERE id = ?', l.course_id);
+  if (!c || !c.in_order) return null;
+  for (const prev of ctx.db.all('SELECT id, title, position, created_at FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', l.course_id)) {
+    if (prev.id === l.id) return null;
+    if (!done.has(prev.id)) return { id: prev.id, title: prev.title };
+  }
+  return null;
+}
+// Marks the lessons of an in-order course past the first unfinished one as locked, with what to finish first.
+function lockInOrder(course, ls) {
+  if (!course.in_order) return ls;
+  let gate = null;
+  return ls.map((l) => { const out = gate ? { ...l, locked: true, locked_by: gate.title } : l; if (!gate && !l.done) gate = l; return out; });
 }
 // What the athlete (or their parent) sees: assigned reading first, then courses and the library. Unpublished lessons never show.
 export function education(ctx, clientId) {
@@ -622,8 +643,8 @@ export function education(ctx, clientId) {
   const lessons = ctx.db.all(`SELECT * FROM lessons WHERE published = 1 AND ${ATHLETE_LESSON} ORDER BY position, created_at`);
   const locked = lockedCourses(ctx, clientId);
   const courses = ctx.db.all(`SELECT * FROM courses WHERE published = 1 AND audience = 'athletes' ORDER BY created_at`).map((c) => {
-    const ls = lessons.filter((l) => l.course_id === c.id).map((l) => (locked.has(c.id) ? { ...lessonItem(l, done), locked: true } : lessonItem(l, done)));
-    return { id: c.id, title: c.title, description: c.description, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done),
+    const ls = lockInOrder(c, lessons.filter((l) => l.course_id === c.id).map((l) => (locked.has(c.id) ? { ...lessonItem(l, done), locked: true } : lessonItem(l, done))));
+    return { id: c.id, title: c.title, description: c.description, in_order: !!c.in_order, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done),
       ...(locked.has(c.id) ? { locked: true, price_cents: c.price_cents } : {}) };
   }).filter((c) => c.total > 0);
   // The lesson to open next in a course: the first one not done yet.
@@ -778,14 +799,14 @@ function courseAudience(body, cur = {}) {
 }
 export function createCourse(ctx, body = {}) {
   const id = newId('crs'), a = courseAudience(body);
-  ctx.db.run('INSERT INTO courses (id, title, description, published, audience, age_min, age_max, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
-    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, a.audience, a.age_min, a.age_max, ctx.now());
+  ctx.db.run('INSERT INTO courses (id, title, description, published, audience, age_min, age_max, in_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', id, v.str(body.title, 'title', { max: 160 }),
+    v.str(body.description, 'description', { max: 1000, optional: true }), body.published === false ? 0 : 1, a.audience, a.age_min, a.age_max, body.in_order === false ? 0 : 1, ctx.now());
   return getCourse(ctx, id);
 }
 export function getCourse(ctx, id) {
   const c = ctx.db.get('SELECT * FROM courses WHERE id = ?', id);
   if (!c) throw notFound('Course');
-  return { ...c, published: !!c.published, lessons: ctx.db.all('SELECT id, title, position, published FROM lessons WHERE course_id = ? ORDER BY position, created_at', id).map((l) => ({ ...l, published: !!l.published })) };
+  return { ...c, published: !!c.published, in_order: !!c.in_order, lessons: ctx.db.all('SELECT id, title, position, published, quiz FROM lessons WHERE course_id = ? ORDER BY position, created_at', id).map((l) => ({ id: l.id, title: l.title, position: l.position, published: !!l.published, has_quiz: !!l.quiz })) };
 }
 export function updateCourse(ctx, id, body = {}) {
   const c = getCourse(ctx, id);
@@ -794,6 +815,7 @@ export function updateCourse(ctx, id, body = {}) {
     ctx.db.run('UPDATE courses SET title = ?, description = ?, published = ?, audience = ?, age_min = ?, age_max = ? WHERE id = ?', body.title !== undefined ? v.str(body.title, 'title', { max: 160 }) : c.title,
       body.description !== undefined ? v.str(body.description, 'description', { max: 1000, optional: true }) : c.description, body.published !== undefined ? (body.published ? 1 : 0) : (c.published ? 1 : 0), a.audience, a.age_min, a.age_max, id);
     ctx.db.run('UPDATE lessons SET category = ? WHERE course_id = ?', courseCategory(a.audience), id);   // a course's lessons follow its audience
+    if (body.in_order !== undefined) ctx.db.run('UPDATE courses SET in_order = ? WHERE id = ?', body.in_order ? 1 : 0, id);
   });
   return getCourse(ctx, id);
 }
@@ -1108,8 +1130,8 @@ export function parentCourses(ctx, guardian) {
   const fits = (c) => (c.age_min == null && c.age_max == null) || ages.some((a) => (c.age_min == null || a >= c.age_min) && (c.age_max == null || a <= c.age_max));
   const done = new Set(ctx.db.all('SELECT lesson_id FROM guardian_lesson_progress WHERE guardian_id = ?', guardian.id).map((r) => r.lesson_id));
   return ctx.db.all(`SELECT * FROM courses WHERE audience = 'parents' AND published = 1 ORDER BY created_at`).filter(fits).map((c) => {
-    const ls = ctx.db.all('SELECT * FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', c.id).map((l) => lessonItem(l, done));
-    return { id: c.id, title: c.title, description: c.description, age_min: c.age_min, age_max: c.age_max, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
+    const ls = lockInOrder(c, ctx.db.all('SELECT * FROM lessons WHERE course_id = ? AND published = 1 ORDER BY position, created_at', c.id).map((l) => lessonItem(l, done)));
+    return { id: c.id, title: c.title, description: c.description, age_min: c.age_min, age_max: c.age_max, in_order: !!c.in_order, lessons: ls, done: ls.filter((l) => l.done).length, total: ls.length, complete: ls.length > 0 && ls.every((l) => l.done) };
   }).filter((c) => c.total > 0);
 }
 // Stand-alone reading for parents (version 46): parent education, blogs and research, newest first, with what this parent read.
@@ -1127,6 +1149,7 @@ export function parentLesson(ctx, guardian, lessonId) {
       done: !!ctx.db.get('SELECT 1 FROM guardian_lesson_progress WHERE lesson_id = ? AND guardian_id = ?', a.id, guardian.id), next: null, position: null };
   }
   const l = ctx.db.get('SELECT * FROM lessons WHERE id = ?', lessonId), i = course.lessons.findIndex((x) => x.id === lessonId);
+  if (course.lessons[i].locked) { const e = new HttpError(409, 'locked', `Finish "${course.lessons[i].locked_by}" first. This course goes in order.`); e.details = { locked_by: course.lessons.find((x) => x.title === course.lessons[i].locked_by)?.id ?? null }; throw e; }
   return { id: l.id, title: l.title, summary: l.summary, body: l.body, video_url: l.video_url, minutes: l.minutes, course: { id: course.id, title: course.title }, quiz: null,
     done: course.lessons[i].done, next: course.lessons[i + 1] ? { id: course.lessons[i + 1].id, title: course.lessons[i + 1].title } : null, position: { n: i + 1, of: course.lessons.length } };
 }
@@ -1272,7 +1295,7 @@ export function teamEngagement(ctx, contractId) {
 }
 // Team names for pickers (no money).
 // Every roster athlete has a profile and the app (version 37); archived athletes aren't reached, so they aren't counted.
-export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org_name,
+export const listTeams = (ctx) => ctx.db.all(`SELECT t.id, t.name, o.name AS org_name, o.id AS org_id,
     (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS roster_count,
     (SELECT COUNT(*) FROM team_roster r JOIN clients c ON c.id = r.client_id WHERE r.contract_id = t.id AND r.active = 1 AND c.archived_at IS NULL) AS app_athletes
   FROM team_contracts t JOIN organizations o ON o.id = t.org_id WHERE t.status = 'active' ORDER BY o.name, t.name`).map((t) => ({ ...t, label: `${t.org_name} ${t.name}` }));

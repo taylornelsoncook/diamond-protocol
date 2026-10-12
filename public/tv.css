@@ -50,3 +50,10 @@ body{background:var(--black)}
 .tv-demo-dots span.on{background:var(--green-bright)}
 .tv-ex li.tv-ex--clip{cursor:pointer}
 .tv-ex li.tv-ex--showing{border-color:var(--green-bright);box-shadow:inset 0 0 0 1px var(--green-bright)}
+.tv-instr{margin:4px 0 0;color:var(--steel);font:400 clamp(15px,1.3vw,22px)/1.35 var(--font-sans);white-space:pre-line;border-left:4px solid var(--green-mid);padding-left:12px}
+/* Pinned team-feed posts under the board (version 78). */
+.tv-posts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.tv-post{border:1px solid var(--green-mid);border-radius:var(--radius-md);background:var(--surface);padding:16px 20px;display:flex;flex-direction:column;gap:6px}
+.tv-post-kicker{margin:0;color:var(--green-bright);font:600 clamp(13px,1vw,18px)/1.3 var(--font-display);text-transform:uppercase;letter-spacing:.04em}
+.tv-post-title{margin:0;font:600 clamp(20px,1.8vw,30px)/1.2 var(--font-display);color:var(--steel)}
+.tv-post-body{margin:0;font:400 clamp(16px,1.3vw,22px)/1.4 var(--font-sans);color:var(--steel);white-space:pre-line}

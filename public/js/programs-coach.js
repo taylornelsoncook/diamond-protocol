@@ -129,11 +129,84 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
-        cards, weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
+        cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
 
+// The month calendar (the redesign, step 3): a pick (everyone on a program, one program, a team or one athlete), a month
+// of day cells with a card per workout the picked people have that day, a day view beside it, and Publish / Release
+// from / Unpublish for a program pick.
+const calUi = { month: null, pick: '', day: null };
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const ymd = (d) => d.toISOString().slice(0, 10);
+const monthOf = (s) => { const [y, m] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, 1)); };
+const shiftMonth = (s, n) => { const d = monthOf(s); d.setUTCMonth(d.getUTCMonth() + n); return ymd(d).slice(0, 7); };
+function calendarPanel(progs, edit) {
+  const box = h('div', { class: 'stack', style: 'gap:10px' });
+  const pick = select([['', 'Everyone on a program']], { 'aria-label': 'Whose calendar', value: calUi.pick });
+  const title = h('h3', { class: 'week-title', style: 'margin:0' });
+  const grid = h('div', { class: 'cal-grid', role: 'grid', 'aria-label': 'Month' });
+  const side = h('div', { class: 'cal-day' });
+  const pubBox = h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' });
+  let data = null;
+  const query = () => { const [kind, id] = calUi.pick.split(':'); return kind === 'program' ? `program_id=${id}` : kind === 'team' ? `contract_id=${id}` : kind === 'client' ? `client_id=${id}` : ''; };
+  const load = async () => {
+    fill(grid, h('p', { class: 'small muted' }, 'Loading…'));
+    data = await get(`/v1/calendar?month=${calUi.month}&${query()}`);
+    draw();
+  };
+  const draw = () => {
+    title.textContent = `${MONTHS[Number(calUi.month.split('-')[1]) - 1]} ${calUi.month.split('-')[0]}`;
+    const byDate = new Map(data.days.map((d) => [d.date, d]));
+    const firstDay = monthOf(calUi.month), startPad = (firstDay.getUTCDay() + 6) % 7;   // Monday first
+    const cells = [['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('div', { class: 'cal-head', role: 'columnheader' }, d))];
+    const n = new Date(Date.UTC(firstDay.getUTCFullYear(), firstDay.getUTCMonth() + 1, 0)).getUTCDate();
+    const items = [];
+    for (let i = 0; i < startPad; i++) items.push(h('div', { class: 'cal-cell cal-cell--pad' }));
+    for (let d = 1; d <= n; d++) {
+      const date = `${calUi.month}-${String(d).padStart(2, '0')}`, day = byDate.get(date);
+      items.push(h('button', { type: 'button', role: 'gridcell', class: `cal-cell${date === data.today ? ' cal-cell--today' : ''}${calUi.day === date ? ' cal-cell--picked' : ''}${day ? ' cal-cell--has' : ''}`, 'aria-label': `${date}${day ? `, ${plural(day.workouts.length, 'workout')}` : ''}`,
+        onClick: () => { calUi.day = date; draw(); } },
+        h('span', { class: 'cal-n' }, String(d)),
+        day ? day.workouts.slice(0, 3).map((w) => h('span', { class: `cal-card${w.done === w.athletes.length ? ' cal-card--done' : w.missed ? ' cal-card--missed' : w.unpublished ? ' cal-card--hidden' : ''}` }, w.title, h('span', { class: 'cal-card-n' }, `${w.done}/${w.athletes.length}`))) : null,
+        day && day.workouts.length > 3 ? h('span', { class: 'small muted' }, `+${day.workouts.length - 3}`) : null));
+    }
+    fill(grid, ...cells, ...items);
+    // The day view: every workout that day, who has it, and the numbers.
+    const day = calUi.day ? byDate.get(calUi.day) : null;
+    fill(side, h('div', { class: 'strong' }, calUi.day ? fmtDay(calUi.day) : 'Pick a day'),
+      !calUi.day ? h('p', { class: 'small muted', style: 'margin:0' }, 'Click a day to see its workouts and who has them.')
+        : !day ? h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing on this day for these athletes.')
+          : day.workouts.map((w) => h('div', { class: 'cal-wo' },
+            h('a', { class: 'strong', href: `#/programs/${w.program_id}?week=${w.week}`, style: 'color:inherit' }, w.title),
+            h('div', { class: 'small muted' }, `${w.program_name} · week ${w.week} day ${w.day} · ${plural(w.exercises, 'exercise')}${w.blocks.length ? ` · ${w.blocks.join(', ')}` : ''}`),
+            h('div', { class: 'small' }, `${w.done} of ${w.athletes.length} logged${w.missed ? ` · ${w.missed} missed` : ''}${w.unpublished ? ` · ${w.unpublished} can't see it yet` : ''}${w.effort_avg != null ? ` · effort ${w.effort_avg}` : ''}`),
+            h('div', { class: 'row wrap', style: 'gap:4px' }, w.athletes.map((a) => h('a', { class: `dp-badge ${a.status === 'done' ? 'dp-badge--good' : a.status === 'missed' ? 'dp-badge--warn' : 'dp-badge--muted'}`, href: `#/clients/${a.id}?tab=training`, style: 'text-decoration:none' }, first(a.name)))))));
+    // Publish controls for a program pick.
+    const [kind, id] = calUi.pick.split(':');
+    const states = data.assignments.reduce((m, a) => { m[a.state] = (m[a.state] ?? 0) + 1; return m; }, {});
+    const summary = data.people ? Object.entries(states).map(([k, c]) => `${c} ${k}`).join(' · ') : 'nobody on a program';
+    const doPub = (body, msg) => busy(null, async () => { const r = await post(`/v1/programs/${id}/publish`, body); toast(`${msg} for ${plural(r.athletes.length, 'athlete')}.`); await load(); });
+    fill(pubBox, h('span', { class: 'small muted' }, `${plural(data.people, 'athlete')} · ${summary}`),
+      edit && kind === 'program' ? [btn('Publish now', () => doPub({ published_from: null }, 'Published'), 'secondary'),
+        btn('Release from a date', () => { const d = prompt('Athletes see the program from (YYYY-MM-DD):', data.today); if (d) doPub({ published_from: d }, `Released from ${d}`); }, 'ghost'),
+        btn('Unpublish', () => { if (confirm('Hide this program from its athletes until you publish it again? Nothing counts as missed meanwhile.')) doPub({ published_from: 'unpublished' }, 'Unpublished'); }, 'ghost')] : null);
+  };
+  pick.addEventListener('change', () => { calUi.pick = pick.value; calUi.day = null; load().catch((e) => toast(e.message, 'warn')); });
+  const nav = (n) => { calUi.month = shiftMonth(calUi.month, n); calUi.day = null; load().catch((e) => toast(e.message, 'warn')); };
+  calUi.month ??= new Date().toISOString().slice(0, 7);
+  fill(box, h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, btn('◀', () => nav(-1), 'ghost', { 'aria-label': 'Previous month' }), title, btn('▶', () => nav(1), 'ghost', { 'aria-label': 'Next month' }), btn('Today', () => { calUi.month = new Date().toISOString().slice(0, 7); calUi.day = null; load(); }, 'ghost'), h('span', { class: 'grow' }), h('div', { style: 'min-width:220px' }, pick)),
+    pubBox, h('div', { class: 'cal-wrap' }, grid, side));
+  Promise.all([get('/v1/teams').catch(() => ({ data: [] })), get('/v1/clients?status=current').catch(() => ({ data: [] }))]).then(([teams, clients]) => {
+    for (const p of progs) pick.append(h('option', { value: `program:${p.id}` }, `Program: ${p.name}`));
+    for (const t of teams.data) pick.append(h('option', { value: `team:${t.id}` }, `Team: ${t.label}`));
+    for (const c of clients.data.filter((c) => c.program)) pick.append(h('option', { value: `client:${c.id}` }, c.name));
+    pick.value = calUi.pick;
+  }).catch(() => {});
+  load().catch((e) => fill(grid, h('p', { class: 'dp-error' }, e.message)));
+  return panel('Calendar', { subtitle: 'What each athlete has on each day. Pick a program, a team or one athlete; click a day for the details; publish a program when it\'s ready.' }, box);
+}
 // The roster this week (the training calendar): every athlete on a program with planned, done and missed, behind first.
 // Behind = two planned workouts missed in a row. A team filter narrows it; the coach opens the athlete's Training tab.
 const rosterUi = { team: '', only: '' };
@@ -474,7 +547,8 @@ function exerciseDialog(x, cats, tags = null) {
 }
 
 // ---------- Program builder ----------
-const builder = { focusTab: false };
+const builder = { focusTab: false, selected: new Set() };   // selected: the ticked days (workout ids) on the week grid
+const drag = { kind: null, id: null, days: [] };            // what is being dragged: an exercise line, or a day (with the ticked days)
 
 export async function viewProgram(main, id) {
   const [p, exs, shop] = await Promise.all([get(`/v1/programs/${id}`), get('/v1/exercises'), isOwner() ? get('/v1/shop') : null]);
@@ -521,25 +595,50 @@ export async function viewProgram(main, id) {
     else { drawTabs(); drawWeek(); }
   };
 
+  // The week grid (the redesign, step 1): the seven days across, each a column of blocks with one line per exercise;
+  // ticks on days raise an action bar (copy, move, repeat, save to library, delete); arrows step the weeks.
+  const selected = builder.selected;
+  const barBox = h('div', { class: 'pg-bar', hidden: true, role: 'region', 'aria-label': 'Selected days' });
+  const drawBar = () => {
+    const ids = [...selected].filter((id) => p.workouts.some((w) => w.id === id));
+    for (const id of selected) if (!ids.includes(id)) selected.delete(id);
+    barBox.hidden = !ids.length;
+    if (!ids.length) return;
+    const after = (r) => { selected.clear(); reload(r?.days?.[0]?.week ?? week); };
+    fill(barBox, h('span', { class: 'strong' }, `${plural(ids.length, 'day')} selected`),
+      btn('Copy to', () => bulkDialog(p, ids, 'copy', after), 'secondary'), btn('Move', () => bulkDialog(p, ids, 'move', after), 'ghost'), btn('Repeat', () => bulkDialog(p, ids, 'repeat', after), 'ghost'),
+      btn('Save to library', (e) => busy(e.currentTarget, async () => { for (const id of ids) { const w = p.workouts.find((x) => x.id === id); await post(`/v1/workouts/${id}/save-template`, { name: w.title }); } toast(`${plural(ids.length, 'workout template')} saved. Start a day from them with Add day.`); selected.clear(); drawBar(); drawWeek(); }), 'ghost'),
+      btn('Delete', (e) => { const logged = ids.reduce((n, id) => n + (p.workouts.find((x) => x.id === id)?.logs ?? 0), 0); if (!confirm(`Delete ${plural(ids.length, 'day')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in their history.` : ''}`)) return;
+        busy(e.currentTarget, async () => { const r = await post(`/v1/programs/${id}/days/delete`, { workouts: ids, confirm: true }); toast(`${plural(r.deleted, 'day')} deleted.`); after(); }); }, 'ghost'),
+      btn('Send to athletes', () => sendDialog(p, ids, [], () => { selected.clear(); drawBar(); }), 'secondary'),
+      btn('Clear', () => { selected.clear(); drawBar(); drawWeek(); }, 'ghost'));
+  };
   const drawWeek = () => {
     weekBox.setAttribute('aria-labelledby', `pg-week-${week}`);
     const days = daysIn(week);
     const isLast = week === p.weeks;
     const logged = days.reduce((n, w) => n + w.logs, 0);
+    const weekReps = days.reduce((n, w) => n + repsOf(w), 0);
+    const step = (d) => { const n = week + d; if (n < 1 || n > p.weeks) return; week = n; go(n); draw(); };
     const weekActions = edit ? h('div', { class: 'row wrap' },
       days.length < 7 ? btn('Add day', () => dayDialog(p, week, reload), 'secondary') : null,
       days.length ? btn('Copy week', () => copyWeekDialog(p, week, reload), 'ghost') : null,
       days.length || (isLast && p.weeks > 1) ? btn('Delete week', (e) => {
-        const msg = days.length ? `Delete week ${week}'s ${plural(days.length, 'workout')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''}${isLast && p.weeks > 1 ? ' The program becomes shorter.' : ''}` : `Delete the empty week ${week}? The program becomes ${plural(p.weeks - 1, 'week')}.`;
+        const msg = days.length ? `Delete week ${week}'s ${plural(days.length, 'workout')}?${logged ? ` Athletes logged them ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''}${isLast && p.weeks > 1 ? ' The program becomes shorter.' : ''}` : `Remove week ${week}? The program becomes shorter.`;
         if (!confirm(msg)) return;
         busy(e.currentTarget, async () => { await del(`/v1/programs/${id}/weeks/${week}`, { confirm: true }); toast(`Week ${week} deleted.`); reload(Math.min(week, isLast && p.weeks > 1 ? p.weeks - 1 : p.weeks)); });
       }, 'ghost') : null) : null;
+    const columns = [1, 2, 3, 4, 5, 6, 7].map((d) => { const w = days.find((x) => x.day === d); return w ? dayColumn(p, w, exs, edit, reload, { selected, onSelect: drawBar }) : emptyDay(p, week, d, edit, reload); });
     fill(weekBox,
-      h('div', { class: 'row wrap' }, h('h2', { class: 'week-title grow' }, `Week ${week}`), weekActions),
-      days.length ? h('div', { class: 'pg-week-grid' }, days.map((w) => workoutCard(p, w, exs, edit, reload)))
-        : h('div', { class: 'empty' }, edit ? (isLast && p.weeks > 1 ? `Week ${week} is empty. Add a day, copy another week here, or delete this week.` : `No workouts in week ${week} yet. Add a day, or copy another week here.`) : `No workouts in week ${week} yet.`));
+      h('div', { class: 'row wrap', style: 'align-items:center' },
+        h('div', { class: 'row', style: 'gap:4px;align-items:center' },
+          btn('◀', () => step(-1), 'ghost', { 'aria-label': 'Previous week', disabled: week <= 1 }), h('h2', { class: 'week-title', style: 'margin:0' }, `Week ${week} of ${p.weeks}`), btn('▶', () => step(1), 'ghost', { 'aria-label': 'Next week', disabled: week >= p.weeks })),
+        h('span', { class: 'small muted grow' }, days.length ? `${plural(days.length, 'day')} · ${weekReps.toLocaleString()} reps planned${logged ? ` · logged ${plural(logged, 'time')}` : ''}` : ''),
+        weekActions),
+      h('div', { class: 'pg-grid-wrap' }, h('div', { class: 'pg-days', role: 'group', 'aria-label': `Week ${week}, days across` }, columns),
+        edit && p.kind !== 'template' ? sendPanel(p, { selected, onSend: () => { selected.clear(); drawBar(); drawWeek(); } }) : null));
+    drawBar();
   };
-
   const isTemplate = p.kind === 'template';
   const header = deps.header(isTemplate ? `${p.name} (template)` : p.name, isTemplate ? `Template · ${plural(p.weeks, 'week')} · ${p.level ?? 'Any level'} · nobody is assigned to a template: start a program from it` : `${plural(p.weeks, 'week')} · ${p.level ?? 'Any level'} · ${plural(p.clients.length, 'client')} · ${plural(p.logged_7d, 'workout')} logged in the last 7 days`,
     edit ? isTemplate ? btn('Start a program from it', () => get('/v1/programs?kind=template').then((t) => newProgramDialog([], t.data, p.id))) : btn('Assign to a client', () => assignDialog(p)) : null);
@@ -549,8 +648,8 @@ export async function viewProgram(main, id) {
       btn(isTemplate ? 'Copy as a new template' : 'Save as template', () => saveTemplateDialog(p), 'ghost'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/program.html?id=${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener' }, 'Print or PDF'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/v1/programs/${encodeURIComponent(id)}/export.xlsx` }, 'Excel')) : null,
-    isTemplate ? null : clientsPanel(p, edit),
-    modeBar, tabsBox, weekBox, planBox,
+    modeBar, tabsBox, weekBox, barBox, planBox,
+    isTemplate ? null : clientsPanel(p, edit),   // the grid comes first (the redesign); who is on the program sits under it
     shop && !isTemplate ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render(), { get })) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
       edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
@@ -785,10 +884,10 @@ function duplicateDialog(p) {
     { label: 'Cancel', variant: 'ghost' }]);
   name.select();
 }
-function dayDialog(p, week, reload) {
+function dayDialog(p, week, reload, preset = null) {
   const used = new Set(p.workouts.filter((w) => w.week === week).map((w) => w.day));
   const free = [1, 2, 3, 4, 5, 6, 7].filter((d) => !used.has(d));
-  const day = select(free.map((d) => [String(d), `Day ${d}`]));
+  const day = select(free.map((d) => [String(d), `Day ${d}`]), { value: preset && free.includes(preset) ? String(preset) : String(free[0]) });
   const title = input({ placeholder: 'Lower body' });
   const from = select([['', 'An empty day']], { 'aria-label': 'Start from a template' });
   const fromBox = h('div', { hidden: true }, field('Start from', from, 'A workout template brings its exercises, set details, groups and blocks.'));
@@ -919,57 +1018,189 @@ function copyWeekDialog(p, week, reload) {
   to.addEventListener('input', () => { if (Number(through.value) < Number(to.value)) through.value = to.value; });
 }
 
-function workoutCard(p, w, exs, edit, reload) {
-  const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
-  const body = (x) => h('span', { class: 'pg-ex-line grow' }, h('span', { class: 'pg-ex-name' }, x.name), h('span', { class: 'small muted' }, line(x)),
-    x.form_check ? h('span', { class: 'dp-badge dp-badge--neutral', title: x.form_check_note || 'The athlete is asked to send a clip of this one' }, 'Form check') : null,
-    x.note ? h('span', { class: 'small pg-note' }, x.note) : null);
-  const row = (x, n) => h('div', { class: `row pg-ex${x.block_id ? ' sf-in-group' : ''}` },
-    n != null ? h('span', { class: 'sf-tag', 'aria-hidden': 'true' }, String(n)) : null, playBtn(x),
-    edit ? h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
-      body(x), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit'))
-      : h('div', { class: 'grow pg-ex-body' }, body(x)));
-  // Named blocks (version 74): exercises in no block first, then each block with its name, how it runs and its own
-  // Add exercise. A block can be renamed, moved, saved as a complex for other workouts, or removed.
+// Reps planned in a day: sets × the number to count from the reps text (a time, distance or max counts nothing).
+const repNum = (reps) => { const m = /^(\d{1,3})/.exec(String(reps ?? '').trim()); return m && !/\d\s*(s|sec|min|yd|m|ft|km|mi)\b|:\d/i.test(reps) ? Number(m[1]) : 0; };
+const repsOf = (w) => w.exercises.reduce((n, x) => n + (x.sets || 1) * repNum(x.reps), 0);
+// A block's letter circle takes a colour from its name: warm-ups amber, speed and conditioning green, cool-downs blue, lifts steel.
+const blockTone = (name = '') => (/warm|activ|mobil|prep/i.test(name) ? 'warm' : /sprint|accel|speed|condition|plyo|agil|jump|tempo run/i.test(name) ? 'speed' : /cool|stretch|recover|breath/i.test(name) ? 'cool' : 'lift');
+const letterOf = (i) => String.fromCharCode(65 + Math.min(i, 25));
+
+// One day of the week grid: the tick, the title, the day's instructions, each block with its letter and its exercises
+// one line each, and the adds at the foot.
+function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
+  const line = (x) => [x.prescription, x.rest_seconds != null ? (x.rest_seconds === 0 ? 'no rest' : `${restWord(x.rest_seconds)} rest`) : null, x.tempo ? `tempo ${x.tempo}` : null, x.target_rpe != null ? `RPE ${x.target_rpe}` : null, loadText(x)].filter(Boolean).join(' · ');
+  // Drag and drop (step 2): a line is dragged within the day, into a block, or onto another day; the drop lands it
+  // ahead of the line it is dropped on, at the end of a block dropped on its heading, or at the end of a day.
+  const drop = async (payload) => { try { await post(`/v1/workout-exercises/${drag.id}/move`, { workout_id: w.id, ...payload }); reload(); } catch (e) { toast(e.message, 'warn'); } };
+  const dragProps = (x) => (edit ? { draggable: 'true',
+    onDragstart: (e) => { drag.id = x.id; drag.kind = 'exercise'; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', x.id); e.currentTarget.classList.add('pg-dragging'); },
+    onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.id = null; } } : {});
+  const target = (payloadOf) => (edit ? {
+    onDragover: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('pg-over'); },
+    onDragleave: (e) => e.currentTarget.classList.remove('pg-over'),
+    onDrop: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.currentTarget.classList.remove('pg-over'); const pl = payloadOf(); if (pl.before_id === drag.id) return; drop(pl); } } : {});
+  const row = (x, n) => h('div', { class: 'pg-line', ...dragProps(x), ...target(() => ({ before_id: x.id, block_id: x.block_id ?? null })) },
+    n != null ? h('span', { class: 'pg-line-n' }, String(n)) : null,
+    edit ? h('button', { type: 'button', class: 'pg-line-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
+      h('span', { class: 'pg-line-name' }, x.name, x.form_check ? h('span', { class: 'pg-flag', title: x.form_check_note || 'The athlete is asked to send a clip' }, 'FC') : null), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null)
+      : h('div', { class: 'pg-line-body' }, h('span', { class: 'pg-line-name' }, x.name), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null),
+    x.video_url ? playBtn(x) : null);
   const blocks = w.blocks ?? [];
-  const blockHead = (b, i) => h('div', { class: 'row wrap pg-block-head' },
-    h('div', { class: 'grow stack-tight' },
-      edit ? h('button', { type: 'button', class: 'sf-group pg-block-name', 'aria-label': `Rename or change ${b.name}`, onClick: () => blockDialog(w, b, reload) }, b.name, KIND_WORDS[b.kind] && b.kind !== 'block' ? h('span', { class: 'sf-group-how' }, ` · ${KIND_WORDS[b.kind]}`) : null)
-        : h('div', { class: 'sf-group' }, b.name, b.kind !== 'block' ? h('span', { class: 'sf-group-how' }, ` · ${KIND_WORDS[b.kind]}`) : null)),
-    edit ? h('div', { class: 'row wrap pg-block-acts', style: 'gap:2px' },
-      btn('+ Exercise', () => pickExercise({ title: `Add to ${b.name}`, exs, program: p, workout: w, block: b, onAdd: () => reload() }), 'ghost', { 'aria-label': `Add an exercise to ${b.name}` }),
+  const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
+  const blockHead = (b, i) => h('div', { class: 'pg-bhead', ...target(() => ({ block_id: b.id })) },
+    h('span', { class: `pg-letter pg-letter--${blockTone(b.name)}`, 'aria-hidden': 'true' }, letterOf(i)),
+    edit ? h('button', { type: 'button', class: 'pg-bname', 'aria-label': `${b.name}: rename, change or remove`, onClick: () => blockDialog(w, b, reload) }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null)
+      : h('span', { class: 'pg-bname' }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null),
+    edit ? h('div', { class: 'pg-bacts' },
+      btn('+', () => pickExercise({ title: `Add to ${b.name}`, exs, program: p, workout: w, block: b, onAdd: () => reload() }), 'ghost', { 'aria-label': `Add an exercise to ${b.name}`, title: 'Add an exercise' }),
       b.count && i > 0 && blocks[i - 1].count ? btn('↑', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} up` }) : null,
       b.count && i < blocks.length - 1 && blocks[i + 1].count ? btn('↓', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i + 2 }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} down` }) : null,
-      b.count ? btn('Save', () => saveComplexDialog(b), 'ghost', { 'aria-label': `Save ${b.name} as a complex`, title: 'Save as a complex for other workouts' }) : null,
-      btn('Remove', (e) => {
-        const keep = b.count ? confirm(`Remove the block ${b.name}?\n\nOK removes its ${plural(b.count, 'exercise')} too. Cancel keeps everything.`) : true;
-        if (!keep) return;
-        busy(e.currentTarget, async () => { await del(`/v1/workout-blocks/${b.id}`); toast(`${b.name} removed.`); reload(); });
-      }, 'ghost', { 'aria-label': `Remove ${b.name}` })) : null);
-  const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
+      b.count ? btn('Save', () => saveComplexDialog(b), 'ghost', { 'aria-label': `Save ${b.name} as a complex`, title: 'Save as a complex' }) : null,
+      btn('×', (e) => { if (b.count && !confirm(`Remove the block ${b.name} and its ${plural(b.count, 'exercise')}?`)) return; busy(e.currentTarget, async () => { await del(`/v1/workout-blocks/${b.id}`); toast(`${b.name} removed.`); reload(); }); }, 'ghost', { 'aria-label': `Remove ${b.name}` })) : null);
   const rows = [];
   let n = 0;
   w.exercises.forEach((x, i) => {
     if (x.block_id && w.exercises[i - 1]?.block_id !== x.block_id && byId.has(x.block_id)) { const { b, i: bi } = byId.get(x.block_id); rows.push(blockHead(b, bi)); n = 0; }
     rows.push(row(x, x.block_id ? ++n : null));
   });
-  for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 12px' }, edit ? 'Empty. Add an exercise to this block.' : 'Empty.'));
-  const routines = h('div', { class: 'row wrap small', style: 'gap:6px;align-items:center' },
-    h('span', { class: 'muted' }, `Warm-up: ${w.warmup?.name ?? 'none'} · Cool-down: ${w.cooldown?.name ?? 'none'}`),
-    edit ? btn(w.warmup || w.cooldown ? 'Change' : 'Attach blocks', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost', { 'aria-label': `Warm-up and cool-down for ${w.title}` }) : null);
-  return h('div', { class: 'workout' },
-    h('div', { class: 'row' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
-      edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title))),
-    routines,
-    rows.length ? rows : h('p', { class: 'small muted' }, edit ? 'No exercises yet. Add a block (Warm up, Speed, Strength...) or load a complex, then add exercises to it.' : 'No exercises yet.'),
-    edit ? h('div', { class: 'row wrap pg-foot' },
-      btn('Add a block', () => blockDialog(w, null, reload), 'secondary'),
-      btn('Load a complex', () => loadComplexDialog(w, reload), 'secondary'),
-      btn('Add exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' }),
-      h('span', { class: 'grow' }),
-      btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost', { 'aria-label': `Copy ${w.title}` }),
-      btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost', { 'aria-label': `Save ${w.title} as a template` }),
-      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost', { 'aria-label': `Delete ${w.title}` })) : null);
+  for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 30px' }, edit ? 'Empty. Press + to add an exercise.' : 'Empty.'));
+  const tick = edit ? h('input', { type: 'checkbox', class: 'pg-tick', checked: selected.has(w.id), 'aria-label': `Select day ${w.day}, ${w.title}`, onChange: (e) => { if (e.target.checked) selected.add(w.id); else selected.delete(w.id); onSelect(); } }) : null;
+  const menu = edit ? h('details', { class: 'pg-menu' }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
+    h('div', { class: 'pg-menu-list' },
+      btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
+      btn('Warm-up and cool-down', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost'),
+      btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost'),
+      btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost'),
+      btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost'))) : null;
+  const reps = repsOf(w);
+  const dayDrag = edit ? { draggable: 'true',
+    onDragstart: (e) => { drag.kind = 'day'; drag.days = selected.has(w.id) ? [...selected] : [w.id]; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', drag.days.join(',')); e.currentTarget.classList.add('pg-dragging'); },
+    onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.kind = null; } } : {};
+  return h('div', { class: `pg-day${selected.has(w.id) ? ' pg-day--selected' : ''}`, 'data-day': String(w.day) },
+    h('div', { class: 'pg-day-head', ...dayDrag, title: edit ? 'Drag onto an athlete, a team or a school in Send to' : null }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
+      h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${w.logs}×` : ''}${reps ? ` · ${reps} reps` : ''}`),
+      edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title)), menu),
+    w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
+    w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
+    rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),
+    edit ? h('div', { class: 'pg-dropzone', ...target(() => ({ block_id: null })) }, 'Drop here: end of the day, outside the blocks') : null,
+    edit ? h('div', { class: 'pg-day-foot' },
+      btn('+ Block', () => blockDialog(w, null, reload), 'ghost'), btn('Load a complex', () => loadComplexDialog(w, reload), 'ghost'),
+      btn('+ Exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' })) : null);
+}
+const restWord = (secs) => (secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`);
+// Send to (step 2): a panel of schools, teams and athletes beside the grid that takes dragged days, and the dialog that
+// sends the days (a short program of their own) from a date.
+async function sendTargets() {
+  const [orgs, teams, clients] = await Promise.all([get('/v1/organizations').catch(() => ({ data: [] })), get('/v1/teams').catch(() => ({ data: [] })), get('/v1/clients')]);
+  const activeOrg = new Set(teams.data.map((t) => t.org_id));
+  return { schools: orgs.data.filter((o) => activeOrg.has(o.id)).map((o) => ({ kind: 'org', id: o.id, label: o.name, sub: `${plural(teams.data.filter((t) => t.org_id === o.id).length, 'team')} · the whole school` })),
+    teams: teams.data.map((t) => ({ kind: 'team', id: t.id, label: t.label, sub: plural(t.roster_count, 'athlete') })),
+    athletes: clients.data.filter((c) => !c.archived_at).map((c) => ({ kind: 'client', id: c.id, label: c.name, sub: c.program ? `On ${c.program.name}` : 'No program' })) };
+}
+function sendPanel(p, { selected, onSend }) {
+  const box = h('aside', { class: 'pg-send', 'aria-label': 'Send to' });
+  const q = input({ type: 'search', placeholder: 'Find a school, team or athlete', 'aria-label': 'Find a school, team or athlete' });
+  const list = h('div', { class: 'pg-send-list' });
+  let targets = null;
+  const item = (t) => h('div', { class: 'pg-send-item', role: 'button', tabindex: '0', 'aria-label': `Send the ticked days to ${t.label}`,
+    onClick: () => { const days = [...selected]; if (!days.length) return toast('Tick the days to send first, or drag a day here.', 'warn'); sendDialog(p, days, [t], onSend); },
+    onKeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.currentTarget.click(); } },
+    onDragover: (e) => { if (drag.kind !== 'day') return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; e.currentTarget.classList.add('pg-over'); },
+    onDragleave: (e) => e.currentTarget.classList.remove('pg-over'),
+    onDrop: (e) => { if (drag.kind !== 'day') return; e.preventDefault(); e.currentTarget.classList.remove('pg-over'); sendDialog(p, [...drag.days], [t], onSend); } },
+    h('span', { class: `pg-send-k pg-send-k--${t.kind}` }, { org: 'School', team: 'Team', client: '' }[t.kind]), h('span', { class: 'grow stack-tight', style: 'gap:0;min-width:0' }, h('span', { class: 'strong small' }, t.label), h('span', { class: 'small muted' }, t.sub)));
+  const draw = () => {
+    if (!targets) return fill(list, h('p', { class: 'small muted' }, 'Loading…'));
+    const needle = q.value.trim().toLowerCase();
+    const hit = (t) => !needle || t.label.toLowerCase().includes(needle);
+    const groups = [['Schools', targets.schools.filter(hit)], ['Teams', targets.teams.filter(hit)], ['Athletes', targets.athletes.filter(hit).slice(0, 40)]].filter(([, xs]) => xs.length);
+    fill(list, groups.length ? groups.flatMap(([title, xs]) => [h('div', { class: 'pg-send-group' }, title), ...xs.map(item)]) : h('p', { class: 'small muted' }, 'Nobody matches.'));
+  };
+  q.addEventListener('input', draw);
+  fill(box, h('div', { class: 'strong' }, 'Send to'), h('p', { class: 'small muted', style: 'margin:0' }, 'Drag a day (or the ticked days) onto a school, a team or an athlete, or tick days and click one.'), q, list);
+  draw();
+  sendTargets().then((t) => { targets = t; draw(); }).catch((e) => fill(list, h('p', { class: 'dp-error' }, e.message)));
+  return box;
+}
+function sendDialog(p, dayIds, picked, onSend) {
+  const days = dayIds.map((id) => p.workouts.find((w) => w.id === id)).filter(Boolean);
+  if (!days.length) return toast('Tick the days to send first.', 'warn');
+  const need = Math.max(1, ...days.map((w) => w.day));
+  const sched = scheduleFields({ need });
+  const name = input({ maxlength: '120', value: `${p.name} · ${days.length === 1 ? days[0].title : plural(days.length, 'day')}`, 'aria-label': 'Name for these days' });
+  const replace = h('input', { type: 'checkbox' });
+  const chosen = new Map(picked.map((t) => [`${t.kind}:${t.id}`, t]));
+  const chosenBox = h('div', { class: 'row wrap', style: 'gap:6px' });
+  const q = input({ type: 'search', placeholder: 'Add a school, team or athlete', 'aria-label': 'Add a school, team or athlete' });
+  const found = h('div', { class: 'pg-send-list', style: 'max-height:28vh' });
+  let targets = null;
+  const drawChosen = () => fill(chosenBox, chosen.size ? [...chosen.values()].map((t) => h('span', { class: 'dp-badge dp-badge--good', style: 'gap:6px' }, t.label, h('button', { type: 'button', class: 'pg-x', 'aria-label': `Remove ${t.label}`, onClick: () => { chosen.delete(`${t.kind}:${t.id}`); drawChosen(); } }, '×'))) : h('span', { class: 'small muted' }, 'Nobody chosen yet.'));
+  const drawFound = () => {
+    const needle = q.value.trim().toLowerCase();
+    if (!targets || !needle) return fill(found);
+    const all = [...targets.schools, ...targets.teams, ...targets.athletes].filter((t) => t.label.toLowerCase().includes(needle) && !chosen.has(`${t.kind}:${t.id}`)).slice(0, 12);
+    fill(found, all.map((t) => h('button', { type: 'button', class: 'pg-send-item', onClick: () => { chosen.set(`${t.kind}:${t.id}`, t); q.value = ''; drawChosen(); drawFound(); } },
+      h('span', { class: `pg-send-k pg-send-k--${t.kind}` }, { org: 'School', team: 'Team', client: '' }[t.kind]), h('span', { class: 'grow small strong' }, t.label), h('span', { class: 'small muted' }, t.sub))));
+  };
+  q.addEventListener('input', drawFound);
+  sendTargets().then((t) => { targets = t; drawFound(); }).catch(() => {});
+  drawChosen();
+  dialog(`Send ${plural(days.length, 'day')}`, h('div', { class: 'stack' },
+    h('p', { class: 'small muted', style: 'margin:0' }, `${days.map((w) => `wk ${w.week} d${w.day} ${w.title}`).join(', ')}. They go out as a short program of their own, so logging, progression and the calendar work as usual.`),
+    field('To', chosenBox), q, found,
+    field('Name on their app', name),
+    sched.el,
+    h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, replace, h('span', null, 'Move athletes who are on another program onto these days ', h('span', { class: 'muted' }, '(otherwise they are skipped and named)')))), [
+    { label: 'Send', variant: 'primary', onClick: async () => {
+      if (!chosen.size) throw new Error('Choose at least one school, team or athlete.');
+      const ids = (k) => [...chosen.values()].filter((t) => t.kind === k).map((t) => t.id);
+      const r = await post(`/v1/programs/${p.id}/days/send`, { workouts: dayIds, client_ids: ids('client'), contract_ids: ids('team'), org_ids: ids('org'), name: name.value.trim() || undefined, replace: replace.checked, ...sched.body() });
+      toast(`${plural(r.assigned.length, 'athlete')} got ${r.program.name}.${r.skipped.length ? ` Skipped: ${r.skipped.map((x) => `${first(x.name)} (${x.reason})`).join(', ')}.` : ''}`, r.skipped.length ? 'warn' : 'good');
+      onSend?.(r);
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
+}
+// A day of the week with no workout yet.
+function emptyDay(p, week, day, edit, reload) {
+  return h('div', { class: 'pg-day pg-day--empty', 'data-day': String(day) },
+    h('div', { class: 'pg-day-head' }, h('span', { class: 'small muted' }, `Day ${day}`)),
+    edit ? btn('+ Add day', () => dayDialog(p, week, reload, day), 'ghost', { 'aria-label': `Add a workout on day ${day} of week ${week}` }) : h('p', { class: 'small muted', style: 'margin:0' }, 'Rest'));
+}
+// The day's instructions (version 75): what the coach wants the athlete to read first.
+function instructionsDialog(w, reload) {
+  const t = textarea(w.instructions ?? '', { rows: '6', maxlength: '2000', placeholder: 'Start with the dynamic warm-up, then the speed work before the lifts. Rest 2 minutes between the heavy sets.' });
+  dialog(`Instructions for ${w.title}`, h('div', { class: 'stack' }, field('What the athlete reads first', t, 'Shows at the top of the day in the app and on the weight-room screen.')), [
+    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workouts/${w.id}`, { instructions: t.value.trim() || null }); toast('Instructions saved.'); reload(); } },
+    { label: 'Cancel', variant: 'ghost' }]);
+  t.focus();
+}
+// The ticked days at once: copy to a week (here, another program or a template), move to a week, or repeat for N weeks.
+function bulkDialog(p, ids, action, after) {
+  const days = ids.map((id) => p.workouts.find((w) => w.id === id)).filter(Boolean);
+  const weeks = [...new Set(days.map((w) => w.week))].sort((a, b) => a - b);
+  const weekSel = select(Array.from({ length: 52 }, (_, i) => [String(i + 1), `Week ${i + 1}${i + 1 > p.weeks ? ' (new)' : ''}`]), { value: String(Math.min(weeks.at(-1) + 1, 52)), 'aria-label': 'To week' });
+  const times = input({ type: 'number', min: '1', max: '26', value: '4', inputmode: 'numeric', 'aria-label': 'How many times' });
+  const target = select([[p.id, `This program (${p.name})`]], { 'aria-label': 'Which program' });
+  if (action === 'copy') Promise.all([get('/v1/programs'), get('/v1/programs?kind=template')]).then(([a, b]) => {
+    for (const x of [...a.data, ...b.data]) if (x.id !== p.id) target.append(h('option', { value: x.id }, `${x.kind === 'template' ? 'Template: ' : ''}${x.name}`));
+  }).catch(() => {});
+  const what = `${plural(days.length, 'day')} (${days.map((w) => `wk ${w.week} d${w.day}`).join(', ')})`;
+  const body = action === 'copy' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Copy ${what}. Each keeps its weekday; days from several weeks land in consecutive weeks.`), h('div', { class: 'form-grid' }, field('To week', weekSel), field('In', target)))
+    : action === 'move' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Move ${what}. Each keeps its weekday.`), field('To week', weekSel))
+    : h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Repeat ${what} into the weeks after week ${weeks.at(-1)}.`), field('How many times', times, 'Each repeat is the same run of days again; the program grows as needed.'));
+  const send = async (extra = {}) => {
+    const payload = { workouts: ids, ...(action === 'repeat' ? { times: Number(times.value) } : { to_week: Number(weekSel.value) }), ...(action === 'copy' && target.value !== p.id ? { to_program_id: target.value } : {}), ...extra };
+    try { return await post(`/v1/programs/${p.id}/days/${action}`, payload); }
+    catch (e) {
+      if (e.code === 'replace_needed') { if (!confirm(`${e.message}`)) return null; return send({ ...extra, replace: true }); }
+      if (e.code === 'confirm_needed') { if (!confirm(`${e.message} Go on?`)) return null; return send({ ...extra, confirm: true }); }
+      throw e;
+    }
+  };
+  dialog({ copy: 'Copy days', move: 'Move days', repeat: 'Repeat days' }[action], body, [
+    { label: { copy: 'Copy', move: 'Move', repeat: 'Repeat' }[action], variant: 'primary', onClick: async () => { const r = await send(); if (!r) return false; toast(`${plural(r.days.length, 'day')} ${action === 'copy' ? 'copied' : action === 'move' ? 'moved' : 'repeated'}${r.replaced ? `, ${r.replaced} replaced` : ''}.`); after(r.to_program_id && r.to_program_id !== p.id ? null : r); } },
+    { label: 'Cancel', variant: 'ghost' }]);
 }
 // A block's name and how it runs (version 74): new, or renaming one. Any name goes; the usual ones are offered.
 const BLOCK_NAMES = ['Warm up', 'Activation', 'Acceleration', 'Speed', 'Plyometrics', 'Power', 'Strength', 'Accessory', 'Conditioning', 'Core', 'Cool down'];

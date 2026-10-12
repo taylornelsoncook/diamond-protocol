@@ -369,3 +369,6 @@ td .dp-badge{white-space:nowrap}
 .sp-b-center{font-size:5.5cqw;padding:1cqw 2cqw}
 .sp-pos--suggested{border-style:dashed;border-color:var(--amber)}
 .sp-suggest-note{border-left:3px solid var(--amber);padding-left:8px}
+
+/* The help sentences are hidden for everyone but the owner, and for the owner when the setting says so (ui.js). */
+html[data-help="off"] .dp-help{display:none}

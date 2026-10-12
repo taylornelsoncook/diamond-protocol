@@ -45,6 +45,14 @@ export async function importView(main, deps, mode = 'file') {
   const text = textarea('', { rows: '8', maxlength: '20000', 'aria-label': 'The workout, in your words', placeholder: 'Lower body. Back squat 4 by 5 at 75 percent of their max, 2 minutes rest. Superset RDL 3 by 8 with split squats 3 by 8 each side. Finish with 3 rounds of plank 40 seconds and dead bugs 10 each side, no rest.' });
   const where = select([['', 'A new program'], ...progs.data.map((p) => [p.id, `Add to ${p.name}`])], { 'aria-label': 'Where it goes' });
   const draftBox = h('div', { class: 'stack' });
+  // Check the connection: one tiny request to Anthropic, so a key, credit or model problem shows here in plain words before a file is sent.
+  const checkOut = h('span', { class: 'small muted', role: 'status' });
+  const checkBtn = btn('Check the connection', (e) => busy(e.currentTarget, async () => {
+    checkOut.className = 'small muted'; checkOut.textContent = 'Checking…';
+    const r = await post('/v1/programs/import/check');
+    checkOut.className = r.ok ? 'small good-text' : 'small warn-text';
+    checkOut.textContent = r.ok ? `Connected: ${r.model} answered in ${r.took_ms ? `${(r.took_ms / 1000).toFixed(1)} s` : 'no time'}.` : r.message;
+  }), 'ghost');
   const readBtn = btn(spoken ? 'Build the workout' : 'Read the file', (e) => busy(e.currentTarget, async () => {
     if (spoken ? !text.value.trim() : !file.files[0]) throw new Error(spoken ? 'Say or type the workout first.' : 'Choose the file first.');
     fill(draftBox, h('p', { class: 'small muted', role: 'status' }, spoken ? 'Building the workout from your words…' : 'Reading the file. A long program can take a few minutes; keep this page open…'));
@@ -77,7 +85,7 @@ export async function importView(main, deps, mode = 'file') {
     : panel('Your program file', { subtitle: 'A PDF of the program, or a clear photo of a printed one. Claude reads it into a draft; you check every line before anything is saved.' },
       h('div', { class: 'form-grid' }, field('File', file, `PDF up to ${MAX_MB} MB, or a photo up to ${MAX_PHOTO_MB} MB.`), field('Save it as', where)),
       h('p', { class: 'small muted' }, 'The file is sent to Anthropic (Claude) to be read. Leave athletes\' personal details out of it.'),
-      h('div', null, readBtn)), draftBox);
+      h('div', { class: 'row wrap', style: 'align-items:center;gap:12px' }, readBtn, checkBtn, checkOut)), draftBox);
 
   // Step 2: the draft to check.
   function editor(d) {

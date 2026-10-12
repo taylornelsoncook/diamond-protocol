@@ -150,6 +150,7 @@ test('front desk can\'t read or save; without the key the page says what to do',
   const had = process.env.ANTHROPIC_API_KEY; delete process.env.ANTHROPIC_API_KEY;
   try {
     assert.equal((await coach('GET', '/v1/programs/import/status')).body.ready, false);
+    assert.match((await coach('POST', '/v1/programs/import/check')).body.message, /ANTHROPIC_API_KEY/);
     const r = await coach('POST', '/v1/programs/import/draft', { file: PDF });
     assert.equal(r.status, 503);
     assert.match(r.body.error.message, /ANTHROPIC_API_KEY/);
@@ -204,8 +205,13 @@ test('the request to Anthropic: the file, the model, structured output and the f
     assert.equal(q.body.messages[0].content[0].type, 'document');
     assert.equal(q.body.messages[0].content[0].source.data, PDF.data_base64);
     for (const [status, body, re] of [
-      [401, { error: { message: 'invalid x-api-key' } }, /key in Render isn't working/],
+      [401, { error: { message: 'invalid x-api-key' } }, /key in Render isn't working.*invalid x-api-key/],
       [529, { error: { message: 'Overloaded' } }, /busy/],
+      // The account's state is told apart from the file, with Anthropic's own words: no credits, a model the account can't use, a damaged PDF, anything else.
+      [400, { error: { message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } }, /no credits left.*Plans & Billing/],
+      [404, { error: { message: 'model: claude-opus-5' } }, /model this is set to \(claude-opus-5\) isn't available.*DP_WORKOUT_MODEL/],
+      [400, { error: { message: 'Could not process PDF' } }, /couldn't open that PDF.*Save as PDF/],
+      [400, { error: { message: 'messages.0.content.0: something odd' } }, /Anthropic said: messages.0.content.0: something odd/],
       [200, 'max_tokens', /too long to read in one go/],
       [200, 'refusal', /couldn't read that file as a training program/]]) {
       reply = status === 200 ? { stream: sse('{"is_program": true', body) } : { status, body };
@@ -213,6 +219,16 @@ test('the request to Anthropic: the file, the model, structured output and the f
       assert.ok(e.status >= 400, `${status}: ${e.text}`);
       assert.match(e.body.error.message, re);
     }
+    // The connection check: one tiny request, the answer in plain words either way; front desk can't.
+    reply = { status: 200, body: { model: 'claude-opus-5', usage: { input_tokens: 12, output_tokens: 2 }, content: [{ type: 'text', text: 'OK' }] } };
+    const ok = (await coach('POST', '/v1/programs/import/check')).body;
+    assert.deepEqual([ok.ok, ok.model, ok.usage], [true, 'claude-opus-5', { input_tokens: 12, output_tokens: 2 }]);
+    assert.equal(got[got.length - 1].body.max_tokens, 16, 'a tiny request');
+    reply = { status: 400, body: { error: { message: 'Your credit balance is too low to access the Anthropic API.' } } };
+    const bad = (await coach('POST', '/v1/programs/import/check')).body;
+    assert.deepEqual([bad.ok, bad.code, bad.status], [false, 'ai_credits', 400]);
+    assert.match(bad.message, /no credits left/);
+    assert.equal((await desk('POST', '/v1/programs/import/check')).status, 403);
   } finally {
     fake.close();
     if (saved.key) process.env.ANTHROPIC_API_KEY = saved.key; else delete process.env.ANTHROPIC_API_KEY;

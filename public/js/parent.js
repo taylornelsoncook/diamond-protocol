@@ -4,6 +4,8 @@ import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js
 import { importForm, importsList, dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
+import { timelineBlock } from './timeline-ui.js';
+import { feedBlock } from './feed-ui.js';
 wearableReturnNotice();
 
 // ---------- API ----------
@@ -235,7 +237,7 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ['timeline', 'Timeline'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
   const cur = subtabs.querySelector('[aria-current]');
   if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
@@ -245,6 +247,13 @@ async function viewHome(main) {
   if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
   if (state.homeTab === 'workout') return viewWorkout(main);
+  if (state.homeTab === 'timeline') {   // everything the athlete did, newest first (the same lines the coach sees)
+    const a = athlete();
+    fill(main, top('Timeline'), subtabs, athleteChips(() => render()), h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, `Everything ${a.name.split(' ')[0]} did`), h('p', { class: 'dp-panel-sub' }, 'Workouts, results once a testing day is shared, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
+      timelineBlock((p) => get(p.replace(/^\/portal\/api\//, '')), `/portal/api/athletes/${a.id}/timeline`)));
+    drawSubtabs();
+    return;
+  }
   const a = athlete(), eng = engageFor(a);
   const where = h('div', { class: 'eg-view' });
   fill(main, top(ENGAGE_TABS.find(([k]) => k === state.homeTab)[1]), subtabs, athleteChips(() => render()), where);
@@ -365,8 +374,13 @@ async function viewOverview(main) {
   fill(main, top('Home'), state.me.athletes.length ? subtabs : null, banners(),
     state.session?.kind === 'both' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '/app' }, 'My workouts') : null,   // a parent who trains here too
     h('div', { id: 'p-install-slot' }, installCard()),
-    state.me.athletes.length ? [cards, calendarPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
+    state.me.athletes.length ? [cards, calendarPanel(), teamFeedPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
   drawSubtabs();
+}
+// The team feed (version 78): the coaches' posts to everyone, your athletes' teams and their programs; bump and comment as the parent.
+function teamFeedPanel() {
+  return panel('Team feed', { subtitle: 'From the coaches, for everyone, your athletes\' teams and their programs.' },
+    feedBlock({ get: (q) => get(`feed${q}`), post: (p, b) => post(`feed${p}`, b), del: (p) => api('DELETE', `feed${p}`) }, { compact: true, limit: 5, empty: 'Nothing from the coaches yet.' }));
 }
 
 // A session row (Home, Book "Booked for"): Today/Tomorrow, coach, waitlist place, On now / Checked in. Tap for details.

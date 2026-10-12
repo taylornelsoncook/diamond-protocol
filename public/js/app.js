@@ -1158,7 +1158,7 @@ async function viewClient(main, id) {
   const maxesPanel = panel('Maxes', { subtitle: `The weights in ${first}'s program come from these. A max entered here shows to the family at once; with nothing on file the estimate from logged sets stands in.` },
     maxesBlock(maxData, { who: 'coach', first, canEdit: role !== 'front_desk', save: (b) => post(`/v1/clients/${id}/maxes`, b), remove: (rid) => del(`/v1/clients/${id}/maxes/${rid}`), reload: render }));
   // Bar speed from a velocity device (version 81): per exercise, the load-velocity profile and the estimated max it points to.
-  const barSpeedPanel = panel('Bar speed', { subtitle: `Sets from ${first}'s velocity device (Output, GymAware, Vitruve and others): how fast each load moved, the estimated max the line points to, and recent sessions. Connect a device or import its export under Testing → Devices & imports.` },
+  const barSpeedPanel = panel('Bar speed', { subtitle: `For every exercise ${first} has done on a velocity device (Output, GymAware, Vitruve and others): the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max. Connect a device or import its export under Testing → Devices & imports.` },
     vbtBlock(barSpeed, { who: 'coach', first }));
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 

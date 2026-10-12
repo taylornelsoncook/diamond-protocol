@@ -428,3 +428,4 @@ html[data-help="off"] .dp-help{display:none}
 .vb-map-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:6px 16px;margin:8px 0}
 .vb-map-row{display:flex;align-items:center;justify-content:space-between;gap:8px} .vb-map-row .select{max-width:200px}
 .vb-problems{border-left:3px solid var(--amber);padding-left:10px} .vb-problems ul{margin:4px 0 0;padding-left:16px}
+.vb-summary td,.vb-summary th{vertical-align:top;padding-top:8px;padding-bottom:8px} .vb-summary b{font-size:15px}

@@ -32,7 +32,7 @@ export const SYSTEMS = {
 };
 export const PROVIDERS = Object.keys(SYSTEMS);
 export const MAX_PER_REQUEST = 1000;
-export const PROFILE_DAYS = 90;
+export const PROFILE_DAYS = 0;   // 0 = every set they have ever done (owner's ask); a number limits the profile to that many days
 const KG_TO_LB = 2.2046226218;
 
 // Minimum velocity thresholds: the mean velocity of a true one-rep max, per lift family (the owner's settings; the
@@ -269,10 +269,11 @@ export function fitProfile(points, mvt) {
     velocity_at: (load) => round(intercept + slope * load, 2) };
 }
 
-// The athlete's bar speed by exercise: the last PROFILE_DAYS of sets as a load-velocity profile with the estimated max,
+// The athlete's bar speed by exercise: every set (or the last `days`) as a load-velocity profile with the estimated max,
 // the fastest rep at each load, the speed at the load they lift most as a trend, and the recent sessions. parentView
 // changes nothing (bar speed is the athlete's own training, like logged sets).
 export function profileFor(ctx, clientId, { days = PROFILE_DAYS } = {}) {
+  days = days || 36500;
   const tz = getSetting(ctx, 'timezone');
   const today = localDate(ctx.now(), tz);
   const since = new Date(`${today}T00:00:00Z`); since.setUTCDate(since.getUTCDate() - days);
@@ -296,7 +297,9 @@ export function profileFor(ctx, clientId, { days = PROFILE_DAYS } = {}) {
     const trend = trackLoad == null ? [] : [...recent.filter((s) => s.load_lb != null && vel(s) != null && (Math.round(s.load_lb / 5) * 5 || Math.round(s.load_lb)) === trackLoad)
       .reduce((m, s) => { m.set(s.day, Math.max(m.get(s.day) ?? 0, vel(s))); return m; }, new Map()).entries()].map(([date, value]) => ({ date, value: round(value, 2) })).sort((a, b) => (a.date < b.date ? -1 : 1));
     const fastest = ex.sets.reduce((b, s) => (vel(s) != null && (!b || vel(s) > vel(b)) ? s : b), null);
-    const heaviest = ex.sets.reduce((b, s) => (s.load_lb != null && (!b || s.load_lb > b.load_lb) ? s : b), null);
+    // The heaviest load ever, and the fastest they moved that load (owner's ask: the heaviest weight with its fastest bar speed).
+    const topLoad = Math.max(-1, ...ex.sets.filter((s) => s.load_lb != null).map((s) => s.load_lb));
+    const heaviest = topLoad < 0 ? null : ex.sets.filter((s) => s.load_lb === topLoad).reduce((b, s) => (vel(s) != null && (!b || vel(s) > vel(b)) ? s : b), null) ?? ex.sets.find((s) => s.load_lb === topLoad);
     const days = new Set(ex.sets.map((s) => s.day));
     return { name: ex.name, exercise_id: ex.exercise_id, sets: ex.sets.length, recent_sets: recent.length, days: days.size, last_day: ex.sets[0].day, mvt,
       profile: fit ? { slope: fit.slope, intercept: fit.intercept, r2: fit.r2, points, e1rm: fit.e1rm, e1rm_exact: fit.e1rm_exact, loads: fit.loads, straight: fit.r2 >= 0.8,

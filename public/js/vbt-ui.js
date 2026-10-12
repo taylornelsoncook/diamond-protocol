@@ -1,83 +1,31 @@
 // Bar speed (velocity-based training), shared by the athlete app and the parent portal (Performance), the client page
 // (Testing), Testing → Devices & imports (the file import and the waiting list) and API & integrations (the device guide).
 import { h, fill, btn, busy, toast, input, select, field, panel, copyText } from './ui.js';
-import { sparkline } from './charts.js';
 
 const day = (d, opts = { month: 'short', day: 'numeric' }) => (d ? new Date(`${String(d).slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts }) : '');
 const ms = (x, d = 2) => (x == null ? '—' : `${Number(x).toFixed(d)} m/s`);
 const lb = (x) => (x == null ? '—' : `${Math.round(x)} lb`);
 const pct = (x) => (x == null ? '—' : `${Math.round(x)}%`);
-const LOSS_WARN = 20;   // velocity loss past this means the set was pushed close to failure
 
 // ---------- The athlete's bar speed ----------
-// data: the answer to GET …/vbt. who: 'athlete' | 'parent' | 'coach' (wording).
+// data: the answer to GET …/vbt. who: 'athlete' | 'parent' | 'coach' (wording). Owner's ask: one line per exercise
+// they have ever done: the heaviest weight with the fastest bar speed at that weight, and the estimated one-rep max.
 export function vbtBlock(data, { who = 'athlete', first = null } = {}) {
-  const your = who === 'athlete' ? 'your' : `${first ?? 'the athlete'}'s`;
   if (!data?.has_data) return h('p', { class: 'small muted', style: 'margin:0' }, `No bar-speed sets yet. Sets from a velocity device (Output, GymAware, Vitruve, Enode, Perch and others) land here once ${who === 'coach' ? 'the device is connected or its export is imported' : 'your coach connects the device'}.`);
-  return h('div', { class: 'stack vb' },
-    h('div', { class: 'vb-tiles' },
-      tile(data.totals.sets, 'sets'), tile(data.totals.days, data.totals.days === 1 ? 'day' : 'days'), tile(data.totals.exercises, data.totals.exercises === 1 ? 'exercise' : 'exercises'),
-      h('div', { class: 'vb-tile' }, h('b', null, day(data.totals.last_day)), h('span', null, 'last session'))),
-    h('div', { class: 'vb-ex-list' }, data.exercises.map((ex) => exerciseCard(ex, { your, who }))),
-    data.recent.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Recent sessions'), h('span', { class: 'small muted' }, `Set by set, newest first. A loss over ${LOSS_WARN}% means the set was pushed close to the limit.`), data.recent.map(sessionBlock)) : null,
-    h('p', { class: 'small muted', style: 'margin:0' }, `From ${data.systems.map((s) => s.label.split(' (')[0]).join(', ')}. The estimated max comes from a straight line through the fastest rep at each load over the last ${data.days} days, read at the minimum velocity threshold${who === 'coach' ? ' (the owner\'s setting on API & integrations → Bar speed devices)' : ''}; it is an estimate, not a tested max.`));
-}
-const tile = (value, label) => h('div', { class: 'vb-tile' }, h('b', null, String(value)), h('span', null, label));
-
-function exerciseCard(ex, { your, who }) {
-  const p = ex.profile;
-  const head = h('div', { class: 'row wrap', style: 'gap:8px;align-items:baseline' },
-    h('span', { class: 'strong grow' }, ex.name),
-    h('span', { class: 'small muted' }, `${ex.sets} ${ex.sets === 1 ? 'set' : 'sets'} · ${ex.days} ${ex.days === 1 ? 'day' : 'days'} · last ${day(ex.last_day)}`));
-  const estimate = p?.e1rm ? h('div', { class: 'vb-est' },
-    h('div', null, h('b', null, lb(p.e1rm)), h('span', { class: 'small muted' }, ` estimated max`)),
-    h('span', { class: 'small muted' }, `From ${p.loads} loads at ${ms(ex.mvt.value)}, ${p.straight ? 'a clean line' : 'a rough line'} (r² ${p.r2}). Loads for a target speed: ${p.zones.map((z) => `${lb(z.load_lb)} at ${z.velocity.toFixed(2)}`).join(', ')} m/s.`))
-    : h('span', { class: 'small muted' }, ex.mvt.kind === 'ballistic' ? 'A ballistic lift: speed and power are the measure, no max is estimated.'
-      : `${ex.profile_points.length < 3 ? 'Three different loads' : 'Loads further apart'} are needed for an estimated max${ex.profile_points.length ? ` (${ex.profile_points.length} so far)` : ''}.`);
-  const facts = h('div', { class: 'row wrap small', style: 'gap:14px' },
-    ex.fastest ? h('span', null, 'Fastest: ', h('b', null, ms(ex.fastest.velocity)), ` at ${lb(ex.fastest.load_lb)}`) : null,
-    ex.heaviest ? h('span', null, 'Heaviest: ', h('b', null, lb(ex.heaviest.load_lb)), ex.heaviest.velocity != null ? ` at ${ms(ex.heaviest.velocity)}` : '') : null,
-    ex.avg_loss != null ? h('span', null, 'Typical loss: ', h('b', { class: ex.avg_loss > LOSS_WARN ? 'warn-text' : '' }, pct(ex.avg_loss))) : null);
-  const trend = ex.trend.length > 1 ? h('div', { class: 'row', style: 'gap:10px;align-items:center' },
-    h('span', { style: 'color:var(--green-bright)' }, sparkline(ex.trend, { width: 96, height: 30, label: `${ex.name} speed at ${lb(ex.track_load)}` })),
-    h('span', { class: 'small muted' }, `Speed at ${lb(ex.track_load)}, ${your} usual load: ${ms(ex.trend[0].value)} → ${ms(ex.trend[ex.trend.length - 1].value)} over ${ex.trend.length} days`)) : null;
-  return h('div', { class: 'eg-item vb-ex' }, head, h('div', { class: 'vb-ex-body' }, h('div', { class: 'stack-tight grow' }, estimate, facts, trend), ex.profile_points.length >= 2 ? lvChart(ex) : null));
-}
-// The load-velocity chart: the fastest rep at each load as dots, the fitted line, and the threshold.
-function lvChart(ex) {
-  const ns = 'http://www.w3.org/2000/svg', W = 220, H = 120, L = 34, B = 22, T = 8, R = 10;
-  const pts = ex.profile_points, p = ex.profile;
-  const loads = pts.map((x) => x.load_lb), vels = pts.map((x) => x.velocity);
-  const maxL = Math.max(...loads, p?.e1rm ?? 0) * 1.05, minL = 0;
-  const maxV = Math.max(...vels, 1.2) * 1.08;
-  const X = (l) => L + ((l - minL) / (maxL - minL || 1)) * (W - L - R), Y = (vv) => T + (1 - vv / maxV) * (H - T - B);
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'vb-chart'); svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', `${ex.name} load and velocity: ${pts.map((x) => `${Math.round(x.load_lb)} lb at ${x.velocity.toFixed(2)} m/s`).join(', ')}${p?.e1rm ? `; estimated max ${p.e1rm} lb` : ''}`);
-  const mk = (tag, attrs, text) => { const el = document.createElementNS(ns, tag); for (const [k, val] of Object.entries(attrs)) el.setAttribute(k, val); if (text != null) el.textContent = text; svg.append(el); return el; };
-  mk('line', { x1: L, y1: Y(0), x2: W - R, y2: Y(0), stroke: 'var(--line)' }); mk('line', { x1: L, y1: T, x2: L, y2: Y(0), stroke: 'var(--line)' });
-  for (const vv of [0.5, 1.0].filter((x) => x < maxV)) { mk('line', { x1: L, y1: Y(vv), x2: W - R, y2: Y(vv), stroke: 'var(--line-subtle)', 'stroke-dasharray': '2 3' }); mk('text', { x: L - 4, y: Y(vv) + 3, 'text-anchor': 'end', class: 'vb-axis' }, vv.toFixed(1)); }
-  mk('text', { x: L - 4, y: Y(0) + 3, 'text-anchor': 'end', class: 'vb-axis' }, '0');
-  for (const l of [Math.round(maxL / 2 / 25) * 25, Math.round(maxL / 25) * 25].filter((x) => x > 0 && x < maxL)) mk('text', { x: X(l), y: H - 6, 'text-anchor': 'middle', class: 'vb-axis' }, `${l} lb`);
-  if (p?.slope) {
-    const x0 = Math.min(...loads), x1 = p.e1rm ?? Math.max(...loads);
-    mk('line', { x1: X(x0), y1: Y(p.intercept + p.slope * x0), x2: X(x1), y2: Y(Math.max(0, p.intercept + p.slope * x1)), stroke: 'var(--green-mid)', 'stroke-width': 1.5 });
-    if (ex.mvt.value != null) { mk('line', { x1: L, y1: Y(ex.mvt.value), x2: W - R, y2: Y(ex.mvt.value), stroke: 'var(--amber)', 'stroke-dasharray': '3 3' }); mk('text', { x: W - R, y: Y(ex.mvt.value) - 3, 'text-anchor': 'end', class: 'vb-axis vb-axis--amber' }, `1RM speed ${ex.mvt.value.toFixed(2)}`); }
-    if (p.e1rm) { mk('circle', { cx: X(p.e1rm), cy: Y(ex.mvt.value), r: 4, fill: 'none', stroke: 'var(--amber)', 'stroke-width': 1.5 }); }
-  }
-  for (const x of pts) { const c = mk('circle', { cx: X(x.load_lb), cy: Y(x.velocity), r: 3.5, fill: 'var(--green-bright)' }); const t = document.createElementNS(ns, 'title'); t.textContent = `${Math.round(x.load_lb)} lb: ${x.velocity.toFixed(2)} m/s on ${day(x.day)}`; c.append(t); }
-  return svg;
-}
-function sessionBlock(s) {
-  return h('div', { class: 'vb-session' },
-    h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong' }, day(s.day, { weekday: 'short', month: 'short', day: 'numeric' })), h('span', { class: 'small muted' }, `${s.sets} ${s.sets === 1 ? 'set' : 'sets'}`)),
-    s.exercises.map((ex) => h('div', { class: 'vb-session-ex' },
-      h('div', { class: 'row wrap', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'small strong' }, ex.name), ex.max_loss > LOSS_WARN ? h('span', { class: 'dp-badge dp-badge--warn' }, `${Math.round(ex.max_loss)}% loss`) : null),
-      h('table', { class: 'vb-table' },
-        h('thead', null, h('tr', null, ['Set', 'Load', 'Reps', 'Mean', 'Peak', 'Loss', 'Power'].map((t) => h('th', null, t)))),
-        h('tbody', null, ex.sets.map((x) => h('tr', null,
-          h('td', null, x.set_no ?? '·'), h('td', null, lb(x.load_lb)), h('td', null, x.reps ?? '—'), h('td', null, ms(x.mean_velocity)), h('td', null, ms(x.peak_velocity)),
-          h('td', { class: x.velocity_loss_pct > LOSS_WARN ? 'warn-text' : '' }, pct(x.velocity_loss_pct)), h('td', null, x.mean_power != null ? `${Math.round(x.mean_power)} W` : '—'))))))));
+  const rows = data.exercises.map((ex) => {
+    const p = ex.profile;
+    const why = p?.e1rm ? `From ${p.loads} loads at ${ms(ex.mvt.value)} (r² ${p.r2})` : ex.mvt.kind === 'ballistic' ? 'A ballistic lift: no max is estimated' : `${ex.profile_points.length < 3 ? 'Three different loads' : 'Loads further apart'} are needed (${ex.profile_points.length} so far)`;
+    return h('tr', null,
+      h('td', null, h('span', { class: 'strong' }, ex.name), h('span', { class: 'small muted', style: 'display:block' }, `${ex.sets} ${ex.sets === 1 ? 'set' : 'sets'} · last ${day(ex.last_day)}`)),
+      h('td', null, ex.heaviest ? h('b', null, lb(ex.heaviest.load_lb)) : '—', ex.heaviest?.day ? h('span', { class: 'small muted', style: 'display:block' }, day(ex.heaviest.day)) : null),
+      h('td', null, ex.heaviest?.velocity != null ? h('b', null, ms(ex.heaviest.velocity)) : '—'),
+      h('td', { title: why }, p?.e1rm ? h('b', null, lb(p.e1rm)) : h('span', { class: 'muted' }, '—'), h('span', { class: 'small muted', style: 'display:block' }, p?.e1rm ? `at ${ms(ex.mvt.value)}` : why)));
+  });
+  return h('div', { class: 'stack-tight vb' },
+    h('table', { class: 'vb-table vb-summary' },
+      h('thead', null, h('tr', null, ['Exercise', 'Heaviest', 'Fastest at that weight', 'Estimated 1 rep max'].map((t) => h('th', null, t)))),
+      h('tbody', null, rows)),
+    h('p', { class: 'small muted', style: 'margin:0' }, `Every set ${who === 'athlete' ? 'you have' : `${first ?? 'the athlete'} has`} ever done on ${data.systems.map((s) => s.label.split(' (')[0]).join(', ')}. The estimated max is where the line through the fastest rep at each load reaches the minimum velocity threshold${who === 'coach' ? ' (the owner\'s setting on API & integrations → Bar speed devices)' : ''}; it is an estimate, not a tested max.`));
 }
 
 // ---------- Files: read in the browser ----------

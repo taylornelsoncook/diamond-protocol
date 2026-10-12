@@ -324,7 +324,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
   function vbtBox() {
     if (!api.get) return null;
     const box = h('div');
-    api.get('vbt').then((d) => { if (d?.has_data) fill(box, section(parent ? `${name()}'s bar speed` : 'Your bar speed', `Sets from ${parent ? 'their' : 'your'} velocity device: how fast each load moved, the estimated max it points to, and recent sessions.`, vbtBlock(d, { who: parent ? 'parent' : 'athlete', first: name() }))); }).catch(() => {});
+    api.get('vbt').then((d) => { if (d?.has_data) fill(box, section(parent ? `${name()}'s bar speed` : 'Your bar speed', `Every exercise ${parent ? 'they have' : 'you have'} done on a velocity device: the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max.`, vbtBlock(d, { who: parent ? 'parent' : 'athlete', first: name() }))); }).catch(() => {});
     return box;
   }
   function renderPerformance() {

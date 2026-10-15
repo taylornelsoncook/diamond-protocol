@@ -210,6 +210,7 @@ test('the request to Anthropic: the file, the model, structured output and the f
       // The account's state is told apart from the file, with Anthropic's own words: no credits, a model the account can't use, a damaged PDF, anything else.
       [400, { error: { message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } }, /no credits left.*Plans & Billing/],
       [404, { error: { message: 'model: claude-opus-5' } }, /model this is set to \(claude-opus-5\) isn't available.*DP_WORKOUT_MODEL/],
+      [400, { error: { message: 'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace.' } }, /isn't tied to a workspace.*ANTHROPIC_WORKSPACE_ID/],
       [400, { error: { message: 'Could not process PDF' } }, /couldn't open that PDF.*Save as PDF/],
       [400, { error: { message: 'messages.0.content.0: something odd' } }, /Anthropic said: messages.0.content.0: something odd/],
       [200, 'max_tokens', /too long to read in one go/],
@@ -219,11 +220,34 @@ test('the request to Anthropic: the file, the model, structured output and the f
       assert.ok(e.status >= 400, `${status}: ${e.text}`);
       assert.match(e.body.error.message, re);
     }
+    // Background reads (the owner's report: a long PDF left the page waiting on one request): the page starts a job
+    // and asks after it; the read's own errors come back the same way; only the starter or the owner may ask.
+    reply = { status: 200, stream: sse(JSON.stringify(DRAFT), 'end_turn') };
+    const job = await coach('POST', '/v1/programs/import/jobs', { file: PDF });
+    assert.equal(job.status, 202, job.text); assert.equal(job.body.status, 'running'); assert.equal(job.body.kind, 'file');
+    let st;
+    for (let i = 0; i < 100 && (st = (await coach('GET', `/v1/programs/import/jobs/${job.body.id}`)).body).status === 'running'; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(st.status, 'done'); assert.equal(st.draft.workouts.length, 3); assert.equal(typeof st.seconds, 'number');
+    assert.equal((await owner('GET', `/v1/programs/import/jobs/${job.body.id}`)).status, 200, 'the owner may look');
+    assert.ok((await desk('GET', `/v1/programs/import/jobs/${job.body.id}`)).status >= 400, 'nobody else');
+    assert.equal((await coach('GET', '/v1/programs/import/jobs/rd_nope')).status, 404);
+    assert.equal((await coach('POST', '/v1/programs/import/jobs', { file: { name: 'notes.txt', data_base64: 'aGk=' } })).status, 400, 'a bad file is refused before any job starts');
+    reply = { status: 400, body: { error: { message: 'Could not process PDF' } } };
+    const badJob = await coach('POST', '/v1/programs/import/jobs', { file: PDF });
+    for (let i = 0; i < 100 && (st = (await coach('GET', `/v1/programs/import/jobs/${badJob.body.id}`)).body).status === 'running'; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(st.status, 'failed'); assert.equal(st.error.status, 400); assert.match(st.error.message, /couldn't open that PDF/);
+    const words = await coach('POST', '/v1/programs/dictate/jobs', { text: 'hi' });
+    assert.equal(words.status, 400, 'too short to be a workout: refused at once');
     // The connection check: one tiny request, the answer in plain words either way; front desk can't.
     reply = { status: 200, body: { model: 'claude-opus-5', usage: { input_tokens: 12, output_tokens: 2 }, content: [{ type: 'text', text: 'OK' }] } };
     const ok = (await coach('POST', '/v1/programs/import/check')).body;
     assert.deepEqual([ok.ok, ok.model, ok.usage], [true, 'claude-opus-5', { input_tokens: 12, output_tokens: 2 }]);
     assert.equal(got[got.length - 1].body.max_tokens, 16, 'a tiny request');
+    assert.equal(got[got.length - 1].headers['anthropic-workspace-id'], undefined, 'no workspace header unless the owner set one');
+    // An organization-level key needs the workspace named: ANTHROPIC_WORKSPACE_ID goes in the header (stray quotes dropped).
+    process.env.ANTHROPIC_WORKSPACE_ID = '"wrkspc_01ABC"';
+    try { await coach('POST', '/v1/programs/import/check'); assert.equal(got[got.length - 1].headers['anthropic-workspace-id'], 'wrkspc_01ABC'); }
+    finally { delete process.env.ANTHROPIC_WORKSPACE_ID; }
     reply = { status: 400, body: { error: { message: 'Your credit balance is too low to access the Anthropic API.' } } };
     const bad = (await coach('POST', '/v1/programs/import/check')).body;
     assert.deepEqual([bad.ok, bad.code, bad.status], [false, 'ai_credits', 400]);

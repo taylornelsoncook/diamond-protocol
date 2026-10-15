@@ -5,7 +5,7 @@
 // for every line (or adds a new one), and only then saves it, all at once, as a new program or as weeks added to one.
 // Exercise names are never matched silently: an exact library name is picked for the coach to see, a close one is only
 // suggested (the coach presses Use it), anything else is offered as a new exercise.
-// Needs ANTHROPIC_API_KEY (the owner adds it in Render). The file goes to Anthropic to be read and nothing else.
+// Needs ANTHROPIC_API_KEY (the owner adds it in Render; ANTHROPIC_WORKSPACE_ID beside it when the key isn't inside a workspace). The file goes to Anthropic to be read and nothing else.
 import { newId, v, badRequest, notFound, HttpError } from '../util.js';
 import { CATEGORIES, LOAD_TESTS, GROUP_KINDS, getProgram, loadInput, slotFields, insertSlot, rxText, splitRx } from './programs.js';
 import { splitDistance, normalizeTempo } from './rx.js';
@@ -21,6 +21,15 @@ const MAX_WORKOUTS = 7 * 52, MAX_EXERCISES = 30, MAX_LINES = 1500;
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced', 'All levels'];
 const MODEL = () => process.env.DP_WORKOUT_MODEL || 'claude-opus-5';
 const API = () => (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
+// The request headers. An Anthropic key made at the organization level (not inside a workspace) is refused unless the
+// request names the workspace to bill: ANTHROPIC_WORKSPACE_ID (the owner copies it from console.anthropic.com →
+// Settings → Workspaces) goes in the anthropic-workspace-id header; a key made inside a workspace needs nothing.
+export function aiHeaders(key) {
+  const h = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  const ws = (process.env.ANTHROPIC_WORKSPACE_ID || '').trim().replace(/^["']|["']$/g, '');
+  if (ws) h['anthropic-workspace-id'] = ws;
+  return h;
+}
 
 export const aiReady = (ctx) => !!(ctx.readWorkoutFile || process.env.ANTHROPIC_API_KEY);
 export function importStatus(ctx) {
@@ -104,6 +113,7 @@ ${library.length ? library.map((e) => e.name).join('\n') : '(empty)'}`}`;
 // apart from the file (damaged, too long).
 export function refused(status, why, model, kind = 'document') {
   console.error(`workout import: Anthropic answered ${status}: ${why}`);
+  if (/workspace/i.test(why)) return new HttpError(502, 'ai_workspace', `The Anthropic key isn't tied to a workspace (Anthropic said: ${why}). Two ways to fix it at console.anthropic.com: make a new key inside a workspace (API keys → Create key, and pick the workspace) and put it in ANTHROPIC_API_KEY on both Render services; or copy the workspace's ID (Settings → Workspaces) into ANTHROPIC_WORKSPACE_ID in Render beside the key. Let the services restart, then check again.`);
   if (status === 401 || status === 403) return new HttpError(502, 'ai_key', `The Anthropic key in Render isn't working (Anthropic said: ${why}). The owner checks ANTHROPIC_API_KEY at console.anthropic.com → API keys.`);
   if (/credit balance|purchase credits|plans & billing|billing/i.test(why)) return new HttpError(502, 'ai_credits', `The Anthropic account has no credits left (Anthropic said: ${why}). The owner adds credits at console.anthropic.com → Plans & Billing, then this works.`);
   if (status === 404 || /model.*(not found|does not exist|not exist|not available|not supported)|(no such|unknown|invalid) model/i.test(why)) return new HttpError(502, 'ai_model', `The AI model this is set to (${model}) isn't available to the Anthropic account (Anthropic said: ${why}). The owner can set DP_WORKOUT_MODEL in Render to a model the account has, for example claude-opus-5-5.`);
@@ -121,7 +131,7 @@ export async function checkConnection(ctx, user) {
   rateLimit(`workout-check:${user?.id ?? 'anon'}`, 20, 60 * 60000);
   const model = MODEL(), started = Date.now();
   const body = { model, max_tokens: 16, messages: [{ role: 'user', content: 'Reply with the single word OK.' }] };
-  const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  const headers = aiHeaders(key);
   let res;
   try { res = await fetch(`${API()}/v1/messages`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) }); }
   catch (e) { return { ok: false, code: 'ai_unavailable', message: e?.name === 'TimeoutError' ? 'Anthropic didn\'t answer within a minute. Try again shortly.' : `We couldn't reach Anthropic (${e?.message ?? 'network error'}). Try again in a minute.` }; }
@@ -144,7 +154,7 @@ export async function askClaude(ctx, file, library, opts = {}) {
   const body = { model, max_tokens: 64000, stream: true, system,
     thinking: { type: 'adaptive' }, output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
     messages: [{ role: 'user', content: [file.block, { type: 'text', text: prompt }] }] };
-  const headers = { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+  const headers = aiHeaders(key);
   if (model === 'claude-opus-5') { body.fallbacks = 'default'; headers['anthropic-beta'] = 'server-side-fallback-2026-07-01'; }   // a declined read is retried on another model
   let res;
   const signal = AbortSignal.timeout(15 * 60000);
@@ -222,6 +232,43 @@ export function matchExercise(name, claudeMatch, library) {
 export const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 export async function draftFromFile(ctx, body, user) {
   return draft(ctx, fileBlock(body), user);
+}
+
+// ---------- Background reads ----------
+// A read can take minutes (a long PDF, the model thinking it through). One web request held open that long is fragile:
+// a proxy on the way can drop it and the page then sits on nothing (the owner's report: "it has taken like 5 minutes
+// and it still hasn't uploaded"). So the page starts a job and asks after it every few seconds; the read goes on in the
+// background whatever happens to the connection, and a page opened again picks the job back up. Jobs live in memory
+// for half an hour on this server instance; a restart loses them, and the page says so.
+const jobs = new Map();
+const JOB_KEEP_MS = 30 * 60000;
+export function startJob(ctx, user, kind, run) {
+  const now = Date.now();
+  for (const [id, j] of jobs) if (now - j.started > JOB_KEEP_MS) jobs.delete(id);
+  const job = { id: newId('rd'), user_id: user?.id ?? null, kind, status: 'running', started: now, started_at: ctx.now(), finished_at: null, draft: null, error: null };
+  jobs.set(job.id, job);
+  Promise.resolve().then(run).then((draft) => { job.status = 'done'; job.draft = draft; }, (e) => {
+    job.status = 'failed';
+    job.error = e instanceof HttpError ? { code: e.code, status: e.status, message: e.message, ...(e.details ? { details: e.details } : {}) } : { code: 'error', status: 500, message: 'Something went wrong while reading. Try again.' };
+    if (!(e instanceof HttpError)) console.error('workout import job', e);
+  }).finally(() => { job.finished_at = ctx.now(); job.finished = Date.now(); });
+  return jobView(job);
+}
+// The person who started the read (or the owner) asks after it. A job this server no longer has (a restart, or half an
+// hour gone by) is 404: the page tells the coach to start the read again.
+export function jobStatus(id, user) {
+  const job = jobs.get(String(id ?? ''));
+  if (!job || (job.user_id !== (user?.id ?? null) && user?.role !== 'owner')) throw notFound('That read');
+  return jobView(job);
+}
+const jobView = (j) => ({ id: j.id, kind: j.kind, status: j.status, started_at: j.started_at, finished_at: j.finished_at, seconds: Math.round(((j.finished ?? Date.now()) - j.started) / 1000),
+  ...(j.status === 'done' ? { draft: j.draft } : {}), ...(j.status === 'failed' ? { error: j.error } : {}) });
+// The file or the words are checked before the job starts, so a bad file is refused at once, not from inside a job.
+export function startFileJob(ctx, body, user) { const file = fileBlock(body); return startJob(ctx, user, 'file', () => draft(ctx, file, user)); }
+export function startTextJob(ctx, body, user) {
+  const text = v.str(body?.text, 'text', { max: MAX_TEXT_CHARS }).replace(/\r\n?/g, '\n');
+  if (text.length < 8) throw badRequest('Say or type the workout first, like "Lower body: back squat 4 by 5 at 75 percent, then RDL 3 by 8".');
+  return startJob(ctx, user, 'text', () => draft(ctx, { name: 'your notes', source: 'text', block: { type: 'text', text } }, user));
 }
 // Programs → Dictate a workout: what the coach typed or spoke (speech-to-text on their device) goes to Claude as text.
 export async function draftFromText(ctx, body, user) {

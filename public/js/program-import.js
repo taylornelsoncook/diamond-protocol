@@ -69,6 +69,32 @@ export function exerciseRow(x, { byName, listId, status, remove, where = 'In the
     ...sf.body(), ...(lt.value ? { load_test: lt.value, load_pct: Number(lp.value) } : { load_test: null }) }) };
 }
 
+// A background read: the server answers a job at once and the page asks after it every few seconds, showing the time so
+// far; a long program keeps going whatever happens to the connection, and the job id is kept in this tab so a page
+// opened again picks it back up. Resolves with the draft; throws the read's own error in plain words.
+const JOB_KEY = 'dp_import_job';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export async function waitForRead(get, job, { status, what = 'Reading the file' } = {}) {
+  try { sessionStorage.setItem(JOB_KEY, JSON.stringify({ id: job.id, kind: job.kind, started: Date.now() - (job.seconds ?? 0) * 1000 })); } catch { /* storage off */ }
+  const started = Date.now() - (job.seconds ?? 0) * 1000;
+  let misses = 0, cur = job;
+  const clock = () => { const s = Math.round((Date.now() - started) / 1000); return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`; };
+  while (cur.status === 'running') {
+    if (status) status.textContent = `${what}… ${clock()}. A long program can take several minutes. You can leave this page and come back; the read keeps going.`;
+    await sleep(3000);
+    try { cur = await get(`/v1/programs/import/jobs/${job.id}`); misses = 0; }
+    catch (e) {
+      if (e.status === 404) { forgetRead(); throw new Error('The server restarted while reading, so that read was lost. Press the button again.'); }
+      if (++misses >= 10) { forgetRead(); throw new Error('We lost touch with the server while reading. Check your connection and press the button again.'); }
+    }
+  }
+  forgetRead();
+  if (cur.status === 'failed') throw Object.assign(new Error(cur.error?.message ?? 'Reading failed. Try again.'), { status: cur.error?.status, code: cur.error?.code });
+  return cur.draft;
+}
+export const pendingRead = (kind) => { try { const j = JSON.parse(sessionStorage.getItem(JOB_KEY) || 'null'); return j && j.kind === kind && Date.now() - j.started < 30 * 60000 ? j : null; } catch { return null; } };
+export const forgetRead = () => { try { sessionStorage.removeItem(JOB_KEY); } catch { /* storage off */ } };
+
 export async function importView(main, deps, mode = 'file') {
   const spoken = mode === 'dictate';
   const get = (p) => deps.api('GET', p), post = (p, b) => deps.api('POST', p, b);
@@ -100,12 +126,21 @@ export async function importView(main, deps, mode = 'file') {
   }), 'ghost');
   const readBtn = btn(spoken ? 'Build the workout' : 'Read the file', (e) => busy(e.currentTarget, async () => {
     if (spoken ? !text.value.trim() : !file.files[0]) throw new Error(spoken ? 'Say or type the workout first.' : 'Choose the file first.');
-    fill(draftBox, h('p', { class: 'small muted', role: 'status' }, spoken ? 'Building the workout from your words…' : 'Reading the file. A long program can take a few minutes; keep this page open…'));
+    const status = h('p', { class: 'small muted', role: 'status' }, spoken ? 'Building the workout from your words…' : 'Reading the file…');
+    fill(draftBox, status);
     try {
-      const d = spoken ? await post('/v1/programs/dictate/draft', { text: text.value }) : await post('/v1/programs/import/draft', { file: await readFile(file.files[0]) });
-      editor(d);
+      const job = spoken ? await post('/v1/programs/dictate/jobs', { text: text.value }) : await post('/v1/programs/import/jobs', { file: await readFile(file.files[0]) });
+      editor(await waitForRead(get, job, { status, what: spoken ? 'Building the workout from your words' : 'Reading the file' }));
     } catch (x) { fill(draftBox, h('div', { class: 'dp-error', role: 'alert' }, x.message)); }
   }), 'primary');
+  // A read started earlier in this tab (the page was closed or reloaded while it ran): pick it back up.
+  const pending = pendingRead(spoken ? 'text' : 'file');
+  if (pending) setTimeout(async () => {
+    const status = h('p', { class: 'small muted', role: 'status' }, 'Picking the read back up…');
+    fill(draftBox, status);
+    try { editor(await waitForRead(get, { id: pending.id, kind: pending.kind, status: 'running', seconds: Math.round((Date.now() - pending.started) / 1000) }, { status, what: spoken ? 'Building the workout from your words' : 'Reading the file' })); }
+    catch (x) { fill(draftBox, h('div', { class: 'dp-error', role: 'alert' }, x.message)); }
+  }, 0);
   // Speaking: the browser's own speech recognition where it has one (Chrome, Edge, Safari); words land in the box as
   // they're heard, after what's already there. Elsewhere the device's keyboard dictation types into the box.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;

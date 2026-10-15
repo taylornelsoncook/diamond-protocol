@@ -114,8 +114,8 @@ function icon(d) {
   for (const path of d) { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', path); svg.append(p); }
   return svg;
 }
-function tabBar() {
-  const tabs = [['home', 'Home', ['M3 11l9-7 9 7', 'M5 10v10h14V10']], ['book', 'Book', ['M4 6h16v14H4z', 'M4 10h16', 'M8 3v4', 'M16 3v4']], ['progress', 'Progress', ['M4 19l5-6 4 3 7-9', 'M4 19h16']], ['programs', 'Programs', ['M4 5h16', 'M4 12h16', 'M4 19h10']], ['family', 'Family', ['M8 11a3 3 0 100-6 3 3 0 000 6z', 'M16 11a3 3 0 100-6 3 3 0 000 6z', 'M2 20c0-3 3-5 6-5s6 2 6 5', 'M14 15c3 0 8 1 8 5']]];
+function tabBar(only = null) {
+  const tabs = [['home', 'Home', ['M3 11l9-7 9 7', 'M5 10v10h14V10']], ['book', 'Book', ['M4 6h16v14H4z', 'M4 10h16', 'M8 3v4', 'M16 3v4']], ['progress', 'Progress', ['M4 19l5-6 4 3 7-9', 'M4 19h16']], ['programs', 'Programs', ['M4 5h16', 'M4 12h16', 'M4 19h10']], ['family', 'Family', ['M8 11a3 3 0 100-6 3 3 0 000 6z', 'M16 11a3 3 0 100-6 3 3 0 000 6z', 'M2 20c0-3 3-5 6-5s6 2 6 5', 'M14 15c3 0 8 1 8 5']]].filter(([k]) => !only || only.includes(k));
   return h('nav', { class: 'p-tabs', 'aria-label': 'Sections' }, tabs.map(([k, label, d]) => h('button', { type: 'button', class: 'p-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => { state.tab = k; render(); } }, icon(d), label)));
 }
 
@@ -1156,16 +1156,29 @@ function signInPanel() {
   return panel('Your sign-in', {}, body);
 }
 // An athlete signed in with their own email (no family role): their workouts live in the app; here they manage the sign-in.
+// An athlete signed in with their own email (no parent row): the same shape as the family account (owner's ask: the
+// strip of sections above and the bar below), with their app in the frame. Home holds the app's sections; Progress is
+// its Performance tab; Family is the sign-in, the devices and Sign out. Booking and payments are a parent's, so an
+// athlete who should see them is made the family's account holder (Add a parent with their own email).
+const ATHLETE_TABS = [['workout', 'Workout'], ['profile', 'Profile'], ['sprint', 'Sprint'], ['accountability', 'Accountability'], ['performance', 'Performance'], ['education', 'Education']];
 function renderAthleteHome() {
   const s = state.session;
-  const main = h('main', { class: 'p-wrap' },
-    h('div', { class: 'p-top' }, h('img', { src: '/brand/mark.png', alt: '' }), h('div', { class: 'stack-tight grow' }, h('div', { class: 'p-title' }, `Hi ${s.first_name}`), h('div', { class: 'small muted' }, s.email))),
-    // The athlete's own app, right here: one sign-in place for parents and athletes alike.
-    h('iframe', { class: 'p-frame', src: '/app?embed=1', title: 'Your workouts', 'data-athlete': 'me', style: `height:${Math.max(520, (frameHeights.get('me') ?? 0) + 8)}px` }),
-    h('p', { class: 'small muted', style: 'margin:0' }, h('a', { href: '/app', target: '_blank', rel: 'noopener' }, 'Open full screen')),
-    signInPanel(), devicesPanel(),
-    btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.session = null; render(); }), 'ghost'));
-  fill(root, main);
+  if (!['home', 'progress', 'family'].includes(state.tab)) state.tab = 'home';
+  if (!ATHLETE_TABS.some(([k]) => k === state.homeTab)) state.homeTab = 'workout';
+  const which = state.tab === 'progress' ? 'performance' : state.homeTab;
+  const head = (title) => h('div', { class: 'p-top' }, h('img', { src: '/brand/mark.png', alt: '' }), h('div', { class: 'stack-tight grow' }, h('div', { class: 'p-title' }, title), h('div', { class: 'small muted' }, s.first_name ? `${s.first_name} · ${s.email}` : s.email)));
+  const main = h('main', { class: 'p-wrap' });
+  if (state.tab === 'family') {
+    fill(main, head('Family'), signInPanel(), devicesPanel(), btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.session = null; state.tab = 'home'; render(); }), 'ghost'));
+  } else {
+    const strip = h('nav', { class: 'p-subtabs', 'aria-label': 'Sections' }, ATHLETE_TABS.map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': which === k ? 'page' : null, onClick: () => { state.homeTab = k; state.tab = 'home'; render(); } }, label)));
+    const src = `/app?embed=1${which === 'workout' ? '' : `#${which}`}`;
+    fill(main, head(state.tab === 'progress' ? 'Progress' : 'Home'), state.tab === 'progress' ? null : strip,
+      h('iframe', { class: 'p-frame', src, title: `Your ${which}`, 'data-athlete': 'me', style: `height:${Math.max(520, (frameHeights.get('me') ?? 0) + 8)}px` }),
+      h('p', { class: 'small muted', style: 'margin:0' }, h('a', { href: '/app', target: '_blank', rel: 'noopener' }, 'Open full screen')));
+  }
+  fill(root, main, tabBar(['home', 'progress', 'family']));
+  window.scrollTo(0, 0);
 }
 // Devices signed in to this account; sign out everywhere else.
 function devicesPanel() {

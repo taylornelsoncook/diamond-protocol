@@ -1187,11 +1187,10 @@ async function viewClient(main, id) {
     contact.email ? h('a', { class: 'dp-btn dp-btn--secondary', href: `mailto:${contact.email}` }, 'Email') : null,
     c.emergency_phone && !c.medical_notes ? h('a', { class: 'dp-btn dp-btn--ghost', href: telHref(c.emergency_phone) }, `Emergency: ${c.emergency_name ?? 'call'}`) : null) : null;
   const teamsLine = c.teams?.length ? h('p', { class: 'small', style: 'margin:0' }, 'Team: ', ...c.teams.map((t, i) => [i ? ', ' : '', isOwner() ? h('a', { href: `#/teams/${t.id}` }, t.name) : t.name])) : null;
-  // Outside data (wearables and spreadsheets): owners and coaches bring more in from Settings → Data import.
+  // Recovery & sleep: the athlete's wearable (WHOOP, Oura) pulls on its own; nothing is brought in by hand (owner decision).
   const wear = outside ? wearablesBlock({ first, canConnect: ['owner', 'coach'].includes(role), list: async () => ({ ...(await get(`/v1/clients/${id}/wearables`)), providers: (await get('/v1/wearables/status')).providers.filter((p) => p.ready) }),
     connect: (p) => post(`/v1/clients/${id}/wearables/${p}/connect`), disconnect: (w) => del(`/v1/wearables/${w}`), sync: ['owner', 'coach'].includes(role) ? (w) => post(`/v1/wearables/${w}/sync`) : null, afterChange: () => render() }) : null;
-  const outsidePanel = outside ? h('div', { class: 'stack' }, dataSummary(outside, { title: 'Recovery & sleep', action: ['owner', 'coach'].includes(role) ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/settings?tab=import&client=${id}` }, 'Import') : null,
-    empty: `Nothing on file yet. Connect ${first}'s WHOOP or Oura below (parents can too, from the portal), or import a file from Settings → Data import.` }),
+  const outsidePanel = outside ? h('div', { class: 'stack' }, dataSummary(outside, { title: 'Recovery & sleep', empty: `Nothing on file yet. Connect ${first}'s WHOOP or Oura below (parents can too, from the portal).` }),
     panel('Linked wearables', { subtitle: 'Recovery, sleep, strain and workouts pulled a few times a day from the athlete\'s own account.' }, wear.el)) : null;
   // Form checks (services/formchecks.js): clips the athlete sent from the app; owners and coaches watch and answer here.
   const canAnswer = ['owner', 'coach'].includes(role);

@@ -169,6 +169,31 @@ test('one email that is both a parent and an athlete gets both: the family porta
   app.ctx.db.run('UPDATE clients SET email = ? WHERE id = ?', 'maria.self@example.com', self.id);
 });
 
+test('the app\'s Profile tab sets, changes and removes the password for the athlete\'s own email; a parent in the family frame and a profile without an email are refused', async () => {
+  const { cookie } = await signIn('sam@example.com');
+  const me = as(cookie);
+  assert.deepEqual((await me('GET', '/app/api/password')).body, { email: 'sam@example.com', has_password: false, parent: false });
+  assert.equal((await me('POST', '/app/api/password', { password: 'short' }, { origin: base })).status, 400);
+  const set = await me('POST', '/app/api/password', { password: 'river stones at dusk' }, { origin: base });
+  assert.equal(set.status, 200, JSON.stringify(set.body)); assert.equal(set.body.has_password, true);
+  assert.equal((await me('GET', '/app/api/password')).body.has_password, true);
+  assert.equal((await me('GET', '/portal/api/session')).body.has_password, true, 'the portal sees the same password');
+  assert.equal((await req('POST', '/portal/api/login/password', { email: 'sam@example.com', password: 'river stones at dusk' })).status, 200, 'and it signs in');
+  assert.equal((await me('DELETE', '/app/api/password', null, { origin: base })).status, 200);
+  assert.equal((await me('GET', '/app/api/password')).body.has_password, false);
+  // A parent opening Ava's app through the family's Workout tab: the portal's own panel is theirs.
+  const mom = as((await signIn('maria@example.com')).cookie);
+  const viaFrame = await mom('GET', '/app/api/password', null, { 'x-athlete-id': ava.id });
+  assert.deepEqual([viaFrame.status, viaFrame.body.parent], [200, true]);
+  assert.equal((await mom('POST', '/app/api/password', { password: 'river stones at dusk' }, { origin: base, 'x-athlete-id': ava.id })).status, 403);
+  // Ava's own private link: no email of her own, nothing to set a password for.
+  const token = (await owner('GET', `/v1/clients/${ava.id}`)).body.app_link.split('token=')[1];
+  const avaApp = (m, p, b) => req(m, p, b, { 'x-client-token': token });
+  assert.deepEqual((await avaApp('GET', '/app/api/password')).body, { email: null, has_password: false, parent: false });
+  const none = await avaApp('POST', '/app/api/password', { password: 'river stones at dusk' });
+  assert.equal(none.status, 400); assert.match(none.body.error.message, /no email of its own/);
+});
+
 test('an archived athlete can no longer sign in, and a session already open stops working', async () => {
   const { cookie } = await signIn('sam@example.com');
   assert.equal((await owner('POST', `/v1/clients/${sam.id}/archive`, {})).status, 200);

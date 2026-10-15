@@ -73,6 +73,14 @@ import * as profiles from './services/profiles.js';
 import { portalRoutes } from './portal-routes.js';
 import { portalInvite, finishProfile } from './services/notify.js';
 import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocalDay } from './util.js';
+// The athlete behind an app request, as the portal's password routes see them: their own email's rows. A parent
+// acting through the family frame is refused (403), a profile with no email of its own can't have a password (400).
+function ownSignIn(ctx, r) {
+  if (r.actingParent) throw new HttpError(403, 'parents_in_portal', 'Set your own password in the portal: Family tab → Your sign-in.');
+  const c = ctx.db.get('SELECT email FROM clients WHERE id = ?', r.client.id);
+  if (!c?.email) throw new HttpError(400, 'no_email', 'Your profile has no email of its own yet, so there\'s nothing to set a password for. Ask your coach to add your email, then come back here.');
+  return families.whoSignsIn(ctx, c.email);
+}
 
 // Coaches work only with the sales they rang up; anyone else's reads as not found.
 function ownSale(ctx, r) {
@@ -144,7 +152,7 @@ export const routes = [
   ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program (not front desk). Refused with 409 duplicate_email when the email belongs to a client, parent_exists when the parent\'s email already signs in for a family (add the athlete to that family instead), and possible_duplicate when a client has the same name and birthday (archived clients too) or the same phone number; details.duplicates lists them (possible_duplicate only with check_duplicates: true, which the dashboard sends; resend without it to create the account anyway).', (ctx, r) => clients.createClient(ctx, r.body, { staff: { role: r.user?.role ?? 'owner' } }), 201],
   ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: !r.apiKey || r.apiKey.scope === 'full', role: r.user?.role })],   // the app link lets anyone who has it log workouts: not for read-only keys
   ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone, notes and profile fields (birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, athlete_id) and training_type (hybrid, in_facility, remote, or null to clear).', (ctx, r) => { clients.updateClient(ctx, r.params.id, r.body); return clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role }); }],
-  // Outside data: wearables and spreadsheets brought in by hand (Settings → Data import). Owners and coaches import;
+  // Outside data: wearables, and the by-hand import API (off the screens by owner decision; kept for integrations). Owners and coaches import;
   // every staff member can look.
   ['GET', '/v1/clients/:id/outside-data', 'any', 'Clients', 'An athlete\'s outside data (wearables and other apps): each metric\'s latest value, 7-day and 30-day averages, the 30 days before, up to ?days= (default 90) of values for a trend, and the last 20 wearable workouts. Days count back from the newest day on file.', (ctx, r) => { clients.getClient(ctx, r.params.id); return dataimport.athleteData(ctx, r.params.id, { days: r.query.days }); }],
   ['GET', '/v1/data-imports/sources', 'any', 'Clients', 'The systems a file can come from (WHOOP, Oura, Garmin, Apple Health, Fitbit, Strava, TrainingPeaks, any spreadsheet): label, where to find the export, file kinds and formats.', (ctx) => ({ data: dataimport.sources() })],
@@ -879,6 +887,12 @@ export const routes = [
   ['POST', '/app/api/feed/:id/comments', 'client', 'Client app', 'Comment on a post: body (up to 1,000 characters).', (ctx, r) => feed.comment(ctx, r.params.id, { client_id: r.client.id, name: r.client.name.split(' ')[0] }, r.body), 201],
   ['DELETE', '/app/api/feed/comments/:id', 'client', 'Client app', 'Take back your own comment.', (ctx, r) => feed.removeComment(ctx, r.params.id, { client_id: r.client.id })],
   ['GET', '/app/api/timeline', 'client', 'Client app', 'Your timeline: everything you did, newest first (workouts, results once shared, maxes, sprint reps, form checks, check-ins, sessions, badges, reading, steps up, purchases). ?kind=, ?before=, ?limit=.', (ctx, r) => timeline.timelineFor(ctx, r.client.id, { kind: r.query.kind || null, before: r.query.before || null, limit: r.query.limit, view: 'athlete' })],
+  // Your sign-in (owner's ask: change the password from the app's Profile tab too). The password belongs to the athlete's
+  // own email (and to the parent row sharing that address, as in the portal); a parent opening the app through the
+  // family's Workout tab is sent to the portal's Family tab instead.
+  ['GET', '/app/api/password', 'client', 'Client app', 'Your sign-in: the email on your profile and whether a password is set.', (ctx, r) => { const c = ctx.db.get('SELECT email, password_hash FROM clients WHERE id = ?', r.client.id); return { email: c?.email || null, has_password: !!c?.password_hash, parent: !!r.actingParent }; }],
+  ['POST', '/app/api/password', 'client', 'Client app', 'Set or change the password for signing in with your own email: password (10+ characters). Emailed codes keep working.', (ctx, r) => families.setPassword(ctx, ownSignIn(ctx, r), r.body)],
+  ['DELETE', '/app/api/password', 'client', 'Client app', 'Remove your password; sign in with emailed codes only.', (ctx, r) => families.removePassword(ctx, ownSignIn(ctx, r))],
   ['GET', '/app/api/maxes', 'client', 'Client app', 'Your maxes for the lifts your program loads from: the max on file, the estimate from your sets, the history and trend, and strength by exercise.', (ctx, r) => maxes.maxesFor(ctx, r.client.id, { parentView: true })],
   ['POST', '/app/api/maxes', 'client', 'Client app', 'Enter or update a max: test, value (lb, or unit kg), optional date and note. Your program\'s weights use it from now on.', (ctx, r) => maxes.saveMax(ctx, r.client.id, r.body, r.actingParent ? { by: 'parent', name: r.actingParent.name } : { by: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/vbt', 'client', 'Client app', 'Your bar speed by exercise: the load-velocity profile and estimated max, the fastest rep at each load, the trend at your usual load, and your recent sessions set by set.', (ctx, r) => vbt.profileFor(ctx, r.client.id)],

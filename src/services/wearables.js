@@ -65,7 +65,7 @@ function athlete(ctx, clientId) {
 // only land on the athlete it was started for. by: { kind: 'staff' | 'parent', id }.
 export function connectUrl(ctx, clientId, provider, by = {}) {
   const p = providerKey(provider);
-  if (!ready(p)) throw conflict(`${PROVIDERS[p].label} isn't set up yet. The owner adds ${PROVIDERS[p].env.join(' and ')} in Render (Settings → Data import shows how).`);
+  if (!ready(p)) throw conflict(`${PROVIDERS[p].label} isn't set up yet. The owner adds ${PROVIDERS[p].env.join(' and ')} in Render (Settings → Wearables shows how).`);
   if (!ctx.publicUrl) throw conflict('Connecting a wearable needs the app\'s public address (PUBLIC_URL).');
   const c = athlete(ctx, clientId);
   rateLimit(`wearable-connect:${by.kind ?? 'x'}:${by.id ?? 'x'}`, 20, 60 * 60000);

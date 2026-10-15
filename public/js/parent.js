@@ -657,14 +657,15 @@ async function viewProgress(main) {
     drawFormChecks(a, fcBox);
     drawMonthly(a, monthlyBox).catch(() => fill(monthlyBox));
   }
-  // Games and the game week (gameweek.js): the family keeps the athlete's games, reads the advice for each day around
-  // them, and can move a workout the plan says lands on the wrong day.
+  // Games and the game week (gameweek.js): the family keeps the athlete's games, races and competitions; every day of
+  // the training calendar takes a colour from them (green = the full workout, yellow = one set fewer, red = half the
+  // sets), and a changed date moves the colours at once.
   function drawGames(a, box) {
     const block = gamesBlock({ first: a.first_name, who: 'parent', canEdit: true,
-      api: { plan: () => get(`athletes/${a.id}/games`), add: (b) => post(`athletes/${a.id}/games`, b), remove: (id) => api('DELETE', `athletes/${a.id}/games/${id}`),
-        preview: (b) => post(`athletes/${a.id}/games/preview`, b), import: (b) => post(`athletes/${a.id}/games/import`, b), move: (b) => post(`athletes/${a.id}/games/moves`, b) } });
+      api: { plan: () => get(`athletes/${a.id}/games`), add: (b) => post(`athletes/${a.id}/games`, b), update: (id, b) => api('PATCH', `athletes/${a.id}/games/${id}`, b), remove: (id) => api('DELETE', `athletes/${a.id}/games/${id}`),
+        preview: (b) => post(`athletes/${a.id}/games/preview`, b), import: (b) => post(`athletes/${a.id}/games/import`, b) } });
     fill(box, h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Games and game week'),
-      h('p', { class: 'small muted', style: 'margin:0' }, `Keep ${a.first_name}'s games here (or bring in the team's calendar) and the training calendar says what to do around them: the hard session three days out, lighter the day before, recovery the day after. ${a.first_name} sees the same in the app.`), block.el));
+      h('p', { class: 'small muted', style: 'margin:0' }, `Keep ${a.first_name}'s games, races and competitions here (or bring in the team's calendar). Every day of the training calendar takes a colour from them: green is the full workout, yellow one set fewer on every exercise, red half the sets. Change a date and everything follows. ${a.first_name} sees the same in the app.`), block.el));
   }
   // Monthly reports the coaches sent: what the athlete did that month and the coach's line.
   async function drawMonthly(a, box) {

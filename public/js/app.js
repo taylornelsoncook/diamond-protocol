@@ -1305,10 +1305,10 @@ const ADJ_KIND = { shift: 'Missed week', minimum: 'Minimum week', advance: 'Next
 // The game-week helper (gameweek.js): the athlete's games, the advice for each day around them, and the workouts that
 // land on the wrong day with Move it (the same move as the training calendar's).
 function gamesPanel(clientId, first, canEdit) {
-  const block = gamesBlock({ first, who: 'coach', canEdit, onMoved: render,
-    api: { plan: () => get(`/v1/clients/${clientId}/game-plan`), add: (b) => post(`/v1/clients/${clientId}/games`, b), remove: (gid) => del(`/v1/clients/${clientId}/games/${gid}`),
-      preview: (b) => post(`/v1/clients/${clientId}/games/preview`, b), import: (b) => post(`/v1/clients/${clientId}/games/import`, b), move: (b) => post(`/v1/clients/${clientId}/training-calendar/moves`, b) } });
-  return panel('Games and game week', { subtitle: `${first}'s games (added here, in the app or by the family), what each day around a game allows, and the workouts that land on the wrong day. The rules are on the Programs page.` }, block.el);
+  const block = gamesBlock({ first, who: 'coach', canEdit,
+    api: { plan: () => get(`/v1/clients/${clientId}/game-plan`), add: (b) => post(`/v1/clients/${clientId}/games`, b), update: (gid, b) => patch(`/v1/clients/${clientId}/games/${gid}`, b), remove: (gid) => del(`/v1/clients/${clientId}/games/${gid}`),
+      preview: (b) => post(`/v1/clients/${clientId}/games/preview`, b), import: (b) => post(`/v1/clients/${clientId}/games/import`, b) } });
+  return panel('Games and game week', { subtitle: `${first}'s games, races and competitions (added here, in the app or by the family). Every day of the training calendar takes a colour from them: green is the workout as written, yellow one set fewer on every exercise, red half the sets; the exercises, reps and weights never change. The rules are on the Programs page.` }, block.el);
 }
 function adaptBlock(clientId, first) {
   const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
@@ -2959,7 +2959,7 @@ function livePanel(id, st, canSwap) {
       h('summary', { class: 'row wrap dp-live-sum', style: 'gap:8px;align-items:center;cursor:pointer' },
         h('span', { class: `dp-badge dp-badge--${a.here ? 'good' : 'muted'}`, style: 'min-width:56px;text-align:center' }, a.here ? 'Here' : 'Not yet'),
         h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, h('a', { href: `#/clients/${a.client_id}`, class: 'strong', style: 'color:var(--steel)' }, a.name), a.team ? h('span', { class: 'small muted' }, ' · team') : null), what),
-        level(a.readiness), progress),
+        level(a.readiness), a.game_day?.cut ? h('span', { class: `gw-chip gw-chip--${a.game_day.tone}`, title: a.game_day.cut_text }, `${a.game_day.tone === 'red' ? 'Red' : 'Yellow'} day: ${a.game_day.cut === 'half' ? 'half the sets' : 'one set fewer'}`) : null, progress),
       w ? h('div', { class: 'stack-tight', style: 'margin:8px 0 0 64px' }, a.exercises.map((e) => exLine(a, e))) : null);
   };
   async function draw(fromTimer = false) {

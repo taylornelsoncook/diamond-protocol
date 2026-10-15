@@ -1,12 +1,13 @@
 # The game week: what to do around a game, and why
 
-The research brief behind the game-week helper (`services/gameweek.js`, schema 82): athletes keep their games, and
-each day around a game carries advice and allows a light, moderate or heavy workout. Written October 2026 for youth
-and high-school athletes in team sports. Most of the research is on soccer, where the weekly "match-day minus" pattern
+The research brief behind the game-week helper (`services/gameweek.js`, schema 82): athletes keep their games, races
+and competitions, and each day around one takes a colour on their training calendar (green, yellow or red) that cuts
+the sets of whatever workout is planned, the way the owner used to colour a season spreadsheet by hand. Written
+October 2026 for youth and high-school athletes in team sports. Most of the research is on soccer, where the weekly "match-day minus" pattern
 (MD-3, MD-2, MD-1, MD+1...) is studied most; it transfers to other field and court sports in practice, with the usual
 caution that a trained athlete recovers faster than an untrained one and an older athlete than a younger one.
 
-The starting rules in the app are a reading of this brief. The owner can change any day's allowed load or words on
+The starting rules in the app are a reading of this brief. The owner can change any day's colour or words on
 Programs → Game week.
 
 ## What the evidence says
@@ -44,29 +45,30 @@ number of sets, and placing the hardest lifting away from competition, never wit
 
 ## The rules the app starts with
 
-| Day | Allows | The advice athletes read |
-| --- | --- | --- |
-| Three days out | heavy | The hardest session of the week: heavy legs, jumps and sprints all fit; by game day the athlete has recovered and feels sharper for it. |
-| Two days out | moderate | A normal session, but the big leg work stays three days out: soreness from heavy or new exercises peaks a day or two later, right on game day. Nothing new, nothing to failure. Upper body, a moderate lift or speed work. |
-| Day before | light | Short and sharp: warm-up, a few fast moves (jumps, short sprints, a light power exercise), stop fresh. No heavy lifting, long conditioning or new exercises. Sleep 9 hours or more. |
-| Game day | light | Play. Nothing in the weight room unless the coach set up a short activation (10 to 15 minutes in the morning, fast and light, 6 or more hours before the game). A familiar meal 3 to 4 hours before, drink through the day, a full warm-up. |
-| Day after | light | Recovery: jump and sprint ability are still down and soreness is near its peak. 20 to 30 minutes of easy movement, mobility, food, water, sleep. No heavy lifting. |
-| Two days after | moderate | Still recovering: the legs produce less force for 48 to 72 hours even when they feel fine. Upper body, core, technique, or a lighter full-body lift. Heavy legs wait one more day. |
-| Three days after | heavy | Back to full training. |
+The owner's rule: the workout stays exactly as the coach wrote it (the exercises, reps and weights), and only the
+number of sets changes with the day's colour. Green is the workout as written, yellow is one set fewer on every
+exercise, red is half the sets (rounded up, never below one). The cut is worked out when the workout is opened, so a
+game whose date changes moves every colour and every set count at once; nothing is moved or stored.
 
-A day that is both (two days after one game and the day before the next) takes the stricter rule and mentions the
-other game. A tournament is one game day per day. A day more than three days from any game is clear: train as planned.
+| Day | Colour | Sets | The advice athletes read |
+| --- | --- | --- | --- |
+| Three days out | green | as written | The day for the hardest work of the week: heavy legs, jumps and sprints all fit; by game day the athlete has recovered and feels sharper for it. |
+| Two days out | yellow | one fewer | Soreness from heavy or new work peaks a day or two later, right on game day: nothing new, nothing to failure. |
+| Day before | red | half | Short and sharp, stop fresh. No long conditioning, no new exercises. Sleep 9 hours or more. |
+| Game day | red | half | Only if the coach set up a short activation (fast and light, 6 or more hours before). A familiar meal 3 to 4 hours before, drink through the day, a full warm-up. |
+| Day after | red | half | Jump and sprint ability are still down and soreness is near its peak: 20 to 30 minutes of easy movement, mobility, food, water, sleep. |
+| Two days after | yellow | one fewer | The legs produce less force for 48 to 72 hours even when they feel fine. Nothing to failure. |
+| Three days after | green | as written | Back to full training. |
 
-**How heavy a workout counts as** (`loadOf`): a lower-body or power lift at 80% of a max or more, a target RPE of 8 or
-more, or a load written as heavy, max, AMRAP or to failure is *heavy*; a leg lift at 65 to 79% or at low reps, any
-lift at RPE 6 to 7.5, or 18 or more sets in all is *moderate*; everything else (mobility, arm care, a short
-conditioning piece, activation) is *light*. An upper-body lift never counts as heavy legs and tops out at moderate.
-The title helps: "Recovery", "Mobility" and "Activation" are light; "Max day" and "Heavy" are heavy.
+A day that is both (two days after one game and the day before the next) takes the stricter colour and mentions the
+other game. A tournament is one game day per day. A day more than three days from any game is green with no advice.
+Races, meets and competitions follow the same days as games. Where the adaptive plan's minimum week is also in force
+(half the sets), the deeper of the two cuts applies, never both.
 
-**What the app suggests:** a workout heavier than its day allows moves to the nearest day within three that allows
-it, has nothing else planned and isn't a game day (earlier when the conflict is before a game, later when it is
-after). With no such day, the suggestion is to do it and keep it light (the warm-up and the fast moves, without the
-heavy sets) or moderate (working sets at 60 to 70%, nothing to failure).
+Why cut sets and not the workout: the research above is about how much, not what. Fewer sets of the same lift keeps
+the pattern the athlete is used to (the repeated bout effect) and the weight the coach chose, while taking most of the
+volume, and so the soreness and fatigue, out of the days that matter. Coaches write one program; the colours do the
+rest.
 
 ## Sources
 

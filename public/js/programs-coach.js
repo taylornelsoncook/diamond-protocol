@@ -933,20 +933,21 @@ function weeklyNotesPanel(notes) {
       btn('Draft last week', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/generate'); toast(r.written ? `${plural(r.written, 'note')} drafted.` : r.kept ? 'Already drafted.' : 'Nothing to say: a quiet week for everyone.'); deps.render(); }), 'ghost')) },
     drafts.length ? drafts.map(row) : h('p', { class: 'muted small' }, sent.length ? `All sent for ${week}. ${plural(sent.length, 'note')} went out.` : 'No drafts right now. They\'re written on Monday morning, or press Draft last week.'));
 }
-// The game-week rules (gameweek.js, docs/game-week.md): for each day from three before a game to three after, the
-// heaviest workout it allows and the advice athletes read. The owner changes them; coaches read them.
+// The game-week rules (gameweek.js, docs/game-week.md): for each day from three before a game to three after, its
+// colour (green = the workout as written, yellow = one set fewer on every exercise, red = half the sets) and the
+// advice athletes read. The owner changes them; coaches read them.
 function gameRulesPanel(r, owner) {
   const rows = r.rules.map((d) => {
-    const allow = select(r.loads.map((l) => [l, l === 'heavy' ? 'heavy (full training)' : l === 'moderate' ? 'moderate' : 'light']), { value: d.allow, 'aria-label': `Heaviest workout ${d.label.toLowerCase()}`, disabled: owner ? null : '' });
+    const allow = select(r.loads.map((l) => [l.key, l.label]), { value: d.allow, 'aria-label': `Colour ${d.label.toLowerCase()}`, disabled: owner ? null : '' });
     const advice = textarea(d.advice, { rows: '3', maxlength: '600', 'aria-label': `Advice ${d.label.toLowerCase()}`, disabled: owner ? null : '' });
     return { d, allow, advice, el: h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
       h('div', { style: 'width:140px' }, h('div', { class: 'strong' }, d.label), h('div', { class: 'small muted' }, d.offset === 0 ? 'the game' : d.offset < 0 ? `${-d.offset} ${-d.offset === 1 ? 'day' : 'days'} before` : `${d.offset} ${d.offset === 1 ? 'day' : 'days'} after`)),
-      h('div', { style: 'width:190px' }, allow), h('div', { class: 'grow', style: 'min-width:240px' }, advice)) };
+      h('div', { style: 'width:280px' }, allow), h('div', { class: 'grow', style: 'min-width:240px' }, advice)) };
   });
   const actions = owner ? h('div', { class: 'row wrap' },
     btn('Save rules', (e) => busy(e.currentTarget, async () => { await patch('/v1/game-rules', { rules: Object.fromEntries(rows.map((x) => [x.d.key, { allow: x.allow.value, advice: x.advice.value.trim() }])) }); toast('Game-week rules saved. Every athlete\'s plan reads them from now on.'); }), 'primary'),
     r.customized ? btn('Back to the starting values', (e) => { if (!confirm('Put every day back to the research brief\'s rules and words?')) return; busy(e.currentTarget, async () => { await patch('/v1/game-rules', { reset: true }); toast('Reset.'); deps.render(); }); }, 'ghost') : null) : null;
-  return panel('Game week', { subtitle: 'Athletes and families keep their games in the app; each day around a game then allows a light, moderate or heavy workout and shows these words, and a workout that lands on the wrong day gets a suggestion to move. The starting values come from the research in docs/game-week.md: the hardest session three days out, soreness and lost force for 48 to 72 hours after a game, nothing new or heavy the day before.' },
+  return panel('Game week', { subtitle: 'Athletes and families keep their games, races and competitions in the app; each day around one takes a colour on the athlete\'s calendar and the sets follow on their own: green is the workout as written, yellow one set fewer on every exercise, red half the sets (rounded up, never below one). The exercises, reps and weights never change, so programs are written as usual. The starting values come from the research in docs/game-week.md: the hardest work three days out, soreness and lost force for 48 to 72 hours after a game, nothing new or heavy the day before.' },
     h('div', { class: 'stack-tight' }, rows.map((x) => x.el)), actions);
 }
 // Start-up rules (schema 67, services/startup.js): which program an athlete's answers to the start-up questions put them

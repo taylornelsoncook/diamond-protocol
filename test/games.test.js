@@ -1,7 +1,8 @@
-// The game-week helper (schema 82, services/gameweek.js): athletes, parents and coaches keep the athlete's games;
-// every day knows where it sits against them and carries the advice; workouts heavier than their day allows get a
-// suggestion to move (one tap, only to the date suggested); schedules come in from .ics, CSV or pasted lines; the
-// owner alone changes the rules; games are in the family export; the version 81 database gains the table.
+// The game-week helper (schema 82, services/gameweek.js): athletes, parents and coaches keep the athlete's games, races
+// and competitions; every day of the training calendar takes a colour from where it sits against them (green = the
+// full workout, yellow = one set fewer on every exercise, red = half the sets), worked out on read, so a game whose
+// date changes moves the colours and the sets at once; schedules come in from .ics, CSV or pasted lines; the owner
+// alone changes the rules; games are in the family export; the version 81 database gains the table.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { createApp } from '../src/server.js';
 import { createUser } from '../src/services/access.js';
 import { openDb } from '../src/db.js';
 import { newId } from '../src/util.js';
-import { dayInfo, loadOf, parseIcs, parseCsv, readDate, DEFAULT_RULES } from '../src/services/gameweek.js';
+import { dayInfo, cutSets, parseIcs, parseCsv, readDate, DEFAULT_RULES } from '../src/services/gameweek.js';
 
 let app, base, owner, coach, desk, maya, token, program, parent;
 const PW = 'correct-horse-battery';
@@ -76,8 +77,9 @@ test('where a day sits against the games, and which rule applies', () => {
   assert.equal(dayInfo('2026-10-10', ['2026-10-10'], r).offset, 0);
   assert.deepEqual([dayInfo('2026-10-09', ['2026-10-10'], r).key, dayInfo('2026-10-08', ['2026-10-10'], r).key, dayInfo('2026-10-07', ['2026-10-10'], r).key], ['-1', '-2', '-3']);
   assert.deepEqual([dayInfo('2026-10-11', ['2026-10-10'], r).allow, dayInfo('2026-10-12', ['2026-10-10'], r).allow, dayInfo('2026-10-13', ['2026-10-10'], r).allow], ['light', 'moderate', 'heavy']);
+  assert.deepEqual([dayInfo('2026-10-11', ['2026-10-10'], r).tone, dayInfo('2026-10-12', ['2026-10-10'], r).cut, dayInfo('2026-10-13', ['2026-10-10'], r).cut], ['red', 'minus_one', null], 'the colour and what it does to the sets');
   const clear = dayInfo('2026-10-20', ['2026-10-10'], r);
-  assert.deepEqual([clear.offset, clear.allow, clear.advice, clear.after], [null, 'heavy', null, 10]);
+  assert.deepEqual([clear.offset, clear.allow, clear.tone, clear.cut, clear.advice, clear.after], [null, 'heavy', 'green', null, null, 10]);
   // Between two games (Saturday and Tuesday): the Monday is two days after one and the day before the other: the stricter wins, the other is mentioned.
   const between = dayInfo('2026-10-12', ['2026-10-10', '2026-10-13'], r);
   assert.deepEqual([between.key, between.allow], ['-1', 'light']);
@@ -85,16 +87,10 @@ test('where a day sits against the games, and which rule applies', () => {
   assert.equal(dayInfo('2026-10-12', ['2026-10-10', '2026-10-13'], { ...r, '-1': { ...r['-1'], allow: 'heavy' } }).key, '2', 'the owner\'s rules decide which is stricter');
 });
 
-test('how heavy a workout is, read from its exercises and its title', () => {
-  const load = (title, exercises, m) => loadOf({ title, exercises }, m);
-  assert.deepEqual(load('Lower body', [{ name: 'Back squat', category: 'Lower body', sets: 4, reps: '4', load_pct: 85 }]), { load: 'heavy', legs: true, why: 'Back squat at 85% of max' });
-  assert.equal(load('Upper body', [{ name: 'Bench press', category: 'Upper body', sets: 3, reps: '8', target_rpe: 7 }]).load, 'moderate');
-  assert.equal(load('Upper body', [{ name: 'Bench press', category: 'Upper body', sets: 3, reps: '3', load_pct: 90 }]).load, 'moderate', 'an upper-body lift never counts as heavy legs, and tops out at moderate');
-  assert.deepEqual(load('Mobility', [{ name: 'Hip circles', category: 'Mobility', sets: 2, reps: '10' }]), { load: 'light', legs: false, why: 'a recovery day by its name' });
-  assert.equal(load('Day 3', [{ name: 'Hip circles', category: 'Mobility', sets: 2, reps: '10' }]).load, 'light');
-  assert.equal(load('Day 1', [{ name: 'Trap bar deadlift', category: null, sets: 4, reps: '5' }], () => 'hinge').load, 'moderate', 'a leg lift at low reps is a working session');
-  assert.equal(load('Max day', [{ name: 'Hip circles', category: 'Mobility', sets: 1, reps: '10' }]).load, 'heavy', 'the title says so');
-  assert.equal(load('Circuit', Array.from({ length: 6 }, (_, i) => ({ name: `Move ${i}`, category: 'Core', sets: 3, reps: '12' }))).load, 'moderate', 'a lot of sets');
+test('what each colour does to the sets: yellow one fewer, red half (rounded up), never below one', () => {
+  assert.deepEqual([4, 3, 1].map((n) => cutSets(n, null)), [4, 3, 1], 'green: as written');
+  assert.deepEqual([4, 3, 1].map((n) => cutSets(n, 'minus_one')), [3, 2, 1]);
+  assert.deepEqual([4, 3, 2, 1].map((n) => cutSets(n, 'half')), [2, 2, 1, 1]);
 });
 
 test('reading a schedule: .ics with every date form, CSV with a header, pasted lines', () => {
@@ -114,50 +110,62 @@ test('reading a schedule: .ics with every date form, CSV with a header, pasted l
   assert.equal(readDate('13/45/2026', TODAY), null);
 });
 
-test('the athlete adds a game, reads the plan, and takes the suggestion to move a heavy session off the day after', async () => {
+test('the athlete adds a game: each day takes its colour, the sets follow in the app, and a changed date resets everything', async () => {
   let home = (await athlete('GET', '/app/api/home')).body;
   assert.equal(home.games.games_on_file, 0);
+  assert.deepEqual([home.workout.title, home.workout.game_day, home.workout.exercises[0].target_sets], ['Upper body', null, 3], 'no games: nothing changes');
   const add = await athlete('POST', '/app/api/games', { date: '2026-10-10', time: '14:00', title: 'vs Westlake' });
-  assert.equal(add.status, 201, add.text); assert.equal(add.body.source, 'athlete'); assert.equal(add.body.created_by, 'Maya Okafor');
+  assert.equal(add.status, 201, add.text); assert.equal(add.body.source, 'athlete'); assert.equal(add.body.created_by, 'Maya Okafor'); assert.equal(add.body.kind_word, 'game');
   assert.equal((await athlete('POST', '/app/api/games', { date: '2026-10-10', title: 'VS WESTLAKE' })).status, 409, 'the same game twice');
   assert.equal((await athlete('POST', '/app/api/games', { date: '2026-10-10', time: '25:00' })).status, 400);
   const plan = (await athlete('GET', '/app/api/games')).body;
   assert.equal(plan.next_game.title, 'vs Westlake');
-  assert.deepEqual([plan.now.offset, plan.now.label, plan.now.allow], [-3, 'Three days out', 'heavy'], 'Wednesday is three days out from Saturday');
+  assert.deepEqual([plan.now.offset, plan.now.label, plan.now.tone, plan.now.cut], [-3, 'Three days out', 'green', null], 'Wednesday is three days out from Saturday: the full workout');
   const byDate = Object.fromEntries(plan.days.map((d) => [d.date, d]));
-  assert.deepEqual(byDate['2026-10-07'].workouts.map((w) => [w.title, w.load, w.fits]), [['Upper body', 'moderate', true]]);
-  assert.deepEqual([byDate['2026-10-09'].allow, byDate['2026-10-09'].workouts[0].load, byDate['2026-10-09'].conflict], ['light', 'light', false], 'mobility the day before fits');
-  assert.deepEqual([byDate['2026-10-12'].label, byDate['2026-10-12'].allow, byDate['2026-10-12'].conflict], ['Two days after', 'moderate', true], 'heavy legs two days after the game don\'t');
-  assert.equal(plan.suggestions.length, 1);
-  const s = plan.suggestions[0];
-  assert.deepEqual([s.title, s.date, s.load, s.legs, s.kind, s.to_date], ['Lower body', '2026-10-12', 'heavy', true, 'move', '2026-10-13']);
-  assert.match(s.text, /heavy legs \(Back squat at 85% of max\) and it lands 2 days after your game\. Move it to 2026-10-13/);
+  assert.deepEqual(byDate['2026-10-07'].workouts.map((w) => [w.title, w.sets, w.sets_today]), [['Upper body', 3, 3]]);
+  assert.deepEqual([byDate['2026-10-09'].tone, byDate['2026-10-09'].cut_text, byDate['2026-10-09'].workouts[0].sets_today], ['red', 'half the sets on every exercise', 1], 'the day before: half of 2 sets is 1');
+  assert.deepEqual([byDate['2026-10-10'].offset, byDate['2026-10-10'].tone, byDate['2026-10-10'].games[0].title], [0, 'red', 'vs Westlake']);
+  assert.deepEqual([byDate['2026-10-12'].label, byDate['2026-10-12'].tone, byDate['2026-10-12'].workouts[0].sets_today], ['Two days after', 'yellow', 3], 'two days after: 4 sets of squats become 3');
+  assert.deepEqual([byDate['2026-10-14'].tone, byDate['2026-10-14'].offset], ['green', null], 'four days after: clear');
   home = (await athlete('GET', '/app/api/home')).body;
-  assert.deepEqual([home.games.days_to_next, home.games.game_dates, home.games.suggestions.length], [3, ['2026-10-10'], 1]);
+  assert.deepEqual([home.games.days_to_next, home.games.game_dates, home.games.now.tone], [3, ['2026-10-10'], 'green']);
   assert.equal(home.games.by_date['2026-10-10'].game.title, 'vs Westlake');
-  // Only the suggested move is open to the athlete.
-  assert.equal((await athlete('POST', '/app/api/games/moves', { workout_id: s.workout_id, date: '2026-10-20' })).status, 400, 'not a date the plan suggested');
-  const moved = await athlete('POST', '/app/api/games/moves', { workout_id: s.workout_id, date: s.to_date });
+  assert.deepEqual([home.games.by_date['2026-10-09'].tone, home.games.by_date['2026-10-12'].tone, home.games.by_date['2026-10-14']], ['red', 'yellow', undefined], 'only coloured days are listed');
+  assert.deepEqual([home.workout.game_day.tone, home.workout.game_day.game.title, home.workout.exercises[0].target_sets, home.workout.exercises[0].game_cut], ['green', 'vs Westlake', 3, undefined], 'today is green: the workout as written');
+  // The workouts on coloured days, opened from the calendar: the same exercises, fewer sets.
+  const lower = home.calendar.workouts.find((w) => w.date === '2026-10-12'), mob = home.calendar.workouts.find((w) => w.date === '2026-10-09');
+  let w = (await athlete('GET', `/app/api/workouts/${lower.id}`)).body;
+  assert.deepEqual([w.game_day.tone, w.game_day.cut, w.game_day.label, w.exercises[0].target_sets, w.exercises[0].planned_sets, w.exercises[0].game_cut, w.exercises[0].reps], ['yellow', 'minus_one', 'Two days after', 3, 4, 'minus_one', '4'], 'one set fewer, the reps and weight the same');
+  w = (await athlete('GET', `/app/api/workouts/${mob.id}`)).body;
+  assert.deepEqual([w.game_day.tone, w.exercises[0].target_sets, w.exercises[0].planned_sets, w.exercises[0].game_cut], ['red', 1, 2, 'half']);
+  // The game moves a week: every colour and set count follows at once, nothing else to do.
+  assert.equal((await athlete('PATCH', `/app/api/games/${add.body.id}`, {})).status, 400, 'nothing to change');
+  assert.equal((await athlete('PATCH', `/app/api/games/${add.body.id}`, { time: '9pm' })).status, 400);
+  const moved = await athlete('PATCH', `/app/api/games/${add.body.id}`, { date: '2026-10-17' });
   assert.equal(moved.status, 200, moved.text);
-  assert.deepEqual(moved.body.moved, { workout_id: s.workout_id, title: 'Lower body', from: '2026-10-12', to: '2026-10-13' });
-  assert.equal(moved.body.plan.suggestions.length, 0, 'nothing left to move');
-  assert.equal(app.ctx.db.get('SELECT moved_by FROM assignment_moves WHERE workout_id = ?', s.workout_id).moved_by, 'Maya Okafor');
-  const cal = (await coach('GET', `/v1/clients/${maya.id}/training-calendar`)).body;
-  assert.equal(cal.workouts.find((w) => w.id === s.workout_id).date, '2026-10-13');
-  assert.equal((await athlete('POST', '/app/api/games/moves', { workout_id: s.workout_id, date: s.to_date })).status, 400, 'gone once taken');
+  assert.deepEqual([moved.body.date, moved.body.title, moved.body.time, moved.body.was.date], ['2026-10-17', 'vs Westlake', '14:00', '2026-10-10'], 'the rest stays');
+  w = (await athlete('GET', `/app/api/workouts/${lower.id}`)).body;
+  assert.deepEqual([w.game_day, w.exercises[0].target_sets, w.exercises[0].planned_sets], [null, 4, undefined], 'Oct 12 is clear now: all 4 sets');
+  home = (await athlete('GET', '/app/api/home')).body;
+  assert.deepEqual([home.games.now.tone, home.games.by_date['2026-10-16'].tone, home.games.by_date['2026-10-14'].tone, home.games.by_date['2026-10-09']], ['green', 'red', 'green', undefined], 'the colours moved with the game');
+  const back = await athlete('PATCH', `/app/api/games/${add.body.id}`, { date: '2026-10-10' });
+  assert.equal(back.status, 200, back.text);
+  assert.equal((await athlete('GET', `/app/api/workouts/${lower.id}`)).body.exercises[0].target_sets, 3, 'and back again');
 });
 
-test('a second game close by: the stricter day wins, and a workout with no free day nearby is kept but lightened', async () => {
+test('a second game close by: the stricter day wins, and the weight-room screen and the Live panel cut the same sets', async () => {
   const add = await parent('POST', `/portal/api/athletes/${maya.id}/games`, { date: '2026-10-13', title: 'vs Reagan', kind: 'scrimmage' });
   assert.equal(add.status, 201, add.text); assert.equal(add.body.source, 'parent');
   const plan = (await parent('GET', `/portal/api/athletes/${maya.id}/games`)).body;
   const byDate = Object.fromEntries(plan.days.map((d) => [d.date, d]));
-  assert.deepEqual([byDate['2026-10-12'].key, byDate['2026-10-12'].allow], ['-1', 'light']);
-  assert.equal(byDate['2026-10-13'].offset, 0, 'the moved Lower body now sits on a game day');
-  const s = plan.suggestions.find((x) => x.title === 'Lower body');
-  assert.ok(s, 'the heavy session is flagged again');
-  assert.deepEqual([s.kind, s.to_date], ['lighten', null], 'every day within three is a game day, the day before or after one, or already has a workout');
-  assert.match(s.text, /lands on game day, with no free day nearby to move it to\. Do it, but keep it light/);
+  assert.deepEqual([byDate['2026-10-12'].key, byDate['2026-10-12'].tone, byDate['2026-10-12'].workouts[0].sets_today], ['-1', 'red', 2], 'two days after one game and the day before the next: red, half the sets');
+  assert.match(byDate['2026-10-12'].advice, /You also played 2 days ago\.$/);
+  assert.equal(byDate['2026-10-13'].offset, 0);
+  assert.equal((await parent('PATCH', `/portal/api/athletes/${maya.id}/games/${add.body.id}`, { date: '2026-10-10', title: 'vs Westlake' })).status, 409, 'onto a game already on file');
+  // The coach's Live panel for a session today reads the same colour (today is green, so the full sets), as does the client page's plan.
+  const cplan = (await coach('GET', `/v1/clients/${maya.id}/game-plan`)).body;
+  assert.deepEqual(cplan.days.find((d) => d.date === '2026-10-12').workouts.map((w) => [w.title, w.sets, w.sets_today]), [['Lower body', 4, 2]]);
+  assert.deepEqual(Object.keys(cplan.colors), ['green', 'yellow', 'red']);
 });
 
 test('coaches bring the team\'s calendar in: practices start unticked, duplicates are skipped, the same file twice adds nothing', async () => {
@@ -183,6 +191,13 @@ test('coaches bring the team\'s calendar in: practices start unticked, duplicate
   const bad = await coach('POST', `/v1/clients/${maya.id}/games/import`, { items: [{ date: 'soon' }, { date: '2026-11-02', kind: 'final' }] });
   assert.equal(bad.status, 400); assert.equal(bad.body.error.details.problems.length, 2);
   assert.equal((await coach('POST', `/v1/clients/${maya.id}/games/preview`, { text: 'nothing here' })).status, 400);
+  // Races, meets and competitions are kinds of their own (the owner's words: "games, races, and competitions").
+  const pv2 = (await coach('POST', `/v1/clients/${maya.id}/games/preview`, { text: 'Nov 14 8:00 Cross country regional\nNov 21 State track meet\nDec 5 Winter Classic competition\nDec 12 vs Lake Travis' })).body;
+  assert.deepEqual(pv2.items.map((i) => i.kind), ['race', 'meet', 'competition', 'game']);
+  const race = await coach('POST', `/v1/clients/${maya.id}/games`, { date: '2026-11-14', time: '08:00', title: 'Cross country regional', kind: 'race' });
+  assert.equal(race.status, 201, race.text); assert.deepEqual([race.body.kind_label, race.body.kind_word], ['Race', 'race']);
+  assert.equal((await coach('POST', `/v1/clients/${maya.id}/games`, { date: '2026-11-15', kind: 'marathon' })).status, 400);
+  assert.equal((await coach('DELETE', `/v1/clients/${maya.id}/games/${race.body.id}`)).status, 200);
   // Front desk looks, never adds; a parent only reaches their own athlete.
   assert.equal((await desk('GET', `/v1/clients/${maya.id}/games`)).status, 200);
   assert.equal((await desk('POST', `/v1/clients/${maya.id}/games`, { date: '2026-11-07' })).status, 403);
@@ -196,6 +211,8 @@ test('the owner changes the rules; coaches read them; the plan follows; the expo
   const r = (await coach('GET', '/v1/game-rules')).body;
   assert.equal(r.rules.length, 7); assert.equal(r.customized, false);
   assert.deepEqual(r.rules.map((d) => d.offset), [-3, -2, -1, 0, 1, 2, 3], 'in the order of the week');
+  assert.deepEqual(r.rules.map((d) => d.tone), ['green', 'yellow', 'red', 'red', 'red', 'yellow', 'green']);
+  assert.deepEqual(r.loads.map((l) => [l.key, l.tone]), [['light', 'red'], ['moderate', 'yellow'], ['heavy', 'green']]);
   assert.equal(r.rules.find((d) => d.key === '-1').allow, 'light');
   assert.equal((await coach('PATCH', '/v1/game-rules', { rules: { '-1': { allow: 'moderate' } } })).status, 403, 'owner only');
   assert.equal((await owner('PATCH', '/v1/game-rules', { rules: { '-9': { allow: 'moderate' } } })).status, 400);
@@ -203,10 +220,11 @@ test('the owner changes the rules; coaches read them; the plan follows; the expo
   const saved = await owner('PATCH', '/v1/game-rules', { rules: { '2': { allow: 'heavy', advice: 'Two days after: lift as normal.' } } });
   assert.equal(saved.status, 200, saved.text); assert.equal(saved.body.customized, true);
   const two = saved.body.rules.find((d) => d.key === '2');
-  assert.deepEqual([two.allow, two.advice, two.label], ['heavy', 'Two days after: lift as normal.', 'Two days after']);
+  assert.deepEqual([two.allow, two.tone, two.advice, two.label], ['heavy', 'green', 'Two days after: lift as normal.', 'Two days after']);
   const plan = (await coach('GET', `/v1/clients/${maya.id}/game-plan`)).body;
   const d = plan.days.find((x) => x.date === '2026-10-19');
-  assert.deepEqual([d.key, d.allow, d.advice], ['2', 'heavy', 'Two days after: lift as normal.'], 'two days after the Hill Country game now allows anything');
+  assert.deepEqual([d.key, d.allow, d.tone, d.advice], ['2', 'heavy', 'green', 'Two days after: lift as normal.'], 'two days after the Hill Country game is green now');
+  assert.equal((await athlete('GET', '/app/api/home')).body.games.by_date['2026-10-19'].tone, 'green', 'the app reads the owner\'s rules');
   const reset = await owner('PATCH', '/v1/game-rules', { reset: true });
   assert.equal(reset.body.customized, false); assert.equal(reset.body.rules.find((x) => x.key === '2').allow, 'moderate');
   const ex = (await owner('GET', `/v1/families/${maya.family.id}/export`)).body;

@@ -305,7 +305,7 @@ CREATE TABLE IF NOT EXISTS games (
   date TEXT NOT NULL,
   time TEXT,
   title TEXT,
-  kind TEXT NOT NULL DEFAULT 'game' CHECK (kind IN ('game', 'tournament', 'scrimmage')),
+  kind TEXT NOT NULL DEFAULT 'game' CHECK (kind IN ('game', 'tournament', 'scrimmage', 'race', 'meet', 'competition')),
   source TEXT NOT NULL DEFAULT 'athlete',
   import_key TEXT,
   created_by TEXT,

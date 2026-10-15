@@ -1,32 +1,42 @@
-// The game-week helper (owner's ask: "an athlete calendar helper ... day of game, day before, 2 days before, day after
-// and 3 days after ... the athlete uploads their games and gets suggestions on what the best thing to do is").
-// Athletes (parents through the family account, coaches on the client page) keep their games: typed one at a time, or
-// brought in from the team's calendar (.ics from TeamSnap, SportsEngine, GameChanger and the like, a CSV, or pasted
-// lines). Every day then knows where it sits against the games (three days out, the day before, game day, the day
-// after...), carries the advice for that day, and the workouts on the training calendar are checked against it: a
-// workout heavier than the day allows gets a suggestion to move to the nearest day that fits (one tap in the app),
-// or, with no good day, to keep it light. The rules and the words are the research brief's starting values
-// (docs/game-week.md), and the owner can change them (settings key game_rules). The plan itself never changes: a move
-// is one athlete's workout on another date (assignment_moves), the same as a coach's move.
+// The game-week helper (owner's asks: "an athlete calendar helper ... day of game, day before, 2 days before, day
+// after and 3 days after ... the athlete uploads their games"; "it doesn't take into account their actual schedule:
+// I want them to input the games, races, and competitions and make it fluid enough that if it changes they can input
+// the new date and their suggested schedule resets"; "we already have a calendar on their account: if it is yellow cut
+// sets down by 1, if it is red cut sets in half, and keep the workout the same").
+// Athletes (parents through the family account, coaches on the client page) keep their games, races, meets and
+// competitions: typed one at a time, or brought in from the team's calendar (.ics from TeamSnap, SportsEngine,
+// GameChanger and the like, a CSV, or pasted lines). Every day of the athlete's training calendar then takes a colour
+// from where it sits against them: green (full workout), yellow (one set fewer on every exercise) or red (half the
+// sets). The workout itself never changes, only the sets, worked out on read (programs.appExercise), so changing a
+// game's date moves the colours and the sets at once. The rules and the words are the research brief's starting
+// values (docs/game-week.md), and the owner can change them (settings key game_rules).
 import { newId, v, badRequest, notFound, conflict, addDaysToDate, isDate, localDate } from '../util.js';
 import { getSetting } from './families.js';
-import { clientCalendar, moveWorkout, today } from './training-calendar.js';
-import { repCount } from './rx.js';
+import { clientCalendar, today } from './training-calendar.js';
 
-export const KINDS = { game: 'Game', tournament: 'Tournament day', scrimmage: 'Scrimmage' };
-export const LOADS = ['rest', 'light', 'moderate', 'heavy'];   // in order: what a day allows, and what a workout is
+export const KINDS = { game: 'Game', tournament: 'Tournament day', scrimmage: 'Scrimmage', race: 'Race', meet: 'Meet', competition: 'Competition' };
+// The one word for an event of each kind ("Race tomorrow").
+export const KIND_WORDS = { game: 'game', tournament: 'tournament', scrimmage: 'scrimmage', race: 'race', meet: 'meet', competition: 'competition' };
+export const LOADS = ['light', 'moderate', 'heavy'];   // in order: what a day allows
+// What each colour does to the workout (the owner's rule): green = as written, yellow = one set fewer on every
+// exercise, red = half the sets (rounded up, never below one). The exercises, reps and weights stay the same.
+export const TONES = { heavy: 'green', moderate: 'yellow', light: 'red' };
+export const CUTS = { heavy: null, moderate: 'minus_one', light: 'half' };
+export const CUT_TEXT = { minus_one: 'one set fewer on every exercise', half: 'half the sets on every exercise' };
+export const TONE_TEXT = { green: 'Green: the full workout', yellow: 'Yellow: one set fewer on every exercise', red: 'Red: half the sets on every exercise' };
 export const MAX_GAMES = 400, MAX_TITLE = 80, HORIZON_DAYS = 21, LIST_DAYS = 120;
+export const NEAR_DAYS = 3;   // a day within this many days of a game takes a colour from the rules; further is green
 
-// The rules by day, keyed by the days to the game (negative) or since it (positive). allow is the heaviest workout
-// that fits the day; advice is what the athlete reads. Starting values from docs/game-week.md.
+// The rules by day, keyed by the days to the game (negative) or since it (positive). allow is the colour (heavy =
+// green, moderate = yellow, light = red); advice is what the athlete reads. Starting values from docs/game-week.md.
 export const DEFAULT_RULES = {
-  '-3': { label: 'Three days out', allow: 'heavy', advice: 'This is the day for your hardest session of the week. Heavy legs, jumps and sprints all fit: by game day you\'ll have recovered and feel sharper for it. Eat well and get to bed on time.' },
-  '-2': { label: 'Two days out', allow: 'moderate', advice: 'A normal session is fine, but keep the big leg work for three days out: soreness from heavy or new exercises peaks a day or two later, right on game day. Nothing new today, nothing to failure. Upper body, a moderate lift or speed work are good here.' },
-  '-1': { label: 'Day before', allow: 'light', advice: 'Short and sharp: a warm-up, a few fast moves (jumps, short sprints, a light power exercise), then stop while you feel fresh. No heavy lifting, no long conditioning, no new exercises. Sleep 9 hours or more; this night matters more than tomorrow\'s.' },
-  '0': { label: 'Game day', allow: 'light', advice: 'Play. Nothing in the weight room unless your coach set up a short activation (10 to 15 minutes in the morning, fast and light, six hours or more before the game). Eat a meal you know 3 to 4 hours before, drink through the day, and do a full warm-up.' },
-  '1': { label: 'Day after', allow: 'light', advice: 'Recovery day: your jump and sprint ability is still down and soreness is near its peak. Move for 20 to 30 minutes (an easy bike, a walk, a swim, mobility), stretch, eat and drink well, and sleep. No heavy lifting.' },
-  '2': { label: 'Two days after', allow: 'moderate', advice: 'Still recovering: your legs produce less force for 48 to 72 hours after a game, even when you feel fine. A moderate session is right: upper body, core, technique work, or a lighter full-body lift. Heavy legs wait one more day.' },
-  '3': { label: 'Three days after', allow: 'heavy', advice: 'Back to full training. Heavy legs are fine from here on.' }
+  '-3': { label: 'Three days out', allow: 'heavy', advice: 'Green day: the full workout. This is the day for your hardest work of the week. Heavy legs, jumps and sprints all fit: by game day you\'ll have recovered and feel sharper for it.' },
+  '-2': { label: 'Two days out', allow: 'moderate', advice: 'Yellow day: one set fewer on every exercise. Soreness from heavy or new work peaks a day or two later, right on game day, so nothing new today and nothing to failure.' },
+  '-1': { label: 'Day before', allow: 'light', advice: 'Red day: half the sets. Short and sharp, then stop while you feel fresh. No long conditioning, no new exercises. Sleep 9 hours or more; this night matters more than tomorrow\'s.' },
+  '0': { label: 'Game day', allow: 'light', advice: 'Red day: half the sets, and only if your coach set up a short activation (fast and light, six hours or more before you play). Eat a meal you know 3 to 4 hours before, drink through the day, and do a full warm-up.' },
+  '1': { label: 'Day after', allow: 'light', advice: 'Red day: half the sets. Your jump and sprint ability is still down and soreness is near its peak. Move for 20 to 30 minutes (an easy bike, a walk, a swim, mobility), stretch, eat and drink well, and sleep.' },
+  '2': { label: 'Two days after', allow: 'moderate', advice: 'Yellow day: one set fewer on every exercise. Your legs produce less force for 48 to 72 hours after a game, even when they feel fine. Nothing to failure.' },
+  '3': { label: 'Three days after', allow: 'heavy', advice: 'Green day: the full workout. Back to full training; heavy legs are fine from here on.' }
 };
 const ADVICE_MAX = 600;
 
@@ -37,9 +47,10 @@ export function rules(ctx) {
   return Object.fromEntries(Object.entries(DEFAULT_RULES).map(([k, r]) => [k, { ...r, ...(saved[k] ?? {}) }]));
 }
 export function rulesView(ctx) {
-  return { rules: Object.entries(rules(ctx)).map(([key, r]) => ({ key, offset: Number(key), ...r })).sort((a, b) => a.offset - b.offset), loads: LOADS.slice(1), customized: !!ctx.db.get(`SELECT 1 FROM settings WHERE key = 'game_rules'`), defaults: DEFAULT_RULES };
+  return { rules: Object.entries(rules(ctx)).map(([key, r]) => ({ key, offset: Number(key), ...r, tone: TONES[r.allow], cut: CUTS[r.allow] })).sort((a, b) => a.offset - b.offset),
+    loads: LOADS.map((l) => ({ key: l, tone: TONES[l], label: TONE_TEXT[TONES[l]] })), customized: !!ctx.db.get(`SELECT 1 FROM settings WHERE key = 'game_rules'`), defaults: DEFAULT_RULES };
 }
-// The owner changes a day's allowed load or its words (rules: { '-1': { allow, advice } }), or resets the lot.
+// The owner changes a day's colour or its words (rules: { '-1': { allow, advice } }), or resets the lot.
 export function saveRules(ctx, body = {}) {
   if (body.reset) { ctx.db.run(`DELETE FROM settings WHERE key = 'game_rules'`); return rulesView(ctx); }
   if (!body.rules || typeof body.rules !== 'object') throw badRequest('Send rules: { "-1": { allow, advice }, ... } or reset: true.');
@@ -48,7 +59,7 @@ export function saveRules(ctx, body = {}) {
     if (!DEFAULT_RULES[k]) throw badRequest(`${k} isn't a day of the game week (-3 to 3).`);
     if (!r || typeof r !== 'object') throw badRequest(`Day ${k}: send allow and/or advice.`);
     const cur = { ...(next[k] ?? {}) };
-    if (r.allow !== undefined) cur.allow = v.oneOf(r.allow, 'allow', LOADS.slice(1));
+    if (r.allow !== undefined) cur.allow = v.oneOf(r.allow, 'allow', LOADS);
     if (r.advice !== undefined) { const a = v.str(r.advice, 'advice', { max: ADVICE_MAX }).trim(); if (!a) throw badRequest(`Day ${k}: write the advice, or reset to the starting words.`); cur.advice = a; }
     next[k] = cur;
   }
@@ -58,35 +69,50 @@ export function saveRules(ctx, body = {}) {
 
 // ---------- Games ----------
 const clientOf = (ctx, id) => { const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', id); if (!c) throw notFound('Athlete'); return c; };
-const shape = (g) => ({ id: g.id, date: g.date, time: g.time, title: g.title, kind: g.kind, kind_label: KINDS[g.kind], source: g.source, created_by: g.created_by, created_at: g.created_at });
+const shape = (g) => ({ id: g.id, date: g.date, time: g.time, title: g.title, kind: g.kind, kind_label: KINDS[g.kind], kind_word: KIND_WORDS[g.kind], source: g.source, created_by: g.created_by, created_at: g.created_at });
 export function listGames(ctx, clientId, { from = null, to = null } = {}) {
   clientOf(ctx, clientId);
   const day = today(ctx);
   const lo = from ?? addDaysToDate(day, -7), hi = to ?? addDaysToDate(day, LIST_DAYS);
   return ctx.db.all('SELECT * FROM games WHERE client_id = ? AND date >= ? AND date <= ? ORDER BY date, time', clientId, lo, hi).map(shape);
 }
-function gameFields(ctx, body = {}) {
-  const date = v.str(body.date, 'date', { max: 10 });
-  if (!isDate(date)) throw badRequest('Give the game\'s date as YYYY-MM-DD.');
+function gameFields(ctx, body = {}, current = null) {
+  const has = (k) => body[k] !== undefined;
+  const date = current && !has('date') ? current.date : v.str(body.date, 'date', { max: 10 });
+  if (!isDate(date)) throw badRequest('Give the date as YYYY-MM-DD.');
   const day = today(ctx);
   if (date < addDaysToDate(day, -365) || date > addDaysToDate(day, 400)) throw badRequest('That date is more than a year away. Check it.');
-  let time = v.str(body.time, 'time', { max: 5, optional: true }) || null;
-  if (time) { const m = time.match(/^(\d{1,2}):(\d{2})$/); if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw badRequest('Give the time as HH:MM (24-hour), or leave it out.'); time = `${m[1].padStart(2, '0')}:${m[2]}`; }
-  const title = v.str(body.title, 'title', { max: MAX_TITLE, optional: true }).replace(/\s+/g, ' ').trim() || null;
-  const kind = body.kind === undefined || body.kind === null || body.kind === '' ? 'game' : v.oneOf(body.kind, 'kind', Object.keys(KINDS));
+  let time = current && !has('time') ? current.time : v.str(body.time, 'time', { max: 5, optional: true }) || null;
+  if (time) { const m = String(time).match(/^(\d{1,2}):(\d{2})$/); if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw badRequest('Give the time as HH:MM (24-hour), or leave it out.'); time = `${m[1].padStart(2, '0')}:${m[2]}`; }
+  const title = current && !has('title') ? current.title : (v.str(body.title, 'title', { max: MAX_TITLE, optional: true }) ?? '').replace(/\s+/g, ' ').trim() || null;
+  const kind = current && !has('kind') ? current.kind : body.kind === undefined || body.kind === null || body.kind === '' ? 'game' : v.oneOf(body.kind, 'kind', Object.keys(KINDS));
   return { date, time, title, kind };
 }
 const countOf = (ctx, clientId) => ctx.db.get('SELECT COUNT(*) AS n FROM games WHERE client_id = ?', clientId).n;
+const sameDay = (ctx, clientId, f, notId = null) => ctx.db.get('SELECT id FROM games WHERE client_id = ? AND date = ? AND lower(COALESCE(title, \'\')) = lower(?) AND id != ?', clientId, f.date, f.title ?? '', notId ?? '');
 export function addGame(ctx, clientId, body = {}, who = {}) {
   const c = clientOf(ctx, clientId);
   if (c.archived_at) throw conflict(`${c.name} is archived.`);
   const f = gameFields(ctx, body);
-  const dup = ctx.db.get('SELECT id FROM games WHERE client_id = ? AND date = ? AND lower(COALESCE(title, \'\')) = lower(?)', clientId, f.date, f.title ?? '');
-  if (dup) throw conflict(`That game is already on ${f.date}.`);
+  if (sameDay(ctx, clientId, f)) throw conflict(`That ${KIND_WORDS[f.kind]} is already on ${f.date}.`);
   if (countOf(ctx, clientId) >= MAX_GAMES) throw badRequest(`Up to ${MAX_GAMES} games can be kept. Remove old ones first.`);
   const id = newId('gm');
   ctx.db.run('INSERT INTO games (id, client_id, date, time, title, kind, source, import_key, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)', id, clientId, f.date, f.time, f.title, f.kind, who.kind ?? 'athlete', who.name ?? null, ctx.now());
   return shape(ctx.db.get('SELECT * FROM games WHERE id = ?', id));
+}
+// A game that moved (the owner's ask: "if it changes they can input the new date and their suggested schedule
+// resets"): the new date, time, title or kind, any of them. Nothing else is stored, so every colour and every set
+// count follows from the next read.
+export function updateGame(ctx, clientId, id, body = {}) {
+  const c = clientOf(ctx, clientId);
+  if (c.archived_at) throw conflict(`${c.name} is archived.`);
+  const g = ctx.db.get('SELECT * FROM games WHERE id = ? AND client_id = ?', id, clientId);
+  if (!g) throw notFound('Game');
+  if (!['date', 'time', 'title', 'kind'].some((k) => body[k] !== undefined)) throw badRequest('Send the new date, time, title or kind.');
+  const f = gameFields(ctx, body, g);
+  if (sameDay(ctx, clientId, f, g.id)) throw conflict(`That ${KIND_WORDS[f.kind]} is already on ${f.date}.`);
+  ctx.db.run('UPDATE games SET date = ?, time = ?, title = ?, kind = ? WHERE id = ?', f.date, f.time, f.title, f.kind, g.id);
+  return { ...shape(ctx.db.get('SELECT * FROM games WHERE id = ?', g.id)), was: { date: g.date, time: g.time, title: g.title, kind: g.kind } };
 }
 export function removeGame(ctx, clientId, id) {
   const g = ctx.db.get('SELECT * FROM games WHERE id = ? AND client_id = ?', id, clientId);
@@ -194,6 +220,9 @@ const guessKind = (title, kindText = '') => {
   const t = `${kindText} ${title}`.toLowerCase();
   if (/practice|training|workout|lift|session|meeting|team dinner|pictures|banquet|fundrais/.test(t)) return 'practice';
   if (/tournament|tourney|showcase|bracket|pool play|invitational/.test(t)) return 'tournament';
+  if (/\brace\b|\b5k\b|\b10k\b|marathon|cross country|\bxc\b|time trial|triathlon|\bcrit\b|\brun\b/.test(t)) return 'race';
+  if (/\bmeet\b|relays|championship|sectional|regional|\bstate\b|district/.test(t)) return 'meet';
+  if (/competition|\bcomp\b|qualifier|\bopen\b|\bfinals?\b|grand prix/.test(t)) return 'competition';
   if (/scrimmage|friendly|exhibition|preseason game/.test(t)) return 'scrimmage';
   return 'game';
 };
@@ -252,59 +281,46 @@ export function importSchedule(ctx, clientId, body = {}, who = {}) {
   return { added, skipped, games: listGames(ctx, clientId) };
 }
 
+
 // ---------- Where a day sits against the games ----------
 // For a date: the days to the next game (before), the days since the last (after), the rule that applies (the stricter
-// of the two when a day is both, like the Thursday between a Tuesday and a Saturday game), and the advice.
+// of the two when a day is both, like the Thursday between a Tuesday and a Saturday game), its colour and what it
+// does to the sets, and the advice. A day further than three from any game is green with no advice.
 export function dayInfo(date, gameDates, rulesByKey) {
   const dates = [...new Set(gameDates)].sort();
   const next = dates.find((g) => g >= date) ?? null, last = [...dates].reverse().find((g) => g <= date) ?? null;
   const daysApart = (a, b) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86400000);
   const before = next ? daysApart(date, next) : null, after = last ? daysApart(last, date) : null;
-  if (before === 0) return { offset: 0, key: '0', before: 0, after: 0, next_game: next, last_game: last, ...pick('0') };
+  const withTone = (r) => ({ ...r, tone: TONES[r.allow], cut: CUTS[r.allow], cut_text: CUT_TEXT[CUTS[r.allow]] ?? null });
+  if (before === 0) return withTone({ offset: 0, key: '0', before: 0, after: 0, next_game: next, last_game: last, ...pick('0') });
   const keys = [];
-  if (before !== null && before <= 3) keys.push(String(-before));
-  if (after !== null && after <= 3) keys.push(String(after));
-  if (!keys.length) return { offset: null, key: null, before, after, next_game: next, last_game: last, allow: 'heavy', label: 'Clear', advice: null };
+  if (before !== null && before <= NEAR_DAYS) keys.push(String(-before));
+  if (after !== null && after <= NEAR_DAYS) keys.push(String(after));
+  if (!keys.length) return withTone({ offset: null, key: null, before, after, next_game: next, last_game: last, allow: 'heavy', label: 'Clear', advice: null });
   const strictest = keys.map((k) => ({ k, r: rulesByKey[k] })).sort((a, b) => LOADS.indexOf(a.r.allow) - LOADS.indexOf(b.r.allow) || Math.abs(Number(a.k)) - Math.abs(Number(b.k)))[0];
   const other = keys.find((k) => k !== strictest.k) ?? null;
   const extra = other ? (Number(other) < 0 ? ` You also play again in ${-Number(other)} ${-Number(other) === 1 ? 'day' : 'days'}.` : ` You also played ${Number(other)} ${Number(other) === 1 ? 'day' : 'days'} ago.`) : '';
-  return { offset: Number(strictest.k), key: strictest.k, before, after, next_game: next, last_game: last, ...pick(strictest.k), advice: strictest.r.advice + extra };
+  return withTone({ offset: Number(strictest.k), key: strictest.k, before, after, next_game: next, last_game: last, ...pick(strictest.k), advice: strictest.r.advice + extra });
   function pick(k) { return { allow: rulesByKey[k].allow, label: rulesByKey[k].label, advice: rulesByKey[k].advice }; }
 }
-
-// ---------- How heavy a workout is ----------
-// Read from its exercises: a lower-body or power lift at 80% of a max or more, a target RPE of 8 or more, or a
-// heavy-sounding load is heavy; a leg lift at 65 to 79%, a lift at RPE 6 to 7.5, or a lot of sets is moderate; the
-// rest (mobility, arm care, activation, a short conditioning piece) is light. The title helps ("Recovery", "Max day").
-const LOWER = /^(lower body|power|speed)$/i;
-const LOWER_MOVES = new Set(['squat', 'hinge', 'lunge', 'jump', 'sprint', 'throw']);
-export function loadOf(workout, movementOf = () => null) {
-  const title = String(workout.title ?? '').toLowerCase();
-  if (/recovery|mobility|activation|primer|prehab|stretch|flush|regen/.test(title)) return { load: 'light', legs: false, why: 'a recovery day by its name' };
-  let score = 0, legs = false, why = null;
-  const exs = workout.exercises ?? [];
-  let sets = 0;
-  for (const x of exs) {
-    const lower = LOWER.test(x.category ?? '') || LOWER_MOVES.has(movementOf(x.exercise_id) ?? x.movement ?? '');
-    const pct = x.load_pct ?? null, rpe = x.target_rpe ?? null;
-    const heavyText = /heavy|max|1rm|3rm|5rm|amrap|failure/i.test(`${x.load_text ?? ''} ${x.reps ?? ''}`);
-    const reps = repCount(x.reps);
-    let s = 0;
-    if ((pct !== null && pct >= 80) || (rpe !== null && rpe >= 8) || heavyText) s = 3;
-    else if ((pct !== null && pct >= 65) || (rpe !== null && rpe >= 6) || (lower && reps !== null && reps <= 6 && (x.sets ?? 1) >= 3)) s = 2;
-    else if (pct !== null || rpe !== null || (x.sets ?? 0) >= 3) s = 1;
-    sets += x.sets ?? 1;
-    if (lower && s >= 2) { legs = true; if (s === 3 && !why) why = `${x.name} at ${pct !== null ? `${pct}% of max` : rpe !== null ? `RPE ${rpe}` : 'a heavy load'}`; }
-    score = Math.max(score, lower ? s : Math.min(s, 2));
-    if (!why && s === 3) why = `${x.name} ${pct !== null ? `at ${pct}% of max` : rpe !== null ? `at RPE ${rpe}` : 'to a heavy load'}`;
-  }
-  if (/heavy|max|test|1rm/.test(title)) { score = 3; legs = legs || /squat|clean|deadlift|leg|lower/.test(title); why ??= 'a heavy day by its name'; }
-  if (score < 3 && sets >= 18) { score = Math.max(score, 2); why ??= `${sets} sets`; }
-  if (score === 2 && !why) why = legs ? 'a leg session at a working load' : 'a working session';
-  return { load: score >= 3 ? 'heavy' : score === 2 ? 'moderate' : 'light', legs, why: why ?? (score === 0 ? 'nothing heavy in it' : 'a light session') };
+// The cut that applies to a workout the athlete does on a date (programs.appExercise reads it): null when the day is
+// green or the athlete has no games near it. One query; nothing stored.
+export function cutFor(ctx, clientId, date) {
+  const games = ctx.db.all('SELECT date, time, title, kind FROM games WHERE client_id = ? AND date >= ? AND date <= ?', clientId, addDaysToDate(date, -NEAR_DAYS), addDaysToDate(date, NEAR_DAYS));
+  if (!games.length) return null;
+  const i = dayInfo(date, games.map((g) => g.date), rules(ctx));
+  const g = games.find((x) => x.date === (i.offset !== null && i.offset <= 0 ? i.next_game : i.last_game)) ?? games[0];
+  return { tone: i.tone, cut: i.cut, cut_text: i.cut_text, label: i.label, offset: i.offset, advice: i.advice, game: { date: g.date, time: g.time, title: g.title, kind: g.kind, kind_word: KIND_WORDS[g.kind] } };
+}
+// The sets an exercise gets on a day of that colour (full = the planned count, with the athlete's steps): yellow one
+// fewer, red half (rounded up), never below one.
+export function cutSets(full, cut) {
+  if (cut === 'half') return Math.max(1, Math.ceil(full / 2));
+  if (cut === 'minus_one') return Math.max(1, full - 1);
+  return full;
 }
 
-// ---------- The plan: every day of the next three weeks, and what to change ----------
+// ---------- The plan: every day of the next three weeks in its colour ----------
 export function planFor(ctx, clientId, { days = HORIZON_DAYS } = {}) {
   const c = clientOf(ctx, clientId);
   const day = today(ctx);
@@ -312,69 +328,39 @@ export function planFor(ctx, clientId, { days = HORIZON_DAYS } = {}) {
   const games = listGames(ctx, clientId, { from: addDaysToDate(day, -4), to: addDaysToDate(day, LIST_DAYS) });
   const gameDates = games.map((g) => g.date);
   const cal = clientCalendar(ctx, clientId);
-  const movement = new Map(ctx.db.all('SELECT id, movement FROM exercises WHERE movement IS NOT NULL').map((e) => [e.id, e.movement]));
-  const program = cal.program ? ctx.db.all(`SELECT we.workout_id, we.sets, we.reps, we.load_pct, we.target_rpe, we.load_text, e.name, e.category, e.id AS exercise_id
-    FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id JOIN workouts w ON w.id = we.workout_id WHERE w.program_id = ? ORDER BY we.position`, cal.program.id) : [];
-  const byWorkout = new Map();
-  for (const x of program) byWorkout.set(x.workout_id, [...(byWorkout.get(x.workout_id) ?? []), x]);
-  const loads = new Map(cal.workouts.map((w) => [w.id, loadOf({ title: w.title, exercises: byWorkout.get(w.id) ?? [] }, (id) => movement.get(id) ?? null)]));
+  const setsOf = new Map(cal.program ? ctx.db.all('SELECT we.workout_id, SUM(COALESCE(we.sets, 1)) AS sets FROM workout_exercises we JOIN workouts w ON w.id = we.workout_id WHERE w.program_id = ? GROUP BY we.workout_id', cal.program.id).map((x) => [x.workout_id, x.sets]) : []);
   const onDate = new Map();
   for (const w of cal.workouts) if (w.status !== 'skipped' && w.status !== 'unpublished') onDate.set(w.date, [...(onDate.get(w.date) ?? []), w]);
   const horizon = Array.from({ length: days + 1 }, (_, i) => addDaysToDate(day, i));
-  const info = (d) => dayInfo(d, gameDates, r);
   const daysOut = horizon.map((d) => {
-    const i = info(d);
-    const ws = (onDate.get(d) ?? []).map((w) => ({ id: w.id, title: w.title, status: w.status, ...loads.get(w.id), fits: LOADS.indexOf(loads.get(w.id).load) <= LOADS.indexOf(i.allow) }));
-    return { date: d, games: games.filter((g) => g.date === d), ...i, workouts: ws, conflict: ws.some((w) => !w.fits && w.status !== 'done') };
+    const i = dayInfo(d, gameDates, r);
+    const ws = (onDate.get(d) ?? []).map((w) => { const sets = setsOf.get(w.id) ?? 0; return { id: w.id, title: w.title, status: w.status, sets, sets_today: cutSets(sets, i.cut) }; });
+    return { date: d, games: games.filter((g) => g.date === d), ...i, workouts: ws };
   });
-  // Suggestions: a workout heavier than its day allows moves to the nearest day that fits (earlier before a game,
-  // later after one) with nothing else planned and no game; with no such day within three, keep it but lighten it.
-  const suggestions = [];
-  for (const d of daysOut) {
-    for (const w of d.workouts) {
-      if (w.fits || w.status === 'done') continue;
-      const order = d.before !== null && d.before <= 3 && (d.after === null || d.after > 3 || d.before <= d.after) ? [-1, -2, -3, 1, 2, 3] : [1, 2, 3, -1, -2, -3];
-      let to = null;
-      for (const o of order) {
-        const cand = addDaysToDate(d.date, o);
-        if (cand < day) continue;
-        const ci = info(cand);
-        if (ci.offset === 0 || LOADS.indexOf(w.load) > LOADS.indexOf(ci.allow)) continue;
-        if ((onDate.get(cand) ?? []).length) continue;
-        to = cand; break;
-      }
-      const what = w.legs ? 'heavy legs' : `a ${w.load} session`;
-      const where = d.offset === 0 ? 'on game day' : d.offset < 0 ? `${-d.offset} ${-d.offset === 1 ? 'day' : 'days'} before your game` : `${d.offset} ${d.offset === 1 ? 'day' : 'days'} after your game`;
-      suggestions.push({ workout_id: w.id, title: w.title, date: d.date, load: w.load, legs: w.legs, why: w.why, day_label: d.label, allow: d.allow,
-        kind: to ? 'move' : 'lighten', to_date: to,
-        text: to ? `${w.title} is ${what} (${w.why}) and it lands ${where}. Move it to ${to}: that day allows it and nothing else is planned.`
-          : `${w.title} is ${what} (${w.why}) and it lands ${where}, with no free day nearby to move it to. Do it, but keep it ${d.allow === 'light' ? 'light: the warm-up, the fast moves, and skip the heavy sets' : 'moderate: the working sets at 60 to 70%, nothing to failure'}.` });
-    }
-  }
   const todayInfo = daysOut[0];
   const nextGame = games.find((g) => g.date >= day) ?? null;
   return { client_id: c.id, today: day, games, next_game: nextGame, upcoming_games: games.filter((g) => g.date >= day).slice(0, 10),
-    now: { offset: todayInfo.offset, label: todayInfo.label, allow: todayInfo.allow, advice: todayInfo.advice, before: todayInfo.before, after: todayInfo.after },
-    days: daysOut, suggestions, has_program: !!cal.program };
+    now: { offset: todayInfo.offset, label: todayInfo.label, allow: todayInfo.allow, tone: todayInfo.tone, cut: todayInfo.cut, cut_text: todayInfo.cut_text, advice: todayInfo.advice, before: todayInfo.before, after: todayInfo.after },
+    days: daysOut, has_program: !!cal.program, colors: TONE_TEXT };
 }
-// The short form on the app's home screen.
+// The short form on the app's home screen: the next game, today's colour, and every coloured day of the next four
+// months (by_date; a day left out is green) for the calendar strip.
 export function homeSummary(ctx, clientId) {
-  const p = planFor(ctx, clientId);
-  const daysTo = p.next_game ? Math.round((Date.parse(`${p.next_game.date}T12:00:00Z`) - Date.parse(`${p.today}T12:00:00Z`)) / 86400000) : null;
-  return { next_game: p.next_game, days_to_next: daysTo, now: p.now, suggestions: p.suggestions.slice(0, 3), games_on_file: p.games.length,
-    game_dates: [...new Set(p.games.map((g) => g.date))],
-    by_date: Object.fromEntries(p.days.map((d) => [d.date, { offset: d.offset, allow: d.allow, label: d.label, advice: d.advice, game: d.games[0] ?? null, conflict: d.conflict }])) };
-}
-// The athlete (or a parent) takes a suggestion: the workout moves to the date the plan suggested, nothing else.
-export function takeSuggestion(ctx, clientId, body = {}, actor = null) {
-  const p = planFor(ctx, clientId);
-  const s = p.suggestions.find((x) => x.workout_id === String(body.workout_id ?? '') && x.kind === 'move' && x.to_date === String(body.date ?? ''));
-  if (!s) throw badRequest('That suggestion isn\'t on your plan any more. Open the calendar and look again.');
-  moveWorkout(ctx, clientId, { workout_id: s.workout_id, date: s.to_date }, actor);
-  return { moved: { workout_id: s.workout_id, title: s.title, from: s.date, to: s.to_date }, plan: homeSummary(ctx, clientId) };
-}
-// Today's heads-up for the coach (every athlete with a conflict in the next week), and the family export.
-export function conflictsFor(ctx, clientIds) {
-  return clientIds.map((id) => { try { return { client_id: id, suggestions: planFor(ctx, id, { days: 7 }).suggestions }; } catch { return { client_id: id, suggestions: [] }; } }).filter((x) => x.suggestions.length);
+  const day = today(ctx);
+  const r = rules(ctx);
+  const games = listGames(ctx, clientId, { from: addDaysToDate(day, -NEAR_DAYS - 7), to: addDaysToDate(day, LIST_DAYS) });
+  const gameDates = [...new Set(games.map((g) => g.date))];
+  const next = games.find((g) => g.date >= day) ?? null;
+  const daysTo = next ? Math.round((Date.parse(`${next.date}T12:00:00Z`) - Date.parse(`${day}T12:00:00Z`)) / 86400000) : null;
+  const now = dayInfo(day, gameDates, r);
+  const byDate = {};
+  for (const g of gameDates) for (let o = -NEAR_DAYS; o <= NEAR_DAYS; o++) {
+    const d = addDaysToDate(g, o);
+    if (d < addDaysToDate(day, -7) || byDate[d]) continue;
+    const i = dayInfo(d, gameDates, r);
+    byDate[d] = { offset: i.offset, allow: i.allow, tone: i.tone, cut: i.cut, cut_text: i.cut_text, label: i.label, advice: i.advice, game: games.find((x) => x.date === d) ?? null };
+  }
+  return { next_game: next, days_to_next: daysTo, now: { offset: now.offset, label: now.label, allow: now.allow, tone: now.tone, cut: now.cut, cut_text: now.cut_text, advice: now.advice },
+    games_on_file: games.length, game_dates: gameDates, by_date: byDate, colors: TONE_TEXT };
 }
 export const gamesOf = (ctx, clientId) => ctx.db.all('SELECT date, time, title, kind, source, created_by, created_at FROM games WHERE client_id = ? ORDER BY date', clientId);

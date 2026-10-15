@@ -233,6 +233,43 @@ export const clean = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().sli
 export async function draftFromFile(ctx, body, user) {
   return draft(ctx, fileBlock(body), user);
 }
+
+// ---------- Background reads ----------
+// A read can take minutes (a long PDF, the model thinking it through). One web request held open that long is fragile:
+// a proxy on the way can drop it and the page then sits on nothing (the owner's report: "it has taken like 5 minutes
+// and it still hasn't uploaded"). So the page starts a job and asks after it every few seconds; the read goes on in the
+// background whatever happens to the connection, and a page opened again picks the job back up. Jobs live in memory
+// for half an hour on this server instance; a restart loses them, and the page says so.
+const jobs = new Map();
+const JOB_KEEP_MS = 30 * 60000;
+export function startJob(ctx, user, kind, run) {
+  const now = Date.now();
+  for (const [id, j] of jobs) if (now - j.started > JOB_KEEP_MS) jobs.delete(id);
+  const job = { id: newId('rd'), user_id: user?.id ?? null, kind, status: 'running', started: now, started_at: ctx.now(), finished_at: null, draft: null, error: null };
+  jobs.set(job.id, job);
+  Promise.resolve().then(run).then((draft) => { job.status = 'done'; job.draft = draft; }, (e) => {
+    job.status = 'failed';
+    job.error = e instanceof HttpError ? { code: e.code, status: e.status, message: e.message, ...(e.details ? { details: e.details } : {}) } : { code: 'error', status: 500, message: 'Something went wrong while reading. Try again.' };
+    if (!(e instanceof HttpError)) console.error('workout import job', e);
+  }).finally(() => { job.finished_at = ctx.now(); job.finished = Date.now(); });
+  return jobView(job);
+}
+// The person who started the read (or the owner) asks after it. A job this server no longer has (a restart, or half an
+// hour gone by) is 404: the page tells the coach to start the read again.
+export function jobStatus(id, user) {
+  const job = jobs.get(String(id ?? ''));
+  if (!job || (job.user_id !== (user?.id ?? null) && user?.role !== 'owner')) throw notFound('That read');
+  return jobView(job);
+}
+const jobView = (j) => ({ id: j.id, kind: j.kind, status: j.status, started_at: j.started_at, finished_at: j.finished_at, seconds: Math.round(((j.finished ?? Date.now()) - j.started) / 1000),
+  ...(j.status === 'done' ? { draft: j.draft } : {}), ...(j.status === 'failed' ? { error: j.error } : {}) });
+// The file or the words are checked before the job starts, so a bad file is refused at once, not from inside a job.
+export function startFileJob(ctx, body, user) { const file = fileBlock(body); return startJob(ctx, user, 'file', () => draft(ctx, file, user)); }
+export function startTextJob(ctx, body, user) {
+  const text = v.str(body?.text, 'text', { max: MAX_TEXT_CHARS }).replace(/\r\n?/g, '\n');
+  if (text.length < 8) throw badRequest('Say or type the workout first, like "Lower body: back squat 4 by 5 at 75 percent, then RDL 3 by 8".');
+  return startJob(ctx, user, 'text', () => draft(ctx, { name: 'your notes', source: 'text', block: { type: 'text', text } }, user));
+}
 // Programs → Dictate a workout: what the coach typed or spoke (speech-to-text on their device) goes to Claude as text.
 export async function draftFromText(ctx, body, user) {
   const text = v.str(body?.text, 'text', { max: MAX_TEXT_CHARS }).replace(/\r\n?/g, '\n');

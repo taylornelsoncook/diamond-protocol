@@ -5,7 +5,7 @@
 // photo, fixes what's off, and saves it as one workout in a program (every block of the board a named block of the
 // workout, with a tick to save any of them to the complex library). Nothing is saved until Save.
 import { h, fill, toast, busy, btn, field, input, select, panel } from './ui.js';
-import { exerciseRow } from './program-import.js';
+import { exerciseRow, waitForRead, pendingRead } from './program-import.js';
 import { GROUP_KINDS } from './set-fields.js';
 
 const MAX_PHOTO_MB = 3.7;
@@ -54,12 +54,20 @@ export async function boardView(main, deps) {
   const draftBox = h('div', { class: 'stack' });
   const readBtn = btn('Read the board', (e) => busy(e.currentTarget, async () => {
     if (!chosen) throw new Error('Take or choose the photo first.');
-    fill(draftBox, h('p', { class: 'small muted', role: 'status' }, 'Reading the board. This takes a minute; keep this page open…'));
+    const status = h('p', { class: 'small muted', role: 'status' }, 'Reading the board…');
+    fill(draftBox, status);
     try {
-      const d = await post('/v1/programs/board/draft', { file: chosen });
-      editor(d);
+      const job = await post('/v1/programs/board/jobs', { file: chosen });
+      editor(await waitForRead(get, job, { status, what: 'Reading the board' }));
     } catch (x) { fill(draftBox, h('div', { class: 'dp-error', role: 'alert' }, x.message)); }
   }), 'primary');
+  const pending = pendingRead('board');   // a read started earlier in this tab: pick it back up
+  if (pending) setTimeout(async () => {
+    const status = h('p', { class: 'small muted', role: 'status' }, 'Picking the read back up…');
+    fill(draftBox, status);
+    try { editor(await waitForRead(get, { id: pending.id, kind: 'board', status: 'running', seconds: Math.round((Date.now() - pending.started) / 1000) }, { status, what: 'Reading the board' })); }
+    catch (x) { fill(draftBox, h('div', { class: 'dp-error', role: 'alert' }, x.message)); }
+  }, 0);
   const lock = (on) => { where.disabled = on; photo.disabled = on; readBtn.disabled = on; };
   fill(box, panel('The whiteboard', { subtitle: 'Stand square to the board with all of it in the frame, in good light. Draw a solid line across the board between blocks and a dashed line between the complexes inside a block; sets and reps to the right of each line.' },
     h('div', { class: 'form-grid' }, field('Photo', photo, `Up to ${MAX_PHOTO_MB} MB. On a phone this opens the camera.`), field('Save it in', where)),

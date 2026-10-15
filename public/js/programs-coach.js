@@ -79,8 +79,8 @@ async function sendLink(c) {
 const pageState = { q: '', level: '', sport: '', setting: '', author: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
 
 export async function viewPrograms(main) {
-  const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules, notes] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
-    get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null), canEdit() ? get('/v1/weekly-notes').catch(() => null) : null]);
+  const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules, notes, gameRules] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
+    get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null), canEdit() ? get('/v1/weekly-notes').catch(() => null) : null, get('/v1/game-rules').catch(() => null)]);
   const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
@@ -132,7 +132,7 @@ export async function viewPrograms(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
-        cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
+        cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, gameRules ? gameRulesPanel(gameRules, isOwner()) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
       panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
         h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
 }
@@ -932,6 +932,22 @@ function weeklyNotesPanel(notes) {
     action: h('div', { class: 'row wrap', style: 'gap:6px' }, drafts.length > 1 ? btn('Send all', (e) => { if (!confirm(`Send ${drafts.length} notes as they read now?`)) return; busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/send-all', { week: drafts[0].week_start }); toast(`Sent ${r.sent}.`); deps.render(); }); }, 'secondary') : null,
       btn('Draft last week', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/generate'); toast(r.written ? `${plural(r.written, 'note')} drafted.` : r.kept ? 'Already drafted.' : 'Nothing to say: a quiet week for everyone.'); deps.render(); }), 'ghost')) },
     drafts.length ? drafts.map(row) : h('p', { class: 'muted small' }, sent.length ? `All sent for ${week}. ${plural(sent.length, 'note')} went out.` : 'No drafts right now. They\'re written on Monday morning, or press Draft last week.'));
+}
+// The game-week rules (gameweek.js, docs/game-week.md): for each day from three before a game to three after, the
+// heaviest workout it allows and the advice athletes read. The owner changes them; coaches read them.
+function gameRulesPanel(r, owner) {
+  const rows = r.rules.map((d) => {
+    const allow = select(r.loads.map((l) => [l, l === 'heavy' ? 'heavy (full training)' : l === 'moderate' ? 'moderate' : 'light']), { value: d.allow, 'aria-label': `Heaviest workout ${d.label.toLowerCase()}`, disabled: owner ? null : '' });
+    const advice = textarea(d.advice, { rows: '3', maxlength: '600', 'aria-label': `Advice ${d.label.toLowerCase()}`, disabled: owner ? null : '' });
+    return { d, allow, advice, el: h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
+      h('div', { style: 'width:140px' }, h('div', { class: 'strong' }, d.label), h('div', { class: 'small muted' }, d.offset === 0 ? 'the game' : d.offset < 0 ? `${-d.offset} ${-d.offset === 1 ? 'day' : 'days'} before` : `${d.offset} ${d.offset === 1 ? 'day' : 'days'} after`)),
+      h('div', { style: 'width:190px' }, allow), h('div', { class: 'grow', style: 'min-width:240px' }, advice)) };
+  });
+  const actions = owner ? h('div', { class: 'row wrap' },
+    btn('Save rules', (e) => busy(e.currentTarget, async () => { await patch('/v1/game-rules', { rules: Object.fromEntries(rows.map((x) => [x.d.key, { allow: x.allow.value, advice: x.advice.value.trim() }])) }); toast('Game-week rules saved. Every athlete\'s plan reads them from now on.'); }), 'primary'),
+    r.customized ? btn('Back to the starting values', (e) => { if (!confirm('Put every day back to the research brief\'s rules and words?')) return; busy(e.currentTarget, async () => { await patch('/v1/game-rules', { reset: true }); toast('Reset.'); deps.render(); }); }, 'ghost') : null) : null;
+  return panel('Game week', { subtitle: 'Athletes and families keep their games in the app; each day around a game then allows a light, moderate or heavy workout and shows these words, and a workout that lands on the wrong day gets a suggestion to move. The starting values come from the research in docs/game-week.md: the hardest session three days out, soreness and lost force for 48 to 72 hours after a game, nothing new or heavy the day before.' },
+    h('div', { class: 'stack-tight' }, rows.map((x) => x.el)), actions);
 }
 // Start-up rules (schema 67, services/startup.js): which program an athlete's answers to the start-up questions put them
 // on. The highest priority matching rule wins; the owner picks whether it happens at once, waits for a coach, or is off.

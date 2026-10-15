@@ -1,6 +1,7 @@
 import { h, fill, toast, copyText, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, viewProgramBoard, workoutRow } from './programs-coach.js';
+import { gamesBlock } from './games-ui.js';
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
@@ -1208,7 +1209,7 @@ async function viewClient(main, id) {
     ['family', 'Family', [familyPanel ?? noFamilyPanel, requestsPanel, mergePanel]],
     ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
     ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
-    ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), volumePanel, eng.accountability, eng.goals, eng.badges]],
+    ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), gamesPanel(id, first, role !== 'front_desk'), volumePanel, eng.accountability, eng.goals, eng.badges]],
     ['testing', 'Testing', [maxesPanel, barSpeedPanel, perfPanel, eng.targets]],
     ['recovery', 'Recovery & sleep', [outsidePanel]],
     ['form-checks', 'Form checks', [formChecksPanel]],
@@ -1301,6 +1302,14 @@ function startupBlock(clientId, first, c, role) {
 // The adaptive plan (services/adapt.js): what the athlete's calendar calls for (a missed week coming round again, a minimum
 // week after misses in a row, the next phase early after two clean weeks), approve or dismiss, undo what was applied.
 const ADJ_KIND = { shift: 'Missed week', minimum: 'Minimum week', advance: 'Next phase early' };
+// The game-week helper (gameweek.js): the athlete's games, the advice for each day around them, and the workouts that
+// land on the wrong day with Move it (the same move as the training calendar's).
+function gamesPanel(clientId, first, canEdit) {
+  const block = gamesBlock({ first, who: 'coach', canEdit, onMoved: render,
+    api: { plan: () => get(`/v1/clients/${clientId}/game-plan`), add: (b) => post(`/v1/clients/${clientId}/games`, b), remove: (gid) => del(`/v1/clients/${clientId}/games/${gid}`),
+      preview: (b) => post(`/v1/clients/${clientId}/games/preview`, b), import: (b) => post(`/v1/clients/${clientId}/games/import`, b), move: (b) => post(`/v1/clients/${clientId}/training-calendar/moves`, b) } });
+  return panel('Games and game week', { subtitle: `${first}'s games (added here, in the app or by the family), what each day around a game allows, and the workouts that land on the wrong day. The rules are on the Programs page.` }, block.el);
+}
 function adaptBlock(clientId, first) {
   const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
   const draw = async () => {

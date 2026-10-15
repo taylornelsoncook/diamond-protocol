@@ -1,4 +1,5 @@
 import { newId, v, notFound, conflict, badRequest, HttpError } from '../util.js';
+import { gamesOf } from './gameweek.js';
 import { getSetting, getFamily } from './families.js';
 import { emit } from './events.js';
 import { sendEmail } from './mail.js';
@@ -101,6 +102,7 @@ export function exportFamily(ctx, familyId) {
       progression_steps: progressionsOf(ctx, k.id),
       exercise_swaps: swapsOf(ctx, k.id),
       bar_speed: barSpeedOf(ctx, k.id),   // sets from velocity-based training devices (version 81)
+      games: gamesOf(ctx, k.id),   // the athlete's games for the game-week helper (version 82)
       monthly_reports: monthlyOf(ctx, k.id),
       training_profile: trainingProfileOf(ctx, k.id),   // the start-up answers and the gear at home (version 67)
       plan_adjustments: adjustmentsOf(ctx, k.id),   // the adaptive plan's changes to their calendar (version 69)

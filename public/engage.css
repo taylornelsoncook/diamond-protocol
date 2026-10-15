@@ -217,3 +217,13 @@
 .fd-comment{display:flex;gap:8px;align-items:flex-start;padding:6px 10px;border-left:2px solid var(--line);}
 .fd-comment--hidden{opacity:.6;border-left-color:var(--amber)}
 .fd-thread textarea{min-height:40px;resize:vertical}
+
+/* The game-week helper (games-ui.js): the next week day by day. */
+.gw-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.gw-day{display:flex;flex-direction:column;gap:2px;padding:6px 4px;border:1px solid var(--line);border-radius:8px;min-height:64px;font-size:12px;overflow:hidden}
+.gw-day--game{border-color:var(--green-bright);box-shadow:inset 0 -3px 0 var(--green-bright)}
+.gw-day--conflict{border-color:var(--amber)}
+.gw-day-name{font-weight:600}
+.gw-day-what{color:var(--fg-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gw-day-wo{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:600px){.gw-week{grid-template-columns:repeat(4,minmax(0,1fr))}}

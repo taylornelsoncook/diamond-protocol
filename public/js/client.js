@@ -7,6 +7,7 @@ import { startupForm, summaryText } from './startup-ui.js';
 import { timelineBlock } from './timeline-ui.js';
 import { feedBlock } from './feed-ui.js';
 import { maxesBlock } from './maxes-ui.js';
+import { gamesBlock } from './games-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
 // An athlete who signed in at /portal with their own email has no token: the portal cookie opens the app, and
@@ -485,6 +486,7 @@ function calendarStrip(home) {
   if (!cal?.workouts?.length) return null;
   const byDate = new Map();
   for (const w of cal.workouts) byDate.set(w.date, [...(byDate.get(w.date) ?? []), w]);
+  const gameDates = new Set(home.games?.game_dates ?? []), gameDay = (d) => home.games?.by_date?.[d] ?? null;   // the game-week helper (gameweek.js)
   state.calWeek ??= mondayOf(cal.today);
   const box = h('section', { class: 'dp-panel stack-tight c-cal', 'aria-label': 'Your training calendar' });
   let showPlan = false;
@@ -493,11 +495,12 @@ function calendarStrip(home) {
     const cells = days.map((d) => {
       const ws = byDate.get(d) ?? [];
       const st = !ws.length ? 'rest' : ws.every((w) => w.status === 'done') ? 'done' : ws.some((w) => w.status === 'missed') ? 'missed' : d === cal.today ? 'today' : 'planned';
-      return h('button', { type: 'button', class: `c-day c-day--${st}${d === cal.today ? ' c-day--now' : ''}`, 'aria-pressed': String(state.calDay === d),
-        'aria-label': `${dayName(d, { weekday: 'long', month: 'long', day: 'numeric' })}${d === cal.today ? ', today' : ''}: ${ws.length ? ws.map((w) => `${w.title} (${STATUS_WORD[w.status].toLowerCase()})`).join(', ') : 'rest day'}`,
+      const game = gameDates.has(d), gd = gameDay(d);
+      return h('button', { type: 'button', class: `c-day c-day--${st}${d === cal.today ? ' c-day--now' : ''}${game ? ' c-day--game' : ''}${gd?.conflict ? ' c-day--conflict' : ''}`, 'aria-pressed': String(state.calDay === d),
+        'aria-label': `${dayName(d, { weekday: 'long', month: 'long', day: 'numeric' })}${d === cal.today ? ', today' : ''}${game ? ', game day' : ''}: ${ws.length ? ws.map((w) => `${w.title} (${STATUS_WORD[w.status].toLowerCase()})`).join(', ') : 'rest day'}`,
         onClick: () => { state.calDay = state.calDay === d ? null : d; draw(); } },
         h('span', { class: 'c-day-wd' }, dayName(d, { weekday: 'short' })), h('span', { class: 'c-day-n' }, String(Number(d.slice(8)))),
-        h('span', { class: 'c-day-dot', 'aria-hidden': 'true' }, st === 'done' ? '✓' : st === 'missed' ? '!' : ws.length ? '•' : ''));
+        h('span', { class: 'c-day-dot', 'aria-hidden': 'true' }, game ? 'G' : st === 'done' ? '✓' : st === 'missed' ? '!' : ws.length ? '•' : ''));
     });
     const picked = state.calDay ? byDate.get(state.calDay) ?? [] : null;
     const line = (w) => h('div', { class: 'c-plan-row' },
@@ -513,6 +516,8 @@ function calendarStrip(home) {
         btn('›', () => { state.calWeek = addDays(state.calWeek, 7); state.calDay = null; draw(); }, 'ghost', { 'aria-label': 'Next week' })),
       h('div', { class: 'c-week', role: 'group', 'aria-label': `Training days, ${label}` }, cells),
       picked ? h('div', { class: 'c-day-info stack-tight' }, h('span', { class: 'small strong' }, dayName(state.calDay, { weekday: 'long', month: 'long', day: 'numeric' })),
+        gameDay(state.calDay)?.game ? h('span', { class: 'small strong' }, `Game${gameDay(state.calDay).game.title ? `: ${gameDay(state.calDay).game.title}` : ''}${gameDay(state.calDay).game.time ? ` at ${gameDay(state.calDay).game.time}` : ''}`) : gameDates.has(state.calDay) ? h('span', { class: 'small strong' }, 'Game day') : null,
+        gameDay(state.calDay)?.advice ? h('span', { class: `small${gameDay(state.calDay).conflict ? ' warn-text' : ' muted'}` }, `${gameDay(state.calDay).label}: ${gameDay(state.calDay).advice}`) : null,
         picked.length ? picked.map(line) : h('span', { class: 'small muted' }, 'Rest day. Nothing planned.')) : null,
       h('div', { class: 'row wrap small muted', style: 'align-items:center' }, h('span', { class: 'grow' }, `${cal.counts.done} done · ${cal.counts.missed} missed · ${cal.counts.upcoming} to go · ${cal.days_text}`),
         home.week ? h('span', { class: home.week.streak ? 'good-text strong' : 'muted' }, home.week.streak ? `${home.week.streak} clean ${home.week.streak === 1 ? 'week' : 'weeks'} in a row` : home.week.planned ? `${home.week.done} of ${home.week.planned} this week · ${home.week.sets} sets` : '') : null,
@@ -523,6 +528,28 @@ function calendarStrip(home) {
   };
   draw();
   return box;
+}
+// The game-week helper (gameweek.js): the next game, where today sits against it with the advice, and suggestions to
+// move a workout that lands on the wrong day (one tap: the same move a coach would make).
+function gameCard(home) {
+  const g = home.games;
+  if (!g) return null;
+  const toGames = () => document.getElementById('c-games')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (!g.games_on_file) return h('div', { class: 'c-note row', style: 'align-items:center;gap:8px' }, h('span', { class: 'grow small' }, 'Add your game schedule and the app tells you what to do the day before, on game day and the days after.'), btn('Add games', toGames, 'ghost'));
+  const next = g.next_game;
+  const head = next ? `${g.days_to_next === 0 ? 'Game day' : g.days_to_next === 1 ? 'Game tomorrow' : `Game in ${g.days_to_next} days`}${next.title ? ` · ${next.title}` : ''}${next.time ? ` · ${next.time}` : ''}` : 'No game coming up';
+  return h('section', { class: 'dp-panel stack-tight c-game' },
+    h('div', { class: 'row', style: 'align-items:center;gap:8px' }, h('span', { class: 'grow strong' }, head), btn('Games', toGames, 'ghost')),
+    g.now.advice ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'strong' }, `${g.now.label}: `), g.now.advice) : null,
+    g.suggestions.map((s) => h('div', { class: 'c-note stack-tight' }, h('span', { class: 'small' }, s.text),
+      s.kind === 'move' ? h('div', null, btn(`Move it to ${dayName(s.to_date)}`, (e) => busy(e.currentTarget, async () => { await api('POST', '/app/api/games/moves', { workout_id: s.workout_id, date: s.to_date }); toast(`${s.title} moved to ${dayName(s.to_date)}.`); await refresh(); render(); }), 'primary')) : null)));
+}
+function gamesSection() {
+  const block = gamesBlock({ first: state.home?.client?.first_name ?? 'you', who: 'athlete', canEdit: true, onMoved: async () => { await refresh(); render(); },
+    api: { plan: () => api('GET', '/app/api/games'), add: (b) => api('POST', '/app/api/games', b), remove: (id) => api('DELETE', `/app/api/games/${id}`),
+      preview: (b) => api('POST', '/app/api/games/preview', b), import: (b) => api('POST', '/app/api/games/import', b), move: (b) => api('POST', '/app/api/games/moves', b) } });
+  return h('section', { class: 'dp-panel stack', id: 'c-games' }, h('h2', { class: 'dp-panel-title' }, 'Games and game week'),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'Keep your games here and the calendar says what to do around them: the hard session three days out, lighter the day before, recovery the day after. A workout that lands on the wrong day gets a suggestion to move it.'), block.el);
 }
 // Open a workout from the calendar. Sets already logged in another workout stay where they are: finish or discard them first.
 async function openPick(id) {
@@ -810,6 +837,7 @@ function renderLogger(w) {
   const blocked = reopened ? null : strayPanel();
   fill(view, top(),
     reopened ? null : calendarStrip(home),
+    reopened ? null : gameCard(home),
     h('div', { class: 'stack-tight' },
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title),
@@ -840,6 +868,7 @@ function renderLogger(w) {
     reopened ? null : installCard(home),
     reopened ? null : feedCard(),
     reopened ? null : comingUp(home.upcoming),
+    reopened ? null : gamesSection(),
     reopened ? null : formChecksSection(),
     reopened ? null : historyPanel(home),
     restBar);

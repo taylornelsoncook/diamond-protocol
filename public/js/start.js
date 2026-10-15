@@ -46,7 +46,7 @@ function renderForm() {
         h('div', { class: 'form-grid' }, field('Age', age), field('Sport', sport)),
         field('Anything we should know? (optional)', message)),
       err, submit,
-      h('p', { class: 'small muted', style: 'text-align:center' }, 'Ready to sign up now? ', h('a', { href: '/join' }, 'Create a family account'), '. Already a member? ', h('a', { href: '/parent' }, 'Sign in')))));
+      h('p', { class: 'small muted', style: 'text-align:center' }, 'Ready to sign up now? ', h('a', { href: '/join' }, 'Create a family account'), '. Already a member? ', h('a', { href: '/client' }, 'Sign in')))));
 }
 
 function renderThanks(email) {

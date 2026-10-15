@@ -173,7 +173,7 @@ test('email the report to the family, with or without a 90-day link', async () =
   let mail = outbox().at(-1);
   assert.match(mail.body, /Great summer\./);
   assert.match(mail.body, /Biggest improvements:\n {2}40-yard dash: 6\.30 s to 6\.12 s \(\+2\.9%\)/);
-  assert.match(mail.body, /https:\/\/app\.example\.test\/parent/);
+  assert.match(mail.body, /https:\/\/app\.example\.test\/client/);
   assert.equal(mail.body.includes('5.94'), false, 'nothing from the unshared day');
   const withLink = (await call('POST', `/v1/clients/${ava.id}/report/email`, { include_link: true }, coach)).body;
   assert.equal(withLink.emailed, 1);

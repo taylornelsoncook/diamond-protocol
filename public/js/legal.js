@@ -14,7 +14,7 @@ async function load() {
     h('article', { class: 'dp-panel stack' },
       doc.published ? h('p', { class: 'small muted' }, `Version ${doc.version}${doc.updated ? `, updated ${new Date(`${doc.updated}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}` : ''}`) : h('p', { class: 'warn-text' }, `The ${TITLE[kind].toLowerCase()} hasn't been published yet.`),
       ...String(doc.published ? doc.text : '').split(/\n{2,}/).map((para) => h('p', { style: 'white-space:pre-wrap;margin:0' }, para))),
-    h('p', { class: 'small' }, h('a', { href: kind === 'terms' ? '/privacy' : '/terms' }, kind === 'terms' ? 'Privacy policy' : 'Terms of service'), ' · ', h('a', { href: '/parent' }, 'Parent sign-in')),
+    h('p', { class: 'small' }, h('a', { href: kind === 'terms' ? '/privacy' : '/terms' }, kind === 'terms' ? 'Privacy policy' : 'Terms of service'), ' · ', h('a', { href: '/client' }, 'Parent sign-in')),
     d.business_address ? h('p', { class: 'small muted', style: 'white-space:pre-line' }, `${d.business_name}\n${d.business_address}`) : null));
 }
 load();

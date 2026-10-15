@@ -48,11 +48,15 @@ before(async () => {
 });
 after(() => app.server.close());
 
-test('the portal page opens at /portal and /parent', async () => {
-  for (const p of ['/portal', '/parent', '/portal/']) {
+test('the one account opens at /client; the older /portal and /parent addresses land there with their query', async () => {
+  for (const p of ['/client', '/client/']) {
     const res = await fetch(base + p);
     assert.equal(res.status, 200, p);
     assert.match(res.headers.get('content-type'), /text\/html/);
+  }
+  for (const [p, to] of [['/portal', '/client'], ['/parent', '/client'], ['/portal?tab=progress', '/client?tab=progress'], ['/parent/?finish=1', '/client?finish=1']]) {
+    const res = await fetch(base + p, { redirect: 'manual' });
+    assert.deepEqual([res.status, res.headers.get('location')], [301, to], p);
   }
   assert.equal((await fetch(base + '/portal/api/session')).status, 401);
 });
@@ -73,7 +77,7 @@ test('an athlete with their own email signs in with a code and lands in the app;
   assert.equal(home.status, 200);
   assert.equal(home.body.client.id, sam.id);
   assert.equal((await req('GET', '/app/api/home')).status, 401, 'no cookie, no link: nothing');
-  assert.equal((await req('GET', '/app/api/home')).body.error.message.includes('/portal'), true);
+  assert.equal((await req('GET', '/app/api/home')).body.error.message.includes('/client'), true);
   // A write from another site with the cookie is refused; from this site it goes through.
   const foreign = await me('POST', '/app/api/messages', { body: 'hi coach' }, { origin: 'https://evil.example' });
   assert.equal(foreign.status, 403);
@@ -172,7 +176,9 @@ test('one email that is both a parent and an athlete gets both: the family porta
 test('the app\'s Profile tab sets, changes and removes the password for the athlete\'s own email; a parent in the family frame and a profile without an email are refused', async () => {
   const { cookie } = await signIn('sam@example.com');
   const me = as(cookie);
-  assert.deepEqual((await me('GET', '/app/api/password')).body, { email: 'sam@example.com', has_password: false, parent: false });
+  assert.deepEqual((await me('GET', '/app/api/password')).body, { email: 'sam@example.com', has_password: false, who: 'athlete' });
+  const dev = (await me('GET', '/app/api/devices')).body;
+  assert.ok(dev.data.length >= 1 && dev.data.some((d) => d.current), 'the Signed in panel lists this sign-in');
   assert.equal((await me('POST', '/app/api/password', { password: 'short' }, { origin: base })).status, 400);
   const set = await me('POST', '/app/api/password', { password: 'river stones at dusk' }, { origin: base });
   assert.equal(set.status, 200, JSON.stringify(set.body)); assert.equal(set.body.has_password, true);
@@ -181,15 +187,18 @@ test('the app\'s Profile tab sets, changes and removes the password for the athl
   assert.equal((await req('POST', '/portal/api/login/password', { email: 'sam@example.com', password: 'river stones at dusk' })).status, 200, 'and it signs in');
   assert.equal((await me('DELETE', '/app/api/password', null, { origin: base })).status, 200);
   assert.equal((await me('GET', '/app/api/password')).body.has_password, false);
-  // A parent opening Ava's app through the family's Workout tab: the portal's own panel is theirs.
+  // A parent opening Ava's app through the family's Workout tab sets their own password there (the one account).
   const mom = as((await signIn('maria@example.com')).cookie);
   const viaFrame = await mom('GET', '/app/api/password', null, { 'x-athlete-id': ava.id });
-  assert.deepEqual([viaFrame.status, viaFrame.body.parent], [200, true]);
-  assert.equal((await mom('POST', '/app/api/password', { password: 'river stones at dusk' }, { origin: base, 'x-athlete-id': ava.id })).status, 403);
+  assert.deepEqual([viaFrame.status, viaFrame.body.email, viaFrame.body.who], [200, 'maria@example.com', 'parent']);
+  assert.equal((await mom('POST', '/app/api/password', { password: 'river stones at dusk' }, { origin: base, 'x-athlete-id': ava.id })).status, 200);
+  assert.equal((await req('POST', '/portal/api/login/password', { email: 'maria@example.com', password: 'river stones at dusk' })).status, 200, 'it is the parent\'s password');
+  assert.ok((await mom('GET', '/app/api/devices', null, { 'x-athlete-id': ava.id })).body.data.some((d) => d.current), 'and the parent\'s devices');
   // Ava's own private link: no email of her own, nothing to set a password for.
   const token = (await owner('GET', `/v1/clients/${ava.id}`)).body.app_link.split('token=')[1];
   const avaApp = (m, p, b) => req(m, p, b, { 'x-client-token': token });
-  assert.deepEqual((await avaApp('GET', '/app/api/password')).body, { email: null, has_password: false, parent: false });
+  assert.deepEqual((await avaApp('GET', '/app/api/password')).body, { email: null, has_password: false, who: null });
+  assert.deepEqual((await avaApp('GET', '/app/api/devices')).body, { data: [], link: true });
   const none = await avaApp('POST', '/app/api/password', { password: 'river stones at dusk' });
   assert.equal(none.status, 400); assert.match(none.body.error.message, /no email of its own/);
 });

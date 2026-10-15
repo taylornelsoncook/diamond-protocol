@@ -51,7 +51,7 @@ test('sharing shows the results, emails the family, and the report tells the sto
   assert.equal(s.families_notified, 1);
   assert.ok(s.shared_at);
   const mail = (await call('GET', '/v1/outbox', null, coach)).body.data.find((m) => m.to_email === 'maria@example.com' && m.subject.includes('results from Fall combine'));
-  assert.ok(mail.body.includes('Keep sprinting twice a week') && mail.body.includes('/parent'));
+  assert.ok(mail.body.includes('Keep sprinting twice a week') && mail.body.includes('/client'));
   const r = (await call('GET', `/portal/api/athletes/${ava.id}/report`, null, parent)).body;
   assert.equal(r.athlete.athlete_id, ava.athlete_id);
   const forty = r.tests.find((t) => t.test === 'dash_40yd');

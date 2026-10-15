@@ -27,11 +27,11 @@ function render(o, note) {
     h('p', { style: 'margin:0' }, `${fmt(s.starts_at, { weekday: 'long', month: 'long', day: 'numeric' })}, ${fmt(s.starts_at, { hour: 'numeric', minute: '2-digit' })}–${fmt(s.ends_at, { hour: 'numeric', minute: '2-digit' })} · ${s.location_name}`)];
   const booked = o.athletes.filter((a) => a.status === 'booked');
   if (note || booked.length) return shell(...head, h('div', { class: 'dp-panel', style: 'background:var(--green-deep);border-color:var(--green)' }, h('p', { class: 'strong', style: 'margin:0' }, note ?? `${booked.map((a) => a.first_name).join(' and ')} ${booked.length > 1 ? 'are' : 'is'} booked. See you there!`)),
-    h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/parent' }, 'Open the parent portal'));
+    h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/client' }, 'Open the parent portal'));
   if (t?.used) return shell(...head, h('p', { class: 'muted', style: 'margin:0' }, 'This trial offer has already been used.'), h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/book' }, 'See what else is open'));
   const closed = { full: 'Sorry, that spot was just taken. We\'ll let you know next time one opens.', started: 'This session has already started.', canceled: 'This session was canceled.' }[o.status];
   if (closed) return shell(...head, h('p', { class: 'muted', style: 'margin:0' }, closed), h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/book' }, 'See what else is open'));
-  if (!o.waiver_signed) return shell(...head, h('p', { style: 'margin:0' }, 'Sign the waiver in the parent portal first (Family tab), then come back to this link.'), h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/parent' }, 'Open the parent portal'));
+  if (!o.waiver_signed) return shell(...head, h('p', { style: 'margin:0' }, 'Sign the waiver in the parent portal first (Family tab), then come back to this link.'), h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/client' }, 'Open the parent portal'));
 
   const take = (a, pay) => async () => {
     try {
@@ -50,7 +50,7 @@ function render(o, note) {
     h('p', { class: `strong ${s.spots_left <= 1 ? 'warn-text' : ''}`, style: 'margin:0' }, s.spots_left === 1 ? 'One spot left. First to book gets it.' : `${s.spots_left} spots left.`),
     ...o.athletes.map((a) => a.status === 'waitlisted' ? h('p', { class: 'muted', style: 'margin:0' }, `${a.first_name} is on the waitlist.`)
       : btn(t ? `Book ${a.first_name} ${free ? 'free' : `for ${money(t.price_cents)}`}` : `Book ${a.first_name}`, (e) => busy(e.currentTarget, take(a)), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block' })),
-    t && !free && !o.card_last4 ? h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/parent' }, 'Add a card in the parent portal') : null,
+    t && !free && !o.card_last4 ? h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/client' }, 'Add a card in the parent portal') : null,
     h('p', { class: 'small muted', style: 'margin:0' }, t ? (free ? 'Nothing to pay. The offer ends when the session starts. Cancel from the parent portal if plans change.'
       : `${money(t.price_cents)} instead of ${s.drop_in_cents != null ? `the ${money(s.drop_in_cents)} drop-in` : 'the usual price'}, charged to ${o.card_last4 ? `the card ending ${o.card_last4}` : 'your card on file'} when you book (a membership that covers this class covers it instead). The offer ends when the session starts.`)
       : `Covered by a membership or session pack when ${o.athletes.length > 1 ? 'they have' : 'there\'s'} one${s.drop_in_cents ? `; otherwise ${money(s.drop_in_cents)} drop-in` : ''}. Cancel from the parent portal if plans change.`));

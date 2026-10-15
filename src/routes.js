@@ -73,13 +73,18 @@ import * as profiles from './services/profiles.js';
 import { portalRoutes } from './portal-routes.js';
 import { portalInvite, finishProfile } from './services/notify.js';
 import { HttpError, v, badRequest, notFound, zonedToUtc, localDate, startOfLocalDay } from './util.js';
-// The athlete behind an app request, as the portal's password routes see them: their own email's rows. A parent
-// acting through the family frame is refused (403), a profile with no email of its own can't have a password (400).
-function ownSignIn(ctx, r) {
-  if (r.actingParent) throw new HttpError(403, 'parents_in_portal', 'Set your own password in the portal: Family tab → Your sign-in.');
+// The person behind an app request, as the portal's sign-in routes see them: the portal cookie's parent and/or athlete
+// (a parent inside the family's Workout tab is themselves), or, from a private link, the athlete's own email's rows.
+// Null when the profile has no email of its own: there is nothing to sign in with, so no password and no devices.
+function signedInAs(ctx, r) {
+  if (r.who) return r.who;
   const c = ctx.db.get('SELECT email FROM clients WHERE id = ?', r.client.id);
-  if (!c?.email) throw new HttpError(400, 'no_email', 'Your profile has no email of its own yet, so there\'s nothing to set a password for. Ask your coach to add your email, then come back here.');
-  return families.whoSignsIn(ctx, c.email);
+  return c?.email ? families.whoSignsIn(ctx, c.email) : null;
+}
+function ownSignIn(ctx, r) {
+  const who = signedInAs(ctx, r);
+  if (!who) throw new HttpError(400, 'no_email', 'Your profile has no email of its own yet, so there\'s nothing to set a password for. Ask your coach to add your email, then come back here.');
+  return who;
 }
 
 // Coaches work only with the sales they rang up; anyone else's reads as not found.
@@ -890,9 +895,11 @@ export const routes = [
   // Your sign-in (owner's ask: change the password from the app's Profile tab too). The password belongs to the athlete's
   // own email (and to the parent row sharing that address, as in the portal); a parent opening the app through the
   // family's Workout tab is sent to the portal's Family tab instead.
-  ['GET', '/app/api/password', 'client', 'Client app', 'Your sign-in: the email on your profile and whether a password is set.', (ctx, r) => { const c = ctx.db.get('SELECT email, password_hash FROM clients WHERE id = ?', r.client.id); return { email: c?.email || null, has_password: !!c?.password_hash, parent: !!r.actingParent }; }],
+  ['GET', '/app/api/password', 'client', 'Client app', 'Your sign-in: the email on your profile and whether a password is set.', (ctx, r) => { const who = signedInAs(ctx, r), person = who?.guardian ?? who?.client; return { email: person?.email || null, has_password: !!(who?.guardian?.password_hash || who?.client?.password_hash), who: !who ? null : who.guardian && who.client ? 'both' : who.guardian ? 'parent' : 'athlete' }; }],
   ['POST', '/app/api/password', 'client', 'Client app', 'Set or change the password for signing in with your own email: password (10+ characters). Emailed codes keep working.', (ctx, r) => families.setPassword(ctx, ownSignIn(ctx, r), r.body)],
   ['DELETE', '/app/api/password', 'client', 'Client app', 'Remove your password; sign in with emailed codes only.', (ctx, r) => families.removePassword(ctx, ownSignIn(ctx, r))],
+  ['GET', '/app/api/devices', 'client', 'Client app', 'Phones and computers signed in with your email (link: true from a private link, where nothing is signed in).', (ctx, r) => { const who = signedInAs(ctx, r); return who ? { data: portal.listDevices(ctx, who, r.familyToken ?? null) } : { data: [], link: true }; }],
+  ['POST', '/app/api/devices/sign-out-others', 'client', 'Client app', 'Sign out every other device signed in with your email.', (ctx, r) => { const who = signedInAs(ctx, r); if (!who) throw new HttpError(400, 'no_email', 'Nothing is signed in from a private link.'); return portal.signOutOthers(ctx, who, r.familyToken ?? null); }],
   ['GET', '/app/api/maxes', 'client', 'Client app', 'Your maxes for the lifts your program loads from: the max on file, the estimate from your sets, the history and trend, and strength by exercise.', (ctx, r) => maxes.maxesFor(ctx, r.client.id, { parentView: true })],
   ['POST', '/app/api/maxes', 'client', 'Client app', 'Enter or update a max: test, value (lb, or unit kg), optional date and note. Your program\'s weights use it from now on.', (ctx, r) => maxes.saveMax(ctx, r.client.id, r.body, r.actingParent ? { by: 'parent', name: r.actingParent.name } : { by: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/vbt', 'client', 'Client app', 'Your bar speed by exercise: the load-velocity profile and estimated max, the fastest rep at each load, the trend at your usual load, and your recent sessions set by set.', (ctx, r) => vbt.profileFor(ctx, r.client.id)],

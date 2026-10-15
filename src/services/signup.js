@@ -46,7 +46,7 @@ export async function startSignup(ctx, body, ip) {
   if (new Set(names).size < names.length) throw badRequest('Two athletes have the same name. Use a middle initial or nickname to tell them apart.');
   const biz = getSetting(ctx, 'business_name');
   if (ctx.db.get('SELECT id FROM guardians WHERE email = ?', parent.email)) {
-    await sendEmail(ctx, { to: parent.email, subject: `You already have a ${biz} account`, text: `Someone (probably you) tried to sign up with this email, but you already have an account.\n\nSign in instead: ${ctx.publicUrl ?? ''}/parent\n\nIf this wasn't you, you can ignore this email.` });
+    await sendEmail(ctx, { to: parent.email, subject: `You already have a ${biz} account`, text: `Someone (probably you) tried to sign up with this email, but you already have an account.\n\nSign in instead: ${ctx.publicUrl ?? ''}/client\n\nIf this wasn't you, you can ignore this email.` });
     return out;
   }
   const recent = ctx.db.get('SELECT COUNT(*) AS n FROM signup_requests WHERE email = ? AND created_at > ?', parent.email, new Date(Date.now() - 3600000).toISOString()).n;

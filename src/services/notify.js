@@ -28,7 +28,7 @@ export async function welcomeFamily(ctx, familyId, { selfSignup = false } = {}) 
   for (const g of familyEmails(ctx, familyId)) {
     await send(ctx, g.email, `Welcome to ${biz(ctx)}`,
       `Hi ${first(g.name)},\n\n${selfSignup ? 'Your family account is ready.' : `${biz(ctx)} set up your family account.`}${kids.length ? ` Athletes: ${kids.map((k) => `${k.name} (${k.athlete_id})`).join(', ')}.` : ''}\n\n` +
-      `Sign in at ${base(ctx)}/portal with this email address. We'll email you a code, and once you're in you can set a password if you'd rather.\n\n` +
+      `Sign in at ${base(ctx)}/client with this email address. We'll email you a code, and once you're in you can set a password if you'd rather.\n\n` +
       `Before the first session:\n1. Sign the waiver (Family tab)\n2. Add a card for memberships, packs and camps (Family tab)\n3. Book a class, private session or evaluation (Book tab)\n\nSee you soon,\n${biz(ctx)}`);
   }
 }
@@ -41,7 +41,7 @@ export async function finishProfile(ctx, clientId, { dayName = null } = {}) {
     const self = g.relationship === 'self' || g.name === c.name;
     await sendEmail(ctx, { to: g.email, subject: `Finish ${self ? 'your' : `${first(c.name)}'s`} profile at ${biz(ctx)}`,
       text: `Hi ${first(g.name)},\n\n${biz(ctx)} added ${self ? 'you' : c.name} to ${dayName ? `the testing day "${dayName}"` : 'a testing day'} and set up ${self ? 'your' : 'your family'} account (Athlete ID ${c.athlete_id}).\n\n` +
-        `Sign in at ${base(ctx)}/portal?finish=1 with this email address. We'll email you a code, and once you're in you can set a password if you'd rather.\n\n` +
+        `Sign in at ${base(ctx)}/client?finish=1 with this email address. We'll email you a code, and once you're in you can set a password if you'd rather.\n\n` +
         `One thing we need before ${self ? 'you train' : `${first(c.name)} trains`}: sign the waiver (Family tab). Everything else (birthday, sport, an emergency contact, a card) can wait until you're ready.\n\nSee you soon,\n${biz(ctx)}` });
     out.push(g.email);
   }
@@ -73,7 +73,7 @@ export async function portalInvite(ctx, guardianId) {
   const g = ctx.db.get('SELECT name, email, family_id FROM guardians WHERE id = ?', guardianId);
   const kids = ctx.db.all('SELECT name FROM clients WHERE family_id = ? AND archived_at IS NULL ORDER BY name', g.family_id).map((k) => first(k.name));
   await send(ctx, g.email, `Sign in to ${biz(ctx)}`,
-    `Hi ${first(g.name)},\n\nHere's how to sign in to the parent portal${kids.length ? ` for ${kids.join(' and ')}` : ''}: go to ${base(ctx)}/portal and enter this email address (${g.email}). We'll email you a code; once you're in you can set a password if you'd rather.\n\nIn the portal you can sign the waiver, save a card, book sessions and see progress.\n\n${biz(ctx)}`);
+    `Hi ${first(g.name)},\n\nHere's how to sign in to the parent portal${kids.length ? ` for ${kids.join(' and ')}` : ''}: go to ${base(ctx)}/client and enter this email address (${g.email}). We'll email you a code; once you're in you can set a password if you'd rather.\n\nIn the portal you can sign the waiver, save a card, book sessions and see progress.\n\n${biz(ctx)}`);
   return g.email;
 }
 
@@ -122,7 +122,7 @@ export async function trialReminders(ctx, asOf = ctx.now()) {
     WHERE s.status = 'trialing' AND s.trial_ends_at > ? AND s.trial_ends_at <= ? AND s.trial_reminded_at IS NULL`, asOf, soon);
   for (const s of subs) {
     const payer = payerFor(ctx, s.client_id);
-    const card = payer.card_payment_method ? `We'll charge the card ending ${payer.card_last4}.` : `There's no card on file yet. ${payer.table === 'families' ? `Add one in the parent portal (${base(ctx)}/parent, Family tab)` : 'Reply to this email and we\'ll send you a secure link to add one'} so training isn't interrupted.`;
+    const card = payer.card_payment_method ? `We'll charge the card ending ${payer.card_last4}.` : `There's no card on file yet. ${payer.table === 'families' ? `Add one in the parent portal (${base(ctx)}/client, Family tab)` : 'Reply to this email and we\'ll send you a secure link to add one'} so training isn't interrupted.`;
     await send(ctx, payer.email, `${first(s.client_name)}'s free trial ends ${day(ctx, s.trial_ends_at)}`,
       `Hi ${first(payer.name)},\n\n${s.client_name}'s free trial of ${s.plan_name} ends on ${day(ctx, s.trial_ends_at)}. After that it's ${money(s.price_cents)} a month. ${card}\n\nTo cancel before then, just reply to this email.\n\n${biz(ctx)}`);
     ctx.db.run('UPDATE subscriptions SET trial_reminded_at = ? WHERE id = ?', ctx.now(), s.id);
@@ -143,15 +143,15 @@ export async function paymentFailed(ctx, invoiceId) {
   if (!inv || !['failed', 'void'].includes(inv.status)) return;
   const payer = payerFor(ctx, inv.client_id);
   const link = inv.status === 'failed' && inv.sub_status !== 'canceled' ? invoicePayLink(ctx, inv.id) : null;
-  const fix = `${link ? `Pay it now by card, no sign-in needed: ${link}\n\nOr ` : ''}${payer.table === 'families' ? `${link ? 'u' : 'U'}pdate the card in the parent portal and we'll charge it right away: ${base(ctx)}/parent (Family tab).` : `${link ? 'r' : 'R'}eply to this email and we'll send you a secure link to update your card.`}`;
+  const fix = `${link ? `Pay it now by card, no sign-in needed: ${link}\n\nOr ` : ''}${payer.table === 'families' ? `${link ? 'u' : 'U'}pdate the card in the parent portal and we'll charge it right away: ${base(ctx)}/client (Family tab).` : `${link ? 'r' : 'R'}eply to this email and we'll send you a secure link to update your card.`}`;
   const text = inv.status === 'void' || inv.sub_status === 'canceled'
-    ? `Hi ${first(payer.name)},\n\nWe tried several times but couldn't charge ${money(inv.amount_cents)} for ${inv.client_name}'s ${inv.plan_name}, so the membership has been canceled.\n\nTo start again, ${payer.table === 'families' ? `add a working card at ${base(ctx)}/parent and choose a membership under Programs` : 'reply to this email'}.\n\n${biz(ctx)}`
+    ? `Hi ${first(payer.name)},\n\nWe tried several times but couldn't charge ${money(inv.amount_cents)} for ${inv.client_name}'s ${inv.plan_name}, so the membership has been canceled.\n\nTo start again, ${payer.table === 'families' ? `add a working card at ${base(ctx)}/client and choose a membership under Programs` : 'reply to this email'}.\n\n${biz(ctx)}`
     : `Hi ${first(payer.name)},\n\nThe ${money(inv.amount_cents)} payment for ${inv.client_name}'s ${inv.plan_name} didn't go through${inv.last_error ? ` (${inv.last_error})` : ''}. ${fix}\n\n${inv.next_retry_at ? `We'll try again on ${day(ctx, inv.next_retry_at)}. ` : ''}${lockLine(ctx, inv)}\n\n${biz(ctx)}`;
   const recipients = inv.family_id ? familyEmails(ctx, inv.family_id).map((g) => g.email) : [payer.email];
   if (on(ctx, 'payment_failed')) for (const to of recipients) await send(ctx, to, inv.status === 'void' ? `${first(inv.client_name)}'s membership was canceled` : `Payment didn't go through for ${first(inv.client_name)}'s membership`, text);
   if (inv.family_id) textFamily(ctx, inv.family_id, 'payment_failed', inv.status === 'void' || inv.sub_status === 'canceled'
-    ? `We couldn't charge ${money(inv.amount_cents)} for ${first(inv.client_name)}'s ${inv.plan_name}, so the membership was canceled. To start again, add a working card in the parent portal: ${base(ctx)}/parent`
-    : `The ${money(inv.amount_cents)} payment for ${first(inv.client_name)}'s ${inv.plan_name} didn't go through. ${link ? `Pay now: ${link} (or update your card in the parent portal).` : `Update your card: ${base(ctx)}/parent (Family tab).`} We'll try again ${day(ctx, inv.next_retry_at)}.`);
+    ? `We couldn't charge ${money(inv.amount_cents)} for ${first(inv.client_name)}'s ${inv.plan_name}, so the membership was canceled. To start again, add a working card in the parent portal: ${base(ctx)}/client`
+    : `The ${money(inv.amount_cents)} payment for ${first(inv.client_name)}'s ${inv.plan_name} didn't go through. ${link ? `Pay now: ${link} (or update your card in the parent portal).` : `Update your card: ${base(ctx)}/client (Family tab).`} We'll try again ${day(ctx, inv.next_retry_at)}.`);
 }
 
 // ---------- Card reminders and membership refunds (sent by the owner from Billing) ----------
@@ -163,7 +163,7 @@ export async function cardReminder(ctx, clientId, invoiceIds, recipients) {
   const total = rows.reduce((t, r) => t + r.amount_cents, 0);
   const lines = rows.map((r) => { const link = invoicePayLink(ctx, r.id); return `- ${r.plan_name} for ${first(r.client_name)}: ${money(r.amount_cents)}${link ? `\n  Pay by card, no sign-in needed: ${link}` : ''}`; });
   const card = payer.card_last4 ? `We couldn't charge your card ending ${payer.card_last4}` : 'We don\'t have a card on file for you';
-  const update = payer.table === 'families' ? `To add or update your card, sign in to the parent portal and open the Family tab: ${base(ctx)}/parent\nWe'll charge it as soon as it's saved.` : 'Reply to this email and we\'ll send you a secure link to update your card.';
+  const update = payer.table === 'families' ? `To add or update your card, sign in to the parent portal and open the Family tab: ${base(ctx)}/client\nWe'll charge it as soon as it's saved.` : 'Reply to this email and we\'ll send you a secure link to update your card.';
   const subject = rows.length === 1 ? `Please update your card: ${money(total)} didn't go through` : `Please update your card: ${rows.length} payments didn't go through`;
   const text = `Hi ${first(payer.name)},\n\n${card}, so ${rows.length === 1 ? 'this payment is' : 'these payments are'} still due:\n\n${lines.join('\n')}\n\nTotal: ${money(total)}\n\n${update}\n\nQuestions? Just reply to this email.\n\n${biz(ctx)}`;
   for (const to of recipients) await send(ctx, to, subject, text);

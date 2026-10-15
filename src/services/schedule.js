@@ -810,7 +810,7 @@ async function moveUp(ctx, s, next, { staff = false } = {}) {
   emit(ctx, 'booking.created', { booking_id: next.id, session_id: s.id, session_name: s.name, starts_at: s.starts_at, client_id: next.client_id, client_name: next.name, coverage: r.coverage, from_waitlist: true, ...(staff ? { over_spots: s.booked_count >= s.capacity } : {}) });
   notifyFamily(ctx, next.family_id, `A spot opened: ${s.name}, ${when(ctx, s.starts_at)}`,
     `Good news: ${first(next.name)} moved off the waitlist and is booked for ${s.name}, ${when(ctx, s.starts_at)}.${r.coverage === 'unpaid' ? ' Payment is due at the session. If you can\'t make it, cancel from the parent portal.' : ''}`);
-  textFamily(ctx, next.family_id, 'waitlist', `A spot opened. ${first(next.name)} is now booked for ${s.name}, ${when(ctx, s.starts_at)}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/parent`);
+  textFamily(ctx, next.family_id, 'waitlist', `A spot opened. ${first(next.name)} is now booked for ${s.name}, ${when(ctx, s.starts_at)}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/client`);
   return r;
 }
 // Staff move someone off the waitlist now, even when it puts the session over its spots (the coach decides).

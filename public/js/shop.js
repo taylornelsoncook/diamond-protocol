@@ -34,7 +34,7 @@ function render(d) {
     h('p', { class: 'small muted', style: 'margin:0' }, x.kind === 'program' ? 'Your athlete follows it in their own app, with demo videos for every exercise.' : 'Your athlete reads and watches it in their own app.'),
     h('div', { class: 'row wrap', style: 'gap:8px' },
       x.kind === 'program' ? h('a', { class: 'dp-btn dp-btn--secondary', href: `/shop/${encodeURIComponent(x.id)}` }, 'See the program') : null,
-      h('a', { class: 'dp-btn dp-btn--primary', href: `/parent?buy=${x.kind}:${x.id}` }, x.trial_days > 0 ? 'I have an account: start the trial' : 'I have an account: buy'),
+      h('a', { class: 'dp-btn dp-btn--primary', href: `/client?buy=${x.kind}:${x.id}` }, x.trial_days > 0 ? 'I have an account: start the trial' : 'I have an account: buy'),
       h('a', { class: 'dp-btn dp-btn--secondary', href: newFamily(x) }, d.signup_open ? 'New? Sign up and buy' : 'New? Ask about it')));
 
   fill(root, h('main', { class: 'p-wrap' },

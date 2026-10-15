@@ -20,7 +20,7 @@ async function api(method, path, body) {
 const get = (p) => api('GET', p), post = (p, b = {}) => api('POST', p, b);
 
 const state = { me: null, session: null, tab: 'home', athleteId: null, homeTab: 'overview' };
-const HERE = location.pathname.startsWith('/portal') ? '/portal' : '/parent';   // the page's own address (both open this page)
+const HERE = '/client';   // the page's own address (the one account: /portal and /parent land here)
 const root = document.getElementById('root');
 const athlete = () => state.me.athletes.find((a) => a.id === state.athleteId) ?? state.me.athletes[0];
 const fmt = (iso, opts) => new Intl.DateTimeFormat('en-US', { timeZone: state.me?.timezone, ...opts }).format(new Date(iso));
@@ -241,7 +241,7 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ['timeline', 'Timeline'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ['profile', 'Profile'], ['timeline', 'Timeline'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
   const cur = subtabs.querySelector('[aria-current]');
   if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
@@ -251,6 +251,7 @@ async function viewHome(main) {
   if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
   if (state.homeTab === 'workout') return viewWorkout(main);
+  if (state.homeTab === 'profile') return viewWorkout(main, 'profile');   // the app's Profile tab: coming up, maxes, games, form checks, the sign-in and devices
   if (state.homeTab === 'timeline') {   // everything the athlete did, newest first (the same lines the coach sees)
     const a = athlete();
     fill(main, top('Timeline'), subtabs, athleteChips(() => render()), h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, `Everything ${a.name.split(' ')[0]} did`), h('p', { class: 'dp-panel-sub' }, 'Workouts, results once a testing day is shared, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
@@ -277,12 +278,12 @@ window.addEventListener('message', (e) => {
   const f = document.querySelector(`iframe[data-athlete="${e.data.athlete}"]`);
   if (f) f.style.height = `${Math.max(420, e.data.dpAppHeight + 8)}px`;
 });
-function viewWorkout(main) {
+function viewWorkout(main, tab = 'workout') {
   const a = athlete();
-  const src = `/app?athlete=${encodeURIComponent(a.id)}&embed=1`;
-  const frame = h('iframe', { class: 'p-frame', src, title: `${a.first_name ?? a.name}'s workout`, 'data-athlete': a.id, style: `height:${Math.max(420, (frameHeights.get(a.id) ?? 0) + 8)}px` });
-  fill(main, top('Workout'), subtabs, athleteChips(() => render()),
-    h('p', { class: 'small muted', style: 'margin:0' }, `${a.first_name ?? a.name}'s program, logged under Athlete ID ${a.athlete_id ?? '…'}. `, h('a', { href: src.replace('&embed=1', ''), target: '_blank', rel: 'noopener' }, 'Open full screen')),
+  const src = `/app?athlete=${encodeURIComponent(a.id)}&embed=1${tab === 'workout' ? '' : `#${tab}`}`;
+  const frame = h('iframe', { class: 'p-frame', src, title: `${a.first_name ?? a.name}'s ${tab}`, 'data-athlete': a.id, style: `height:${Math.max(420, (frameHeights.get(a.id) ?? 0) + 8)}px` });
+  fill(main, top(tab === 'profile' ? 'Profile' : 'Workout'), subtabs, athleteChips(() => render()),
+    h('p', { class: 'small muted', style: 'margin:0' }, tab === 'profile' ? `Everything about ${a.first_name ?? a.name}: what's coming up, maxes, games, form checks, your sign-in and the devices signed in. ` : `${a.first_name ?? a.name}'s program, logged under Athlete ID ${a.athlete_id ?? '…'}. `, h('a', { href: src.replace('&embed=1', ''), target: '_blank', rel: 'noopener' }, 'Open full screen')),
     frame);
   drawSubtabs();
 }

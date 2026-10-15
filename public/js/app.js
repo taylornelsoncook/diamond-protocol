@@ -1162,7 +1162,7 @@ async function viewClient(main, id) {
     maxesBlock(maxData, { who: 'coach', first, canEdit: role !== 'front_desk', save: (b) => post(`/v1/clients/${id}/maxes`, b), remove: (rid) => del(`/v1/clients/${id}/maxes/${rid}`), reload: render }));
   // Bar speed from a velocity device (version 81): per exercise, the load-velocity profile and the estimated max it points to.
   const barSpeedPanel = panel('Bar speed', { subtitle: `For every exercise ${first} has done on a velocity device (Output, GymAware, FLEX, Enode, Perch, or any device's CSV): the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max.`,
-    action: role === 'front_desk' ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/connections?athlete=${id}` }, 'Import a file') },
+    action: role === 'owner' ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/connections?athlete=${id}` }, 'Import a file') : null },
     vbtBlock(barSpeed, { who: 'coach', first }));
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
@@ -4589,7 +4589,9 @@ async function viewQueue(main) {
 async function viewConnections(main) {
   if (deskStop(main, 'Devices & imports')) return;
   const owner = isOwner();
-  const [integ, links, everyone, waitingQ, vbtSystems, vbtWaiting, vbtImports] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue'), get('/v1/vbt/systems'), get('/v1/vbt/waiting'), get('/v1/vbt/imports')]);
+  // Bar speed (owner decision): the owner connects devices, imports files and links waiting sets; coaches only read the data on each athlete's page.
+  const none = { data: [] };
+  const [integ, links, everyone, waitingQ, vbtSystems, vbtWaiting, vbtImports] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue'), get('/v1/vbt/systems'), owner ? get('/v1/vbt/waiting') : none, owner ? get('/v1/vbt/imports') : none]);
   const sysName = (p) => (p === 'api' ? 'Open API' : integ.data.find((i) => i.provider === p)?.name.split(' (')[0] ?? vbtSystems.data.find((x) => x.key === p)?.label.split(' (')[0] ?? p);
 
   // Hawkin: a failed sync shows Needs attention, and the owner can paste a new token right there.
@@ -4676,7 +4678,7 @@ async function viewConnections(main) {
     waitingQ.n ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waitingQ.n} ${waitingQ.n === 1 ? 'result is' : 'results are'} waiting from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
     linkPanel, linksPanel, hawkinPanel,
     // Bar speed (version 81): a device's export, and sets waiting under a name or ID we don't know.
-    vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render, preselect: new URLSearchParams(location.hash.split('?')[1] ?? '').get('athlete') }),
+    !owner ? null : vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render, preselect: new URLSearchParams(location.hash.split('?')[1] ?? '').get('athlete') }),
     vbtWaiting.data.length || vbtImports.data.length ? vbtWaitingPanel({ waiting: vbtWaiting.data, imports: vbtImports.data, everyone, athletePicker, post, onDone: render }) : null,
     panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
     apiPanel);

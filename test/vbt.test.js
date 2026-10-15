@@ -100,14 +100,14 @@ test('a set from a device name or ID nobody linked waits; linking the device sen
   const r = await resultsKey('POST', '/v1/vbt/sets', { provider: 'output', sets: [{ athlete: { external_id: 'HUB-204', name: 'Maya O' }, exercise: 'Trap bar deadlift', performed_at: '2026-10-06T17:30:00Z', set_no: 1, reps: 5, load: 100, load_unit: 'kg', mean_velocity: 0.7 }] });
   assert.deepEqual([r.body.saved, r.body.waiting], [0, 1]);
   assert.deepEqual(r.body.waiting_for, [{ identity: 'id:HUB-204', external_id: 'HUB-204', name: 'Maya O', sets: 1 }]);
-  const waiting = (await coach('GET', '/v1/vbt/waiting')).body.data;
+  const waiting = (await owner('GET', '/v1/vbt/waiting')).body.data;
   assert.equal(waiting.length, 1);
   assert.deepEqual([waiting[0].identity, waiting[0].sets, waiting[0].exercises], ['id:HUB-204', 1, ['Trap bar deadlift']]);
   assert.equal((await coach('GET', `/v1/vbt/sets?client_id=${maya.id}&exercise=Trap bar deadlift`)).body.data.length, 0, 'not on the profile yet');
   // Linking the device under Testing → Devices & imports covers bar speed too.
   const link = (await coach('POST', '/v1/athlete-links', { provider: 'output', external_id: 'HUB-204', athlete_id: maya.athlete_id })).body;
   assert.equal(link.bar_speed_linked, 1);
-  assert.equal((await coach('GET', '/v1/vbt/waiting')).body.data.length, 0);
+  assert.equal((await owner('GET', '/v1/vbt/waiting')).body.data.length, 0);
   assert.equal((await coach('GET', `/v1/vbt/sets?client_id=${maya.id}&exercise=Trap bar deadlift`)).body.data.length, 1);
   // The next set from that device lands straight away.
   const next = await resultsKey('POST', '/v1/vbt/sets', { provider: 'output', sets: [{ athlete: { external_id: 'HUB-204' }, exercise: 'Trap bar deadlift', performed_at: '2026-10-06T17:35:00Z', set_no: 2, reps: 5, load: 100, load_unit: 'kg', mean_velocity: 0.66 }] });
@@ -117,10 +117,13 @@ test('a set from a device name or ID nobody linked waits; linking the device sen
   assert.deepEqual((await coach('GET', '/v1/vbt/systems')).body.data.map((x) => x.key), ['output', 'gymaware', 'flex', 'enode', 'perch', 'other']);
   assert.equal((await resultsKey('POST', '/v1/vbt/sets', { provider: 'vitruve', sets: [] })).status, 400, 'a system without an open API is not a provider');
   await resultsKey('POST', '/v1/vbt/sets', { provider: 'perch', sets: [{ athlete: { name: 'Maya Okafor' }, exercise: 'Front squat', performed_at: '2026-10-06T17:40:00Z', load: 135, reps: 3, mean_velocity: 0.8 }] });
-  const w = (await coach('GET', '/v1/vbt/waiting')).body.data[0];
+  const w = (await owner('GET', '/v1/vbt/waiting')).body.data[0];
   assert.equal(w.identity, 'name:maya okafor', 'a name is never matched on its own');
   assert.equal((await desk('POST', '/v1/vbt/waiting/link', { provider: 'perch', identity: w.identity, athlete_id: maya.athlete_id })).status, 403, 'front desk looks only');
-  const linked = (await coach('POST', '/v1/vbt/waiting/link', { provider: 'perch', identity: w.identity, athlete_id: maya.athlete_id })).body;
+  assert.equal((await coach('POST', '/v1/vbt/waiting/link', { provider: 'perch', identity: w.identity, athlete_id: maya.athlete_id })).status, 403, 'coaches read the data, never link, import or send (owner decision)');
+  assert.equal((await coach('GET', '/v1/vbt/waiting')).status, 403);
+  assert.equal((await coach('POST', '/v1/vbt/sets', { provider: 'output', sets: [] })).status, 403);
+  const linked = (await owner('POST', '/v1/vbt/waiting/link', { provider: 'perch', identity: w.identity, athlete_id: maya.athlete_id })).body;
   assert.deepEqual([linked.linked, linked.remembered], [1, true]);
   assert.ok(app.ctx.db.get(`SELECT 1 FROM athlete_links WHERE provider = 'perch' AND external_id = 'name:maya okafor' AND client_id = ?`, maya.id));
 });
@@ -153,9 +156,10 @@ test('the profile: a load-velocity line, the estimated max at the threshold, the
   await owner('PATCH', '/v1/settings', { vbt_mvt_squat: '0.30' });
   // The athlete in the app, the parent in the portal, front desk on the client page.
   assert.equal((await athlete('GET', '/app/api/vbt')).body.exercises.find((e) => e.name === 'Back Squat').profile.e1rm, 310);
-  assert.equal((await parent('GET', `/portal/api/athletes/${maya.id}/vbt`)).body.totals.sets, 13);
+  assert.equal((await parent('GET', `/portal/api/athletes/${maya.id}/vbt`)).status, 404, 'parents see no bar speed (owner decision); the athlete sees their own');
+  assert.equal((await coach('GET', `/v1/clients/${maya.id}/vbt`)).body.totals.sets, 13, 'coaches read everyone\'s');
   assert.equal((await desk('GET', `/v1/clients/${maya.id}/vbt`)).status, 200);
-  assert.equal((await desk('GET', '/v1/vbt/waiting')).status, 200);
+  assert.equal((await desk('GET', '/v1/vbt/waiting')).status, 403);
   assert.equal((await desk('POST', '/v1/vbt/sets', { provider: 'output', sets: squatSets('2026-10-07') })).status, 403);
   // The timeline carries one line per exercise and day.
   const tl = (await coach('GET', `/v1/clients/${maya.id}/athlete-timeline?kind=bar_speed`)).body;
@@ -171,7 +175,7 @@ test('a device export: columns matched by name, one row per rep folded into sets
   const csv = 'Athlete,Date,Exercise,Set,Rep,Load (kg),Mean Velocity (m/s),Peak Velocity (m/s),Mean Power (W)\n' + [
     'Maya Okafor,10/05/2026 17:02,Back Squat,1,1,100,0.72,1.1,800', 'Maya Okafor,10/05/2026 17:02,Back Squat,1,2,100,0.70,1.05,790', 'Maya Okafor,10/05/2026 17:02,Back Squat,1,3,100,0.61,1.0,700',
     'Jordan Lee,10/05/2026 17:10,Back Squat,1,1,80,0.9,1.3,600'].join('\n');
-  const prev = (await coach('POST', '/v1/vbt/import/preview', { provider: 'output', file: { name: 'hub.csv', csv } })).body;
+  const prev = (await owner('POST', '/v1/vbt/import/preview', { provider: 'output', file: { name: 'hub.csv', csv } })).body;
   assert.deepEqual([prev.mapping.athlete, prev.mapping.date, prev.mapping.exercise, prev.mapping.rep, prev.mapping.load, prev.mapping.load_unit, prev.mapping.mean_velocity], ['Athlete', 'Date', 'Exercise', 'Rep', 'Load (kg)', 'kg', 'Mean Velocity (m/s)']);
   assert.deepEqual([prev.rows, prev.sets_found, prev.per_rep, prev.problems], [4, 2, true, []]);
   const p0 = prev.preview[0];
@@ -179,27 +183,27 @@ test('a device export: columns matched by name, one row per rep folded into sets
   assert.equal(p0.performed_at, '2026-10-05T17:02:00.000Z', 'a US date and time, taken as written');
   assert.deepEqual(prev.unmatched_athletes.map((u) => u.name), ['Maya Okafor', 'Jordan Lee'], 'Maya is linked by name under vitruve, not output: a name is never matched on its own');
   // A bad value stops the save and names the row and column.
-  const bad = await coach('POST', '/v1/vbt/import', { provider: 'output', file: { name: 'hub.csv', csv: csv + '\nMaya Okafor,10/05/2026 17:20,Back Squat,2,1,100,7.5,1.0,800' } });
+  const bad = await owner('POST', '/v1/vbt/import', { provider: 'output', file: { name: 'hub.csv', csv: csv + '\nMaya Okafor,10/05/2026 17:20,Back Squat,2,1,100,7.5,1.0,800' } });
   assert.deepEqual([bad.status, bad.body.error.code], [400, 'problems']);
   assert.deepEqual(bad.body.error.details.problems[0], { row: 6, column: 'Mean Velocity (m/s)', message: 'mean_velocity must be between 0 and 6.' });
   assert.equal(app.ctx.db.get(`SELECT COUNT(*) AS n FROM vbt_sets WHERE source = 'csv:output'`).n, 0, 'nothing saved');
   // Saved: Jordan waits, Maya's set is on file only once the name is linked under output (it isn't, so both wait).
-  const saved = (await coach('POST', '/v1/vbt/import', { provider: 'output', file: { name: 'hub.csv', csv } })).body;
+  const saved = (await owner('POST', '/v1/vbt/import', { provider: 'output', file: { name: 'hub.csv', csv } })).body;
   assert.deepEqual([saved.saved, saved.waiting, saved.duplicates], [0, 2, 0]);
-  assert.equal((await coach('GET', '/v1/vbt/imports')).body.data[0].id, saved.id);
-  assert.equal((await coach('GET', '/v1/vbt/waiting')).body.data.length, 2);
+  assert.equal((await owner('GET', '/v1/vbt/imports')).body.data[0].id, saved.id);
+  assert.equal((await owner('GET', '/v1/vbt/waiting')).body.data.length, 2);
   // Importing it again changes nothing.
-  const twice = (await coach('POST', '/v1/vbt/import', { provider: 'output', file: { name: 'hub.csv', csv } })).body;
+  const twice = (await owner('POST', '/v1/vbt/import', { provider: 'output', file: { name: 'hub.csv', csv } })).body;
   assert.deepEqual([twice.saved, twice.waiting, twice.duplicates], [0, 0, 2]);
-  const undone = (await coach('POST', `/v1/vbt/imports/${saved.id}/undo`)).body;
+  const undone = (await owner('POST', `/v1/vbt/imports/${saved.id}/undo`)).body;
   assert.equal(undone.removed, 2);
-  assert.equal((await coach('GET', '/v1/vbt/waiting')).body.data.length, 0);
-  await coach('POST', `/v1/vbt/imports/${twice.id}/undo`);
+  assert.equal((await owner('GET', '/v1/vbt/waiting')).body.data.length, 0);
+  await owner('POST', `/v1/vbt/imports/${twice.id}/undo`);
   // A file with no athlete column needs the athlete chosen; an Excel-less, set-per-row file with lb loads.
   const perSet = 'Date,Exercise,Set,Reps,Weight (lb),Avg Velocity,Peak Velocity\n2026-10-04,Back Squat,1,5,205,0.75,1.1\n2026-10-04,Back Squat,2,5,205,0.71,1.05';
-  const noOne = await coach('POST', '/v1/vbt/import/preview', { provider: 'flex', file: { name: 'flex.csv', csv: perSet } });
+  const noOne = await owner('POST', '/v1/vbt/import/preview', { provider: 'flex', file: { name: 'flex.csv', csv: perSet } });
   assert.match(noOne.body.problems[0].message, /names no athlete/);
-  const mine = (await coach('POST', '/v1/vbt/import', { provider: 'flex', file: { name: 'flex.csv', csv: perSet }, client_id: maya.id })).body;
+  const mine = (await owner('POST', '/v1/vbt/import', { provider: 'flex', file: { name: 'flex.csv', csv: perSet }, client_id: maya.id })).body;
   assert.deepEqual([mine.saved, mine.waiting], [2, 0]);
   const flex = (await coach('GET', `/v1/vbt/sets?client_id=${maya.id}&provider=flex`)).body.data;
   assert.deepEqual(flex.map((s) => [s.load_lb, s.reps, s.mean_velocity, s.day]).sort(), [[205, 5, 0.71, '2026-10-04'], [205, 5, 0.75, '2026-10-04']]);
@@ -212,7 +216,8 @@ test('the family export carries bar speed and deleting the family removes it; re
   assert.equal(kid.bar_speed.length, 15, JSON.stringify(Object.keys(kid)).slice(0, 300));
   assert.deepEqual(Object.keys(kid.bar_speed[0]).sort(), ['best_velocity', 'exercise', 'last_velocity', 'load_lb', 'mean_power', 'mean_velocity', 'peak_power', 'peak_velocity', 'performed_at', 'reps', 'rom_cm', 'set_no', 'system', 'velocity_loss_pct']);
   const one = (await coach('GET', `/v1/vbt/sets?client_id=${maya.id}&provider=flex`)).body.data[0];
-  assert.equal((await coach('DELETE', `/v1/vbt/sets/${one.id}`)).status, 200);
+  assert.equal((await coach('DELETE', `/v1/vbt/sets/${one.id}`)).status, 403, 'a coach never changes the data');
+  assert.equal((await owner('DELETE', `/v1/vbt/sets/${one.id}`)).status, 200);
   assert.equal((await coach('GET', `/v1/vbt/sets?client_id=${maya.id}&provider=flex`)).body.data.length, 1);
   // Another family's deletion takes its sets with it.
   const other = (await coach('POST', '/v1/clients', { name: 'Zed Park', birth_date: '2012-01-01', parent: { name: 'Pat Park', email: 'pat@example.com' } })).body;

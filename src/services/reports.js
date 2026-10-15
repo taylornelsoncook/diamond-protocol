@@ -153,7 +153,7 @@ export function emailReport(ctx, clientId, body = {}, by = {}, baseUrl) {
   if (note) lines.push('From your coach:', note, '');
   if (r.highlights.length) lines.push('Biggest improvements:', ...r.highlights.map((t) => `  ${t.test_name}: ${fmtValue(t.first.value, t.unit, t.decimals)} to ${fmtValue(t.latest.value, t.unit, t.decimals)} (+${t.improvement_pct}%)`), '');
   if (r.new_prs.length) lines.push(`New personal records: ${r.new_prs.join(', ')}.`, '');
-  lines.push('Open, print or save the full report:', link ? link.url : `${baseUrl ?? ctx.publicUrl ?? ''}/parent`,
+  lines.push('Open, print or save the full report:', link ? link.url : `${baseUrl ?? ctx.publicUrl ?? ''}/client`,
     link ? 'This link works for 90 days without signing in. Please share it only with people you trust.' : 'Sign in to the parent portal with this email address to see it.');
   notifyFamily(ctx, c.family_id, `${first}'s progress report`, lines.join('\n'));
   return { emailed: parents.length, link: link ? { id: link.id, expires_at: link.expires_at } : null };
@@ -176,7 +176,7 @@ export function shareSession(ctx, id, body = {}, baseUrl) {
     for (const k of kids) {
       const own = ctx.db.get('SELECT body FROM progress_notes WHERE client_id = ? AND perf_session_id = ? AND approved_at IS NOT NULL', k.id, id)?.body;
       notifyFamily(ctx, k.family_id, `${k.name.split(' ')[0]}'s results from ${s.name} are ready`,
-        `${k.name.split(' ')[0]}'s results from ${s.name} are in the parent portal, with progress since earlier tests.${own ? `\n\n${own}` : ''}${note ? `\n\nFrom your coach: ${note}` : ''}\n\nSee them: ${baseUrl ?? ctx.publicUrl ?? ''}/parent`);
+        `${k.name.split(' ')[0]}'s results from ${s.name} are in the parent portal, with progress since earlier tests.${own ? `\n\n${own}` : ''}${note ? `\n\nFrom your coach: ${note}` : ''}\n\nSee them: ${baseUrl ?? ctx.publicUrl ?? ''}/client`);
     }
     notified = new Set(kids.filter((k) => ctx.db.get(`SELECT 1 FROM guardians WHERE family_id = ? AND email IS NOT NULL AND email != '' LIMIT 1`, k.family_id)).map((k) => k.family_id)).size;
   }

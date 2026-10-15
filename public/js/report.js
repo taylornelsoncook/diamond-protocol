@@ -35,7 +35,7 @@ async function load() {
     render(r);
   } catch (e) {
     if (e.status === 410 || (share && e.status === 404)) return notice('This link no longer works', e.message);
-    if (e.status === 401) return notice('Please sign in first', 'Open this report from the parent portal or the coach dashboard.', h('a', { class: 'dp-btn dp-btn--secondary', href: '/parent' }, 'Go to the parent portal'));
+    if (e.status === 401) return notice('Please sign in first', 'Open this report from the parent portal or the coach dashboard.', h('a', { class: 'dp-btn dp-btn--secondary', href: '/client' }, 'Go to the parent portal'));
     notice('Report not found', e.status === 404 ? 'Check the link.' : e.message);
   }
 }
@@ -129,7 +129,7 @@ function render(r) {
   const canShare = r.can_share && mode !== 'link' && !familyPreview;
   fill(root,
     mode === 'link' ? null : h('div', { class: 'rp-actions' }, btn('Print or save as PDF', () => window.print(), 'primary'),
-      mode === 'parent' ? h('a', { class: 'dp-btn dp-btn--ghost', href: '/parent?tab=progress' }, 'Back to Progress')
+      mode === 'parent' ? h('a', { class: 'dp-btn dp-btn--ghost', href: '/client?tab=progress' }, 'Back to Progress')
         : [h('a', { class: 'dp-btn dp-btn--secondary', href: familyPreview ? `/report.html?client=${id}` : `/report.html?client=${id}&parent_view=true` }, familyPreview ? 'Coach view' : 'Family view'),
           h('a', { class: 'dp-btn dp-btn--ghost', href: `/#/clients/${a.id}` }, 'Back to the athlete')]),
     mode === 'link' ? h('div', { class: 'rp-actions' }, btn('Print or save as PDF', () => window.print(), 'primary')) : null,

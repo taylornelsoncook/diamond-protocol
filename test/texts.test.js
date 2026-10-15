@@ -122,7 +122,7 @@ test('the day-before reminder goes once per family and session, and skips last-m
   const t = texts(app).at(-1);
   assert.equal(texts(app).length, before + 1, 'one text for both siblings');
   assert.equal(t.kind, 'reminder');
-  assert.match(t.body, /Reminder: Ava and Ben have Speed Lab .* at Facility\. Can't make it\? Cancel in the parent portal: https:\/\/staging\.example\.org\/parent/);
+  assert.match(t.body, /Reminder: Ava and Ben have Speed Lab .* at Facility\. Can't make it\? Cancel in the parent portal: https:\/\/staging\.example\.org\/client/);
   assert.equal(await sendReminders(app.ctx, asOf), 0, 'never twice');
 
   // Booked 10 hours before start: they just got a confirmation, so no reminder.

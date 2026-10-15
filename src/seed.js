@@ -472,7 +472,7 @@ engage.createLesson(ctx, { category: 'research', title: 'Sleep and injury risk i
 
 console.log(`Seeded. Sign in at http://localhost:${process.env.PORT || 3000} with ${email} / ${password}`);
 console.log(`Sample staff (same password): riley@diamondprotocol.local and jordan@diamondprotocol.local (coaches), desk@diamondprotocol.local (front desk)`);
-console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/parent (sign in as maria.lopez@example.com, kurt.jensen@example.com (two kids), linh.nguyen@example.com (card declining, locked out until it's paid) or paulo.silva@example.com (no card or waiver yet); in test mode the code is shown on screen)`);
+console.log(`Parent portal: http://localhost:${process.env.PORT || 3000}/client (sign in as maria.lopez@example.com, kurt.jensen@example.com (two kids), linh.nguyen@example.com (card declining, locked out until it's paid) or paulo.silva@example.com (no card or waiver yet); in test mode the code is shown on screen)`);
 console.log(`Client app example (Maya): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, made['Maya Okafor'].id, { withSecrets: true }).app_link}`);
 console.log(`Athlete app with accountability, performance and education (Ava): http://localhost:${process.env.PORT || 3000}${clients.getClient(ctx, lopez.id, { withSecrets: true }).app_link}`);
 ctx.db.close();

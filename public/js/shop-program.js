@@ -19,7 +19,7 @@ function paragraphs(text) { return String(text ?? '').split(/\n{2,}/).map((t) =>
 function render(d) {
   const p = d.program, trial = p.trial_days > 0;
   const total = p.price_cents + (p.fee_cents ?? 0);
-  const buyNow = `/parent?buy=program:${encodeURIComponent(p.id)}`;
+  const buyNow = `/client?buy=program:${encodeURIComponent(p.id)}`;
   const newFamily = d.signup_open ? `/join?buy=program:${encodeURIComponent(p.id)}` : '/start';
   const cta = h('div', { class: 'row wrap', style: 'gap:8px' },
     h('a', { class: 'dp-btn dp-btn--primary', href: newFamily }, d.signup_open ? (trial ? `Start the free ${p.trial_days}-day trial` : 'Sign up and buy') : 'Ask about it'),

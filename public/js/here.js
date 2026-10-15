@@ -14,7 +14,7 @@ async function load() {
   document.title = `Check in · ${business_name}`;
   const res = await fetch(`/portal/api/check-in?code=${encodeURIComponent(code)}`, { credentials: 'same-origin' });
   if (res.status === 401) return shell(h('h1', { class: 'p-title' }, `Check in at ${location_name}`), h('p', { class: 'muted', style: 'margin:0' }, 'Sign in to the parent portal to check your athlete in. You\'ll come right back here.'),
-    h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: `/parent?checkin=${encodeURIComponent(code)}` }, 'Sign in'));
+    h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: `/client?checkin=${encodeURIComponent(code)}` }, 'Sign in'));
   const data = await res.json();
   if (!res.ok) return shell(h('h1', { class: 'p-title' }, 'Something went wrong'), h('p', { class: 'muted', style: 'margin:0' }, data.error?.message ?? 'Try again, or ask a coach to check you in.'));
   render(data);
@@ -22,7 +22,7 @@ async function load() {
 
 function render(d, note) {
   if (!d.data.length) return shell(h('h1', { class: 'p-title' }, `Check in at ${d.location_name}`),
-    h('p', { class: 'muted', style: 'margin:0' }, 'Nobody in your family is booked here right now. Check-in opens 30 minutes before a session starts.'), h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/parent' }, 'Open the parent portal'));
+    h('p', { class: 'muted', style: 'margin:0' }, 'Nobody in your family is booked here right now. Check-in opens 30 minutes before a session starts.'), h('a', { class: 'dp-btn dp-btn--secondary dp-btn--block', href: '/client' }, 'Open the parent portal'));
   shell(h('h1', { class: 'p-title' }, `Check in at ${d.location_name}`),
     note ? h('div', { class: note.ok ? 'strong' : 'test-banner', role: 'status', style: note.ok ? 'color:var(--green-bright)' : '' }, note.text) : null,
     ...d.data.map((b) => h('div', { class: 'row', style: 'align-items:center;gap:12px' },

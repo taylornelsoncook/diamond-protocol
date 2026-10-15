@@ -67,7 +67,7 @@ test('only the Book now page can sit inside another website', async () => {
   assert.equal(book.status, 200);
   assert.match(book.headers.get('content-security-policy'), /frame-ancestors \*/);
   assert.match(await book.text(), /\/js\/book\.js/);
-  for (const path of ['/', '/parent', '/join', '/start']) assert.match((await fetch(base + path)).headers.get('content-security-policy'), /frame-ancestors 'none'/, path);
+  for (const path of ['/', '/client', '/join', '/start']) assert.match((await fetch(base + path)).headers.get('content-security-policy'), /frame-ancestors 'none'/, path);
   const embed = await fetch(base + '/embed.js');
   assert.match(embed.headers.get('content-type'), /javascript/);
   assert.match(await embed.text(), /\/book\?embed=1/);

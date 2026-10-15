@@ -128,7 +128,7 @@ export function reportLines(ctx, r) {
 }
 export function reportText(ctx, r) {
   const biz = getSetting(ctx, 'business_name');
-  return [`${first(r.client_name)}'s ${r.label} at ${biz}`, '', ...reportLines(ctx, r), '', `See the full picture in the parent portal: ${ctx.publicUrl ?? ''}/parent?tab=progress`, '', biz].join('\n');
+  return [`${first(r.client_name)}'s ${r.label} at ${biz}`, '', ...reportLines(ctx, r), '', `See the full picture in the parent portal: ${ctx.publicUrl ?? ''}/client?tab=progress`, '', biz].join('\n');
 }
 // Email the report to the athlete's parents (every parent with an email who hasn't opted out), then mark it sent.
 export async function send(ctx, id, user) {

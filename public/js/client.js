@@ -10,7 +10,7 @@ import { maxesBlock } from './maxes-ui.js';
 import { gamesBlock, nextText, toneChip } from './games-ui.js';
 
 // The private link looks like /app?token=… . Keep the token for this device, then drop it from the address bar.
-// An athlete who signed in at /portal with their own email has no token: the portal cookie opens the app, and
+// An athlete who signed in at /client with their own email has no token: the portal cookie opens the app, and
 // tokenValue becomes "session:<athlete id>" so drafts and caches stay theirs (the header is left empty for it).
 // The family portal's Workout tab opens /app?athlete=<id>&embed=1 for one of the parent's athletes: the portal cookie
 // signs the requests and x-athlete-id says which athlete, tokenValue is "family:<id>", and the app hides its own tab
@@ -77,8 +77,9 @@ function drawTabs() {
   fill(tabs, [['workout', 'Workout'], ['sprint', 'Sprint'], ...ENGAGE_TABS, ['profile', 'Profile']].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
     tabIcon(k), label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
 }
-function show(tab) {
+function show(tab, anchor = null) {
   state.tab = tab;
+  if (anchor) setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   if ((hashTab() ?? 'workout') !== tab) history.replaceState(null, '', `${location.pathname}${location.search}${tab === 'workout' ? '' : `#${tab}`}`);
   drawTabs();
   window.scrollTo(0, 0);
@@ -134,11 +135,15 @@ function renderProfile(where) {
   api('GET', '/app/api/maxes').then((d) => { if (d?.lifts?.length) fill(maxes, h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, 'Your maxes'), maxesBlock(d, { who: 'athlete', canEdit: true, save: (b) => api('POST', '/app/api/maxes', b), remove: (id) => api('DELETE', `/app/api/maxes/${id}`), reload: () => show('profile') }))); }).catch(() => {});
   const links = embedded ? null : h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Your account'),
     h('p', { class: 'small muted' }, 'Family, payments, bookings, programs and your sign-in live in the portal. Sign in with your email if it asks.'),
-    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=family' }, 'Family & payments'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=book' }, 'Book a session'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=progress' }, 'Progress & reports'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/portal?tab=programs' }, 'Programs & store')));
+    h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '/client?tab=family' }, 'Family & payments'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/client?tab=book' }, 'Book a session'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/client?tab=progress' }, 'Progress & reports'), h('a', { class: 'dp-btn dp-btn--secondary', href: '/client?tab=programs' }, 'Programs & store')));
   fill(where,
     h('section', { class: 'dp-panel stack-tight' }, h('div', { class: 'c-title', style: 'font-size:24px' }, c.name ?? 'You'), c.athlete_id ? h('div', { class: 'small muted' }, 'Athlete ID ', h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id)) : null, streaks),
+    comingUp(home?.upcoming),
     maxes,
-    embedded ? null : signInPanel(),
+    gamesSection(),
+    formChecksSection(),
+    signInPanel(),
+    devicesPanel(),
     h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, 'Everything you did'), h('p', { class: 'dp-panel-sub' }, 'Workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
       timelineBlock((p) => api('GET', p), '/app/api/timeline', { empty: 'Nothing here yet. Log a workout or check in and it lands here.' })),
     links);
@@ -151,15 +156,14 @@ function signInPanel() {
   const draw = async () => {
     let s;
     try { s = await api('GET', '/app/api/password'); } catch { return fill(box); }
-    if (s.parent) return fill(box);
-    if (!s.email) return fill(box, h('h2', { class: 'dp-panel-title' }, 'Your sign-in'), h('p', { class: 'small muted', style: 'margin:0' }, 'Your profile has no email of its own yet. Ask your coach to add one; then you can sign in at the portal with a code or a password.'));
+    if (!s.email) return fill(box, h('h2', { class: 'dp-panel-title' }, 'Your sign-in'), h('p', { class: 'small muted', style: 'margin:0' }, 'Your profile has no email of its own yet. Ask your coach to add one; then you can sign in at /client with a code or a password.'));
     const pw = h('input', { class: 'dp-input', type: 'password', autocomplete: 'new-password', minlength: '10', placeholder: 'At least 10 characters' });
     const err = h('p', { class: 'dp-error', role: 'alert', style: 'margin:0' });
     const form = h('form', { class: 'stack-tight', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
       try { await api('POST', '/app/api/password', { password: pw.value }); pw.value = ''; toast('Password saved. Emailed codes still work too.'); draw(); }
       catch (x) { err.textContent = x.message; }
     }); } },
-      h('p', { class: 'small muted', style: 'margin:0' }, s.has_password ? `A password is set for ${s.email}. Emailed codes still work too.` : `You sign in at the portal with a code we email to ${s.email}. Set a password if you'd rather not wait for a code.`),
+      h('p', { class: 'small muted', style: 'margin:0' }, s.has_password ? `A password is set for ${s.email}. Emailed codes still work too.` : `You sign in at /client with a code we email to ${s.email}. Set a password if you'd rather not wait for a code.`),
       h('label', { class: 'stack-tight' }, h('span', { class: 'small strong' }, s.has_password ? 'New password' : 'Password'), pw), err,
       h('div', { class: 'row wrap' }, btn(s.has_password ? 'Change password' : 'Set a password', null, 'secondary', { type: 'submit' }),
         s.has_password ? btn('Remove it', (e) => { if (confirm('Remove your password? You\'ll sign in with emailed codes.')) busy(e.currentTarget, async () => { await api('DELETE', '/app/api/password'); toast('Password removed.'); draw(); }); }, 'ghost') : null));
@@ -168,14 +172,26 @@ function signInPanel() {
   draw();
   return box;
 }
-const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn dp-btn--primary', href: '/portal' }, 'Sign in with your email'));
+// Signed in: the phones and computers signed in with the email (the same list as the portal's Family tab).
+function devicesPanel() {
+  const list = h('div', { class: 'stack-tight' }, h('p', { class: 'small muted', style: 'margin:0' }, 'Loading…'));
+  const day = (x) => new Date(x).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const draw = (r) => fill(list,
+    r.link ? h('p', { class: 'small muted', style: 'margin:0' }, 'You opened the app from your private link, so nothing is signed in here. Phones and computers signed in with your email at /client show in this list.') : !(r.data ?? []).length ? h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing is signed in with your email right now.') : null,
+    (r.data ?? []).map((d) => h('div', { class: 'list-item', style: 'align-items:flex-start' }, h('div', { class: 'grow stack-tight' }, h('span', null, d.device, d.current ? h('span', { class: 'small good-text' }, ' · this device') : null),
+      h('span', { class: 'small muted' }, `Signed in ${day(d.signed_in_at ?? d.last_seen_at ?? Date.now())}${d.last_seen_at ? ` · last used ${day(d.last_seen_at)}` : ''}`)))),
+    (r.data ?? []).length > 1 ? btn('Sign out everywhere else', (e) => { if (confirm('Sign out every other phone and computer?')) busy(e.currentTarget, async () => { const o = await api('POST', '/app/api/devices/sign-out-others', {}); toast(`Signed out ${o.signed_out} ${o.signed_out === 1 ? 'device' : 'devices'}.`); draw(o); }); }, 'secondary') : null);
+  api('GET', '/app/api/devices').then(draw).catch(() => fill(list));
+  return h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Signed in'), h('p', { class: 'dp-panel-sub' }, 'Phones and computers signed in with your email.'), list);
+}
+const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn dp-btn--primary', href: '/client' }, 'Sign in with your email'));
 async function load() {
   let home;
   if (!tokenValue || viaCookie(tokenValue)) {                   // no private link on this phone: the portal cookie, if they signed in there
     try { home = await api('GET', `/app/api/home${atQ()}`); if (!String(tokenValue ?? '').startsWith('family:')) tokenValue = `session:${home.client?.id ?? 'me'}`; }
     catch (e) {
       const cached = tokenValue ? store.get(`dp_wo_home_${String(tokenValue).slice(0, 16)}`) : null;
-      if (e.status === 401 || !tokenValue) { if (!embedded) { location.replace('/portal'); return; } return message('Sign in with your email to see your workouts.', signInLink()); }
+      if (e.status === 401 || !tokenValue) { if (!embedded) { location.replace('/client'); return; } return message('Sign in with your email to see your workouts.', signInLink()); }
       if (e.status || !cached || cached.token !== tokenValue) return message(e.status ? e.message : 'You\'re offline. Open the app again when you have a signal.');
       home = cached.home;
     }
@@ -490,16 +506,16 @@ function render() {
   const w = home.locked ? null : currentWorkout();
   if (!w) {
     stopRest();
-    fill(view, top(), home.locked ? null : calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
+    fill(view, top(), home.locked ? null : calendarStrip(home), home.locked ? null : gameCard(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
       !home.locked && home.startup?.needed ? startupPanel(home) : h('div', { class: 'dp-panel' }, h('p', null, home.message)), home.locked ? null : gearCard(home), home.locked ? null : installCard(home),
-      home.locked ? null : feedCard(), strayPanel(), formChecksSection(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
+      home.locked ? null : feedCard(), strayPanel(), historyPanel(home), h('p', { class: 'small muted' }, `Check in, see your goals, results and lessons with the tabs ${embedded ? 'above' : 'below'}.`));
     return;
   }
   // Finished offline and not sent yet: don't show the same workout again.
   if (outbox().some((x) => x.token === tokenValue && x.kind === 'finish' && x.workout_id === w.id)) {
     fill(view, top(), calendarStrip(home), h('div', { class: 'c-title' }, `Hi ${home.client.first_name}`), pendingBox,
       h('div', { class: 'dp-panel stack' }, h('p', null, `${w.title} is finished and saved on this phone. It sends when you're back online, then your next workout shows here.`)),
-      comingUp(home.upcoming), historyPanel(home));
+      historyPanel(home));
     return;
   }
   draftFor(w);
@@ -569,13 +585,14 @@ function calendarStrip(home) {
 function gameCard(home) {
   const g = home.games;
   if (!g) return null;
-  const toGames = () => document.getElementById('c-games')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  if (!g.games_on_file) return h('div', { class: 'c-note row', style: 'align-items:center;gap:8px' }, h('span', { class: 'grow small' }, 'Add your games, races and competitions and the calendar colours itself: green is the full workout, yellow one set fewer, red half the sets.'), btn('Add games', toGames, 'ghost'));
-  const next = g.next_game;
-  return h('section', { class: 'dp-panel stack-tight c-game' },
-    h('div', { class: 'row', style: 'align-items:center;gap:8px' }, h('span', { class: 'grow strong' }, next ? nextText(next, g.days_to_next) : 'No game coming up'), btn('Games', toGames, 'ghost')),
-    h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' }, h('span', { class: 'small muted' }, 'Today:'), toneChip(g.now.tone), g.now.label !== 'Clear' ? h('span', { class: 'small muted' }, g.now.label) : null),
-    g.now.advice ? h('p', { class: 'small muted', style: 'margin:0' }, g.now.advice) : null);
+  // Owner decision: no games box on the Workout tab. One line at the top asks for the games until some are on file; it
+  // comes back when nothing is scheduled in the next 90 days, and Not now hides it until a game is added. The games
+  // themselves live on the Profile tab.
+  const soon = g.days_to_next != null && g.days_to_next <= 90;
+  if (soon || prefs.games_prompt_off) return null;
+  return h('div', { class: 'c-note row', style: 'align-items:center;gap:8px;flex-wrap:wrap' },
+    h('span', { class: 'grow small' }, g.games_on_file ? 'Nothing on your calendar for the next 90 days. Add your next games, races and competitions and the calendar colours itself around them.' : 'Add your games, races and competitions and the calendar colours itself: green is the full workout, yellow one set fewer, red half the sets.'),
+    h('div', { class: 'row', style: 'gap:6px' }, btn('Add games', () => show('profile', 'c-games'), 'ghost'), btn('Not now', () => { prefs.games_prompt_off = true; savePrefs(); render(); }, 'ghost')));
 }
 // The banner on a workout that falls on a yellow or red day: the same exercises, fewer sets.
 function gameDayBanner(w) {
@@ -587,10 +604,10 @@ function gameDayBanner(w) {
     h('span', { class: 'small' }, `${when[0].toUpperCase()}${when.slice(1)}${g.game.title ? ` (${g.game.title})` : ''}. The exercises, reps and weights stay the same; the sets below are already cut.`)));
 }
 function gamesSection() {
-  const block = gamesBlock({ first: state.home?.client?.first_name ?? 'you', who: 'athlete', canEdit: true, onChanged: async () => { await refresh(); render(); },
+  const block = gamesBlock({ first: state.home?.client?.first_name ?? 'you', who: 'athlete', canEdit: true, onChanged: async () => { prefs.games_prompt_off = false; savePrefs(); await refresh(); },
     api: { plan: () => api('GET', '/app/api/games'), add: (b) => api('POST', '/app/api/games', b), update: (id, b) => api('PATCH', `/app/api/games/${id}`, b), remove: (id) => api('DELETE', `/app/api/games/${id}`),
       preview: (b) => api('POST', '/app/api/games/preview', b), import: (b) => api('POST', '/app/api/games/import', b) } });
-  return h('section', { class: 'dp-panel stack', id: 'c-games' }, h('h2', { class: 'dp-panel-title' }, 'Games and game week'),
+  return h('section', { class: 'dp-panel stack', id: 'c-games' }, h('h2', { class: 'dp-panel-title' }, 'Games'),
     h('p', { class: 'small muted', style: 'margin:0' }, 'Keep your games, races and competitions here. Every day of your calendar takes a colour from them: green is the full workout, yellow one set fewer on every exercise, red half the sets. A date changes? Change it here and everything follows.'), block.el);
 }
 // Open a workout from the calendar. Sets already logged in another workout stay where they are: finish or discard them first.
@@ -910,9 +927,6 @@ function renderLogger(w) {
     reopened ? null : gearCard(home),
     reopened ? null : installCard(home),
     reopened ? null : feedCard(),
-    reopened ? null : comingUp(home.upcoming),
-    reopened ? null : gamesSection(),
-    reopened ? null : formChecksSection(),
     reopened ? null : historyPanel(home),
     restBar);
 }

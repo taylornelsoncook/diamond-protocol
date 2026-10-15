@@ -309,7 +309,7 @@ export function signWaiver(ctx, familyId, guardian, body) {
 }
 
 // ---------- Portal sign-in: parents and athletes, with an emailed code or an optional password ----------
-// One sign-in page (/portal) for everyone in a family. An email on file signs in as the parent it belongs to, as the
+// One sign-in page (/client) for everyone in a family. An email on file signs in as the parent it belongs to, as the
 // athlete whose own address it is, or as both when one person is both (an adult training for themselves). A 6-digit
 // code emailed to the address always works; a password is optional and set inside the portal.
 const CODE_MINUTES = 10, MAX_ATTEMPTS = 5, SESSION_DAYS = 30;

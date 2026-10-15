@@ -160,7 +160,7 @@ export async function submitInquiry(ctx, body) {
     return out;
   }
   if (ctx.db.get('SELECT id FROM guardians WHERE email = ?', data.email)) {
-    await sendEmail(ctx, { to: data.email, subject: `Your ${biz(ctx)} account`, text: `Thanks for reaching out! You already have a family account. Sign in to book: ${base(ctx)}/parent\n\n${biz(ctx)}` });
+    await sendEmail(ctx, { to: data.email, subject: `Your ${biz(ctx)} account`, text: `Thanks for reaching out! You already have a family account. Sign in to book: ${base(ctx)}/client\n\n${biz(ctx)}` });
     return out;
   }
   const id = createLead(ctx, data, { source: channelOf(body.from) ?? 'inquiry', textsOk, textsOkSource: textsOk ? 'Ticked "text me" on the website form' : null });

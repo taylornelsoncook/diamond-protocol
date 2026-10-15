@@ -72,7 +72,7 @@ export function connectUrl(ctx, clientId, provider, by = {}) {
   const state = token(24);
   ctx.db.run('DELETE FROM wearable_auth_states WHERE created_at < ?', new Date(Date.parse(ctx.now()) - STATE_MINUTES * 60000).toISOString());
   ctx.db.run('INSERT INTO wearable_auth_states (state, client_id, provider, by_kind, by_id, return_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    state, c.id, p, by.kind === 'staff' ? 'staff' : 'parent', by.id ?? null, by.kind === 'staff' ? `/?back=#/clients/${c.id}` : '/parent?tab=progress', ctx.now());
+    state, c.id, p, by.kind === 'staff' ? 'staff' : 'parent', by.id ?? null, by.kind === 'staff' ? `/?back=#/clients/${c.id}` : '/client?tab=progress', ctx.now());
   const q = new URLSearchParams({ client_id: creds(p).id, redirect_uri: redirectUri(ctx, p), response_type: 'code', scope: PROVIDERS[p].scopes, state });
   return { url: `${PROVIDERS[p].authorize}?${q}`, provider: p, label: PROVIDERS[p].label, expires_in_minutes: STATE_MINUTES };
 }
@@ -82,14 +82,14 @@ export function connectUrl(ctx, clientId, provider, by = {}) {
 export async function callback(ctx, provider, query = {}) {
   const p = Object.hasOwn(PROVIDERS, String(provider)) ? String(provider) : null;
   const back = (to, what) => {
-    const [path, hash = ''] = String(to || '/parent?tab=progress').split('#');
+    const [path, hash = ''] = String(to || '/client?tab=progress').split('#');
     const [pathname, query = ''] = path.split('?');
     const q = new URLSearchParams(query); q.set('wearable', what); q.set('provider', p ?? '');
     return { __redirect: `${pathname}?${q}${hash ? `#${hash}` : ''}` };
   };
-  if (!p) return back('/parent?tab=progress', 'error');
+  if (!p) return back('/client?tab=progress', 'error');
   const row = query.state ? ctx.db.get('SELECT * FROM wearable_auth_states WHERE state = ? AND provider = ?', String(query.state), p) : null;
-  if (!row || Date.parse(row.created_at) < Date.parse(ctx.now()) - STATE_MINUTES * 60000) return back('/parent?tab=progress', 'expired');
+  if (!row || Date.parse(row.created_at) < Date.parse(ctx.now()) - STATE_MINUTES * 60000) return back('/client?tab=progress', 'expired');
   ctx.db.run('DELETE FROM wearable_auth_states WHERE state = ?', row.state);
   const to = row.return_to;
   if (query.error || !query.code) return back(to, 'denied');

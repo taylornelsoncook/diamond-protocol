@@ -133,14 +133,14 @@ test('the provider sends the parent back: the code is exchanged, the account lin
   const link = (await parent('POST', `athletes/${maya.id}/wearables/whoop/connect`)).body;
   const state = new URL(link.url).searchParams.get('state');
   // A made-up state, or one used twice, goes nowhere.
-  assert.equal((await pub('/wearables/whoop/callback?code=abc&state=nope')).location, '/parent?tab=progress&wearable=expired&provider=whoop');
+  assert.equal((await pub('/wearables/whoop/callback?code=abc&state=nope')).location, '/client?tab=progress&wearable=expired&provider=whoop');
   const back = await pub(`/wearables/whoop/callback?code=abc123&state=${state}`);
   assert.equal(back.status, 302);
-  assert.equal(back.location, '/parent?tab=progress&wearable=connected&provider=whoop', 'the parent lands on the Progress tab');
+  assert.equal(back.location, '/client?tab=progress&wearable=connected&provider=whoop', 'the parent lands on the Progress tab');
   await settled();
   const hist = app.ctx.db.get('SELECT history_done, history_from FROM wearable_connections WHERE client_id = ?', maya.id);
   assert.deepEqual([hist.history_done, hist.history_from.slice(0, 10)], [1, '2026-03-03'], 'the history walk went back two empty chunks (180 days) past the first pull and stopped');
-  assert.equal((await pub(`/wearables/whoop/callback?code=abc123&state=${state}`)).location, '/parent?tab=progress&wearable=expired&provider=whoop', 'a state works once');
+  assert.equal((await pub(`/wearables/whoop/callback?code=abc123&state=${state}`)).location, '/client?tab=progress&wearable=expired&provider=whoop', 'a state works once');
   const tokenCall = calls.find((c) => c.url.includes('/oauth/oauth2/token'));
   const form = new URLSearchParams(tokenCall.body);
   assert.deepEqual([form.get('grant_type'), form.get('code'), form.get('redirect_uri'), form.get('client_id'), form.get('client_secret')], ['authorization_code', 'abc123', 'https://app.example.org/wearables/whoop/callback', 'whoop-client-test', 'whoop-secret-test']);
@@ -255,7 +255,7 @@ test('a provider that keeps answering 429 is given up on after a few tries, not 
 test('declined, then disconnected: the token is revoked, the data stays', async () => {
   const link = (await parent('POST', `athletes/${maya.id}/wearables/whoop/connect`)).body;
   const state = new URL(link.url).searchParams.get('state');
-  assert.equal((await pub(`/wearables/whoop/callback?error=access_denied&state=${state}`)).location, '/parent?tab=progress&wearable=denied&provider=whoop');
+  assert.equal((await pub(`/wearables/whoop/callback?error=access_denied&state=${state}`)).location, '/client?tab=progress&wearable=denied&provider=whoop');
   const conn = app.ctx.db.get('SELECT id FROM wearable_connections WHERE client_id = ?', maya.id);
   const gina = await parentSignIn('gina@example.com');
   assert.equal((await gina('DELETE', `wearables/${conn.id}`)).status, 404, 'another family can\'t touch it');

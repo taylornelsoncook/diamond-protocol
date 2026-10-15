@@ -282,7 +282,7 @@ function notifyAthlete(ctx, c, subject, text, { tab = null } = {}) {
   const base = ctx.publicUrl ?? '';
   const biz = getSetting(ctx, 'business_name');
   try { pushNotify(ctx, c.id, { title: subject, body: text.split('\n').filter(Boolean).slice(-1)[0] ?? '', url: `/app${tab ? `#${tab}` : ''}`, kind: 'message' }); } catch (e) { console.error('push:', e.message); }   // the phone, when it's subscribed (push.js)
-  if (c.family_id) notifyFamily(ctx, c.family_id, subject, `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}`);
+  if (c.family_id) notifyFamily(ctx, c.family_id, subject, `${text}\n\nSee it in the parent portal: ${base}/client\n\n${biz}`);
   if (c.email) sendEmail(ctx, { to: c.email, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}${tab ? `#${tab}` : ''}\n\n${biz}` }).catch(() => {});
 }
 const staffName = (actor) => actor?.name ?? actor?.label ?? 'Your coach';
@@ -1094,7 +1094,7 @@ function remindAthletes(ctx, items, actor) {
     const subject = list.length === 1 ? `Reminder: ${firstName(c)} has "${list[0].assignment.title}" to finish` : `Reminder: ${firstName(c)} has ${list.length} lessons to finish`;
     const text = `${coach} sent a reminder. ${firstName(c)} still has this to finish:\n\n${lines}`;
     if (to.athlete) sendEmail(ctx, { to: to.athlete, subject, sensitive: true, text: `${text}\n\nOpen your app: ${base}/app?token=${c.access_token}#education\n\n${biz}` }).catch(() => {});
-    for (const email of to.parents) sendEmail(ctx, { to: email, subject, text: `${text}\n\nSee it in the parent portal: ${base}/parent\n\n${biz}` }).catch(() => {});
+    for (const email of to.parents) sendEmail(ctx, { to: email, subject, text: `${text}\n\nSee it in the parent portal: ${base}/client\n\n${biz}` }).catch(() => {});
     for (const { assignment: x } of list) ctx.db.run('INSERT INTO lesson_reminders (id, assignment_id, client_id, sent_by, sent_at) VALUES (?, ?, ?, ?, ?)', newId('lrem'), x.id, c.id, actor?.id ?? null, ctx.now());
     reminded.push({ id: c.id, name: c.name });
   }

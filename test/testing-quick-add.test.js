@@ -45,7 +45,7 @@ test('front desk adds a new athlete at the door: profile, own account, on the da
   assert.equal(mail.length, 1, 'one email, the finish-your-profile one (no separate welcome)');
   assert.equal(mail[0].subject, 'Finish your profile at Diamond Protocol');
   assert.match(mail[0].body, /added you to the testing day "Fall combine"/);
-  assert.match(mail[0].body, /https:\/\/app\.example\.org\/portal\?finish=1/);
+  assert.match(mail[0].body, /https:\/\/app\.example\.org\/client\?finish=1/);
   assert.match(mail[0].body, /sign the waiver \(Family tab\)\. Everything else/);
   // The portal's to-finish list starts with the waiver.
   app.ctx.db.run('DELETE FROM login_codes');

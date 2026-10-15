@@ -208,7 +208,7 @@ export function resolveMembershipRequest(ctx, id, body = {}, actor) {
   const upd = ctx.db.run(`UPDATE membership_requests SET status = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE id = ? AND status = 'open'`, status, ctx.now(), actor?.name ?? 'Staff', note, id);
   if (!upd.changes) throw conflict('This request was already answered or withdrawn.');
   const g = r.guardian_id ? ctx.db.get('SELECT name, email FROM guardians WHERE id = ?', r.guardian_id) : null;
-  if (g) mail(ctx, g.email, `About ${first(r.client_name)}'s membership`, `Hi ${first(g.name)},\n\n${status === 'done' ? `We've taken care of your request about ${first(r.client_name)}'s membership.` : `We looked at your request about ${first(r.client_name)}'s membership and can't make that change right now.`}${note ? `\n\n${note}` : ''}\n\nYou can see the membership on the Programs tab of the parent portal: ${ctx.publicUrl ?? ''}/parent\n\n${biz(ctx)}`);
+  if (g) mail(ctx, g.email, `About ${first(r.client_name)}'s membership`, `Hi ${first(g.name)},\n\n${status === 'done' ? `We've taken care of your request about ${first(r.client_name)}'s membership.` : `We looked at your request about ${first(r.client_name)}'s membership and can't make that change right now.`}${note ? `\n\n${note}` : ''}\n\nYou can see the membership on the Programs tab of the parent portal: ${ctx.publicUrl ?? ''}/client\n\n${biz(ctx)}`);
   return listMembershipRequests(ctx, { status: 'all', clientId: r.client_id }).find((x) => x.id === id);
 }
 

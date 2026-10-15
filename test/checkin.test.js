@@ -70,7 +70,7 @@ test('a front-desk tablet shows sessions open for check-in and athletes tap thei
   kioskKey = k.body.link.split('#')[1];
   assert.equal((await fetch(`${base}/kiosk`)).status, 200);
   assert.equal((await fetch(`${base}/kiosk/`)).status, 200);          // a slash typed on the end still opens the page
-  assert.equal((await fetch(`${base}/parent/`)).status, 200);
+  assert.equal((await fetch(`${base}/client/`)).status, 200);
   assert.equal((await fetch(`${base}/nowhere/`)).status, 404);
   const board = (await kiosk('GET', '/kiosk-api/board')).body;
   assert.equal(board.location_name, 'Facility');

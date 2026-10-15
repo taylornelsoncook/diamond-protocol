@@ -49,7 +49,7 @@ const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video|sprint-clips\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json', '.pdf': 'application/pdf' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/parent': 'parent.html', '/portal': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/client': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "img-src 'self' data: https:", "media-src 'self' https: blob:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
@@ -116,7 +116,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
       if (!route) {
-        if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(res, url.pathname);
+        if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(res, url.pathname, url.search);
         const known = routes.some((r) => r.regex.test(url.pathname));
         throw new HttpError(known ? 405 : 404, known ? 'method_not_allowed' : 'not_found', known ? 'That method is not allowed here.' : 'No such endpoint.');
       }
@@ -278,8 +278,9 @@ function authenticate(ctx, req, route, r, url) {
   if (route.auth === 'client') {
     const linkToken = req.headers['x-client-token'] || url.searchParams.get('token');
     r.client = linkToken ? clientByToken(ctx, linkToken) : null;
-    if (!r.client && cookies.dp_family) {                                  // signed in at /portal: as the athlete, or a parent opening one of the family's athletes
+    if (!r.client && cookies.dp_family) {                                  // signed in at /client: as the athlete, or a parent opening one of the family's athletes
       const who = whoForToken(ctx, cookies.dp_family);
+      r.who = who;
       const wanted = req.headers['x-athlete-id'] || url.searchParams.get('athlete');
       if (wanted && who?.guardian) {                                          // the family portal's Workout tab: the parent acts for their own athlete
         const a = ctx.db.get('SELECT * FROM clients WHERE id = ? AND family_id = ? AND archived_at IS NULL', String(wanted), who.guardian.family_id);
@@ -289,7 +290,7 @@ function authenticate(ctx, req, route, r, url) {
       if (r.client && req.method !== 'GET' && !sameSite()) throw new HttpError(403, 'bad_origin', 'Requests from other sites are not allowed.');
       if (r.client) r.familyToken = cookies.dp_family;
     }
-    if (!r.client) throw new HttpError(401, 'invalid_link', linkToken ? 'This app link is not valid. Ask your coach for a new one.' : 'Sign in with your email at /portal, or open the link your coach sent you.');
+    if (!r.client) throw new HttpError(401, 'invalid_link', linkToken ? 'This app link is not valid. Ask your coach for a new one.' : 'Sign in with your email at /client, or open the link your coach sent you.');
     // Locked out over a declined payment: only the app's home answers (and says why) until it's paid (lockout.js).
     if (route.path !== '/app/api/home' && clientLock(ctx, r.client.id)) throw new HttpError(402, 'payment_locked', athleteLockMessage);
     return;
@@ -363,10 +364,11 @@ async function readJson(req, limit = 1_000_000) {
   } catch { throw new HttpError(400, 'invalid_json', 'The request body is not a valid JSON object.'); }
 }
 
-async function serveStatic(res, pathname) {
-  pathname = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;   // /portal/ is /portal: a slash typed on the end shouldn't 404
-  // One sign-in place for parents and athletes (version 73): the old /parent address lands on /portal.
-  if (pathname === '/parent') { res.writeHead(301, { location: '/portal' }); res.end(); return; }
+async function serveStatic(res, pathname, search = '') {
+  pathname = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;   // /client/ is /client: a slash typed on the end shouldn't 404
+  // One account at one address (owner's ask): /client is where parents, athletes and every client sign in; the older
+  // /portal and /parent addresses land there, with their query kept (?tab=progress and the like).
+  if (pathname === '/parent' || pathname === '/portal') { res.writeHead(301, { location: '/client' + (search || '') }); res.end(); return; }
   const file = PAGES[pathname] ?? (/^\/invoice\/[\w-]+$/.test(pathname) ? 'invoice.html' : /^\/pay\/[\w-]+$/.test(pathname) ? 'pay.html' : /^\/here\/[\w-]+$/.test(pathname) ? 'here.html' : /^\/spot\/[\w-]+$/.test(pathname) ? 'spot.html' : /^\/receipt\/[\w-]+$/.test(pathname) ? 'receipt.html' : /^\/shop\/[\w-]+$/.test(pathname) ? 'shop-program.html' : pathname.slice(1));
   const full = normalize(join(PUBLIC_DIR, file));
   if (!full.startsWith(PUBLIC_DIR)) return json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });

@@ -250,6 +250,6 @@ async function chargeTrial(ctx, b) {
     return 'closed';
   }
   if (guardian?.email) sendEmail(ctx, { to: guardian.email, subject: `We couldn't charge your card for ${b.title}`,
-    text: `Hi ${first(guardian.name)},\n\nThe free trial of ${b.title} ended, but we couldn't charge the card on file (${why}). ${first(b.client_name)} keeps the program for now; we'll try again tomorrow, and after ${TRIAL_TRIES} tries the program closes.\n\nUpdate the card in the parent portal (Family tab): ${ctx.publicUrl ?? ''}/portal\n\n${biz}` }).catch(() => {});
+    text: `Hi ${first(guardian.name)},\n\nThe free trial of ${b.title} ended, but we couldn't charge the card on file (${why}). ${first(b.client_name)} keeps the program for now; we'll try again tomorrow, and after ${TRIAL_TRIES} tries the program closes.\n\nUpdate the card in the parent portal (Family tab): ${ctx.publicUrl ?? ''}/client\n\n${biz}` }).catch(() => {});
   return 'failed';
 }

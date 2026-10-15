@@ -129,7 +129,7 @@ export async function sendReminders(ctx, asOf = ctx.now()) {
     if (s.family_id && due.length && familyPhones(ctx, s.family_id).length) {
       const names = due.map((r) => r.client_name.split(' ')[0]);
       const who = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)} have` : `${names[0]} has`;
-      textFamily(ctx, s.family_id, 'reminder', `Reminder: ${who} ${s.session_name} ${when(s.starts_at)} at ${s.location_name}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/parent`);
+      textFamily(ctx, s.family_id, 'reminder', `Reminder: ${who} ${s.session_name} ${when(s.starts_at)} at ${s.location_name}. Can't make it? Cancel in the parent portal: ${ctx.publicUrl ?? ''}/client`);
       sent++;
     }
     for (const r of list) ctx.db.run('UPDATE bookings SET reminded_at = ? WHERE id = ?', ctx.now(), r.id);
@@ -184,7 +184,7 @@ export async function handleInbound(ctx, params) {
     for (const g of parents.filter((p) => p.sms_opt_in_at)) ctx.db.run('UPDATE guardians SET sms_opt_out_at = NULL WHERE id = ?', g.id);
     return null;
   }
-  if (word === 'HELP' || word === 'INFO') return `${biz}: texts about bookings, schedule changes and payments. Manage them in the parent portal: ${ctx.publicUrl ?? ''}/parent. Reply STOP to stop.`;
+  if (word === 'HELP' || word === 'INFO') return `${biz}: texts about bookings, schedule changes and payments. Manage them in the parent portal: ${ctx.publicUrl ?? ''}/client. Reply STOP to stop.`;
   // A reply from someone who asked about training shows on their lead's timeline; the coach the owner gave the lead to
   // hears about it too (never about leads that aren't theirs).
   const leads = ctx.db.all(`SELECT id, parent_name, phone, coach_id, status FROM leads WHERE phone IS NOT NULL ORDER BY created_at DESC`).filter((l) => normalizePhone(l.phone) === phone);

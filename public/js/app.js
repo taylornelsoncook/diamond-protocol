@@ -1073,7 +1073,7 @@ async function viewClient(main, id) {
       h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!np.name.value.trim() || !np.email.value.trim()) throw new Error('Enter the parent\'s name and email.');
         await post(`/v1/clients/${id}/family`, { parent: { name: np.name.value, email: np.email.value, phone: np.phone.value || undefined } });
-        toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/portal with ${np.email.value.trim()}.`); render();
+        toast(`Parent added. ${np.name.value.trim().split(' ')[0]} signs in at ${location.origin}/client with ${np.email.value.trim()}.`); render();
       }); } }, h('div', { class: 'grow', style: 'min-width:160px' }, field('Parent name', np.name)), field('Email', np.email), field('Phone', np.phone), btn('Add parent', null, 'secondary', { type: 'submit' })),
       h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => { if (!ns.name.value.trim()) throw new Error('Enter the sibling\'s full name.'); await addSib(); }); } },
         h('div', { class: 'grow', style: 'min-width:180px' }, field('Sibling name', ns.name)), field('Birthday', ns.birth), btn('Add sibling', null, 'secondary', { type: 'submit' })),
@@ -1432,7 +1432,7 @@ async function viewNewClient(main) {
   const common = () => ({ training_type: trains.value || undefined, plan_id: plan.value || undefined, program_id: canProgram ? prog.value || undefined : undefined, medical_notes: val(f.medical_notes), emergency_name: val(f.emergency_name), emergency_phone: val(f.emergency_phone) });
   const body = () => (isAthlete.checked ? { ...athleteBody(), ...common(), parent: { name: f.pName.value, email: f.pEmail.value, phone: val(f.pPhone) } } : { name: f.name.value, email: f.email.value, phone: val(f.phone), ...common() });
   const done = (c) => {
-    toast(c.family && isAthlete.checked ? `${c.name.split(' ')[0]} added. ${f.pName.value.split(' ')[0] || 'The parent'} can sign in at ${location.origin}/parent with ${f.pEmail.value.trim()}.` : `Account created for ${c.name.split(' ')[0]}.`);
+    toast(c.family && isAthlete.checked ? `${c.name.split(' ')[0]} added. ${f.pName.value.split(' ')[0] || 'The parent'} can sign in at ${location.origin}/client with ${f.pEmail.value.trim()}.` : `Account created for ${c.name.split(' ')[0]}.`);
     location.hash = `#/clients/${c.id}`;
   };
   const dupLink = (d) => h('a', { href: `#/clients/${d.id}` }, `${d.name} (${d.athlete_id}${d.archived ? ', archived' : ''}${d.family_name ? `, ${d.family_name}` : ''}${d.birth_date ? `, born ${date(`${d.birth_date}T12:00:00`)}` : ''})`);

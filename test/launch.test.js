@@ -47,7 +47,7 @@ test('families sign themselves up: details, agree, confirm email, signed in', as
   assert.equal(me.family.waiver.signed, false, 'the waiver is still signed in the portal');
   kim = me;
   const welcome = await mailTo('kim@example.com', /^Welcome to/);
-  assert.ok(welcome.body.includes('Your family account is ready') && welcome.body.includes('https://app.example.com/portal') && welcome.body.includes(`LEOREY${year}`));
+  assert.ok(welcome.body.includes('Your family account is ready') && welcome.body.includes('https://app.example.com/client') && welcome.body.includes(`LEOREY${year}`));
   const events = (await call('GET', '/v1/events?limit=20', null, owner)).body.data;
   assert.ok(events.some((e) => e.type === 'family.signed_up'));
 });
@@ -173,7 +173,7 @@ test('receipts, trial reminders and failed-payment emails; each can be turned of
   const in3 = new Date(Date.now() + 3 * 86400000).toISOString();
   assert.equal((await call('POST', '/v1/billing/run', { as_of: in3 }, owner)).body.trial_reminders, 1);
   const trial = await mailTo('rosa@example.com', /free trial ends/);
-  assert.ok(trial.body.includes('no card on file') && trial.body.includes('/parent'));
+  assert.ok(trial.body.includes('no card on file') && trial.body.includes('/client'));
   assert.equal((await call('POST', '/v1/billing/run', { as_of: in3 }, owner)).body.trial_reminders, 0, 'only once');
   // The family adds a card, but it declines when the trial ends: both parents hear about it.
   await call('POST', `/v1/clients/${tia.id}/card/test`, null, owner);

@@ -39,7 +39,7 @@ function render(d) {
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, s.name),
           h('span', { class: 'small muted' }, [KIND[s.kind], s.location_name, ages(s), price(s)].filter(Boolean).join(' · ')),
           h('span', { class: `small ${s.spots_left ? (s.spots_left <= 3 ? 'warn-text' : 'muted') : 'warn-text'}` }, s.spots_left ? `${s.spots_left} ${s.spots_left === 1 ? 'spot' : 'spots'} left` : 'Full: join the waitlist')),
-        link('/parent?book=classes', s.spots_left ? 'Book' : 'Waitlist', s.spots_left ? 'primary' : 'secondary'))];
+        link('/client?book=classes', s.spots_left ? 'Book' : 'Waitlist', s.spots_left ? 'primary' : 'secondary'))];
     }));
   };
   age.addEventListener('change', () => { drawClasses(); sendHeight(); });
@@ -47,14 +47,14 @@ function render(d) {
   const evalPanel = d.evaluations.length ? h('section', { class: 'dp-panel stack' },
     h('h2', { class: 'dp-panel-title' }, 'New? Start with an evaluation'),
     h('p', { class: 'muted', style: 'margin:0' }, `We test speed, power and movement, then build a plan for your athlete${d.evaluations[0].price_cents ? `. ${money(d.evaluations[0].price_cents)}` : ''}.`),
-    h('div', { class: 'row wrap', style: 'gap:8px' }, d.evaluations.slice(0, 6).map((e) => h('a', { class: 'p-chip', style: 'display:inline-flex;align-items:center;text-decoration:none', href: '/parent?book=evaluation', ...target }, `${fmt(e.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time(e.starts_at)}`))),
+    h('div', { class: 'row wrap', style: 'gap:8px' }, d.evaluations.slice(0, 6).map((e) => h('a', { class: 'p-chip', style: 'display:inline-flex;align-items:center;text-decoration:none', href: '/client?book=evaluation', ...target }, `${fmt(e.starts_at, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time(e.starts_at)}`))),
     h('p', { class: 'small muted', style: 'margin:0' }, 'Pick a time after you sign in.')) : null;
 
   fill(root, h('main', { class: 'p-wrap', style: embed ? 'padding:12px 12px 16px' : null },
     embed ? null : h('img', { src: '/brand/logo.png', alt: `${d.business_name}. Built under pressure.`, style: 'width:160px;align-self:center' }),
     h('h1', { class: 'p-title', style: 'text-align:center' }, 'Book a session'),
     !d.open ? h('p', { class: 'muted', style: 'text-align:center' }, `Online booking isn't open right now. `, h('a', { href: '/start', ...target }, 'Ask about training'), ' and we\'ll get back to you.') : [
-      h('div', { class: 'row wrap', style: 'gap:8px;justify-content:center' }, link('/parent?book=classes', 'I have an account: sign in'), link(newFamily, d.signup_open ? 'New family? Sign up' : 'New? Ask about training', 'secondary')),
+      h('div', { class: 'row wrap', style: 'gap:8px;justify-content:center' }, link('/client?book=classes', 'I have an account: sign in'), link(newFamily, d.signup_open ? 'New family? Sign up' : 'New? Ask about training', 'secondary')),
       evalPanel,
       h('section', { class: 'dp-panel stack' },
         h('div', { class: 'row wrap' }, h('h2', { class: 'dp-panel-title grow' }, 'Next 2 weeks'), age),

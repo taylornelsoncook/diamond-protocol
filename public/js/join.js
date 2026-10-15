@@ -10,7 +10,7 @@ async function boot() {
   state.info = info;
   document.title = `Join ${info.business_name}`;
   if (!info.open) return fill(root, h('main', { class: 'p-wrap', style: 'min-height:100vh;justify-content:center' }, logoBlock(), h('div', { class: 'dp-panel stack' },
-    h('h1', { class: 'p-title' }, 'Sign-up is closed'), h('p', { class: 'muted' }, `Contact ${info.business_name} to join. Already have an account?`), h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/parent' }, 'Sign in'))));
+    h('h1', { class: 'p-title' }, 'Sign-up is closed'), h('p', { class: 'muted' }, `Contact ${info.business_name} to join. Already have an account?`), h('a', { class: 'dp-btn dp-btn--primary dp-btn--block', href: '/client' }, 'Sign in'))));
   renderForm();
 }
 const logoBlock = () => h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.', style: 'width:160px;align-self:center' });
@@ -36,7 +36,7 @@ function renderForm(error) {
       h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start;min-height:44px' }, agree,
         h('span', null, 'I agree to the ', h('a', { href: '/terms', target: '_blank' }, 'terms of service'), ' and ', h('a', { href: '/privacy', target: '_blank' }, 'privacy policy'), ', and I\'m the parent or legal guardian of the athletes I\'m adding.')),
       err, submit,
-      h('p', { class: 'small muted', style: 'text-align:center' }, 'Already have an account? ', h('a', { href: '/parent' }, 'Sign in')))));
+      h('p', { class: 'small muted', style: 'text-align:center' }, 'Already have an account? ', h('a', { href: '/client' }, 'Sign in')))));
   function readCards() { root.querySelectorAll('[data-athlete]').forEach((el) => { const i = Number(el.dataset.athlete); for (const k of Object.keys(state.athletes[i])) { const f = el.querySelector(`[name="${k}"]`); if (f) state.athletes[i][k] = f.value; } }); }
   state.readCards = readCards;
 }
@@ -78,7 +78,7 @@ function renderCode(started) {
     if (!res.ok) { err.textContent = data.error?.message ?? 'That didn\'t work. Try again.'; return; }
     const buy = new URLSearchParams(location.search).get('buy');     // from the store page: land on what they came to buy
     const pending = (data.athletes ?? []).some((a) => a.claim === 'pending');   // an Athlete ID we'll check with the coach
-    location.href = `/parent?welcome=1${pending ? '&claim=1' : ''}${buy && /^(program|course):[\w-]+$/.test(buy) ? `&buy=${encodeURIComponent(buy)}` : ''}`;
+    location.href = `/client?welcome=1${pending ? '&claim=1' : ''}${buy && /^(program|course):[\w-]+$/.test(buy) ? `&buy=${encodeURIComponent(buy)}` : ''}`;
   }); } },
     h('h1', { class: 'p-title' }, 'Check your email'),
     h('p', { class: 'muted' }, `We sent a 6-digit code to ${state.parent.email}. It expires in 30 minutes. If you already have an account, we emailed you a sign-in link instead.`),

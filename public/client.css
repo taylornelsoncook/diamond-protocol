@@ -32,8 +32,7 @@
 .c-rx-cell b{display:block;font:600 10px/14px var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--steel-muted)}
 .c-rx-cell span{display:block;font:600 15px/20px var(--font-sans);color:var(--steel);overflow-wrap:anywhere}
 .c-rx--compact .c-rx-cell span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.c-rx-cell--empty span{color:var(--steel-muted);font-weight:400}
-.c-rx--compact .c-rx-cell--empty{display:none}
+.c-rx-cell--empty{display:none}   /* a metric with no number is left out, open or collapsed (owner's ask) */
 .c-rx--compact{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
 .c-sets{display:flex;flex-direction:column;gap:6px;padding:10px 12px 12px}
 .c-set{display:flex;align-items:center;gap:8px;min-height:52px}

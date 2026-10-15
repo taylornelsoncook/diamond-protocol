@@ -1,6 +1,7 @@
 import { h, fill, toast, copyText, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, viewProgramBoard, workoutRow } from './programs-coach.js';
+import { gamesBlock } from './games-ui.js';
 import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
@@ -106,9 +107,11 @@ function render() {
 
 function header(title, subtitle, action) {
   const menu = h('button', { type: 'button', class: 'dp-btn dp-btn--secondary menu-btn', 'aria-label': 'Open menu', onClick: () => document.querySelector('.shell').classList.toggle('nav-open') }, 'Menu');
+  // On a phone the Menu button sits beside the title and the page's buttons line up in two even columns underneath
+  // (styles.css .dp-header-actions), instead of wrapping unevenly to the right.
   return h('header', { class: 'dp-header' },
-    h('div', null, h('h1', { class: 'dp-header-title' }, title), subtitle ? h('p', { class: 'dp-header-sub' }, subtitle) : null),
-    h('div', { class: 'row' }, menu, action || null));
+    h('div', { class: 'dp-header-text' }, h('h1', { class: 'dp-header-title' }, title), subtitle ? h('p', { class: 'dp-header-sub' }, subtitle) : null),
+    menu, action ? h('div', { class: 'dp-header-actions row' }, action) : null);
 }
 const addClientBtn = () => btn('Add client', () => { location.hash = '#/clients/new'; });
 
@@ -1158,7 +1161,8 @@ async function viewClient(main, id) {
   const maxesPanel = panel('Maxes', { subtitle: `The weights in ${first}'s program come from these. A max entered here shows to the family at once; with nothing on file the estimate from logged sets stands in.` },
     maxesBlock(maxData, { who: 'coach', first, canEdit: role !== 'front_desk', save: (b) => post(`/v1/clients/${id}/maxes`, b), remove: (rid) => del(`/v1/clients/${id}/maxes/${rid}`), reload: render }));
   // Bar speed from a velocity device (version 81): per exercise, the load-velocity profile and the estimated max it points to.
-  const barSpeedPanel = panel('Bar speed', { subtitle: `For every exercise ${first} has done on a velocity device (Output, GymAware, Vitruve and others): the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max. Connect a device or import its export under Testing → Devices & imports.` },
+  const barSpeedPanel = panel('Bar speed', { subtitle: `For every exercise ${first} has done on a velocity device (Output, GymAware, FLEX, Enode, Perch, or any device's CSV): the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max.`,
+    action: role === 'owner' ? h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/connections?athlete=${id}` }, 'Import a file') : null },
     vbtBlock(barSpeed, { who: 'coach', first }));
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
@@ -1208,7 +1212,7 @@ async function viewClient(main, id) {
     ['family', 'Family', [familyPanel ?? noFamilyPanel, requestsPanel, mergePanel]],
     ['membership', 'Membership', [membership, sessionsPanel, payments, payLinks]],
     ['schedule', 'Sessions', [bookingsPanel, attendancePanel]],
-    ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), volumePanel, eng.accountability, eng.goals, eng.badges]],
+    ['training', 'Training', [training, calendarPanel(calendar, { first, canEdit: role !== 'front_desk', deps: { get, post, patch }, reload: render }), gamesPanel(id, first, role !== 'front_desk'), volumePanel, eng.accountability, eng.goals, eng.badges]],
     ['testing', 'Testing', [maxesPanel, barSpeedPanel, perfPanel, eng.targets]],
     ['recovery', 'Recovery & sleep', [outsidePanel]],
     ['form-checks', 'Form checks', [formChecksPanel]],
@@ -1301,6 +1305,14 @@ function startupBlock(clientId, first, c, role) {
 // The adaptive plan (services/adapt.js): what the athlete's calendar calls for (a missed week coming round again, a minimum
 // week after misses in a row, the next phase early after two clean weeks), approve or dismiss, undo what was applied.
 const ADJ_KIND = { shift: 'Missed week', minimum: 'Minimum week', advance: 'Next phase early' };
+// The game-week helper (gameweek.js): the athlete's games, the advice for each day around them, and the workouts that
+// land on the wrong day with Move it (the same move as the training calendar's).
+function gamesPanel(clientId, first, canEdit) {
+  const block = gamesBlock({ first, who: 'coach', canEdit,
+    api: { plan: () => get(`/v1/clients/${clientId}/game-plan`), add: (b) => post(`/v1/clients/${clientId}/games`, b), update: (gid, b) => patch(`/v1/clients/${clientId}/games/${gid}`, b), remove: (gid) => del(`/v1/clients/${clientId}/games/${gid}`),
+      preview: (b) => post(`/v1/clients/${clientId}/games/preview`, b), import: (b) => post(`/v1/clients/${clientId}/games/import`, b) } });
+  return panel('Games and game week', { subtitle: `${first}'s games, races and competitions (added here, in the app or by the family). Every day of the training calendar takes a colour from them: green is the workout as written, yellow one set fewer on every exercise, red half the sets; the exercises, reps and weights never change. The rules are on the Programs page.` }, block.el);
+}
 function adaptBlock(clientId, first) {
   const box = h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' });
   const draw = async () => {
@@ -2950,7 +2962,7 @@ function livePanel(id, st, canSwap) {
       h('summary', { class: 'row wrap dp-live-sum', style: 'gap:8px;align-items:center;cursor:pointer' },
         h('span', { class: `dp-badge dp-badge--${a.here ? 'good' : 'muted'}`, style: 'min-width:56px;text-align:center' }, a.here ? 'Here' : 'Not yet'),
         h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', null, h('a', { href: `#/clients/${a.client_id}`, class: 'strong', style: 'color:var(--steel)' }, a.name), a.team ? h('span', { class: 'small muted' }, ' · team') : null), what),
-        level(a.readiness), progress),
+        level(a.readiness), a.game_day?.cut ? h('span', { class: `gw-chip gw-chip--${a.game_day.tone}`, title: a.game_day.cut_text }, `${a.game_day.tone === 'red' ? 'Red' : 'Yellow'} day: ${a.game_day.cut === 'half' ? 'half the sets' : 'one set fewer'}`) : null, progress),
       w ? h('div', { class: 'stack-tight', style: 'margin:8px 0 0 64px' }, a.exercises.map((e) => exLine(a, e))) : null);
   };
   async function draw(fromTimer = false) {
@@ -4577,7 +4589,9 @@ async function viewQueue(main) {
 async function viewConnections(main) {
   if (deskStop(main, 'Devices & imports')) return;
   const owner = isOwner();
-  const [integ, links, everyone, waitingQ, vbtSystems, vbtWaiting, vbtImports] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue'), get('/v1/vbt/systems'), get('/v1/vbt/waiting'), get('/v1/vbt/imports')]);
+  // Bar speed (owner decision): the owner connects devices, imports files and links waiting sets; coaches only read the data on each athlete's page.
+  const none = { data: [] };
+  const [integ, links, everyone, waitingQ, vbtSystems, vbtWaiting, vbtImports] = await Promise.all([get('/v1/integrations'), get('/v1/athlete-links'), linkableAthletes(), get('/v1/queue'), get('/v1/vbt/systems'), owner ? get('/v1/vbt/waiting') : none, owner ? get('/v1/vbt/imports') : none]);
   const sysName = (p) => (p === 'api' ? 'Open API' : integ.data.find((i) => i.provider === p)?.name.split(' (')[0] ?? vbtSystems.data.find((x) => x.key === p)?.label.split(' (')[0] ?? p);
 
   // Hawkin: a failed sync shows Needs attention, and the owner can paste a new token right there.
@@ -4664,7 +4678,7 @@ async function viewConnections(main) {
     waitingQ.n ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waitingQ.n} ${waitingQ.n === 1 ? 'result is' : 'results are'} waiting from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
     linkPanel, linksPanel, hawkinPanel,
     // Bar speed (version 81): a device's export, and sets waiting under a name or ID we don't know.
-    vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render }),
+    !owner ? null : vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render, preselect: new URLSearchParams(location.hash.split('?')[1] ?? '').get('athlete') }),
     vbtWaiting.data.length || vbtImports.data.length ? vbtWaitingPanel({ waiting: vbtWaiting.data, imports: vbtImports.data, everyone, athletePicker, post, onDone: render }) : null,
     panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
     apiPanel);

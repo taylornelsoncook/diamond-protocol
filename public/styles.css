@@ -36,7 +36,11 @@
 .dp-metric-value--warn{color:var(--amber)}
 .dp-metric-value--good{color:var(--green-bright)}
 .dp-metric-note{font:400 13px/18px var(--font-sans);color:var(--steel-muted)}
-.dp-header{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-4);padding-bottom:var(--space-4);border-bottom:1px solid var(--line)}
+.dp-header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--space-4);padding-bottom:var(--space-4);border-bottom:1px solid var(--line)}
+/* The page's buttons: right-aligned and wrapping as a row on wide screens, dropping under the title when they don't fit;
+   two even columns on a phone (below). */
+.dp-header-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--space-3);margin-left:auto}
+.dp-header-actions>.row,.dp-header-actions>.row.wrap{display:contents}
 .dp-header-title{margin:0;font:700 40px/1 var(--font-display);letter-spacing:.06em;text-transform:uppercase;color:var(--steel)}
 .dp-header-sub{margin:6px 0 0;font:400 15px/22px var(--font-sans);color:var(--steel-muted)}
 .dp-field{display:flex;flex-direction:column;gap:6px}
@@ -122,8 +126,17 @@ dialog::backdrop{background:rgba(0,0,0,.75)}
 @media (max-width: 760px){
   .shell{display:block} .shell .dp-nav{position:fixed;left:0;top:0;z-index:40;transform:translateX(-100%);transition:transform .2s}
   .shell.nav-open .dp-nav{transform:none} .main{padding:20px 16px 64px} .menu-btn{display:inline-flex}
-  .dp-header{flex-wrap:wrap;align-items:flex-start} .dp-header-title{font-size:30px} .form-grid{grid-template-columns:1fr}
+  .dp-header{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:12px} .dp-header-title{font-size:30px} .form-grid{grid-template-columns:1fr}
+  .dp-header-actions{grid-column:1 / -1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%;margin-left:0}
+  .dp-header-actions .dp-btn{width:100%;min-width:0;padding-left:8px;padding-right:8px;white-space:normal;text-align:center}
+  .dp-header-actions>.dp-btn:last-child:nth-child(odd),.dp-header-actions>.row>.dp-btn:last-child:nth-child(odd){grid-column:1 / -1}
   .metrics{grid-template-columns:1fr} .metrics .dp-metric+.dp-metric{border-left:0;border-top:1px solid var(--line-subtle)}
+  /* Filter chips and tab strips: even columns instead of a ragged wrap (the owner's note). */
+  .tm-views{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .tm-views .tm-view{width:100%;min-width:0;padding:0 6px;justify-content:center;white-space:normal;text-align:center}
+  .ts-tabs.ts-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible}
+  .ts-tabs .ts-tab{width:100%;min-width:0;justify-content:center;white-space:normal;text-align:center;padding:0 8px}
+  .ts-tabs .ts-tab:last-child:nth-child(odd){grid-column:1 / -1}
 }
 @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
 input[type=checkbox]{accent-color:var(--green-mid);width:18px;height:18px}

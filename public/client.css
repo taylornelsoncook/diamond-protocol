@@ -78,6 +78,13 @@
 .c-day-n{font:600 15px/1 var(--font-sans);color:var(--steel)}
 .c-day-dot{font:700 12px/12px var(--font-sans);min-height:12px;color:var(--green-bright)}
 .c-day--missed .c-day-dot{color:var(--amber)}
+.c-day--game{border-color:var(--green-bright);box-shadow:inset 0 -3px 0 var(--green-bright)}
+.c-day--game .c-day-dot{color:var(--green-bright)}
+.c-day--green{box-shadow:inset 0 -3px 0 var(--green-bright)}
+.c-day--yellow{border-color:var(--amber);box-shadow:inset 0 -3px 0 var(--amber)}
+.c-day--red{border-color:var(--red,#d2473b);box-shadow:inset 0 -3px 0 var(--red,#d2473b)}
+.c-day--red .c-day-dot{color:var(--red,#d2473b)}
+.c-game{border-color:var(--green-mid)}
 .c-day--done .c-day-dot{color:var(--green-soft)}
 .c-day[aria-pressed="true"]{border-color:var(--green-bright);box-shadow:0 0 0 1px var(--green-bright) inset}
 .c-day:focus-visible{outline:2px solid var(--green-bright);outline-offset:2px}

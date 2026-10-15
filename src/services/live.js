@@ -1,6 +1,8 @@
 import { newId, v, notFound, badRequest, conflict } from '../util.js';
 import { athletesIn } from './screen.js';
 import { getProgram, appExercise, swapsFor, nextWorkoutFor, startOfToday } from './programs.js';
+import { cutFor as gameCutFor } from './gameweek.js';
+import { today as localToday } from './training-calendar.js';
 import { readinessToday } from './engage.js';
 import { emit } from './events.js';
 
@@ -47,8 +49,9 @@ function athleteLive(ctx, s, a, onScreen, program) {
   const setsBySlot = new Map(log ? ctx.db.all('SELECT workout_exercise_id, COUNT(*) AS n FROM workout_sets WHERE workout_log_id = ? GROUP BY workout_exercise_id', log.id).map((r) => [r.workout_exercise_id, r.n]) : []);
   const doneSlots = new Set(log ? ctx.db.all('SELECT workout_exercise_id FROM exercise_logs WHERE workout_log_id = ?', log.id).map((r) => r.workout_exercise_id) : []);
   const swaps = w ? swapsFor(ctx, a.client_id, w.id) : null;
+  const gameDay = w ? gameCutFor(ctx, a.client_id, w.date ?? localToday(ctx)) : null;   // the day's colour from the athlete's games (gameweek.js)
   const exercises = w ? w.exercises.map((x) => {
-    const e = appExercise(ctx, a.client_id, x, readiness, swaps), n = setsBySlot.get(x.id) ?? 0;
+    const e = appExercise(ctx, a.client_id, x, readiness, swaps, { game: gameDay?.cut ?? null }), n = setsBySlot.get(x.id) ?? 0;
     return { id: e.id, exercise_id: e.exercise_id, name: e.name, group_tag: e.group_tag, block_name: e.block_name ?? null, prescription: e.prescription, details: e.details,
       load: e.load ? { lb: e.load.lb ?? null, text: e.load.text, missing: !!e.load.missing } : null,
       target_sets: e.target_sets, planned_sets: e.planned_sets ?? null, target_reps: e.target_reps, progression: e.progression?.text ?? null, swapped: e.swapped ?? null,
@@ -57,6 +60,7 @@ function athleteLive(ctx, s, a, onScreen, program) {
   return { client_id: a.client_id, name: a.name, booking_id: a.booking_id ?? null, team: !!a.team, here: !!a.here,
     readiness: readiness?.level ? { level: readiness.level, headline: readiness.headline, sets_off: readiness.sets_off, drop: readiness.drop } : null,
     workout: w ? { id: w.id, title: w.title, week: w.week, day: w.day, program_name: w.program_name, source: w.source, warmup: w.warmup?.name ?? null, cooldown: w.cooldown?.name ?? null } : null,
+    game_day: gameDay ? { tone: gameDay.tone, cut: gameDay.cut, cut_text: gameDay.cut_text, label: gameDay.label, game: gameDay.game } : null,
     program_progress: own ? { completed: own.program.workouts.length - own.left.length, total: own.program.workouts.length, name: own.program.name } : null,
     logged: !!log, logged_at: log?.completed_at ?? null, on_screen: !!log?.session_id, effort: log?.rpe ?? null,
     exercises_done: exercises.filter((e) => e.done).length, sets_logged: [...setsBySlot.values()].reduce((t, n) => t + n, 0), exercises };

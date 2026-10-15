@@ -322,7 +322,7 @@ export function createEngage({ api, audience = 'athlete', onData = () => {} }) {
   }
   // Bar speed from a velocity device (version 81): the load-velocity profile and estimated max per exercise, recent sessions.
   function vbtBox() {
-    if (!api.get) return null;
+    if (!api.get || parent) return null;   // the athlete's own data only (owner decision): nothing in the family portal
     const box = h('div');
     api.get('vbt').then((d) => { if (d?.has_data) fill(box, section(parent ? `${name()}'s bar speed` : 'Your bar speed', `Every exercise ${parent ? 'they have' : 'you have'} done on a velocity device: the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max.`, vbtBlock(d, { who: parent ? 'parent' : 'athlete', first: name() }))); }).catch(() => {});
     return box;

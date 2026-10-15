@@ -14,6 +14,7 @@ import { equipmentSwaps, getProfile as trainingProfile } from './startup.js';
 import { cuesFor } from './cues.js';
 import { activeMinimum, forAthlete as adjustmentsFor, checkAthlete as adaptAfterLog } from './adapt.js';
 import { thisWeek as weekStrip, forAthlete as weeklyNoteFor } from './weekly.js';
+import { homeSummary as gameSummary, cutFor as gameCutFor, cutSets as gameCutSets } from './gameweek.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -1170,7 +1171,9 @@ function reopenId(ctx, clientId) {
 // One exercise as the app shows it: the plan, today's weight (lighter on a rough day), an easy day's sets taken off
 // (never below one), and the coach-approved steps for this athlete on top (progression.js).
 // minimum: a minimum week (adapt.js) halves the sets, never below one, before an easy day's cut.
-export function appExercise(ctx, clientId, x0, readiness, swaps = null, { minimum = false } = {}) {
+// game: the game-week colour of the day (gameweek.js): 'minus_one' on a yellow day, 'half' on a red one; the deeper of
+// it and the minimum week applies, never both.
+export function appExercise(ctx, clientId, x0, readiness, swaps = null, { minimum = false, game = null } = {}) {
   const x = slotFor(x0, swaps?.get(x0.id));
   const drop = readiness?.drop ?? 0, setsOff = readiness?.sets_off ?? 0;
   const rx = parseRx(x);
@@ -1178,9 +1181,9 @@ export function appExercise(ctx, clientId, x0, readiness, swaps = null, { minimu
   const load = loadFor(ctx, clientId, x, { visibleOnly: true, drop });
   if (load && load.lb != null && step?.weight_lb) { load.lb = Math.max(5, load.lb + step.weight_lb); load.text = `${load.lb} lb (${load.text.replace(/^\d+ lb \((.*)\)$/, '$1')}, ${step.weight_lb > 0 ? '+' : ''}${step.weight_lb} lb from your progression)`; }
   const full = Math.min(MAX_SETS, rx.sets + (step?.sets ?? 0));
-  const planned = minimum ? Math.max(1, Math.ceil(full / 2)) : full;
+  const planned = Math.min(minimum ? Math.max(1, Math.ceil(full / 2)) : full, gameCutSets(full, game));
   const targetSets = Math.max(1, planned - setsOff);
-  return { ...x, load, target_sets: targetSets, ...(targetSets < full ? { planned_sets: full } : {}), ...(minimum ? { minimum_week: true } : {}), target_reps: rx.reps == null ? null : Math.max(1, rx.reps + (step?.reps ?? 0)),
+  return { ...x, load, target_sets: targetSets, ...(targetSets < full ? { planned_sets: full } : {}), ...(minimum ? { minimum_week: true } : {}), ...(game && gameCutSets(full, game) < full ? { game_cut: game } : {}), target_reps: rx.reps == null ? null : Math.max(1, rx.reps + (step?.reps ?? 0)),
     progression: step, last: lastTime(ctx, clientId, x.exercise_id), best_weight: bestWeight(ctx, clientId, x.exercise_id) };
 }
 
@@ -1249,6 +1252,7 @@ export function clientHome(ctx, client, { at = null } = {}) {
     adjustments: adjustmentsFor(ctx, client.id),   // a minimum week in force, and what the adaptive plan changed this week (adapt.js)
     week: weekStrip(ctx, client.id),               // this week's planned, done, sets and the run of clean weeks (weekly.js)
     weekly_note: weeklyNoteFor(ctx, client.id),    // the coach's note for the week, once sent
+    games: gameSummary(ctx, client.id),            // the game-week helper: the next game, today's advice, suggestions (gameweek.js)
     workout: next && appWorkout(ctx, client.id, next, readiness, { at }),
     upcoming: left.filter((w) => w.id !== next?.id).slice(0, 3).map((w) => ({ id: w.id, week: w.week, day: w.day, title: w.title, date: w.date, status: w.status, exercises: w.exercises.map((x) => x.name) })),
     calendar: cal,
@@ -1260,9 +1264,10 @@ export function clientHome(ctx, client, { at = null } = {}) {
 function appWorkout(ctx, clientId, w, readiness, { at = null } = {}) {
   const swaps = equipmentSwaps(ctx, clientId, w, swapsFor(ctx, clientId, w.id), { at });   // the gear the athlete has at home (startup.js)
   const minimum = !!activeMinimum(ctx, clientId);
-  const items = w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps, { minimum }), alternatives: alternativesFor(ctx, x) }));
+  const gameDay = gameCutFor(ctx, clientId, w.date ?? localToday(ctx));   // the day's colour from the athlete's games (gameweek.js)
+  const items = w.exercises.map((x) => ({ ...appExercise(ctx, clientId, x, readiness, swaps, { minimum, game: gameDay?.cut ?? null }), alternatives: alternativesFor(ctx, x) }));
   const cues = cuesFor(ctx, items.map((x) => x.exercise_id));   // the coach's recorded cue and clip for the exercise they do (cues.js)
-  return { ...w, exercises: withAsks(ctx, clientId, items.map((x) => ({ ...x, cue: cues.get(x.exercise_id) ?? null }))) };
+  return { ...w, game_day: gameDay, exercises: withAsks(ctx, clientId, items.map((x) => ({ ...x, cue: cues.get(x.exercise_id) ?? null }))) };
 }
 // A workout the athlete picked on the calendar (a missed one, or a day ahead) instead of the one the app opened on.
 export function openWorkout(ctx, client, workoutId, { at = null } = {}) {

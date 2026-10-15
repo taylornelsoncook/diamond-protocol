@@ -93,6 +93,7 @@ function render() {
   else if (athlete) side = h('div', { class: 'tv-me stack' },
     h('h2', { class: 'tv-me-name' }, athlete.name),
     athlete.readiness && athlete.readiness.level !== 'green' ? h('p', { class: 'tv-me-ready' }, `${athlete.readiness.headline}, from today's check-in.`) : null,
+    athlete.game_day?.cut_text ? h('p', { class: 'tv-me-ready' }, `${athlete.game_day.tone === 'red' ? 'Red' : 'Yellow'} day (${athlete.game_day.label.toLowerCase()}): ${athlete.game_day.cut_text}.`) : null,
     athlete.weights.length ? h('dl', { class: 'tv-me-weights' }, athlete.weights.map((x) => h('div', null, h('dt', null, x.name), h('dd', null, x.text)))) : h('p', { class: 'muted', style: 'margin:0' }, 'No weights to work out for this one. Follow the board.'),
     h('button', { type: 'button', class: 'dp-btn dp-btn--primary dp-btn--block tv-big', onClick: log }, 'Log this workout'),
     h('button', { type: 'button', class: 'dp-btn dp-btn--ghost dp-btn--block', onClick: () => { athlete = null; render(); } }, 'Not me'));

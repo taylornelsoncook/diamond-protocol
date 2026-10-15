@@ -14,20 +14,19 @@ import { readXlsx } from './xlsx.js';
 import { emit } from './events.js';
 
 // The systems coaches use, with where each keeps its export and what it offers for a live connection (from the brief).
+// Only systems with an open API are listed (owner decision: "I don't want any VBT equipment that does not allow open
+// API options"); every one of them also exports a CSV, which is the usual road into a profile (Testing → Devices &
+// imports, or the client page's Bar speed panel). Any other device's CSV goes in as "Another device or spreadsheet".
 export const SYSTEMS = {
   output: { label: 'Output Sports (Capture app, Output Hub)', kind: 'IMU sensor', export: 'In Output Hub, open the athlete or group, pick the date range, exercise and metrics, and export the CSV. The Capture app syncs to the Hub whenever it\'s online.',
     api: 'Output offers an Open API on its Pro Teams plan (pre-built for TeamBuildr, Movella and Teamworks). Ask Output for access; a short script, or Output\'s team, can forward each set to the address below with your key.' },
   gymaware: { label: 'GymAware Cloud (RS, PowerTool)', kind: 'linear position transducer', export: 'In GymAware Cloud, CSV export is on the Essentials+ tiers: open the athlete or team, choose the dates and Export.',
     api: 'GymAware\'s Cloud API (cloud.gymaware.com/api/summaries, included with the Premium or Pro Cloud licence) streams one JSON object per set with meanVelocity, peakVelocity, meanPower and peakPower. Post those objects to the address below as they are: the field names are accepted.' },
   flex: { label: 'GymAware FLEX', kind: 'laser bar tracker', export: 'In the FLEX app or GymAware Cloud: Export → CSV (the CSV export is on the Essentials and higher tiers).', api: 'Same cloud as GymAware above.' },
-  vitruve: { label: 'Vitruve (Encoder, Teams)', kind: 'linear position transducer', export: 'Vitruve Teams: Progress → the athlete → the exercise → Export → CSV or Excel (30 days, 180 days or everything, by plan). The athlete app exports one day of one exercise at a time.',
-    api: 'No public API; export the file.' },
   enode: { label: 'Enode Pro (formerly Vmaxpro)', kind: 'IMU sensor', export: 'In the Enode app: Export → choose the athlete, exercise, metrics and date range → CSV (every plan, the free one too).',
     api: 'API access starts on Enode\'s Trainer plan; ask Enode for the documentation and forward sets to the address below.' },
   perch: { label: 'Perch', kind: '3D camera', export: 'In Perch: Reports → export the collected data as CSV.',
     api: 'Perch\'s API (an optional add-on) gives read-only tokens; its documentation is on GitHub (SBGSports/perch-api-docs). A short script can read your sets from Perch and post them to the address below.' },
-  repone: { label: 'RepOne Strength', kind: 'linear position transducer', export: 'Export your training data from the RepOne app (StrengthOS) and upload the file.', api: 'No public API.' },
-  metric: { label: 'Metric VBT (phone app)', kind: 'phone camera', export: 'Metric Pro: Export training data (a spreadsheet file) from the app and upload it.', api: 'No API.' },
   other: { label: 'Another device or spreadsheet', kind: '', export: 'Any CSV or Excel file with an exercise, a load and a velocity per set (one row per set, or one per rep). Columns named like the usual ones are matched; the rest is matched by hand.', api: 'Any script can post sets to the address below with a results-scope API key.' }
 };
 export const PROVIDERS = Object.keys(SYSTEMS);

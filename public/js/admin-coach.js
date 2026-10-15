@@ -99,6 +99,7 @@ export async function viewIntegrations(main) {
 
 // ---- Bar speed devices (version 81): every VBT system, how its data gets here, the push address, the thresholds ----
 async function devicesTab(box) {
+  if (me()?.role !== 'owner') { fill(box, h('p', { class: 'muted small' }, 'Bar-speed devices are connected by the owner. The data shows on each athlete\'s Testing tab.')); return; }
   const { data, thresholds } = await get('/v1/vbt/systems');
   fill(box, ...vbtDevicesPanel({ systems: data, thresholds, owner: me()?.role === 'owner', origin: location.origin, saveThresholds: (b) => patch('/v1/settings', b) }));
 }

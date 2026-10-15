@@ -297,6 +297,22 @@ CREATE TABLE IF NOT EXISTS assignment_moves (
   created_at TEXT NOT NULL,
   UNIQUE (assignment_id, workout_id)
 );
+-- Version 82: the athlete's games (the game-week helper). One row per game day; a tournament is one row per day.
+-- import_key is the event's id from an .ics file, so bringing the same calendar in again changes nothing.
+CREATE TABLE IF NOT EXISTS games (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  time TEXT,
+  title TEXT,
+  kind TEXT NOT NULL DEFAULT 'game' CHECK (kind IN ('game', 'tournament', 'scrimmage', 'race', 'meet', 'competition')),
+  source TEXT NOT NULL DEFAULT 'athlete',
+  import_key TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (client_id, import_key)
+);
+CREATE INDEX IF NOT EXISTS idx_games_client_date ON games(client_id, date);
 CREATE TABLE IF NOT EXISTS workout_logs (
   id TEXT PRIMARY KEY,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

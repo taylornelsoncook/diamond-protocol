@@ -520,7 +520,7 @@ function calendarStrip(home) {
         gameDay(state.calDay)?.tone ? h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' }, toneChip(gameDay(state.calDay).tone), h('span', { class: 'small muted' }, gameDay(state.calDay).label)) : null,
         gameDay(state.calDay)?.advice ? h('span', { class: 'small muted' }, gameDay(state.calDay).advice) : null,
         picked.length ? picked.map(line) : h('span', { class: 'small muted' }, 'Rest day. Nothing planned.')) : null,
-      h('div', { class: 'row wrap small muted', style: 'align-items:center' }, h('span', { class: 'grow' }, `${cal.counts.done} done · ${cal.counts.missed} missed · ${cal.counts.upcoming} to go · ${cal.days_text}`),
+      h('div', { class: 'row wrap small muted', style: 'align-items:center' }, h('span', { class: 'grow', style: 'flex-basis:100%' }, `${cal.counts.done} done · ${cal.counts.missed} missed · ${cal.counts.upcoming} to go · ${cal.days_text}`),
         home.week ? h('span', { class: home.week.streak ? 'good-text strong' : 'muted' }, home.week.streak ? `${home.week.streak} clean ${home.week.streak === 1 ? 'week' : 'weeks'} in a row` : home.week.planned ? `${home.week.done} of ${home.week.planned} this week · ${home.week.sets} sets` : '') : null,
         btn(showPlan ? 'Hide the plan' : 'Whole plan', () => { showPlan = !showPlan; draw(); }, 'ghost')),
       showPlan ? h('div', { class: 'c-plan stack-tight' }, [...new Set(cal.workouts.map((w) => w.week))].map((week) => [h('span', { class: 'small strong' }, `Week ${week}`),

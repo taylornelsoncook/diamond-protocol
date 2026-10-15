@@ -210,6 +210,7 @@ test('the request to Anthropic: the file, the model, structured output and the f
       // The account's state is told apart from the file, with Anthropic's own words: no credits, a model the account can't use, a damaged PDF, anything else.
       [400, { error: { message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } }, /no credits left.*Plans & Billing/],
       [404, { error: { message: 'model: claude-opus-5' } }, /model this is set to \(claude-opus-5\) isn't available.*DP_WORKOUT_MODEL/],
+      [400, { error: { message: 'This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace.' } }, /isn't tied to a workspace.*ANTHROPIC_WORKSPACE_ID/],
       [400, { error: { message: 'Could not process PDF' } }, /couldn't open that PDF.*Save as PDF/],
       [400, { error: { message: 'messages.0.content.0: something odd' } }, /Anthropic said: messages.0.content.0: something odd/],
       [200, 'max_tokens', /too long to read in one go/],
@@ -224,6 +225,11 @@ test('the request to Anthropic: the file, the model, structured output and the f
     const ok = (await coach('POST', '/v1/programs/import/check')).body;
     assert.deepEqual([ok.ok, ok.model, ok.usage], [true, 'claude-opus-5', { input_tokens: 12, output_tokens: 2 }]);
     assert.equal(got[got.length - 1].body.max_tokens, 16, 'a tiny request');
+    assert.equal(got[got.length - 1].headers['anthropic-workspace-id'], undefined, 'no workspace header unless the owner set one');
+    // An organization-level key needs the workspace named: ANTHROPIC_WORKSPACE_ID goes in the header (stray quotes dropped).
+    process.env.ANTHROPIC_WORKSPACE_ID = '"wrkspc_01ABC"';
+    try { await coach('POST', '/v1/programs/import/check'); assert.equal(got[got.length - 1].headers['anthropic-workspace-id'], 'wrkspc_01ABC'); }
+    finally { delete process.env.ANTHROPIC_WORKSPACE_ID; }
     reply = { status: 400, body: { error: { message: 'Your credit balance is too low to access the Anthropic API.' } } };
     const bad = (await coach('POST', '/v1/programs/import/check')).body;
     assert.deepEqual([bad.ok, bad.code, bad.status], [false, 'ai_credits', 400]);

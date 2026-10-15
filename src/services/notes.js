@@ -1,4 +1,5 @@
 import { newId, v, notFound, conflict, badRequest } from '../util.js';
+import { aiHeaders } from './workoutimport.js';
 import { getSetting } from './families.js';
 import { athleteProfile, getSession } from './performance.js';
 import { athleteReport } from './reports.js';
@@ -79,7 +80,7 @@ async function polish(ctx, facts, draft) {
   if (!key) return null;
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: AbortSignal.timeout(20000),
-      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      headers: aiHeaders(key),
       body: JSON.stringify({ model: process.env.DP_AI_MODEL || 'claude-sonnet-5', max_tokens: 400,
         system: `You write short progress notes from a youth sports-performance coach at ${getSetting(ctx, 'business_name')} to a parent. Warm, plain English, 60 to 110 words, one paragraph. Use only the facts given; never invent numbers, injuries or plans. Refer to the athlete by first name and never use he, she, him or her. No greeting or sign-off.`,
         messages: [{ role: 'user', content: `Facts (JSON): ${JSON.stringify(facts)}\n\nDraft to improve:\n${draft}` }] }) });

@@ -442,3 +442,47 @@ html[data-help="off"] .dp-help{display:none}
 .vb-map-row{display:flex;align-items:center;justify-content:space-between;gap:8px} .vb-map-row .select{max-width:200px}
 .vb-problems{border-left:3px solid var(--amber);padding-left:10px} .vb-problems ul{margin:4px 0 0;padding-left:16px}
 .vb-summary td,.vb-summary th{vertical-align:top;padding-top:8px;padding-bottom:8px} .vb-summary b{font-size:15px}
+/* The Schedule week grid: Sunday to Saturday across, 4 am to 10 pm down in 15-minute rows. Sessions block out the whole
+   time they cover; bookable hours sit behind them as bands; a click on an empty cell adds something there. */
+.sc-grid-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.sc-grid{display:grid;grid-template-columns:52px repeat(7,minmax(128px,1fr));min-width:960px}
+.sc-grid-corner{position:sticky;left:0;z-index:4;background:var(--surface);border-bottom:1px solid var(--line)}
+.sc-grid-dayhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px;padding:8px 6px;border-bottom:1px solid var(--line);border-left:1px solid var(--line-subtle);position:sticky;top:0;z-index:3;background:var(--surface)}
+.sc-grid-dayname{font:500 11px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted)}
+.sc-grid-daynum{font:600 18px/1 var(--font-display)}
+.sc-grid-dayhead.is-today .sc-grid-daynum,.sc-grid-dayhead.is-today .sc-grid-dayname{color:var(--green-soft)}
+.sc-grid-todaytag{font:600 11px/1 var(--font-sans);color:var(--green-soft)}
+.sc-grid-off{font:600 10px/1.2 var(--font-sans);padding:2px 6px;border-radius:var(--radius-pill);background:var(--amber-deep);color:var(--amber)}
+.sc-grid-times{position:sticky;left:0;z-index:2;background:var(--surface);border-right:1px solid var(--line)}
+.sc-grid-hour{position:absolute;right:6px;margin-top:3px;font:500 11px/1 var(--font-mono);color:var(--steel-muted);white-space:nowrap}
+.sc-grid-day{position:relative;border-left:1px solid var(--line-subtle)}
+.sc-grid-day.is-today{background:rgba(125,186,112,.04)}
+.sc-grid-day.is-past{background:rgba(0,0,0,.18)}
+.sc-grid-day.is-closed{background:repeating-linear-gradient(135deg,transparent 0 10px,rgba(240,180,88,.06) 10px 12px)}
+.sc-cell{display:block;box-sizing:border-box;width:100%;height:14px;margin:0;padding:0;border:0;border-top:1px solid transparent;background:transparent;cursor:default}
+.sc-cell.is-hour{border-top-color:var(--line-subtle)}
+button.sc-cell{cursor:pointer}
+button.sc-cell:hover,button.sc-cell:focus-visible{background:rgba(125,186,112,.18);outline:none}
+button.sc-cell:focus-visible{box-shadow:inset 0 0 0 2px var(--green-bright)}
+.sc-hours{position:absolute;left:0;right:0;z-index:1;pointer-events:none;box-sizing:border-box;border-left:3px solid var(--green-mid);background:rgba(90,154,79,.14);padding:2px 4px;overflow:hidden;font:500 10px/1.2 var(--font-sans);color:var(--green-soft)}
+.sc-hours--evaluation{border-left-color:var(--amber);background:rgba(240,180,88,.1);color:var(--amber)}
+.sc-hours.is-off{opacity:.45;border-left-style:dashed}
+.sc-block{position:absolute;z-index:2;box-sizing:border-box;display:flex;flex-direction:column;gap:1px;padding:3px 5px;border-radius:4px;border:1px solid transparent;overflow:hidden;color:#fff;text-decoration:none;font:400 11px/1.25 var(--font-sans)}
+.sc-block-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.sc-block-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9}
+.sc-block-flag{font-weight:600;color:var(--amber)}
+.sc-block--group{background:#2F6B34;border-color:#5A9A4F}
+.sc-block--camp,.sc-block--clinic{background:#7A5A1C;border-color:#B98A3A}
+.sc-block--team{background:#2B5C8A;border-color:#4F86B8}
+.sc-block--private{background:#5A4A8C;border-color:#8A78C0}
+.sc-block--evaluation{background:#4A4F4C;border-color:#7A807C}
+a.sc-block:hover,a.sc-block:focus-visible{filter:brightness(1.15);outline:none;box-shadow:0 0 0 2px var(--green-bright)}
+.sc-block.is-done{opacity:.55}
+.sc-block.is-live{box-shadow:0 0 0 2px var(--green-bright)}
+.sc-block.is-full .sc-block-name::after{content:' · Full';font-weight:400;opacity:.85}
+.sc-block.is-planned{background:transparent;border-style:dashed;color:var(--steel-muted)}
+.sc-now{position:absolute;left:0;right:0;z-index:3;height:0;border-top:2px solid var(--green-bright);pointer-events:none}
+.sc-now::before{content:'';position:absolute;left:-4px;top:-5px;width:8px;height:8px;border-radius:50%;background:var(--green-bright)}
+.sc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;padding:10px 12px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel);font:inherit;text-align:left;cursor:pointer}
+.sc-choice:hover{background:var(--surface-raised);border-color:var(--green-mid)}
+@media (max-width:640px){.sc-grid{grid-template-columns:44px repeat(7,minmax(112px,1fr));min-width:820px}.sc-grid-daynum{font-size:16px}}

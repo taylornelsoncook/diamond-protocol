@@ -2,6 +2,16 @@
 
 Everything that needs your identity, your money, your hardware or your decisions. Work top to bottom: the first section has the longest waits, so start it today.
 
+## Next: take today's work live
+Everything merged today is on staging. Production is still on merge 31 until you press the button.
+- [ ] **Production settings:** in Render → diamond-protocol → Environment, check it has the same keys as staging: `ANTHROPIC_API_KEY` (plus `ANTHROPIC_WORKSPACE_ID` or `DP_WORKOUT_MODEL` if you added them on staging), `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET`, `FORMCHECK_S3_BUCKET`. Settings never copy between the two services.
+- [ ] **Deploy production:** press Manual Deploy → Deploy latest commit on the `diamond-protocol` service in Render. That brings production from merge 31 to merge 77 in one go (the one `/client` account, wearables only, the PDF reader fixes, form checks, the game week, the new Profile tab, the phone fixes). Wait for Live.
+- [ ] **Check production:** open https://app.diamondprotocol.org/client and sign in; Settings → Wearables says Set up for WHOOP; Programs → Build from a PDF → Check the connection says Connected; Settings → Backups & jobs → Form-check videos says Set up.
+- [ ] **Home screen:** on your phone, remove the old portal shortcut and add it again from `/client`.
+- [ ] **Phone checks:** as the owner, the dashboard menu scrolls all the way to Settings. As an athlete, the Workout tab is compact with no empty metrics and nothing speaks; after Start workout the coach's recording plays; the Profile tab has Coming up, Games, Form checks, Your sign-in and Signed in.
+- [ ] **Optional, your own account:** to get Book, Programs and the family billing on your own phone when you sign in as yourself, make your email the account holder of your own family (Clients → your profile → Family → Add a parent, with your own email).
+- [ ] **WHOOP on production:** once live, press Connect WHOOP on a real athlete (Clients → the athlete → Recovery & sleep) or have the parent do it from the portal's Progress tab.
+
 ## Next up (updated September 29, 2026)
 
 Done on September 28: production runs the newest version (schema 48), off-site backups show **Off-site: OK**, the Anthropic key is in Render on both services, the `dp-videos` bucket serves `videos.diamondprotocol.org`, and the first 196 exercise videos are uploaded. The sections below this one are the long list; this section is the next two weeks.

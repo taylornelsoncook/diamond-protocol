@@ -131,6 +131,12 @@ dialog::backdrop{background:rgba(0,0,0,.75)}
   .dp-header-actions .dp-btn{width:100%;min-width:0;padding-left:8px;padding-right:8px;white-space:normal;text-align:center}
   .dp-header-actions>.dp-btn:last-child:nth-child(odd),.dp-header-actions>.row>.dp-btn:last-child:nth-child(odd){grid-column:1 / -1}
   .metrics{grid-template-columns:1fr} .metrics .dp-metric+.dp-metric{border-left:0;border-top:1px solid var(--line-subtle)}
+  /* Filter chips and tab strips: even columns instead of a ragged wrap (the owner's note). */
+  .tm-views{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  .tm-views .tm-view{width:100%;min-width:0;padding:0 6px;justify-content:center;white-space:normal;text-align:center}
+  .ts-tabs.ts-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible}
+  .ts-tabs .ts-tab{width:100%;min-width:0;justify-content:center;white-space:normal;text-align:center;padding:0 8px}
+  .ts-tabs .ts-tab:last-child:nth-child(odd){grid-column:1 / -1}
 }
 @media (prefers-reduced-motion: reduce){ *{transition:none!important} }
 input[type=checkbox]{accent-color:var(--green-mid);width:18px;height:18px}

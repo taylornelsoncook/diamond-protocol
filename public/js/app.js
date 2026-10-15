@@ -1161,7 +1161,8 @@ async function viewClient(main, id) {
   const maxesPanel = panel('Maxes', { subtitle: `The weights in ${first}'s program come from these. A max entered here shows to the family at once; with nothing on file the estimate from logged sets stands in.` },
     maxesBlock(maxData, { who: 'coach', first, canEdit: role !== 'front_desk', save: (b) => post(`/v1/clients/${id}/maxes`, b), remove: (rid) => del(`/v1/clients/${id}/maxes/${rid}`), reload: render }));
   // Bar speed from a velocity device (version 81): per exercise, the load-velocity profile and the estimated max it points to.
-  const barSpeedPanel = panel('Bar speed', { subtitle: `For every exercise ${first} has done on a velocity device (Output, GymAware, Vitruve and others): the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max. Connect a device or import its export under Testing → Devices & imports.` },
+  const barSpeedPanel = panel('Bar speed', { subtitle: `For every exercise ${first} has done on a velocity device (Output, GymAware, FLEX, Enode, Perch, or any device's CSV): the heaviest weight, the fastest bar speed at that weight, and the estimated one-rep max.`,
+    action: role === 'front_desk' ? null : h('a', { class: 'dp-btn dp-btn--secondary', href: `#/testing/connections?athlete=${id}` }, 'Import a file') },
     vbtBlock(barSpeed, { who: 'coach', first }));
   const age = c.birth_date ? Math.floor((Date.now() - Date.parse(c.birth_date)) / (365.25 * 86400000)) : null;
 
@@ -4675,7 +4676,7 @@ async function viewConnections(main) {
     waitingQ.n ? h('div', { class: 'test-banner row wrap', style: 'gap:12px' }, h('span', { class: 'grow' }, `${waitingQ.n} ${waitingQ.n === 1 ? 'result is' : 'results are'} waiting from ${waitingQ.groups} unrecognized ${waitingQ.groups === 1 ? 'athlete' : 'athletes'}. Nothing lands in a profile until you link it.`), h('a', { class: 'dp-btn dp-btn--outline', href: '#/testing/queue' }, 'Link them')) : null,
     linkPanel, linksPanel, hawkinPanel,
     // Bar speed (version 81): a device's export, and sets waiting under a name or ID we don't know.
-    vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render }),
+    vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render, preselect: new URLSearchParams(location.hash.split('?')[1] ?? '').get('athlete') }),
     vbtWaiting.data.length || vbtImports.data.length ? vbtWaitingPanel({ waiting: vbtWaiting.data, imports: vbtImports.data, everyone, athletePicker, post, onDone: render }) : null,
     panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
     apiPanel);

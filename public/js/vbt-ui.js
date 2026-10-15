@@ -11,7 +11,7 @@ const pct = (x) => (x == null ? '—' : `${Math.round(x)}%`);
 // data: the answer to GET …/vbt. who: 'athlete' | 'parent' | 'coach' (wording). Owner's ask: one line per exercise
 // they have ever done: the heaviest weight with the fastest bar speed at that weight, and the estimated one-rep max.
 export function vbtBlock(data, { who = 'athlete', first = null } = {}) {
-  if (!data?.has_data) return h('p', { class: 'small muted', style: 'margin:0' }, `No bar-speed sets yet. Sets from a velocity device (Output, GymAware, Vitruve, Enode, Perch and others) land here once ${who === 'coach' ? 'the device is connected or its export is imported' : 'your coach connects the device'}.`);
+  if (!data?.has_data) return h('p', { class: 'small muted', style: 'margin:0' }, `No bar-speed sets yet. Sets from a velocity device (Output, GymAware, FLEX, Enode, Perch, or any device's CSV) land here once ${who === 'coach' ? 'the device is connected or its export is imported' : 'your coach connects the device'}.`);
   const rows = data.exercises.map((ex) => {
     const p = ex.profile;
     const why = p?.e1rm ? `From ${p.loads} loads at ${ms(ex.mvt.value)} (r² ${p.r2})` : ex.mvt.kind === 'ballistic' ? 'A ballistic lift: no max is estimated' : `${ex.profile_points.length < 3 ? 'Three different loads' : 'Loads further apart'} are needed (${ex.profile_points.length} so far)`;
@@ -43,13 +43,16 @@ const ROLE_LABELS = { athlete: 'Athlete name', athlete_id: 'Athlete ID (the devi
 
 // Testing → Devices & imports: import a bar-speed export. post(path, body); systems from GET /v1/vbt/systems; everyone and
 // athletePicker from the page (the athlete when a file names none); onDone() reloads the page.
-export function vbtImportPanel({ post, systems, everyone, athletePicker, onDone }) {
+export function vbtImportPanel({ post, systems, everyone, athletePicker, onDone, preselect = null }) {
   const sys = select(systems.map((s) => [s.key, s.label]), { value: 'output', 'aria-label': 'System' });
   const file = input({ type: 'file', accept: '.csv,.tsv,.txt,.xlsx', 'aria-label': 'Export file' });
   const help = h('p', { class: 'small muted', style: 'margin:0' });
   const showHelp = () => { const s = systems.find((x) => x.key === sys.value); help.textContent = s ? s.export : ''; };
   sys.addEventListener('change', showHelp); showHelp();
   const picker = athletePicker(everyone, { label: 'Whose sets are these? (only when the file names no athlete)' });
+  // Opened from an athlete's page ("Import a file" on their Bar speed panel): their name is already picked.
+  const pre = preselect ? everyone.find((a) => (a.client_id ?? a.id) === preselect) : null;
+  if (pre) picker.pick(pre);
   const result = h('div', { class: 'stack' });
   let loaded = null, mapping = null;
   const preview = async (e) => {
@@ -86,12 +89,15 @@ export function vbtImportPanel({ post, systems, everyone, athletePicker, onDone 
         onDone?.();
       }), 'primary', { disabled: !!r.problem_count })));
   }
-  return panel('Import a bar-speed export', { subtitle: 'Output Hub, GymAware Cloud, FLEX, Vitruve, Enode, Perch, RepOne, Metric or any spreadsheet with an exercise, a load and a velocity per set (or per rep). Athletes land by Athlete ID or a linked device name; the rest wait for you to link them once.' },
+  const out = panel('Import a bar-speed export', { subtitle: 'Output Hub, GymAware Cloud, FLEX, Enode, Perch, or any spreadsheet with an exercise, a load and a velocity per set (or per rep). Athletes land by Athlete ID or a linked device name; the rest wait for you to link them once.' },
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, () => preview()); } },
       h('div', { class: 'form-grid cols-2' }, field('System', sys), field('Export file', file)), help,
       h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Athlete'), picker.el),
       h('div', null, btn('Check the file', null, 'primary', { type: 'submit' }))),
     result);
+  out.id = 'vbt-import';
+  if (pre) setTimeout(() => out.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  return out;
 }
 // Sets waiting under a device name or ID: link to an athlete (remembered), or throw away.
 export function vbtWaitingPanel({ waiting, imports, everyone, athletePicker, post, onDone }) {
@@ -129,7 +135,7 @@ export function vbtDevicesPanel({ systems, thresholds, owner, origin, saveThresh
     h('div', { class: 'row', style: 'justify-content:flex-end' }, btn('Copy', () => copyText(example, 'Example copied.'), 'ghost', { 'aria-label': 'Copy the example' })),
     h('pre', { class: 'small', style: 'white-space:pre-wrap;overflow-x:auto;background:var(--ground);padding:12px;border-radius:6px;margin:0' }, example),
     h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/integrations' }, 'API keys'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/connections' }, 'Import a file or link a device'), h('a', { class: 'dp-btn dp-btn--ghost', href: '/v1/openapi.json', target: '_blank' }, 'API reference')));
-  const guide = panel('The systems and how their data gets here', { subtitle: 'Every one exports a file you can import; a few offer a live connection.' },
+  const guide = panel('The systems and how their data gets here', { subtitle: 'Only systems with an open API are listed. Every one of them also exports a CSV you can import; any other device\'s CSV goes in as "Another device or spreadsheet".' },
     h('div', { class: 'eg-list' }, systems.filter((s) => s.key !== 'other').map((s) => h('div', { class: 'eg-item stack-tight' },
       h('div', { class: 'row wrap', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong' }, s.label), s.kind ? h('span', { class: 'small muted' }, s.kind) : null),
       h('span', { class: 'small' }, h('b', null, 'Export: '), s.export), h('span', { class: 'small' }, h('b', null, 'Live: '), s.api)))));

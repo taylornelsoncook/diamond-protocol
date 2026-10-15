@@ -113,13 +113,16 @@ test('a set from a device name or ID nobody linked waits; linking the device sen
   const next = await resultsKey('POST', '/v1/vbt/sets', { provider: 'output', sets: [{ athlete: { external_id: 'HUB-204' }, exercise: 'Trap bar deadlift', performed_at: '2026-10-06T17:35:00Z', set_no: 2, reps: 5, load: 100, load_unit: 'kg', mean_velocity: 0.66 }] });
   assert.deepEqual([next.body.saved, next.body.waiting], [1, 0]);
   // A name nobody linked waits too, and the waiting list links it by hand (and remembers).
-  await resultsKey('POST', '/v1/vbt/sets', { provider: 'vitruve', sets: [{ athlete: { name: 'Maya Okafor' }, exercise: 'Front squat', performed_at: '2026-10-06T17:40:00Z', load: 135, reps: 3, mean_velocity: 0.8 }] });
+  // Only systems with an open API are listed (owner decision); any other device's CSV goes in as 'other'.
+  assert.deepEqual((await coach('GET', '/v1/vbt/systems')).body.data.map((x) => x.key), ['output', 'gymaware', 'flex', 'enode', 'perch', 'other']);
+  assert.equal((await resultsKey('POST', '/v1/vbt/sets', { provider: 'vitruve', sets: [] })).status, 400, 'a system without an open API is not a provider');
+  await resultsKey('POST', '/v1/vbt/sets', { provider: 'perch', sets: [{ athlete: { name: 'Maya Okafor' }, exercise: 'Front squat', performed_at: '2026-10-06T17:40:00Z', load: 135, reps: 3, mean_velocity: 0.8 }] });
   const w = (await coach('GET', '/v1/vbt/waiting')).body.data[0];
   assert.equal(w.identity, 'name:maya okafor', 'a name is never matched on its own');
-  assert.equal((await desk('POST', '/v1/vbt/waiting/link', { provider: 'vitruve', identity: w.identity, athlete_id: maya.athlete_id })).status, 403, 'front desk looks only');
-  const linked = (await coach('POST', '/v1/vbt/waiting/link', { provider: 'vitruve', identity: w.identity, athlete_id: maya.athlete_id })).body;
+  assert.equal((await desk('POST', '/v1/vbt/waiting/link', { provider: 'perch', identity: w.identity, athlete_id: maya.athlete_id })).status, 403, 'front desk looks only');
+  const linked = (await coach('POST', '/v1/vbt/waiting/link', { provider: 'perch', identity: w.identity, athlete_id: maya.athlete_id })).body;
   assert.deepEqual([linked.linked, linked.remembered], [1, true]);
-  assert.ok(app.ctx.db.get(`SELECT 1 FROM athlete_links WHERE provider = 'vitruve' AND external_id = 'name:maya okafor' AND client_id = ?`, maya.id));
+  assert.ok(app.ctx.db.get(`SELECT 1 FROM athlete_links WHERE provider = 'perch' AND external_id = 'name:maya okafor' AND client_id = ?`, maya.id));
 });
 
 test('the profile: a load-velocity line, the estimated max at the threshold, the trend at the usual load, recent sessions; athlete and parent read it too', async () => {

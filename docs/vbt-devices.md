@@ -22,6 +22,11 @@ lift or move.
 
 ## The systems
 
+**What the app lists** (owner decision, October 2026): only systems with an open API are offered in the app's menus
+and guide (Output, GymAware, GymAware FLEX, Enode, Perch). Every one of them also exports a CSV, and that export is the
+usual road into an athlete's profile (Testing → Devices & imports, or Import a file on the athlete's Bar speed panel).
+The other systems below stay here for reference; their CSVs import as "Another device or spreadsheet".
+
 | System | What it is | Export | Live connection |
 | --- | --- | --- | --- |
 | **Output Sports** (Capture app, Output Hub) | IMU sensor on the bar or body | Output Hub exports a CSV over any date range, per athlete or group, by exercise and metric. The Capture app syncs to the Hub when online. | An **Open API** on the Pro Teams plan, with pre-built connections to TeamBuildr, Movella and Teamworks AMS (formerly Smartabase). No public documentation found; Output grants access. |

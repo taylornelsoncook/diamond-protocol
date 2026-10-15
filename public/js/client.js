@@ -31,9 +31,18 @@ try {
 } catch { /* storage blocked: keep the token in memory */ }
 if (params.has('token')) history.replaceState(null, '', `/app${location.hash}`);   // keep #education and the like
 // Inside the portal: report the page's height so the frame fits, whenever it changes.
+// html and body are 100% of the frame, so the document's height would follow the frame and the frame the document, for
+// ever (the page grew by a few pixels a tick and the bottom never held still); the content's own box is measured instead.
 if (embedded && window.parent !== window) {
-  const tell = () => window.parent.postMessage({ dpAppHeight: document.documentElement.scrollHeight, athlete: familyAthlete ?? 'me' }, location.origin);
-  new ResizeObserver(tell).observe(document.body);
+  document.documentElement.style.height = 'auto'; document.body.style.height = 'auto';
+  let last = 0;
+  const tell = () => {
+    const el = document.getElementById('root'); if (!el) return;
+    const height = Math.ceil(el.getBoundingClientRect().height + el.offsetTop);
+    if (Math.abs(height - last) < 2) return;
+    last = height; window.parent.postMessage({ dpAppHeight: height, athlete: familyAthlete ?? 'me' }, location.origin);
+  };
+  new ResizeObserver(tell).observe(document.getElementById('root'));
   window.addEventListener('load', tell);
 }
 
@@ -129,11 +138,36 @@ function renderProfile(where) {
   fill(where,
     h('section', { class: 'dp-panel stack-tight' }, h('div', { class: 'c-title', style: 'font-size:24px' }, c.name ?? 'You'), c.athlete_id ? h('div', { class: 'small muted' }, 'Athlete ID ', h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id)) : null, streaks),
     maxes,
+    embedded ? null : signInPanel(),
     h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, 'Everything you did'), h('p', { class: 'dp-panel-sub' }, 'Workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
       timelineBlock((p) => api('GET', p), '/app/api/timeline', { empty: 'Nothing here yet. Log a workout or check in and it lands here.' })),
     links);
 }
 
+// Your sign-in (owner's ask): set, change or remove the password for the athlete's own email, right here on the Profile
+// tab; a parent inside the family portal's frame does it on the portal's Family tab instead, so the panel is left out there.
+function signInPanel() {
+  const box = h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Your sign-in'));
+  const draw = async () => {
+    let s;
+    try { s = await api('GET', '/app/api/password'); } catch { return fill(box); }
+    if (s.parent) return fill(box);
+    if (!s.email) return fill(box, h('h2', { class: 'dp-panel-title' }, 'Your sign-in'), h('p', { class: 'small muted', style: 'margin:0' }, 'Your profile has no email of its own yet. Ask your coach to add one; then you can sign in at the portal with a code or a password.'));
+    const pw = h('input', { class: 'dp-input', type: 'password', autocomplete: 'new-password', minlength: '10', placeholder: 'At least 10 characters' });
+    const err = h('p', { class: 'dp-error', role: 'alert', style: 'margin:0' });
+    const form = h('form', { class: 'stack-tight', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+      try { await api('POST', '/app/api/password', { password: pw.value }); pw.value = ''; toast('Password saved. Emailed codes still work too.'); draw(); }
+      catch (x) { err.textContent = x.message; }
+    }); } },
+      h('p', { class: 'small muted', style: 'margin:0' }, s.has_password ? `A password is set for ${s.email}. Emailed codes still work too.` : `You sign in at the portal with a code we email to ${s.email}. Set a password if you'd rather not wait for a code.`),
+      h('label', { class: 'stack-tight' }, h('span', { class: 'small strong' }, s.has_password ? 'New password' : 'Password'), pw), err,
+      h('div', { class: 'row wrap' }, btn(s.has_password ? 'Change password' : 'Set a password', null, 'secondary', { type: 'submit' }),
+        s.has_password ? btn('Remove it', (e) => { if (confirm('Remove your password? You\'ll sign in with emailed codes.')) busy(e.currentTarget, async () => { await api('DELETE', '/app/api/password'); toast('Password removed.'); draw(); }); }, 'ghost') : null));
+    fill(box, h('h2', { class: 'dp-panel-title' }, 'Your sign-in'), form);
+  };
+  draw();
+  return box;
+}
 const signInLink = () => h('p', { style: 'margin:0' }, h('a', { class: 'dp-btn dp-btn--primary', href: '/portal' }, 'Sign in with your email'));
 async function load() {
   let home;

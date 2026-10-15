@@ -175,6 +175,12 @@ test('later pulls refresh an expired token, replace changed values and mark a re
   assert.equal(app.ctx.db.get('SELECT refresh_token FROM wearable_connections WHERE id = ?', conn.id).refresh_token, 'rt-2');
   assert.equal(app.ctx.db.get(`SELECT value FROM athlete_metrics WHERE client_id = ? AND metric = 'recovery_pct'`, maya.id).value, 67);
   assert.equal((await desk('POST', `/v1/wearables/${conn.id}/sync`, {})).status, 403);
+  // A parent presses Pull now on their own athlete's wearable (owner decision: Pull now and Disconnect are the only
+  // ways data comes in; nothing is brought in from files), never on another family's.
+  const mineNow = await parent('POST', `wearables/${conn.id}/sync`, {});
+  assert.equal(mineNow.status, 200, JSON.stringify(mineNow.body)); assert.equal(mineNow.body.provider, 'whoop');
+  const gina0 = await parentSignIn('gina@example.com');
+  assert.equal((await gina0('POST', `wearables/${conn.id}/sync`, {})).status, 404, 'another family can\'t pull it');
   // The provider refuses the token: the connection waits for a parent to connect again, and the job carries on.
   app.ctx.wearableFetch = whoopStub({ apiStatus: 401 });
   const bad = await owner('POST', `/v1/wearables/${conn.id}/sync`, {});

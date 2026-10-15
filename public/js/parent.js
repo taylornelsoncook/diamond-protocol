@@ -1,7 +1,7 @@
 import { h, fill, toast, money, busy, btn, field, input, select, panel, videoEmbed } from './ui.js';
 import { sparkline, fmtResult, fmtDate as fmtDay } from './charts.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
-import { importForm, importsList, dataSummary } from './dataimport-ui.js';
+import { dataSummary } from './dataimport-ui.js';
 import { wearablesBlock, wearableReturnNotice } from './wearables-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { timelineBlock } from './timeline-ui.js';
@@ -685,23 +685,14 @@ async function viewProgress(main) {
     fill(box, h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Form checks'),
       h('p', { class: 'small muted', style: 'margin:0' }, `Clips ${a.first_name} sent to the coach from the app, with the coach's answer. Only our coaches and your family can watch them, and they're removed after a while. Remove one any time.`), block.el));
   }
-  // Recovery and sleep from a wearable or another app: what's on file, bringing in a file, and undoing one.
+  // Recovery and sleep from the athlete's wearable (owner decision: WHOOP and Oura pull on their own; nothing is brought in by hand).
   async function drawOutside(a, box) {
     const d = await get(`athletes/${a.id}/outside-data`);
     const reload = () => drawOutside(a, box);
-    const form = importForm({ athlete: () => ({ id: a.id, name: a.name }), preview: (b) => post(`athletes/${a.id}/data-imports/preview`, b), commit: (b) => post(`athletes/${a.id}/data-imports`, b), sources: () => get('data-imports/sources'), onSaved: reload });
     const linked = await get(`athletes/${a.id}/wearables`).catch(() => ({ data: [] }));
-    const active = (linked.data ?? []).filter((w) => w.status === 'active').map((w) => w.label);
-    const wear = wearablesBlock({ first: a.first_name, canConnect: true, list: async () => linked, connect: (p) => post(`athletes/${a.id}/wearables/${p}/connect`), disconnect: (id) => api('DELETE', `wearables/${id}`), afterChange: reload });
-    fill(box, dataSummary(d, { title: `${a.first_name}'s recovery and sleep`, empty: `Connect ${a.first_name}'s WHOOP or Oura below, or bring in a file, and see recovery, heart rate variability, sleep and strain here. Our coaches see it too.` }),
-      h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Linked wearables'), wear.el),
-      h('details', { class: 'dp-panel', open: d.has_data || active.length ? null : true },
-        h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, active.length ? 'Bring in a file from another app' : `Bring in a file for ${a.first_name}`),
-        h('p', { class: 'small muted' }, active.length
-          ? `${active.join(' and ')} ${active.length === 1 ? 'is' : 'are'} linked and pull on their own, so there's nothing to upload from ${active.length === 1 ? 'it' : 'them'}. Use this for another app: a CSV, Excel file, Google Sheets link or PDF with a date column.`
-          : 'Pick where the file comes from (WHOOP, Oura, Garmin, Apple Health, Fitbit, Strava, TrainingPeaks or any spreadsheet) and the menu says how to get the export from that app.'),
-        form,
-        d.recent?.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Brought in'), importsList(d.recent, { canUndo: (x) => x.created_by_kind === 'parent', undo: async (id) => { await post(`data-imports/${id}/undo`); toast('Undone.'); reload(); } })) : null));
+    const wear = wearablesBlock({ first: a.first_name, canConnect: true, list: async () => linked, connect: (p) => post(`athletes/${a.id}/wearables/${p}/connect`), sync: (id) => post(`wearables/${id}/sync`), disconnect: (id) => api('DELETE', `wearables/${id}`), afterChange: reload });
+    fill(box, dataSummary(d, { title: `${a.first_name}'s recovery and sleep`, empty: `Connect ${a.first_name}'s WHOOP or Oura below and see recovery, heart rate variability, sleep and strain here. Our coaches see it too.` }),
+      h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Linked wearables'), wear.el));
   }
   function drawReport(a, r, { period, since, from }) {
     const next = r.next_testing_day;
@@ -933,7 +924,7 @@ async function viewPrograms(main) {
   };
   const onlinePanel = shop.items.length ? panel('Online programs & courses', { subtitle: `Pay once and ${a.first_name} gets it in their app. No membership needed.` }, shop.items.map(onlineRow)) : null;
 
-  fill(main, top('Programs'), banners(), athleteChips(() => render({ keepScroll: true })), cardLine, state.buy ? onlinePanel : null, memPanel, campPanel, groupPanel, storePanel, state.buy ? null : onlinePanel);
+  fill(main, top('Programs'), banners(), athleteChips(() => render({ keepScroll: true })), cardLine, state.buy ? onlinePanel : null, memPanel, signInPanel(), campPanel, groupPanel, storePanel, state.buy ? null : onlinePanel);
   document.getElementById('buy-pick')?.scrollIntoView({ block: 'center' });
 }
 // Ask to switch plans, pause or cancel: the owner gets it and makes the change.

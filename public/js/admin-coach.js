@@ -3,7 +3,6 @@
 // on the sign-in page and the page an emailed reset link opens. The server checks every rule; these screens only follow.
 import { h, fill, toast, date, ago, btn, busy, field, input, select, panel } from './ui.js';
 import { exerciseLibrary } from './programs-coach.js';
-import { importForm, importsList } from './dataimport-ui.js';
 import { vbtDevicesPanel } from './vbt-ui.js';
 
 let api, render, header, pulseTile, download, me, saveAnyway;
@@ -482,13 +481,14 @@ function rolesTable() {
 // =====================================================================================================================
 // Settings. Everyone sees the exercise library; the other tabs are the owner's (the server refuses them to staff anyway).
 // =====================================================================================================================
-const SETTINGS_TABS = [['exercises', 'Exercise library'], ['import', 'Data import'], ['staff', 'Staff'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
+const SETTINGS_TABS = [['exercises', 'Exercise library'], ['wearables', 'Wearables'], ['staff', 'Staff'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
 export async function viewSettings(main) {
   const owner = me()?.role === 'owner', coach = me()?.role === 'coach';
   const list = owner ? SETTINGS_TABS : coach ? SETTINGS_TABS.slice(0, 2) : SETTINGS_TABS.slice(0, 1);   // coaches bring in data too; front desk sees the library
-  let current = list.some(([k]) => k === queryOf().get('tab')) ? queryOf().get('tab') : 'exercises';
+  const asked = queryOf().get('tab') === 'import' ? 'wearables' : queryOf().get('tab');   // the old Data import tab's links land on Wearables
+  let current = list.some(([k]) => k === asked) ? asked : 'exercises';
   const body = h('div', { id: 'tab-panel', role: 'tabpanel', class: 'stack', style: 'margin-top:16px' });
-  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), import: importTab, staff: staffTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
+  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), wearables: wearablesTab, staff: staffTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
   let loading = 0;
   async function loadTab() {
     const n = ++loading;
@@ -505,35 +505,16 @@ export async function viewSettings(main) {
     catch (err) { helpOn.checked = !helpOn.checked; toast(err.message, 'warn'); }
   }));
   const helpRow = owner ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px;margin-top:8px' }, helpOn, h('span', null, 'Show the help sentences on my screens ', h('span', { class: 'muted' }, '(the short explanations under titles and fields; coaches, parents and athletes never see them)'))) : null;
-  fill(main, header('Settings', owner ? 'Your exercise library, data import, staff, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and bringing in athletes\' data from wearables and spreadsheets.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), helpRow, t$?.bar, body);
+  fill(main, header('Settings', owner ? 'Your exercise library, wearables, staff, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and the wearables athletes connect.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), helpRow, t$?.bar, body);
   await loadTab();
 }
 
-// Data import: bring an athlete's numbers in from a wearable or another app (a CSV, an Excel file, a Google Sheets link or
-// a PDF). The athlete is always picked here; nothing in the file is matched by name.
-async function importTab(box) {
-  const clients = (await get('/v1/clients')).data;
-  const pre = queryOf().get('client');
-  const find = input({ type: 'search', placeholder: 'Find an athlete by name or Athlete ID', 'aria-label': 'Find an athlete', autocomplete: 'off' });
-  const pick = select([['', 'Choose the athlete'], ...clients.map((c) => [c.id, `${c.name}${c.athlete_id ? ` · ${c.athlete_id}` : ''}`])], { value: clients.some((c) => c.id === pre) ? pre : '', 'aria-label': 'Athlete' });
-  find.addEventListener('input', () => {
-    const q = find.value.trim().toLowerCase();
-    for (const o of pick.options) if (o.value) o.hidden = !!q && !o.textContent.toLowerCase().includes(q);
-    const hits = [...pick.options].filter((o) => o.value && !o.hidden);
-    if (hits.length === 1) pick.value = hits[0].value;
-  });
-  const recentBox = h('div');
-  const loadRecent = async () => fill(recentBox, importsList((await get('/v1/data-imports')).data, { showAthlete: true, undo: async (id) => { const r = await post(`/v1/data-imports/${id}/undo`); toast(`Undone: ${plural(r.removed_values, 'value')} and ${plural(r.removed_workouts, 'workout')} removed.`); loadRecent(); } }));
-  const form = importForm({
-    athlete: () => { const c = clients.find((x) => x.id === pick.value); return c ? { id: c.id, name: c.name } : null; },
-    preview: (b) => post('/v1/data-imports/preview', b),
-    commit: (b) => post('/v1/data-imports', b),
-    sources: () => get('/v1/data-imports/sources'),
-    onSaved: () => loadRecent()
-  });
-  // Wearables that connect on their own (WHOOP, Oura): what's set up, and how the owner sets one up.
+// Wearables: which providers (WHOOP, Oura) are set up for athletes to connect, and how the owner sets one up. Owner
+// decision: the athlete's data arrives only through a connected wearable (Pull now and Disconnect on the client page and
+// the portal); nothing is brought in from files by hand.
+async function wearablesTab(box) {
   const wear = await get('/v1/wearables/status');
-  const wearPanel = panel('Wearables that connect on their own', { subtitle: 'Once a provider is set up, parents see a Connect button on the Progress tab and coaches one on the client page; the athlete\'s numbers then arrive every few hours without files.' },
+  fill(box, panel('Wearables that connect on their own', { subtitle: 'Once a provider is set up, parents see a Connect button on the Progress tab and coaches one on the client page; the athlete\'s numbers then arrive every few hours, and Pull now fetches the last week at once.' },
     h('div', { class: 'stack' }, wear.providers.map((p) => h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
       h('div', { class: 'grow stack-tight', style: 'min-width:240px' }, h('span', { class: 'strong' }, p.label),
         h('span', { class: `small ${p.ready ? 'good-text' : 'muted'}` }, p.ready ? 'Set up. Families can connect.' : 'Not set up yet.'),
@@ -541,11 +522,7 @@ async function importTab(box) {
         p.client_id_hint ? h('span', { class: 'small muted' }, `Client ID in Render: ${p.client_id_hint}. It must match the Client ID on the ${p.label} developer page; a sign-in page saying "invalid_client" means it doesn't.`) : null,
         ...(p.problems ?? []).map((t) => h('span', { class: 'small warn-text' }, t)),
         h('span', { class: 'small muted' }, 'Redirect address to register with them: ', h('code', { style: 'user-select:all' }, p.redirect_uri))))),
-      h('p', { class: 'small muted', style: 'margin:0' }, 'Apple Health and Garmin don\'t offer this kind of link, so their exports still come in as files below.')));
-  fill(box, wearPanel, panel('Bring in data', { subtitle: 'An athlete\'s numbers from any system: pick where the file comes from (WHOOP, Oura, Garmin, Apple Health, Fitbit, Strava, TrainingPeaks) and the menu says how to get the export; any other spreadsheet you match up once, saving its columns as the measures we track. It shows on their client page and to the athlete and their parents. Parents can bring in their own athlete\'s files from the parent portal too.' },
-    h('div', { class: 'form-grid' }, field('Athlete', h('div', { class: 'stack-tight' }, find, pick))), form),
-    panel('Recently brought in', { subtitle: 'Undo removes what that import saved.' }, recentBox));
-  await loadRecent();
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Apple Health and Garmin don\'t offer this kind of link, so they can\'t be connected.'))));
 }
 
 async function staffTab(box) {

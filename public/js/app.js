@@ -107,9 +107,11 @@ function render() {
 
 function header(title, subtitle, action) {
   const menu = h('button', { type: 'button', class: 'dp-btn dp-btn--secondary menu-btn', 'aria-label': 'Open menu', onClick: () => document.querySelector('.shell').classList.toggle('nav-open') }, 'Menu');
+  // On a phone the Menu button sits beside the title and the page's buttons line up in two even columns underneath
+  // (styles.css .dp-header-actions), instead of wrapping unevenly to the right.
   return h('header', { class: 'dp-header' },
-    h('div', null, h('h1', { class: 'dp-header-title' }, title), subtitle ? h('p', { class: 'dp-header-sub' }, subtitle) : null),
-    h('div', { class: 'row' }, menu, action || null));
+    h('div', { class: 'dp-header-text' }, h('h1', { class: 'dp-header-title' }, title), subtitle ? h('p', { class: 'dp-header-sub' }, subtitle) : null),
+    menu, action ? h('div', { class: 'dp-header-actions row' }, action) : null);
 }
 const addClientBtn = () => btn('Add client', () => { location.hash = '#/clients/new'; });
 

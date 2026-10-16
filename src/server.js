@@ -43,6 +43,7 @@ import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
 import { calendarFeed } from './services/portal.js';
+import { feed as staffCalendarFeed } from './services/staffcal.js';
 
 // What was typed as the email on the sign-in and forgot-password forms, for the activity log: only if it looks like an
 // email, so a password typed into the wrong box is never stored.
@@ -108,10 +109,11 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       }
       if (url.pathname === '/sms/inbound' && req.method === 'POST') return smsInbound(ctx, req, res, `${baseUrl}/sms/inbound`);
       // A parent's private calendar feed (the secret is the key; only its hash is stored). Calendar apps poll it.
-      const cal = url.pathname.match(/^\/cal\/([\w-]{20,64})\.ics$/);
+      // A coach's own feed (/cal/staff/<secret>.ics) works the same way.
+      const cal = url.pathname.match(/^\/cal\/(staff\/)?([\w-]{20,64})\.ics$/);
       if (cal && (req.method === 'GET' || req.method === 'HEAD')) {
         rateLimit(`cal:${clientIp(req)}`, 120, 15 * 60000);
-        const body = calendarFeed(ctx, cal[1], url.host);
+        const body = cal[1] ? staffCalendarFeed(ctx, cal[2], url.host) : calendarFeed(ctx, cal[2], url.host);
         res.writeHead(200, { 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
         return res.end(req.method === 'HEAD' ? undefined : body);
       }

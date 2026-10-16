@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS users (
   title TEXT,       -- version 72: shown on a program's sales page ("Head speed coach")
   bio TEXT,         -- version 72: how this coach trains, in their words
   photo_url TEXT,   -- version 72: an https picture link (jpg, png or webp)
+  calendar_token_hash TEXT,   -- version 84: the coach's own calendar feed (/cal/staff/<secret>.ics); only the hash is kept
+  calendar_created_at TEXT,
   failed_logins INTEGER NOT NULL DEFAULT 0,
   locked_until TEXT,
   last_login_at TEXT,

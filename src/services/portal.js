@@ -82,7 +82,7 @@ export function familyBooking(ctx, familyId, bookingId) {
 // to three months ahead. Only a hash of the secret is stored (the address is shown once, when made); resetting makes a
 // new address and the old one stops working at once. The feed has first names, session names, times and places: no
 // Athlete IDs, birthdays, medical notes, emails or phone numbers.
-const hashCal = (s) => sha256(`calendar:${s}`);
+export const hashCal = (s) => sha256(`calendar:${s}`);
 export const calendarStatus = (g) => ({ on: !!g.calendar_token_hash, created_at: g.calendar_created_at ?? null });
 export function resetCalendar(ctx, guardian, baseUrl) {
   const secret = token(24);
@@ -94,10 +94,10 @@ export function stopCalendar(ctx, guardian) {
   ctx.db.run('UPDATE guardians SET calendar_token_hash = NULL, calendar_created_at = NULL WHERE id = ?', guardian.id);
   return { on: false, created_at: null };
 }
-const icsText = (s) => String(s ?? '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
-const icsTime = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+export const icsText = (s) => String(s ?? '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+export const icsTime = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 // Lines longer than 75 bytes are folded (a line break and a space), as calendar apps expect.
-function fold(line) {
+export function fold(line) {
   const out = [];
   let cur = '';
   for (const ch of line) {

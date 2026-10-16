@@ -154,17 +154,48 @@ const payerById = (ctx, table, id) => {
   return ctx.db.get('SELECT id FROM clients WHERE id = ?', id) ? payerFor(ctx, id) : null;
 };
 // A link the client or parent opens to add a card on Stripe's secure page.
-export async function cardSetupLink(ctx, clientId, baseUrl) {
+// open: staff open the page themselves (the client page's Change card), so Stripe comes back to the card-saved page with the
+// client and the session, and that page saves the card at once (finishCardSetup) instead of waiting for Stripe's webhook.
+export async function cardSetupLink(ctx, clientId, baseUrl, { open = false } = {}) {
   const payer = payerFor(ctx, clientId);
-  return setupLinkFor(ctx, payer, baseUrl);
+  const back = open ? `${baseUrl}/card-saved.html?client=${encodeURIComponent(clientId)}` : null;
+  return setupLinkFor(ctx, payer, baseUrl, open ? { successUrl: `${back}&session_id={CHECKOUT_SESSION_ID}`, cancelUrl: `${back}&canceled=1` } : {});
 }
-export async function setupLinkFor(ctx, payer, baseUrl) {
+export async function setupLinkFor(ctx, payer, baseUrl, { successUrl = `${baseUrl}/card-saved.html`, cancelUrl = `${baseUrl}/card-saved.html?canceled=1` } = {}) {
   const customerId = await ensureCustomer(ctx, payer);
   let s;
-  try { s = await ctx.payments.cardSetupSession({ customerId, ownerKey: payer.metadataKey, ownerId: payer.id, successUrl: `${baseUrl}/card-saved.html`, cancelUrl: `${baseUrl}/card-saved.html?canceled=1` }); }
+  try { s = await ctx.payments.cardSetupSession({ customerId, ownerKey: payer.metadataKey, ownerId: payer.id, successUrl, cancelUrl }); }
   catch (e) { throw paymentError(e); }
   if (!s.url) throw conflict('Card links need Stripe. In test mode, use "Add test card".');
   return { url: s.url };
+}
+// The card a finished Stripe card page holds, saved on its payer: from the webhook (checkout.session.completed) or from the
+// card-saved page staff come back to (finishCardSetup). Both may land; the second finds the card already saved and changes nothing.
+async function applySetupSession(ctx, sessionId, expectPayer = null) {
+  const info = await ctx.payments.getSetupSession(sessionId);
+  const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
+  if (expectPayer) {
+    if (!payer || payer.table !== expectPayer.table || payer.id !== expectPayer.id) throw conflict('That card page was for someone else.');
+    if (!info.paymentMethod) throw conflict('No card was saved on that page. Open it again and finish on Stripe\'s page.');
+  }
+  if (!payer || !info.paymentMethod) return { saved: false };
+  return withLock(`card-setup:${sessionId}`, async () => {
+    const cur = ctx.db.get(`SELECT card_payment_method FROM ${payer.table} WHERE id = ?`, payer.id);
+    if (cur?.card_payment_method === info.paymentMethod) return { saved: false, payer };
+    saveCard(ctx, payer, info);
+    // Every parent hears about a new family card (the one who saved it too: the card page doesn't say who it was).
+    if (payer.table === 'families') notifyFamily(ctx, payer.id, 'A card was saved to your family account', `A card ending ${info.last4 ?? ''} was saved to your family account. It pays for memberships, packs, camps and drop-ins.\n\nNot you? Reply to this email.\n\n${getSetting(ctx, 'business_name')}`);
+    await retryFailed(ctx, payer);
+    return { saved: true, payer };
+  });
+}
+export async function finishCardSetup(ctx, clientId, sessionId) {
+  const id = v.str(sessionId, 'session_id', { max: 200 });
+  if (!/^cs_[A-Za-z0-9_]+$/.test(id)) throw badRequest('session_id is not a Stripe card page.');
+  if (!ctx.payments.getSetupSession) throw conflict('Card pages need Stripe. In test mode, use "Add test card".');
+  const payer = payerFor(ctx, clientId);
+  try { await applySetupSession(ctx, id, payer); } catch (e) { if (e instanceof HttpError) throw e; throw paymentError(e); }
+  return cardSummary(ctx, clientId);
 }
 export async function addTestCard(ctx, clientId) {
   if (ctx.payments.live || !ctx.payments.testCard) throw conflict('Test cards are only available in test mode.');
@@ -708,14 +739,7 @@ export async function handleStripeEvent(ctx, event) {
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
-    const info = await ctx.payments.getSetupSession(obj.id);
-    const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
-    if (payer && info.paymentMethod) {
-      saveCard(ctx, payer, info);
-      // Every parent hears about a new family card (the one who saved it too: the card page doesn't say who it was).
-      if (payer.table === 'families') notifyFamily(ctx, payer.id, 'A card was saved to your family account', `A card ending ${info.last4 ?? ''} was saved to your family account. It pays for memberships, packs, camps and drop-ins.\n\nNot you? Reply to this email.\n\n${getSetting(ctx, 'business_name')}`);
-      await retryFailed(ctx, payer);
-    }
+    await applySetupSession(ctx, obj.id);
   }
   return { received: true };
 }

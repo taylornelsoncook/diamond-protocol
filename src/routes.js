@@ -489,7 +489,8 @@ export const routes = [
     return commerce.revenueByLocation(ctx, r.query.since ? v.date(r.query.since, 'since') : start);
   }],
   ['GET', '/v1/clients/:id/card', 'any', 'Clients', 'Whether the client has a saved card, and its brand and last 4 digits.', (ctx, r) => commerce.cardSummary(ctx, r.params.id)],
-  ['POST', '/v1/clients/:id/card/setup-link', 'any', 'Clients', 'A secure Stripe link the client opens to add or replace their card.', (ctx, r) => commerce.cardSetupLink(ctx, r.params.id, r.baseUrl)],
+  ['POST', '/v1/clients/:id/card/setup-link', 'any', 'Clients', 'A secure Stripe link the client opens to add or replace their card. open: true when staff open it themselves (Stripe comes back to the card-saved page, which saves the card at once).', (ctx, r) => commerce.cardSetupLink(ctx, r.params.id, r.baseUrl, { open: !!r.body.open })],
+  ['POST', '/v1/clients/:id/card/setup-done', 'any', 'Clients', 'After Stripe\'s card page: session_id (the finished checkout session) saves the card now, without waiting for the webhook.', (ctx, r) => commerce.finishCardSetup(ctx, r.params.id, r.body.session_id)],
   ['POST', '/v1/clients/:id/card/test', 'any', 'Clients', 'Test mode only: attach a test Visa ending 4242.', (ctx, r) => commerce.addTestCard(ctx, r.params.id)],
   ['DELETE', '/v1/clients/:id/card', 'any', 'Clients', 'Remove the saved card.', (ctx, r) => commerce.removeCard(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/credits', 'any', 'Clients', 'Session credit balance.', (ctx, r) => ({ balance: commerce.creditBalance(ctx, r.params.id) })],

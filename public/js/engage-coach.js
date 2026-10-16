@@ -347,7 +347,7 @@ const remindToast = (r) => {
 // The editor asks before throwing away typed text (Escape or Cancel); a click outside it does nothing.
 // Education tabs (engage.js EDU_CATEGORIES). Courses are athlete or parent education; the other tabs are stand-alone posts.
 const EDU_TABS = [['athlete', 'Athlete education'], ['parent', 'Parent education'], ['coach', 'Coach\'s education'], ['blog', 'Blogs'], ['research', 'Research']];
-const CATEGORY_READERS = { athlete: 'Athletes (and their parents with them)', parent: 'Parents, in the parent portal', coach: 'Staff, and anyone on the public page /learn', blog: 'Athletes and parents', research: 'Athletes and parents' };
+const CATEGORY_READERS = { athlete: 'Athletes (and their parents with them)', parent: 'Parents, in the parent portal', coach: 'Staff, and anyone on the public page /learn', blog: 'Athletes and parents, and anyone on your public blog page /blog', research: 'Athletes and parents' };
 const courseCat = (c) => (c?.audience === 'parents' ? 'parent' : 'athlete');
 async function lessonDialog(lesson, courses, preset = {}) {
   const l = lesson ? await get(`/v1/lessons/${lesson.id}`) : { published: true, course_id: preset.course_id ?? null, category: preset.category ?? 'athlete' };
@@ -355,13 +355,18 @@ async function lessonDialog(lesson, courses, preset = {}) {
     video_url: input({ type: 'url', value: l.video_url ?? '', placeholder: 'https://www.youtube.com/watch?v=…' }), minutes: input({ type: 'number', min: '1', max: '240', inputmode: 'numeric', value: l.minutes ?? '' }),
     course_id: select([['', 'Stand-alone lesson'], ...courses.map((c) => [c.id, `${c.title}${c.published ? '' : ' (draft)'}${c.audience === 'parents' ? ' · parents' : ''}`])], { value: l.course_id ?? '' }), published: h('input', { type: 'checkbox', checked: !!l.published }),
     category: select(EDU_TABS, { value: l.category ?? 'athlete' }),
+    image_url: input({ type: 'url', value: l.image_url ?? '', placeholder: 'https://…/picture.jpg' }), slug: input({ value: l.slug ?? '', maxlength: '80', placeholder: 'Made from the title' }),
     quiz: textarea(l.quiz_text ?? '', { style: 'min-height:140px;font-family:var(--font-mono);font-size:14px', placeholder: 'What should your knees do when you land?\n- Cave inward\n* Track over your toes\n- Lock straight' }) };
   const readers = h('p', { class: 'small muted', style: 'margin:0' });
   const catField = field('Tab', f.category);
+  // A blog post is on the public blog too: its picture and its web address.
+  const blogBox = h('div', { class: 'form-grid' }, field('Picture link (optional)', f.image_url, 'A photo for the post and for link previews: a .jpg, .png or .webp link starting with https://.'),
+    field('Web address', f.slug, lesson?.slug ? `The post lives at ${location.origin}/blog/${lesson.slug}. Changing it breaks links already shared.` : 'Letters, numbers and dashes. Left empty, it\'s made from the title.'));
   const syncCat = () => {
     const c = courses.find((x) => x.id === f.course_id.value);
     if (c) f.category.value = courseCat(c);
     f.category.disabled = !!c;
+    blogBox.hidden = !!c || f.category.value !== 'blog';
     readers.textContent = `Who reads it: ${CATEGORY_READERS[f.category.value]}.${c ? ' A lesson in a course is for the course\'s readers.' : ''}`;
   };
   f.course_id.addEventListener('change', syncCat); f.category.addEventListener('change', syncCat); syncCat();
@@ -372,11 +377,11 @@ async function lessonDialog(lesson, courses, preset = {}) {
   const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
     try {
       const body = { title: f.title.value, summary: f.summary.value || null, body: f.body.value || null, video_url: f.video_url.value || null, minutes: f.minutes.value ? Number(f.minutes.value) : null, course_id: f.course_id.value || null, published: f.published.checked, quiz_text: f.quiz.value,
-        ...(f.course_id.value ? {} : { category: f.category.value }) };
+        ...(f.course_id.value ? {} : { category: f.category.value }), ...(!f.course_id.value && f.category.value === 'blog' ? { image_url: f.image_url.value || null, slug: f.slug.value.trim() || undefined } : {}) };
       if (lesson) await patch(`/v1/lessons/${lesson.id}`, body); else await post('/v1/lessons', body);
       const course = courses.find((c) => c.id === body.course_id);
       d.close();
-      const who = { athlete: 'Athletes', parent: 'Parents', coach: 'Staff and the public page', blog: 'Athletes and parents', research: 'Athletes and parents' }[body.category ?? courseCat(course)];
+      const who = { athlete: 'Athletes', parent: 'Parents', coach: 'Staff and the public page', blog: 'Athletes, parents and the public blog', research: 'Athletes and parents' }[body.category ?? courseCat(course)];
       toast(!f.published.checked ? `Draft saved. ${who} won't see it until you publish it.` : course && !course.published ? `Saved. It shows once you publish the course "${course.title}".` : lesson ? 'Lesson saved.' : `Posted. ${who} can read it now.`);
       refresh();
     } catch (x) { err.textContent = x.message; }
@@ -385,7 +390,7 @@ async function lessonDialog(lesson, courses, preset = {}) {
     field('Title', f.title), field('Summary', f.summary, 'One line under the title.'),
     field('Lesson text', f.body, 'Plain text. Leave a blank line between paragraphs.'),
     h('div', { class: 'form-grid' }, field('Video link (optional)', f.video_url, 'YouTube, Vimeo or a direct .mp4 link, starting with https://'), field('Minutes to read or watch', f.minutes)),
-    h('div', { class: 'form-grid' }, field('Course', f.course_id, 'Moving a lesson into a course puts it last.'), catField), readers,
+    h('div', { class: 'form-grid' }, field('Course', f.course_id, 'Moving a lesson into a course puts it last.'), catField), readers, blogBox,
     field('Quiz (optional)', f.quiz, 'A question on one line, then its choices below, each starting with - and the right one with *. A blank line between questions. Up to 10. Athletes need 80% to finish the lesson.'),
     h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, f.published, h('span', null, 'Published: its readers can see it')),
     err, h('div', { class: 'row' }, btn(lesson ? 'Save lesson' : 'Post lesson', null, 'primary', { type: 'submit' }), btn('Cancel', leave, 'ghost'))));
@@ -565,16 +570,16 @@ export async function viewEducation(main) {
       const starter = cat === 'parent' && !edu.courses.some((c) => c.audience === 'parents') && manage && !needle ? h('div', { class: 'dp-panel stack', style: 'background:transparent' },
         h('span', { class: 'strong' }, 'Courses for parents'), h('p', { class: 'small muted', style: 'margin:0' }, 'Short courses parents read in the parent portal, shown by their athlete\'s age. Start from three drafts (growth spurts, fueling, recruiting basics), then read, edit and publish them.'),
         h('div', null, btn('Add starter drafts', (e) => busy(e.currentTarget, async () => { toast((await post('/v1/courses/starter-parent')).message); refresh(); }), 'secondary'))) : null;
-      const link = `${location.origin}/learn`;
+      const link = `${location.origin}/${cat === 'blog' ? 'blog' : 'learn'}`;
       const intro = { athlete: 'Athletes read these in their app, and parents with them in the portal. Assign them to athletes or teams.',
         parent: 'Parents read these in the parent portal under For parents. Courses can be shown only to parents of athletes a certain age.',
         coach: 'For your staff, and public: anyone can read published coach\'s education on your website page.',
-        blog: 'Posts athletes see in their app and parents see in the portal, newest first.', research: 'Studies and summaries athletes see in their app and parents see in the portal.' }[cat];
+        blog: 'Posts athletes see in their app and parents see in the portal, and anyone can read on your public blog page, newest first. Drafts stay private.', research: 'Studies and summaries athletes see in their app and parents see in the portal.' }[cat];
       fill(list,
         h('p', { class: 'small muted', style: 'margin:0' }, intro),
-        cat === 'coach' ? h('div', { class: 'row wrap', style: 'gap:8px' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
-          btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast('Link copied. Put it on your website.')).catch(() => toast('Copy did not work here. Select the link and copy it.', 'warn')), 'ghost'),
-          h('a', { class: 'dp-btn dp-btn--ghost', href: '/learn', target: '_blank', rel: 'noopener' }, 'View')) : null,
+        cat === 'coach' || cat === 'blog' ? h('div', { class: 'row wrap', style: 'gap:8px' }, h('code', { class: 'small', style: 'word-break:break-all' }, link),
+          btn('Copy link', () => navigator.clipboard.writeText(link).then(() => toast(cat === 'blog' ? 'Blog link copied. Put it on your website and social media; each post has its own link too.' : 'Link copied. Put it on your website.')).catch(() => toast('Copy did not work here. Select the link and copy it.', 'warn')), 'ghost'),
+          h('a', { class: 'dp-btn dp-btn--ghost', href: cat === 'blog' ? '/blog' : '/learn', target: '_blank', rel: 'noopener' }, 'View')) : null,
         // Coach's references that ship with the platform (the sprint research brief, as a PDF and a printable page).
         cat === 'coach' ? panel('Coach\'s references', { subtitle: 'Reading that comes with the platform. Download or print it for the staff room.' },
           h('div', { class: 'list-item' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, 'Sprint positions: the angles that make athletes fast'),
@@ -623,6 +628,7 @@ export async function viewEducation(main) {
           toast(course && !course.published ? `Published. It shows once you publish the course "${course.title}".` : `Published. ${CATEGORY_READERS[l.category ?? courseCat(course)]} can read it now.`); refresh();
         }), 'secondary') : null,
         manage && l.published && !parents && (!course || course.published) ? btn('Assign', () => assignDialog({ lesson_id: l.id }), 'ghost') : null,
+        !course && l.category === 'blog' && l.published && l.slug ? h('a', { class: 'dp-btn dp-btn--ghost', href: `/blog/${encodeURIComponent(l.slug)}`, target: '_blank', rel: 'noopener', 'aria-label': `View ${l.title} on the blog` }, 'View') : null,
         manage ? btn('Edit', () => lessonDialog(l, edu.courses), 'ghost') : null));
   }
   async function move(e, course, i, dir) {

@@ -38,6 +38,7 @@ import { runReminders as runPushReminders, cleanup as cleanupPush } from './serv
 import { workoutToday } from './services/programs.js';
 import { runWeekly } from './services/weekly.js';
 import { runTrials } from './services/shop.js';
+import { render as renderBlog, robots as robotsTxt } from './services/blog.js';
 import { cleanup as cleanupSprintClips } from './services/sprint.js';
 import { followCampaignLink } from './services/campaigns.js';
 import { followContactLink } from './services/contact.js';
@@ -113,6 +114,15 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         const body = calendarFeed(ctx, cal[1], url.host);
         res.writeHead(200, { 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
         return res.end(req.method === 'HEAD' ? undefined : body);
+      }
+      // The public blog (/blog, /blog/<post>, the feed and the sitemap) and robots.txt come straight from the server as
+      // finished pages, so search engines, link previews and feed readers read them without running anything.
+      if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === '/blog' || url.pathname.startsWith('/blog/') || url.pathname === '/robots.txt')) {
+        rateLimit(`blog:${clientIp(req)}`, 240, 15 * 60000);
+        const out = url.pathname === '/robots.txt' ? robotsTxt(baseUrl) : renderBlog(ctx, url.pathname, Object.fromEntries(url.searchParams), baseUrl);
+        if (out.redirect) { res.writeHead(301, { location: out.redirect, 'cache-control': 'no-store' }); return res.end(); }
+        res.writeHead(out.status, { 'content-type': out.type, ...(out.type.startsWith('text/html') ? { 'content-security-policy': csp() } : {}), 'cache-control': out.status === 200 ? 'public, max-age=300' : 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin' });
+        return res.end(req.method === 'HEAD' ? undefined : out.body);
       }
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
       if (!route) {

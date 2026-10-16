@@ -1214,8 +1214,11 @@ CREATE TABLE IF NOT EXISTS lessons (
   -- version 46: the Education tab it's under and who reads it: athlete (athletes and their parents), parent (parents in the
   -- portal), coach (staff and the public /learn page), blog and research (athletes and parents). A lesson in a course
   -- takes the course's audience (athlete or parent).
-  category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))
+  category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research')),
+  slug TEXT,                                    -- version 83: the post's web address on the public blog (/blog/<slug>), made from the title, kept when it changes
+  image_url TEXT                                -- version 83: the post's picture (https), shown on the blog and in link previews
 );
+CREATE UNIQUE INDEX IF NOT EXISTS lessons_slug ON lessons(slug) WHERE slug IS NOT NULL;
 CREATE TABLE IF NOT EXISTS lesson_progress (
   lesson_id TEXT NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

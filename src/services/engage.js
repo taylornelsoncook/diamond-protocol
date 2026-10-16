@@ -9,6 +9,8 @@ import { updateSettings, getSetting } from './families.js';
 import { sendEmail, notifyFamily } from './mail.js';
 import { athleteProfile, getTest, parentFilter } from './performance.js';
 import { emit } from './events.js';
+import { uniqueSlug, slugTaken } from './blog.js';
+import { slugify } from '../util.js';
 
 const SCALES = ['hydration', 'soreness', 'energy', 'mood'];           // 1 to 5
 export const GOAL_KINDS = { workouts: 'Workouts', sessions: 'Sessions attended', checkins: 'Daily check-ins', custom: 'Custom' };
@@ -746,7 +748,9 @@ function lessonFields(ctx, body, cur = {}) {
     course_id: has('course_id') ? (blank(body.course_id) ? null : String(body.course_id)) : cur.course_id ?? null,
     published: has('published') ? (body.published ? 1 : 0) : cur.published ?? 1,
     quiz: has('quiz_text') ? (blank(body.quiz_text) ? null : JSON.stringify(parseQuiz(v.str(body.quiz_text, 'quiz_text', { max: 20000 })))) : cur.quiz ?? null,
-    category: has('category') ? v.oneOf(body.category, 'category', Object.keys(EDU_CATEGORIES)) : cur.category ?? 'athlete'
+    category: has('category') ? v.oneOf(body.category, 'category', Object.keys(EDU_CATEGORIES)) : cur.category ?? 'athlete',
+    image_url: has('image_url') ? v.url(body.image_url, 'image_url', { optional: true }) : cur.image_url ?? null,
+    slug: cur.slug ?? null
   };
   if (!out.title) throw badRequest('Give the lesson a title.');
   if (out.course_id) {
@@ -755,6 +759,16 @@ function lessonFields(ctx, body, cur = {}) {
     const fits = courseCategory(course.audience);
     if (has('category') && out.category !== fits) throw badRequest(`"${course.title}" is ${EDU_CATEGORIES[fits].toLowerCase()}, so its lessons are too. Make it a stand-alone lesson to put it under ${EDU_CATEGORIES[out.category]}.`);
     out.category = fits;
+  }
+  // A blog post has a web address on the public blog (/blog/<slug>): typed, or made from the title the first time and
+  // kept when the title changes, so links already shared keep working.
+  if (out.category === 'blog' && !out.course_id) {
+    if (has('slug') && !blank(body.slug)) {
+      const wanted = slugify(v.str(body.slug, 'slug', { max: 120 }));
+      if (!wanted) throw badRequest('The web address needs letters or numbers (like why-sleep-matters).');
+      if (slugTaken(ctx, wanted, cur.id ?? '')) throw badRequest(`The web address "${wanted}" is already used by another post. Pick another.`);
+      out.slug = wanted;
+    } else if (!out.slug) out.slug = uniqueSlug(ctx, out.title, { exceptId: cur.id ?? '' });
   }
   return out;
 }
@@ -768,8 +782,8 @@ export function createLesson(ctx, body = {}) {
   const f = lessonFields(ctx, body);
   const position = f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : 0;
   const id = newId('les');
-  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, quiz, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, ctx.now(), ctx.now());
+  ctx.db.run('INSERT INTO lessons (id, title, summary, body, video_url, minutes, course_id, position, published, quiz, category, slug, image_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    id, f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, f.slug, f.image_url, ctx.now(), ctx.now());
   return getLesson(ctx, id);
 }
 export function updateLesson(ctx, id, body = {}) {
@@ -781,8 +795,8 @@ export function updateLesson(ctx, id, body = {}) {
     if (n) throw conflict(`"${cur.title}" is assigned to athletes ${n === 1 ? 'once' : `${n} times`}. Remove ${n === 1 ? 'that assignment' : 'those assignments'} on the Assigned tab first, then move it to ${EDU_CATEGORIES[f.category]}.`);
   }
   const position = f.course_id !== cur.course_id && f.course_id ? (ctx.db.get('SELECT MAX(position) AS m FROM lessons WHERE course_id = ?', f.course_id).m ?? -1) + 1 : cur.position;
-  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, category = ?, updated_at = ? WHERE id = ?',
-    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, ctx.now(), id);
+  ctx.db.run('UPDATE lessons SET title = ?, summary = ?, body = ?, video_url = ?, minutes = ?, course_id = ?, position = ?, published = ?, quiz = ?, category = ?, slug = ?, image_url = ?, updated_at = ? WHERE id = ?',
+    f.title, f.summary, f.body, f.video_url, f.minutes, f.course_id, position, f.published, f.quiz, f.category, f.slug, f.image_url, ctx.now(), id);
   return getLesson(ctx, id);
 }
 export function deleteLesson(ctx, id) {
@@ -1033,7 +1047,7 @@ export function educationReport(ctx) {
       (SELECT COUNT(*) FROM lesson_assignments x WHERE x.lesson_id = l.id) AS assigned
     FROM lessons l ORDER BY l.position, l.created_at`)
     .map((l) => ({ id: l.id, title: l.title, summary: l.summary, minutes: l.minutes, has_video: !!l.video_url, has_quiz: !!l.quiz, course_id: l.course_id, category: l.category, position: l.position, published: !!l.published,
-      completions: l.completions, opened: l.opened, assigned: l.assigned, updated_at: l.updated_at }));
+      slug: l.slug, image_url: l.image_url, completions: l.completions, opened: l.opened, assigned: l.assigned, updated_at: l.updated_at }));
   const courses = ctx.db.all('SELECT * FROM courses ORDER BY created_at').map((c) => ({ id: c.id, title: c.title, description: c.description, published: !!c.published, lessons: lessons.filter((l) => l.course_id === c.id),
     certificates: ctx.db.get('SELECT COUNT(*) AS n FROM course_certificates WHERE course_id = ?', c.id).n, for_sale: !!c.for_sale && c.price_cents > 0, audience: c.audience, age_min: c.age_min, age_max: c.age_max,
     assigned: ctx.db.get('SELECT COUNT(*) AS n FROM lesson_assignments WHERE course_id = ?', c.id).n,

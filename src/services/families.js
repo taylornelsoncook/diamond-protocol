@@ -285,6 +285,15 @@ export function athleteFields(body, cur = {}) {
   };
 }
 
+// A card or customer id the built-in test provider made (cus_test_…, pm_test_…) means nothing to Stripe. They're left over when
+// a database seeded or run without a Stripe key (staging's sample families, a card added with "Add test card") gets a Stripe key:
+// Stripe answers "No such customer" to anything naming them. So they count as no usable card: a charge fails with a plain reason
+// (never a 500), and a card link makes a new Stripe customer so the card can be added again.
+const TEST_ID = /^(cus|pm)_test_/;
+export const staleCustomer = (ctx, payer) => ctx.payments.name !== 'test' && TEST_ID.test(payer?.stripe_customer_id ?? '');
+export const staleCard = (ctx, payer) => ctx.payments.name !== 'test' && !!payer?.card_payment_method && (TEST_ID.test(payer.card_payment_method) || TEST_ID.test(payer.stripe_customer_id ?? ''));
+export const staleCardText = (payer) => `The card on file for ${payer.name} was saved before Stripe was connected, so Stripe can't charge it. Add the card again with a secure card link.`;
+
 // Who pays for a client: their family when they have one, otherwise themselves.
 export function payerFor(ctx, clientId) {
   const c = ctx.db.get('SELECT * FROM clients WHERE id = ?', clientId);

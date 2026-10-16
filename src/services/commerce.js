@@ -1,6 +1,6 @@
 import { newId, token, v, notFound, badRequest, conflict, HttpError, withLock, isDate, localDate, zonedToUtc, addDaysToDate, startOfLocalDay } from '../util.js';
 import { emit } from './events.js';
-import { payerFor, getSetting } from './families.js';
+import { payerFor, getSetting, staleCard, staleCardText, staleCustomer } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
@@ -135,9 +135,10 @@ function clientRow(ctx, id) {
 }
 // Cards live on the payer: the family for athletes with parents, otherwise the client.
 async function ensureCustomer(ctx, payer) {
-  if (payer.stripe_customer_id) return payer.stripe_customer_id;
+  if (payer.stripe_customer_id && !staleCustomer(ctx, payer)) return payer.stripe_customer_id;
   let id;
-  try { id = await ctx.payments.ensureCustomer(payer); } catch (e) { throw paymentError(e); }
+  // A test provider's customer id is replaced with a real one (the provider makes a new customer when none is given).
+  try { id = await ctx.payments.ensureCustomer({ ...payer, stripe_customer_id: null }); } catch (e) { throw paymentError(e); }
   ctx.db.run(`UPDATE ${payer.table} SET stripe_customer_id = ? WHERE id = ?`, id, payer.id);
   payer.stripe_customer_id = id;
   return id;
@@ -153,17 +154,48 @@ const payerById = (ctx, table, id) => {
   return ctx.db.get('SELECT id FROM clients WHERE id = ?', id) ? payerFor(ctx, id) : null;
 };
 // A link the client or parent opens to add a card on Stripe's secure page.
-export async function cardSetupLink(ctx, clientId, baseUrl) {
+// open: staff open the page themselves (the client page's Change card), so Stripe comes back to the card-saved page with the
+// client and the session, and that page saves the card at once (finishCardSetup) instead of waiting for Stripe's webhook.
+export async function cardSetupLink(ctx, clientId, baseUrl, { open = false } = {}) {
   const payer = payerFor(ctx, clientId);
-  return setupLinkFor(ctx, payer, baseUrl);
+  const back = open ? `${baseUrl}/card-saved.html?client=${encodeURIComponent(clientId)}` : null;
+  return setupLinkFor(ctx, payer, baseUrl, open ? { successUrl: `${back}&session_id={CHECKOUT_SESSION_ID}`, cancelUrl: `${back}&canceled=1` } : {});
 }
-export async function setupLinkFor(ctx, payer, baseUrl) {
+export async function setupLinkFor(ctx, payer, baseUrl, { successUrl = `${baseUrl}/card-saved.html`, cancelUrl = `${baseUrl}/card-saved.html?canceled=1` } = {}) {
   const customerId = await ensureCustomer(ctx, payer);
   let s;
-  try { s = await ctx.payments.cardSetupSession({ customerId, ownerKey: payer.metadataKey, ownerId: payer.id, successUrl: `${baseUrl}/card-saved.html`, cancelUrl: `${baseUrl}/card-saved.html?canceled=1` }); }
+  try { s = await ctx.payments.cardSetupSession({ customerId, ownerKey: payer.metadataKey, ownerId: payer.id, successUrl, cancelUrl }); }
   catch (e) { throw paymentError(e); }
   if (!s.url) throw conflict('Card links need Stripe. In test mode, use "Add test card".');
   return { url: s.url };
+}
+// The card a finished Stripe card page holds, saved on its payer: from the webhook (checkout.session.completed) or from the
+// card-saved page staff come back to (finishCardSetup). Both may land; the second finds the card already saved and changes nothing.
+async function applySetupSession(ctx, sessionId, expectPayer = null) {
+  const info = await ctx.payments.getSetupSession(sessionId);
+  const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
+  if (expectPayer) {
+    if (!payer || payer.table !== expectPayer.table || payer.id !== expectPayer.id) throw conflict('That card page was for someone else.');
+    if (!info.paymentMethod) throw conflict('No card was saved on that page. Open it again and finish on Stripe\'s page.');
+  }
+  if (!payer || !info.paymentMethod) return { saved: false };
+  return withLock(`card-setup:${sessionId}`, async () => {
+    const cur = ctx.db.get(`SELECT card_payment_method FROM ${payer.table} WHERE id = ?`, payer.id);
+    if (cur?.card_payment_method === info.paymentMethod) return { saved: false, payer };
+    saveCard(ctx, payer, info);
+    // Every parent hears about a new family card (the one who saved it too: the card page doesn't say who it was).
+    if (payer.table === 'families') notifyFamily(ctx, payer.id, 'A card was saved to your family account', `A card ending ${info.last4 ?? ''} was saved to your family account. It pays for memberships, packs, camps and drop-ins.\n\nNot you? Reply to this email.\n\n${getSetting(ctx, 'business_name')}`);
+    await retryFailed(ctx, payer);
+    return { saved: true, payer };
+  });
+}
+export async function finishCardSetup(ctx, clientId, sessionId) {
+  const id = v.str(sessionId, 'session_id', { max: 200 });
+  if (!/^cs_[A-Za-z0-9_]+$/.test(id)) throw badRequest('session_id is not a Stripe card page.');
+  if (!ctx.payments.getSetupSession) throw conflict('Card pages need Stripe. In test mode, use "Add test card".');
+  const payer = payerFor(ctx, clientId);
+  try { await applySetupSession(ctx, id, payer); } catch (e) { if (e instanceof HttpError) throw e; throw paymentError(e); }
+  return cardSummary(ctx, clientId);
 }
 export async function addTestCard(ctx, clientId) {
   if (ctx.payments.live || !ctx.payments.testCard) throw conflict('Test cards are only available in test mode.');
@@ -183,7 +215,7 @@ export function removeCard(ctx, clientId) {
 }
 export function cardSummary(ctx, clientId) {
   const p = payerFor(ctx, clientId);
-  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
+  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, stale: staleCard(ctx, p), owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
 }
 
 // ---------- Session credits and check-ins ----------
@@ -391,6 +423,7 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   }
   const payer = client ? payerFor(ctx, client.id) : null;
   if (method === 'card_on_file' && !payer?.card_payment_method) throw conflict(client ? `${client.name.split(' ')[0]} has no card on file${payer.table === 'families' ? ' for the family' : ''}.` : 'Choose a client with a card on file.');
+  if (method === 'card_on_file' && staleCard(ctx, payer)) throw conflict(staleCardText(payer));
   // Receipt: email_receipt true sends one (to receipt_email, or the family's billing email), false sends none,
   // left out follows the automatic-receipt setting.
   const receiptOpt = body.email_receipt === undefined || body.email_receipt === null ? null : body.email_receipt ? 1 : 0;
@@ -411,13 +444,16 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   if (method === 'cash') {
     completeSale(ctx, id, {});
   } else if (method === 'card_on_file') {
-    const r = await ctx.payments.chargeSaved({ client: payer, amountCents: amount, description, idempotencyKey: `sale-${id}`, metadata });
+    let r;
+    // A decline comes back as r.error; anything else (Stripe down, a key that stopped working) fails the sale and names the service.
+    try { r = await ctx.payments.chargeSaved({ client: payer, amountCents: amount, description, idempotencyKey: `sale-${id}`, metadata }); }
+    catch (e) { failSale(ctx, id, `The payment service returned an error: ${e.message}`); throw paymentError(e); }
     if (r.ok) { ctx.db.run('UPDATE sales SET payment_ref = ? WHERE id = ?', r.ref, id); completeSale(ctx, id, { card: { brand: payer.card_brand, last4: payer.card_last4 } }); }
     else failSale(ctx, id, r.error);
   } else {
     try {
       const locationRef = await syncLocation(ctx, loc.id);
-      const customerId = payer && wantsSave ? await ensureCustomer(ctx, payer) : payer?.stripe_customer_id ?? null;
+      const customerId = payer && wantsSave ? await ensureCustomer(ctx, payer) : payer && !staleCustomer(ctx, payer) ? payer.stripe_customer_id ?? null : null;   // a test customer id is left off: Stripe doesn't know it
       const intent = await ctx.payments.createInPersonIntent({ amountCents: amount, customerId, saveCard: wantsSave, description, metadata, idempotencyKey: `sale-${id}` });
       ctx.db.run('UPDATE sales SET payment_ref = ?, client_secret = ? WHERE id = ?', intent.id, intent.clientSecret, id);
       void locationRef;
@@ -703,14 +739,7 @@ export async function handleStripeEvent(ctx, event) {
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
-    const info = await ctx.payments.getSetupSession(obj.id);
-    const payer = info.familyId ? payerById(ctx, 'families', info.familyId) : info.clientId ? payerById(ctx, 'clients', info.clientId) : null;
-    if (payer && info.paymentMethod) {
-      saveCard(ctx, payer, info);
-      // Every parent hears about a new family card (the one who saved it too: the card page doesn't say who it was).
-      if (payer.table === 'families') notifyFamily(ctx, payer.id, 'A card was saved to your family account', `A card ending ${info.last4 ?? ''} was saved to your family account. It pays for memberships, packs, camps and drop-ins.\n\nNot you? Reply to this email.\n\n${getSetting(ctx, 'business_name')}`);
-      await retryFailed(ctx, payer);
-    }
+    await applySetupSession(ctx, obj.id);
   }
   return { received: true };
 }

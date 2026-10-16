@@ -1,6 +1,6 @@
 import { newId, v, notFound, badRequest, conflict, HttpError, addDays, addMonths, withLock, isDate, localDate, zonedToUtc, startOfLocalDay, addDaysToDate } from '../util.js';
 import { emit } from './events.js';
-import { payerFor, getSetting } from './families.js';
+import { payerFor, getSetting, staleCard, staleCardText } from './families.js';
 import { membershipReceipt, paymentFailed, trialReminders, cardReminder, invoiceRefundReceipt } from './notify.js';
 import { csvCell } from './clients.js';
 import { sendEmail } from './mail.js';
@@ -285,7 +285,9 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
     if (errored) ctx.db.run(`UPDATE invoice_charges SET status = 'pending', manual = ?, source = ?, error = NULL, settled_at = NULL WHERE id = ?`, manual ? 1 : 0, source, attemptId);
     else ctx.db.run(`INSERT INTO invoice_charges (id, invoice_id, attempt, manual, source, amount_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`, attemptId, inv.id, attempts, manual ? 1 : 0, source, inv.amount_cents, ctx.now());
     try {
-      result = await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: 'Diamond Protocol membership', idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id, charge_attempt_id: attemptId } });
+      // A card from before Stripe was connected is a decline with a plain reason, never a call Stripe answers "No such customer" to.
+      result = staleCard(ctx, client) ? { ok: false, error: staleCardText(client) }
+        : await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: 'Diamond Protocol membership', idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id, charge_attempt_id: attemptId } });
     } catch (e) {
       ctx.db.run(`UPDATE invoice_charges SET status = 'error', error = ?, settled_at = ? WHERE id = ?`, String(e.message ?? e).slice(0, 300), ctx.now(), attemptId);
       throw e;

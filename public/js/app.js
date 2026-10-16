@@ -943,11 +943,22 @@ async function viewClient(main, id) {
   syncDirty();
 
   const card = c.card.on_file
-    ? h('div', { class: 'row wrap' }, h('span', { class: 'grow' }, `${(c.card.brand || 'Card').replace(/^./, (x) => x.toUpperCase())} ending ${c.card.last4 ?? '••••'}`),
+    ? h('div', { class: 'row wrap' }, h('div', { class: 'grow' }, `${(c.card.brand || 'Card').replace(/^./, (x) => x.toUpperCase())} ending ${c.card.last4 ?? '••••'}`,
+          c.card.stale ? h('div', { class: 'small warn-text' }, 'Saved before Stripe was connected, so Stripe can\'t charge it. Press Change card, or send a link, so it can be added again.') : null),
         role === 'front_desk' ? null : btn('Remove card', (e) => { if (confirm('Remove the saved card? Membership renewals will fail until a new card is added.')) busy(e.currentTarget, async () => { await del(`/v1/clients/${id}/card`); toast('Card removed.'); render(); }); }, 'ghost'))
     : h('p', { class: 'muted' }, `No card saved. Save one when ${first} taps to pay, or send a secure link.`);
+  const cardNote = state.payments.provider === 'stripe' ? h('p', { class: 'small muted dp-help' }, 'Card numbers are kept by Stripe, never here: this page shows only the brand, the last 4 digits and the expiry. Change card opens Stripe\'s secure page for the card to be typed in at the desk; Copy link sends the same page to the family.') : null;
+  // Change card opens Stripe's secure page in a new tab (opened on the click itself, so the browser allows it): the card is typed
+  // there, never here, and the page comes back to card-saved.html, which saves it on the client at once.
   const cardActions = h('div', { class: 'row wrap' },
-    state.payments.provider === 'stripe' ? btn(c.card.on_file ? 'Send link to update card' : 'Copy card link for client', (e) => busy(e.currentTarget, async () => {
+    state.payments.provider === 'stripe' ? btn(c.card.on_file ? 'Change card' : 'Add a card', (e) => {
+      const tab = window.open('', '_blank');
+      busy(e.currentTarget, async () => {
+        try { const { url } = await post(`/v1/clients/${id}/card/setup-link`, { open: true }); if (tab) tab.location = url; else location.href = url; }
+        catch (err) { tab?.close(); toast(err.message, 'warn'); }
+      });
+    }, 'primary') : null,
+    state.payments.provider === 'stripe' ? btn(c.card.on_file ? 'Copy link to send' : 'Copy card link for client', (e) => busy(e.currentTarget, async () => {
       const { url } = await post(`/v1/clients/${id}/card/setup-link`);
       await copyText(url, `Secure card link copied. Send it to ${first}.`);
     }), 'outline') : null,
@@ -955,7 +966,7 @@ async function viewClient(main, id) {
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { 'aria-label': 'Check-in location', value: (() => { try { return localStorage.getItem('dp_location'); } catch { return null; } })() || locs.data[0]?.id });
   const member = ['active', 'trialing', 'past_due'].includes(c.status);
   const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${plural(c.credits.private, 'private session')} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
-    card, cardActions,
+    card, cardActions, cardNote,
     c.archived_at ? null : locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
       // Members and athletes with group credits use a group session; otherwise a private credit.
       const r = await post(`/v1/clients/${id}/check-ins`, { location_id: locSel.value, credit_type: member || c.credits.group > 0 ? 'group' : 'private' });
@@ -2057,6 +2068,13 @@ async function viewSell(main) {
     const needCard = h('div', { class: 'stack' },
       h('p', { class: 'warn-text', style: 'margin:0' }, `${first} has no card on file. Monthly memberships renew on a saved card.`),
       h('div', { class: 'row wrap' },
+        btn('Open Stripe\'s card page', (e) => {
+          const tab = window.open('', '_blank');
+          busy(e.currentTarget, async () => {
+            try { const { url } = await post(`/v1/clients/${c.id}/card/setup-link`, { open: true }); if (tab) tab.location = url; else location.href = url; fill(needCard, h('p', { style: 'margin:0' }, 'Add the card on Stripe\'s page in the other tab, then pick the plan again here.')); }
+            catch (err) { tab?.close(); toast(err.message, 'warn'); }
+          });
+        }, 'primary'),
         btn('Get a secure card link', (e) => busy(e.currentTarget, async () => {
           try {
             const { url } = await post(`/v1/clients/${c.id}/card/setup-link`);

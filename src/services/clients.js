@@ -2,7 +2,7 @@ import { newId, token, v, notFound, conflict, badRequest, HttpError } from '../u
 import { emit } from './events.js';
 import * as billing from './billing.js';
 import * as programs from './programs.js';
-import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSetting } from './families.js';
+import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSetting, staleCard } from './families.js';
 import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
@@ -157,7 +157,7 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
   const payer = payerFor(ctx, id);
   c.notes = extra.notes ?? null;
   c.card_status = payer.card_status;
-  c.card = payer.card_payment_method ? { on_file: true, brand: payer.card_brand, last4: payer.card_last4, owner: payer.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: payer.table === 'families' ? 'family' : 'client' };
+  c.card = payer.card_payment_method ? { on_file: true, brand: payer.card_brand, last4: payer.card_last4, exp: payer.card_exp ?? null, stale: staleCard(ctx, payer), owner: payer.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: payer.table === 'families' ? 'family' : 'client' };
   Object.assign(c, athleteFields({}, extra));
   if (c.family) {
     const fam = getFamily(ctx, c.family.id);

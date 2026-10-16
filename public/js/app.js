@@ -2649,6 +2649,89 @@ function sessionRow(x, { showState = false, state } = {}) {
       kindBadge(x.kind)));
 }
 
+// The week grid (owner's ask: the whole week on one page, Sunday to Saturday, 4 am to 10 pm, in 15-minute rows; click an
+// empty time to add a class, a session or hours, and whatever is scheduled blocks out the whole time it covers).
+const GRID = { from: 4 * 60, to: 22 * 60, step: 15, rowPx: 14 };
+const sundayOf = (d) => addDaysStr(d, -new Date(`${d}T12:00:00Z`).getUTCDay());
+const minsOf = (hm) => { const [hh, mm] = String(hm).split(':').map(Number); return hh * 60 + (mm || 0); };
+const hmOf = (mins) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
+// Overlapping blocks share the column side by side: each gets a lane, and the cluster's lane count sets the widths.
+function laneOut(items) {
+  const sorted = [...items].sort((a, b) => a.s - b.s || b.e - a.e);
+  let cluster = [], clusterEnd = -1;
+  const flush = () => {
+    const ends = [];
+    for (const it of cluster) { let l = ends.findIndex((e) => e <= it.s); if (l < 0) { l = ends.length; ends.push(0); } ends[l] = it.e; it.lane = l; }
+    for (const it of cluster) it.lanes = ends.length;
+    cluster = []; clusterEnd = -1;
+  };
+  for (const it of sorted) { if (cluster.length && it.s >= clusterEnd) flush(); cluster.push(it); clusterEnd = Math.max(clusterEnd, it.e); }
+  if (cluster.length) flush();
+  return sorted;
+}
+function weekGrid({ week, today, rows, projected, hours, timeOff, canAdd, onSlot }) {
+  const nRows = (GRID.to - GRID.from) / GRID.step, colPx = nRows * GRID.rowPx;
+  const dates = Array.from({ length: 7 }, (_, i) => addDaysStr(week, i));
+  const now = new Date().toISOString(), nowMins = minsOf(bizTime(now)), nowDay = bizDay(now);
+  const topOf = (mins) => ((mins - GRID.from) / GRID.step) * GRID.rowPx;
+  // Where a session sits in the day: clamped to the grid's hours (a session past 10 pm sits at the bottom edge).
+  const span = (startIso, endIso) => {
+    const s0 = minsOf(bizTime(startIso)), d0 = bizDay(startIso);
+    let e0 = s0 + Math.max(GRID.step, Math.round((Date.parse(endIso) - Date.parse(startIso)) / 60000));
+    if (bizDay(endIso) !== d0 && e0 < s0 + GRID.step) e0 = GRID.to;
+    const s = Math.min(Math.max(s0, GRID.from), GRID.to - GRID.step), e = Math.min(Math.max(e0, s + GRID.step), GRID.to);
+    return { s, e, clipped: s0 < GRID.from || e0 > GRID.to };
+  };
+  const timesCol = h('div', { class: 'sc-grid-times', style: `height:${colPx}px`, 'aria-hidden': 'true' });
+  for (let m = GRID.from; m < GRID.to; m += 60) timesCol.append(h('span', { class: 'sc-grid-hour', style: `top:${topOf(m)}px` }, hm12(hmOf(m)).replace(':00', '')));
+  const dayHeads = [], dayCols = [];
+  for (const d of dates) {
+    const weekday = new Date(`${d}T12:00:00Z`).getUTCDay();
+    const off = timeOff.filter((t) => t.start_date <= d && t.end_date >= d);
+    const closed = off.find((t) => !t.user_id);
+    dayHeads.push(h('div', { class: `sc-grid-dayhead${d === today ? ' is-today' : ''}${closed ? ' is-closed' : ''}` },
+      h('span', { class: 'sc-grid-dayname' }, DAY_NAMES[weekday]), h('span', { class: 'sc-grid-daynum' }, String(Number(d.slice(8)))),
+      d === today ? h('span', { class: 'sc-grid-todaytag' }, 'Today') : null,
+      closed ? h('span', { class: 'sc-grid-off', title: closed.note || 'Closed' }, 'Closed') : null,
+      off.filter((t) => t.user_id).map((t) => h('span', { class: 'sc-grid-off', title: t.note || `${t.coach_name} is off` }, `${(t.coach_name ?? 'Coach').split(' ')[0]} off`))));
+    const col = h('div', { class: `sc-grid-day${d === today ? ' is-today' : ''}${d < today ? ' is-past' : ''}${closed ? ' is-closed' : ''}`, style: `height:${colPx}px`, 'data-date': d });
+    // The 15-minute cells: a click adds something at that time (owners and coaches).
+    for (let m = GRID.from; m < GRID.to; m += GRID.step) {
+      const hm = hmOf(m);
+      col.append(canAdd ? h('button', { type: 'button', class: `sc-cell${m % 60 === 0 ? ' is-hour' : ''}`, 'aria-label': `${shortDate(d)} ${hm12(hm)}: add a class, session or hours here`, title: `Add at ${hm12(hm)}`, onClick: () => onSlot(d, hm) })
+        : h('div', { class: `sc-cell${m % 60 === 0 ? ' is-hour' : ''}` }));
+    }
+    // Hours for privates and evaluations: a band behind the sessions, the whole time it covers.
+    for (const a of hours.filter((a) => a.weekday === weekday)) {
+      const s = Math.max(minsOf(a.start_time), GRID.from), e = Math.min(minsOf(a.end_time), GRID.to);
+      if (e <= s) continue;
+      col.append(h('div', { class: `sc-hours sc-hours--${a.kind}${a.coach_active === false ? ' is-off' : ''}`, style: `top:${topOf(s)}px;height:${topOf(e) - topOf(s)}px`,
+        title: `${a.kind === 'private' ? 'Private training' : 'Evaluation'} hours ${hm12(a.start_time)}–${hm12(a.end_time)} · ${a.slot_minutes} min each · ${a.location_name} · ${a.coach_name ?? 'no coach set'}${a.coach_active === false ? ' (not offered: the coach can\'t lead sessions now)' : ''}` },
+        h('span', null, `${a.kind === 'private' ? 'Private' : 'Evaluation'} hours · ${a.coach_name ? a.coach_name.split(' ')[0] : a.location_name}`)));
+    }
+    // Sessions (and past the horizon the classes planned from their series), side by side where they overlap.
+    const items = laneOut([...rows.filter((x) => bizDay(x.starts_at) === d).map((x) => ({ x, ...span(x.starts_at, x.ends_at) })),
+      ...projected.filter((x) => x.date === d).map((x) => ({ x, ...span(x.starts_at, x.ends_at) }))]);
+    for (const it of items) {
+      const x = it.x, st = x.projected ? 'planned' : sessionState(x, now), tall = it.e - it.s >= 45;
+      const place = `${x.location_name} · ${x.coach_name ?? 'No coach set'}`;
+      const count = x.projected ? `${x.capacity} spots` : `${x.booked_count}/${x.capacity}${x.waitlist_count ? ` +${x.waitlist_count} wait` : ''}`;
+      const style = `top:${topOf(it.s)}px;height:${topOf(it.e) - topOf(it.s) - 2}px;left:calc(${(100 / it.lanes) * it.lane}% + 2px);width:calc(${100 / it.lanes}% - 4px)`;
+      const title = `${x.name} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${place} · ${x.projected ? `${x.capacity} spots, planned from the class list (created 8 weeks ahead)` : `${x.booked_count} of ${x.capacity} booked${x.waitlist_count ? `, ${x.waitlist_count} waitlisted` : ''}${x.unpaid_count ? `, ${x.unpaid_count} unpaid` : ''}`}${it.clipped ? ' · runs outside 4 am to 10 pm' : ''}`;
+      const inner = [h('span', { class: 'sc-block-name' }, x.name),
+        tall ? h('span', { class: 'sc-block-line' }, `${timeOf(x.starts_at)}–${timeOf(x.ends_at)}`) : null,
+        tall ? h('span', { class: 'sc-block-line' }, `${count} · ${place}`) : h('span', { class: 'sc-block-line' }, `${timeOf(x.starts_at)} · ${count}`),
+        x.unpaid_count && tall ? h('span', { class: 'sc-block-flag' }, `${x.unpaid_count} unpaid`) : null];
+      col.append(x.projected ? h('div', { class: `sc-block sc-block--${x.kind} is-planned`, style, title: `${title}` }, ...inner)
+        : h('a', { class: `sc-block sc-block--${x.kind} is-${st}${x.booked_count >= x.capacity ? ' is-full' : ''}`, href: `#/schedule/${x.id}`, style, title, 'aria-label': title }, ...inner));
+    }
+    if (d === nowDay && nowMins >= GRID.from && nowMins < GRID.to) col.append(h('div', { class: 'sc-now', style: `top:${topOf(nowMins)}px`, 'aria-hidden': 'true' }));
+    dayCols.push(col);
+  }
+  return h('div', { class: 'sc-grid-wrap' }, h('div', { class: 'sc-grid', role: 'group', 'aria-label': `Week of ${shortDate(week)}, 4 am to 10 pm in 15-minute rows` },
+    h('div', { class: 'sc-grid-corner' }), dayHeads, timesCol, dayCols));
+}
+
 // Edit a class, camp or clinic: every upcoming session follows. Prices are the owner's (coaches never see them).
 function editSeriesDialog(x, locs, coaches) {
   const owner = isOwner();
@@ -2693,15 +2776,21 @@ async function viewSchedule(main) {
   const settings = await get('/v1/settings');
   tzName = settings.timezone;
   const today = bizDate();
-  const week = /^\d{4}-\d{2}-\d{2}$/.test(q.get('week') ?? '') ? q.get('week') : today;     // seven days from this date (today by default)
-  const mine = leads() && q.get('mine') === '1', onlyCoach = q.get('coach'), kind = q.get('kind') ?? '', loc = q.get('loc') ?? '';
+  // The week on screen runs Sunday to Saturday (owner's ask): any date in the address lands on its Sunday.
+  const week = sundayOf(/^\d{4}-\d{2}-\d{2}$/.test(q.get('week') ?? '') ? q.get('week') : today);
+  const mine = leads() && q.get('mine') === '1', onlyCoach = q.get('coach'), kind = q.get('kind') ?? '', loc = q.get('loc') ?? '', view = q.get('view') === 'list' ? 'list' : 'grid';
   const params = new URLSearchParams({ from: bizIso(week), to: bizIso(addDaysStr(week, 7)), project: 'true' });
   if (onlyCoach) params.set('coach_id', onlyCoach); else if (mine) params.set('coach_id', 'me');
   if (kind) params.set('kind', kind);
   if (loc) params.set('location_id', loc);
   const monthParams = new URLSearchParams(params); monthParams.delete('from'); monthParams.delete('to'); monthParams.delete('project');
-  const [sched, series, locs, coachList] = await Promise.all([get(`/v1/schedule?${params}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/coaches')]);
+  const [sched, series, locs, coachList, av, timeOff] = await Promise.all([get(`/v1/schedule?${params}`), get('/v1/class-series'), get('/v1/locations'), get('/v1/coaches'),
+    get('/v1/availability').catch(() => ({ data: [] })), get(`/v1/time-off?from=${week}&to=${addDaysStr(week, 6)}`).catch(() => ({ data: [] }))]);
   const coaches = coachList.data;
+  // Hours for privates and evaluations follow the same filters as the sessions (a place, a coach, a type).
+  const coachFilter = onlyCoach || (mine ? state.user.id : null);
+  const hours = av.data.filter((a) => (!loc || a.location_id === loc) && (!coachFilter || a.coach_id === coachFilter) && (!kind || a.kind === kind));
+  const daysOff = timeOff.data.filter((t) => !t.user_id || !coachFilter || t.user_id === coachFilter);
   lastScheduleHash = location.hash || '#/schedule';
   // Filters live in the address, so Back, refresh and a session's Schedule button keep them.
   const go = (changes) => {
@@ -2715,6 +2804,7 @@ async function viewSchedule(main) {
   const search = input({ type: 'search', placeholder: 'Find a session, place or coach', value: q.get('q') ?? '', 'aria-label': 'Find a session', style: 'max-width:320px' });
   const list = h('div', { class: 'stack', style: 'gap:24px' });
   const totals = h('p', { class: 'small muted', style: 'margin:0', 'aria-live': 'polite' });
+  let onSlot = () => {};      // set once the forms exist below: a click on an empty time
   const draw = () => {
     const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const rows = sched.data.filter((x) => words.every((w) => `${x.name} ${x.location_name} ${x.coach_name ?? 'no coach set'}`.toLowerCase().includes(w)));
@@ -2726,6 +2816,8 @@ async function viewSchedule(main) {
     // Past the 8-week horizon the classes are projected from their series: shown as planned lines, nothing to open or book yet.
     for (const x of (sched.projected ?? []).filter((x) => words.every((w) => `${x.name} ${x.location_name} ${x.coach_name ?? 'no coach set'}`.toLowerCase().includes(w)))) { if (!byDay.has(x.date)) byDay.set(x.date, []); byDay.get(x.date).push(x); }
     const ordered = [...byDay].sort(([a], [b]) => (a < b ? -1 : 1));
+    if (view === 'grid') return fill(list, weekGrid({ week, today, rows, projected: (sched.projected ?? []).filter((x) => words.every((w) => `${x.name} ${x.location_name} ${x.coach_name ?? 'no coach set'}`.toLowerCase().includes(w))), hours, timeOff: daysOff, canAdd: leads() && locs.data.length > 0, onSlot: (d, hm) => onSlot(d, hm) }),
+      h('p', { class: 'small muted', style: 'margin:0' }, `${leads() ? 'Click an empty time to add a class, a one-time session or hours there. ' : ''}Shaded bands are hours parents can book privates and evaluations in; dashed blocks are weekly classes planned past the 8-week horizon.`));
     fill(list, byDay.size ? ordered.map(([d, xs]) => panel(`${dayOf(bizIso(d, '12:00'))}${d === today ? ' · Today' : ''}`, {}, xs.map((x) => (x.projected ? projectedRow(x) : sessionRow(x, { showState: d <= today, state: sessionState(x, now) })))))
       : h('div', { class: 'empty' }, words.length ? `Nothing in these 7 days matches "${search.value.trim()}".` : onlyCoach ? `${coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach'} doesn't lead anything in these 7 days.` : mine ? 'You don\'t lead anything in these 7 days. Untick My sessions to see everything.' : 'Nothing scheduled in these 7 days.'));
   };
@@ -2738,6 +2830,8 @@ async function viewSchedule(main) {
   draw();
 
   const weekLabel = `${shortDate(week)} – ${shortDate(addDaysStr(week, 6))}`;
+  const viewToggle = h('div', { class: 'row tm-views', role: 'group', 'aria-label': 'How to show the week' },
+    [['grid', 'Grid'], ['list', 'List']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(view === k), onClick: () => go({ view: k === 'grid' ? null : k }) }, label)));
   // The month calendar (owner's ask: click a day and go there, at least a year ahead): sessions per day, projected
   // classes past the horizon in a lighter tone, the week on screen outlined, a jump menu two years wide.
   const calUi = { month: week.slice(0, 7) };
@@ -2752,7 +2846,7 @@ async function viewSchedule(main) {
     let mv;
     try { mv = await get(`/v1/schedule/month?${new URLSearchParams({ ...Object.fromEntries(monthParams), month: calUi.month })}`); } catch (e) { return fill(calBody, h('p', { class: 'warn-text small' }, e.message)); }
     const byDate = new Map(mv.days.map((d) => [d.date, d]));
-    const first = `${calUi.month}-01`, lead = (new Date(`${first}T12:00:00Z`).getUTCDay() + 6) % 7;   // Monday first
+    const first = `${calUi.month}-01`, lead = new Date(`${first}T12:00:00Z`).getUTCDay();   // Sunday first, like the week grid
     const cells = [];
     for (let i = 0; i < lead; i++) cells.push(h('div', { class: 'sc-cal-pad' }));
     for (let d = first; d.slice(0, 7) === calUi.month; d = addDaysStr(d, 1)) {
@@ -2765,8 +2859,8 @@ async function viewSchedule(main) {
         n ? h('span', { class: 'sc-cal-count' }, `${n}${x.projected && !x.sessions ? '*' : ''}`) : null,
         x?.booked ? h('span', { class: 'sc-cal-booked' }, `${x.booked} booked`) : null));
     }
-    fill(calBody, h('div', { class: 'sc-cal-head' }, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => h('span', null, d))), h('div', { class: 'sc-cal-grid' }, cells),
-      h('p', { class: 'small muted', style: 'margin:0' }, `Click a day to show that week. Sessions exist 8 weeks ahead (to ${shortDate(mv.horizon)}); past that, * counts the weekly classes planned from your class list, created as the date nears.`));
+    fill(calBody, h('div', { class: 'sc-cal-head' }, DAY_NAMES.map((d) => h('span', null, d))), h('div', { class: 'sc-cal-grid' }, cells),
+      h('p', { class: 'small muted', style: 'margin:0' }, `Click a day to show its week, Sunday to Saturday. Sessions exist 8 weeks ahead (to ${shortDate(mv.horizon)}); past that, * counts the weekly classes planned from your class list, created as the date nears.`));
   }
   jump.addEventListener('change', () => { calUi.month = jump.value; drawCal(); });
   const calPanel = h('details', { class: 'dp-panel sc-cal-wrap', open: true },
@@ -2779,7 +2873,7 @@ async function viewSchedule(main) {
     btn('Previous week', () => go({ week: addDaysStr(week, -7) }), 'secondary', { 'aria-label': 'Previous week' }),
     h('span', { class: 'strong', style: 'min-width:170px;text-align:center' }, weekLabel),
     btn('Next week', () => go({ week: addDaysStr(week, 7) }), 'secondary', { 'aria-label': 'Next week' }),
-    week !== today ? btn('From today', () => go({ week: null }), 'ghost') : null);
+    week !== sundayOf(today) ? btn('This week', () => go({ week: null }), 'ghost') : null);
   const types = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Type of session' },
     [['', 'All'], ['group', 'Group'], ['camp', 'Camps'], ['clinic', 'Clinics'], ['team', 'Team'], ['private', 'Privates'], ['evaluation', 'Evaluations']].map(([k, label]) =>
       h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(kind === k), onClick: () => go({ kind: k }) }, label)));
@@ -2798,7 +2892,7 @@ async function viewSchedule(main) {
   }
   const filterBar = h('div', { class: 'stack', style: 'gap:12px' },
     h('div', { class: 'row wrap', style: 'gap:12px;justify-content:space-between' }, weekNav, h('div', { class: 'row wrap', style: 'gap:8px' }, search, placeSel, whoCtl)),
-    types, totals);
+    h('div', { class: 'row wrap', style: 'gap:12px;justify-content:space-between' }, types, viewToggle), totals);
 
   // Add a class, camp or clinic (owners and coaches).
   const f = { name: input({ maxlength: '80' }), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
@@ -2850,6 +2944,39 @@ async function viewSchedule(main) {
     addBtn.className = 'dp-btn dp-btn--secondary';
     p.scrollIntoView({ behavior: 'smooth' }); focusEl.focus({ preventScroll: true });
   }
+  // A click on an empty time in the grid: what goes there? The class and session forms open filled in with that day
+  // and time; hours for privates or evaluations are added right here (the same as Hours & settings).
+  const hoursDialog = (d, hm) => {
+    const weekday = new Date(`${d}T12:00:00Z`).getUTCDay(), from = minsOf(hm);
+    const a = { kind: select([['private', 'Private training'], ['evaluation', 'Evaluations']]), loc: select(locs.data.map((l) => [l.id, l.name])), from: input({ type: 'time', value: hm }), to: input({ type: 'time', value: hmOf(Math.min(from + 60, GRID.to)) }),
+      len: input({ type: 'number', value: '60', min: '15', step: '15' }), price: input({ type: 'number', step: '0.01', placeholder: 'Evaluations' }), coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
+    const dayBoxes = DAY_NAMES.map((name, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i), checked: i === weekday }), name));
+    teamDialog(`Hours on ${DAY_NAMES[weekday]}s from ${hm12(hm)}`, h('div', { class: 'stack' },
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Parents book open times in these hours in the portal, every week. Hours with a coach are blocked by anything that coach leads; hours with no coach by anything at that place.'),
+      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, field('For', a.kind), field('Where', a.loc), field('Coach', a.coach)),
+      h('fieldset', { style: 'border:0;padding:0;margin:0' }, h('legend', { class: 'dp-label' }, 'Days'), h('div', { class: 'row wrap', style: 'gap:12px' }, dayBoxes)),
+      h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(120px,1fr))' }, field('From', a.from), field('To', a.to), field('Minutes each', a.len), field('Price ($)', a.price))),
+      [{ label: 'Add hours', variant: 'primary', onClick: async () => {
+        const weekdays = dayBoxes.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
+        if (!weekdays.length) throw new Error('Tick at least one day.');
+        const r = await saveAnyway((c) => post('/v1/availability', { kind: a.kind.value, location_id: a.loc.value, weekdays, start_time: a.from.value, end_time: a.to.value, slot_minutes: Number(a.len.value), price_cents: a.price.value ? Math.round(Number(a.price.value) * 100) : undefined, coach_id: a.coach.value || null, ...c }));
+        if (!r) return false;
+        toast(`Hours added on ${r.added.map((x) => DAY_NAMES[x.weekday]).join(', ')}.`); render();
+      } }, { label: 'Cancel', variant: 'ghost' }]);
+  };
+  onSlot = (d, hm) => {
+    const weekday = new Date(`${d}T12:00:00Z`).getUTCDay(), dialog = document.getElementById('dialog');
+    // The next dialog opens once this one's close has cleared it (the close event comes after close()).
+    const choice = (label, sub, run) => h('button', { type: 'button', class: 'sc-choice', onClick: () => { dialog.addEventListener('close', () => setTimeout(run, 0), { once: true }); dialog.close(); } }, h('span', { class: 'strong' }, label), h('span', { class: 'small muted' }, sub));
+    teamDialog(`${shortDate(d)} at ${hm12(hm)}`, h('div', { class: 'stack', style: 'gap:8px' },
+      choice('A weekly class, camp or clinic', `Every ${DAY_NAMES[weekday]} at ${hm12(hm)} from ${d < today ? 'today' : shortDate(d)}. Sessions are created 8 weeks ahead.`, () => {
+        for (const l of days) { const i = l.querySelector('input'); i.checked = Number(i.value) === weekday; }
+        f.start.value = d < today ? today : d; f.time.value = hm; open(addPanel, f.name);
+      }),
+      d < today ? null : choice('One session', `A makeup or one-time session on ${shortDate(d)} at ${hm12(hm)}.`, () => { o.date.value = d; o.time.value = hm; open(onePanel, o.name); }),
+      choice('Hours for privates or evaluations', `Times parents can book, every ${DAY_NAMES[weekday]} from ${hm12(hm)}.`, () => hoursDialog(d, hm))),
+      [{ label: 'Cancel', variant: 'ghost' }]);
+  };
 
   const seriesCoach = (x) => {
     if (!leads()) return h('span', { class: 'small muted' }, x.coach_name ?? 'No coach set');
@@ -2868,10 +2995,10 @@ async function viewSchedule(main) {
     : [h('p', { class: 'muted' }, 'No classes yet.')];
 
   fill(main,
-    header('Schedule', 'Classes, camps, clinics, privates and evaluations, seven days at a time.', h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
+    header('Schedule', 'The week, Sunday to Saturday, 4 am to 10 pm in 15-minute rows: classes, camps, clinics, privates, evaluations and bookable hours.', h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
       leads() && locs.data.length ? oneBtn : null, leads() && locs.data.length ? addBtn : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
-    calPanel, filterBar, list,
+    filterBar, list, calPanel,
     panel('Classes & camps', { subtitle: leads() ? 'Edit a class and every upcoming session follows.' : null }, ...seriesList),
     leads() && locs.data.length ? [onePanel, addPanel] : null);
 }

@@ -34,6 +34,7 @@ import * as access from './services/access.js';
 import * as commerce from './services/commerce.js';
 import * as families from './services/families.js';
 import * as schedule from './services/schedule.js';
+import * as staffcal from './services/staffcal.js';
 import * as teams from './services/teams.js';
 import * as perf from './services/performance.js';
 import * as perfImport from './services/perf-import.js';
@@ -572,6 +573,9 @@ export const routes = [
   ['GET', '/v1/clients/:id/leads', 'any', 'Clients', 'The leads for a client\'s family (a coach: only the ones given to them).', (ctx, r) => list(leads.leadsForClient(ctx, r.params.id, r.user))],
 
   // Schedule: classes, camps, clinics, team sessions, privates and evaluations
+  ['GET', '/v1/me/calendar-feed', 'session', 'Schedule', 'Your own calendar feed for Apple, Google or Outlook: on or off, and when it was made. The address itself is shown only when made.', (ctx, r) => staffcal.status(ctx.db.get('SELECT * FROM users WHERE id = ?', r.user.id))],
+  ['POST', '/v1/me/calendar-feed', 'session', 'Schedule', 'Make (or reset) your private calendar feed address: the sessions you lead (the owner: every session), two weeks back to three months ahead. Shown once; the old address stops working.', (ctx, r) => staffcal.reset(ctx, r.user, r.baseUrl)],
+  ['DELETE', '/v1/me/calendar-feed', 'session', 'Schedule', 'Turn your calendar feed off.', (ctx, r) => staffcal.stop(ctx, r.user)],
   ['GET', '/v1/coaches', 'any', 'Schedule', 'Staff who can lead sessions (active owners and coaches), for coach pickers.', (ctx) => list(schedule.listCoaches(ctx))],
   ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind=, ?location_id= and ?coach_id= (me for your own).', (ctx, r) => {
     const from = r.query.from ? v.date(r.query.from, 'from') : new Date(Date.now() - 3600000).toISOString();

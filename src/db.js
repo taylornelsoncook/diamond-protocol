@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import crypto from 'node:crypto';
-import { newId, token } from './util.js';
+import { newId, token, slugify } from './util.js';
 import { newAthleteId } from './services/athlete-ids.js';
 import { splitRx, splitDistance, normalizeTempo } from './services/rx.js';
 
@@ -43,7 +43,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 82;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count), 74 named blocks and complexes (workout_blocks, complexes, complex_exercises, workout_exercises.block_id; lettered groups become blocks), 75 the day's instructions (workouts.instructions), 76 days sent to athletes (programs.sent_from), 77 publish and unpublish (assignments.published_from), 78 the team feed (feed_posts, feed_reactions, feed_comments), 79 the sign-up link's channels as lead sources (leads rebuilt with the wider source check), 80 courses in order (courses.in_order), 81 bar speed (vbt_imports, vbt_sets: sets from velocity-based training devices), 82 the athlete's games (games: the game-week helper)
+const SCHEMA_VERSION = 83;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count), 74 named blocks and complexes (workout_blocks, complexes, complex_exercises, workout_exercises.block_id; lettered groups become blocks), 75 the day's instructions (workouts.instructions), 76 days sent to athletes (programs.sent_from), 77 publish and unpublish (assignments.published_from), 78 the team feed (feed_posts, feed_reactions, feed_comments), 79 the sign-up link's channels as lead sources (leads rebuilt with the wider source check), 80 courses in order (courses.in_order), 81 bar speed (vbt_imports, vbt_sets: sets from velocity-based training devices), 82 the athlete's games (games: the game-week helper), 83 the public blog (lessons.slug and image_url)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -140,7 +140,7 @@ const ADDED_COLUMNS = {
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL',         // version 23 (then rebuilt so assignment_id can be empty)
     'rpe INTEGER', 'started_at TEXT', 'request_id TEXT', 'edited_at TEXT',                  // version 40 (batch B8): effort, time taken, one save per Finish
     'program_id TEXT', 'program_name TEXT', 'workout_title TEXT', 'workout_week INTEGER', 'workout_day INTEGER', 'exercises_snapshot TEXT'],   // version 43: what a deleted workout was
-  lessons: ['quiz TEXT', "category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))"],   // version 24: lesson quizzes; 46: Education tabs
+  lessons: ['quiz TEXT', "category TEXT NOT NULL DEFAULT 'athlete' CHECK (category IN ('athlete','parent','coach','blog','research'))", 'slug TEXT', 'image_url TEXT'],   // version 24: lesson quizzes; 46: Education tabs; 83: the public blog
   courses: ["audience TEXT NOT NULL DEFAULT 'athletes' CHECK (audience IN ('athletes','parents'))", 'age_min INTEGER', 'age_max INTEGER', 'for_sale INTEGER NOT NULL DEFAULT 0', 'price_cents INTEGER', 'in_order INTEGER NOT NULL DEFAULT 1'],   // version 25: parent education; 26: sold online; 80: lessons in order
   programs: ['sent_from TEXT REFERENCES programs(id) ON DELETE SET NULL',   // version 76: a short program sent from another's days
     'sport TEXT', "setting TEXT CHECK (setting IN ('facility','remote','both'))", 'author_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'author_name TEXT',   // version 74: the Programs list's filters
@@ -270,6 +270,7 @@ function migrate(raw, schema) {
   }
   if (version < 73) splitDistances(raw);
   if (version < 74) groupsToBlocks(raw);
+  if (version < 83) blogSlugs(raw);
 }
 
 // ---------- Version 73: distance and tempo ----------
@@ -549,4 +550,17 @@ function createStatement(schema, table) {
 }
 function columnsOf(stmt) {
   return stmt.split('\n').slice(1).map((l) => l.trim().split(/\s+/)[0]).filter((w) => /^[a-z_0-9]+$/.test(w) && !['UNIQUE', 'PRIMARY', 'CHECK', 'FOREIGN'].includes(w.toUpperCase()) && w === w.toLowerCase());
+}
+
+// Version 83: every blog post gets a web address made from its title (the public blog is /blog/<slug>), unique, so the
+// posts already written are reachable the moment the page goes up.
+function blogSlugs(raw) {
+  const taken = new Set(raw.prepare('SELECT slug FROM lessons WHERE slug IS NOT NULL').all().map((r) => r.slug));
+  for (const l of raw.prepare("SELECT id, title FROM lessons WHERE category = 'blog' AND slug IS NULL ORDER BY created_at").all()) {
+    const base = slugify(l.title) || 'post';
+    let slug = base;
+    for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+    taken.add(slug);
+    raw.prepare('UPDATE lessons SET slug = ? WHERE id = ?').run(slug, l.id);
+  }
 }

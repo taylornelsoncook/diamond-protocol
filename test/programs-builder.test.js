@@ -188,7 +188,10 @@ test('clients on a program and the Programs page: progress, needs a check-in, fi
   assert.deepEqual(detail.clients.map((c) => [c.name, c.done, c.total, c.complete, c.quiet, c.app_open]),
     [['Ava Lopez', 2, 2, true, false, true], ['Ben Ortiz', 0, 2, false, true, true], ['Cole Nguyen', 0, 2, false, false, false]]);
   assert.deepEqual(detail.clients[1].next, { id: w1.id, week: 1, day: 1, title: 'Accel', date: detail.clients[1].next.date, status: 'missed' });   // dated by the training calendar (version 62)
-  assert.equal(detail.clients[1].days_idle, 10);
+  // Idle days count from noon of the start day (a business date), so before noon UTC the tenth day isn't over yet: 9 or 10.
+  const benRow = detail.clients[1];
+  assert.equal(benRow.days_idle, Math.floor((Date.now() - Date.parse(`${benRow.start_date}T12:00:00Z`)) / 86400000));
+  assert.ok(benRow.days_idle === 9 || benRow.days_idle === 10, `days idle ${benRow.days_idle}`);
   assert.deepEqual(detail.workouts.map((w) => w.logs), [1, 1]);
   assert.equal(detail.logged_7d, 2);
 

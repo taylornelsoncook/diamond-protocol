@@ -92,6 +92,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 - [ ] **Stripe live mode:** business verification complete, bank account added, live keys available (`sk_live_...`).
 - [x] **A private GitHub repository** with the project in it (Claude Code can set this up with you).
 - [x] **Hosting account** (Render is simplest). It needs a paid plan with a persistent disk.
+- [ ] **The blog on your own domain (optional):** the blog is at https://app.diamondprotocol.org/blog as soon as the build is live. If you want it at diamondprotocol.org/blog instead, add a redirect rule in Cloudflare (Rules → Redirect Rules): when the path starts with `/blog`, redirect to `https://app.diamondprotocol.org` plus the same path, status 301. Google then treats the app address as the blog's home. Posts are written under Education → Blogs; each one has its own link to share.
 
 ## 7. Put it online (follow DEPLOY.md, ideally with Claude Code)
 

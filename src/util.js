@@ -137,3 +137,9 @@ export function safeEqual(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && timingSafeEqual(x, y);
 }
+
+// A web address made from a title: lower case, letters and digits, dashes between words, 80 characters at most
+// ("Why sleep matters!" → "why-sleep-matters"). Used for blog posts (version 83).
+export function slugify(text) {
+  return String(text ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80).replace(/-+$/, '');
+}

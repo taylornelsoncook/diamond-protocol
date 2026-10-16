@@ -1,6 +1,6 @@
 import { newId, token, v, notFound, badRequest, conflict, HttpError, withLock, isDate, localDate, zonedToUtc, addDaysToDate, startOfLocalDay } from '../util.js';
 import { emit } from './events.js';
-import { payerFor, getSetting } from './families.js';
+import { payerFor, getSetting, staleCard, staleCardText, staleCustomer } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
 import { handlePayLinkCheckout } from './paylinks.js';
 import { saleReceipt } from './notify.js';
@@ -135,9 +135,10 @@ function clientRow(ctx, id) {
 }
 // Cards live on the payer: the family for athletes with parents, otherwise the client.
 async function ensureCustomer(ctx, payer) {
-  if (payer.stripe_customer_id) return payer.stripe_customer_id;
+  if (payer.stripe_customer_id && !staleCustomer(ctx, payer)) return payer.stripe_customer_id;
   let id;
-  try { id = await ctx.payments.ensureCustomer(payer); } catch (e) { throw paymentError(e); }
+  // A test provider's customer id is replaced with a real one (the provider makes a new customer when none is given).
+  try { id = await ctx.payments.ensureCustomer({ ...payer, stripe_customer_id: null }); } catch (e) { throw paymentError(e); }
   ctx.db.run(`UPDATE ${payer.table} SET stripe_customer_id = ? WHERE id = ?`, id, payer.id);
   payer.stripe_customer_id = id;
   return id;
@@ -183,7 +184,7 @@ export function removeCard(ctx, clientId) {
 }
 export function cardSummary(ctx, clientId) {
   const p = payerFor(ctx, clientId);
-  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
+  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, stale: staleCard(ctx, p), owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
 }
 
 // ---------- Session credits and check-ins ----------
@@ -391,6 +392,7 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   }
   const payer = client ? payerFor(ctx, client.id) : null;
   if (method === 'card_on_file' && !payer?.card_payment_method) throw conflict(client ? `${client.name.split(' ')[0]} has no card on file${payer.table === 'families' ? ' for the family' : ''}.` : 'Choose a client with a card on file.');
+  if (method === 'card_on_file' && staleCard(ctx, payer)) throw conflict(staleCardText(payer));
   // Receipt: email_receipt true sends one (to receipt_email, or the family's billing email), false sends none,
   // left out follows the automatic-receipt setting.
   const receiptOpt = body.email_receipt === undefined || body.email_receipt === null ? null : body.email_receipt ? 1 : 0;
@@ -411,13 +413,16 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   if (method === 'cash') {
     completeSale(ctx, id, {});
   } else if (method === 'card_on_file') {
-    const r = await ctx.payments.chargeSaved({ client: payer, amountCents: amount, description, idempotencyKey: `sale-${id}`, metadata });
+    let r;
+    // A decline comes back as r.error; anything else (Stripe down, a key that stopped working) fails the sale and names the service.
+    try { r = await ctx.payments.chargeSaved({ client: payer, amountCents: amount, description, idempotencyKey: `sale-${id}`, metadata }); }
+    catch (e) { failSale(ctx, id, `The payment service returned an error: ${e.message}`); throw paymentError(e); }
     if (r.ok) { ctx.db.run('UPDATE sales SET payment_ref = ? WHERE id = ?', r.ref, id); completeSale(ctx, id, { card: { brand: payer.card_brand, last4: payer.card_last4 } }); }
     else failSale(ctx, id, r.error);
   } else {
     try {
       const locationRef = await syncLocation(ctx, loc.id);
-      const customerId = payer && wantsSave ? await ensureCustomer(ctx, payer) : payer?.stripe_customer_id ?? null;
+      const customerId = payer && wantsSave ? await ensureCustomer(ctx, payer) : payer && !staleCustomer(ctx, payer) ? payer.stripe_customer_id ?? null : null;   // a test customer id is left off: Stripe doesn't know it
       const intent = await ctx.payments.createInPersonIntent({ amountCents: amount, customerId, saveCard: wantsSave, description, metadata, idempotencyKey: `sale-${id}` });
       ctx.db.run('UPDATE sales SET payment_ref = ?, client_secret = ? WHERE id = ?', intent.id, intent.clientSecret, id);
       void locationRef;

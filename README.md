@@ -232,6 +232,8 @@ Security in place: passwords hashed with scrypt; sessions in HttpOnly cookies; A
 
 With no `STRIPE_SECRET_KEY`, the server uses built-in test payments: nothing is charged, taps are simulated from the dashboard, and each client has a "make card decline" switch.
 
+A card saved while the server ran without a Stripe key (the sample data's families, or "Add test card") is a pretend card Stripe has never seen. Once a key is set, the client page says so under the card, a charge on it is refused with that reason instead of failing, and the card link makes a new Stripe customer so the card can be added again (on staging, use Stripe's test card 4242 4242 4242 4242).
+
 With a Stripe key, everything runs through Stripe:
 - **In person:** Tap to Pay on iPhone (in the DP Coach app) and Stripe smart readers at the front desk (sent from the dashboard, no app needed).
 - **Saved cards:** from a tap (when the client agrees), or from a secure Stripe link you send them. Card details never touch this server.

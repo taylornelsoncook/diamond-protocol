@@ -943,7 +943,8 @@ async function viewClient(main, id) {
   syncDirty();
 
   const card = c.card.on_file
-    ? h('div', { class: 'row wrap' }, h('span', { class: 'grow' }, `${(c.card.brand || 'Card').replace(/^./, (x) => x.toUpperCase())} ending ${c.card.last4 ?? '••••'}`),
+    ? h('div', { class: 'row wrap' }, h('div', { class: 'grow' }, `${(c.card.brand || 'Card').replace(/^./, (x) => x.toUpperCase())} ending ${c.card.last4 ?? '••••'}`,
+          c.card.stale ? h('div', { class: 'small warn-text' }, 'Saved before Stripe was connected, so Stripe can\'t charge it. Send a link so the card can be added again.') : null),
         role === 'front_desk' ? null : btn('Remove card', (e) => { if (confirm('Remove the saved card? Membership renewals will fail until a new card is added.')) busy(e.currentTarget, async () => { await del(`/v1/clients/${id}/card`); toast('Card removed.'); render(); }); }, 'ghost'))
     : h('p', { class: 'muted' }, `No card saved. Save one when ${first} taps to pay, or send a secure link.`);
   const cardActions = h('div', { class: 'row wrap' },

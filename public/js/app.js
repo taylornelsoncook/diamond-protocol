@@ -2673,7 +2673,7 @@ function laneOut(items) {
   return sorted;
 }
 // columns: [{ key, date, isToday, past, closed, offs, head, hours, items, projected, showNow, coach_id }]
-function timeGrid({ columns, canAdd, canDrag, onSlot, onDrop, byCoach, coachIndex }) {
+function timeGrid({ columns, canAdd, canDrag, onSlot, onDrop, byCoach, byClass, coachIndex, onOpen }) {
   const nRows = (GRID.to - GRID.from) / GRID.step, colPx = nRows * GRID.rowPx;
   const now = new Date().toISOString(), nowMins = minsOf(bizTime(now));
   const topOf = (mins) => ((mins - GRID.from) / GRID.step) * GRID.rowPx;
@@ -2728,7 +2728,7 @@ function timeGrid({ columns, canAdd, canDrag, onSlot, onDrop, byCoach, coachInde
     };
     block.addEventListener('pointerup', (e) => finish(e, false));
     block.addEventListener('pointercancel', (e) => finish(e, true));
-    block.addEventListener('click', (e) => { if (block.dataset.dragged) { e.preventDefault(); delete block.dataset.dragged; } });
+    block.addEventListener('click', (e) => { if (block.dataset.dragged) { e.preventDefault(); setTimeout(() => delete block.dataset.dragged, 0); } });
     // The bottom edge: a longer or shorter session.
     const grip = h('div', { class: 'sc-block-grip', title: 'Drag to change the length' });
     let size = null;
@@ -2786,8 +2786,10 @@ function timeGrid({ columns, canAdd, canDrag, onSlot, onDrop, byCoach, coachInde
         tall ? h('span', { class: 'sc-block-line' }, `${count} · ${place}`) : h('span', { class: 'sc-block-line' }, `${timeOf(x.starts_at)} · ${count}`),
         x.unpaid_count && tall ? h('span', { class: 'sc-block-flag' }, `${x.unpaid_count} unpaid`) : null];
       const tone = byCoach ? ` sc-block--c${x.coach_id ? coachIndex(x.coach_id) : 'none'}` : '';
-      if (x.projected) { col.append(h('div', { class: `sc-block sc-block--${x.kind}${tone} is-planned`, style, title }, ...inner)); continue; }
-      const block = h('a', { class: `sc-block sc-block--${x.kind}${tone} is-${st}${x.booked_count >= x.capacity ? ' is-full' : ''}`, href: `#/schedule/${x.id}`, style, title, 'aria-label': title }, ...inner);
+      const own = byClass && x.color ? `;--own:${x.color}` : '';   // the class's own colour (version 85), set on the block
+      if (x.projected) { const pb = h('div', { class: `sc-block sc-block--${x.kind}${tone}${own ? ' is-own' : ''} is-planned`, style: style + own, title, role: onOpen ? 'button' : null, tabindex: onOpen ? '0' : null }, ...inner); if (onOpen) { pb.addEventListener('click', () => onOpen(x)); pb.addEventListener('keydown', (e) => { if (e.key === 'Enter') onOpen(x); }); } col.append(pb); continue; }
+      const block = h('a', { class: `sc-block sc-block--${x.kind}${tone}${own ? ' is-own' : ''} is-${st}${x.booked_count >= x.capacity ? ' is-full' : ''}`, href: `#/schedule/${x.id}`, style: style + own, title, 'aria-label': title }, ...inner);
+      if (onOpen) block.addEventListener('click', (e) => { if (block.dataset.dragged) return; e.preventDefault(); onOpen(x); });
       col.append(block);
       if (canDrag && st === 'later') attachDrag(block, it, c);
     }
@@ -2798,9 +2800,22 @@ function timeGrid({ columns, canAdd, canDrag, onSlot, onDrop, byCoach, coachInde
     h('div', { class: 'sc-grid-corner' }), heads, timesCol, cols));
 }
 
+// A row of colour swatches (the palette a class is coloured from, version 85): radios, so the keyboard works.
+function colorPicker(value, name = 'color') {
+  const wrap = h('div', { class: 'sc-pick', role: 'radiogroup', 'aria-label': 'Colour' });
+  const current = () => wrap.querySelector('input:checked')?.value ?? value ?? null;
+  for (const c of CLASS_PALETTE) {
+    const input = h('input', { type: 'radio', name, value: c, checked: c === String(value ?? '').toLowerCase() });
+    wrap.append(h('label', { class: 'sc-pick-swatch', style: `--sw:${c}`, title: c }, input, h('span', { class: 'sc-pick-dot' })));
+  }
+  if (value && !CLASS_PALETTE.includes(String(value).toLowerCase())) wrap.append(h('label', { class: 'sc-pick-swatch', style: `--sw:${value}`, title: `${value} (current)` }, h('input', { type: 'radio', name, value, checked: true }), h('span', { class: 'sc-pick-dot' })));
+  wrap.value = current; return wrap;
+}
+const CLASS_PALETTE = ['#2f6b34', '#2b5c8a', '#5a4a8c', '#7a5a1c', '#1f6b6b', '#7a2e4a', '#8a4a1c', '#3d6b2a', '#4a5a8c', '#6b2f2f', '#2f6b5a', '#5a5a1c'];   // the same list as the server's (db.js CLASS_PALETTE)
 // Edit a class, camp or clinic: every upcoming session follows. Prices are the owner's (coaches never see them).
 function editSeriesDialog(x, locs, coaches) {
   const owner = isOwner();
+  const color = colorPicker(x.color);
   const f = { name: input({ value: x.name, maxlength: '80' }), time: input({ type: 'time', value: x.start_time }), dur: input({ type: 'number', min: '10', max: '600', value: String(x.duration_min) }),
     cap: input({ type: 'number', min: '1', max: '500', value: String(x.capacity) }), ageMin: input({ type: 'number', placeholder: 'Any', value: x.age_min ?? '' }), ageMax: input({ type: 'number', placeholder: 'Any', value: x.age_max ?? '' }),
     loc: select(locs.map((l) => [l.id, l.name]), { value: x.location_id }), coach: coachPicker(coaches, x.coach_id, x.coach_name),
@@ -2817,13 +2832,14 @@ function editSeriesDialog(x, locs, coaches) {
     h('div', { class: 'form-grid cols-3' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap, `${x.enrolled?.length ?? x.enrolled_count ?? 0} standing or registered`)),
     h('div', { class: 'form-grid cols-4' }, field('Min age', f.ageMin), field('Max age', f.ageMax), owner ? field('Drop-in ($)', f.dropIn) : null, owner ? field('Registration ($)', f.reg) : null),
     h('div', { class: 'form-grid' }, field('First day', f.start), field('Last day', f.end, ['camp', 'clinic'].includes(x.kind) ? 'Camps and clinics need a last day.' : 'Leave empty for weekly classes that keep going.')),
-    field('Description (parents see this)', f.desc));
+    field('Description (parents see this)', f.desc, 'What the class is and who it\'s for. Shown when anyone clicks the class on the schedule, in the portal and on Book now.'),
+    field('Colour on the schedule', color, 'Picked for the class when it was made; change it here.'));
   teamDialog(`Edit ${x.name}`, body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
     const next = { name: f.name.value.trim(), location_id: f.loc.value, coach_id: f.coach.value || null, weekdays, start_time: f.time.value, duration_min: num(f.dur), capacity: num(f.cap),
-      age_min: num(f.ageMin), age_max: num(f.ageMax), start_date: f.start.value, end_date: f.end.value || null, description: f.desc.value.trim() || null,
+      age_min: num(f.ageMin), age_max: num(f.ageMax), start_date: f.start.value, end_date: f.end.value || null, description: f.desc.value.trim() || null, color: color.value(),
       ...(owner ? { drop_in_cents: cents(f.dropIn), registration_cents: cents(f.reg) } : {}) };
-    const cur = { ...x, coach_id: x.coach_id ?? null, end_date: x.end_date ?? null, description: x.description ?? null, age_min: x.age_min ?? null, age_max: x.age_max ?? null, drop_in_cents: x.drop_in_cents ?? null, registration_cents: x.registration_cents ?? null };
+    const cur = { ...x, coach_id: x.coach_id ?? null, end_date: x.end_date ?? null, description: x.description ?? null, color: x.color ?? null, age_min: x.age_min ?? null, age_max: x.age_max ?? null, drop_in_cents: x.drop_in_cents ?? null, registration_cents: x.registration_cents ?? null };
     const changed = Object.fromEntries(Object.entries(next).filter(([k, val]) => JSON.stringify(val) !== JSON.stringify(k === 'weekdays' ? [...cur.weekdays].sort() : cur[k])));
     if (changed.weekdays) changed.weekdays = [...changed.weekdays].sort();
     if (!Object.keys(changed).length) throw new Error('Nothing to change.');
@@ -2869,7 +2885,7 @@ async function viewSchedule(main) {
   // Views: the week grid (default), one day with a column per coach, or the day-by-day list. Colour by type or by coach.
   const view = ['day', 'list'].includes(q.get('view')) ? q.get('view') : 'week';
   const day = /^\d{4}-\d{2}-\d{2}$/.test(q.get('day') ?? '') ? q.get('day') : today;
-  const color = q.get('color') === 'coach' ? 'coach' : 'kind';
+  const color = ['coach', 'kind'].includes(q.get('color')) ? q.get('color') : 'class';   // by class (each class its own colour), by type, or by coach
   const range = view === 'day' ? { from: day, days: 1 } : { from: week, days: 7 };
   const params = new URLSearchParams({ from: bizIso(range.from), to: bizIso(addDaysStr(range.from, range.days)), project: 'true' });
   if (onlyCoach) params.set('coach_id', onlyCoach); else if (mine) params.set('coach_id', 'me');
@@ -2920,9 +2936,30 @@ async function viewSchedule(main) {
       hours: hours.filter((a) => a.weekday === weekday), items: rows.filter((x) => bizDay(x.starts_at) === d), projected: proj.filter((x) => x.date === d) })));
   };
   const COLOR_NAMES = { group: 'Group', camp: 'Camp', clinic: 'Clinic', team: 'Team', private: 'Private', evaluation: 'Evaluation' };
-  const legend = () => h('div', { class: 'sc-legend', 'aria-label': 'Colours' }, color === 'coach'
-    ? [...coaches.map((c, i) => h('span', null, h('span', { class: `sc-swatch sc-swatch--c${i % COACH_COLORS}` }), c.name)), h('span', null, h('span', { class: 'sc-swatch sc-swatch--cnone' }), 'No coach')]
-    : Object.entries(COLOR_NAMES).map(([k, label]) => h('span', null, h('span', { class: `sc-swatch sc-swatch--${k}` }), label)));
+  const legend = () => {
+    if (color === 'coach') return h('div', { class: 'sc-legend', 'aria-label': 'Colours' }, [...coaches.map((c, i) => h('span', null, h('span', { class: `sc-swatch sc-swatch--c${i % COACH_COLORS}` }), c.name)), h('span', null, h('span', { class: 'sc-swatch sc-swatch--cnone' }), 'No coach')]);
+    if (color === 'kind') return h('div', { class: 'sc-legend', 'aria-label': 'Colours' }, Object.entries(COLOR_NAMES).map(([k, label]) => h('span', null, h('span', { class: `sc-swatch sc-swatch--${k}` }), label)));
+    // By class: every class and one-off session on screen, each with its own colour.
+    const seen = new Map();
+    for (const x of [...sched.data, ...(sched.projected ?? [])]) { const key = `${x.name}|${x.color ?? ''}`; if (!seen.has(key)) seen.set(key, { name: x.name, color: x.color }); }
+    return h('div', { class: 'sc-legend', 'aria-label': 'Colours' }, [...seen.values()].sort((a, b) => a.name.localeCompare(b.name)).map((c) => h('span', null, h('span', { class: 'sc-swatch', style: c.color ? `background:${c.color}` : '' }), c.name)));
+  };
+  // A click on a block (owner's ask: see what the class is): the quick look, with the description families read, then
+  // Open for the roster and the rest.
+  const quickLook = (x) => {
+    const st = x.projected ? 'planned' : sessionState(x);
+    const dialog = document.getElementById('dialog');
+    const line = (label, val) => (val ? h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'small muted', style: 'min-width:64px' }, label), h('span', null, val)) : null);
+    teamDialog(x.name, h('div', { class: 'stack', style: 'gap:10px' },
+      h('div', { class: 'row wrap', style: 'gap:6px' }, kindBadge(x.kind), x.projected ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Planned') : st === 'live' ? h('span', { class: 'dp-badge dp-badge--good' }, 'On now') : st === 'done' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Done') : null,
+        !x.projected && x.booked_count >= x.capacity ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Full') : null, x.unpaid_count ? h('span', { class: 'dp-badge dp-badge--warn' }, `${x.unpaid_count} unpaid`) : null),
+      x.description ? h('p', { style: 'margin:0;white-space:pre-wrap' }, x.description) : h('p', { class: 'small muted', style: 'margin:0' }, leads() ? 'No description yet. Families see the description when they book: add one in Edit' + (x.series_id ? ' on the class.' : ' session.') : 'No description yet.'),
+      line('When', `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)}`), line('Where', x.location_name), line('Coach', x.coach_name ?? 'No coach set'),
+      line('Spots', x.projected ? `${x.capacity} spots · planned from the class list, created 8 weeks ahead` : `${x.booked_count} of ${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
+      [...(x.projected ? [] : [{ label: 'Open session', variant: 'primary', onClick: () => { location.hash = `#/schedule/${x.id}`; } }]),
+        ...(leads() && x.series_id ? [{ label: 'Edit class', variant: 'secondary', onClick: () => { const cs = series.data.find((c) => c.id === x.series_id); if (!cs) return; dialog.addEventListener('close', () => setTimeout(() => editSeriesDialog(cs, locs.data, coaches), 0), { once: true }); } }] : []),
+        { label: 'Close', variant: 'ghost' }]);
+  };
   // A session dropped on a new time, day, coach or length: say what changes, then save it (families are emailed as usual).
   const onDrop = ({ x, column, s: startMins, dur }) => {
     const curDate = bizDay(x.starts_at), curTime = bizTime(x.starts_at), curDur = Math.round((Date.parse(x.ends_at) - Date.parse(x.starts_at)) / 60000);
@@ -2964,7 +3001,7 @@ async function viewSchedule(main) {
     const ordered = [...byDay].sort(([a], [b]) => (a < b ? -1 : 1));
     if (view !== 'list') {
       const proj = (sched.projected ?? []).filter((x) => words.every((w) => `${x.name} ${x.location_name} ${x.coach_name ?? 'no coach set'}`.toLowerCase().includes(w)));
-      return fill(list, timeGrid({ columns: buildColumns(rows, proj), canAdd: leads() && locs.data.length > 0, canDrag: leads(), onSlot: (c, hm) => onSlot(c, hm), onDrop, byCoach: color === 'coach', coachIndex: (id) => Math.max(0, coaches.findIndex((c) => c.id === id)) % COACH_COLORS }),
+      return fill(list, timeGrid({ columns: buildColumns(rows, proj), canAdd: leads() && locs.data.length > 0, canDrag: leads(), onSlot: (c, hm) => onSlot(c, hm), onDrop, byCoach: color === 'coach', byClass: color === 'class', coachIndex: (id) => Math.max(0, coaches.findIndex((c) => c.id === id)) % COACH_COLORS, onOpen: quickLook }),
         legend(),
         h('p', { class: 'small muted', style: 'margin:0' }, `${leads() ? 'Click an empty time to add a class, a one-time session or hours there. Drag a session to move it, or its bottom edge to change its length (you confirm before anything is saved). ' : ''}Shaded bands are hours parents can book privates and evaluations in; dashed blocks are weekly classes planned past the 8-week horizon.`));
     }
@@ -2984,7 +3021,7 @@ async function viewSchedule(main) {
     h('div', { class: 'row tm-views', role: 'group', 'aria-label': 'How to show the schedule' },
       [['day', 'Day'], ['week', 'Week'], ['list', 'List']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(view === k), onClick: () => go({ view: k === 'week' ? null : k, day: k === 'day' ? day : null }) }, label))),
     view === 'list' ? null : h('div', { class: 'row tm-views', role: 'group', 'aria-label': 'Colour by' }, h('span', { class: 'small muted', style: 'padding:0 6px' }, 'Colour:'),
-      [['kind', 'Type'], ['coach', 'Coach']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(color === k), onClick: () => go({ color: k === 'kind' ? null : k }) }, label))));
+      [['class', 'Class'], ['kind', 'Type'], ['coach', 'Coach']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(color === k), onClick: () => go({ color: k === 'class' ? null : k }) }, label))));
   // The month calendar (owner's ask: click a day and go there, at least a year ahead): sessions per day, projected
   // classes past the horizon in a lighter tone, the week on screen outlined, a jump menu two years wide.
   const calUi = { month: week.slice(0, 7) };
@@ -3080,16 +3117,17 @@ async function viewSchedule(main) {
   // One session that isn't part of a class: a makeup, a one-time clinic. The staff note is for staff only.
   const o = { name: input({ maxlength: '80', placeholder: 'Like Makeup speed session' }), kind: select([['group', 'Group'], ['clinic', 'Clinic'], ['private', 'Private'], ['evaluation', 'Evaluation'], ['team', 'Team']]),
     loc: select(locs.data.map((l) => [l.id, l.name])), date: input({ type: 'date', value: today, min: today }), time: input({ type: 'time', value: '17:00' }), dur: input({ type: 'number', value: '60', min: '10' }), cap: input({ type: 'number', value: '12', min: '1' }),
-    dropIn: input({ type: 'number', step: '0.01', placeholder: 'Leave empty if not sold' }), note: input({ maxlength: '500', placeholder: 'Only staff see this' }), coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
+    dropIn: input({ type: 'number', step: '0.01', placeholder: 'Leave empty if not sold' }), note: input({ maxlength: '500', placeholder: 'Only staff see this' }), desc: input({ maxlength: '2000', placeholder: 'What it is and who it\'s for' }), coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
   const oneForm = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     if (o.date.value && o.date.value < bizDate()) throw new Error('Pick today or a later date.');
     const x = await saveAnyway((c) => post('/v1/sessions', { name: o.name.value, kind: o.kind.value, location_id: o.loc.value, date: o.date.value, start_time: o.time.value, duration_min: Number(o.dur.value), capacity: Number(o.cap.value),
-      coach_id: o.coach.value || null, staff_note: o.note.value || undefined, ...(isOwner() ? { drop_in_cents: dollars(o.dropIn) } : {}), ...c }));
+      coach_id: o.coach.value || null, staff_note: o.note.value || undefined, description: o.desc.value.trim() || undefined, ...(isOwner() ? { drop_in_cents: dollars(o.dropIn) } : {}), ...c }));
     if (!x) return;
     toast(`${x.name} added for ${tzFmt(x.starts_at, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.`); location.hash = `#/schedule/${x.id}`;
   }); } },
     h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(160px,1fr))' }, field('Name', o.name), field('Type', o.kind), field('Coach', o.coach), field('Where', o.loc)),
     h('div', { class: 'form-grid cols-4' }, field('Date', o.date), field('Starts', o.time), field('Minutes', o.dur), field('Spots', o.cap)),
+    field('Description (parents see this)', o.desc, 'Shown when anyone clicks the session on the schedule, in the portal and on Book now. A colour is picked for it.'),
     h('div', { class: 'form-grid' }, isOwner() ? field('Drop-in ($)', o.dropIn) : null, field('Staff note', o.note, 'Why it\'s on, who it\'s for. Families don\'t see it.')),
     h('div', null, btn('Add session', null, 'primary', { type: 'submit' })));
   const onePanel = panel('Add one session', { subtitle: 'A makeup or one-time session that isn\'t part of a weekly class.' }, oneForm);
@@ -3147,7 +3185,7 @@ async function viewSchedule(main) {
     return sel;
   };
   const seriesList = series.data.length ? series.data.map((x) => h('div', { class: 'list-item', style: 'flex-wrap:wrap' },
-    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${hm12(x.start_time)} · ${x.duration_min} min · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}${x.end_date ? ` · until ${ymd(x.end_date)}` : ''}`)),
+    h('div', { class: 'grow stack-tight', style: 'min-width:200px' }, h('span', { class: 'strong' }, h('span', { class: 'sc-swatch', style: x.color ? `background:${x.color}` : '', 'aria-hidden': 'true' }), x.name), h('span', { class: 'small muted' }, `${x.weekdays.map((d) => DAY_NAMES[d]).join(', ')} ${hm12(x.start_time)} · ${x.duration_min} min · ${x.location_name} · ${x.capacity} spots${x.age_min || x.age_max ? ` · ages ${x.age_min ?? ''}–${x.age_max ?? ''}` : ''}${x.enrolled_count ? ` · ${x.enrolled_count} ${x.kind === 'group' ? 'standing' : 'registered'}` : ''}${x.end_date ? ` · until ${ymd(x.end_date)}` : ''}`)),
     seriesCoach(x), kindBadge(x.kind),
     leads() ? btn('Edit', () => editSeriesDialog(x, locs.data, coaches), 'outline', { 'aria-label': `Edit ${x.name}` }) : null,
     leads() ? btn('Archive', (e) => { if (confirm(`Archive ${x.name}? Future sessions are canceled, credits returned and families emailed.`)) busy(e.currentTarget, async () => { await patch(`/v1/class-series/${x.id}`, { active: false }); toast('Archived.'); render(); }); }, 'ghost', { 'aria-label': `Archive ${x.name}` }) : null))
@@ -3167,16 +3205,21 @@ async function viewSchedule(main) {
 function editSessionDialog(x, locs, coaches, again) {
   const f = { name: input({ value: x.name, maxlength: '80' }), date: input({ type: 'date', value: bizDay(x.starts_at), min: bizDate() }), time: input({ type: 'time', value: bizTime(x.starts_at) }),
     dur: input({ type: 'number', min: '10', max: '600', value: String(Math.round((Date.parse(x.ends_at) - Date.parse(x.starts_at)) / 60000)) }), cap: input({ type: 'number', min: String(Math.max(1, x.booked_count)), max: '500', value: String(x.capacity) }),
-    loc: select(locs.map((l) => [l.id, l.name]), { value: x.location_id }), coach: coachPicker(coaches, x.coach_id, x.coach_name), note: textarea(x.staff_note ?? '', { maxlength: '500', placeholder: 'Only staff see this' }) };
+    loc: select(locs.map((l) => [l.id, l.name]), { value: x.location_id }), coach: coachPicker(coaches, x.coach_id, x.coach_name), note: textarea(x.staff_note ?? '', { maxlength: '500', placeholder: 'Only staff see this' }),
+    desc: textarea(x.description ?? '', { maxlength: '2000', placeholder: 'What it is and who it\'s for' }) };
+  const color = x.series_id ? null : colorPicker(x.color);
   const notify = h('input', { type: 'checkbox', checked: true });
   const body = h('div', { class: 'stack' },
     x.series_id ? h('p', { class: 'small muted', style: 'margin:0' }, 'Changes this session only. Edit the class on the Schedule page to change every session.') : null,
     h('div', { class: 'form-grid' }, field('Name', f.name), field('Coach', f.coach, x.series_id ? 'A sub for this session.' : null)),
     h('div', { class: 'form-grid cols-4' }, field('Date', f.date), field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap, x.waitlist_count ? 'More spots move the waitlist up.' : x.booked_count ? `${x.booked_count} booked` : null)),
     field('Where', f.loc), field('Staff note', f.note, 'Families don\'t see it.'),
+    x.series_id ? (x.description ? h('p', { class: 'small muted', style: 'margin:0' }, `Description (from the class): ${x.description}`) : null) : field('Description (parents see this)', f.desc, 'Shown when anyone clicks the session on the schedule, in the portal and on Book now.'),
+    color ? field('Colour on the schedule', color) : null,
     x.booked_count ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, notify, h('span', null, 'Email booked families if the time or place changes')) : null);
   teamDialog('Edit session', body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
-    const r = await saveAnyway((c) => patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked, ...c }));
+    const r = await saveAnyway((c) => patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked,
+      ...(x.series_id ? {} : { description: f.desc.value.trim() || null, color: color.value() }), ...c }));
     if (!r) return false;
     toast([`Saved: ${r.changed.join(', ')}.`, r.promoted ? `${nplural(r.promoted, 'athlete')} moved up from the waitlist.` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed.` : null].filter(Boolean).join(' '));
     again();

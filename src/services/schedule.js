@@ -1,5 +1,6 @@
 import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localDate, weekdayOf, addDaysToDate, ageOn, isTime, isDate, withLock, sha256 } from '../util.js';
 import { emit } from './events.js';
+import { CLASS_PALETTE } from '../db.js';
 import { getSetting, payerFor } from './families.js';
 import { notifyFamily, sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
@@ -138,10 +139,21 @@ function plannedDays(ctx, s, taken = new Set()) {
 }
 
 // ---------- Series (recurring classes, camps, clinics, team sessions) ----------
+// Colours (owner's ask: a colour is picked when a class or service is made): a new class or one-off session takes the
+// least-used colour of the palette, so neighbours on the schedule look different; the owner can change it.
+export const PALETTE = CLASS_PALETTE;
+export const colorInput = (x, field = 'color') => { if (x === null || x === '') return null; const c = String(x).trim().toLowerCase(); if (!/^#[0-9a-f]{6}$/.test(c)) throw badRequest(`${field} must be a colour like #2F6B34.`); return c; };
+export function pickColor(ctx) {
+  const used = new Map(PALETTE.map((c) => [c, 0]));
+  for (const r of ctx.db.all(`SELECT lower(color) AS color, COUNT(*) AS n FROM class_series WHERE active = 1 AND color IS NOT NULL GROUP BY lower(color)`)) if (used.has(r.color)) used.set(r.color, r.n);
+  for (const r of ctx.db.all(`SELECT lower(color) AS color, COUNT(*) AS n FROM class_sessions WHERE series_id IS NULL AND status = 'scheduled' AND starts_at > ? AND color IS NOT NULL GROUP BY lower(color)`, ctx.now())) if (used.has(r.color)) used.set(r.color, used.get(r.color) + r.n);
+  return [...used.entries()].sort((a, b) => a[1] - b[1])[0][0];
+}
 function seriesInput(body, cur = {}) {
   const pick = (k, fn) => (body[k] !== undefined ? fn(body[k]) : cur[k]);
   const out = {
     name: pick('name', (x) => v.str(x, 'name', { max: 80 })),
+    color: pick('color', (x) => colorInput(x)),
     kind: pick('kind', (x) => v.oneOf(x, 'kind', SERIES_KINDS)),
     description: pick('description', (x) => v.str(x, 'description', { max: 2000, optional: true })),
     location_id: pick('location_id', (x) => v.str(x, 'location_id')),
@@ -175,9 +187,9 @@ export async function createSeries(ctx, body) {
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   confirmCoach(ctx, coachId, coachWarnings(ctx, coachId, plannedDays(ctx, s)), body);
   const id = newId('ser');
-  ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, coach_id, active, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-    id, s.name, s.kind, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, contractId, coachId, ctx.now());
+  ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, coach_id, active, created_at, color)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    id, s.name, s.kind, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, contractId, coachId, ctx.now(), s.color ?? pickColor(ctx));
   await generateSessions(ctx, id);
   return getSeries(ctx, id);
 }
@@ -271,8 +283,8 @@ async function updateSeriesNow(ctx, id, body) {
       for (const [coach, slots] of byCoach) confirmCoach(ctx, coach, coachWarnings(ctx, coach, slots, { excludeSeries: id }), body);
     }
     ctx.db.tx(() => {
-      ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1 WHERE id = ?`,
-        s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, id);
+      ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1, color = ? WHERE id = ?`,
+        s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, s.color ?? cur.color ?? pickColor(ctx), id);
       for (const { x, next } of plan) {
         const keys = Object.keys(next);
         if (keys.length) ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), x.id);
@@ -426,7 +438,7 @@ export function projectedSessions(ctx, { from, to, kind, locationId, coachId } =
     for (const x of series) {
       if (!x.days.includes(weekdayOf(d)) || x.start_date > d || (x.end_date && x.end_date < d)) continue;
       const starts = zonedToUtc(d, x.start_time, zone);
-      out.push({ projected: true, series_id: x.id, name: x.name, kind: x.kind, location_id: x.location_id, location_name: x.location_name, coach_id: x.coach_id ?? null, coach_name: x.coach_name ?? null,
+      out.push({ projected: true, series_id: x.id, name: x.name, kind: x.kind, location_id: x.location_id, location_name: x.location_name, coach_id: x.coach_id ?? null, coach_name: x.coach_name ?? null, color: x.color ?? null, description: x.description ?? null,
         starts_at: starts, ends_at: new Date(Date.parse(starts) + x.duration_min * 60000).toISOString(), capacity: x.capacity, date: d });
     }
   }
@@ -471,12 +483,13 @@ export async function createSession(ctx, body) {
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   confirmCoach(ctx, coachId, coachWarnings(ctx, coachId, [{ starts_at: starts, ends_at: new Date(Date.parse(starts) + dur * 60000).toISOString() }]), body);
   const id = newId('cls');
-  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, staff_note, status, created_at)
-              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+  const color = body.color !== undefined && body.color !== null && body.color !== '' ? colorInput(body.color) : pickColor(ctx), description = v.str(body.description, 'description', { max: 2000, optional: true });
+  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, staff_note, status, created_at, color, description)
+              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)`,
     id, v.str(body.name, 'name', { max: 80 }), kind, loc.id, starts, new Date(Date.parse(starts) + dur * 60000).toISOString(),
     v.int(body.capacity ?? (kind === 'private' ? 1 : 12), 'capacity', { min: 1, max: 500 }),
     v.int(body.age_min, 'age_min', { min: 3, max: 99, optional: true }), v.int(body.age_max, 'age_max', { min: 3, max: 99, optional: true }),
-    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, v.str(body.staff_note, 'staff_note', { max: 500, optional: true }), ctx.now());
+    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, v.str(body.staff_note, 'staff_note', { max: 500, optional: true }), ctx.now(), color, description);
   return getSession(ctx, id);
 }
 // Change one session: coach_id (a sub for this day; null leaves it with nobody), name, date and start_time, duration_min,
@@ -484,7 +497,7 @@ export async function createSession(ctx, body) {
 // count: nothing changed is refused. A new time or place emails booked families (one email each) unless notify is false.
 // A class session moved to another day still stands for its class day, so the schedule job doesn't add that day again.
 // Runs under the session's booking lock, so a booking can't slip in between the spots check and the save.
-const SESSION_FIELD_WORDS = { name: 'name', starts_at: 'time', ends_at: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note' };
+const SESSION_FIELD_WORDS = { name: 'name', starts_at: 'time', ends_at: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note', color: 'color', description: 'description' };
 export function updateSession(ctx, id, body) { return withLock(`book:${id}`, () => updateSessionNow(ctx, id, body)); }
 async function updateSessionNow(ctx, id, body) {
   const s = getSession(ctx, id);
@@ -494,6 +507,9 @@ async function updateSessionNow(ctx, id, body) {
   if (body.coach_id !== undefined) { const c = coachInput(ctx, body.coach_id); if (c !== (s.coach_id ?? null)) next.coach_id = c; }
   if (body.location_id !== undefined) { const l = commerce.getLocation(ctx, v.str(body.location_id, 'location_id')).id; if (l !== s.location_id) next.location_id = l; }
   if (body.staff_note !== undefined) { const n = v.str(body.staff_note, 'staff_note', { max: 500, optional: true }); if (n !== (s.staff_note ?? null)) next.staff_note = n; }
+  // A one-off session's own colour and description; a class session takes its class's (edit the class for those).
+  if (body.description !== undefined) { const n = v.str(body.description, 'description', { max: 2000, optional: true }); if (s.series_id) { if (n !== (s.description ?? null)) throw badRequest('This session is part of a class: edit the class to change its description.'); } else if (n !== (s.own_description ?? null)) next.description = n; }
+  if (body.color !== undefined) { const c = colorInput(body.color); if (s.series_id) { if (c !== (s.color ?? null)) throw badRequest('This session is part of a class: edit the class to change its colour.'); } else if (c !== (s.own_color ?? null)) next.color = c; }
   if (body.date !== undefined || body.start_time !== undefined || body.duration_min !== undefined) {
     const date = body.date ?? localDate(s.starts_at, zone), time = body.start_time ?? localTime(s.starts_at, zone);
     if (!isDate(date)) throw badRequest('date must look like 2026-10-05.');
@@ -568,6 +584,7 @@ export function clashFor(ctx, clientId, sessionId) {
 }
 
 const SESSION_LIST_SQL = `SELECT s.*, l.name AS location_name, cs.registration_cents, cu.name AS coach_name,
+    COALESCE(cs.color, s.color) AS color, COALESCE(cs.description, s.description) AS description, s.color AS own_color, s.description AS own_description,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended')) AS booked_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'waitlisted') AS waitlist_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'attended') AS attended_count,

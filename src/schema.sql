@@ -599,7 +599,8 @@ CREATE TABLE IF NOT EXISTS class_series (
   contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL,   -- team sessions belong to a contract
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,               -- who leads it (version 31)
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  color TEXT                             -- version 85: the class's colour on the schedule (#rrggbb), picked automatically when it's made
 );
 CREATE TABLE IF NOT EXISTS class_sessions (
   id TEXT PRIMARY KEY,
@@ -618,6 +619,8 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,         -- who leads it: the class's coach, or a sub for this one session (version 31)
   slot_date TEXT,                        -- version 39: the class day (YYYY-MM-DD) a class session stands for, even after it moves to another day
   staff_note TEXT,                       -- version 39: a note for staff on this one session (never shown to families)
+  color TEXT,                            -- version 85: a one-off session's colour (a class session takes its class's)
+  description TEXT,                      -- version 85: what a one-off session is, for families (a class session takes its class's)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);

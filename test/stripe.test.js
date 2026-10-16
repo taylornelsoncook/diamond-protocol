@@ -143,7 +143,7 @@ test('clients add cards on Stripe\'s hosted page', async () => {
   assert.equal(link.url, 'https://checkout.stripe.com/c/pay/cs_1');
   globalThis.setupClient = client.id;
   await webhook({ type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'setup' } } });
-  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', owner: 'client' });
+  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', stale: false, owner: 'client' });
 });
 
 test('schools pay team invoices online by card or bank account', async () => {

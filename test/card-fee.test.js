@@ -28,6 +28,7 @@ const setFee = (body) => owner('PATCH', '/v1/settings', { card_fee_pct: 2.9, car
 
 before(async () => {
   app = createApp({ testMode: true, jobs: false, publicUrl: 'https://app.example.org' });
+  app.ctx.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('billing_cycle', 'anniversary')");   // these tests cover a month from the start day; test/billing-cycle.test.js covers the 1st
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia', password: PW });
   createUser(app.ctx, { email: 'coach@test.dev', name: 'Riley', password: PW, role: 'coach' });
   createUser(app.ctx, { email: 'desk@test.dev', name: 'Jess', password: PW, role: 'front_desk' });

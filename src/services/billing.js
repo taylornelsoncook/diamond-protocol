@@ -11,6 +11,43 @@ export const RETRY_EVERY_DAYS = 3;
 const money = (c) => `${c < 0 ? '-' : ''}$${(Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: Math.abs(c) % 100 ? 2 : 0 })}`;
 const zone = (ctx) => getSetting(ctx, 'timezone');
 const bizToday = (ctx) => localDate(ctx.now(), zone(ctx));
+const MIN_CHARGE_CENTS = 50;          // Stripe's smallest card charge
+
+// ---- When memberships renew (owner setting billing_cycle; owner decision: "pro rate to the first of the month, then
+// charge on the first of the month until they cancel") ----
+//   first:       every paid month runs from the 1st of a month (midnight, business time) to the next 1st. A membership
+//                started (or a trial ended, or a paused one resumed) mid-month is charged for the days left in that month,
+//                by whole days: price × days left / days in the month (the 16th of a 31-day month pays 16/31). Renewals land
+//                on the 1st at the full price. A charge under 50 cents (Stripe's smallest) is an invoice of 0, paid at once.
+//   anniversary: a month from the day it started, every month, at the full price (how it worked before).
+export const BILLING_CYCLES = ['first', 'anniversary'];
+export const billingCycle = (ctx) => (BILLING_CYCLES.includes(getSetting(ctx, 'billing_cycle')) ? getSetting(ctx, 'billing_cycle') : 'first');
+const dayNumber = (dateStr) => Math.round(Date.parse(`${dateStr}T12:00:00Z`) / 86400000);
+const firstOfNextMonth = (dateStr) => { const [y, m] = dateStr.split('-').map(Number); return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`; };
+// The period that starts at startIso and what it costs at priceCents (the full month, or the part of it that's left).
+export function periodFor(ctx, startIso, priceCents, cycle = billingCycle(ctx)) {
+  if (cycle !== 'first') return { start: startIso, end: addMonths(startIso, 1), amount_cents: priceCents, days: null, days_in_month: null, prorated: false };
+  const tz = zone(ctx), startDay = localDate(startIso, tz), endDay = firstOfNextMonth(startDay), monthStart = `${startDay.slice(0, 7)}-01`;
+  const days = dayNumber(endDay) - dayNumber(startDay), daysInMonth = dayNumber(endDay) - dayNumber(monthStart);
+  const full = days >= daysInMonth;
+  const amount = full ? priceCents : Math.round((priceCents * days) / daysInMonth);
+  return { start: startIso, end: zonedToUtc(endDay, '00:00', tz), amount_cents: amount < MIN_CHARGE_CENTS ? 0 : amount, days, days_in_month: daysInMonth, prorated: !full };
+}
+// What starting a plan today would charge and when it renews: the counter and the client page show it before Start.
+export function quote(ctx, planId, asOf = ctx.now()) {
+  const plan = getPlan(ctx, planId);
+  const trial = plan.trial_days > 0;
+  const period = trial ? null : periodFor(ctx, asOf, plan.price_cents);
+  const fee = period && period.amount_cents ? cardFee(ctx, period.amount_cents, 'memberships').cents : 0;
+  const monthlyFee = cardFee(ctx, plan.price_cents, 'memberships').cents;
+  const tz = zone(ctx);
+  return {
+    plan_id: plan.id, plan_name: plan.name, monthly_cents: plan.price_cents, monthly_fee_cents: monthlyFee, trial_days: plan.trial_days, cycle: billingCycle(ctx),
+    charge_now_cents: period ? period.amount_cents + fee : 0, fee_cents: fee, prorated: !!period?.prorated, days: period?.days ?? null, days_in_month: period?.days_in_month ?? null,
+    period_start: localDate(asOf, tz), period_end: period ? localDate(period.end, tz) : localDate(addDays(asOf, plan.trial_days), tz),
+    next_charge_on: period ? localDate(period.end, tz) : localDate(addDays(asOf, plan.trial_days), tz)
+  };
+}
 // How a payment recorded by hand arrived. Everything else (NULL) was charged or paid online by card, and refunds go back to it.
 export const HAND_METHODS = { cash: 'Cash', check: 'Check', other: 'Other' };
 
@@ -100,12 +137,13 @@ export async function subscribe(ctx, clientId, planId, asOf = ctx.now()) {
   if (currentSubscription(ctx, clientId)) throw conflict('This client already has a subscription. Change its plan instead.');
   if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) throw conflict('This client is archived. Restore them on their client page first.');
   const trial = plan.trial_days > 0;
+  const period = trial ? null : periodFor(ctx, asOf, plan.price_cents);
   const sub = {
     id: newId('sub'),
     status: trial ? 'trialing' : 'active',
     trial_ends_at: trial ? addDays(asOf, plan.trial_days) : null,
     start: asOf,
-    end: trial ? addDays(asOf, plan.trial_days) : addMonths(asOf, 1)
+    end: trial ? addDays(asOf, plan.trial_days) : period.end
   };
   ctx.db.tx(() => {
     ctx.db.run(
@@ -115,8 +153,9 @@ export async function subscribe(ctx, clientId, planId, asOf = ctx.now()) {
     const s = getSubscription(ctx, sub.id);
     emit(ctx, 'subscription.created', { subscription_id: s.id, client_id: clientId, client_name: s.client_name, plan_name: s.plan_name, status: s.status, trial_ends_at: s.trial_ends_at });
   });
-  if (!trial) await invoiceAndCharge(ctx, sub.id, sub.start, sub.end, asOf);
-  return getSubscription(ctx, sub.id);
+  // The answer carries the first charge (or the trial) so the counter and the client page can say what happened.
+  const inv = trial ? null : await invoiceAndCharge(ctx, sub.id, sub.start, sub.end, asOf, period.amount_cents);
+  return { ...getSubscription(ctx, sub.id), first_charge: inv ? { invoice_id: inv.id, amount_cents: inv.amount_cents, fee_cents: inv.fee_cents, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null, period_end: inv.period_end, prorated: period.prorated } : null };
 }
 
 // Changing a membership's plan (owner). when:
@@ -126,7 +165,6 @@ export async function subscribe(ctx, clientId, planId, asOf = ctx.now()) {
 //               card on file, as its own invoice (a membership that is paid up only). A cheaper plan charges nothing.
 // Any change made now clears a change waiting for the renewal. Returns the subscription and, for difference, the charge.
 export const PLAN_CHANGE_WHEN = ['now', 'renewal', 'difference'];
-const MIN_CHARGE_CENTS = 50;          // Stripe's smallest card charge
 export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
   if (!PLAN_CHANGE_WHEN.includes(when)) throw badRequest('when must be now, renewal or difference.');
   const s = getSubscription(ctx, subId);
@@ -206,11 +244,11 @@ export function pause(ctx, subId) {
 export async function resume(ctx, subId, asOf = ctx.now()) {
   const s = getSubscription(ctx, subId);
   if (s.status !== 'paused') throw conflict('Only a paused subscription can be resumed.');
-  const end = addMonths(asOf, 1);
-  ctx.db.run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, updated_at = ? WHERE id = ?', asOf, end, ctx.now(), subId);
   applyPendingPlan(ctx, subId);
+  const period = periodFor(ctx, asOf, getSubscription(ctx, subId).price_cents);
+  ctx.db.run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, updated_at = ? WHERE id = ?', asOf, period.end, ctx.now(), subId);
   setStatus(ctx, subId, 'active');
-  await invoiceAndCharge(ctx, subId, asOf, end, asOf);
+  await invoiceAndCharge(ctx, subId, asOf, period.end, asOf, period.amount_cents);
   return getSubscription(ctx, subId);
 }
 
@@ -240,13 +278,14 @@ export function getInvoice(ctx, id) {
   return i;
 }
 
-async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf) {
+async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf, amountCents = null) {
   const s = getSubscription(ctx, subId);
   const id = newId('inv');
-  const fee = cardFee(ctx, s.price_cents, 'memberships').cents;      // owner setting: a card fee on membership charges, its own line
+  const base = amountCents ?? s.price_cents;                                 // the full month, or the part of it that's left (periodFor)
+  const fee = base ? cardFee(ctx, base, 'memberships').cents : 0;            // owner setting: a card fee on membership charges, its own line
   ctx.db.run(
     `INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, fee_cents)
-     VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, s.price_cents + fee, periodStart, periodEnd, ctx.now(), fee);
+     VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, base + fee, periodStart, periodEnd, ctx.now(), fee);
   return attemptCharge(ctx, id, asOf);
 }
 
@@ -261,6 +300,12 @@ export function attemptCharge(ctx, invoiceId, asOf = ctx.now(), opts = {}) { ret
 // automatic try, as the owner decided), 'owner' (Retry or Retry all) or 'parent' (the portal's Try again). The owner's and
 // a parent's are manual tries. manual: true alone means the owner's.
 const SOURCES = ['automatic', 'new_card', 'owner', 'parent'];
+// What the owner reads in Stripe's dashboard beside each membership charge: the plan, who it's for and the time it covers.
+function chargeDescription(ctx, inv) {
+  const s = ctx.db.get('SELECT p.name AS plan_name FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.id = ?', inv.subscription_id);
+  const tz = zone(ctx), from = localDate(inv.period_start, tz), to = localDate(inv.period_end, tz);
+  return `${s?.plan_name ?? 'Membership'} membership, ${inv.client_name}, ${from} to ${to}${inv.note ? ` (${inv.note})` : ''}`.slice(0, 200);
+}
 async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, source: sourceOpt = null, onlyIfFailed = false } = {}) {
   const source = SOURCES.includes(sourceOpt) ? sourceOpt : manualOpt ? 'owner' : 'automatic';
   const manual = source === 'owner' || source === 'parent';
@@ -287,7 +332,7 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
     try {
       // A card from before Stripe was connected is a decline with a plain reason, never a call Stripe answers "No such customer" to.
       result = staleCard(ctx, client) ? { ok: false, error: staleCardText(client) }
-        : await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: 'Diamond Protocol membership', idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id, charge_attempt_id: attemptId } });
+        : await ctx.payments.chargeSaved({ client, amountCents: inv.amount_cents, description: chargeDescription(ctx, inv), idempotencyKey: `${inv.id}:${attempts}`, metadata: { invoice_id: inv.id, charge_attempt_id: attemptId } });
     } catch (e) {
       ctx.db.run(`UPDATE invoice_charges SET status = 'error', error = ?, settled_at = ? WHERE id = ?`, String(e.message ?? e).slice(0, 300), ctx.now(), attemptId);
       throw e;
@@ -472,11 +517,11 @@ export async function runBilling(ctx, asOf = ctx.now()) {
     const due = ctx.db.all(`SELECT id, current_period_end FROM subscriptions WHERE status IN ('trialing','active') AND current_period_end <= ?`, asOf);
     if (!due.length) break;
     for (const s of due) {
-      const start = s.current_period_end, end = addMonths(start, 1);
-      ctx.db.run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, updated_at = ? WHERE id = ?', start, end, ctx.now(), s.id);
-      applyPendingPlan(ctx, s.id);
+      applyPendingPlan(ctx, s.id);                                            // a plan change waiting for the renewal prices this month
+      const start = s.current_period_end, period = periodFor(ctx, start, getSubscription(ctx, s.id).price_cents);
+      ctx.db.run('UPDATE subscriptions SET current_period_start = ?, current_period_end = ?, updated_at = ? WHERE id = ?', start, period.end, ctx.now(), s.id);
       summary.renewed++;
-      count(await invoiceAndCharge(ctx, s.id, start, end, asOf));
+      count(await invoiceAndCharge(ctx, s.id, start, period.end, asOf, period.amount_cents));
     }
   }
 

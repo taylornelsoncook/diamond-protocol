@@ -849,7 +849,7 @@ async function viewClient(main, id) {
       h('div', { class: 'row wrap' },
         sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.'), 'secondary') : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
         btn('Cancel subscription', (e) => { if (confirm(`Cancel ${first}'s subscription now? Open invoices will be voided.`)) act('cancel', 'Subscription canceled.')(e); }, 'ghost')))
-      : c.archived_at ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/subscription`, { plan_id: planSel.value }); toast('Subscription started.'); render(); }), 'secondary')));
+      : c.archived_at ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, planSel), btn('Start subscription', () => { const p = plans.data.find((x) => x.id === planSel.value); if (!p) return toast('Choose a plan first.', 'warn'); if (!c.card.on_file) return toast(`${first} has no card on file. Add one under Card & sessions first.`, 'warn'); startMembershipDialog(id, c.name, p, c.card); }, 'secondary')));
 
   const payments = panel('Payments', {}, inv.data.length ? inv.data.map((i) => h('div', { class: 'list-item' },
     h('div', { class: 'grow stack-tight' }, h('span', null, `${i.amount_cents == null ? '' : `${money(i.amount_cents)} · `}${date(i.period_start)} to ${date(i.period_end)}`), i.last_error && i.status === 'failed' ? h('span', { class: 'small warn-text' }, `${i.last_error} Tried ${i.attempts}×.`) : null),
@@ -1754,6 +1754,9 @@ async function viewBilling(main) {
       h('a', { class: 'dp-btn dp-btn--ghost', href: `#/teams/${i.contract_id}` }, 'Team')));
   const lockSel = select([['0', 'Never lock families out'], ['1', 'Lock out after the first decline'], ['2', 'Lock out after the first retry also declines'], ['3', 'Lock out after the second retry also declines'], ['4', 'Lock out after the third retry also declines']], { value: String(settings.payment_lock_tries ?? '4'), 'aria-label': 'When a declined payment locks the family out', style: 'width:auto' });
   lockSel.addEventListener('change', () => busy(lockSel, async () => { await patch('/v1/settings', { payment_lock_tries: Number(lockSel.value) }); toast(lockSel.value === '0' ? 'Families are never locked out.' : 'Saved. Locked families can only update the card and pay until it goes through.'); render(); }));
+  const cycleSel = select([['first', 'On the 1st of every month (a start mid-month pays the days left in that month)'], ['anniversary', 'Every month on the day the membership started']], { value: settings.billing_cycle === 'anniversary' ? 'anniversary' : 'first', 'aria-label': 'When memberships renew', style: 'width:auto' });
+  cycleSel.addEventListener('change', () => busy(cycleSel, async () => { await patch('/v1/settings', { billing_cycle: cycleSel.value }); toast(cycleSel.value === 'first' ? 'Saved. New memberships are charged for the rest of this month, then on the 1st. Memberships already running move to the 1st at their next renewal.' : 'Saved. Memberships renew a month from the day they started.'); render(); }));
+  const cycleRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Memberships renew:'), cycleSel);
   const lockRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Declined payments:'), lockSel,
     h('span', { class: 'muted' }, 'A locked family can only update the card and pay in the parent portal; the app, online booking and self check-in wait until it\'s paid.'));
   // The card processing fee passed to the payer: off by default, the owner's call, with the caution that surcharge rules differ.
@@ -1781,7 +1784,7 @@ async function viewBilling(main) {
   const attPanel = h('div', { id: 'bl-att' }, panel('Needs attention', {
     subtitle: attN ? [att.failed.length ? `${plural(att.failed.length, 'declined charge')} (${money(att.failed_cents)})` : null, att.overdue.length ? `${plural(att.overdue.length, 'overdue school invoice')} (${money(att.overdue_cents)})` : null].filter(Boolean).join(' and ') + `. Declined charges retry on their own every ${att.retry_every_days} days, up to ${att.max_attempts} tries; a failed-payment email with a pay link goes out each time.` : null,
     action: attTools },
-  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.'), lockRow));
+  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.'), cycleRow, lockRow));
 
   // ---- invoices ----
   const search = input({ type: 'search', placeholder: 'Name, plan, school or invoice number', 'aria-label': 'Search invoices', value: billingUi.q });
@@ -2051,20 +2054,24 @@ async function viewSell(main) {
   const planGrid = h('div', { class: 'pos-tiles' });
   function drawPlans() {
     const c = client(), sub = c?.subscription && c.subscription.status !== 'canceled' ? c.subscription : null;
-    fill(planGrid, planList.map((p) => h('button', { type: 'button', class: 'dp-panel pos-tile', disabled: !!sub, title: sub ? `${firstName(c)} already has ${sub.plan_name}` : null, onClick: () => startMembership(p) },
+    const canChange = !!sub && isOwner() && sub.status !== 'canceled';
+    fill(planGrid, planList.map((p) => h('button', { type: 'button', class: 'dp-panel pos-tile', disabled: !!sub && !canChange, title: sub ? `${firstName(c)} already has ${sub.plan_name}${canChange ? '. Click to change the plan.' : ''}` : null,
+      onClick: () => (sub ? changePlanDialog({ client_id: c.id, client_name: c.name, ...sub }, planList) : startMembership(p)) },
       h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
       String(settings.card_fee_on ?? '').split(',').includes('memberships') && (Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0)) ? h('span', { class: 'small muted' }, `plus a ${money(Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0))} ${(settings.card_fee_label || 'card processing fee').toLowerCase()}`) : null,
-      h('span', { class: 'small muted' }, sub ? `${firstName(c)} already has ${sub.plan_name}` : p.trial_days ? `${p.trial_days}-day free trial` : 'Billed monthly'))));
+      h('span', { class: 'small muted' }, sub ? (canChange ? `${firstName(c)} has ${sub.plan_name} · Change plan` : `${firstName(c)} already has ${sub.plan_name}`) : p.trial_days ? `${p.trial_days}-day free trial` : settings.billing_cycle === 'anniversary' ? 'Billed monthly' : 'Billed on the 1st'))));
   }
   function startMembership(p) {
     const c = client();
     if (!c) { toast('Choose who the membership is for first.', 'warn'); search.focus(); return; }
     const first = firstName(c);
-    const when = p.trial_days ? `Free for ${p.trial_days} day${p.trial_days === 1 ? '' : 's'}, then ${money(p.price_cents)} every month.` : `${money(p.price_cents)} today, then every month.`;
-    const done = (sub) => { toast(sub.status === 'trialing' ? `${first} is on ${p.name}. The trial ends ${date(sub.trial_ends_at)}.` : `${first} is on ${p.name}. Renews ${date(sub.current_period_end)}.`); c.subscription = { status: sub.status, plan_name: p.name }; fill(memberBox); drawClient(); drawPlans(); };
-    const start = btn(p.trial_days ? 'Start free trial' : `Charge ${money(p.price_cents)} and start`, (e) => busy(e.currentTarget, async () => {
+    const when = p.trial_days ? `Free for ${p.trial_days} day${p.trial_days === 1 ? '' : 's'}, then ${money(p.price_cents)} a month.` : `${money(p.price_cents)} a month.`;
+    const done = (sub) => { toast(startedText(first, p.name, sub), sub.first_charge && sub.first_charge.status !== 'paid' ? 'warn' : undefined); c.subscription = { id: sub.id, status: sub.status, plan_id: p.id, plan_name: p.name, price_cents: p.price_cents, current_period_end: sub.current_period_end, trial_ends_at: sub.trial_ends_at }; fill(memberBox); drawClient(); drawPlans(); };
+    const start = btn(p.trial_days ? 'Start free trial' : 'Charge and start', (e) => busy(e.currentTarget, async () => {
       try { done(await post(`/v1/clients/${c.id}/subscription`, { plan_id: p.id })); } catch (err) { toast(err.message, 'warn'); }
     }), 'secondary');
+    const quoteLine = h('p', { style: 'margin:0' }, 'Working out the first charge…');
+    get(`/v1/plans/${p.id}/quote`).then((q) => { quoteLine.textContent = quoteText(q); if (!p.trial_days) start.textContent = q.charge_now_cents ? `Charge ${money(q.charge_now_cents)} and start` : 'Start (nothing to charge today)'; }).catch((err) => { quoteLine.textContent = err.message; });
     const needCard = h('div', { class: 'stack' },
       h('p', { class: 'warn-text', style: 'margin:0' }, `${first} has no card on file. Monthly memberships renew on a saved card.`),
       h('div', { class: 'row wrap' },
@@ -2084,7 +2091,7 @@ async function viewSell(main) {
         state.payments.can_simulate ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${c.id}/card/test`); c.has_card = true; drawClient(); startMembership(p); }), 'ghost') : null),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Or charge a first sale by Tap to Pay with "Save this card" ticked, then start the membership.'));
     fill(memberBox, panel(`Start ${p.name}`, { subtitle: `${c.name} · ${when}` },
-      c.has_card ? h('div', { class: 'stack' }, h('p', { style: 'margin:0' }, 'Bills the card on file every month.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost'))) : needCard));
+      c.has_card ? h('div', { class: 'stack' }, quoteLine, h('p', { class: 'small muted', style: 'margin:0' }, 'Charged to the card on file.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost'))) : needCard));
     memberBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
@@ -2464,6 +2471,38 @@ function setupDialog(title, fields, saveLabel, onSave, note) {
 }
 // Change a membership's plan (owner): start now, at the end of this membership, or now with the price difference charged
 // (billing.js changePlan). m: { client_id, client_name, plan_id, status, current_period_end, pending_plan_id, pending_plan_name }.
+// What starting a plan charges and when it renews, from GET /v1/plans/:id/quote (owner decision: a membership started
+// mid-month pays the days left in the month, then the full price on the 1st; the anniversary setting keeps a month from the start day).
+const longDay = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+function quoteText(q) {
+  const fee = q.fee_cents ? ` (includes a ${money(q.fee_cents)} card fee)` : '';
+  const monthly = `${money(q.monthly_cents + (q.monthly_fee_cents || 0))} ${q.cycle === 'first' ? 'on the 1st of every month' : 'every month'}`;
+  if (q.trial_days) return `Free for ${q.trial_days} day${q.trial_days === 1 ? '' : 's'}. From ${longDay(q.next_charge_on)}, ${q.cycle === 'first' ? `the days left in that month are charged, then ${monthly}` : monthly}.`;
+  if (q.cycle !== 'first') return `${money(q.charge_now_cents)} today${fee}, then ${monthly} from ${longDay(q.next_charge_on)}.`;
+  if (!q.charge_now_cents) return `Nothing today: only ${q.days} day${q.days === 1 ? '' : 's'} left in this month. Then ${monthly} from ${longDay(q.next_charge_on)}.`;
+  return q.prorated ? `${money(q.charge_now_cents)} today for the ${q.days} days left in this month (${q.days} of ${q.days_in_month}, ${longDay(q.period_start)} to ${longDay(q.next_charge_on)})${fee}, then ${monthly} from ${longDay(q.next_charge_on)}.`
+    : `${money(q.charge_now_cents)} today for the whole month${fee}, then ${monthly} from ${longDay(q.next_charge_on)}.`;
+}
+// The toast after a membership starts: what was charged, or why it wasn't.
+function startedText(first, planName, sub) {
+  const c = sub.first_charge;
+  if (!c) return `${first} is on ${planName}. The free trial ends ${date(sub.trial_ends_at)}; the card is charged then.`;
+  if (c.status === 'paid') return `${first} is on ${planName}. ${c.amount_cents ? `Charged ${money(c.amount_cents)}` : 'Nothing charged'} for ${c.prorated ? 'the rest of this month' : 'this month'}. Next charge ${date(sub.current_period_end)}.`;
+  return `${first} is on ${planName}, but the ${money(c.amount_cents)} charge didn't go through${c.error ? `: ${c.error}` : '.'} Retry it from Billing or fix the card.`;
+}
+function startMembershipDialog(clientId, clientName, plan, card) {
+  const first = clientName.split(' ')[0];
+  const line = h('p', { style: 'margin:0' }, 'Working out the first charge…');
+  get(`/v1/plans/${plan.id}/quote`).then((q) => { line.textContent = quoteText(q); }).catch((e) => { line.textContent = e.message; });
+  setupDialog(`Start ${plan.name} for ${first}`, [line,
+    h('p', { class: 'small muted', style: 'margin:0' }, card?.on_file ? `Charged to the ${(card.brand || 'card').replace(/^./, (x) => x.toUpperCase())} ending ${card.last4 ?? ''} on file.` : 'There is no card on file: add one first.')],
+    'Start membership', async () => {
+      const sub = await post(`/v1/clients/${clientId}/subscription`, { plan_id: plan.id });
+      const text = startedText(first, plan.name, sub);
+      if (sub.first_charge && sub.first_charge.status !== 'paid') { toast(text, 'warn'); return null; }
+      return text;
+    });
+}
 function changePlanDialog(m, plans) {
   const first = m.client_name.split(' ')[0];
   const choices = plans.filter((p) => p.active && p.id !== m.plan_id);

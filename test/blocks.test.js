@@ -205,7 +205,7 @@ test('a version 73 database is upgraded: lettered groups become named blocks, lo
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 84, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 85, `round ${round}`);
       assert.deepEqual(d.all('SELECT name, kind, position FROM workout_blocks ORDER BY position'), [{ name: 'Superset A', kind: 'superset', position: 1 }, { name: 'Circuit B', kind: 'circuit', position: 2 }]);
       const rows = d.all('SELECT we.id, we.position, b.name AS block FROM workout_exercises we LEFT JOIN workout_blocks b ON b.id = we.block_id ORDER BY we.position');
       assert.deepEqual(rows, [{ id: 'x1', position: 1, block: null }, { id: 'x2', position: 2, block: 'Superset A' }, { id: 'x4', position: 3, block: 'Superset A' }, { id: 'x3', position: 4, block: null }, { id: 'x5', position: 5, block: 'Circuit B' }],

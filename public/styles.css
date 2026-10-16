@@ -506,3 +506,14 @@ a.sc-block:hover,a.sc-block:focus-visible{filter:brightness(1.15);outline:none;b
 .sc-swatch--group{background:#2F6B34} .sc-swatch--camp,.sc-swatch--clinic{background:#7A5A1C} .sc-swatch--team{background:#2B5C8A} .sc-swatch--private{background:#5A4A8C} .sc-swatch--evaluation{background:#4A4F4C}
 .sc-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--steel-muted)}
 .sc-swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle;border:1px solid transparent}
+/* Colour by class (version 85): the block's own colour; the picker in the class and session dialogs. */
+.sc-block.is-own{background:var(--own);border-color:color-mix(in srgb,var(--own) 70%,#fff)}
+.sc-grid.by-coach .sc-block.is-own{background:var(--own)}
+.sc-block.is-own.is-planned{background:transparent;color:var(--steel-muted);border-color:var(--own)}
+.sc-pick{display:flex;flex-wrap:wrap;gap:8px}
+.sc-pick-swatch{position:relative;width:32px;height:32px;border-radius:50%;background:var(--sw);cursor:pointer;border:2px solid transparent}
+.sc-pick-swatch input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+.sc-pick-swatch:has(input:checked){border-color:#fff;box-shadow:0 0 0 2px var(--sw)}
+.sc-pick-swatch:has(input:focus-visible){outline:2px solid var(--green-bright);outline-offset:2px}
+.sc-pick-dot{position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:#fff;opacity:0;pointer-events:none}
+.sc-pick-swatch:has(input:checked) .sc-pick-dot{opacity:1}

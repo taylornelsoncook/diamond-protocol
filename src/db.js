@@ -43,7 +43,7 @@ export function openDb(file) {
 
 // Brings databases created by earlier versions up to the current schema.
 // Tables whose constraints changed are rebuilt from their definition in schema.sql (SQLite's documented method).
-const SCHEMA_VERSION = 84;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count), 74 named blocks and complexes (workout_blocks, complexes, complex_exercises, workout_exercises.block_id; lettered groups become blocks), 75 the day's instructions (workouts.instructions), 76 days sent to athletes (programs.sent_from), 77 publish and unpublish (assignments.published_from), 78 the team feed (feed_posts, feed_reactions, feed_comments), 79 the sign-up link's channels as lead sources (leads rebuilt with the wider source check), 80 courses in order (courses.in_order), 81 bar speed (vbt_imports, vbt_sets: sets from velocity-based training devices), 82 the athlete's games (games: the game-week helper), 83 the public blog (lessons.slug and image_url), 84 the coach's calendar feed (users.calendar_token_hash/calendar_created_at)
+const SCHEMA_VERSION = 85;   // 44 Education, 45 the CRM, 46 the owner's improvements, 47 outside data (data import), 48 the video library, 49 structured set details, 50 the planner's phases, 51 the card fee, 52 wearable sync, 53 form checks, 54 import sources (data_imports takes any file kind), 55 progression steps, 56 exercise swaps, 57 exercise substitutions, 58 warm-up and cool-down blocks, 59 monthly parent reports, 60 one portal (athletes sign in too, optional passwords), 61 form checks asked in the plan, 62 the training calendar (training days on an assignment, moved workouts), 63 templates (programs.kind), 64 exercise tags (movement, muscles, equipment), 65 sprint analysis (sprint_clips, sprint_marks), 66 the distance a sprint clip covers and suggested marks (sprint_clips.segment/auto_at/auto_note, sprint_marks.source), 67 the start-up questions and equipment swaps (training_profiles, program_rules, swap_optouts; exercise_swaps.by_kind takes 'equipment'), 68 the coach's cues (exercise_cues), 69 the adaptive plan (plan_adjustments, assignment_skips), 70 push notifications (push_subscriptions, push_notices), 71 the weekly coach's note and the team board (weekly_notes, leaderboard_optins), 72 the sales page (programs.pitch/coach_id/trial_days, users.title/bio/photo_url, purchases rebuilt with trials), 73 distance as its own set field and tempo as four counts (workout_exercises.distance; reps that were a distance move over, tempos get their fourth count), 74 named blocks and complexes (workout_blocks, complexes, complex_exercises, workout_exercises.block_id; lettered groups become blocks), 75 the day's instructions (workouts.instructions), 76 days sent to athletes (programs.sent_from), 77 publish and unpublish (assignments.published_from), 78 the team feed (feed_posts, feed_reactions, feed_comments), 79 the sign-up link's channels as lead sources (leads rebuilt with the wider source check), 80 courses in order (courses.in_order), 81 bar speed (vbt_imports, vbt_sets: sets from velocity-based training devices), 82 the athlete's games (games: the game-week helper), 83 the public blog (lessons.slug and image_url), 84 the coach's calendar feed (users.calendar_token_hash/calendar_created_at), 85 class colours and one-off descriptions (class_series.color, class_sessions.color/description)
 const REBUILD = { 2: ['clients', 'products', 'session_credits'] };
 // Whole tables added in a version, created from their definition in schema.sql.
 const ADDED_TABLES = {
@@ -134,7 +134,7 @@ const ADDED_COLUMNS = {
     'sets INTEGER', 'reps TEXT', 'tempo TEXT', 'rest_seconds INTEGER', 'target_rpe REAL', 'load_text TEXT',   // version 49: structured set details
     'group_label TEXT', "group_kind TEXT CHECK (group_kind IN ('superset','circuit','block'))", 'note TEXT'],
   coach_messages: ["from_kind TEXT NOT NULL DEFAULT 'coach'", 'author_name TEXT', 'guardian_id TEXT', 'staff_read_at TEXT'],   // version 20: replies
-  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],      // version 4; coach: version 31
+  class_series: ['contract_id TEXT REFERENCES team_contracts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'color TEXT'],      // version 4; coach: version 31; colour: version 85
   // class_sessions: see version 39 below (workout_id: version 23 weight-room screen; coach_id: version 31)
   availability: ['coach_id TEXT REFERENCES users(id) ON DELETE SET NULL'],                  // version 31
   workout_logs: ['session_id TEXT REFERENCES class_sessions(id) ON DELETE SET NULL',         // version 23 (then rebuilt so assignment_id can be empty)
@@ -164,7 +164,7 @@ const ADDED_COLUMNS = {
     'auto_attempts INTEGER NOT NULL DEFAULT 0',
     'note TEXT'],                                                         // version 46: a plan change's price difference                          // version 43: automatic charges only (retries the owner or a parent starts don't count)
   // ---- Version 39: Schedule (batch B2): the class day a moved session stands for, and a staff note on one session
-  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT'],
+  class_sessions: ['workout_id TEXT REFERENCES workouts(id) ON DELETE SET NULL', 'coach_id TEXT REFERENCES users(id) ON DELETE SET NULL', 'slot_date TEXT', 'staff_note TEXT', 'color TEXT', 'description TEXT'],   // colour and description: version 85
   // ---- Version 40 (batch B8): exercise categories (effort, time taken and one save per Finish on workout logs: see workout_logs above)
   exercises: ['category TEXT', 'poster_url TEXT', 'movement TEXT', 'muscles TEXT', 'equipment TEXT'],   // category: version 40; poster_url: version 48 (the still shown before a video plays); tags: version 64
   // ---- Version 41 (batches B12 and B13): the card's expiry, signed-in devices (card_exp on clients, calendar feed on guardians and the note on bookings: see above)
@@ -271,6 +271,7 @@ function migrate(raw, schema) {
   if (version < 73) splitDistances(raw);
   if (version < 74) groupsToBlocks(raw);
   if (version < 83) blogSlugs(raw);
+  if (version < 85) classColors(raw);
 }
 
 // ---------- Version 73: distance and tempo ----------
@@ -563,4 +564,13 @@ function blogSlugs(raw) {
     taken.add(slug);
     raw.prepare('UPDATE lessons SET slug = ? WHERE id = ?').run(slug, l.id);
   }
+}
+
+// Version 85: every class gets its own colour on the schedule, and so does every upcoming one-off session, round the
+// palette in the order they were made (new ones take the least-used colour, services/schedule.js pickColor).
+export const CLASS_PALETTE = ['#2f6b34', '#2b5c8a', '#5a4a8c', '#7a5a1c', '#1f6b6b', '#7a2e4a', '#8a4a1c', '#3d6b2a', '#4a5a8c', '#6b2f2f', '#2f6b5a', '#5a5a1c'];   // lower case, as colours are stored
+function classColors(raw) {
+  let i = 0;
+  for (const s of raw.prepare('SELECT id FROM class_series WHERE color IS NULL ORDER BY active DESC, created_at').all()) raw.prepare('UPDATE class_series SET color = ? WHERE id = ?').run(CLASS_PALETTE[i++ % CLASS_PALETTE.length], s.id);
+  for (const s of raw.prepare("SELECT id FROM class_sessions WHERE series_id IS NULL AND color IS NULL AND status = 'scheduled' ORDER BY starts_at").all()) raw.prepare('UPDATE class_sessions SET color = ? WHERE id = ?').run(CLASS_PALETTE[i++ % CLASS_PALETTE.length], s.id);
 }

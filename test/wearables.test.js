@@ -297,7 +297,7 @@ test('a version 51 database gains the wearable tables, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 84, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 85, `round ${round}`);
       assert.deepEqual(d.all('PRAGMA table_info(wearable_connections)').map((c) => c.name).slice(0, 4), ['id', 'client_id', 'provider', 'provider_user_id']);
       assert.ok(d.all('PRAGMA table_info(wearable_auth_states)').length);
       d.close();

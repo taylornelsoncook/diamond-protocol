@@ -113,8 +113,9 @@ ctx.db.run(`UPDATE subscriptions SET trial_ends_at = ?, current_period_end = ? W
 await billing.runBilling(ctx);
 billing.pause(ctx, billing.currentSubscription(ctx, made['Leo Marchetti'].id).id);
 // Billing samples: part of Grace's payment refunded, and Daniel's family already reminded to update the card.
-const graceInv = ctx.db.get(`SELECT id FROM invoices WHERE client_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT 1`, made['Grace Kim'].id);
-if (graceInv) await billing.refundInvoice(ctx, graceInv.id, { amount_cents: 2500, reason: 'Missed a week (travel)', email: false });
+// (Her first charge is prorated to the 1st, so late in a month it can be small: the refund is part of what she paid, never more.)
+const graceInv = ctx.db.get(`SELECT id, amount_cents, fee_cents FROM invoices WHERE client_id = ? AND status = 'paid' AND amount_cents > 0 ORDER BY created_at DESC LIMIT 1`, made['Grace Kim'].id);
+if (graceInv) await billing.refundInvoice(ctx, graceInv.id, { amount_cents: Math.min(2500, Math.floor(graceInv.amount_cents / 2)) || graceInv.amount_cents, reason: 'Missed a week (travel)', email: false });
 const danielInv = ctx.db.get(`SELECT id FROM invoices WHERE client_id = ? AND status = 'failed' LIMIT 1`, made['Daniel Reyes'].id);
 if (danielInv) await billing.remindInvoice(ctx, danielInv.id);
 

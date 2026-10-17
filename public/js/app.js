@@ -2033,19 +2033,25 @@ async function viewSell(main) {
       h('span', { class: 'strong' }, x.name), p.track_stock ? left(x.on_hand) : null)))));
   const prodSearch = input({ type: 'search', placeholder: 'Find a product', 'aria-label': 'Find a product' });
   prodSearch.addEventListener('input', () => drawProducts());
-  const productGrid = h('div', { class: 'pos-tiles' });
+  // Every option in one organized list (owner's ask): memberships first, then sessions, packs, gear and other, each its own group.
+  const PRODUCT_GROUPS = [['session', 'Sessions'], ['pack', 'Session packs'], ['gear', 'Gear'], ['other', 'Other']];
+  const PRODUCT_KIND_OF = (p) => (PRODUCT_GROUPS.some(([k]) => k === p.kind) ? p.kind : 'other');
+  const productGrid = h('div', { class: 'stack' });
+  const productTile = (p) => {
+    const sizes = (p.variants ?? []).filter((x) => x.active), n = inCart(p.id);
+    return h('button', { type: 'button', class: 'dp-panel pos-tile', 'aria-label': `${p.name}, ${money(p.price_cents)}${n ? `, ${n} in the sale` : ''}`, onClick: () => (sizes.length > 1 ? pickSize(p, sizes) : addToCart(sizes.length ? `${p.id}:${sizes[0].id}` : p.id)) },
+      n ? h('span', { class: 'pos-count', 'aria-hidden': 'true' }, n) : null,
+      h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents)),
+      p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null,
+      sizes.length > 1 ? h('span', { class: 'small muted' }, sizes.map((x) => x.name).join(' · ')) : null,
+      p.track_stock ? left(p.on_hand) : null);
+  };
   function drawProducts() {
     const q = prodSearch.value.trim().toLowerCase();
     const shown = prods.data.filter((p) => !q || p.name.toLowerCase().includes(q));
-    fill(productGrid, shown.length ? shown.map((p) => {
-      const sizes = (p.variants ?? []).filter((x) => x.active), n = inCart(p.id);
-      return h('button', { type: 'button', class: 'dp-panel pos-tile', 'aria-label': `${p.name}, ${money(p.price_cents)}${n ? `, ${n} in the sale` : ''}`, onClick: () => (sizes.length > 1 ? pickSize(p, sizes) : addToCart(sizes.length ? `${p.id}:${sizes[0].id}` : p.id)) },
-        n ? h('span', { class: 'pos-count', 'aria-hidden': 'true' }, n) : null,
-        h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents)),
-        p.kind === 'pack' ? h('span', { class: 'small muted' }, `${p.sessions} ${p.credit_type} sessions`) : null,
-        sizes.length > 1 ? h('span', { class: 'small muted' }, sizes.map((x) => x.name).join(' · ')) : null,
-        p.track_stock ? left(p.on_hand) : null);
-    }) : h('p', { class: 'muted' }, 'No product matches.'));
+    const groups = PRODUCT_GROUPS.map(([kind, label]) => [label, shown.filter((p) => (PRODUCT_KIND_OF(p)) === kind)]).filter(([, list]) => list.length);
+    fill(productGrid, groups.length ? groups.map(([label, list]) => h('div', { class: 'stack-tight pos-group' },
+      h('div', { class: 'dp-label' }, label), h('div', { class: 'pos-tiles' }, list.map(productTile)))) : h('p', { class: 'muted' }, 'No product matches.'));
   }
   async function refreshStock() { if (!prods.data.some((p) => p.track_stock)) return; prods.data = (await get('/v1/products')).data; drawProducts(); }
   const customDesc = input({ placeholder: 'Description', 'aria-label': 'Custom item description', maxlength: '80' }), customAmt = input({ type: 'number', min: '0.01', step: '0.01', inputmode: 'decimal', placeholder: '$', 'aria-label': 'Custom amount in dollars', style: 'width:110px' });
@@ -2053,57 +2059,74 @@ async function viewSell(main) {
     h('div', { class: 'grow', style: 'min-width:160px' }, customDesc), customAmt, btn('Add', null, 'secondary', { type: 'submit' }));
 
   // ----- Monthly memberships (renew on the saved card) -----
+  // Owner's ask: every option listed before anything is clicked, the "charge now instead of the trial" tick on the page itself,
+  // each plan showing what today's charge would be, and one tap (plus a confirm) to charge the card on file.
   const memberBox = h('div');
   const planList = plans.data.filter((p) => p.active !== false && p.price_cents != null);
   const planGrid = h('div', { class: 'pos-tiles' });
+  const anyTrial = planList.some((p) => p.trial_days);
+  const skipTrial = { value: anyTrial && remember.get('dp_skip_trial') === 'on' };
+  const skipBox = h('input', { type: 'checkbox', checked: skipTrial.value, onChange: (e) => { skipTrial.value = e.target.checked; remember.set('dp_skip_trial', skipTrial.value ? 'on' : 'off'); loadQuotes(); } });
+  const skipRow = anyTrial ? h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, skipBox, h('span', null, 'Charge now instead of the free trial (prorated for the days left in this month)')) : null;
+  const quotes = {};                                       // plan id → what starting today charges (from the server, with the tick's choice)
+  let quoteRun = 0;
+  async function loadQuotes() {
+    const run = ++quoteRun;
+    await Promise.all(planList.map(async (p) => { try { quotes[p.id] = await get(`/v1/plans/${p.id}/quote${skipTrial.value ? '?skip_trial=true' : ''}`); } catch { quotes[p.id] = null; } }));
+    if (run === quoteRun) drawPlans();
+  }
+  const todayLine = (q) => {
+    if (!q) return 'Working out today\'s charge…';
+    if (q.trial_days) return `Free until ${date(q.next_charge_on)}, then ${money(q.monthly_cents + (q.monthly_fee_cents || 0))} ${q.cycle === 'first' ? 'on the 1st' : 'a month'}`;
+    if (!q.charge_now_cents) return `Nothing today (${q.days} day${q.days === 1 ? '' : 's'} left in the month), then ${money(q.monthly_cents + (q.monthly_fee_cents || 0))} on ${date(q.next_charge_on)}`;
+    return `${money(q.charge_now_cents)} today${q.prorated ? ` (${q.days} of ${q.days_in_month} days)` : ''}, then ${money(q.monthly_cents + (q.monthly_fee_cents || 0))} on ${date(q.next_charge_on)}`;
+  };
   function drawPlans() {
     const c = client(), sub = c?.subscription && c.subscription.status !== 'canceled' ? c.subscription : null;
     const canChange = !!sub && isOwner() && sub.status !== 'canceled';
     fill(planGrid, planList.map((p) => h('button', { type: 'button', class: 'dp-panel pos-tile', disabled: !!sub && !canChange, title: sub ? `${firstName(c)} already has ${sub.plan_name}${canChange ? '. Click to change the plan.' : ''}` : null,
       onClick: () => (sub ? changePlanDialog({ client_id: c.id, client_name: c.name, ...sub }, planList) : startMembership(p)) },
       h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
-      String(settings.card_fee_on ?? '').split(',').includes('memberships') && (Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0)) ? h('span', { class: 'small muted' }, `plus a ${money(Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0))} ${(settings.card_fee_label || 'card processing fee').toLowerCase()}`) : null,
       h('span', { class: 'small muted' }, p.sessions_per_month ? `${p.sessions_per_month} group classes a month` : 'Unlimited group classes'),
-      h('span', { class: 'small muted' }, sub ? (canChange ? `${firstName(c)} has ${sub.plan_name} · Change plan` : `${firstName(c)} already has ${sub.plan_name}`) : p.trial_days ? `${p.trial_days}-day free trial` : settings.billing_cycle === 'anniversary' ? 'Billed monthly' : 'Billed on the 1st'))));
+      h('span', { class: 'small' }, todayLine(quotes[p.id])),
+      h('span', { class: 'small muted' }, sub ? (canChange ? `${firstName(c)} has ${sub.plan_name} · Change plan` : `${firstName(c)} already has ${sub.plan_name}`)
+        : c ? (c.has_card ? `Tap to charge ${firstName(c)}'s card on file` : `${firstName(c)} has no card on file yet`) : 'Choose who it\'s for first'))));
   }
   function startMembership(p) {
     const c = client();
     if (!c) { toast('Choose who the membership is for first.', 'warn'); search.focus(); return; }
     const first = firstName(c);
-    const when = p.trial_days ? `Free for ${p.trial_days} day${p.trial_days === 1 ? '' : 's'}, then ${money(p.price_cents)} a month.` : `${money(p.price_cents)} a month.`;
     const done = (sub) => { toast(startedText(first, p.name, sub), sub.first_charge && sub.first_charge.status !== 'paid' ? 'warn' : undefined); c.subscription = { id: sub.id, status: sub.status, plan_id: p.id, plan_name: p.name, price_cents: p.price_cents, current_period_end: sub.current_period_end, trial_ends_at: sub.trial_ends_at }; fill(memberBox); drawClient(); drawPlans(); };
-    const start = btn(p.trial_days ? 'Start free trial' : 'Charge and start', (e) => busy(e.currentTarget, async () => {
-      try { done(await post(`/v1/clients/${c.id}/subscription`, { plan_id: p.id, skip_trial: !!skip?.value() })); } catch (err) { toast(err.message, 'warn'); }
-    }), 'secondary');
-    const quoteLine = h('p', { style: 'margin:0' }, 'Working out the first charge…');
-    const requote = (skipTrial) => get(`/v1/plans/${p.id}/quote${skipTrial ? '?skip_trial=true' : ''}`).then((q) => {
-      quoteLine.textContent = quoteText(q);
-      start.textContent = q.trial_days ? 'Start free trial' : q.charge_now_cents ? `Charge ${money(q.charge_now_cents)} and start` : 'Start (nothing to charge today)';
-    }).catch((err) => { quoteLine.textContent = err.message; });
-    const skip = skipTrialTick(p, requote);
-    requote(false);
+    if (c.has_card) {
+      // One tap and a confirm: the quote is already on the tile, so nothing is worked out after the click.
+      const q = quotes[p.id];
+      const what = q ? todayLine(q) : `${money(p.price_cents)} a month`;
+      if (!confirm(`Start ${p.name} for ${c.name}?\n${what}.\n${q?.trial_days ? 'Nothing is charged today.' : 'Charged to the card on file now.'}`)) return;
+      post(`/v1/clients/${c.id}/subscription`, { plan_id: p.id, skip_trial: skipTrial.value }).then(done).catch((err) => toast(err.message, 'warn'));
+      return;
+    }
     const needCard = h('div', { class: 'stack' },
       h('p', { class: 'warn-text', style: 'margin:0' }, `${first} has no card on file. Monthly memberships renew on a saved card.`),
       h('div', { class: 'row wrap' },
         btn('Open Stripe\'s card page', (e) => {
           const tab = window.open('', '_blank');
           busy(e.currentTarget, async () => {
-            try { const { url } = await post(`/v1/clients/${c.id}/card/setup-link`, { open: true }); if (tab) tab.location = url; else location.href = url; fill(needCard, h('p', { style: 'margin:0' }, 'Add the card on Stripe\'s page in the other tab, then pick the plan again here.')); }
+            try { const { url } = await post(`/v1/clients/${c.id}/card/setup-link`, { open: true }); if (tab) tab.location = url; else location.href = url; fill(needCard, h('p', { style: 'margin:0' }, 'Add the card on Stripe\'s page in the other tab, then tap the plan again here.')); }
             catch (err) { tab?.close(); toast(err.message, 'warn'); }
           });
         }, 'primary'),
         btn('Get a secure card link', (e) => busy(e.currentTarget, async () => {
           try {
             const { url } = await post(`/v1/clients/${c.id}/card/setup-link`);
-            fill(needCard, h('p', { style: 'margin:0' }, 'Send this link to the client or parent. They add their card on Stripe\'s secure page, then you start the membership here.'), h('input', { class: 'dp-input mono', readonly: true, value: url, onFocus: (ev) => ev.target.select() }));
+            fill(needCard, h('p', { style: 'margin:0' }, 'Send this link to the client or parent. They add their card on Stripe\'s secure page, then you tap the plan here.'), h('input', { class: 'dp-input mono', readonly: true, value: url, onFocus: (ev) => ev.target.select() }));
           } catch (err) { toast(err.message, 'warn'); }
         }), 'outline'),
-        state.payments.can_simulate ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${c.id}/card/test`); c.has_card = true; drawClient(); startMembership(p); }), 'ghost') : null),
-      h('p', { class: 'small muted', style: 'margin:0' }, 'Or charge a first sale by Tap to Pay with "Save this card" ticked, then start the membership.'));
-    fill(memberBox, panel(`Start ${p.name}`, { subtitle: `${c.name} · ${when}` },
-      c.has_card ? h('div', { class: 'stack' }, quoteLine, skip?.el, h('p', { class: 'small muted', style: 'margin:0' }, 'Charged to the card on file.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost'))) : needCard));
+        state.payments.can_simulate ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${c.id}/card/test`); c.has_card = true; drawClient(); drawPlans(); fill(memberBox); toast(`Test card added. Tap ${p.name} to charge it.`); }), 'ghost') : null),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Or charge a first sale by Tap to Pay with "Save this card" ticked, then tap the plan.'));
+    fill(memberBox, panel(`Start ${p.name}`, { subtitle: `${c.name} · ${todayLine(quotes[p.id])}.` }, needCard));
     memberBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
+  loadQuotes();
 
   // ----- The sale -----
   const subtotal = () => sale.cart.reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (sale.custom?.amount_cents || 0);
@@ -2404,9 +2427,10 @@ async function viewSell(main) {
     h('div', { class: 'split' },
       h('div', { class: 'stack', style: 'gap:24px' },
         panel(null, {}, h('div', { class: 'form-grid' }, field('Where', locSel), h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Who'), clientBox))),
-        panel('Products', { action: prods.data.length > 8 ? prodSearch : null }, productGrid, sizeBox, h('div', { class: 'dp-label', style: 'margin-top:8px' }, 'Custom amount'), customForm),
-        planList.length ? panel('Monthly memberships', { subtitle: 'Choose who it\'s for above, then tap a membership. It renews on their saved card.' }, planGrid) : null,
-        memberBox),
+        panel('What to sell', { subtitle: 'Everything you can charge for, in one list. Tap a membership to charge the card on file; tap anything else to add it to the sale.', action: prods.data.length > 8 ? prodSearch : null },
+          planList.length ? h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Monthly memberships'), skipRow, planGrid, memberBox) : null,
+          productGrid, sizeBox,
+          h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Custom amount'), customForm))),
       h('div', { class: 'stack pos-side', style: 'gap:24px' }, progress, lastBox, salePanel)),
     seesTakings ? takingsBox : null,
     panel('Recent sales', { subtitle: role === 'coach' ? 'Sales you took. Tap one for details and the receipt.' : 'Tap a sale for details, the receipt and refunds.', action: h('div', { class: 'row wrap', style: 'gap:8px' }, dayChips, recentSearch, recentLoc) }, recent),

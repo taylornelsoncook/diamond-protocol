@@ -3,6 +3,7 @@
 // card, parents and devices, and the "to finish" list. Every function takes the signed-in parent's family and never
 // reads another family's data; routes in portal-routes.js pass r.guardian.
 import { v, notFound, conflict, badRequest, HttpError, newId, token, sha256, localDate, addDaysToDate, withLock } from '../util.js';
+import { visitsFor } from './visits.js';
 import { getSetting, getFamily, cardExpiry, addGuardian, updateGuardian, payerFor } from './families.js';
 import * as billing from './billing.js';
 import * as commerce from './commerce.js';
@@ -144,6 +145,7 @@ export function membershipPanel(ctx, clientId) {
     membership: s ? { status: s.status, plan_id: s.plan_id, plan_name: s.plan_name, price_cents: s.price_cents, fee_cents: cardFee(ctx, s.price_cents, 'memberships').cents, fee_label: feeSettings(ctx).label, trial_ends_at: s.status === 'trialing' ? s.trial_ends_at : null,
       next_charge_at: ['active', 'trialing', 'past_due'].includes(s.status) ? s.current_period_end : null, renews: s.current_period_end, past_due_cents: pastDue,
       pending_plan_name: s.pending_plan_name ?? null, pending_price_cents: s.pending_price_cents ?? null,   // the owner set a change for the renewal
+      visits: visitsFor(ctx, clientId),   // sessions the plan covers this month and how many are used (limit null = unlimited)
       can_ask: s.status === 'paused' ? ['switch', 'cancel'] : REQUEST_KINDS } : null,
     request: openRequest(ctx, clientId), last_answer: lastDone
   };

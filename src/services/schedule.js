@@ -1,5 +1,6 @@
 import { newId, v, notFound, badRequest, conflict, HttpError, zonedToUtc, localDate, weekdayOf, addDaysToDate, ageOn, isTime, isDate, withLock, sha256 } from '../util.js';
 import { emit } from './events.js';
+import { membershipCovers } from './visits.js';
 import { CLASS_PALETTE } from '../db.js';
 import { getSetting, payerFor } from './families.js';
 import { notifyFamily, sendEmail } from './mail.js';
@@ -670,7 +671,8 @@ function ageCheck(client, session) {
 async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPriceCents }) {
   const type = creditTypeFor(session.kind);
   if (session.kind === 'team') return { coverage: 'none' };                       // billed through the team contract
-  if (type === 'group' && isMember(ctx, client.id)) return { coverage: 'membership' };
+  const member = type === 'group' ? membershipCovers(ctx, client.id, session.starts_at) : null;   // a plan's sessions a month are counted in visits.js
+  if (member?.covers) return { coverage: 'membership' };
   if (offerPriceCents != null) {
     if (offerPriceCents === 0) return { coverage: 'none' };
     const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))} (trial offer)`, amount_cents: offerPriceCents } }, actor, { fee: false });
@@ -692,6 +694,7 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPrice
     type ? `a ${type} session pack` : null,
     session.drop_in_cents ? `paying ${commerceMoney(session.drop_in_cents)} with the card on file` : null
   ].filter(Boolean);
+  if (member?.member && !member.covers) throw new HttpError(402, 'payment_required', `${first(client.name)} ${member.reason} (${member.visits.used} of ${member.visits.limit} used; the count starts again on ${localDate(member.visits.period_end, tz(ctx))}). Book this one with ${options.filter((o) => o !== 'a membership').join(', or ') || 'help from your coach'}.`);
   throw new HttpError(402, 'payment_required', `${first(client.name)} has no ${type ?? ''} sessions left for this. Book with ${options.join(', or ') || 'help from your coach'}.`.replace('  ', ' '));
 }
 async function undoCover(ctx, clientId, r) {
@@ -875,7 +878,7 @@ async function bookFromEnrollment(ctx, sessionId, e) {
   if (ctx.db.get('SELECT id FROM bookings WHERE session_id = ? AND client_id = ?', sessionId, e.client_id)) return;
   const full = s.booked_count >= s.capacity;
   const free = e.kind === 'registration' && ctx.db.get('SELECT registration_cents FROM class_series WHERE id = ?', e.series_id)?.registration_cents === 0;
-  const coverage = e.kind === 'registration' ? (e.sale_id || free ? 'registration' : 'unpaid') : isMember(ctx, e.client_id) ? 'membership' : 'unpaid';
+  const coverage = e.kind === 'registration' ? (e.sale_id || free ? 'registration' : 'unpaid') : membershipCovers(ctx, e.client_id, s.starts_at).covers ? 'membership' : 'unpaid';
   ctx.db.run(`INSERT INTO bookings (id, session_id, client_id, status, coverage, enrollment_id, booked_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'enrollment', ?, ?)`,
     newId('bkg'), sessionId, e.client_id, full && e.kind !== 'registration' ? 'waitlisted' : 'booked', full && e.kind !== 'registration' ? 'none' : coverage, e.id, ctx.now(), ctx.now());
 }

@@ -8,6 +8,7 @@ import { notifyFamily } from './mail.js';
 import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
 import { cardFee, feeSettings, CARD_METHODS } from './fees.js';
+import { membershipCovers, visitsFor } from './visits.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
 const hasAddress = (l) => !!(l.address_line1 && l.city && l.state && l.postal_code);
@@ -241,19 +242,22 @@ export function checkIn(ctx, clientId, body) {
   if (c.archived_at) throw conflict(`${c.name} is archived. Restore them on their client page before checking them in.`);
   const loc = getLocation(ctx, v.str(body.location_id, 'location_id'));
   const type = v.oneOf(body.credit_type ?? 'group', 'credit_type', CREDIT_TYPES);
-  const sub = ctx.db.get(`SELECT status FROM subscriptions WHERE client_id = ? AND status IN ('active','trialing','past_due') LIMIT 1`, clientId);
+  const member = type === 'group' ? membershipCovers(ctx, clientId, ctx.now()) : null;   // a plan's sessions a month are counted in visits.js
   let covered = 'membership';
   const id = newId('chk');
   ctx.db.tx(() => {
-    if (!(sub && type === 'group')) {
-      if (creditBalance(ctx, clientId, type) < 1) throw conflict(`${c.name.split(' ')[0]} has no ${type} sessions left. Sell a session or pack${type === 'group' ? ', or start a membership' : ''}.`);
+    if (!member?.covers) {
+      if (creditBalance(ctx, clientId, type) < 1) {
+        if (member?.member) throw conflict(`${c.name.split(' ')[0]} ${member.reason} (${member.visits.used} of ${member.visits.limit}). Sell a session or pack for this one.`);
+        throw conflict(`${c.name.split(' ')[0]} has no ${type} sessions left. Sell a session or pack${type === 'group' ? ', or start a membership' : ''}.`);
+      }
       covered = 'credit';
       ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'check_in', ?, ?)`, newId('cr'), clientId, type, loc.name, ctx.now());
     }
     ctx.db.run('INSERT INTO check_ins (id, client_id, location_id, covered_by, created_at) VALUES (?, ?, ?, ?, ?)', id, clientId, loc.id, covered, ctx.now());
     emit(ctx, 'session.checked_in', { check_in_id: id, client_id: clientId, client_name: c.name, location_id: loc.id, location_name: loc.name, covered_by: covered, credit_type: type });
   });
-  return { id, covered_by: covered, credit_type: type, credits_left: creditBalance(ctx, clientId, type), credits: creditBalances(ctx, clientId) };
+  return { id, covered_by: covered, credit_type: type, credits_left: creditBalance(ctx, clientId, type), credits: creditBalances(ctx, clientId), visits: visitsFor(ctx, clientId) };
 }
 export function listCheckIns(ctx, { clientId, limit = 50 } = {}) {
   return ctx.db.all(

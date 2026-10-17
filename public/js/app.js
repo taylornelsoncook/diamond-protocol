@@ -965,7 +965,8 @@ async function viewClient(main, id) {
     state.payments.can_simulate && !c.card.on_file ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/card/test`); toast('Test card added.'); render(); }), 'ghost') : null);
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { 'aria-label': 'Check-in location', value: (() => { try { return localStorage.getItem('dp_location'); } catch { return null; } })() || locs.data[0]?.id });
   const member = ['active', 'trialing', 'past_due'].includes(c.status);
-  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${plural(c.credits.private, 'private session')} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
+  const visitWords = c.visits ? (c.visits.limit == null ? `${first} is a member (unlimited group classes). ` : `${first} is a member: ${c.visits.left} of ${c.visits.limit} membership sessions left this month, ${c.visits.used} used; the count starts again ${date(c.visits.period_end)}. `) : '';
+  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? visitWords || `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${plural(c.credits.private, 'private session')} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
     card, cardActions, cardNote,
     c.archived_at ? null : locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
       // Members and athletes with group credits use a group session; otherwise a private credit.
@@ -1856,30 +1857,33 @@ async function viewBilling(main) {
     const el = h('div', { class: 'stack-tight' }, h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, on, h('span', null, 'Offer a free trial')), box);
     return { el, value: () => (on.checked ? Number(n.value) || 0 : 0) };
   };
-  const pname = input({ maxlength: '80' }), price = dollarsIn(null, { min: '0' }), trial = trialField(0);
+  // Sessions a month (owner's ask): the group classes the membership covers each paid month; blank = unlimited. Visits are counted in visits.js.
+  const sessionsField = (n) => input({ type: 'number', min: '1', max: '100', value: n == null ? '' : String(n), inputmode: 'numeric', placeholder: 'Unlimited', 'aria-label': 'Sessions a month' });
+  const sessionsValue = (el) => (el.value.trim() === '' ? null : Number(el.value));
+  const pname = input({ maxlength: '80' }), price = dollarsIn(null, { min: '0' }), trial = trialField(0), sessions = sessionsField(null);
   const addPlan = h('details', { class: 'bl-add' }, h('summary', { class: 'strong', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Add a plan'),
     h('form', { class: 'stack', style: 'margin-top:8px', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const cents = toCents(price);
       if (!pname.value.trim()) throw new Error('Name the plan.');
       if (!(cents >= 0)) throw new Error('Enter a monthly price.');
       if (trial.value() > 90) throw new Error('A free trial can be up to 90 days.');
-      await post('/v1/plans', { name: pname.value.trim(), price_cents: cents, trial_days: trial.value() }); toast('Plan created.'); render();
-    }); } }, h('div', { class: 'form-grid cols-3' }, field('Plan name', pname), field('Monthly price ($)', price), field('Free trial', trial.el, 'Off: the first month is charged right away.')), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' }))));
+      await post('/v1/plans', { name: pname.value.trim(), price_cents: cents, trial_days: trial.value(), sessions_per_month: sessionsValue(sessions) }); toast('Plan created.'); render();
+    }); } }, h('div', { class: 'form-grid cols-3' }, field('Plan name', pname), field('Monthly price ($)', price), field('Sessions a month', sessions, 'How many group classes the membership covers each month. Blank: unlimited. Each check-in uses one; the count starts again when the month renews.'), field('Free trial', trial.el, 'Off: the first month is charged right away.')), h('div', null, btn('Create plan', null, 'secondary', { type: 'submit' }))));
   const editPlan = (p) => {
-    const f = { name: input({ maxlength: '80', value: p.name }), price: dollarsIn(p.price_cents, { min: '0' }), trial: trialField(p.trial_days) };
-    setupDialog(`Change ${p.name}`, [h('div', { class: 'form-grid cols-3' }, field('Plan name', f.name), field('Monthly price ($)', f.price), field('Free trial', f.trial.el))], 'Save', async () => {
+    const f = { name: input({ maxlength: '80', value: p.name }), price: dollarsIn(p.price_cents, { min: '0' }), trial: trialField(p.trial_days), sessions: sessionsField(p.sessions_per_month) };
+    setupDialog(`Change ${p.name}`, [h('div', { class: 'form-grid cols-3' }, field('Plan name', f.name), field('Monthly price ($)', f.price), field('Sessions a month', f.sessions, 'Blank: unlimited group classes.'), field('Free trial', f.trial.el))], 'Save', async () => {
       const cents = toCents(f.price);
       if (!f.name.value.trim() || !(cents >= 0)) throw new Error('Enter a name and a monthly price.');
       if (f.trial.value() > 90) throw new Error('A free trial can be up to 90 days.');
-      await patch(`/v1/plans/${p.id}`, { name: f.name.value.trim(), price_cents: cents, trial_days: f.trial.value() });
+      await patch(`/v1/plans/${p.id}`, { name: f.name.value.trim(), price_cents: cents, trial_days: f.trial.value(), sessions_per_month: sessionsValue(f.sessions) });
       return cents !== p.price_cents ? `Saved. ${plural(p.subscribers, 'member')} pay the new price from their next charge.` : 'Saved.';
     }, 'A new price applies from each member\'s next charge. Nobody is charged when you save.');
   };
   const planPanel = h('div', { id: 'bl-plans' }, panel('Plans', { subtitle: 'Price changes apply from each member\'s next charge. Nobody is charged when you save.' },
-    h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Plan'), h('th', null, 'Price'), h('th', { class: 'bl-wide' }, 'Trial'), h('th', null, 'Members'), h('th', { class: 'bl-wide' }, 'Monthly'), h('th', null, ''))),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' }, h('thead', null, h('tr', null, h('th', null, 'Plan'), h('th', null, 'Price'), h('th', null, 'Sessions'), h('th', { class: 'bl-wide' }, 'Trial'), h('th', null, 'Members'), h('th', { class: 'bl-wide' }, 'Monthly'), h('th', null, ''))),
       h('tbody', null, plans.data.map((p) => h('tr', null,
         h('td', { class: 'strong' }, p.name, p.active ? null : h('span', { class: 'small muted' }, ' (retired)')),
-        h('td', { style: 'white-space:nowrap' }, `${money(p.price_cents)}/mo`), h('td', { class: 'bl-wide' }, p.trial_days ? `${p.trial_days} days` : 'None'),
+        h('td', { style: 'white-space:nowrap' }, `${money(p.price_cents)}/mo`), h('td', null, p.sessions_per_month ? `${p.sessions_per_month} a month` : 'Unlimited'), h('td', { class: 'bl-wide' }, p.trial_days ? `${p.trial_days} days` : 'None'),
         h('td', null, p.subscribers ? h('button', { type: 'button', class: 'dp-btn dp-btn--ghost', 'aria-label': `Show the ${plural(p.subscribers, 'member')} on ${p.name}`, onClick: () => { Object.assign(billingUi, { mview: 'live', mplan: p.id, mq: '' }); render(); setTimeout(() => jumpTo('bl-mem'), 50); } }, String(p.subscribers)) : '0'),
         h('td', { class: 'bl-wide', style: 'font:600 20px/1 var(--font-display)' }, money(p.subscribers * p.price_cents)),
         h('td', { class: 'bl-acts' }, h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap;justify-content:flex-end' },
@@ -2059,6 +2063,7 @@ async function viewSell(main) {
       onClick: () => (sub ? changePlanDialog({ client_id: c.id, client_name: c.name, ...sub }, planList) : startMembership(p)) },
       h('span', { class: 'strong' }, p.name), h('span', { class: 'pos-price' }, money(p.price_cents), h('span', { class: 'small muted', style: 'font:400 13px var(--font-sans)' }, ' /month')),
       String(settings.card_fee_on ?? '').split(',').includes('memberships') && (Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0)) ? h('span', { class: 'small muted' }, `plus a ${money(Math.round((p.price_cents * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0))} ${(settings.card_fee_label || 'card processing fee').toLowerCase()}`) : null,
+      h('span', { class: 'small muted' }, p.sessions_per_month ? `${p.sessions_per_month} group classes a month` : 'Unlimited group classes'),
       h('span', { class: 'small muted' }, sub ? (canChange ? `${firstName(c)} has ${sub.plan_name} · Change plan` : `${firstName(c)} already has ${sub.plan_name}`) : p.trial_days ? `${p.trial_days}-day free trial` : settings.billing_cycle === 'anniversary' ? 'Billed monthly' : 'Billed on the 1st'))));
   }
   function startMembership(p) {
@@ -2475,6 +2480,9 @@ function setupDialog(title, fields, saveLabel, onSave, note) {
 // mid-month pays the days left in the month, then the full price on the 1st; the anniversary setting keeps a month from the start day).
 const longDay = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 function quoteText(q) {
+  return `${quoteMoney(q)} ${q.sessions_per_month ? `Covers ${q.sessions_per_month} group classes a month; each check-in uses one.` : 'Covers unlimited group classes.'}`;
+}
+function quoteMoney(q) {
   const fee = q.fee_cents ? ` (includes a ${money(q.fee_cents)} card fee)` : '';
   const monthly = `${money(q.monthly_cents + (q.monthly_fee_cents || 0))} ${q.cycle === 'first' ? 'on the 1st of every month' : 'every month'}`;
   if (q.trial_days) return `Free for ${q.trial_days} day${q.trial_days === 1 ? '' : 's'}. From ${longDay(q.next_charge_on)}, ${q.cycle === 'first' ? `the days left in that month are charged, then ${monthly}` : monthly}.`;

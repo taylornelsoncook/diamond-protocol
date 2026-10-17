@@ -1,4 +1,5 @@
 import * as billing from './services/billing.js';
+import * as visits from './services/visits.js';
 import * as refunds from './services/refunds.js';
 import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
@@ -289,7 +290,7 @@ export const routes = [
   // Billing
   ['GET', '/v1/plans', 'any', 'Billing', 'List plans. ?include_inactive=true to include retired plans.', (ctx, r) => list(billing.listPlans(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
   ['GET', '/v1/plans/:id/quote', 'any', 'Billing', 'What starting this plan today charges and when it renews: charge_now_cents (the days left in this month under the first-of-the-month cycle), period_end, next_charge_on, trial_days.', (ctx, r) => billing.quote(ctx, r.params.id)],
-  ['POST', '/v1/plans', 'any', 'Billing', 'Create a monthly plan: name, price_cents, trial_days (0, the default, means no free trial).', (ctx, r) => billing.createPlan(ctx, r.body), 201],
+  ['POST', '/v1/plans', 'any', 'Billing', 'Create a monthly plan: name, price_cents, trial_days (0, the default, means no free trial), sessions_per_month (group classes covered each paid month; empty = unlimited).', (ctx, r) => billing.createPlan(ctx, r.body), 201],
   ['PATCH', '/v1/plans/:id', 'any', 'Billing', 'Update a plan. Set active=false to stop offering it.', (ctx, r) => billing.updatePlan(ctx, r.params.id, r.body)],
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
   ['GET', '/v1/invoices', 'any', 'Billing', 'List invoices. Filter with ?status= (open, paid, failed, void).', (ctx, r) => list(billing.listInvoices(ctx, { status: r.query.status }))],
@@ -489,6 +490,7 @@ export const routes = [
     const zone = families.getSetting(ctx, 'timezone'), start = startOfLocalDay(zonedToUtc(`${localDate(ctx.now(), zone).slice(0, 8)}01`, '12:00', zone), zone);
     return commerce.revenueByLocation(ctx, r.query.since ? v.date(r.query.since, 'since') : start);
   }],
+  ['GET', '/v1/clients/:id/visits', 'any', 'Clients', 'Membership visits this period: visits { limit (null = unlimited), used, left, period_start, period_end } and items (classes booked or attended on the membership, walk-in check-ins). visits is null without a live membership.', (ctx, r) => visits.listVisits(ctx, r.params.id)],
   ['GET', '/v1/clients/:id/card', 'any', 'Clients', 'Whether the client has a saved card, and its brand and last 4 digits.', (ctx, r) => commerce.cardSummary(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/card/setup-link', 'any', 'Clients', 'A secure Stripe link the client opens to add or replace their card. open: true when staff open it themselves (Stripe comes back to the card-saved page, which saves the card at once).', (ctx, r) => commerce.cardSetupLink(ctx, r.params.id, r.baseUrl, { open: !!r.body.open })],
   ['POST', '/v1/clients/:id/card/setup-done', 'any', 'Clients', 'After Stripe\'s card page: session_id (the finished checkout session) saves the card now, without waiting for the webhook.', (ctx, r) => commerce.finishCardSetup(ctx, r.params.id, r.body.session_id)],

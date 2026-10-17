@@ -3,6 +3,7 @@ import { emit } from './events.js';
 import * as billing from './billing.js';
 import * as programs from './programs.js';
 import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSetting, staleCard } from './families.js';
+import { visitsFor } from './visits.js';
 import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
@@ -20,7 +21,7 @@ const LIST_SQL = `
     (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1) AS pinned_all,
     (SELECT COUNT(*) FROM client_notes n WHERE n.client_id = c.id AND n.pinned = 1 AND n.coach_only = 0) AS pinned_shared,
     s.id AS subscription_id, s.status AS subscription_status, s.current_period_end, s.trial_ends_at, s.pending_plan_id, (SELECT pp.name FROM plans pp WHERE pp.id = s.pending_plan_id) AS pending_plan_name,
-    p.id AS plan_id, p.name AS plan_name, p.price_cents,
+    p.id AS plan_id, p.name AS plan_name, p.price_cents, p.sessions_per_month,
     a.program_id, pr.name AS program_name,
     (SELECT MAX(completed_at) FROM workout_logs l WHERE l.client_id = c.id) AS last_workout_at,
     (SELECT COALESCE(SUM(delta), 0) FROM session_credits k WHERE k.client_id = c.id AND k.credit_type = 'private') AS private_credits,
@@ -41,7 +42,7 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
   status: r.subscription_status ?? 'none',
   subscription: r.subscription_id ? {
     id: r.subscription_id, status: r.subscription_status, plan_id: r.plan_id, plan_name: r.plan_name,
-    price_cents: r.price_cents, current_period_end: r.current_period_end, trial_ends_at: r.trial_ends_at,
+    price_cents: r.price_cents, sessions_per_month: r.sessions_per_month ?? null, current_period_end: r.current_period_end, trial_ends_at: r.trial_ends_at,
     pending_plan_id: r.pending_plan_id ?? null, pending_plan_name: r.pending_plan_name ?? null   // a change waiting for the renewal
   } : null,
   program: r.program_id ? { id: r.program_id, name: r.program_name } : null,
@@ -156,6 +157,7 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
   const extra = ctx.db.get('SELECT * FROM clients WHERE id = ?', id);
   const payer = payerFor(ctx, id);
   c.notes = extra.notes ?? null;
+  c.visits = visitsFor(ctx, id);                                     // membership visits this period (null without a live membership)
   c.card_status = payer.card_status;
   c.card = payer.card_payment_method ? { on_file: true, brand: payer.card_brand, last4: payer.card_last4, exp: payer.card_exp ?? null, stale: staleCard(ctx, payer), owner: payer.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: payer.table === 'families' ? 'family' : 'client' };
   Object.assign(c, athleteFields({}, extra));

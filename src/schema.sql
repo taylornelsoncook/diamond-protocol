@@ -2126,3 +2126,35 @@ CREATE TABLE IF NOT EXISTS vbt_sets (
   UNIQUE (provider, dedupe_key)
 );
 CREATE INDEX IF NOT EXISTS vbt_sets_client ON vbt_sets(client_id, day);
+
+-- ---- Groups (version 87): a named group of athletes ("Kings 2031") with a shared board ----
+-- Owner's ask: a group under Teams, renamed at will, athletes put in it; each athlete sees how often they attended,
+-- their best sprint times and a board where they message the coach and everyone in the group can read it.
+CREATE TABLE IF NOT EXISTS groups (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  note TEXT,
+  coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,   -- the coach whose group it is (emailed about new messages)
+  coach_told_at TEXT,                                      -- when the coach was last emailed about the board (at most once an hour)
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  added_at TEXT NOT NULL,
+  added_by TEXT,
+  PRIMARY KEY (group_id, client_id)
+);
+CREATE TABLE IF NOT EXISTS group_messages (
+  id TEXT PRIMARY KEY,
+  group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  author_kind TEXT NOT NULL CHECK (author_kind IN ('athlete','parent','staff')),
+  client_id TEXT REFERENCES clients(id) ON DELETE CASCADE,   -- the athlete it comes from (a parent writes for their athlete); removed with the family
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,      -- the staff member, for a coach's message
+  author_name TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  hidden_at TEXT, hidden_by TEXT                             -- a coach hid it: staff still see it, athletes don't
+);
+CREATE INDEX IF NOT EXISTS group_messages_group ON group_messages(group_id, created_at);

@@ -18,7 +18,8 @@ const PATHS = {
   performance: ['M4 19l5-6 4 3 7-9', 'M15 7h5v5'],
   education: ['M12 6C9.5 4.3 6.5 3.8 3.5 4.3v14c3-.5 6 0 8.5 1.7 2.5-1.7 5.5-2.2 8.5-1.7v-14c-3-.5-6 0-8.5 1.7z', 'M12 6v14'],
   profile: ['M12 12a4 4 0 100-8 4 4 0 000 8z', 'M4 21c0-4 3.5-7 8-7s8 3 8 7'],
-  timeline: ['M6 4v16', 'M6 7h10', 'M6 12h13', 'M6 17h8']
+  timeline: ['M6 4v16', 'M6 7h10', 'M6 12h13', 'M6 17h8'],
+  team: ['M9 11a3 3 0 100-6 3 3 0 000 6z', 'M17 11a2.5 2.5 0 100-5 2.5 2.5 0 000 5z', 'M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6', 'M15.5 15.2c.5-.1 1-.2 1.5-.2 2.5 0 4 1.8 4 4']
 };
 export function tabIcon(name) {
   const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');

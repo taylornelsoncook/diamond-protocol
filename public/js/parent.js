@@ -241,7 +241,7 @@ let subtabs = null;
 function drawSubtabs() {
   if (!subtabs?.isConnected) return;
   const a = athlete(), dots = a ? engageDots(a.engagement) : {};
-  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ['profile', 'Profile'], ['timeline', 'Timeline'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
+  fill(subtabs, [['overview', 'Overview'], ['workout', 'Workout'], ['team', 'Team'], ['profile', 'Profile'], ['timeline', 'Timeline'], ...ENGAGE_TABS, ['parents', 'For parents']].map(([k, label]) => h('button', { type: 'button', class: 'p-subtab', 'aria-current': state.homeTab === k ? 'page' : null, onClick: () => { state.homeTab = k; if (k === 'parents') parentReader = null; render(); } },
     label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
   const cur = subtabs.querySelector('[aria-current]');
   if (cur) subtabs.scrollLeft = cur.offsetLeft + cur.offsetWidth - subtabs.clientWidth > 0 ? cur.offsetLeft - 16 : 0;   // keep the chosen tab in view on narrow phones
@@ -251,6 +251,7 @@ async function viewHome(main) {
   if (state.homeTab === 'parents') return viewParentEd(main);
   if (state.homeTab === 'overview' || !state.me.athletes.length) return viewOverview(main);
   if (state.homeTab === 'workout') return viewWorkout(main);
+  if (state.homeTab === 'team') return viewWorkout(main, 'team');   // the app's Team tab: the athlete's groups, attendance, sprint bests and the board
   if (state.homeTab === 'profile') return viewWorkout(main, 'profile');   // the app's Profile tab: coming up, maxes, games, form checks, the sign-in and devices
   if (state.homeTab === 'timeline') {   // everything the athlete did, newest first (the same lines the coach sees)
     const a = athlete();
@@ -282,8 +283,8 @@ function viewWorkout(main, tab = 'workout') {
   const a = athlete();
   const src = `/app?athlete=${encodeURIComponent(a.id)}&embed=1${tab === 'workout' ? '' : `#${tab}`}`;
   const frame = h('iframe', { class: 'p-frame', src, title: `${a.first_name ?? a.name}'s ${tab}`, 'data-athlete': a.id, style: `height:${Math.max(420, (frameHeights.get(a.id) ?? 0) + 8)}px` });
-  fill(main, top(tab === 'profile' ? 'Profile' : 'Workout'), subtabs, athleteChips(() => render()),
-    h('p', { class: 'small muted', style: 'margin:0' }, tab === 'profile' ? `Everything about ${a.first_name ?? a.name}: what's coming up, maxes, games, form checks, your sign-in and the devices signed in. ` : `${a.first_name ?? a.name}'s program, logged under Athlete ID ${a.athlete_id ?? '…'}. `, h('a', { href: src.replace('&embed=1', ''), target: '_blank', rel: 'noopener' }, 'Open full screen')),
+  fill(main, top(tab === 'profile' ? 'Profile' : tab === 'team' ? 'Team' : 'Workout'), subtabs, athleteChips(() => render()),
+    h('p', { class: 'small muted', style: 'margin:0' }, tab === 'profile' ? `Everything about ${a.first_name ?? a.name}: what's coming up, maxes, games, form checks, your sign-in and the devices signed in. ` : tab === 'team' ? `${a.first_name ?? a.name}'s groups: attendance, sprint bests and the team board, where you can write to the coach too. ` : `${a.first_name ?? a.name}'s program, logged under Athlete ID ${a.athlete_id ?? '…'}. `, h('a', { href: src.replace('&embed=1', ''), target: '_blank', rel: 'noopener' }, 'Open full screen')),
     frame);
   drawSubtabs();
 }
@@ -1161,7 +1162,7 @@ function signInPanel() {
 // strip of sections above and the bar below), with their app in the frame. Home holds the app's sections; Progress is
 // its Performance tab; Family is the sign-in, the devices and Sign out. Booking and payments are a parent's, so an
 // athlete who should see them is made the family's account holder (Add a parent with their own email).
-const ATHLETE_TABS = [['workout', 'Workout'], ['profile', 'Profile'], ['sprint', 'Sprint'], ['accountability', 'Accountability'], ['performance', 'Performance'], ['education', 'Education']];
+const ATHLETE_TABS = [['workout', 'Workout'], ['team', 'Team'], ['profile', 'Profile'], ['sprint', 'Sprint'], ['accountability', 'Accountability'], ['performance', 'Performance'], ['education', 'Education']];
 function renderAthleteHome() {
   const s = state.session;
   if (!['home', 'progress', 'family'].includes(state.tab)) state.tab = 'home';

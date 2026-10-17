@@ -1,6 +1,7 @@
 import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 import { athleteSprint } from './sprint-ui.js';
+import { athleteGroups } from './groups-ui.js';
 import { groupTag, groupTitle, withGroups, rxTable } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 import { startupForm, summaryText } from './startup-ui.js';
@@ -62,7 +63,7 @@ let spoken = [];
 const say = (msg) => { spoken.push(msg); if (spoken.length === 1) queueMicrotask(() => { live.textContent = spoken.join(' '); spoken = []; }); };
 
 // A link like /app?token=…#education opens that tab, and changing the # while the app is open switches tabs.
-const TAB_KEYS = ['workout', 'sprint', 'accountability', 'performance', 'education', 'profile'];
+const TAB_KEYS = ['workout', 'team', 'sprint', 'accountability', 'performance', 'education', 'profile'];
 const hashTab = () => { const k = location.hash.replace(/^#\/?/, '').toLowerCase(); return TAB_KEYS.includes(k) ? k : null; };
 const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null, historyOpen: new Set(), details: new Map(),
   pick: null, pickWorkout: null,                       // a workout opened from the calendar instead of the one the app opens on
@@ -74,7 +75,7 @@ const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), po
 const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
 function drawTabs() {
   const dots = engageDots(engage.data);
-  fill(tabs, [['workout', 'Workout'], ['sprint', 'Sprint'], ...ENGAGE_TABS, ['profile', 'Profile']].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
+  fill(tabs, [['workout', 'Workout'], ['team', 'Team'], ['sprint', 'Sprint'], ...ENGAGE_TABS, ['profile', 'Profile']].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
     tabIcon(k), label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
 }
 function show(tab, anchor = null) {
@@ -95,6 +96,11 @@ function show(tab, anchor = null) {
   if (tab === 'profile') {  // one place for everything: the timeline, maxes, streaks and the account pages
     fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, 'Profile')), where);
     renderProfile(where);
+    return;
+  }
+  if (tab === 'team') {   // the groups the athlete is in: attendance, sprint bests and the team board (groups-ui.js)
+    fill(view, h('div', { class: 'row' }, h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), h('h1', { class: 'c-title grow', style: 'font-size:30px' }, 'Team')), where);
+    athleteGroups(where, { api });
     return;
   }
   if (tab === 'sprint') {   // sprint reps sent to the coach and the analysis they send back (sprint-ui.js)

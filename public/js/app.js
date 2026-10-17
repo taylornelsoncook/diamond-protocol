@@ -14,6 +14,7 @@ import { viewMonthlyReports } from './monthly-coach.js';
 import { viewMaxReport } from './maxreport-ui.js';
 import { timelineBlock } from './timeline-ui.js';
 import { feedBlock } from './feed-ui.js';
+import { groupsPanel, viewGroup } from './groups-ui.js';
 wearableReturnNotice();
 import { initAdmin, viewIntegrations, viewSettings, viewAccount, forgotForm, renderReset, passwordField } from './admin-coach.js';
 import { initCrm, viewLeads, viewLead, viewTasks, viewLeadReports, viewLeadImport, viewLeadSettings, todayTasksPanel, contactHistoryPanel, leadNav, STAGES as LEAD_STAGE_LIST } from './crm-coach.js';
@@ -100,7 +101,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'maxes' ? (m) => viewMaxReport(m, { api, header }) : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'board' ? viewProgramBoard : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id === 'groups' ? (m) => viewGroup(m, location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[2], { api, header, role: state.user.role }) : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'maxes' ? (m) => viewMaxReport(m, { api, header }) : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'board' ? viewProgramBoard : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -3872,7 +3873,8 @@ async function viewTeams(main) {
     busy(e.currentTarget, async () => { const r = await post('/v1/team-billing/remind-overdue'); toast(`${nplural(r.sent, 'reminder')} emailed.${r.skipped ? ` ${r.skipped} had no billing email: ${r.schools_without_email.join(', ')}.` : ''}`, r.skipped ? 'warn' : 'good'); render(); });
   }, 'secondary') : null;
   fill(main,
-    header('Teams', 'School and club contracts, billed a flat monthly fee.', h('a', { class: 'dp-btn dp-btn--primary', href: '#/teams/new' }, 'New team contract')),
+    header('Teams', 'Groups of athletes with a shared board, and school and club contracts billed a flat monthly fee.', h('a', { class: 'dp-btn dp-btn--primary', href: '#/teams/new' }, 'New team contract')),
+    groupsPanel({ api, canEdit: state.user.role !== 'front_desk' }),
     h('div', { class: 'metrics' },
       metric('Monthly contract revenue', money(sum.monthly_cents), nplural(sum.active_contracts, 'active team')),
       metric('Waiting on payment', money(sum.open_cents), nplural(sum.open_count, 'open invoice')),

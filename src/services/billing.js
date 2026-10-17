@@ -34,15 +34,16 @@ export function periodFor(ctx, startIso, priceCents, cycle = billingCycle(ctx)) 
   return { start: startIso, end: zonedToUtc(endDay, '00:00', tz), amount_cents: amount < MIN_CHARGE_CENTS ? 0 : amount, days, days_in_month: daysInMonth, prorated: !full };
 }
 // What starting a plan today would charge and when it renews: the counter and the client page show it before Start.
-export function quote(ctx, planId, asOf = ctx.now()) {
+// skipTrial (owner's ask): charge now, prorated for the days left in the month, even on a plan that offers a free trial.
+export function quote(ctx, planId, asOf = ctx.now(), { skipTrial = false } = {}) {
   const plan = getPlan(ctx, planId);
-  const trial = plan.trial_days > 0;
+  const trial = plan.trial_days > 0 && !skipTrial;
   const period = trial ? null : periodFor(ctx, asOf, plan.price_cents);
   const fee = period && period.amount_cents ? cardFee(ctx, period.amount_cents, 'memberships').cents : 0;
   const monthlyFee = cardFee(ctx, plan.price_cents, 'memberships').cents;
   const tz = zone(ctx);
   return {
-    plan_id: plan.id, plan_name: plan.name, monthly_cents: plan.price_cents, monthly_fee_cents: monthlyFee, trial_days: plan.trial_days, sessions_per_month: plan.sessions_per_month ?? null, cycle: billingCycle(ctx),
+    plan_id: plan.id, plan_name: plan.name, monthly_cents: plan.price_cents, monthly_fee_cents: monthlyFee, trial_days: trial ? plan.trial_days : 0, plan_trial_days: plan.trial_days, skip_trial: !!skipTrial, sessions_per_month: plan.sessions_per_month ?? null, cycle: billingCycle(ctx),
     charge_now_cents: period ? period.amount_cents + fee : 0, fee_cents: fee, prorated: !!period?.prorated, days: period?.days ?? null, days_in_month: period?.days_in_month ?? null,
     period_start: localDate(asOf, tz), period_end: period ? localDate(period.end, tz) : localDate(addDays(asOf, plan.trial_days), tz),
     next_charge_on: period ? localDate(period.end, tz) : localDate(addDays(asOf, plan.trial_days), tz)
@@ -135,12 +136,13 @@ function setStatus(ctx, subId, status, extra = {}) {
 }
 
 // Start a subscription. With a trial, nothing is charged until the trial ends.
-export async function subscribe(ctx, clientId, planId, asOf = ctx.now()) {
+// skipTrial: the owner or staff start the plan paid today (prorated to the 1st) instead of its free trial.
+export async function subscribe(ctx, clientId, planId, asOf = ctx.now(), { skipTrial = false } = {}) {
   const plan = getPlan(ctx, planId);
   if (!plan.active) throw badRequest('That plan is no longer offered.');
   if (currentSubscription(ctx, clientId)) throw conflict('This client already has a subscription. Change its plan instead.');
   if (ctx.db.get('SELECT archived_at FROM clients WHERE id = ?', clientId)?.archived_at) throw conflict('This client is archived. Restore them on their client page first.');
-  const trial = plan.trial_days > 0;
+  const trial = plan.trial_days > 0 && !skipTrial;
   const period = trial ? null : periodFor(ctx, asOf, plan.price_cents);
   const sub = {
     id: newId('sub'),

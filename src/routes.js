@@ -233,7 +233,7 @@ export const routes = [
   ['DELETE', '/v1/client-notes/:id', 'any', 'Clients', 'Delete a staff note: owners any, everyone else their own.', (ctx, r) => clients.deleteNote(ctx, r.params.id, noteActor(r))],
   ['POST', '/v1/clients/:id/app-link', 'any', 'Clients', 'Issue a new private app link. The old link stops working.', (ctx, r) => clients.resetAppLink(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/app-link/email', 'any', 'Clients', 'Email the private workout-app link to the athlete\'s own email and their parents. sent_to lists the addresses. Refused for archived clients.', (ctx, r) => clients.emailAppLink(ctx, r.params.id)],
-  ['POST', '/v1/clients/:id/subscription', 'any', 'Clients', 'Start a subscription on plan_id. The answer carries first_charge (amount, status, period_end) or null for a free trial.', async (ctx, r) => billing.subscribe(ctx, r.params.id, v.str(r.body.plan_id, 'plan_id')), 201],
+  ['POST', '/v1/clients/:id/subscription', 'any', 'Clients', 'Start a subscription on plan_id. skip_trial: true charges today (prorated to the 1st) instead of the plan\'s free trial. The answer carries first_charge (amount, status, period_end) or null for a free trial.', async (ctx, r) => billing.subscribe(ctx, r.params.id, v.str(r.body.plan_id, 'plan_id'), ctx.now(), { skipTrial: r.body.skip_trial === true || r.body.skip_trial === 'true' }), 201],
   ['POST', '/v1/clients/:id/subscription/pause', 'any', 'Clients', 'Pause billing and app access.', (ctx, r) => billing.pause(ctx, subOf(ctx, r.params.id))],
   ['POST', '/v1/clients/:id/subscription/resume', 'any', 'Clients', 'Resume a paused subscription. Starts a new period and charges today.', (ctx, r) => billing.resume(ctx, subOf(ctx, r.params.id))],
   ['POST', '/v1/clients/:id/subscription/cancel', 'any', 'Clients', 'Cancel now. Open invoices are voided.', (ctx, r) => billing.cancel(ctx, subOf(ctx, r.params.id))],
@@ -289,7 +289,7 @@ export const routes = [
 
   // Billing
   ['GET', '/v1/plans', 'any', 'Billing', 'List plans. ?include_inactive=true to include retired plans.', (ctx, r) => list(billing.listPlans(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
-  ['GET', '/v1/plans/:id/quote', 'any', 'Billing', 'What starting this plan today charges and when it renews: charge_now_cents (the days left in this month under the first-of-the-month cycle), period_end, next_charge_on, trial_days.', (ctx, r) => billing.quote(ctx, r.params.id)],
+  ['GET', '/v1/plans/:id/quote', 'any', 'Billing', 'What starting this plan today charges and when it renews: charge_now_cents (the days left in this month under the first-of-the-month cycle), period_end, next_charge_on, trial_days. ?skip_trial=true quotes a paid start on a plan with a free trial.', (ctx, r) => billing.quote(ctx, r.params.id, ctx.now(), { skipTrial: r.query.skip_trial === 'true' })],
   ['POST', '/v1/plans', 'any', 'Billing', 'Create a monthly plan: name, price_cents, trial_days (0, the default, means no free trial), sessions_per_month (group classes covered each paid month; empty = unlimited).', (ctx, r) => billing.createPlan(ctx, r.body), 201],
   ['PATCH', '/v1/plans/:id', 'any', 'Billing', 'Update a plan. Set active=false to stop offering it.', (ctx, r) => billing.updatePlan(ctx, r.params.id, r.body)],
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],

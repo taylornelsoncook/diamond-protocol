@@ -42,7 +42,7 @@ export function quote(ctx, planId, asOf = ctx.now()) {
   const monthlyFee = cardFee(ctx, plan.price_cents, 'memberships').cents;
   const tz = zone(ctx);
   return {
-    plan_id: plan.id, plan_name: plan.name, monthly_cents: plan.price_cents, monthly_fee_cents: monthlyFee, trial_days: plan.trial_days, cycle: billingCycle(ctx),
+    plan_id: plan.id, plan_name: plan.name, monthly_cents: plan.price_cents, monthly_fee_cents: monthlyFee, trial_days: plan.trial_days, sessions_per_month: plan.sessions_per_month ?? null, cycle: billingCycle(ctx),
     charge_now_cents: period ? period.amount_cents + fee : 0, fee_cents: fee, prorated: !!period?.prorated, days: period?.days ?? null, days_in_month: period?.days_in_month ?? null,
     period_start: localDate(asOf, tz), period_end: period ? localDate(period.end, tz) : localDate(addDays(asOf, plan.trial_days), tz),
     next_charge_on: period ? localDate(period.end, tz) : localDate(addDays(asOf, plan.trial_days), tz)
@@ -69,6 +69,8 @@ export function getPlan(ctx, id) {
   return publicPlan(p);
 }
 // Two plans on offer with the same name would be confused on client pages, at the counter and in the portal.
+// Group classes a membership covers each paid month: 1 to 100, or null/empty/0 for unlimited (visits.js counts them).
+const sessionsPerMonth = (val) => (val === null || val === undefined || val === '' || Number(val) === 0 ? null : v.int(val, 'sessions_per_month', { min: 1, max: 100 }));
 const planName = (val) => v.str(val, 'name', { max: 80 }).replace(/\s+/g, ' ');
 const liveNamed = (ctx, name, exceptId = '') => ctx.db.get('SELECT id, name FROM plans WHERE active = 1 AND lower(name) = lower(?) AND id != ?', name, exceptId);
 export function createPlan(ctx, body) {
@@ -79,10 +81,11 @@ export function createPlan(ctx, body) {
     name,
     price_cents: v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }),
     trial_days: v.int(body.trial_days ?? 0, 'trial_days', { min: 0, max: 90 }),   // no trial unless the owner turns one on
+    sessions_per_month: sessionsPerMonth(body.sessions_per_month),
     created_at: ctx.now()
   };
-  ctx.db.run('INSERT INTO plans (id, name, price_cents, interval, trial_days, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
-    plan.id, plan.name, plan.price_cents, 'month', plan.trial_days, plan.created_at);
+  ctx.db.run('INSERT INTO plans (id, name, price_cents, interval, trial_days, active, created_at, sessions_per_month) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
+    plan.id, plan.name, plan.price_cents, 'month', plan.trial_days, plan.created_at, plan.sessions_per_month);
   return getPlan(ctx, plan.id);
 }
 // Price changes apply to future invoices only.
@@ -93,11 +96,12 @@ export function updatePlan(ctx, id, body) {
   if (liveAfter && liveNamed(ctx, name, id)) {
     throw conflict(name !== p.name ? `A plan called ${name} is already offered. Choose another name.` : `Another plan on offer is already called ${p.name}. Rename one of them first.`);
   }
-  ctx.db.run('UPDATE plans SET name = ?, price_cents = ?, trial_days = ?, active = ? WHERE id = ?',
+  ctx.db.run('UPDATE plans SET name = ?, price_cents = ?, trial_days = ?, active = ?, sessions_per_month = ? WHERE id = ?',
     name,
     body.price_cents !== undefined ? v.int(body.price_cents, 'price_cents', { min: 0, max: 10000000 }) : p.price_cents,
     body.trial_days !== undefined ? v.int(body.trial_days, 'trial_days', { min: 0, max: 90 }) : p.trial_days,
     body.active !== undefined ? !!body.active : p.active,
+    body.sessions_per_month !== undefined ? sessionsPerMonth(body.sessions_per_month) : p.sessions_per_month,
     id);
   return getPlan(ctx, id);
 }

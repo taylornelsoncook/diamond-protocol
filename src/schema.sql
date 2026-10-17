@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS plans (
   interval TEXT NOT NULL DEFAULT 'month' CHECK (interval IN ('month')),
   trial_days INTEGER NOT NULL DEFAULT 7 CHECK (trial_days >= 0),
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  sessions_per_month INTEGER                      -- version 86: group classes the membership covers each paid month (NULL = unlimited)
 );
 CREATE TABLE IF NOT EXISTS families (
   id TEXT PRIMARY KEY,

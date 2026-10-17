@@ -234,6 +234,8 @@ With no `STRIPE_SECRET_KEY`, the server uses built-in test payments: nothing is 
 
 A card saved while the server ran without a Stripe key (the sample data's families, or "Add test card") is a pretend card Stripe has never seen. Once a key is set, the client page says so under the card, a charge on it is refused with that reason instead of failing, and the card link makes a new Stripe customer so the card can be added again (on staging, use Stripe's test card 4242 4242 4242 4242).
 
+A plan can carry a number of sessions a month (Billing → Plans; blank = unlimited): every group class the membership covers and every walk-in check-in uses one, the client page and the parent portal show how many are left and when the count starts again, and once they're used up the next class falls to a pack, the card on file or pay at the session.
+
 Memberships are billed on the 1st of the month: a membership started mid-month is charged today for the days left in the month (the 16th of a 31-day month pays 16/31 of the price), then the full price on the 1st of every month until it's canceled. Billing → Needs attention → "Memberships renew" switches to a month from the start day instead. Memberships live in this platform; each monthly charge shows in Stripe as a payment named after the plan, the athlete and the month.
 
 To change a client's card from the dashboard, open the client → Membership → **Change card**: Stripe's secure card page opens in a new tab, the card is typed there (never on this site) and shows on the client page as soon as Stripe hands back. **Copy link to send** gives the family the same page.

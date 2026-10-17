@@ -836,6 +836,7 @@ async function viewPrograms(main) {
       m.trial_ends_at ? h('div', null, h('dt', null, 'Trial ends'), h('dd', null, fmt(m.trial_ends_at, { month: 'long', day: 'numeric' }))) : null,
       m.next_charge_at && !m.trial_ends_at ? h('div', null, h('dt', null, 'Next charge'), h('dd', null, fmt(m.next_charge_at, { month: 'long', day: 'numeric' }))) : null,
       m.pending_plan_name ? h('div', null, h('dt', null, 'Changing to'), h('dd', null, `${m.pending_plan_name} on ${fmt(m.renews, { month: 'long', day: 'numeric' })}`)) : null,
+      m.visits && m.visits.limit != null ? h('div', null, h('dt', null, 'Sessions this month'), h('dd', null, `${m.visits.used} of ${m.visits.limit} used · ${m.visits.left} left · starts again ${fmt(m.visits.period_end, { month: 'short', day: 'numeric' })}`)) : null,
       h('div', null, h('dt', null, 'Left in packs'), h('dd', null, `${a.credits.group} group, ${a.credits.private} private`))) : h('p', { class: 'muted small' }, `${a.first_name} has no membership. A membership covers every group class and holds a standing spot; see the plans below.`),
     req ? h('div', { class: 'p-banner p-banner--info' }, h('span', { class: 'grow' }, `You asked to ${KINDS[req.kind]}${req.kind === 'switch' && req.plan_name ? ` to ${req.plan_name}` : ''} on ${fmt(req.created_at, { month: 'short', day: 'numeric' })}. We'll be in touch.`),
       btn('Withdraw', (e) => busy(e.currentTarget, async () => { await post(`athletes/${a.id}/membership-request/withdraw`); toast('Request withdrawn.'); await reload(); }), 'ghost')) : null,

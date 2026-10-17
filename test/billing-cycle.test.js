@@ -42,7 +42,7 @@ test('the period runs to the 1st and costs the days left', () => {
   const ann = periodFor(app.ctx, '2026-10-16T15:00:00.000Z', 24900, 'anniversary');
   assert.deepEqual([ann.end, ann.amount_cents, ann.prorated], ['2026-11-16T15:00:00.000Z', 24900, false]);
   const q = quote(app.ctx, plan.id, '2026-10-16T15:00:00.000Z');
-  assert.deepEqual({ ...q, plan_id: undefined }, { plan_id: undefined, plan_name: 'Hybrid Coaching', monthly_cents: 24900, monthly_fee_cents: 0, trial_days: 0, cycle: 'first', charge_now_cents: 12852, fee_cents: 0, prorated: true, days: 16, days_in_month: 31, period_start: '2026-10-16', period_end: '2026-11-01', next_charge_on: '2026-11-01' });
+  assert.deepEqual({ ...q, plan_id: undefined }, { plan_id: undefined, plan_name: 'Hybrid Coaching', monthly_cents: 24900, monthly_fee_cents: 0, trial_days: 0, sessions_per_month: null, cycle: 'first', charge_now_cents: 12852, fee_cents: 0, prorated: true, days: 16, days_in_month: 31, period_start: '2026-10-16', period_end: '2026-11-01', next_charge_on: '2026-11-01' });
   const t = quote(app.ctx, trialPlan.id, '2026-10-16T15:00:00.000Z');
   assert.deepEqual([t.charge_now_cents, t.trial_days, t.next_charge_on], [0, 7, '2026-10-23']);
 });

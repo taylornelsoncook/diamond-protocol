@@ -52,6 +52,7 @@ const invoices = (clientId) => db().all('SELECT * FROM invoices WHERE client_id 
 before(async () => {
   resetRateLimits();
   app = createApp({ testMode: true, jobs: false, publicUrl: 'https://app.example.org' });
+  app.ctx.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('billing_cycle', 'anniversary')");   // these tests cover a month from the start day; test/billing-cycle.test.js covers the 1st
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia Owner', password: PW });
   createUser(app.ctx, { email: 'coach@test.dev', name: 'Carl Coach', password: PW, role: 'coach' });
   createUser(app.ctx, { email: 'desk@test.dev', name: 'Dana Desk', password: PW, role: 'front_desk' });

@@ -26,6 +26,7 @@ const mailTo = (email) => app.ctx.db.all('SELECT subject, body FROM outbox WHERE
 
 before(async () => {
   app = createApp({ testMode: true, jobs: false, publicUrl: 'https://app.example.org' });
+  app.ctx.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('billing_cycle', 'anniversary')");   // these tests cover a month from the start day; test/billing-cycle.test.js covers the 1st
   const refund = app.ctx.payments.refund;
   app.ctx.payments.refund = async (args) => { refunds.push(args); return refund(args); };
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Owner', password: 'correct-horse-battery' });

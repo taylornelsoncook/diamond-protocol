@@ -48,6 +48,7 @@ async function member({ card = true, declining = false } = {}) {
 before(async () => {
   resetRateLimits();
   app = createApp({ testMode: true, jobs: false, publicUrl: 'https://app.example.org' });
+  app.ctx.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('billing_cycle', 'anniversary')");   // these tests cover a month from the start day; test/billing-cycle.test.js covers the 1st
   const refund = app.ctx.payments.refund;
   app.ctx.payments.refund = async (args) => { refunds.push(args); if (refundFails) return { ok: false, error: 'Stripe is down.' }; return refund(args); };
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia Owner', password: 'correct-horse-battery' });

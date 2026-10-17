@@ -48,6 +48,7 @@ const mailTo = (email) => db().all('SELECT subject, body FROM outbox WHERE to_em
 before(async () => {
   resetRateLimits();
   app = createApp({ testMode: true, jobs: false, publicUrl: 'https://app.example.org' });
+  app.ctx.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('billing_cycle', 'anniversary')");   // these tests cover a month from the start day; test/billing-cycle.test.js covers the 1st
   const refund = app.ctx.payments.refund;
   app.ctx.payments.refund = async (args) => { refunds.push(args); if (refundDelay) await new Promise((r) => setTimeout(r, refundDelay)); return refund(args); };
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia Owner', password: 'correct-horse-battery' });

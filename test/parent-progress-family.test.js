@@ -31,6 +31,7 @@ const outbox = () => db().all('SELECT * FROM outbox ORDER BY created_at DESC, ro
 before(async () => {
   resetRateLimits();
   app = createApp({ testMode: true, jobs: false });
+  app.ctx.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('billing_cycle', 'anniversary')");   // these tests cover a month from the start day; test/billing-cycle.test.js covers the 1st
   createUser(app.ctx, { email: 'owner@test.dev', name: 'Olivia Owner', password: 'owner-password-1' });
   createUser(app.ctx, { email: 'coach@test.dev', name: 'Carl Coach', password: 'coach-password-1', role: 'coach' });
   await new Promise((r) => app.server.listen(0, r));

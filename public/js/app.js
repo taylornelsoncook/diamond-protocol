@@ -2073,10 +2073,15 @@ async function viewSell(main) {
     const when = p.trial_days ? `Free for ${p.trial_days} day${p.trial_days === 1 ? '' : 's'}, then ${money(p.price_cents)} a month.` : `${money(p.price_cents)} a month.`;
     const done = (sub) => { toast(startedText(first, p.name, sub), sub.first_charge && sub.first_charge.status !== 'paid' ? 'warn' : undefined); c.subscription = { id: sub.id, status: sub.status, plan_id: p.id, plan_name: p.name, price_cents: p.price_cents, current_period_end: sub.current_period_end, trial_ends_at: sub.trial_ends_at }; fill(memberBox); drawClient(); drawPlans(); };
     const start = btn(p.trial_days ? 'Start free trial' : 'Charge and start', (e) => busy(e.currentTarget, async () => {
-      try { done(await post(`/v1/clients/${c.id}/subscription`, { plan_id: p.id })); } catch (err) { toast(err.message, 'warn'); }
+      try { done(await post(`/v1/clients/${c.id}/subscription`, { plan_id: p.id, skip_trial: !!skip?.value() })); } catch (err) { toast(err.message, 'warn'); }
     }), 'secondary');
     const quoteLine = h('p', { style: 'margin:0' }, 'Working out the first charge…');
-    get(`/v1/plans/${p.id}/quote`).then((q) => { quoteLine.textContent = quoteText(q); if (!p.trial_days) start.textContent = q.charge_now_cents ? `Charge ${money(q.charge_now_cents)} and start` : 'Start (nothing to charge today)'; }).catch((err) => { quoteLine.textContent = err.message; });
+    const requote = (skipTrial) => get(`/v1/plans/${p.id}/quote${skipTrial ? '?skip_trial=true' : ''}`).then((q) => {
+      quoteLine.textContent = quoteText(q);
+      start.textContent = q.trial_days ? 'Start free trial' : q.charge_now_cents ? `Charge ${money(q.charge_now_cents)} and start` : 'Start (nothing to charge today)';
+    }).catch((err) => { quoteLine.textContent = err.message; });
+    const skip = skipTrialTick(p, requote);
+    requote(false);
     const needCard = h('div', { class: 'stack' },
       h('p', { class: 'warn-text', style: 'margin:0' }, `${first} has no card on file. Monthly memberships renew on a saved card.`),
       h('div', { class: 'row wrap' },
@@ -2096,7 +2101,7 @@ async function viewSell(main) {
         state.payments.can_simulate ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${c.id}/card/test`); c.has_card = true; drawClient(); startMembership(p); }), 'ghost') : null),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Or charge a first sale by Tap to Pay with "Save this card" ticked, then start the membership.'));
     fill(memberBox, panel(`Start ${p.name}`, { subtitle: `${c.name} · ${when}` },
-      c.has_card ? h('div', { class: 'stack' }, quoteLine, h('p', { class: 'small muted', style: 'margin:0' }, 'Charged to the card on file.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost'))) : needCard));
+      c.has_card ? h('div', { class: 'stack' }, quoteLine, skip?.el, h('p', { class: 'small muted', style: 'margin:0' }, 'Charged to the card on file.'), h('div', { class: 'row wrap' }, start, btn('Cancel', () => fill(memberBox), 'ghost'))) : needCard));
     memberBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
@@ -2498,14 +2503,24 @@ function startedText(first, planName, sub) {
   if (c.status === 'paid') return `${first} is on ${planName}. ${c.amount_cents ? `Charged ${money(c.amount_cents)}` : 'Nothing charged'} for ${c.prorated ? 'the rest of this month' : 'this month'}. Next charge ${date(sub.current_period_end)}.`;
   return `${first} is on ${planName}, but the ${money(c.amount_cents)} charge didn't go through${c.error ? `: ${c.error}` : '.'} Retry it from Billing or fix the card.`;
 }
+// A plan with a free trial can still be started paid today (owner's ask): the "Charge now" tick re-quotes the prorated amount.
+function skipTrialTick(plan, onChange) {
+  if (!plan.trial_days) return null;
+  const on = h('input', { type: 'checkbox' });
+  on.addEventListener('change', () => onChange(on.checked));
+  const el = h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, on, h('span', null, `Charge now instead of the ${plan.trial_days}-day free trial (prorated for the days left in this month)`));
+  return { el, value: () => on.checked };
+}
 function startMembershipDialog(clientId, clientName, plan, card) {
   const first = clientName.split(' ')[0];
   const line = h('p', { style: 'margin:0' }, 'Working out the first charge…');
-  get(`/v1/plans/${plan.id}/quote`).then((q) => { line.textContent = quoteText(q); }).catch((e) => { line.textContent = e.message; });
-  setupDialog(`Start ${plan.name} for ${first}`, [line,
+  const requote = (skip) => get(`/v1/plans/${plan.id}/quote${skip ? '?skip_trial=true' : ''}`).then((q) => { line.textContent = quoteText(q); }).catch((e) => { line.textContent = e.message; });
+  const skip = skipTrialTick(plan, requote);
+  requote(false);
+  setupDialog(`Start ${plan.name} for ${first}`, [line, skip?.el,
     h('p', { class: 'small muted', style: 'margin:0' }, card?.on_file ? `Charged to the ${(card.brand || 'card').replace(/^./, (x) => x.toUpperCase())} ending ${card.last4 ?? ''} on file.` : 'There is no card on file: add one first.')],
     'Start membership', async () => {
-      const sub = await post(`/v1/clients/${clientId}/subscription`, { plan_id: plan.id });
+      const sub = await post(`/v1/clients/${clientId}/subscription`, { plan_id: plan.id, skip_trial: !!skip?.value() });
       const text = startedText(first, plan.name, sub);
       if (sub.first_charge && sub.first_charge.status !== 'paid') { toast(text, 'warn'); return null; }
       return text;

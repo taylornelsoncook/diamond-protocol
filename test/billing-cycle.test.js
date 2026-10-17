@@ -42,7 +42,7 @@ test('the period runs to the 1st and costs the days left', () => {
   const ann = periodFor(app.ctx, '2026-10-16T15:00:00.000Z', 24900, 'anniversary');
   assert.deepEqual([ann.end, ann.amount_cents, ann.prorated], ['2026-11-16T15:00:00.000Z', 24900, false]);
   const q = quote(app.ctx, plan.id, '2026-10-16T15:00:00.000Z');
-  assert.deepEqual({ ...q, plan_id: undefined }, { plan_id: undefined, plan_name: 'Hybrid Coaching', monthly_cents: 24900, monthly_fee_cents: 0, trial_days: 0, sessions_per_month: null, cycle: 'first', charge_now_cents: 12852, fee_cents: 0, prorated: true, days: 16, days_in_month: 31, period_start: '2026-10-16', period_end: '2026-11-01', next_charge_on: '2026-11-01' });
+  assert.deepEqual({ ...q, plan_id: undefined }, { plan_id: undefined, plan_name: 'Hybrid Coaching', monthly_cents: 24900, monthly_fee_cents: 0, trial_days: 0, plan_trial_days: 0, skip_trial: false, sessions_per_month: null, cycle: 'first', charge_now_cents: 12852, fee_cents: 0, prorated: true, days: 16, days_in_month: 31, period_start: '2026-10-16', period_end: '2026-11-01', next_charge_on: '2026-11-01' });
   const t = quote(app.ctx, trialPlan.id, '2026-10-16T15:00:00.000Z');
   assert.deepEqual([t.charge_now_cents, t.trial_days, t.next_charge_on], [0, 7, '2026-10-23']);
 });
@@ -111,6 +111,21 @@ test('the anniversary setting keeps a month from the start day', async () => {
   assert.equal((await call('PATCH', '/v1/settings', { billing_cycle: 'weekly' })).status, 400);
   assert.equal((await call('PATCH', '/v1/settings', { billing_cycle: 'first' })).status, 200);
   assert.equal((await call('GET', '/v1/settings')).body.billing_cycle, 'first');
+});
+
+test('a plan with a free trial can be started paid today, prorated to the 1st (owner\'s ask)', async () => {
+  updateSettings(app.ctx, { billing_cycle: 'first' });
+  setNow('2026-10-16T15:00:00.000Z');
+  const q = (await call('GET', `/v1/plans/${trialPlan.id}/quote?skip_trial=true`)).body;
+  assert.deepEqual([q.trial_days, q.plan_trial_days, q.skip_trial, q.charge_now_cents, q.next_charge_on], [0, 7, true, 12852, '2026-11-01']);
+  assert.equal((await call('GET', `/v1/plans/${trialPlan.id}/quote`)).body.trial_days, 7, 'without the flag the trial stands');
+  const fay = await client('Fay Ortiz');
+  const r = await call('POST', `/v1/clients/${fay.id}/subscription`, { plan_id: trialPlan.id, skip_trial: true });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual([r.body.status, r.body.trial_ends_at, r.body.first_charge.amount_cents, r.body.first_charge.prorated, r.body.current_period_end], ['active', null, 12852, true, '2026-11-01T05:00:00.000Z']);
+  const gus = await client('Gus Reed');
+  const t = await call('POST', `/v1/clients/${gus.id}/subscription`, { plan_id: trialPlan.id });
+  assert.deepEqual([t.body.status, t.body.first_charge], ['trialing', null], 'left alone, the trial still applies');
 });
 
 test('the Stripe description names the plan, the athlete and the month', async () => {

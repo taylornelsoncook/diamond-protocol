@@ -144,3 +144,58 @@ test('an unknown ID asks to check it; misses are limited per tablet; other place
   assert.match((await checkIn(s, dee.athlete_id)).body.error.message, /isn't active/);
   assert.equal((await kiosk('POST', '/kiosk-api/check-in', { session_id: s, athlete_id: ava.athlete_id }, 'wrong-key')).status, 401);
 });
+
+test('open gym: the tablet signs an athlete in by Athlete ID once a day, tracked only, and staff see who came', async () => {
+  resetRateLimits();
+  const og = (athleteId, k) => kiosk('POST', '/kiosk-api/open-gym', { athlete_id: athleteId }, k);
+  const credits = app.ctx.db.get(`SELECT COALESCE(SUM(delta), 0) AS n FROM session_credits WHERE client_id = ?`, ben.id).n;
+  const r = await og(ben.athlete_id.toLowerCase());
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([r.body.name, r.body.already, r.body.open_gym, r.body.visits_this_month], ['Ben', false, true, 1]);
+  assert.equal((await og(ben.athlete_id)).body.already, true, 'once a day');
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM open_gym_visits WHERE client_id = ?', ben.id).n, 1);
+  assert.equal(app.ctx.db.get(`SELECT COALESCE(SUM(delta), 0) AS n FROM session_credits WHERE client_id = ?`, ben.id).n, credits, 'no pack session used');
+  assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM check_ins WHERE client_id = ?', ben.id).n, 0, 'not a membership visit');
+  // Another place on the same day is its own visit.
+  const parkKey = (await owner('POST', '/v1/kiosks', { location_id: park.id })).body.link.split('#')[1];
+  assert.equal((await og(ben.athlete_id, parkKey)).body.already, false);
+  assert.equal((await og(cal.athlete_id)).status, 200);
+  // The same rules as a session sign-in.
+  assert.equal((await og('NOPNOP2026')).status, 404);
+  assert.match((await og(dee.athlete_id)).body.error.message, /isn't active/, 'archived in the test above');
+  assert.equal((await kiosk('POST', '/kiosk-api/open-gym', { athlete_id: ben.athlete_id }, 'wrong-key')).status, 401);
+  // Staff: the report, the CSV, the timeline, last seen; a visit taken back.
+  const rep = (await owner('GET', '/v1/open-gym')).body;
+  assert.deepEqual([rep.total, rep.athletes, rep.today], [3, 2, 3]);
+  assert.deepEqual(rep.by_athlete.map((a) => [a.name, a.visits]), [['Ben Park', 2], ['Cal Reyes', 1]]);
+  assert.equal(rep.by_day.length, 30);
+  assert.equal((await owner('GET', `/v1/open-gym?location_id=${park.id}`)).body.total, 1);
+  assert.equal((await owner('GET', '/v1/open-gym?from=2026-10-20&to=2026-10-01')).status, 400);
+  const csv = await fetch(`${base}/v1/open-gym/export.csv`, { headers: { cookie: (await fetch(base + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'owner@test.dev', password: 'correct-horse-battery' }) })).headers.get('set-cookie').split(';')[0] } });
+  assert.match(await csv.text(), /Ben Park/);
+  const tl = (await owner('GET', `/v1/clients/${cal.id}/athlete-timeline`)).body;
+  assert.ok(tl.data.some((x) => x.text === 'Open gym'));
+  assert.ok((await owner('GET', `/v1/clients/${cal.id}`)).body.last_seen_at, 'open gym counts as last seen');
+  const desk = await (async () => { createUser(app.ctx, { email: 'desk@test.dev', name: 'Dee Desk', password: 'correct-horse-battery', role: 'front_desk' }); return signIn('desk@test.dev'); })();
+  assert.equal((await desk('GET', '/v1/open-gym')).status, 200, 'front desk can look');
+  assert.equal((await desk('DELETE', `/v1/open-gym/${rep.visits[0].id}`)).status, 403);
+  assert.equal((await owner('DELETE', `/v1/open-gym/${rep.visits[0].id}`)).status, 200);
+  assert.equal((await owner('GET', '/v1/open-gym')).body.total, 2);
+});
+
+test('the version 90 upgrade adds the open gym table', async () => {
+  const { mkdtempSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { DatabaseSync } = await import('node:sqlite');
+  const { openDb } = await import('../src/db.js');
+  const file = join(mkdtempSync(join(tmpdir(), 'dp-v90-')), 'dp.db');
+  const raw = new DatabaseSync(file);
+  raw.exec(readFileSync('test/fixtures/schema-v90.sql', 'utf8'));
+  raw.exec('PRAGMA user_version = 90');
+  raw.close();
+  const db = openDb(file);
+  assert.equal(db.get('PRAGMA user_version').user_version, 91);
+  assert.ok(db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'open_gym_visits'`));
+  db.close();
+});

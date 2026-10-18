@@ -148,7 +148,7 @@ test('a version 82 database gains slug and image_url, and every blog post its ad
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 90, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 91, `round ${round}`);
       const cols = d.all('PRAGMA table_info(lessons)').map((c) => c.name);
       assert.ok(cols.includes('slug') && cols.includes('image_url'));
       assert.deepEqual(d.all('SELECT id, slug FROM lessons ORDER BY id').map((r) => [r.id, r.slug]), [['les_1', 'why-sleep-matters'], ['les_2', 'why-sleep-matters-2'], ['les_3', null]]);

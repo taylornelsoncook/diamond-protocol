@@ -3,7 +3,9 @@ import { h, fill } from './ui.js';
 // The front-desk sign-in page (owner's ask: "list every class or session within a 2 hour window; when they click the
 // private, class or session they log in with their ID and it checks them in"). Opened once on the tablet with the link
 // from Schedule → Hours & settings (/kiosk#<key>); the key is kept on this tablet. An athlete taps their session, types
-// their Athlete ID and is checked in (services/checkin.js kioskCheckInById).
+// their Athlete ID and is checked in (services/checkin.js kioskCheckInById). Open gym always sits at the top (owner's ask:
+// "a separate button at the top that says open gym and lives there"): the same ID, kept as an open gym visit
+// (services/opengym.js), then back to the list.
 const root = document.getElementById('root');
 const store = { get: () => { try { return localStorage.getItem('dp-kiosk-key'); } catch { return null; } }, set: (k) => { try { localStorage.setItem('dp-kiosk-key', k); } catch { /* private mode */ } } };
 if (location.hash.length > 1) { store.set(location.hash.slice(1)); history.replaceState(null, '', '/kiosk'); }
@@ -11,6 +13,7 @@ const key = store.get() ?? '';
 const time = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 const big = 'min-height:84px;font-size:22px;justify-content:flex-start;padding:16px 20px;text-align:left';
 let board = null, picked = null, message = null, timer = null;
+const OPEN_GYM = 'open-gym';   // picked when the athlete tapped Open gym
 
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { 'x-kiosk-key': key, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -21,7 +24,7 @@ async function api(method, path, body) {
 async function load() {
   try { board = await api('GET', '/kiosk-api/board'); }
   catch (e) { return fill(root, h('main', { class: 'p-wrap', style: 'min-height:100vh;justify-content:center' }, h('div', { class: 'dp-panel stack' }, h('h1', { class: 'p-title' }, 'Check-in isn\'t set up'), h('p', { class: 'muted', style: 'margin:0' }, key ? e.message : 'Open the check-in link from Schedule → Hours & settings on this tablet.')))); }
-  if (picked && !board.sessions.some((s) => s.id === picked)) picked = null;
+  if (picked && picked !== OPEN_GYM && !board.sessions.some((s) => s.id === picked)) picked = null;
   render();
 }
 // A message for a few seconds, then back to the list for the next athlete.
@@ -37,6 +40,10 @@ function sessionButton(s) {
     h('span', { class: 'small muted', style: 'font-size:16px' }, [s.kind_label, s.coach_name ? `Coach ${s.coach_name.split(' ')[0]}` : null, when(s), s.expected ? `${s.checked_in} of ${s.expected} checked in` : null].filter(Boolean).join(' · ')));
 }
 
+// Open gym: always there, above the sessions.
+const openGymButton = () => h('button', { type: 'button', class: 'dp-btn dp-btn--primary dp-btn--block', style: `${big};flex-direction:column;align-items:flex-start;gap:4px`, onClick: () => { picked = OPEN_GYM; render(); } },
+  h('span', { style: 'font:700 26px/1.2 var(--font-display)' }, 'Open gym'), h('span', { style: 'font-size:16px;opacity:.85' }, 'Here to train on your own? Sign in here.'));
+
 function idForm(s) {
   const id = h('input', { class: 'dp-input', type: 'text', inputmode: 'text', autocapitalize: 'characters', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', maxlength: '20',
     'aria-label': 'Your Athlete ID', placeholder: 'AVALOP2026', style: 'font:700 34px/1.2 var(--font-mono, monospace);text-align:center;letter-spacing:.08em;min-height:80px;text-transform:uppercase' });
@@ -47,6 +54,10 @@ function idForm(s) {
     if (!value) return id.focus();
     go.disabled = true;
     try {
+      if (s.openGym) {
+        const r = await api('POST', '/kiosk-api/open-gym', { athlete_id: value });
+        return flash(r.already ? `You're already signed in for open gym today, ${r.name}.` : `Enjoy open gym, ${r.name}!`, 'good');
+      }
       const r = await api('POST', '/kiosk-api/check-in', { session_id: s.id, athlete_id: value });
       const extra = [r.pay_at_desk ? 'Please see the front desk to pay.' : null, r.waiver_needed ? 'Your family still needs to sign the waiver at the front desk.' : null].filter(Boolean).join(' ');
       flash(r.already ? `You're already checked in, ${r.name}. ${extra}`.trim() : `You're checked in, ${r.name}!${extra ? ` ${extra}` : ''}`, extra ? 'warn' : 'good');
@@ -63,14 +74,16 @@ function idForm(s) {
 }
 
 function render() {
-  const s = board.sessions.find((x) => x.id === picked) ?? null;
+  const s = picked === OPEN_GYM ? { openGym: true, name: 'Open gym' } : board.sessions.find((x) => x.id === picked) ?? null;
+  const sub = s?.openGym ? board.location_name : s ? `${time(s.starts_at)}–${time(s.ends_at)}${s.coach_name ? ` · Coach ${s.coach_name.split(' ')[0]}` : ''}` : `${board.location_name} · tap open gym or your session`;
   const head = h('div', { class: 'stack-tight', style: 'text-align:center' }, h('img', { src: '/brand/logo.png', alt: board.business_name, style: 'width:120px;align-self:center' }),
-    h('h1', { class: 'p-title' }, s ? s.name : 'Sign in'), h('p', { class: 'muted', style: 'margin:0;font-size:18px' }, s ? `${time(s.starts_at)}–${time(s.ends_at)}${s.coach_name ? ` · Coach ${s.coach_name.split(' ')[0]}` : ''}` : `${board.location_name} · tap your session`));
+    h('h1', { class: 'p-title' }, s ? s.name : 'Sign in'), h('p', { class: 'muted', style: 'margin:0;font-size:18px' }, sub));
   let body;
   if (message) body = h('div', { class: 'dp-panel', role: 'status', style: `text-align:center;font:600 28px/1.3 var(--font-display);color:${message.tone === 'warn' ? 'var(--amber)' : 'var(--green-bright)'}` }, message.text);
-  else if (!board.sessions.length) body = h('div', { class: 'dp-panel', style: 'text-align:center' }, h('p', { class: 'muted', style: 'margin:0;font-size:20px' }, 'Nothing on in the next 2 hours. Sessions show here 2 hours before they start.'));
-  else if (!s) body = h('div', { class: 'stack' }, board.sessions.map(sessionButton));
-  else body = idForm(s);
+  else if (s) body = idForm(s);
+  else body = h('div', { class: 'stack' }, openGymButton(),
+    board.sessions.length ? board.sessions.map(sessionButton)
+      : h('div', { class: 'dp-panel', style: 'text-align:center' }, h('p', { class: 'muted', style: 'margin:0;font-size:20px' }, 'No sessions in the next 2 hours. They show here 2 hours before they start.')));
   fill(root, h('main', { class: 'p-wrap', style: 'max-width:900px;min-height:100vh;justify-content:center' }, head, body));
 }
 

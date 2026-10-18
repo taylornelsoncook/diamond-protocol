@@ -117,12 +117,13 @@ export function removeMember(ctx, id, clientId) {
 const isMember = (ctx, id, clientId) => !!ctx.db.get('SELECT 1 FROM group_members WHERE group_id = ? AND client_id = ?', id, clientId);
 
 // ---------- What each athlete sees about themselves ----------
-// Times attended: classes and sessions marked attended, team sessions, and door or tablet check-ins (the same three
-// sources as the timeline and the monthly report).
+// Times attended: classes and sessions marked attended, team sessions, door or tablet check-ins, and open gym (the same
+// sources as the timeline).
 export function attendanceCount(ctx, clientId) {
   const r = ctx.db.get(`SELECT (SELECT COUNT(*) FROM bookings WHERE client_id = ? AND status = 'attended')
     + (SELECT COUNT(*) FROM team_attendance WHERE client_id = ?)
-    + (SELECT COUNT(*) FROM check_ins WHERE client_id = ?) AS n`, clientId, clientId, clientId);
+    + (SELECT COUNT(*) FROM check_ins WHERE client_id = ?)
+    + (SELECT COUNT(*) FROM open_gym_visits WHERE client_id = ?) AS n`, clientId, clientId, clientId, clientId);
   return r?.n ?? 0;
 }
 // The sprint tests: every active test in the library's speed category, with its first metric (the time, or top speed).

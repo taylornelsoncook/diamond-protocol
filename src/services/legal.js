@@ -18,6 +18,7 @@ import { forExport as weeklyOf, forgetClient as forgetWeekly } from './weekly.js
 import { forExport as feedOf } from './feed.js';
 import { forExport as barSpeedOf, forgetClient as forgetBarSpeed } from './vbt.js';
 import { forExport as profileTagsOf } from './profiletags.js';
+import { forExport as openGymOf } from './opengym.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
@@ -127,6 +128,7 @@ export function exportFamily(ctx, familyId) {
       training_profile: trainingProfileOf(ctx, k.id),   // the start-up answers and the gear at home (version 67)
       plan_adjustments: adjustmentsOf(ctx, k.id),   // the adaptive plan's changes to their calendar (version 69)
       ...weeklyOf(ctx, k.id),   // weekly_notes and team_board_opt_in (version 71)
+      open_gym: openGymOf(ctx, k.id),   // open gym sign-ins from the front-desk tablet (version 91)
       profile_tags: profileTagsOf(ctx, k.id),   // tags like Legacy (version 90): staff-only labels, handed over on a data request
       wearables_linked: per(`SELECT provider, status, connected_by_kind, connected_at, last_sync_at FROM wearable_connections WHERE client_id = ? ORDER BY provider`, k.id),
       outside_data_imports: per(`SELECT source, file_kind, filename, days, workouts, from_day, to_day, created_by, created_by_kind, created_at, undone_at FROM data_imports WHERE client_id = ? ORDER BY created_at`, k.id),

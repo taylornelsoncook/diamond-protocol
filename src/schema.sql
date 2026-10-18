@@ -2230,3 +2230,17 @@ CREATE TABLE IF NOT EXISTS client_tags (
   created_at TEXT NOT NULL,
   PRIMARY KEY (client_id, tag_id)
 );
+
+-- Open gym (version 91; services/opengym.js): an athlete signing in for open gym on the front-desk tablet. Only kept to
+-- track who uses open gym: it never uses a membership visit or a pack session. One per athlete, location and business day.
+CREATE TABLE IF NOT EXISTS open_gym_visits (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  location_id TEXT NOT NULL REFERENCES locations(id),
+  day TEXT NOT NULL,                     -- the business day (YYYY-MM-DD)
+  source TEXT NOT NULL DEFAULT 'kiosk',  -- kiosk (the tablet) or staff
+  by_name TEXT,                          -- the tablet's or staff member's name
+  created_at TEXT NOT NULL,
+  UNIQUE (client_id, location_id, day)
+);
+CREATE INDEX IF NOT EXISTS open_gym_visits_day ON open_gym_visits(day, location_id);

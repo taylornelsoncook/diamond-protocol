@@ -3,6 +3,7 @@ import * as visits from './services/visits.js';
 import * as refunds from './services/refunds.js';
 import * as buyonline from './services/buyonline.js';
 import * as profiletags from './services/profiletags.js';
+import * as opengym from './services/opengym.js';
 import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
 import * as wearables from './services/wearables.js';
@@ -456,6 +457,10 @@ export const routes = [
   ['GET', '/kiosk-api/screen', 'public', 'Schedule', 'Weight-room screen (x-kiosk-key header, the same key as a check-in tablet): sessions running now at its location, each with its workout and who can log it.', (ctx, r) => screen.screenBoard(ctx, r.kioskKey)],
   ['POST', '/kiosk-api/screen/athlete', 'public', 'Schedule', 'Weight-room screen: one athlete\'s own weights for the session workout. session_id, ref (from the board).', (ctx, r) => screen.screenAthlete(ctx, r.kioskKey, r.body)],
   ['POST', '/kiosk-api/screen/log', 'public', 'Schedule', 'Weight-room screen: log the session workout for one athlete and check them in. session_id, ref, optional exercise_ids.', (ctx, r) => screen.screenLog(ctx, r.kioskKey, r.body), 201],
+  ['POST', '/kiosk-api/open-gym', 'public', 'Schedule', 'Front-desk tablet (x-kiosk-key header): sign in for open gym with athlete_id. Tracked only (no membership visit or pack session used, nothing charged), once per athlete, location and day (already: true after that). Answers name (first), already, visits_this_month; 404 for an unknown ID (counts toward the tablet\'s misses), 409 see_front_desk for an inactive profile, 402 for a family locked out over a payment.', (ctx, r) => opengym.signIn(ctx, checkin.kioskFor(ctx, r.kioskKey), r.body)],
+  ['GET', '/v1/open-gym', 'any', 'Schedule', 'Open gym visits signed in on the front-desk tablet: ?from= and ?to= (business days, default the last 30), ?location_id=. Answers total, athletes, today, by_day, by_athlete (visits, last_at) and the visits (newest first, up to 500).', (ctx, r) => opengym.report(ctx, r.query)],
+  ['GET', '/v1/open-gym/export.csv', 'any', 'Schedule', 'The open gym visits for the same filter as a CSV file.', (ctx, r) => ({ __file: opengym.exportCsv(ctx, r.query) })],
+  ['DELETE', '/v1/open-gym/:id', 'any', 'Schedule', 'Take back an open gym visit signed in by mistake (owners and coaches).', (ctx, r) => opengym.removeVisit(ctx, r.params.id)],
   ['POST', '/kiosk-api/check-in', 'public', 'Schedule', 'Check-in tablet (x-kiosk-key header): check in booking_id, or (the sign-in page) session_id with the athlete\'s athlete_id: booked athletes are checked in, a team\'s roster athletes marked present, and an athlete who isn\'t booked for a class, clinic or camp day with a spot left is booked (their membership or a pack session, else to pay at the front desk; the card on file is never charged here) and checked in. Answers name (first), session, already, pay_at_desk, walk_in, waiver_needed; 409 see_front_desk with the reason; 404 for an unknown ID (30 misses in 15 minutes per tablet).', (ctx, r) => (r.body?.athlete_id != null ? checkin.kioskCheckInById(ctx, r.kioskKey, r.body) : checkin.kioskCheckIn(ctx, r.kioskKey, r.body))],
   ['GET', '/here-api/:code', 'public', 'Schedule', 'The door poster\'s page: business and location name.', (ctx, r) => checkin.publicPlace(ctx, r.params.code)],
   ['PATCH', '/v1/locations/:id', 'any', 'Point of sale', 'Update a location. Set active=false to archive it.', (ctx, r) => commerce.updateLocation(ctx, r.params.id, r.body)],

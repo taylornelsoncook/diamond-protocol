@@ -101,7 +101,7 @@ function render() {
           btn('Sign out', async (e) => busy(e.currentTarget, async () => { await post('/auth/logout'); state.user = null; location.hash = ''; render(); }), 'ghost')))),
     main);
   fill(root, shell);
-  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id === 'groups' ? (m) => viewGroup(m, location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[2], { api, header, role: state.user.role }) : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'maxes' ? (m) => viewMaxReport(m, { api, header }) : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'board' ? viewProgramBoard : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
+  const views = { account: viewAccount, settings: viewSettings, today: viewToday, schedule: id === 'setup' ? viewScheduleSetup : id === 'open-gym' ? viewOpenGym : id ? viewSession : viewSchedule, sell: id === 'setup' ? viewSetup : id === 'inventory' ? viewInventory : viewSell, clients: id ? viewClient : viewClients, leads: id === 'campaigns' ? viewCampaigns : id === 'tasks' ? viewTasks : id === 'reports' ? viewLeadReports : id === 'import' ? viewLeadImport : id === 'settings' ? viewLeadSettings : id ? viewLead : viewLeads, teams: id === 'new' ? viewNewTeam : id === 'groups' ? (m) => viewGroup(m, location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[2], { api, header, role: state.user.role }) : id ? viewTeam : viewTeams, testing: id === 'new' ? viewNewTesting : id === 'maxes' ? (m) => viewMaxReport(m, { api, header }) : id === 'upload' ? viewUpload : id === 'queue' ? viewQueue : id === 'library' ? viewLibrary : id === 'connections' ? viewConnections : id ? viewTestingDay : viewTesting, billing: viewBilling, sprint: (m, sid) => viewSprintCoach(m, sid, { api, header, role: state.user.role }), programs: id === 'import' ? viewProgramImport : id === 'dictate' ? viewProgramDictate : id === 'board' ? viewProgramBoard : id === 'monthly' ? (m) => viewMonthlyReports(m, { api, header }) : id ? viewProgram : viewPrograms, education: viewEducation, integrations: viewIntegrations };
   main.append(h('p', { class: 'muted' }, 'Loading…'));
   views[current](main, id).catch((e) => fill(main, header('Something went wrong', e.message)));
 }
@@ -3408,7 +3408,7 @@ async function viewSchedule(main) {
     : [h('p', { class: 'muted' }, 'No classes yet.')];
 
   fill(main,
-    header('Schedule', 'The week or one day, 4 am to 10 pm in 15-minute rows: classes, camps, clinics, privates, evaluations and bookable hours.', h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
+    header('Schedule', 'The week or one day, 4 am to 10 pm in 15-minute rows: classes, camps, clinics, privates, evaluations and bookable hours.', h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/open-gym' }, 'Open gym'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule/setup' }, 'Hours & settings'),
       leads() ? btn('My calendar', () => myCalendarDialog(), 'secondary') : null,
       leads() && locs.data.length ? oneBtn : null, leads() && locs.data.length ? addBtn : null)),
     locs.data.length ? null : h('div', { class: 'empty' }, 'Add a location in Point of sale setup before scheduling.'),
@@ -3715,6 +3715,52 @@ function timeOffPanel(rows, coaches) {
     }); } },
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(auto-fit,minmax(150px,1fr))' }, who ? field('Who', who) : null, field('First day', from), field('Last day', to), field('Note', note)),
       h('div', null, btn(owner ? 'Add time off' : 'Add my time off', null, 'secondary', { type: 'submit' }))));
+}
+
+// Open gym (owner's ask: "track open gym members"): who signed in for open gym on the front-desk tablet, how often and
+// when (services/opengym.js). Every staff role looks; owners and coaches can take back a visit signed in by mistake.
+const openGymUi = { range: '30', location: '' };
+const OPEN_GYM_RANGES = [['today', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days'], ['month', 'This month'], ['90', 'Last 90 days']];
+async function viewOpenGym(main) {
+  const [locRes, settings] = await Promise.all([get('/v1/locations'), get('/v1/settings')]);
+  tzName = settings.timezone;   // days and times in the business time zone
+  const locs = locRes.data.filter((l) => l.active);
+  const fromOf = (r) => (r === 'today' ? bizDate() : r === 'month' ? `${bizDate().slice(0, 8)}01` : bizDate(1 - Number(r)));
+  const params = () => new URLSearchParams(Object.entries({ from: fromOf(openGymUi.range), to: bizDate(), location_id: openGymUi.location }).filter(([, x]) => x));
+  const out = h('div', { class: 'stack' }, h('p', { class: 'muted' }, 'Loading…'));
+  const range = select(OPEN_GYM_RANGES, { value: openGymUi.range, 'aria-label': 'Dates', style: 'width:auto' });
+  const place = locs.length > 1 ? select([['', 'Every location'], ...locs.map((l) => [l.id, l.name])], { value: openGymUi.location, 'aria-label': 'Location', style: 'width:auto' }) : null;
+  const canRemove = state.user?.role !== 'front_desk';
+  const day = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const clock = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tzName });
+  async function draw() {
+    let r;
+    try { r = await get(`/v1/open-gym?${params()}`); } catch (e) { return fill(out, h('p', { class: 'dp-error' }, e.message)); }
+    const most = Math.max(1, ...r.by_day.map((d) => d.visits));
+    fill(out,
+      h('div', { class: 'row wrap', style: 'gap:12px' }, [['Visits', r.total], ['Athletes', r.athletes], ['Today', r.today]].map(([label, n]) => h('div', { class: 'dp-panel stack-tight', style: 'flex:1 1 140px;margin:0' }, h('span', { class: 'dp-label' }, label), h('span', { style: 'font:700 32px/1 var(--font-display)' }, String(n))))),
+      panel('Each day', { subtitle: `${day(r.from)} to ${day(r.to)}` },
+        r.total ? h('div', { class: 'stack-tight' }, r.by_day.slice().reverse().filter((d) => d.visits || r.by_day.length <= 7).map((d) => h('div', { class: 'row', style: 'gap:10px;align-items:center' },
+          h('span', { class: 'small', style: 'width:110px;flex:none' }, day(d.day)),
+          h('span', { 'aria-hidden': 'true', style: `height:12px;border-radius:6px;background:var(--green-bright, #7DBA70);width:${Math.round((d.visits / most) * 100)}%;max-width:calc(100% - 160px);min-width:${d.visits ? 4 : 0}px` }),
+          h('span', { class: 'small strong' }, String(d.visits)))))
+          : h('p', { class: 'muted', style: 'margin:0' }, 'Nobody signed in for open gym in these dates.')),
+      r.by_athlete.length ? panel('Athletes', { subtitle: 'Most visits first.' }, h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+        h('thead', null, h('tr', null, ['Athlete', 'Athlete ID', 'Visits', 'Last time'].map((x) => h('th', null, x)))),
+        h('tbody', null, r.by_athlete.map((a) => h('tr', null, h('td', null, h('a', { class: 'strong', href: `#/clients/${a.client_id}` }, a.name), a.archived ? h('span', { class: 'small muted' }, ' (archived)') : null),
+          h('td', { class: 'small', style: 'font-family:var(--font-mono)' }, a.athlete_id ?? ''), h('td', { style: 'font:600 20px/1 var(--font-display)' }, String(a.visits)), h('td', { class: 'small muted' }, `${date(a.last_at)} ${clock(a.last_at)}`))))))) : null,
+      r.visits.length ? panel('Sign-ins', { subtitle: 'Newest first.' }, h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+        h('thead', null, h('tr', null, ['When', 'Athlete', 'Where', ''].map((x) => h('th', null, x)))),
+        h('tbody', null, r.visits.map((x) => h('tr', null, h('td', { class: 'small', style: 'white-space:nowrap' }, `${day(x.day)} ${clock(x.at)}`), h('td', null, h('a', { href: `#/clients/${x.client_id}` }, x.name)),
+          h('td', { class: 'small muted' }, `${x.location_name}${x.by ? ` · ${x.by}` : ''}`),
+          h('td', { class: 'bl-acts' }, canRemove ? btn('Remove', (e) => busy(e.currentTarget, async () => { if (!confirm(`Take back ${x.name}'s open gym sign-in on ${day(x.day)}?`)) return; await del(`/v1/open-gym/${x.id}`); toast('Sign-in removed.'); draw(); }), 'ghost', { 'aria-label': `Remove ${x.name}'s sign-in` }) : null))))))) : null);
+  }
+  range.addEventListener('change', () => { openGymUi.range = range.value; draw(); });
+  place?.addEventListener('change', () => { openGymUi.location = place.value; draw(); });
+  fill(main, header('Open gym', 'Athletes sign in for open gym on the front-desk tablet with their Athlete ID. It only keeps count: no membership visit or pack session is used.',
+    h('div', { class: 'row wrap' }, btn('Download CSV', (e) => busy(e.currentTarget, () => download(`/v1/open-gym/export.csv?${params()}`)), 'secondary'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/schedule' }, 'Schedule'))),
+    h('div', { class: 'row wrap', style: 'gap:8px;margin-bottom:12px' }, range, place), out);
+  draw();
 }
 
 async function viewScheduleSetup(main) {

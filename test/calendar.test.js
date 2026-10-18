@@ -106,7 +106,7 @@ test('a version 76 database gains published_from, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 90, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 91, `round ${round}`);
       assert.deepEqual(d.get('SELECT start_date, published_from FROM assignments WHERE id = ?', 'a1'), { start_date: '2026-01-05', published_from: null });
       d.close();
     }

@@ -2253,7 +2253,7 @@ async function viewSell(main) {
       h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, label), h('span', { class: 'small muted' }, hint)))),
       method.value === 'reader' && here.length > 1 ? h('div', { style: 'padding-left:28px' }, readerSel) : null,
       method.value === 'cash' ? h('div', { class: 'row wrap', style: 'gap:8px;padding-left:28px' }, h('span', { class: 'small muted' }, 'Cash received'), cashIn, changeBox) : null,
-      ['tap_to_pay', 'reader'].includes(method.value) && c ? h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, saveCard, h('span', null, `Save this card for ${firstName(c)}'s future payments (with their OK)`)) : null,
+      ['tap_to_pay', 'reader'].includes(method.value) && c ? h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, saveCard, h('span', null, `Save this card with Stripe for ${firstName(c)}'s future payments: memberships on the 1st, bookings and purchases they agree to (with their OK). ${settings.business_name || 'We'} never store${settings.business_name ? 's' : ''} the card number.`)) : null,
       h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, receiptBox, h('span', { class: 'grow' }, receiptOn && addr && !editingReceipt ? `Email a receipt to ${addr}` : 'Email a receipt'),
         receiptOn && addr && !editingReceipt ? btn('Change', (e) => { e.preventDefault(); editingReceipt = true; receiptTo.value = addr; drawSale(); setTimeout(() => receiptTo.focus(), 0); }, 'ghost') : null),
       receiptOn && (!addr || editingReceipt) ? h('div', { style: 'padding-left:28px' }, receiptTo) : null);
@@ -2509,6 +2509,16 @@ async function viewInventory(main) {
 }
 
 // Setup forms open in the shared dialog. onSave returns a toast message; errors stay in the dialog to fix.
+// Settings: fill a legal text box from the drafted wording (GET /v1/legal/drafts, owner). The owner reads it and saves.
+async function useDraft(e, kind, box) {
+  if (box.value.trim() && !box.value.trim().startsWith('[') && !confirm('Replace the wording in this box with the draft? Nothing is saved until you press Save.')) return;
+  await busy(e.currentTarget, async () => {
+    const d = await get('/v1/legal/drafts');
+    box.value = d[kind];
+    box.dispatchEvent(new Event('input'));
+    toast('Draft filled in. Read it, change what the lawyer tells you to, then Save.');
+  });
+}
 function setupDialog(title, fields, saveLabel, onSave, note) {
   const d = document.getElementById('dialog');
   const err = h('div', { class: 'dp-error', role: 'alert' });
@@ -3675,7 +3685,8 @@ async function viewScheduleSetup(main) {
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Business name', st.name), field('Time zone', st.tz, 'Like America/Chicago'), field('Late-cancel window (hours)', st.late, 'Cancels inside this still use the session.')),
       h('div', { class: 'form-grid' }, field('Business address (on invoices)', st.addr), field('How schools can pay (on invoices)', st.payInst, 'For example who to make checks payable to.')),
       field('Parents see test results', shareSel),
-      field('Waiver (have a lawyer write this)', waiver, `Version ${settings.waiver_version}`),
+      field('Waiver (have a lawyer review it)', waiver, `Version ${settings.waiver_version}. One signature covers every athlete on the account and also records the terms and privacy policy.`),
+      isOwner() ? h('div', { class: 'row wrap', style: 'gap:8px' }, btn('Use the drafted wording', (e) => useDraft(e, 'waiver', waiver), 'ghost'), h('span', { class: 'small muted' }, 'Fills the box with the draft from docs/legal (a lawyer should review it), with your business name and contact email filled in. Nothing changes until you Save.')) : null,
       h('div', null, btn('Save settings', null, 'secondary', { type: 'submit' }))));
   // Owners: public sign-up, terms and privacy, automatic emails.
   const joinUrl = `${location.origin}/join`;
@@ -3694,9 +3705,10 @@ async function viewScheduleSetup(main) {
   const privacy = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); privacy.value = settings.privacy_text;
   const legalPanel = panel('Terms of service and privacy policy', { subtitle: 'Paste your lawyer\'s wording. Parents agree when they sign up; changing either asks every parent to accept again before their next booking or purchase. Blank lines start new paragraphs.' },
     field(`Terms of service (version ${settings.terms_version}${settings.terms_text.trim().startsWith('[') ? ', not published yet' : ''})`, terms),
-    h('a', { class: 'small', href: '/terms', target: '_blank' }, 'See the public page'),
+    h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('a', { class: 'small', href: '/terms', target: '_blank' }, 'See the public page'), btn('Use the drafted wording', (e) => useDraft(e, 'terms', terms), 'ghost')),
     field(`Privacy policy (version ${settings.privacy_version}${settings.privacy_text.trim().startsWith('[') ? ', not published yet' : ''})`, privacy),
-    h('a', { class: 'small', href: '/privacy', target: '_blank' }, 'See the public page'),
+    h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('a', { class: 'small', href: '/privacy', target: '_blank' }, 'See the public page'), btn('Use the drafted wording', (e) => useDraft(e, 'privacy', privacy), 'ghost')),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'The drafts (docs/legal in the code, with a README for the lawyer) cover the release of liability, medical consent, concussions, the photo policy, the 14-day cancellation policy and training credit, sales tax, cards held by Stripe, 5-year transaction records, children\'s privacy, no selling of data, deletion on request and Colorado law. The card-saving consent sentences are built into the counter, the portal and the pay page.'),
     h('div', null, btn('Save', (e) => {
       const changed = terms.value !== settings.terms_text || privacy.value !== settings.privacy_text;
       if (changed && !confirm('Every parent will be asked to accept the new version before their next booking or purchase. Continue?')) return;

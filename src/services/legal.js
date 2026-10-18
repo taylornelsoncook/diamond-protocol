@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { newId, v, notFound, conflict, badRequest, HttpError } from '../util.js';
 import { gamesOf } from './gameweek.js';
 import { getSetting, getFamily } from './families.js';
@@ -22,6 +23,22 @@ export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().
 export function legalDocs(ctx) {
   const doc = (kind) => ({ text: getSetting(ctx, `${kind}_text`), version: Number(getSetting(ctx, `${kind}_version`)), updated: getSetting(ctx, `${kind}_updated`) || null, published: published(ctx, kind) });
   return { business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address'), terms: doc('terms'), privacy: doc('privacy') };
+}
+// The drafted wording (docs/legal/*.txt, written for the owner's lawyer to review): the owner presses "Use the drafted
+// wording" on Settings and the text lands in the box with the business's details filled in, to read, change and save.
+// Nothing is published by this: the owner still saves. {{contact_email}} is the sending address's email part.
+export const DRAFT_KINDS = ['waiver', 'terms', 'privacy', 'card-consent'];
+export function drafts(ctx) {
+  const from = String(ctx.mail?.from ?? '');
+  const email = (from.match(/<([^>]+)>/)?.[1] ?? (from.includes('@') ? from : '')).trim() || '[your contact email]';
+  const fill = { business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address') || '[your business address]', contact_email: email,
+    late_cancel_hours: getSetting(ctx, 'late_cancel_hours'), public_url: ctx.publicUrl || '' };
+  const out = {};
+  for (const kind of DRAFT_KINDS) {
+    const text = readFileSync(new URL(`../../docs/legal/${kind}.txt`, import.meta.url), 'utf8');
+    out[kind.replace('-', '_')] = text.replace(/\{\{(\w+)\}\}/g, (_, k) => fill[k] ?? '').trim();
+  }
+  return { ...out, filled_in: fill, note: 'Drafts for a lawyer to review, not legal advice. Saving them on Settings publishes them to families.' };
 }
 // What this parent still needs to accept (only published documents count).
 export function consentStatus(ctx, guardianId) {

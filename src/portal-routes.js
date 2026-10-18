@@ -294,7 +294,7 @@ export const portalRoutes = [
   ['POST', '/portal/api/calendar', 'guardian', 'Make (or reset) your private calendar feed address for Apple, Google or Outlook. The address is shown once; the old one stops working.', (ctx, r) => portal.resetCalendar(ctx, r.guardian, r.baseUrl)],
   ['DELETE', '/portal/api/calendar', 'guardian', 'Turn off your calendar feed.', (ctx, r) => portal.stopCalendar(ctx, r.guardian)],
   ['POST', '/portal/api/waiver/email', 'guardian', 'Email yourself a copy of the signed waiver.', (ctx, r) => portal.emailWaiverCopy(ctx, r.guardian)],
-  ['POST', '/portal/api/waiver', 'guardian', 'Sign the current waiver: signed_name, agree=true.', (ctx, r) => families.signWaiver(ctx, r.guardian.family_id, r.guardian, r.body)],
+  ['POST', '/portal/api/waiver', 'guardian', 'Sign the current waiver: signed_name, agree=true. One signature (owner decision: sign once) also records acceptance of the current terms of service and privacy policy.', (ctx, r) => { const w = families.signWaiver(ctx, r.guardian.family_id, r.guardian, r.body); const a = legal.recordConsent(ctx, r.guardian, { ip: r.ip }); return { ...w, agreements: { needs: a.needs, ok: a.ok } }; }],
   ['POST', '/portal/api/athletes', 'guardian', 'Add an athlete to the family: name, birth_date, sex, sport, school, medical notes, emergency contact. Already has a profile (a team athlete)? Add athlete_code, their Athlete ID: when the name and birthday match, that profile joins your family instead of a second one being made.', async (ctx, r) => {
     const allowed = ['name', 'birth_date', 'sex', 'sport', 'position', 'school', 'grad_year', 'medical_notes', 'emergency_name', 'emergency_phone'];
     const body = Object.fromEntries(Object.entries(r.body).filter(([k]) => allowed.includes(k)));

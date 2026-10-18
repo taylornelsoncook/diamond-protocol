@@ -1,0 +1,103 @@
+{{business_name}} TERMS OF SERVICE
+
+These terms are the agreement between you and {{business_name}} ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
+
+1. WHO WE ARE AND WHO YOU ARE
+
+We are {{business_name}}, {{business_address}}. You can reach us at {{contact_email}}.
+
+Most of our athletes are children. An account is held by a parent or legal guardian (the "account holder") who is responsible for every athlete on it, for everyone who uses the account, and for every booking, purchase and message made through it. An adult who trains with us may hold their own account. You must be 18 or older to hold an account. You agree that the information on your account is true and kept current, including the athlete's medical information and your emergency contact.
+
+2. THE WAIVER COMES FIRST
+
+Before an athlete trains with us, the account holder must sign our Participation Agreement (release of liability, assumption of risk, medical consent, concussion acknowledgment and photo and video policy). One signature covers every athlete on the account. If we change it, you will be asked to sign the new version before booking again.
+
+3. BOOKING, CANCELLATIONS AND NO-SHOWS
+
+Group classes, camps, clinics, evaluations and private sessions are booked through the portal, at our front desk, or with a coach. A booking is confirmed when it appears in your portal. Waitlisted spots become bookings only when we tell you a spot opened.
+
+You may cancel a booked session in the portal. A cancellation made at least {{late_cancel_hours}} hours before the session's start returns the session, pack credit or membership visit it used. A cancellation inside that window, or a no-show, uses the session as if it had been attended. A coach may make exceptions for illness or emergencies at their discretion, and a session we cancel is always returned.
+
+We may cancel, move or combine sessions for weather, lightning, unsafe field or facility conditions, coach illness, low enrollment or any safety reason. When we do, we return what the session used, offer another time, or add training credit to your account. We are not responsible for travel or other costs you incur because a session changed.
+
+4. MEMBERSHIPS AND AUTOMATIC RENEWAL
+
+A membership is a monthly plan that renews automatically. When you start a membership we tell you the plan, the monthly price, how many group classes it covers each month (or that classes are unlimited), when it is charged and how to cancel, and you agree to those terms before anything is charged.
+
+Billing on the 1st. Memberships are billed for calendar months. When a membership starts part-way through a month, the first charge covers only the days left in that month, worked out by the day. The full monthly price is then charged on the 1st of each month, to the card on file, until you cancel. If your plan offers a free trial, the trial length and the first charge date are shown before you start; you may choose to skip the trial and start a paid membership at once.
+
+Cancelling. You may cancel a membership at any time from your portal or by emailing {{contact_email}}. Cancellation takes effect at the end of the month you have already paid for; your athlete keeps training through that date. We do not refund the current month except as described in section 6.
+
+Pausing. Where we offer it, a paused membership is not charged while paused and does not cover classes while paused.
+
+Declined payments. If the card on file is declined we tell you and try again over the following days. While a membership payment is unpaid we may suspend booking and portal access for the account until it is settled. If it stays unpaid after our retries, the membership is cancelled, and the amount already due remains owed.
+
+Price changes. We may change a plan's price with at least 30 days' notice by email. The new price applies from the first renewal after the notice period. If you do not accept the new price, cancel before that renewal.
+
+5. PACKS, CAMPS, CLINICS, EVALUATIONS, ONLINE PROGRAMS AND GEAR
+
+Session packs are a prepaid number of sessions of a given kind and are used one session per booking. Camps and clinics are sold by the event or day. Online programs and courses are digital products delivered in the athlete app once purchased. Gear is sold at our counter and in our online store. Prices are shown before you pay. Pack sessions and training credit do not expire except as section 6 describes; a membership is not a pack and its visits do not carry over from month to month.
+
+6. OUR 14-DAY CANCELLATION POLICY AND TRAINING CREDIT
+
+We want you to be comfortable with what you buy.
+
+Within 14 days. You may cancel any purchase within 14 days of buying it. For a membership, pack, program or course, we refund the price less the value of any sessions used, workouts delivered or classes attended, or, if you prefer, we put the full price on your account as training credit. For a camp or clinic, you may cancel for a refund or credit until 14 days before it starts.
+
+After 14 days. We do not give cash refunds after 14 days, or for a camp or clinic within 14 days of its start, but we do not want you to lose what you paid: the unused part of a pack, the remaining paid days of a membership you are leaving for a documented medical reason or a move away, and a camp or clinic spot you cannot use may be moved to training credit on your account. Training credit can be used toward anything we sell and stays on the account for 12 months from the day it is added.
+
+Refunds go back to the card or method you paid with. Gear may be returned unused with its tags within 14 days for a refund; sized items are exchanged where we have the size. Refunds are never owed for a session an athlete was removed from for safety or conduct reasons, or for a session missed without cancelling in time.
+
+7. PRICES, SALES TAX AND FEES
+
+Prices are in US dollars. Sales tax is added where state or local law requires it; training services are generally not taxed in Colorado, and taxable items such as gear show the tax before you pay. Where we pass a card processing fee to the payer, it is shown as its own line before you pay, is never charged on debit cards, cash or checks, and never exceeds what Colorado law allows. We may correct a mistaken price before a purchase is completed.
+
+8. PAYMENT CARDS
+
+Payments are processed by Stripe, Inc. Your card details go directly to Stripe and are stored by Stripe, not on our platform; we keep only the card brand, the last four digits, the expiry date and a reference Stripe gives us. By saving a card you authorize us to charge it for the memberships, bookings and purchases you make for this account, including automatic membership renewals, retries of a declined payment and purchases made at our counter with your agreement at the time. You may change or remove a saved card in the portal at any time; a membership needs a card on file to continue. You are responsible for keeping a working card on the account. Stripe's own terms and privacy policy apply to its processing.
+
+9. RECORDS
+
+We keep a record of every transaction on your account (charges, refunds, credits, invoices and receipts) for at least five years, as our accounting and tax obligations require. Receipts are emailed to the account's primary email and are available in the portal. Deleting your account does not delete these financial records; they are kept without your name attached, as our Privacy Policy describes.
+
+10. THE ATHLETE APP AND ONLINE PROGRAMS
+
+The athlete app shows the athlete's program, lets them log workouts, send form-check and sprint clips to a coach, connect a wearable, and read lessons. Programs are written for the athlete's age and level, but only the athlete and parent know how the athlete feels on a given day: stop any exercise that causes pain, follow the warm-ups, use spotters and sensible loads, and ask a coach when unsure. Readiness suggestions, estimated maxes, sprint grades and similar numbers are coaching aids, not medical advice. Online programs and lessons are for the athletes on your account only and may not be copied, shared or resold.
+
+11. CONDUCT
+
+We expect athletes, parents and visitors to be respectful to coaches, staff, other athletes and families, in person and in the portal, app and team boards. Bullying, harassment, abusive language, threats, discrimination, intoxication, damage to property, filming others without permission, and disregard for coaches' safety instructions are not allowed. We may remove an athlete or account holder from a session, suspend or close an account, or decline future business for such conduct, without refund.
+
+12. TEAMS AND SCHOOLS
+
+Where an athlete trains with us under a contract between us and a school or club, that contract governs payment for those sessions. These terms still apply to the athlete's and parent's use of the Services, and the Participation Agreement must still be signed.
+
+13. YOUR ACCOUNT AND YOUR DATA
+
+Your data is yours. You may download everything we hold about your family from the portal at any time, and you may ask us to delete your account and your family's personal data at any time, from the portal or by emailing {{contact_email}}. We never sell your data, and we share it only as our Privacy Policy describes or with your permission. Keep your sign-in details private; you are responsible for activity on your account until you tell us it has been compromised.
+
+14. INTELLECTUAL PROPERTY
+
+The Services, our programs, lesson content, videos, names, logos and designs belong to us or our licensors and are protected by law. We give you a personal, non-transferable licence to use them for the athletes on your account while you have an account. Clips, photos and messages you send us remain yours; you give us a licence to store and use them to coach your athlete and run the Services, and for nothing else without your permission.
+
+15. DISCLAIMERS
+
+Training results depend on the athlete, their effort, nutrition, sleep, health and many things outside our control. We do not promise any particular result, time, weight, rank, scholarship or selection. Except as these terms expressly state, the Services are provided "as is", and we disclaim all warranties, express or implied, to the extent the law allows. We try to keep the Services available but do not promise they will be uninterrupted or error-free.
+
+16. LIMITATION OF LIABILITY
+
+To the fullest extent permitted by law, and subject to the Participation Agreement, our total liability to you and your athletes for any claim arising from the Services or these terms is limited to the amount you paid us in the twelve months before the claim arose, and we are not liable for indirect, incidental, special, consequential or punitive damages, or for lost opportunities, however caused. Nothing in these terms limits liability that cannot be limited by law.
+
+17. DISPUTES
+
+We would like to hear about any problem first: write to {{contact_email}} and we will try to sort it out within 30 days. If we cannot, any dispute between you (including your athletes) and us arising from the Services, these terms or the Participation Agreement will be resolved by binding individual arbitration in Douglas County, Colorado, under the rules of the American Arbitration Association, except that either of us may bring an individual claim in small claims court. You and we each give up the right to a jury trial and to take part in a class or representative action. Colorado law governs these terms. If the arbitration clause is found unenforceable, disputes will be heard in the state or federal courts for Douglas County, Colorado.
+
+18. CHANGES TO THESE TERMS
+
+We may change these terms. When we do, we post the new version at {{public_url}}/terms with its date, and the account holder is asked to accept it in the portal before the next booking or purchase. Changes do not apply retroactively to purchases already made.
+
+19. GENERAL
+
+These terms, the Privacy Policy and the Participation Agreement are the whole agreement between you and us about the Services. If any part is found unenforceable, the rest stays in force. Our failure to enforce a term is not a waiver of it. You may not transfer your account or these terms; we may transfer them to a successor who takes over the business, who will be bound by them. Notices to you go to the account's primary email; notices to us go to {{contact_email}}.
+
+Last updated: see the date shown above.

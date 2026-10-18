@@ -37,7 +37,7 @@ function render(p, back) {
       if (r.error) toast(r.error.message, 'warn'); else render(r);
     }), 'secondary', { class: 'dp-btn dp-btn--secondary dp-btn--block' }) : null,
     !p.can_pay_online && !p.can_simulate ? h('p', { class: 'muted', style: 'margin:0' }, 'Paying online isn\'t set up yet. Contact us to pay another way.') : null,
-    h('p', { class: 'small muted', style: 'margin:0' }, p.can_pay_online ? 'You\'ll pay on Stripe\'s secure page. We never see your card number.' : ''));
+    h('p', { class: 'small muted', style: 'margin:0' }, p.can_pay_online ? 'You\'ll pay on Stripe\'s secure page. We never see your card number. Saving the card there is optional and lets us charge it for this family\'s future bookings and memberships with your agreement.' : ''));
 }
 
 load();

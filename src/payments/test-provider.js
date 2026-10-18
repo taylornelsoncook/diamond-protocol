@@ -37,12 +37,12 @@ export function createTestProvider() {
     async processOnReader() { return { ok: true }; },
     async cancelReaderAction() { return { ok: true }; },
 
-    // Test-mode stand-in for the customer tapping their card.
-    simulate(id, outcome) {
+    // Test-mode stand-in for the customer tapping their card. funding: credit (the default), debit or prepaid, as Stripe would say.
+    simulate(id, outcome, { funding = 'credit' } = {}) {
       const i = intents.get(id);
       if (!i) return;
       const n = Math.floor(Math.random() * 4);
-      i.card = { brand: brands[n], last4: String(4242 + n) };
+      i.card = { brand: brands[n], last4: String(4242 + n), funding };
       if (outcome === 'declined') { i.status = 'requires_payment_method'; i.error = 'Card declined by the bank.'; }
       else { i.status = 'succeeded'; i.error = null; i.savedCard = i.saveCard ? `pm_test_${token(8)}` : null; }
     },
@@ -57,7 +57,7 @@ export function createTestProvider() {
 
     // No hosted card page in test mode; the dashboard offers "Add test card" instead.
     async cardSetupSession() { return { id: null, url: null }; },
-    testCard() { return { paymentMethod: `pm_test_${token(8)}`, brand: 'visa', last4: '4242', expMonth: 12, expYear: new Date().getUTCFullYear() + 3 }; },
+    testCard({ funding = 'credit' } = {}) { return { paymentMethod: `pm_test_${token(8)}`, brand: 'visa', last4: '4242', expMonth: 12, expYear: new Date().getUTCFullYear() + 3, funding }; },
 
     verifyWebhook() { throw new Error('Webhooks are only used with Stripe.'); }
   };

@@ -27,7 +27,7 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
   const cardFromCharge = (charge) => {
     const d = charge?.payment_method_details;
     const c = d?.card_present || d?.card || d?.interac_present;
-    return c ? { brand: c.brand, last4: c.last4, generated: c.generated_card || null } : null;
+    return c ? { brand: c.brand, last4: c.last4, funding: c.funding ?? null, generated: c.generated_card || null } : null;
   };
 
   return {
@@ -73,7 +73,7 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       return {
         status: pi.status,
         error: pi.last_payment_error?.message || null,
-        card: card ? { brand: card.brand, last4: card.last4 } : null,
+        card: card ? { brand: card.brand, last4: card.last4, funding: card.funding } : null,
         savedCard: card?.generated || null
       };
     },
@@ -152,17 +152,18 @@ export function createStripeProvider({ secretKey, webhookSecret, currency = 'usd
       return { id: s.id, url: s.url };
     },
     async getCheckoutSession(id) {
-      const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`);
-      return { paid: s.payment_status === 'paid', ref: s.payment_intent ?? s.id, metadata: s.metadata ?? {} };
+      const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`, { expand: ['payment_intent.latest_charge'] });
+      const pi = s.payment_intent && typeof s.payment_intent === 'object' ? s.payment_intent : null;
+      return { paid: s.payment_status === 'paid', ref: pi?.id ?? s.payment_intent ?? s.id, metadata: s.metadata ?? {}, funding: cardFromCharge(pi?.latest_charge)?.funding ?? null };
     },
     async getSetupSession(id) {
       const s = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(id)}`, { expand: ['setup_intent.payment_method'] });
       const pm = s.setup_intent?.payment_method;
-      return { clientId: s.metadata?.client_id, familyId: s.metadata?.family_id, paymentMethod: pm?.id, brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year };
+      return { clientId: s.metadata?.client_id, familyId: s.metadata?.family_id, paymentMethod: pm?.id, brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year, funding: pm?.card?.funding ?? null };
     },
     async getPaymentMethod(id) {
       const pm = await call('GET', `/v1/payment_methods/${encodeURIComponent(id)}`);
-      return { brand: pm.card?.brand, last4: pm.card?.last4, expMonth: pm.card?.exp_month, expYear: pm.card?.exp_year };
+      return { brand: pm.card?.brand, last4: pm.card?.last4, expMonth: pm.card?.exp_month, expYear: pm.card?.exp_year, funding: pm.card?.funding ?? null };   // funding: credit, debit, prepaid or unknown
     },
 
     // Stripe-Signature: t=<time>,v1=<hmac>[,v1=...]

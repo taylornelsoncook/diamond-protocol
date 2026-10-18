@@ -29,7 +29,7 @@ const fake = http.createServer((req, res) => {
     if (/^\/v1\/terminal\/readers\/.+\/process_payment_intent$/.test(p)) return send(200, { id: 'tmr', action: { status: 'in_progress' } });
     if (p === '/v1/refunds') return send(200, { id: nid('re') });
     if (p === '/v1/checkout/sessions' && req.method === 'POST') return send(200, { id: 'cs_1', url: 'https://checkout.stripe.com/c/pay/cs_1' });
-    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: globalThis.setupFamily ? { family_id: globalThis.setupFamily } : { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444', exp_month: 4, exp_year: 2029 } } } });
+    if (p === '/v1/checkout/sessions/cs_1') return send(200, { id: 'cs_1', metadata: globalThis.setupFamily ? { family_id: globalThis.setupFamily } : { client_id: globalThis.setupClient }, setup_intent: { payment_method: { id: 'pm_web', card: { brand: 'mastercard', last4: '4444', exp_month: 4, exp_year: 2029, funding: 'debit' } } } });
     if (p === '/v1/payment_intents' && req.method === 'POST') {
       if (body.off_session === 'true') {
         if (body.payment_method === 'pm_declines') return send(402, { error: { type: 'card_error', message: 'Your card was declined.', payment_intent: { id: nid('pi'), status: 'requires_payment_method' } } });
@@ -108,7 +108,7 @@ test('tap to pay creates a card-present payment that saves the card', async () =
   assert.equal(done.status, 'succeeded');
   assert.equal(done.card_last4, '1111');
   const c = (await call('GET', `/v1/clients/${client.id}`)).body;
-  assert.deepEqual(c.card, { on_file: true, brand: 'visa', last4: '1111', exp: null, stale: false, owner: 'client' });
+  assert.deepEqual(c.card, { on_file: true, brand: 'visa', last4: '1111', exp: null, funding: null, stale: false, owner: 'client' }, 'the charge didn\'t say what the card was; the hourly job looks it up');
   assert.equal(c.session_credits, 10);
 });
 
@@ -143,7 +143,7 @@ test('clients add cards on Stripe\'s hosted page', async () => {
   assert.equal(link.url, 'https://checkout.stripe.com/c/pay/cs_1');
   globalThis.setupClient = client.id;
   await webhook({ type: 'checkout.session.completed', data: { object: { id: 'cs_1', mode: 'setup' } } });
-  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', stale: false, owner: 'client' });
+  assert.deepEqual((await call('GET', `/v1/clients/${client.id}/card`)).body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', funding: 'debit', stale: false, owner: 'client' }, 'Stripe says whether the card is debit (no card fee on it)');
 });
 
 test('staff open the card page themselves and the card is saved as soon as Stripe hands back', async () => {
@@ -162,7 +162,7 @@ test('staff open the card page themselves and the card is saved as soon as Strip
   assert.equal((await call('POST', `/v1/clients/${client.id}/card/setup-done`, { session_id: 'cs_1' })).status, 409, 'another client\'s page');
   const done = await call('POST', `/v1/clients/${other.id}/card/setup-done`, { session_id: 'cs_1' });
   assert.equal(done.status, 200, JSON.stringify(done.body));
-  assert.deepEqual(done.body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', stale: false, owner: 'family' });
+  assert.deepEqual(done.body, { on_file: true, brand: 'mastercard', last4: '4444', exp: '2029-04', funding: 'debit', stale: false, owner: 'family' });
   const mails = () => app.ctx.db.get(`SELECT COUNT(*) AS n FROM outbox WHERE to_email = 'dana@example.com' AND subject LIKE '%card was saved%'`).n;
   assert.equal(mails(), 1);
   // The webhook then lands for the same page: nothing changes and the family isn't told twice.

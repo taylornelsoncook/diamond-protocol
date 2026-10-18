@@ -4,8 +4,8 @@ import { sendEmail } from './mail.js';
 import { sendText, familyPhones } from './sms.js';
 import { emit } from './events.js';
 import { markInvoicePaid } from './billing.js';
-import { recordOnlineSale } from './commerce.js';
-import { cardFee, feeSettings } from './fees.js';
+import { removeDebitFee, recordOnlineSale } from './commerce.js';
+import { cardFee, feeSettings, FUNDINGS } from './fees.js';
 // What the payer pays: the amount plus the card fee the link carries (a membership's fee is already in its amount).
 const totalOf = (l) => l.amount_cents + (l.fee_cents ?? 0);
 // The fee to show: a link's own (added to the total), or the fee already inside a membership invoice's amount.
@@ -191,22 +191,24 @@ export async function confirmPayLink(ctx, tok) {
   const l = byToken(ctx, tok);
   if (l.status === 'open' && l.checkout_ref && ctx.payments.getCheckoutSession) {
     const s = await ctx.payments.getCheckoutSession(l.checkout_ref);
-    if (s.paid) await completePayLink(ctx, l.id, s.ref);
+    if (s.paid) await completePayLink(ctx, l.id, s.ref, { funding: s.funding ?? null });
   }
   return publicPayLink(ctx, tok);
 }
-export async function simulatePayLink(ctx, tok) {
+export async function simulatePayLink(ctx, tok, { funding } = {}) {
   if (!ctx.payments.simulate) throw conflict('Only available in test mode.');
   const l = byToken(ctx, tok);
   if (l.status !== 'open' || l.expires_at <= ctx.now()) throw conflict('This link can\'t be paid any more. Ask us for a new one.');
-  await completePayLink(ctx, l.id, newId('pi_test'));
+  await completePayLink(ctx, l.id, newId('pi_test'), { funding: funding ? v.oneOf(funding, 'funding', FUNDINGS) : 'credit' });
   return publicPayLink(ctx, tok);
 }
 
 // Money arrived. Fulfil what the link was for, once; if it was already paid (this link or another way), refund.
 // One at a time per link, so two payments landing together can't slip past each other.
-export function completePayLink(ctx, id, ref) { return withLock(`paylink:${id}`, () => completeNow(ctx, id, ref)); }
-async function completeNow(ctx, id, ref) {
+// funding (version 88): what the card was, when the caller knows (the return page's check, a simulated payment); else it's
+// asked of the provider once the sale is recorded, so a debit or prepaid card gets the fee back (commerce.js removeDebitFee).
+export function completePayLink(ctx, id, ref, { funding = null } = {}) { return withLock(`paylink:${id}`, () => completeNow(ctx, id, ref, { funding })); }
+async function completeNow(ctx, id, ref, { funding = null } = {}) {
   const l = ctx.db.get('SELECT * FROM pay_links WHERE id = ?', id);
   if (!l || (l.payment_ref && l.payment_ref === ref)) return;
   // Paid twice through the same link (two tabs, or Back and pay again): the second payment goes back.
@@ -231,6 +233,11 @@ async function completeNow(ctx, id, ref) {
     throw e;
   }
   if (saleId) ctx.db.run('UPDATE pay_links SET sale_id = ? WHERE id = ?', saleId, l.id);
+  if (saleId && l.fee_cents) {
+    let fund = funding;
+    if (!fund && ctx.payments.getIntent) { try { fund = (await ctx.payments.getIntent(ref)).card?.funding ?? null; } catch (e) { console.error('pay link funding', e.message); } }
+    await removeDebitFee(ctx, saleId, fund).catch((e) => console.error('pay link fee', e.message));
+  }
   emit(ctx, 'pay_link.paid', { pay_link_id: l.id, client_id: l.client_id, kind: l.kind, amount_cents: l.amount_cents, fee_cents: l.fee_cents ?? 0, sale_id: saleId, invoice_id: l.invoice_id });
 }
 async function refundExtra(ctx, l, ref, when) {

@@ -141,7 +141,38 @@ test('the version 85 upgrade adds the column and leaves existing plans unlimited
   raw.exec('PRAGMA user_version = 85');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 87);
+  assert.equal(db.get('PRAGMA user_version').user_version, 88);
   assert.equal(db.get("SELECT sessions_per_month FROM plans WHERE id = 'plan_old'").sessions_per_month, null);
   db.close();
+});
+
+test('what\'s left of a month is lost unless the owner carries it over; carried sessions add to next month\'s count', async () => {
+  // Ben used both of this month's sessions. The owner agrees to carry one into next month; coaches can't.
+  const denied = await coach('POST', `/v1/clients/${ben.id}/visits/carry-over`, { sessions: 1 });
+  assert.equal(denied.status, 403);
+  const bad = await owner('POST', `/v1/clients/${ben.id}/visits/carry-over`, { sessions: 0 });
+  assert.equal(bad.status, 400);
+  const carried = await owner('POST', `/v1/clients/${ben.id}/visits/carry-over`, { sessions: 1, note: 'Away for the holidays' });
+  assert.equal(carried.status, 200, JSON.stringify(carried.body));
+  const now = await visits(ben);
+  assert.deepEqual([now.visits.limit, now.visits.carried, now.visits.left], [2, 0, 0], 'this month is unchanged');
+  assert.equal(carried.body.period_start, now.visits.period_end, 'it lands on the next paid period');
+  assert.deepEqual([carried.body.visits.limit, carried.body.visits.base_limit, carried.body.visits.carried, carried.body.visits.left], [3, 2, 1, 3]);
+  assert.deepEqual(now.carryovers.map((k) => [k.sessions, k.note, k.by_name]), [[1, 'Away for the holidays', 'Olivia Owner']]);
+  // A class in that month: the carried session makes three.
+  const next = [await klass(40, '09:00'), await klass(41, '09:00'), await klass(42, '09:00')];
+  for (const s of next) assert.equal((await book(s, ben)).body.coverage, 'membership', 'the carried session covers a third class');
+  const page = (await owner('GET', `/v1/clients/${ben.id}`)).body;
+  assert.equal(page.visit_carryovers.length, 1);
+  const ev = app.ctx.db.get(`SELECT data FROM events WHERE type = 'visits.carried_over' ORDER BY rowid DESC LIMIT 1`);
+  assert.equal(JSON.parse(ev.data).sessions, 1);
+  // Taken back: the third class is over the count again (it stays booked; the count just shows it).
+  const gone = await owner('DELETE', `/v1/visit-carryovers/${carried.body.id}`);
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  assert.equal((await owner('GET', `/v1/clients/${ben.id}`)).body.visit_carryovers.length, 0);
+  // An unlimited plan has nothing to carry; carrying into the month running now is allowed too.
+  const cole = app.ctx.db.get(`SELECT c.id FROM clients c JOIN subscriptions s ON s.client_id = c.id JOIN plans p ON p.id = s.plan_id WHERE p.sessions_per_month IS NULL AND s.status = 'active' LIMIT 1`);
+  assert.equal((await owner('POST', `/v1/clients/${cole.id}/visits/carry-over`, { sessions: 1 })).status, 409);
+  const cur = await owner('POST', `/v1/clients/${ben.id}/visits/carry-over`, { sessions: 2, period: 'current' });
+  assert.deepEqual([cur.status, cur.body.visits.limit, cur.body.visits.left], [200, 4, 2]);
 });

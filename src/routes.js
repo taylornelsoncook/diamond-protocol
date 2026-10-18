@@ -290,7 +290,7 @@ export const routes = [
 
   // Billing
   ['GET', '/v1/plans', 'any', 'Billing', 'List plans. ?include_inactive=true to include retired plans.', (ctx, r) => list(billing.listPlans(ctx, { includeInactive: r.query.include_inactive === 'true' }))],
-  ['GET', '/v1/plans/:id/quote', 'any', 'Billing', 'What starting this plan today charges and when it renews: charge_now_cents (the days left in this month under the first-of-the-month cycle), period_end, next_charge_on, trial_days. ?skip_trial=true quotes a paid start on a plan with a free trial.', (ctx, r) => billing.quote(ctx, r.params.id, ctx.now(), { skipTrial: r.query.skip_trial === 'true' })],
+  ['GET', '/v1/plans/:id/quote', 'any', 'Billing', 'What starting this plan today charges and when it renews: charge_now_cents (the days left in this month under the first-of-the-month cycle), period_end, next_charge_on, trial_days. ?skip_trial=true quotes a paid start on a plan with a free trial. ?client_id= reads that client\'s card: no fee on a debit or prepaid card.', (ctx, r) => billing.quote(ctx, r.params.id, ctx.now(), { skipTrial: r.query.skip_trial === 'true', clientId: r.query.client_id || null })],
   ['POST', '/v1/plans', 'any', 'Billing', 'Create a monthly plan: name, price_cents, trial_days (0, the default, means no free trial), sessions_per_month (group classes covered each paid month; empty = unlimited).', (ctx, r) => billing.createPlan(ctx, r.body), 201],
   ['PATCH', '/v1/plans/:id', 'any', 'Billing', 'Update a plan. Set active=false to stop offering it.', (ctx, r) => billing.updatePlan(ctx, r.params.id, r.body)],
   ['GET', '/v1/subscriptions', 'any', 'Billing', 'List subscriptions. Filter with ?status=.', (ctx, r) => list(billing.listSubscriptions(ctx, r.query))],
@@ -310,7 +310,7 @@ export const routes = [
   ['GET', '/pay-api/:token', 'public', 'Billing', 'The parent\'s pay page (the link in the email or text).', (ctx, r) => paylinks.publicPayLink(ctx, r.params.token)],
   ['POST', '/pay-api/:token/checkout', 'public', 'Billing', 'Start paying by card on Stripe\'s secure page.', (ctx, r) => paylinks.checkoutPayLink(ctx, r.params.token)],
   ['POST', '/pay-api/:token/confirm', 'public', 'Billing', 'Back from Stripe: record the payment if it went through.', (ctx, r) => paylinks.confirmPayLink(ctx, r.params.token)],
-  ['POST', '/pay-api/:token/simulate', 'public', 'Billing', 'Test mode only: mark the link paid.', (ctx, r) => paylinks.simulatePayLink(ctx, r.params.token)],
+  ['POST', '/pay-api/:token/simulate', 'public', 'Billing', 'Test mode only: mark the link paid. funding: credit (default), debit or prepaid.', (ctx, r) => paylinks.simulatePayLink(ctx, r.params.token, { funding: r.body?.funding })],
   ['POST', '/v1/billing/run', 'any', 'Billing', 'Run renewals and scheduled retries now. In test mode, pass as_of to run for a future date.', (ctx, r) => {
     let asOf = ctx.now();
     if (r.body.as_of !== undefined) {
@@ -485,7 +485,7 @@ export const routes = [
   ['POST', '/v1/sales/:id/refund', 'any', 'Point of sale', 'Refund a sale. Optional amount_cents for a partial refund and a reason. A full refund removes unused sessions from the pack.', (ctx, r) => commerce.refundSale(ctx, r.params.id, r.body, { actor: r.user?.id ?? r.apiKey?.id })],
   ['POST', '/v1/sales/:id/undo', 'session', 'Point of sale', 'Undo a sale you just took by mistake: a full refund (back to the card, or cash to hand back), sessions and stock back. Only the person who took it, within 10 minutes of it being paid, and only while nothing has been refunded.', (ctx, r) => { ownSale(ctx, r); return commerce.undoSale(ctx, r.params.id, r.user); }],
   ['POST', '/v1/sales/:id/receipt', 'any', 'Point of sale', 'Email (or re-send) the receipt: optional email, otherwise the family\'s billing email or the address typed at the counter. Sent even when automatic receipts are off. Up to 5 times an hour per sale.', (ctx, r) => { ownSale(ctx, r); security.rateLimit(`receipt-send:${r.params.id}`, 5, 60 * 60000); return commerce.emailReceipt(ctx, r.params.id, r.body); }],
-  ['POST', '/v1/sales/:id/simulate', 'any', 'Point of sale', 'Test mode only: act as the client tapping their card. outcome is approved or declined.', (ctx, r) => { ownSale(ctx, r); return commerce.simulateTap(ctx, r.params.id, r.body.outcome); }],
+  ['POST', '/v1/sales/:id/simulate', 'any', 'Point of sale', 'Test mode only: act as the client tapping their card. outcome is approved or declined; funding credit (default), debit or prepaid.', (ctx, r) => { ownSale(ctx, r); return commerce.simulateTap(ctx, r.params.id, r.body.outcome, { funding: r.body.funding }); }],
   ['POST', '/v1/terminal/connection-token', 'any', 'Point of sale', 'Connection token for the Stripe Terminal SDK in the iPhone app. Optional location_id.', (ctx, r) => commerce.connectionToken(ctx, r.body.location_id)],
   ['GET', '/v1/reports/revenue', 'any', 'Point of sale', 'Revenue by location plus membership payments since ?since= (default: start of this month).', (ctx, r) => {
     const zone = families.getSetting(ctx, 'timezone'), start = startOfLocalDay(zonedToUtc(`${localDate(ctx.now(), zone).slice(0, 8)}01`, '12:00', zone), zone);
@@ -495,9 +495,11 @@ export const routes = [
   ['GET', '/v1/clients/:id/card', 'any', 'Clients', 'Whether the client has a saved card, and its brand and last 4 digits.', (ctx, r) => commerce.cardSummary(ctx, r.params.id)],
   ['POST', '/v1/clients/:id/card/setup-link', 'any', 'Clients', 'A secure Stripe link the client opens to add or replace their card. open: true when staff open it themselves (Stripe comes back to the card-saved page, which saves the card at once).', (ctx, r) => commerce.cardSetupLink(ctx, r.params.id, r.baseUrl, { open: !!r.body.open })],
   ['POST', '/v1/clients/:id/card/setup-done', 'any', 'Clients', 'After Stripe\'s card page: session_id (the finished checkout session) saves the card now, without waiting for the webhook.', (ctx, r) => commerce.finishCardSetup(ctx, r.params.id, r.body.session_id)],
-  ['POST', '/v1/clients/:id/card/test', 'any', 'Clients', 'Test mode only: attach a test Visa ending 4242.', (ctx, r) => commerce.addTestCard(ctx, r.params.id)],
+  ['POST', '/v1/clients/:id/card/test', 'any', 'Clients', 'Test mode only: attach a test Visa ending 4242. funding: credit (default), debit or prepaid, to try the card fee rule.', (ctx, r) => commerce.addTestCard(ctx, r.params.id, { funding: r.body?.funding })],
   ['DELETE', '/v1/clients/:id/card', 'any', 'Clients', 'Remove the saved card.', (ctx, r) => commerce.removeCard(ctx, r.params.id)],
-  ['GET', '/v1/clients/:id/credits', 'any', 'Clients', 'Session credit balance.', (ctx, r) => ({ balance: commerce.creditBalance(ctx, r.params.id) })],
+  ['POST', '/v1/clients/:id/visits/carry-over', 'session', 'Clients', 'Owner only: carry membership sessions into the next paid period (or period: current): sessions (1 to 100), note. What is left of a month is otherwise lost.', (ctx, r) => visits.carryOver(ctx, r.params.id, r.body, r.user?.id)],
+  ['DELETE', '/v1/visit-carryovers/:id', 'session', 'Clients', 'Owner only: take back carried-over sessions.', (ctx, r) => visits.removeCarryOver(ctx, r.params.id)],
+  ['GET', '/v1/clients/:id/credits', 'any', 'Clients', 'Session credit balance (packs expire after the pack_expiry_months setting; detail lists each lot and its expiry).', (ctx, r) => ({ balance: commerce.creditBalance(ctx, r.params.id), detail: commerce.creditDetail(ctx, r.params.id) })],
   ['POST', '/v1/clients/:id/credits', 'any', 'Clients', 'Adjust session credits by delta (positive or negative) with an optional note.', (ctx, r) => commerce.adjustCredits(ctx, r.params.id, r.body)],
   ['POST', '/v1/clients/:id/check-ins', 'any', 'Clients', 'Check a client in at location_id. Members train on their membership; others use one session credit.', (ctx, r) => commerce.checkIn(ctx, r.params.id, r.body), 201],
   ['GET', '/v1/check-ins', 'any', 'Clients', 'Recent check-ins. ?client_id= to filter.', (ctx, r) => list(commerce.listCheckIns(ctx, { clientId: r.query.client_id }))],

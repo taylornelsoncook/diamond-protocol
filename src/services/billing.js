@@ -4,7 +4,7 @@ import { payerFor, getSetting, staleCard, staleCardText } from './families.js';
 import { membershipReceipt, paymentFailed, trialReminders, cardReminder, invoiceRefundReceipt } from './notify.js';
 import { csvCell } from './clients.js';
 import { sendEmail } from './mail.js';
-import { cardFee } from './fees.js';
+import { cardFee, cardFunding, ensureFunding } from './fees.js';
 
 export const MAX_ATTEMPTS = 5;        // after the 5th failed automatic charge (the first charge and 4 retries) the subscription is canceled (owner decision: one more retry after the lockout)
 export const RETRY_EVERY_DAYS = 3;
@@ -35,12 +35,14 @@ export function periodFor(ctx, startIso, priceCents, cycle = billingCycle(ctx)) 
 }
 // What starting a plan today would charge and when it renews: the counter and the client page show it before Start.
 // skipTrial (owner's ask): charge now, prorated for the days left in the month, even on a plan that offers a free trial.
-export function quote(ctx, planId, asOf = ctx.now(), { skipTrial = false } = {}) {
+// clientId (version 88): the card that pays for that client decides the fee (none on a debit or prepaid card).
+export function quote(ctx, planId, asOf = ctx.now(), { skipTrial = false, clientId = null } = {}) {
   const plan = getPlan(ctx, planId);
   const trial = plan.trial_days > 0 && !skipTrial;
   const period = trial ? null : periodFor(ctx, asOf, plan.price_cents);
-  const fee = period && period.amount_cents ? cardFee(ctx, period.amount_cents, 'memberships').cents : 0;
-  const monthlyFee = cardFee(ctx, plan.price_cents, 'memberships').cents;
+  const funding = clientId ? cardFunding(ctx, clientId) : null;
+  const fee = period && period.amount_cents ? cardFee(ctx, period.amount_cents, 'memberships', { funding }).cents : 0;
+  const monthlyFee = cardFee(ctx, plan.price_cents, 'memberships', { funding }).cents;
   const tz = zone(ctx);
   return {
     plan_id: plan.id, plan_name: plan.name, monthly_cents: plan.price_cents, monthly_fee_cents: monthlyFee, trial_days: trial ? plan.trial_days : 0, plan_trial_days: plan.trial_days, skip_trial: !!skipTrial, sessions_per_month: plan.sessions_per_month ?? null, cycle: billingCycle(ctx),
@@ -198,7 +200,7 @@ export async function changePlan(ctx, subId, planId, { when = 'now' } = {}) {
   let charged = null;
   if (diff >= MIN_CHARGE_CENTS) {
     const id = newId('inv');
-    const fee = cardFee(ctx, diff, 'memberships').cents;
+    const fee = cardFee(ctx, diff, 'memberships', { funding: await ensureFunding(ctx, payerFor(ctx, s.client_id)) }).cents;
     ctx.db.run(`INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, note, fee_cents)
       VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?, ?)`, id, subId, s.client_id, diff + fee, ctx.now(), s.current_period_end, ctx.now(), `Plan change: ${s.plan_name} to ${plan.name}, the rest of this month`, fee);
     try {
@@ -288,7 +290,8 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf, amount
   const s = getSubscription(ctx, subId);
   const id = newId('inv');
   const base = amountCents ?? s.price_cents;                                 // the full month, or the part of it that's left (periodFor)
-  const fee = base ? cardFee(ctx, base, 'memberships').cents : 0;            // owner setting: a card fee on membership charges, its own line
+  const funding = base ? await ensureFunding(ctx, payerFor(ctx, s.client_id)) : null;   // a debit or prepaid card is never charged the fee
+  const fee = base ? cardFee(ctx, base, 'memberships', { funding }).cents : 0;   // owner setting: a card fee on membership charges, its own line
   ctx.db.run(
     `INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, fee_cents)
      VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, base + fee, periodStart, periodEnd, ctx.now(), fee);

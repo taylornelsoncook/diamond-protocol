@@ -31,6 +31,7 @@ import { runReviewRequests, followReviewLink } from './services/reviews.js';
 import { runSlotFilling } from './services/spots.js';
 import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
+import { lookupFundings } from './services/fees.js';
 import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
 import { cleanup as cleanupCues } from './services/cues.js';
 import { runAdapt } from './services/adapt.js';
@@ -241,6 +242,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
   runner.define('review-requests', HOUR, () => runReviewRequests(ctx));
   runner.define('open-spots', HOUR, () => runSlotFilling(ctx));
   runner.define('money-checks', HOUR, () => runMoneyChecks(ctx));
+  runner.define('card-funding', HOUR, () => lookupFundings(ctx));   // cards saved before version 88: ask Stripe whether each is credit or debit (fees.js)
   runner.define('wearable-sync', 6 * HOUR, () => syncWearables(ctx));
   runner.define('form-check-cleanup', 24 * HOUR, async () => ({ ...(await cleanupFormChecks(ctx)), sprint: await cleanupSprintClips(ctx), cues: await cleanupCues(ctx), push: cleanupPush(ctx) }));
   runner.define('monthly-reports', HOUR, () => runMonthly(ctx));

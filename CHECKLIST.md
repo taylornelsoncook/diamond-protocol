@@ -44,14 +44,14 @@ Done on September 28: production runs the newest version (schema 48), off-site b
 
 - [ ] **Prices:** single session, packs (sizes and prices), gear, and monthly plans with trial length. The app ships with sample prices. Replace them in Point of sale setup and Billing.
 - [ ] **Addresses** for every place you take payments: the facility, your business address (used for the "Mobile" location that covers clients' homes), and each park you train in.
-- [ ] **Policies:** refunds, pack expiration (packs don't expire in the app today), cancellations, and failed payments (today: retry every 3 days, lock the family out after 4 declines, cancel after 5).
+- [ ] **Policies:** refunds, pack expiration (packs expire 12 months after purchase; change the months on Billing → Needs attention, 0 = never), cancellations, and failed payments (today: retry every 3 days, lock the family out after 4 declines, cancel after 5).
 - [ ] **Sales tax.** The app doesn't add tax. Ask your accountant whether you owe tax on sessions or gear in your state, and tell me what to build.
 - [ ] **Waiver.** Have a lawyer review the draft in `docs/legal/waiver.txt` (release of liability, assumption of risk, medical consent, concussions, photo and video policy, Colorado parental release). Settings → Policies → **Use the drafted wording**, make the lawyer's changes, Save. Families sign it once in the portal; the one signature also accepts the terms and privacy policy.
 - [ ] **Class schedule:** each weekly class (days, time, location, ages, spots, drop-in price), your camps and clinics (dates, registration price), and your hours for privates and evaluations.
 - [ ] **Group vs private pricing:** which packs count as group classes and which as privates, and whether memberships cover group classes only (today: yes).
 - [ ] **Cancellation window** for parents (default 12 hours).
 - [ ] **Team contracts:** for each school or club, the monthly fee, billing day, payment terms (Net 30 is the default), PO number if they use one, and the billing contact's email. Add your business address and "make checks payable to" line in Schedule → Hours & settings; both print on invoices.
-- [ ] **Testing equipment:** tell me what you use (timing gates, jump mat, force plates, radar) so I can check each export imports cleanly. Send one real export file from OVR Connect (and any other system) so I can confirm the column matching.
+- [ ] **Testing equipment:** tell me what you use (timing gates, jump mat, force plates, radar) so I can check each export imports cleanly. Parked for now (October 18): when you have a real export file from OVR Connect or another system, send it and I'll confirm the column matching.
 - [ ] **Use Athlete IDs on your devices:** in OVR Connect (and any other testing app), enter each athlete's ID (for example AVALOP2026) as their name or ID. Exports then match automatically with no name-matching step.
 - [ ] **Hawkin Dynamics (if you use it):** as the organization admin in Hawkin, go to Settings → Integrations, create an integration token, and paste it in Testing → Devices & imports.
 - [ ] **VALD (if you use it):** email support@vald.com with your organization ID from VALD Hub to request external API access. Until then, export files from VALD Hub and import them.
@@ -151,5 +151,3 @@ Done: family self sign-up, client import from a spreadsheet, terms and privacy w
 Next:
 - Fix anything you find on staging.
 - Sales tax, once you know your rules.
-- Private video uploads for exercise demos.
-- Confirm the OVR import against a real export file.

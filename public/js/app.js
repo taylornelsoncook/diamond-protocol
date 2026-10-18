@@ -1516,26 +1516,44 @@ function payLinksPanel(clientId, first, owed, products, render) {
 
 // Daily money checks: what the morning check found, newest day first.
 function moneyChecksPanel(checks, render) {
+  // Owner's ask: a condensed box. The last 7 days as one line each (problems open out); everything else, older days and
+  // checking a day by hand, sits in one drop-down menu.
   const tone = { ok: ['All clear', 'good'], problems: ['To look at', 'warn'], error: ['Couldn\'t reach Stripe', 'warn'] };
-  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: bizDate(-1), style: 'width:170px' });
   const run = (day) => (e) => busy(e.currentTarget, async () => {
     const c = await post('/v1/money-checks/run', { date: day });
     toast(c.status === 'ok' ? `Nothing unusual on ${ymd(c.date)}.` : c.status === 'error' ? c.error : `${c.problems} ${c.problems === 1 ? 'thing' : 'things'} to look at on ${ymd(c.date)}.`, c.status === 'ok' ? 'good' : 'warn'); render();
   });
-  const row = (c) => h('div', { class: 'list-item', style: 'align-items:flex-start;flex-wrap:wrap' },
-    h('div', { class: 'grow stack-tight' },
-      h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'strong' }, ymd(c.date)), c.reviewed_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Looked at') : h('span', { class: `dp-badge dp-badge--${tone[c.status][1]}` }, tone[c.status][0])),
-      h('span', { class: 'small muted' }, `${c.totals.card_payments} card ${c.totals.card_payments === 1 ? 'payment' : 'payments'}, ${money(c.totals.recorded_cents)}${c.stripe_checked ? `. Stripe: ${money(c.totals.stripe_cents)}` : ''}`),
-      c.error ? h('span', { class: 'small' }, `${c.error} Tried ${c.attempts} ${c.attempts === 1 ? 'time' : 'times'}.`) : null,
-      c.findings.map((f) => h('div', { class: 'stack-tight', style: 'margin-top:6px' }, h('span', null, f.title), h('span', { class: 'small muted' }, f.detail))),
-      c.reviewed_at ? h('span', { class: 'small muted' }, `Marked as looked at by ${c.reviewed_by}, ${ago(c.reviewed_at).toLowerCase()}.`) : null),
-    c.status !== 'ok' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
-      c.reviewed_at ? null : btn('Mark as looked at', (e) => busy(e.currentTarget, async () => { await patch(`/v1/money-checks/${c.id}`, { reviewed: true }); toast('Marked as looked at.'); render(); }), 'outline'),
-      btn('Check again', run(c.date), 'ghost')) : null);
+  const line = (c) => `${c.totals.card_payments} card ${c.totals.card_payments === 1 ? 'payment' : 'payments'}, ${money(c.totals.recorded_cents)}${c.stripe_checked ? ` · Stripe ${money(c.totals.stripe_cents)}` : ''}`;
+  const badge = (c) => (c.reviewed_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Looked at') : h('span', { class: `dp-badge dp-badge--${tone[c.status][1]}` }, tone[c.status][0]));
+  const actions = (c) => (c.status !== 'ok' ? h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' },
+    c.reviewed_at ? null : btn('Mark as looked at', (e) => busy(e.currentTarget, async () => { await patch(`/v1/money-checks/${c.id}`, { reviewed: true }); toast('Marked as looked at.'); render(); }), 'outline'),
+    btn('Check again', run(c.date), 'ghost')) : null);
+  // One line for a clear day; a problem day opens out to its findings and buttons.
+  const row = (c) => (c.status === 'ok' && !c.findings.length
+    ? h('div', { class: 'row small', style: 'gap:10px;min-height:36px;border-top:1px solid var(--line-subtle)' }, h('span', { class: 'strong', style: 'min-width:92px' }, ymd(c.date)), badge(c), h('span', { class: 'muted grow' }, line(c)))
+    : h('details', { class: 'mc-day', open: !c.reviewed_at ? true : null, style: 'border-top:1px solid var(--line-subtle)' },
+      h('summary', { class: 'row small', style: 'gap:10px;min-height:36px;cursor:pointer;list-style:none' }, h('span', { class: 'strong', style: 'min-width:92px' }, ymd(c.date)), badge(c), h('span', { class: 'muted grow' }, line(c))),
+      h('div', { class: 'stack-tight', style: 'padding:4px 0 10px' },
+        c.error ? h('span', { class: 'small' }, `${c.error} Tried ${c.attempts} ${c.attempts === 1 ? 'time' : 'times'}.`) : null,
+        c.findings.map((f) => h('div', { class: 'stack-tight' }, h('span', null, f.title), h('span', { class: 'small muted' }, f.detail))),
+        c.reviewed_at ? h('span', { class: 'small muted' }, `Marked as looked at by ${c.reviewed_by}, ${ago(c.reviewed_at).toLowerCase()}.`) : null,
+        actions(c))));
+  const recent = checks.data.slice(0, 7), older = checks.data.slice(7);
+  const extra = h('div');
+  const pick = input({ type: 'date', 'aria-label': 'Day to check', value: bizDate(-1), style: 'width:170px' });
+  const more = select([['', 'More…'], ...older.map((c) => [c.id, `${ymd(c.date)} · ${c.reviewed_at ? 'looked at' : tone[c.status][0]}`]), ['__day', 'Check a day by hand…']], { 'aria-label': 'Older checks and other options', style: 'width:auto' });
+  more.addEventListener('change', () => {
+    const v = more.value;
+    if (!v) return fill(extra);
+    if (v === '__day') return fill(extra, h('div', { class: 'row wrap', style: 'gap:8px' }, pick, btn('Check this day', (e) => run(pick.value)(e), 'ghost')));
+    const c = older.find((x) => x.id === v);
+    fill(extra, c ? row(c) : null);
+  });
   return panel('Daily money checks', {
-    subtitle: `Each morning the app checks the day before for double charges, refund spikes and payments stuck waiting${checks.stripe_connected ? ', and matches every card payment with Stripe' : '. Matching every card payment with Stripe starts once Stripe is connected'}. Anything it finds is emailed to you.` },
-    checks.data.length ? checks.data.map(row) : h('p', { class: 'muted', style: 'margin:0' }, 'The first check runs tomorrow morning.'),
-    h('div', { class: 'row wrap', style: 'gap:8px;margin-top:12px' }, pick, btn('Check a day', (e) => run(pick.value)(e), 'ghost')));
+    subtitle: `Each morning the app checks the day before for double charges, refund spikes and payments stuck waiting${checks.stripe_connected ? ', and matches every card payment with Stripe' : '. Matching every card payment with Stripe starts once Stripe is connected'}. Anything it finds is emailed to you.`,
+    action: more },
+    recent.length ? recent.map(row) : h('p', { class: 'muted', style: 'margin:0' }, 'The first check runs tomorrow morning.'),
+    extra);
 }
 
 // ---------- Billing (owner only) ----------

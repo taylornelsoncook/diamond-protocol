@@ -135,7 +135,9 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 @media (max-width: 1100px){.pg-grid-wrap{grid-template-columns:1fr}.pg-send{position:static;max-height:none}}
 
 /* The month calendar (step 3). */
-.cal-wrap{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:10px;align-items:start}
+.cal-wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
+.cal-wrap>.cal-grid{flex:1 1 440px;min-width:0}
+.cal-wrap>.cal-day{flex:1 1 260px;min-width:0}
 .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
 .cal-head{font:600 10px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted);padding:4px 2px}
 .cal-cell{min-height:72px;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);background:var(--ground);padding:4px;display:flex;flex-direction:column;gap:2px;align-items:stretch;text-align:left;color:inherit;font:inherit;cursor:pointer;min-width:0}
@@ -152,4 +154,4 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 .cal-card-n{color:var(--steel-muted);flex-shrink:0}
 .cal-day{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:10px;display:flex;flex-direction:column;gap:8px;min-height:120px}
 .cal-wo{display:flex;flex-direction:column;gap:3px;padding:6px 0;border-top:1px solid var(--line-subtle)}
-@media (max-width: 900px){.cal-wrap{grid-template-columns:1fr}.cal-cell{min-height:48px}.cal-card{display:none}.cal-cell--has .cal-n::after{content:' •';color:var(--green-bright)}}
+@media (max-width: 900px){.cal-cell{min-height:48px}.cal-card{display:none}.cal-cell--has .cal-n::after{content:' •';color:var(--green-bright)}}

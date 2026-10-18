@@ -62,7 +62,8 @@ async function boot() {
   if (buying) state.buy = buy;
   if (state.me && q.has('finish')) {   // added at a testing day: the waiver is the one thing needed, the rest can wait
     state.tab = 'family'; state.finishFirst = true; history.replaceState(null, '', HERE);
-    setTimeout(() => toast('Welcome! Sign the waiver first. Birthday, sport, an emergency contact and a card can wait.'), 300);
+    // From the online sales page (/buy): bought and signed in; now the profile.
+    setTimeout(() => toast(q.has('bought') ? 'Thanks for your purchase! Now create your profile: sign the waiver first, then add the rest when you\'re ready.' : 'Welcome! Sign the waiver first. Birthday, sport, an emergency contact and a card can wait.'), 300);
   } else if (state.me && q.has('welcome')) {
     state.tab = 'family'; history.replaceState(null, '', HERE);
     const claim = q.has('claim') ? ' We\'ll check the Athlete ID you gave with your coach.' : '';

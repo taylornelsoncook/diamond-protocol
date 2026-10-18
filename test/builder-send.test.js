@@ -121,7 +121,7 @@ test('a version 75 database gains sent_from, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 88, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 89, `round ${round}`);
       assert.deepEqual(d.get('SELECT name, sent_from FROM programs WHERE id = ?', 'p1'), { name: 'Speed', sent_from: null });
       d.close();
     }

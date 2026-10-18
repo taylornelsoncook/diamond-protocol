@@ -1924,7 +1924,19 @@ async function viewBilling(main) {
         h('td', { class: 'bl-acts' }, h('div', { class: 'row', style: 'gap:4px;flex-wrap:nowrap;justify-content:flex-end' },
           btn('Change', () => editPlan(p), 'ghost', { 'aria-label': `Change ${p.name}` }),
           btn(p.active ? 'Retire' : 'Offer again', (e) => busy(e.currentTarget, async () => { await patch(`/v1/plans/${p.id}`, { active: !p.active }); toast(p.active ? 'Plan retired. Current members keep it.' : 'Plan offered again.'); render(); }), 'ghost')))))))),
-    addPlan));
+    addPlan,
+    // The online sales page (owner's ask): every active plan and session pack, bought without an account (services/buyonline.js).
+    (() => {
+      const url = `${location.origin}/buy`;
+      const onBox = h('input', { type: 'checkbox', checked: settings.buy_online !== 'off', 'aria-label': 'Sell memberships and packs on the online sales page' });
+      onBox.addEventListener('change', () => busy(onBox, async () => { await patch('/v1/settings', { buy_online: onBox.checked ? 'on' : 'off' }); settings.buy_online = onBox.checked ? 'on' : 'off'; toast(onBox.checked ? 'The online sales page is open.' : 'The online sales page is closed.'); }));
+      return h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:12px;margin-top:4px' },
+        h('div', { class: 'dp-label' }, 'Online sales page'),
+        h('p', { class: 'small muted', style: 'margin:0' }, 'New families buy any plan above or any session pack there, then create their profile. Put the link on your website and social posts.'),
+        h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('code', { class: 'small' }, url),
+          btn('Copy', () => copyText(url, 'Sales page link copied.'), 'outline'), h('a', { class: 'dp-btn dp-btn--ghost', href: '/buy', target: '_blank', rel: 'noopener' }, 'View'),
+          h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, onBox, h('span', null, 'Open'))));
+    })()));
 
   // ---- pay links, money checks, test clock ----
   const linksPanel = h('div', { id: 'bl-links' }, panel('Pay links', { subtitle: 'Links a family taps to pay by card without signing in. Make one from a client\'s page; failed membership payments get one automatically.' },

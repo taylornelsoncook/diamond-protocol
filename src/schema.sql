@@ -2175,3 +2175,32 @@ CREATE TABLE IF NOT EXISTS visit_carryovers (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS visit_carryovers_client ON visit_carryovers(client_id, period_start);
+
+-- Version 89: an order started on the online sales page (/buy) by someone without an account. The buyer's email is
+-- proved with a code first, then the card is saved on Stripe's page, then the account is made and the card charged the
+-- usual way (a sale for a pack, a membership through billing). An order not paid is cleared after a week; a paid one
+-- goes with its family.
+CREATE TABLE IF NOT EXISTS web_orders (
+  id TEXT PRIMARY KEY,
+  item_kind TEXT NOT NULL CHECK (item_kind IN ('plan','product')),
+  item_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  payload TEXT NOT NULL,                 -- the buyer, the athlete and the choices (JSON)
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'code_sent' CHECK (status IN ('code_sent','verified','paid','declined')),
+  customer_ref TEXT,                     -- the Stripe customer made for the order
+  checkout_ref TEXT,                     -- the latest Stripe card page
+  family_id TEXT REFERENCES families(id) ON DELETE CASCADE,
+  client_id TEXT,
+  guardian_id TEXT,
+  sale_id TEXT,
+  subscription_id TEXT,
+  error TEXT,
+  ip TEXT,
+  expires_at TEXT NOT NULL,
+  verified_at TEXT,
+  paid_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS web_orders_email ON web_orders(email, created_at);

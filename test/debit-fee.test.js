@@ -167,7 +167,7 @@ test('the version 87 upgrade adds the funding columns, the fee flag and the carr
   raw.exec('PRAGMA user_version = 87');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 88);
+  assert.equal(db.get('PRAGMA user_version').user_version, 89);
   assert.deepEqual(db.get("SELECT card_payment_method, card_funding FROM families WHERE id = 'fam_old'"), { card_payment_method: 'pm_x', card_funding: null }, 'an old card has no answer yet; the job asks');
   assert.ok(db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'visit_carryovers'"));
   assert.ok(db.all('PRAGMA table_info(sale_refunds)').some((c) => c.name === 'fee'));

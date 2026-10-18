@@ -21,6 +21,7 @@ const DEFAULTS = {
   privacy_version: '1',
   privacy_updated: '',
   public_signup: 'on',
+  buy_online: 'on',                       // the online sales page (/buy): memberships and session packs bought without an account; off shows a closed page
   rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
   help_text: 'on',                        // the owner sees the help sentences (field hints, panel explanations); 'off' hides them for the owner too. Coaches, front desk, parents and athletes never see them.
   readiness_adjust: 'on',                 // lighter weights in the athlete app after a rough daily check-in
@@ -144,6 +145,7 @@ export function updateSettings(ctx, body) {
   if (body.weekly_digest !== undefined) next.weekly_digest = body.weekly_digest === true || body.weekly_digest === 'on' ? 'on' : 'off';
   if (body.monthly_reports !== undefined) next.monthly_reports = v.oneOf(body.monthly_reports, 'monthly_reports', ['review', 'auto', 'off']);
   if (body.public_signup !== undefined) next.public_signup = body.public_signup === true || body.public_signup === 'on' ? 'on' : 'off';
+  if (body.buy_online !== undefined) next.buy_online = body.buy_online === true || body.buy_online === 'on' ? 'on' : 'off';
   if (body.emails_off !== undefined) {
     const list = (Array.isArray(body.emails_off) ? body.emails_off : String(body.emails_off).split(',')).map((x) => String(x).trim()).filter(Boolean);
     for (const x of list) v.oneOf(x, 'emails_off', ['welcome', 'receipts', 'trial_ending', 'payment_failed']);

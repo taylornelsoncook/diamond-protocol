@@ -52,7 +52,7 @@ const typedEmail = (body) => { const t = String(body?.email ?? '').trim().slice(
 const AUDITED_READS = /^\/v1\/(backups\/:name|audit\/export|webhooks\/:id\/secret|form-checks\/:id\/video|sprint-clips\/:id\/video)$/;
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.mjs': 'text/javascript; charset=utf-8', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json', '.pdf': 'application/pdf' };
-const PAGES = { '/': 'index.html', '/app': 'client.html', '/client': 'parent.html', '/join': 'join.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
+const PAGES = { '/': 'index.html', '/app': 'client.html', '/client': 'parent.html', '/join': 'join.html', '/buy': 'buy.html', '/start': 'start.html', '/kiosk': 'kiosk.html', '/tv': 'tv.html', '/certificate': 'certificate.html', '/book': 'book.html', '/shop': 'shop.html', '/learn': 'learn.html', '/terms': 'legal.html', '/privacy': 'legal.html' };
 const CSP = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "img-src 'self' data: https:", "media-src 'self' https: blob:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
@@ -149,6 +149,8 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
       if (route.path === '/auth/reset' || route.path === '/auth/reset/check') rateLimit(`reset:${ip}`, 20, 15 * 60000);
       if (route.path === '/portal/api/login' || route.path === '/portal/api/verify') rateLimit(`portal:${ip}`, 20, 15 * 60000);
       if (route.path.startsWith('/portal/api/signup')) rateLimit(`signup:${ip}`, 15, 60 * 60000);
+      if (route.path === '/portal/api/buy' || route.path === '/portal/api/buy/verify') rateLimit(`buy:${ip}`, 20, 60 * 60000);   // the online sales page: codes emailed and tried
+      if (route.path.startsWith('/portal/api/buy/:id')) rateLimit(`buy-card:${ip}`, 40, 60 * 60000);
       if (route.path === '/portal/api/public/inquiry') { rateLimit(`inquiry:${ip}`, 10, 60 * 60000); rateLimit('inquiry:all', 60, 10 * 60000); }   // per address, and overall
       if (route.path.startsWith('/pay-api/')) rateLimit(`pay:${ip}`, 60, 15 * 60000);
       if (route.path.startsWith('/receipt-api/')) rateLimit(`receipt:${ip}`, 60, 15 * 60000);
@@ -199,6 +201,12 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         res.setHeader('set-cookie', cookie('dp_family', out.token, out.maxAge, url.protocol === 'https:'));
         return json(res, 200, { guardian: out.guardian, athlete: out.athlete ?? null, kind: out.kind ?? 'parent', name: out.name ?? out.guardian?.name ?? null,
           ...(out.athletes ? { athletes: out.athletes.map(({ id, name, claim, message }) => ({ id, name, claim: claim ?? null, message: message ?? null })) } : {}) });
+      }
+      // The online sales page signs the buyer in once the order is paid (the token never goes back in the body).
+      if (route.path === '/portal/api/buy/:id/complete' || route.path === '/portal/api/buy/:id/simulate') {
+        const { token: tok, maxAge, ...rest } = await route.handler(ctx, r);
+        if (tok) res.setHeader('set-cookie', cookie('dp_family', tok, maxAge, url.protocol === 'https:'));
+        return json(res, 200, { ...rest, signed_in: !!tok });
       }
       if (route.path === '/portal/api/logout') res.setHeader('set-cookie', cookie('dp_family', '', 0, url.protocol === 'https:'));
       const out = await route.handler(ctx, r);

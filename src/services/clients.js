@@ -9,6 +9,7 @@ import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
 import { clientLock } from './lockout.js';
+import { tagger } from './profiletags.js';
 
 const LIST_SQL = `
   SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.training_type, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
@@ -66,8 +67,9 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
 });
 const shapeAll = (ctx, rows, role) => {
   const wv = Number(getSetting(ctx, 'waiver_version'));
+  const tagsOf = tagger(ctx);   // profile tags (version 90): Legacy ★ for everyone who joined in the tag's dates
   // Session credits are worked out from the ledger with expiry (commerce.js creditDetail, version 88), not summed in SQL.
-  return rows.map((r) => { const c = shape(r, wv, role); c.credits = creditDetail(ctx, r.id); c.session_credits = c.credits.private + c.credits.group; return c; });
+  return rows.map((r) => { const c = shape(r, wv, role); c.credits = creditDetail(ctx, r.id); c.session_credits = c.credits.private + c.credits.group; c.tags = tagsOf(c); return c; });
 };
 
 // "Active client" means one thing everywhere (the Today metric, the client list's Active filter, the owner summary):
@@ -110,7 +112,7 @@ const sorters = {
 // Archived clients are left out unless asked for: archived=true lists only them, archived=all everyone.
 // status=current is the active clients above; team and no_waiver are the views above; any other status is the membership
 // status (none = no membership). sort: name (default), last_seen (longest since seen first) or newest.
-export function listClients(ctx, { q, status, archived, sort, role, training } = {}) {
+export function listClients(ctx, { q, status, archived, sort, role, training, tag } = {}) {
   if (sort && !CLIENT_SORTS.includes(sort)) throw badRequest(`sort must be one of ${CLIENT_SORTS.join(', ')}.`);
   if (training && training !== 'unset' && !TRAINING_TYPES[training]) throw badRequest(`training must be one of ${[...Object.keys(TRAINING_TYPES), 'unset'].join(', ')}.`);
   let rows = shapeAll(ctx, ctx.db.all(`${LIST_SQL} ORDER BY c.name COLLATE NOCASE`), role);
@@ -119,6 +121,7 @@ export function listClients(ctx, { q, status, archived, sort, role, training } =
   else if (archived !== 'all') rows = rows.filter((c) => !c.archived_at);
   if (status) rows = rows.filter((c) => !c.archived_at && inView(c, status));
   if (training) rows = rows.filter((c) => (training === 'unset' ? !c.training_type : c.training_type === training));
+  if (tag) rows = rows.filter((c) => c.tags.some((t) => t.id === tag));
   if (sorters[sort]) rows.sort(sorters[sort]);
   return rows;
 }
@@ -147,10 +150,10 @@ export function exportClients(ctx, query = {}) {
   const rows = listClients(ctx, query);
   const zone = getSetting(ctx, 'timezone');
   const day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-CA', { timeZone: zone }) : '');
-  const head = ['Athlete ID', 'Name', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Email', 'Phone', 'Birthday', 'Grad year', 'Sport', 'School', 'Status', 'Plan', 'Program', 'Teams', 'Trains', 'Waiver signed', 'Card on file', 'Medical notes on file', 'Last seen', 'Client since', 'Archived'];
+  const head = ['Athlete ID', 'Name', 'Family', 'Parent', 'Parent email', 'Parent phone', 'Email', 'Phone', 'Birthday', 'Grad year', 'Sport', 'School', 'Status', 'Plan', 'Program', 'Teams', 'Trains', 'Waiver signed', 'Card on file', 'Medical notes on file', 'Last seen', 'Client since', 'Tags', 'Archived'];
   const lines = rows.map((c) => [c.athlete_id, c.name, c.family?.name, c.parents[0]?.name, c.parents[0]?.email, phoneText(c.parents[0]?.phone), c.email, phoneText(c.phone), c.birth_date, c.grad_year, c.sport, c.school,
     STATUS_LABEL[c.status] ?? c.status, c.subscription?.plan_name, c.program?.name, c.teams.map((t) => t.name).join('; '), TRAINING_TYPES[c.training_type] ?? '', c.family ? (c.flags.no_waiver ? 'No' : 'Yes') : '', c.has_card ? 'Yes' : 'No', c.flags.medical ? 'Yes' : 'No',
-    day(c.last_seen_at), day(c.created_at), day(c.archived_at)]);
+    day(c.last_seen_at), day(c.created_at), c.tags.map((t) => t.name).join('; '), day(c.archived_at)]);
   const body = [head, ...lines].map((r) => r.map(csvCell).join(',')).join('\r\n');
   return { filename: `clients-${day(ctx.now())}.csv`, type: 'text/csv; charset=utf-8', body: Buffer.from(`\uFEFF${body}\r\n`), count: rows.length };
 }

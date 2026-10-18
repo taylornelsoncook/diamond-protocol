@@ -1,4 +1,4 @@
-import { h, fill, toast, copyText, money, date, ago, badge, btn, busy, field, input, select, panel } from './ui.js';
+import { h, fill, toast, copyText, money, date, ago, badge, btn, busy, field, input, select, panel, tagChip, dayText } from './ui.js';
 import { initEngage, clientPanels, rankingsPanel, readinessPanel, teamPanel, viewEducation } from './engage-coach.js';
 import { initPrograms, viewPrograms, viewProgram, viewProgramImport, viewProgramDictate, viewProgramBoard, workoutRow } from './programs-coach.js';
 import { gamesBlock } from './games-ui.js';
@@ -739,7 +739,7 @@ const CLIENT_SORTS = [['name', 'Name'], ['last_seen', 'Longest since seen'], ['n
 const TRAINING = [['hybrid', 'Hybrid athlete'], ['in_facility', 'In-facility'], ['remote', 'Remote client']];
 const trainingLabel = (k) => TRAINING.find(([x]) => x === k)?.[1] ?? null;
 const trainingTag = (c) => (c.training_type ? h('span', { class: 'dp-badge dp-badge--neutral' }, trainingLabel(c.training_type)) : null);
-const clientsUi = { q: '', view: null, sort: 'name', shown: 100, training: '' };
+const clientsUi = { q: '', view: null, sort: 'name', shown: 100, training: '', tag: '' };
 const clientFlags = (c) => [
   c.flags?.medical ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Medical') : null,
   c.flags?.no_waiver ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'No waiver') : null,
@@ -756,17 +756,23 @@ async function viewClients(main) {
   const start = hashQuery().get('status');
   if (start != null && CLIENT_VIEWS.some(([k]) => k === start)) clientsUi.view = start;
   if (clientsUi.view == null) clientsUi.view = '';
+  if (hashQuery().get('tag')) clientsUi.tag = hashQuery().get('tag');   // Settings → Profile tags → See them
   const count = (k) => data.filter((c) => inClientView(c, k)).length;
   const q = input({ type: 'search', placeholder: 'Name, athlete ID, email, family or phone', id: 'client-search', 'aria-label': 'Search clients', value: clientsUi.q, autocomplete: 'off' });
   const sort = select(CLIENT_SORTS, { 'aria-label': 'Sort clients', style: 'width:auto;min-width:170px', value: clientsUi.sort });
   const trains = select([['', 'Any training'], ...TRAINING, ['unset', 'Not set']], { 'aria-label': 'How they train', style: 'width:auto;min-width:150px', value: clientsUi.training });
+  // Profile tags (Legacy ★ and the like): a filter once anyone on the list has one.
+  const tagList = [...new Map(data.flatMap((c) => c.tags ?? []).map((t) => [t.id, t])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  if (clientsUi.tag && !tagList.some((t) => t.id === clientsUi.tag)) clientsUi.tag = '';
+  const tagSel = tagList.length ? select([['', 'Any tag'], ...tagList.map((t) => [t.id, `${t.symbol} ${t.name}`])], { 'aria-label': 'Profile tag', style: 'width:auto;min-width:130px', value: clientsUi.tag }) : null;
   const views = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Which clients' });
   const body = h('tbody');
   const hint = h('p', { class: 'small muted', style: 'margin:0' });
   const more = h('div', { class: 'row' });
   const shownRows = () => {
     const rows = data.filter((c) => clientMatches(c, clientsUi.q) && inClientView(c, clientsUi.view)
-      && (!clientsUi.training || (clientsUi.training === 'unset' ? !c.training_type : c.training_type === clientsUi.training)));
+      && (!clientsUi.training || (clientsUi.training === 'unset' ? !c.training_type : c.training_type === clientsUi.training))
+      && (!clientsUi.tag || (c.tags ?? []).some((t) => t.id === clientsUi.tag)));
     if (clientsUi.sort === 'last_seen') rows.sort((a, b) => (a.last_seen_at ?? '').localeCompare(b.last_seen_at ?? '') || a.name.localeCompare(b.name));
     else if (clientsUi.sort === 'newest') rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     return rows;
@@ -781,7 +787,7 @@ async function viewClients(main) {
     fill(hint, s && hidden ? [`${hidden} archived ${hidden === 1 ? 'client matches' : 'clients match'} too. `, h('a', { href: '#/clients?status=archived', onClick: (e) => { e.preventDefault(); clientsUi.view = 'archived'; draw(); } }, 'Show archived')] : null);
     fill(body, ...(rows.length ? rows.slice(0, clientsUi.shown).map((c) => h('tr', { class: 'link', tabindex: '0', onClick: () => open(c), onKeydown: (e) => { if (e.key === 'Enter') open(c); } },
       h('td', null, h('div', { class: 'stack-tight' },
-        h('span', { class: 'row wrap', style: 'gap:6px' }, h('span', { class: 'strong' }, c.name), ...clientFlags(c)),
+        h('span', { class: 'row wrap', style: 'gap:6px' }, h('span', { class: 'strong' }, c.name), ...(c.tags ?? []).map(tagChip), ...clientFlags(c)),
         h('span', { class: 'small muted' }, h('span', { style: 'font-family:var(--font-mono)' }, c.athlete_id ?? ''), [c.family ? c.family.name : c.email, c.grad_year ? `Class of ${c.grad_year}` : null, c.teams?.length ? c.teams.map((t) => t.name).join(', ') : null].filter(Boolean).map((x) => ` · ${x}`).join('')),
         c.training_type ? h('span', null, trainingTag(c)) : null)),
       h('td', null, h('div', { class: 'stack-tight', style: 'align-items:flex-start' }, c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : badge(c.status), c.subscription?.plan_name ? h('span', { class: 'small muted' }, c.subscription.plan_name) : null)),
@@ -798,6 +804,7 @@ async function viewClients(main) {
   });
   sort.addEventListener('change', () => { clientsUi.sort = sort.value; draw(); });
   trains.addEventListener('change', () => { clientsUi.training = trains.value; clientsUi.shown = 100; draw(); });
+  tagSel?.addEventListener('change', () => { clientsUi.tag = tagSel.value; clientsUi.shown = 100; draw(); });
   draw();
   const current = count('current'), archived = count('archived');
   const csv = isOwner() ? btn('Download CSV', (e) => busy(e.currentTarget, async () => {
@@ -805,11 +812,12 @@ async function viewClients(main) {
     if (clientsUi.q.trim()) p.set('q', clientsUi.q.trim());
     if (clientsUi.view === 'archived') p.set('archived', 'true'); else if (clientsUi.view) p.set('status', clientsUi.view);
     if (clientsUi.training) p.set('training', clientsUi.training);
+    if (clientsUi.tag) p.set('tag', clientsUi.tag);
     await download(`/v1/client-export?${p}`);
   }), 'secondary', { title: 'The clients in this view, with contact details. No amounts.' }) : null;
   fill(main,
     header('Clients', `${current} active · ${data.length - archived} on the list${archived ? ` · ${archived} archived` : ''}.`, h('div', { class: 'row wrap' }, state.user.role !== 'front_desk' ? h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients/import' }, 'Import') : null, csv, addClientBtn())),
-    panel(null, {}, views, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), trains, sort), hint,
+    panel(null, {}, views, h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:200px' }, q), trains, tagSel, sort), hint,
       h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
         h('thead', null, h('tr', null, ['Client', 'Membership', 'Program', 'Last seen'].map((t) => h('th', { class: t === 'Program' ? 'cl-program' : null }, t)))), body)), more));
   if (clientsUi.q) q.focus();
@@ -1253,8 +1261,8 @@ async function viewClient(main, id) {
   const tabBar = h('nav', { class: 'tm-jump', role: 'tablist', 'aria-label': 'Sections' }, TABS.map(([key, label]) => h('button', { type: 'button', role: 'tab', 'aria-selected': 'false', 'data-tab': key }, label)));
   const content = h('div', { class: 'stack', style: 'gap:24px' });
   fill(main,
-    header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, idChip(c.athlete_id), trainingTag(c), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
-      h('div', { class: 'row' }, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
+    header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, ...(c.tags ?? []).map(tagChip), idChip(c.athlete_id), trainingTag(c), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
+      h('div', { class: 'row' }, isOwner() ? btn('Tags', () => clientTagsDialog(c), 'ghost', { title: 'Add or take off a profile tag like Legacy' }) : null, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
     c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
     c.payment_locked ? h('div', { class: 'dp-panel', role: 'note', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'warn-text' }, `Locked out over a declined membership payment${c.payment_locked.amount_cents != null ? ` (${money(c.payment_locked.amount_cents)})` : ''}${c.payment_locked.athletes.length && !c.payment_locked.athletes.includes(c.name) ? ` for ${c.payment_locked.athletes.join(', ')}` : ''}. The family can only update the card and pay in the parent portal; the app, booking online and self check-in are paused. You can still book and check them in here.`)) : null,
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}`, c.emergency_name || c.emergency_phone ? [' · Emergency: ', c.emergency_name ?? '', ' ', c.emergency_phone ? h('a', { href: telHref(c.emergency_phone), style: 'color:inherit;text-decoration:underline' }, c.emergency_phone) : null] : null) : null,
@@ -2578,6 +2586,21 @@ async function useDraft(e, kind, box) {
     box.dispatchEvent(new Event('input'));
     toast('Draft filled in. Read it, change what the lawyer tells you to, then Save.');
   });
+}
+// The owner adds a profile tag to one client or takes it off, whatever the tag's dates (profiletags.js setClientTag).
+async function clientTagsDialog(c) {
+  const { data: tags } = await get('/v1/profile-tags');
+  if (!tags.length) { toast('No tags yet. Make one in Settings → Profile tags.', 'warn'); location.hash = '#/settings?tab=tags'; return; }
+  const had = new Map((c.tags ?? []).map((t) => [t.id, t]));
+  const boxes = tags.map((t) => ({ t, box: h('input', { type: 'checkbox', checked: had.has(t.id) }) }));
+  const first = c.name.split(' ')[0];
+  setupDialog(`Tags for ${c.name}`, boxes.map(({ t, box }) => h('label', { class: 'row', style: 'gap:10px;min-height:44px;align-items:center' }, box, tagChip(t),
+    h('span', { class: 'small muted' }, had.get(t.id)?.how === 'hand' ? 'added by hand' : had.has(t.id) ? 'joined in its dates' : t.ends_on ? `${dayText(t.starts_on)} to ${dayText(t.ends_on)}` : `from ${dayText(t.starts_on)}`))),
+  'Save', async () => {
+    const changed = boxes.filter(({ t, box }) => box.checked !== had.has(t.id));
+    for (const { t, box } of changed) await post(`/v1/clients/${c.id}/tags`, { tag_id: t.id, on: box.checked });
+    return changed.length ? `Tags saved for ${first}.` : null;
+  }, `A tag goes on everyone who joined in its dates. Tick or untick to change it for ${first} alone.`);
 }
 function setupDialog(title, fields, saveLabel, onSave, note) {
   const d = document.getElementById('dialog');

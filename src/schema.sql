@@ -2206,3 +2206,27 @@ CREATE TABLE IF NOT EXISTS web_orders (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS web_orders_email ON web_orders(email, created_at);
+
+-- Profile tags (version 90; services/profiletags.js): a name, an icon and a colour on every profile made in the tag's dates
+-- (business days, both ends counted; ends_on NULL = still open), worked out on read from clients.created_at.
+CREATE TABLE IF NOT EXISTS profile_tags (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  icon TEXT NOT NULL DEFAULT 'star',
+  color TEXT NOT NULL DEFAULT 'gold',
+  starts_on TEXT NOT NULL,
+  ends_on TEXT,
+  team_only INTEGER NOT NULL DEFAULT 0,  -- 1 = team-only athletes (a roster, no membership) count too
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+-- The owner's hand changes on one profile: 'added' (has it whatever the dates) or 'removed' (never, whatever the dates).
+CREATE TABLE IF NOT EXISTS client_tags (
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  tag_id TEXT NOT NULL REFERENCES profile_tags(id) ON DELETE CASCADE,
+  state TEXT NOT NULL CHECK (state IN ('added','removed')),
+  by_name TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (client_id, tag_id)
+);

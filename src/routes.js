@@ -2,6 +2,7 @@ import * as billing from './services/billing.js';
 import * as visits from './services/visits.js';
 import * as refunds from './services/refunds.js';
 import * as buyonline from './services/buyonline.js';
+import * as profiletags from './services/profiletags.js';
 import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
 import * as wearables from './services/wearables.js';
@@ -159,6 +160,12 @@ export const routes = [
     return { __file: file };
   }],
   ['POST', '/v1/clients', 'any', 'Clients', 'Create a client. Optional plan_id starts a subscription (with trial); optional program_id assigns a program (not front desk). Refused with 409 duplicate_email when the email belongs to a client, parent_exists when the parent\'s email already signs in for a family (add the athlete to that family instead), and possible_duplicate when a client has the same name and birthday (archived clients too) or the same phone number; details.duplicates lists them (possible_duplicate only with check_duplicates: true, which the dashboard sends; resend without it to create the account anyway).', (ctx, r) => clients.createClient(ctx, r.body, { staff: { role: r.user?.role ?? 'owner' } }), 201],
+  // Profile tags (version 90, profiletags.js): Legacy ★ and the like, on every profile made in the tag's dates.
+  ['GET', '/v1/profile-tags', 'any', 'Clients', 'The profile tags: name, icon (symbol), colour (hex), starts_on and ends_on (business days, both counted; null = still open), team_only (team-only athletes count too) and how many current profiles have it. A profile has a tag when it was made in those dates, or the owner added it by hand; every client carries tags [{id, name, symbol, hex, how: dates|hand}], and GET /v1/clients takes ?tag=<id>.', (ctx, r) => profiletags.listTags(ctx, clients.listClients(ctx, { archived: 'all', role: r.user?.role }))],
+  ['POST', '/v1/profile-tags', 'session', 'Clients', 'Owner only. Make a tag: name (up to 30 characters, unique), icon (star, crown, diamond, bolt, heart, flag, check), color (gold, green, steel, blue, red, purple), starts_on (default today), ends_on (empty = no end), team_only, note.', (ctx, r) => profiletags.createTag(ctx, r.body, r.user)],
+  ['PATCH', '/v1/profile-tags/:id', 'session', 'Clients', 'Owner only. Change a tag; new dates change who has it at once (hand changes stay).', (ctx, r) => profiletags.updateTag(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/profile-tags/:id', 'session', 'Clients', 'Owner only. Delete a tag: it leaves every profile.', (ctx, r) => profiletags.deleteTag(ctx, r.params.id)],
+  ['POST', '/v1/clients/:id/tags', 'session', 'Clients', 'Owner only. Add a tag to this profile or take it off, whatever the dates: { tag_id, on: true|false }.', (ctx, r) => profiletags.setClientTag(ctx, clients.getClient(ctx, r.params.id), r.body, r.user)],
   ['GET', '/v1/clients/:id', 'any', 'Clients', 'Get a client with subscription, program, family, teams, flags and app link.', (ctx, r) => clients.getClient(ctx, r.params.id, { withSecrets: !r.apiKey || r.apiKey.scope === 'full', role: r.user?.role })],   // the app link lets anyone who has it log workouts: not for read-only keys
   ['PATCH', '/v1/clients/:id', 'any', 'Clients', 'Update name, email, phone, notes and profile fields (birth_date, sex, sport, position, school, grad_year, medical_notes, emergency_name, emergency_phone, athlete_id) and training_type (hybrid, in_facility, remote, or null to clear).', (ctx, r) => { clients.updateClient(ctx, r.params.id, r.body); return clients.getClient(ctx, r.params.id, { withSecrets: true, role: r.user?.role }); }],
   // Outside data: wearables, and the by-hand import API (off the screens by owner decision; kept for integrations). Owners and coaches import;

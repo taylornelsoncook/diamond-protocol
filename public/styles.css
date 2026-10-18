@@ -24,6 +24,8 @@
 .dp-badge{display:inline-block;padding:4px 10px;border-radius:var(--radius-pill);font:600 13px/1.3 var(--font-sans)}
 .dp-badge--good{background:var(--green-deep);color:var(--green-soft)}
 .dp-badge--warn{background:var(--amber-deep);color:var(--amber)}
+.dp-tag{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:var(--radius-pill);font:700 13px/1.3 var(--font-sans);color:var(--tag);background:color-mix(in srgb, var(--tag) 16%, transparent);border:1px solid color-mix(in srgb, var(--tag) 60%, transparent);white-space:nowrap}
+.dp-tag > span{font-size:14px;line-height:1}
 .dp-badge--neutral{background:var(--surface-raised);color:var(--steel);border:1px solid var(--control-border)}
 .dp-badge--muted{background:var(--surface-raised);color:var(--steel-muted)}
 .dp-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:var(--space-6);display:flex;flex-direction:column;gap:var(--space-3)}

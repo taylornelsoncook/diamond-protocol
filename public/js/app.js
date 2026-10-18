@@ -3675,7 +3675,7 @@ function checkinPanel(locations, kiosks) {
     if (!k.link.startsWith('http')) k.link = location.origin + k.link;
     if (k.screen_link && !k.screen_link.startsWith('http')) k.screen_link = location.origin + k.screen_link;
     fill(shown, h('div', { class: 'dp-panel stack', style: 'background:var(--surface-2, transparent)' },
-      h('div', { class: 'strong' }, `Tablet link for ${l.name}`),
+      h('div', { class: 'strong' }, `Sign-in tablet link for ${l.name}`),
       h('p', { class: 'small muted', style: 'margin:0' }, 'Open this link once in the tablet\'s browser, then add it to the home screen. Anyone with the link can check athletes in here, so don\'t share it. It\'s only shown now.'),
       h('code', { style: 'word-break:break-all' }, k.link),
       h('div', null, btn('Copy tablet link', async () => { await navigator.clipboard?.writeText(k.link).catch(() => {}); toast('Tablet link copied.'); }, 'secondary')),
@@ -3684,9 +3684,9 @@ function checkinPanel(locations, kiosks) {
         h('code', { style: 'word-break:break-all' }, k.screen_link),
         h('div', null, btn('Copy screen link', async () => { await navigator.clipboard?.writeText(k.screen_link).catch(() => {}); toast('Screen link copied.'); }, 'secondary'))] : null));
   });
-  return panel('Self check-in', { subtitle: 'Athletes check themselves in for sessions they\'re booked on, from 30 minutes before the start. The roster updates as they do.' },
+  return panel('Self check-in', { subtitle: 'The front-desk sign-in tablet lists every class, private and session in the next 2 hours; an athlete taps theirs and types their Athlete ID. Not booked for a class with a spot left? They\'re booked and checked in, to pay at the desk unless their membership or a pack covers it. The door poster lets parents check in booked athletes from 30 minutes before. The roster updates as they do.' },
     places.length ? places.map((l) => h('div', { class: 'list-item' }, h('span', { class: 'grow strong' }, l.name),
-      btn('Door poster', poster(l), 'outline'), btn('Set up a tablet', tablet(l), 'ghost'),
+      btn('Door poster', poster(l), 'outline'), btn('Set up the sign-in tablet', tablet(l), 'ghost'),
       canManage ? btn('New door code', (e) => { if (confirm(`Make a new code for ${l.name}? Printed posters there stop working.`)) busy(e.currentTarget, async () => { await post(`/v1/locations/${l.id}/check-in-code/reset`); toast('New code made. Print the poster again.'); }); }, 'ghost') : null))
       : h('p', { class: 'muted', style: 'margin:0' }, 'Add a location in Point of sale first.'),
     shown,

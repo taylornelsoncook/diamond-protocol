@@ -155,7 +155,7 @@ test('a version 70 database gains the weekly note tables', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 87, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 88, `round ${round}`);
       for (const t of ['weekly_notes', 'leaderboard_optins']) assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
       d.close();
     }

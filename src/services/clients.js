@@ -3,7 +3,8 @@ import { emit } from './events.js';
 import * as billing from './billing.js';
 import * as programs from './programs.js';
 import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSetting, staleCard } from './families.js';
-import { visitsFor } from './visits.js';
+import { visitsFor, listCarryOvers } from './visits.js';
+import { creditDetail } from './commerce.js';
 import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
@@ -63,7 +64,11 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
   last_visit_at: [r.last_check_in_at, r.last_attended_at].filter(Boolean).sort().pop() ?? null,
   last_seen_at: [r.last_check_in_at, r.last_attended_at, r.last_workout_at].filter(Boolean).sort().pop() ?? null,
 });
-const shapeAll = (ctx, rows, role) => { const wv = Number(getSetting(ctx, 'waiver_version')); return rows.map((r) => shape(r, wv, role)); };
+const shapeAll = (ctx, rows, role) => {
+  const wv = Number(getSetting(ctx, 'waiver_version'));
+  // Session credits are worked out from the ledger with expiry (commerce.js creditDetail, version 88), not summed in SQL.
+  return rows.map((r) => { const c = shape(r, wv, role); c.credits = creditDetail(ctx, r.id); c.session_credits = c.credits.private + c.credits.group; return c; });
+};
 
 // "Active client" means one thing everywhere (the Today metric, the client list's Active filter, the owner summary):
 // not archived, with a membership that is paid up or on a free trial.
@@ -158,8 +163,9 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
   const payer = payerFor(ctx, id);
   c.notes = extra.notes ?? null;
   c.visits = visitsFor(ctx, id);                                     // membership visits this period (null without a live membership)
+  c.visit_carryovers = listCarryOvers(ctx, id);                      // sessions the owner carried into another month (version 88)
   c.card_status = payer.card_status;
-  c.card = payer.card_payment_method ? { on_file: true, brand: payer.card_brand, last4: payer.card_last4, exp: payer.card_exp ?? null, stale: staleCard(ctx, payer), owner: payer.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: payer.table === 'families' ? 'family' : 'client' };
+  c.card = payer.card_payment_method ? { on_file: true, brand: payer.card_brand, last4: payer.card_last4, exp: payer.card_exp ?? null, funding: payer.card_funding ?? null, stale: staleCard(ctx, payer), owner: payer.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: payer.table === 'families' ? 'family' : 'client' };
   Object.assign(c, athleteFields({}, extra));
   if (c.family) {
     const fam = getFamily(ctx, c.family.id);

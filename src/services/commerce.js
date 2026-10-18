@@ -1,4 +1,4 @@
-import { newId, token, v, notFound, badRequest, conflict, HttpError, withLock, isDate, localDate, zonedToUtc, addDaysToDate, startOfLocalDay } from '../util.js';
+import { newId, token, v, notFound, badRequest, conflict, HttpError, withLock, isDate, localDate, zonedToUtc, addDaysToDate, startOfLocalDay, addMonths } from '../util.js';
 import { emit } from './events.js';
 import { payerFor, getSetting, staleCard, staleCardText, staleCustomer } from './families.js';
 import { handleInvoiceCheckout } from './teams.js';
@@ -7,7 +7,7 @@ import { saleReceipt } from './notify.js';
 import { notifyFamily } from './mail.js';
 import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
-import { cardFee, feeSettings, CARD_METHODS } from './fees.js';
+import { cardFee, feeSettings, CARD_METHODS, cardFunding, ensureFunding, feeFree, FUNDINGS } from './fees.js';
 import { membershipCovers, visitsFor } from './visits.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
@@ -146,8 +146,10 @@ async function ensureCustomer(ctx, payer) {
 }
 // The card's expiry as YYYY-MM (Stripe gives the month and the 4-digit year), or null when it isn't known.
 export const cardExp = (month, year) => (Number.isInteger(Number(month)) && Number(month) >= 1 && Number(month) <= 12 && /^\d{4}$/.test(String(year ?? '')) ? `${year}-${String(Number(month)).padStart(2, '0')}` : null);
-function saveCard(ctx, payer, { paymentMethod, brand, last4, expMonth, expYear }) {
-  ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ?, card_exp = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, paymentMethod ? cardExp(expMonth, expYear) : null, payer.id);
+function saveCard(ctx, payer, { paymentMethod, brand, last4, expMonth, expYear, funding }) {
+  // funding (version 88): credit, debit, prepaid or unknown from Stripe; null when the provider didn't say (looked up before the next charge).
+  const fund = paymentMethod && FUNDINGS.includes(funding) ? funding : null;
+  ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ?, card_exp = ?, card_funding = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, paymentMethod ? cardExp(expMonth, expYear) : null, fund, payer.id);
   emit(ctx, 'client.card_updated', { [payer.metadataKey]: payer.id, client_name: payer.name, card_brand: paymentMethod ? brand ?? null : null, card_last4: paymentMethod ? last4 ?? null : null });
 }
 const payerById = (ctx, table, id) => {
@@ -198,11 +200,11 @@ export async function finishCardSetup(ctx, clientId, sessionId) {
   try { await applySetupSession(ctx, id, payer); } catch (e) { if (e instanceof HttpError) throw e; throw paymentError(e); }
   return cardSummary(ctx, clientId);
 }
-export async function addTestCard(ctx, clientId) {
+export async function addTestCard(ctx, clientId, { funding } = {}) {
   if (ctx.payments.live || !ctx.payments.testCard) throw conflict('Test cards are only available in test mode.');
   const payer = payerFor(ctx, clientId);
   await ensureCustomer(ctx, payer);
-  saveCard(ctx, payer, ctx.payments.testCard());
+  saveCard(ctx, payer, ctx.payments.testCard({ funding: funding ? v.oneOf(funding, 'funding', FUNDINGS) : 'credit' }));
   await retryFailed(ctx, payer);
   return cardSummary(ctx, clientId);
 }
@@ -216,14 +218,57 @@ export function removeCard(ctx, clientId) {
 }
 export function cardSummary(ctx, clientId) {
   const p = payerFor(ctx, clientId);
-  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, stale: staleCard(ctx, p), owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
+  return p.card_payment_method ? { on_file: true, brand: p.card_brand, last4: p.card_last4, exp: p.card_exp ?? null, funding: p.card_funding ?? null, stale: staleCard(ctx, p), owner: p.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: p.table === 'families' ? 'family' : 'client' };
 }
 
 // ---------- Session credits and check-ins ----------
-export const creditBalance = (ctx, clientId, type) => type
-  ? ctx.db.get('SELECT COALESCE(SUM(delta), 0) AS n FROM session_credits WHERE client_id = ? AND credit_type = ?', clientId, type).n
-  : ctx.db.get('SELECT COALESCE(SUM(delta), 0) AS n FROM session_credits WHERE client_id = ?', clientId).n;
+// Packs expire (owner decision, version 88: "private training has a year expiration"): a session bought can be used for
+// pack_expiry_months (12; 0 = never) from the day it was bought. The ledger (session_credits) stays as it is; what's left is
+// worked out from it on read: every positive row is a lot with an expiry date, every use takes from the oldest lot still
+// good on that day, a session a cancelled booking gives back goes to the lot it came from, and a lot past its date is lost.
+export const PACK_EXPIRY_DEFAULT = 12, MAX_PACK_EXPIRY_MONTHS = 60;
+export function packExpiryMonths(ctx) {
+  const raw = getSetting(ctx, 'pack_expiry_months');
+  const n = raw === null || raw === undefined || raw === '' ? PACK_EXPIRY_DEFAULT : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : PACK_EXPIRY_DEFAULT;
+}
+function creditLots(ctx, clientId, type, atIso = ctx.now()) {
+  const months = packExpiryMonths(ctx);
+  const rows = ctx.db.all('SELECT delta, reason, created_at FROM session_credits WHERE client_id = ? AND credit_type = ? ORDER BY created_at, rowid', clientId, type);
+  const lots = [], uses = [];                       // uses: what each use took and from which lot, newest last
+  const newLot = (r, n) => lots.push({ added_at: r.created_at, expires_at: months ? addMonths(r.created_at, months) : null, left: n });
+  for (const r of rows) {
+    if (r.delta > 0 && r.reason === 'cancel') {      // a booking cancelled: the session goes back where it came from
+      let n = r.delta;
+      while (n > 0 && uses.length) { const u = uses[uses.length - 1]; const back = Math.min(n, u.n); u.lot.left += back; u.n -= back; n -= back; if (!u.n) uses.pop(); }
+      if (n > 0) newLot(r, n);
+    } else if (r.delta > 0) newLot(r, r.delta);
+    else {
+      let n = -r.delta;
+      for (const lot of lots) {
+        if (n <= 0) break;
+        if (lot.left <= 0 || (lot.expires_at && lot.expires_at <= r.created_at)) continue;
+        const take = Math.min(n, lot.left); lot.left -= take; n -= take; uses.push({ lot, n: take });
+      }
+      // More taken than any lot good that day held (a ledger from before expiry was counted): the newest lots give it up, so it still adds up.
+      for (let i = lots.length - 1; i >= 0 && n > 0; i--) { const lot = lots[i]; const take = Math.min(n, lot.left); if (take > 0) { lot.left -= take; n -= take; uses.push({ lot, n: take }); } }
+    }
+  }
+  return lots.filter((l) => l.left > 0).map((l) => ({ ...l, expired: !!l.expires_at && l.expires_at <= atIso }));
+}
+export const creditBalance = (ctx, clientId, type) => (type ? [type] : CREDIT_TYPES).reduce((t, k) => t + creditLots(ctx, clientId, k).filter((l) => !l.expired).reduce((a, l) => a + l.left, 0), 0);
 export const creditBalances = (ctx, clientId) => ({ private: creditBalance(ctx, clientId, 'private'), group: creditBalance(ctx, clientId, 'group') });
+// The balances plus each lot with sessions left and its expiry date (soonest first), and how many expired unused: the
+// client page, the portal and the athlete's app read it.
+export function creditDetail(ctx, clientId) {
+  const out = { ...creditBalances(ctx, clientId), expiry_months: packExpiryMonths(ctx), lots: {}, expired: {} };
+  for (const k of CREDIT_TYPES) {
+    const lots = creditLots(ctx, clientId, k);
+    out.lots[k] = lots.filter((l) => !l.expired).map((l) => ({ sessions: l.left, added_at: l.added_at, expires_at: l.expires_at }));
+    out.expired[k] = lots.filter((l) => l.expired).reduce((t, l) => t + l.left, 0);
+  }
+  return out;
+}
 
 export function adjustCredits(ctx, clientId, body) {
   clientRow(ctx, clientId);
@@ -274,7 +319,8 @@ const money = (c) => `${c < 0 ? '-' : ''}$${(Math.abs(c) / 100).toLocaleString('
 // Undo is for "I rang that up wrong": only the person who took the sale, only while nothing has been refunded,
 // and only for UNDO_MINUTES after it was paid. The screen gets the seconds left so it can hide the button in time.
 function undoInfo(ctx, s, userId) {
-  if (!userId || s.created_by !== userId || s.status !== 'succeeded' || s.refunded_cents || !s.completed_at) return { can_undo: false };
+  const asPaid = s.status === 'succeeded' || (s.status === 'partially_refunded' && feeOnlyRefund(ctx, s));
+  if (!userId || s.created_by !== userId || !asPaid || !s.completed_at) return { can_undo: false };
   const left = Math.floor((Date.parse(s.completed_at) + UNDO_MINUTES * 60000 - Date.parse(ctx.now())) / 1000);
   return left > 0 ? { can_undo: true, undo_seconds_left: left } : { can_undo: false };
 }
@@ -290,7 +336,8 @@ export function getSale(ctx, id, { withSecret = false, userId } = {}) {
   s.fee_label = s.fee_cents ? feeSettings(ctx).label : null;
   s.subtotal_cents = s.amount_cents - s.fee_cents + s.discount_cents;     // the items before the discount and any card fee
   s.method_label = METHOD_LABEL[s.method] ?? s.method;
-  s.refunds = ctx.db.all('SELECT r.amount_cents, r.kind, r.reason, r.created_at, u.name AS by_name FROM sale_refunds r LEFT JOIN users u ON u.id = r.created_by WHERE r.sale_id = ? ORDER BY r.created_at', id);
+  s.refunds = ctx.db.all('SELECT r.amount_cents, r.kind, r.reason, r.created_at, r.fee, u.name AS by_name FROM sale_refunds r LEFT JOIN users u ON u.id = r.created_by WHERE r.sale_id = ? ORDER BY r.created_at', id);
+  s.fee_refunded_cents = s.refunds.filter((r) => r.fee).reduce((t, r) => t + r.amount_cents, 0);   // the card fee given back on a debit card (version 88)
   // The printable receipt: a private link, only once the sale is paid.
   s.receipt_url = s.receipt_token && ['succeeded', 'partially_refunded', 'refunded'].includes(s.status) ? `${ctx.publicUrl ?? ''}/receipt/${s.receipt_token}` : null;
   Object.assign(s, undoInfo(ctx, s, userId));
@@ -412,10 +459,6 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   const discount = parseDiscount(ctx, body.discount, subtotal, role);
   const price = subtotal - discount.cents;
   const booking = body.booking_id ? bookingToCollect(ctx, v.str(body.booking_id, 'booking_id', { max: 64 }), client, price) : null;
-  // Owner setting (services/fees.js): a card processing fee on card payments, its own line on the receipt. Cash never carries it.
-  const fee = feeOn && CARD_METHODS.includes(method) ? cardFee(ctx, price, online ? 'store' : 'counter') : { cents: 0 };
-  const amount = price + fee.cents;
-
   const wantsSave = !!body.save_card && ['tap_to_pay', 'reader'].includes(method);
   if (wantsSave && !client) throw badRequest('Choose a client to save their card.');
   let reader = null;
@@ -426,6 +469,12 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
     if (ctx.db.get(`SELECT id FROM sales WHERE reader_id = ? AND status = 'pending'`, reader.id)) throw conflict(`${reader.label} is busy with another payment. Finish or cancel it first.`);
   }
   const payer = client ? payerFor(ctx, client.id) : null;
+  // Owner setting (services/fees.js): a card processing fee on card payments, its own line on the receipt. Cash never carries it,
+  // and neither does a debit or prepaid card: a card on file is looked up (once) before the amount is set; a card tapped or
+  // typed on a pay page is known only after it's charged, and then the fee is given back (removeDebitFee).
+  const funding = method === 'card_on_file' && payer ? await ensureFunding(ctx, payer) : null;
+  const fee = feeOn && CARD_METHODS.includes(method) ? cardFee(ctx, price, online ? 'store' : 'counter', { funding }) : { cents: 0 };
+  const amount = price + fee.cents;
   if (method === 'card_on_file' && !payer?.card_payment_method) throw conflict(client ? `${client.name.split(' ')[0]} has no card on file${payer.table === 'families' ? ' for the family' : ''}.` : 'Choose a client with a card on file.');
   if (method === 'card_on_file' && staleCard(ctx, payer)) throw conflict(staleCardText(payer));
   // Receipt: email_receipt true sends one (to receipt_email, or the family's billing email), false sends none,
@@ -520,7 +569,7 @@ function completeSale(ctx, id, { card, savedCard }) {
     if (s.client_id) for (const type of CREDIT_TYPES) if (byType[type] > 0) {
       ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, sale_id, created_at) VALUES (?, ?, ?, ?, 'purchase', ?, ?)`, newId('cr'), s.client_id, type, byType[type], id, ctx.now());
     }
-    if (s.client_id && s.save_card && savedCard) saveCard(ctx, payerFor(ctx, s.client_id), { paymentMethod: savedCard, brand: card?.brand, last4: card?.last4 });
+    if (s.client_id && s.save_card && savedCard) saveCard(ctx, payerFor(ctx, s.client_id), { paymentMethod: savedCard, brand: card?.brand, last4: card?.last4, funding: card?.funding });
     if (s.booking_id) settleBooking(ctx, s.booking_id, id);
     stockForSale(ctx, id, -1, 'sale');
     emit(ctx, 'sale.completed', {
@@ -528,9 +577,31 @@ function completeSale(ctx, id, { card, savedCard }) {
       amount_cents: s.amount_cents, discount_cents: s.discount_cents, fee_cents: s.fee_cents, method: s.method, items: s.items.map((i) => ({ name: i.name, quantity: i.quantity })), sessions_added: sessions
     });
   });
-  if (completed) saleReceipt(ctx, id).catch((e) => console.error('receipt', e.message));
   if (completed && savedCard) { const s = ctx.db.get('SELECT client_id, save_card FROM sales WHERE id = ?', id); if (s.client_id && s.save_card) retryFailed(ctx, payerFor(ctx, s.client_id)); }
+  // The fee comes back off a debit card before the receipt goes; syncSale waits for it so the app and the counter see the sale as it ends up.
+  return completed ? removeDebitFee(ctx, id, card?.funding).catch((e) => console.error('debit fee', e.message)).then(() => saleReceipt(ctx, id)).catch((e) => console.error('receipt', e.message)) : Promise.resolve();
 }
+// The card fee came off a card that turned out to be debit or prepaid (known only once it was tapped, or typed on the pay
+// page): give the fee back to the card at once, as a refund of the sale marked fee = 1, so the sale itself stands (the
+// counter's Undo still works, the books and Stripe agree, the receipt says so). Once per sale, under the sale's lock.
+export async function removeDebitFee(ctx, id, funding) {
+  if (!feeFree(funding)) return false;
+  return withLock(`sale:${id}`, async () => {
+    const s = ctx.db.get('SELECT * FROM sales WHERE id = ?', id);
+    if (!s || s.status !== 'succeeded' || !s.fee_cents || s.refunded_cents || s.method === 'cash') return false;
+    if (ctx.db.get('SELECT id FROM sale_refunds WHERE sale_id = ? AND fee = 1', id)) return false;
+    const r = await ctx.payments.refund({ paymentRef: s.payment_ref, amountCents: s.fee_cents, idempotencyKey: `fee-refund-${id}` });
+    if (!r.ok) { console.error('debit fee', id, r.error); return false; }
+    ctx.db.tx(() => {
+      ctx.db.run(`UPDATE sales SET refunded_cents = ?, status = 'partially_refunded' WHERE id = ?`, s.fee_cents, id);
+      ctx.db.run('INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_by, created_at, fee) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)', newId('ref'), id, s.fee_cents, 'refund', `${feeSettings(ctx).label} given back: ${funding} card`, ctx.now());
+      emit(ctx, 'sale.refunded', { sale_id: id, client_id: s.client_id, amount_cents: s.fee_cents, total_refunded_cents: s.fee_cents, full: false, sessions_removed: 0, items_restocked: 0, method: s.method, fee: true, funding });
+    });
+    return true;
+  });
+}
+// The fee given back on a debit card is the only refund on the sale: for Undo and the receipt, the sale is as paid.
+const feeOnlyRefund = (ctx, s) => !!s.refunded_cents && !ctx.db.get('SELECT id FROM sale_refunds WHERE sale_id = ? AND fee = 0', s.id);
 
 // Online sales need a sales location; one named "Online" is created the first time.
 export function onlineLocation(ctx) {
@@ -567,7 +638,7 @@ export async function syncSale(ctx, id) {
     i = await ctx.payments.getIntent(s.payment_ref);
     if (i.status === 'requires_capture') { await ctx.payments.captureIntent(s.payment_ref); i = await ctx.payments.getIntent(s.payment_ref); }
   } catch (e) { throw paymentError(e); }
-  if (i.status === 'succeeded') completeSale(ctx, id, { card: i.card, savedCard: i.savedCard });
+  if (i.status === 'succeeded') await completeSale(ctx, id, { card: i.card, savedCard: i.savedCard });
   else if (i.status === 'canceled') ctx.db.run(`UPDATE sales SET status = 'canceled', completed_at = ? WHERE id = ? AND status = 'pending'`, ctx.now(), id);
   else if (i.status === 'requires_payment_method' && i.error) failSale(ctx, id, i.error);
   return getSale(ctx, id, { withSecret: true });
@@ -640,7 +711,8 @@ export function undoSale(ctx, id, user) {
     const refundInstead = user?.role === 'owner' ? 'Refund it instead.' : 'Ask the owner for a refund.';
     if (!user || s.created_by !== user.id) throw conflict(`Only the person who took this sale can undo it. ${refundInstead}`);
     if (s.status === 'pending') throw conflict('This payment is still waiting for the card. Cancel it instead.');
-    if (s.status !== 'succeeded' || s.refunded_cents) throw conflict(s.status === 'refunded' || s.refunded_cents ? `This sale has already been refunded${s.status === 'refunded' ? '' : ' in part'}. ${refundInstead}` : 'Only a completed sale can be undone.');
+    const feeOnly = feeOnlyRefund(ctx, s);
+    if (!(s.status === 'succeeded' || (s.status === 'partially_refunded' && feeOnly))) throw conflict(s.status === 'refunded' || s.refunded_cents ? `This sale has already been refunded${s.status === 'refunded' ? '' : ' in part'}. ${refundInstead}` : 'Only a completed sale can be undone.');
     if (!undoInfo(ctx, s, user.id).can_undo) throw conflict(`Sales can be undone for ${UNDO_MINUTES} minutes after they're paid. ${refundInstead}`);
     return refundNow(ctx, id, { reason: 'Undone at the counter' }, { actor: user.id, kind: 'undo' });
   });
@@ -668,7 +740,7 @@ export function publicReceipt(ctx, receiptToken) {
     id: sale.id, business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address') || null, timezone: getSetting(ctx, 'timezone'),
     paid_at: sale.completed_at ?? sale.created_at, location_name: sale.location_name, client_name: sale.client_name ?? null, method_label: sale.method_label, card_last4: sale.card_last4 ?? null,
     items: sale.items.map((i) => ({ name: i.name, quantity: i.quantity, unit_price_cents: i.unit_price_cents })),
-    subtotal_cents: sale.subtotal_cents, discount_cents: sale.discount_cents, discount_reason: sale.discount_reason, fee_cents: sale.fee_cents, fee_label: sale.fee_label, amount_cents: sale.amount_cents, refunded_cents: sale.refunded_cents, status: sale.status
+    subtotal_cents: sale.subtotal_cents, discount_cents: sale.discount_cents, discount_reason: sale.discount_reason, fee_cents: sale.fee_cents, fee_label: sale.fee_label, fee_refunded_cents: sale.fee_refunded_cents, amount_cents: sale.amount_cents, refunded_cents: sale.refunded_cents, status: sale.status
   };
 }
 
@@ -702,12 +774,12 @@ export function takings(ctx, { date, locationId } = {}) {
 }
 
 // Test mode only: stand in for the client tapping their card.
-export async function simulateTap(ctx, id, outcome) {
+export async function simulateTap(ctx, id, outcome, { funding } = {}) {
   if (ctx.payments.live || !ctx.payments.simulate) throw conflict('Simulated taps are only available in test mode.');
   const s = ctx.db.get('SELECT * FROM sales WHERE id = ?', id);
   if (!s) throw notFound('Sale');
   if (s.status !== 'pending' || !s.payment_ref) throw conflict('This sale is not waiting for a card.');
-  ctx.payments.simulate(s.payment_ref, v.oneOf(outcome ?? 'approved', 'outcome', ['approved', 'declined']));
+  ctx.payments.simulate(s.payment_ref, v.oneOf(outcome ?? 'approved', 'outcome', ['approved', 'declined']), { funding: funding ? v.oneOf(funding, 'funding', FUNDINGS) : 'credit' });
   return syncSale(ctx, id);
 }
 
@@ -738,7 +810,7 @@ export async function handleStripeEvent(ctx, event) {
     // The bank reissued the card (new number or expiry): keep the label on file right. Renewals keep working either way.
     for (const table of ['families', 'clients']) {
       const row = ctx.db.get(`SELECT id FROM ${table} WHERE card_payment_method = ?`, obj.id);
-      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4, expMonth: obj.card?.exp_month, expYear: obj.card?.exp_year }); }
+      if (row) { const payer = payerById(ctx, table, row.id); if (payer) saveCard(ctx, payer, { paymentMethod: obj.id, brand: obj.card?.brand, last4: obj.card?.last4, expMonth: obj.card?.exp_month, expYear: obj.card?.exp_year, funding: obj.card?.funding }); }
     }
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);

@@ -386,6 +386,11 @@ async function viewOverview(main) {
     state.me.athletes.length ? [cards, calendarPanel(), teamFeedPanel()] : h('div', { class: 'empty' }, 'No athletes yet. Add one on the Family tab.'));
   drawSubtabs();
 }
+// Packs expire (owner decision): the soonest date a pack with sessions left runs out, for the membership panel.
+function packExpiry(credits) {
+  const soon = ['group', 'private'].map((t) => credits?.lots?.[t]?.[0]).filter((l) => l?.expires_at).sort((x, y) => x.expires_at.localeCompare(y.expires_at))[0];
+  return soon ? ` · ${soon.sessions === 1 ? '1 expires' : `${soon.sessions} expire`} ${fmt(soon.expires_at, { month: 'short', day: 'numeric', year: 'numeric' })}` : '';
+}
 // The team feed (version 78): the coaches' posts to everyone, your athletes' teams and their programs; bump and comment as the parent.
 function teamFeedPanel() {
   return panel('Team feed', { subtitle: 'From the coaches, for everyone, your athletes\' teams and their programs.' },
@@ -837,8 +842,8 @@ async function viewPrograms(main) {
       m.trial_ends_at ? h('div', null, h('dt', null, 'Trial ends'), h('dd', null, fmt(m.trial_ends_at, { month: 'long', day: 'numeric' }))) : null,
       m.next_charge_at && !m.trial_ends_at ? h('div', null, h('dt', null, 'Next charge'), h('dd', null, fmt(m.next_charge_at, { month: 'long', day: 'numeric' }))) : null,
       m.pending_plan_name ? h('div', null, h('dt', null, 'Changing to'), h('dd', null, `${m.pending_plan_name} on ${fmt(m.renews, { month: 'long', day: 'numeric' })}`)) : null,
-      m.visits && m.visits.limit != null ? h('div', null, h('dt', null, 'Sessions this month'), h('dd', null, `${m.visits.used} of ${m.visits.limit} used · ${m.visits.left} left · starts again ${fmt(m.visits.period_end, { month: 'short', day: 'numeric' })}`)) : null,
-      h('div', null, h('dt', null, 'Left in packs'), h('dd', null, `${a.credits.group} group, ${a.credits.private} private`))) : h('p', { class: 'muted small' }, `${a.first_name} has no membership. A membership covers every group class and holds a standing spot; see the plans below.`),
+      m.visits && m.visits.limit != null ? h('div', null, h('dt', null, 'Sessions this month'), h('dd', null, `${m.visits.used} of ${m.visits.limit} used${m.visits.carried ? ` (${m.visits.carried} carried over)` : ''} · ${m.visits.left} left · starts again ${fmt(m.visits.period_end, { month: 'short', day: 'numeric' })}. Sessions left at the end of the month don't carry over.`)) : null,
+      h('div', null, h('dt', null, 'Left in packs'), h('dd', null, `${a.credits.group} group, ${a.credits.private} private${packExpiry(a.credits)}`))) : h('p', { class: 'muted small' }, `${a.first_name} has no membership. A membership covers every group class and holds a standing spot; see the plans below.`),
     req ? h('div', { class: 'p-banner p-banner--info' }, h('span', { class: 'grow' }, `You asked to ${KINDS[req.kind]}${req.kind === 'switch' && req.plan_name ? ` to ${req.plan_name}` : ''} on ${fmt(req.created_at, { month: 'short', day: 'numeric' })}. We'll be in touch.`),
       btn('Withdraw', (e) => busy(e.currentTarget, async () => { await post(`athletes/${a.id}/membership-request/withdraw`); toast('Request withdrawn.'); await reload(); }), 'ghost')) : null,
     !req && answer ? h('p', { class: 'small muted' }, `${answer.status === 'done' ? 'Done' : 'Answered'}: your request to ${KINDS[answer.kind]} (${fmt(answer.resolved_at, { month: 'short', day: 'numeric' })}).${answer.resolution_note ? ` "${answer.resolution_note}"` : ''}`) : null,

@@ -966,8 +966,11 @@ async function viewClient(main, id) {
     state.payments.can_simulate && !c.card.on_file ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/card/test`); toast('Test card added.'); render(); }), 'ghost') : null);
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { 'aria-label': 'Check-in location', value: (() => { try { return localStorage.getItem('dp_location'); } catch { return null; } })() || locs.data[0]?.id });
   const member = ['active', 'trialing', 'past_due'].includes(c.status);
-  const visitWords = c.visits ? (c.visits.limit == null ? `${first} is a member (unlimited group classes). ` : `${first} is a member: ${c.visits.left} of ${c.visits.limit} membership sessions left this month, ${c.visits.used} used; the count starts again ${date(c.visits.period_end)}. `) : '';
-  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? visitWords || `${first} is a member (group classes included). ` : ''}${c.credits.group} group and ${plural(c.credits.private, 'private session')} left.${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
+  const visitWords = c.visits ? (c.visits.limit == null ? `${first} is a member (unlimited group classes). ` : `${first} is a member: ${c.visits.left} of ${c.visits.limit} membership sessions left this month${c.visits.carried ? ` (${c.visits.carried} carried over)` : ''}, ${c.visits.used} used; the count starts again ${date(c.visits.period_end)}. `) : '';
+  // Packs expire (owner decision): the soonest lot's date, and what has already expired unused.
+  const expiryWords = (type) => { const lot = c.credits.lots?.[type]?.[0]; return lot?.expires_at ? ` (${lot.sessions === c.credits[type] ? 'they' : lot.sessions} expire ${date(lot.expires_at)})` : ''; };
+  const expiredWords = ['group', 'private'].filter((t) => c.credits.expired?.[t]).map((t) => `${c.credits.expired[t]} ${t} expired unused`).join(', ');
+  const sessionsPanel = panel('Card & sessions', { subtitle: `${member ? visitWords || `${first} is a member (group classes included). ` : ''}${c.credits.group} group${expiryWords('group')} and ${plural(c.credits.private, 'private session')}${expiryWords('private')} left.${expiredWords ? ` ${expiredWords}.` : ''}${c.card.owner === 'family' ? ' Card belongs to the family.' : ''}` },
     card, cardActions, cardNote,
     c.archived_at ? null : locs.data.length ? h('div', { class: 'row' }, h('div', { class: 'grow' }, locSel), btn('Walk-in check-in', (e) => busy(e.currentTarget, async () => {
       // Members and athletes with group credits use a group session; otherwise a private credit.
@@ -980,7 +983,16 @@ async function viewClient(main, id) {
         const type = t.trim().toLowerCase(); if (!['group', 'private'].includes(type)) return toast('Type group or private.', 'warn');
         const a = prompt(`Add or remove ${type} sessions (e.g. 2 or -1):`, '1'); if (!a) return;
         busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/credits`, { delta: Number(a), credit_type: type, note: 'Coach adjustment' }); toast(`${r.balance} ${type} sessions left.`); render(); });
-      }, 'ghost')),
+      }, 'ghost'),
+      // Owner decision: what's left of a month's membership sessions is lost unless the owner agrees to carry it over.
+      role === 'owner' && c.visits && c.visits.limit != null ? btn('Carry sessions over', (e) => {
+        const n = prompt(`How many of ${first}'s membership sessions carry into next month? (${c.visits.left} left this month)`, String(Math.min(c.visits.left || 1, 100) || 1)); if (!n) return;
+        const note = prompt('Why? (kept on the record)', '') ?? '';
+        busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/visits/carry-over`, { sessions: Number(n), note, period: 'next' }); toast(`${r.sessions} ${r.sessions === 1 ? 'session' : 'sessions'} carried into the month starting ${date(r.period_start)}.`); render(); });
+      }, 'ghost') : null),
+    c.visit_carryovers?.length ? h('div', { class: 'stack-tight' }, ...c.visit_carryovers.slice(0, 3).map((k) => h('div', { class: 'list-item small' },
+      h('span', { class: 'grow' }, `${k.sessions} carried into the month starting ${date(k.period_start)}${k.note ? ` · ${k.note}` : ''}${k.by_name ? ` · ${k.by_name}` : ''}`),
+      role === 'owner' ? btn('Take back', (e) => busy(e.currentTarget, async () => { await api('DELETE', `/v1/visit-carryovers/${k.id}`); toast('Taken back.'); render(); }), 'ghost', { 'aria-label': `Take back ${k.sessions} carried-over sessions` }) : null))) : null,
     sales.data.length || visits.data.length ? h('div', null,
       ...sales.data.slice(0, 4).map((x) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `${x.description ?? 'Sale'} · ${x.location_name}`), badge(x.status), x.amount_cents == null ? null : h('span', { class: 'muted' }, money(x.amount_cents)))),
       ...visits.data.slice(0, 4).map((k) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, `Checked in at ${k.location_name}`), h('span', { class: 'muted' }, ago(k.created_at))))) : null);
@@ -1777,6 +1789,10 @@ async function viewBilling(main) {
   const cycleSel = select([['first', 'On the 1st of every month (a start mid-month pays the days left in that month)'], ['anniversary', 'Every month on the day the membership started']], { value: settings.billing_cycle === 'anniversary' ? 'anniversary' : 'first', 'aria-label': 'When memberships renew', style: 'width:auto' });
   cycleSel.addEventListener('change', () => busy(cycleSel, async () => { await patch('/v1/settings', { billing_cycle: cycleSel.value }); toast(cycleSel.value === 'first' ? 'Saved. New memberships are charged for the rest of this month, then on the 1st. Memberships already running move to the 1st at their next renewal.' : 'Saved. Memberships renew a month from the day they started.'); render(); }));
   const cycleRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Memberships renew:'), cycleSel);
+  // Owner decision: session packs (private training too) expire a year after purchase; 0 = never.
+  const packMonths = input({ type: 'number', min: '0', max: '60', step: '1', inputmode: 'numeric', value: String(settings.pack_expiry_months ?? '12'), 'aria-label': 'Months a session pack can be used for', style: 'width:5rem' });
+  packMonths.addEventListener('change', () => busy(packMonths, async () => { await patch('/v1/settings', { pack_expiry_months: Number(packMonths.value) || 0 }); toast(Number(packMonths.value) ? `Saved. Packs can be used for ${packMonths.value} months from purchase.` : 'Saved. Packs never expire.'); }));
+  const packRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Session packs expire after:'), packMonths, h('span', { class: 'muted' }, 'months from purchase (0 = never). A membership\'s monthly sessions never carry over on their own; the owner carries them over on the client page.'));
   const lockRow = h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' }, h('span', { class: 'muted' }, 'Declined payments:'), lockSel,
     h('span', { class: 'muted' }, 'A locked family can only update the card and pay in the parent portal; the app, online booking and self check-in wait until it\'s paid.'));
   // The card processing fee passed to the payer: off by default, the owner's call, with the caution that surcharge rules differ.
@@ -1796,7 +1812,7 @@ async function viewBilling(main) {
     }), 'primary');
     return panel('Card processing fee', { subtitle: 'Pass some of the card cost on to the payer as its own line on receipts. Off unless you turn it on.' },
       h('div', { class: 'stack' },
-        h('div', { class: 'dp-error', role: 'note', style: 'background:var(--amber-deep);color:var(--steel)' }, h('strong', null, 'Check the rules first. '), 'Passing card costs to the payer is regulated: some states limit or ban surcharges on credit cards, card networks don\'t allow them on debit cards and cap them at your actual cost (3 to 4% depending on the network), and the fee has to be shown before payment. Many businesses charge a small "service fee" on every payment method instead. Ask your accountant or lawyer before turning this on. This only adds the line and the amount here; it doesn\'t register a surcharge with your card processor.'),
+        h('div', { class: 'dp-error', role: 'note', style: 'background:var(--amber-deep);color:var(--steel)' }, h('strong', null, 'Check the rules first. '), 'Passing card costs to the payer is regulated: Colorado allows a surcharge of at most 2% (or your actual cost) on credit cards only, never on debit or prepaid cards, and it has to be shown before payment. The app asks Stripe what each card is: a debit or prepaid card on file is never charged the fee, and when the card is only known after it\'s tapped or typed on the pay page, the fee is refunded to it at once and the receipt says so. Keep the percent at 2 or under with no flat amount, or leave this off. Ask your accountant or lawyer before turning it on; it only adds the line here and doesn\'t register a surcharge with your card processor.'),
         h('div', { class: 'row wrap', style: 'gap:8px 24px' }, boxes.map((b) => b.el)),
         h('div', { class: 'row wrap', style: 'gap:8px;align-items:flex-end' }, field('Percent of the payment', pct), field('Plus a flat amount ($)', flat), h('div', { class: 'grow', style: 'min-width:200px' }, field('Called', label))),
         example, h('div', null, save)));
@@ -1804,7 +1820,7 @@ async function viewBilling(main) {
   const attPanel = h('div', { id: 'bl-att' }, panel('Needs attention', {
     subtitle: attN ? [att.failed.length ? `${plural(att.failed.length, 'declined charge')} (${money(att.failed_cents)})` : null, att.overdue.length ? `${plural(att.overdue.length, 'overdue school invoice')} (${money(att.overdue_cents)})` : null].filter(Boolean).join(' and ') + `. Declined charges retry on their own every ${att.retry_every_days} days, up to ${att.max_attempts} tries; a failed-payment email with a pay link goes out each time.` : null,
     action: attTools },
-  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.'), cycleRow, lockRow));
+  attN ? h('div', null, att.failed.map(attRow), att.overdue.map(overdueRow)) : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing needs attention. Every charge went through and no school invoice is overdue.'), cycleRow, packRow, lockRow));
 
   // ---- invoices ----
   const search = input({ type: 'search', placeholder: 'Name, plan, school or invoice number', 'aria-label': 'Search invoices', value: billingUi.q });
@@ -2091,7 +2107,7 @@ async function viewSell(main) {
   let quoteRun = 0;
   async function loadQuotes() {
     const run = ++quoteRun;
-    await Promise.all(planList.map(async (p) => { try { quotes[p.id] = await get(`/v1/plans/${p.id}/quote${skipTrial.value ? '?skip_trial=true' : ''}`); } catch { quotes[p.id] = null; } }));
+    await Promise.all(planList.map(async (p) => { try { quotes[p.id] = await get(`/v1/plans/${p.id}/quote?skip_trial=${skipTrial.value ? 'true' : 'false'}${client() ? `&client_id=${encodeURIComponent(client().id)}` : ''}`); } catch { quotes[p.id] = null; } }));
     if (run === quoteRun) drawPlans();
   }
   const todayLine = (q) => {
@@ -2367,7 +2383,7 @@ async function viewSell(main) {
         s.discount_cents ? [row('Subtotal', s.subtotal_cents, 'small muted'), row(`Discount (${s.discount_reason})`, -s.discount_cents, 'small muted')] : null,
         s.fee_cents ? row(s.fee_label || 'Card processing fee', s.fee_cents, 'small muted') : null,
         h('div', { class: 'row strong', style: 'border-top:1px solid var(--line-subtle);padding-top:8px' }, h('span', { class: 'grow' }, 'Paid'), h('span', null, money(s.amount_cents))),
-        s.refunds.map((r) => row(`${r.kind === 'undo' ? 'Undone' : 'Refunded'} ${new Date(r.created_at).toLocaleDateString('en-US', { timeZone: tzName, month: 'short', day: 'numeric' })}${r.by_name ? ` by ${r.by_name}` : ''}${r.reason && r.kind !== 'undo' ? ` · ${r.reason}` : ''}`, -r.amount_cents, 'small muted'))),
+        s.refunds.map((r) => row(`${r.fee ? 'Card fee given back' : r.kind === 'undo' ? 'Undone' : 'Refunded'} ${new Date(r.created_at).toLocaleDateString('en-US', { timeZone: tzName, month: 'short', day: 'numeric' })}${r.by_name ? ` by ${r.by_name}` : ''}${r.reason && r.kind !== 'undo' ? ` · ${r.reason}` : ''}`, -r.amount_cents, 'small muted'))),
       s.status === 'failed' && s.failure_reason ? h('p', { class: 'warn-text', style: 'margin:0' }, s.failure_reason) : null,
       paid ? h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'Receipt'),
         h('p', { class: 'small muted', style: 'margin:0' }, s.receipt_sent_at ? `Emailed to ${s.receipt_email} ${ago(s.receipt_sent_at).toLowerCase()}.` : 'Not emailed yet.'),
@@ -2567,7 +2583,7 @@ function skipTrialTick(plan, onChange) {
 function startMembershipDialog(clientId, clientName, plan, card) {
   const first = clientName.split(' ')[0];
   const line = h('p', { style: 'margin:0' }, 'Working out the first charge…');
-  const requote = (skip) => get(`/v1/plans/${plan.id}/quote${skip ? '?skip_trial=true' : ''}`).then((q) => { line.textContent = quoteText(q); }).catch((e) => { line.textContent = e.message; });
+  const requote = (skip) => get(`/v1/plans/${plan.id}/quote?client_id=${encodeURIComponent(clientId)}${skip ? '&skip_trial=true' : ''}`).then((q) => { line.textContent = quoteText(q); }).catch((e) => { line.textContent = e.message; });
   const skip = skipTrialTick(plan, requote);
   requote(false);
   setupDialog(`Start ${plan.name} for ${first}`, [line, skip?.el,

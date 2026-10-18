@@ -56,6 +56,7 @@ const DEFAULTS = {
   card_fee_pct: '0',                      // a card processing fee passed to the payer (services/fees.js): percent of the amount (0 to 4, tenths)...
   card_fee_flat: '0',                     // ...plus a flat amount in whole cents (0 to 100; not named _cents so the counter, which staff run, can read it)...
   card_fee_label: 'Card processing fee',  // ...shown as its own line under this name...
+  pack_expiry_months: '12',               // session packs (private sessions too) can be used this many months from purchase (commerce.js creditLots); 0 = never expire. Owner decision: a year
   card_fee_on: '',                        // ...on these card payments: a comma list of memberships, counter, pay_links, store (empty = off everywhere, the default)
   vbt_mvt_squat: '0.30',                  // bar speed (services/vbt.js): the mean velocity of a true one-rep max, per lift family, used to estimate a max from a load-velocity profile...
   vbt_mvt_bench: '0.17',                  // ...starting values from the research brief (docs/vbt-devices.md); the owner changes them on API & integrations → Bar speed devices
@@ -131,6 +132,7 @@ export function updateSettings(ctx, body) {
     next.card_fee_pct = String(n);
   }
   if (body.form_check_keep_days !== undefined) next.form_check_keep_days = String(v.int(body.form_check_keep_days, 'form_check_keep_days', { min: 30, max: 365 }));
+  if (body.pack_expiry_months !== undefined) next.pack_expiry_months = String(v.int(body.pack_expiry_months, 'pack_expiry_months', { min: 0, max: 60 }));
   if (body.card_fee_flat !== undefined) next.card_fee_flat = String(v.int(body.card_fee_flat, 'card_fee_flat', { min: 0, max: 100 }));
   if (body.card_fee_label !== undefined) next.card_fee_label = v.str(body.card_fee_label, 'card_fee_label', { max: 40, optional: true }) ?? 'Card processing fee';
   if (body.card_fee_on !== undefined) {
@@ -187,7 +189,7 @@ export function getFamily(ctx, id) {
   if (!f) throw notFound('Family');
   return {
     id: f.id, name: f.name, created_at: f.created_at,
-    card: f.card_payment_method ? { on_file: true, brand: f.card_brand, last4: f.card_last4, exp: f.card_exp ?? null, ...cardExpiry(f.card_exp) } : { on_file: false },
+    card: f.card_payment_method ? { on_file: true, brand: f.card_brand, last4: f.card_last4, exp: f.card_exp ?? null, funding: f.card_funding ?? null, ...cardExpiry(f.card_exp) } : { on_file: false },
     waiver: { signed: Number(f.waiver_version) === Number(getSetting(ctx, 'waiver_version')), signed_by: f.waiver_signed_by, signed_at: f.waiver_signed_at, version_signed: f.waiver_version },
     guardians: ctx.db.all('SELECT id, name, email, phone, relationship, is_primary, sms_opt_in_at, sms_opt_out_at FROM guardians WHERE family_id = ? ORDER BY is_primary DESC, created_at', id)
       .map(({ sms_opt_in_at, sms_opt_out_at, ...g }) => ({ ...g, is_primary: !!g.is_primary, texts: !sms_opt_in_at ? 'off' : sms_opt_out_at ? 'stopped' : 'on' })),
@@ -303,9 +305,9 @@ export function payerFor(ctx, clientId) {
   if (c.family_id) {
     const f = ctx.db.get('SELECT * FROM families WHERE id = ?', c.family_id);
     const g = ctx.db.get('SELECT name, email FROM guardians WHERE family_id = ? ORDER BY is_primary DESC, created_at LIMIT 1', f.id);
-    return { table: 'families', id: f.id, name: g?.name ?? f.name, email: g?.email ?? null, metadataKey: 'family_id', stripe_customer_id: f.stripe_customer_id, card_payment_method: f.card_payment_method, card_brand: f.card_brand, card_last4: f.card_last4, card_exp: f.card_exp, card_status: f.card_status };
+    return { table: 'families', id: f.id, name: g?.name ?? f.name, email: g?.email ?? null, metadataKey: 'family_id', stripe_customer_id: f.stripe_customer_id, card_payment_method: f.card_payment_method, card_brand: f.card_brand, card_last4: f.card_last4, card_exp: f.card_exp, card_funding: f.card_funding ?? null, card_status: f.card_status };
   }
-  return { table: 'clients', id: c.id, name: c.name, email: c.email, metadataKey: 'client_id', stripe_customer_id: c.stripe_customer_id, card_payment_method: c.card_payment_method, card_brand: c.card_brand, card_last4: c.card_last4, card_exp: c.card_exp, card_status: c.card_status };
+  return { table: 'clients', id: c.id, name: c.name, email: c.email, metadataKey: 'client_id', stripe_customer_id: c.stripe_customer_id, card_payment_method: c.card_payment_method, card_brand: c.card_brand, card_last4: c.card_last4, card_exp: c.card_exp, card_funding: c.card_funding ?? null, card_status: c.card_status };
 }
 
 // ---------- Waiver ----------

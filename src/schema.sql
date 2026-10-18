@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS families (
   waiver_signed_by TEXT,
   waiver_signed_at TEXT,
   created_at TEXT NOT NULL,
-  card_exp TEXT                          -- version 41: the saved card's expiry as YYYY-MM (for "expires soon" reminders)
+  card_exp TEXT,                         -- version 41: the saved card's expiry as YYYY-MM (for "expires soon" reminders)
+  card_funding TEXT                      -- version 88: credit, debit, prepaid or unknown, from Stripe (a debit or prepaid card is never charged the card fee)
 );
 CREATE TABLE IF NOT EXISTS guardians (
   id TEXT PRIMARY KEY,
@@ -97,7 +98,8 @@ CREATE TABLE IF NOT EXISTS clients (
   card_exp TEXT,                         -- version 41: the saved card's expiry as YYYY-MM
   training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote')),   -- version 46: how they train, picked by staff (shown under the name)
   password_hash TEXT,                    -- version 60: an athlete with their own email signs in to the portal; an optional password
-  password_set_at TEXT
+  password_set_at TEXT,
+  card_funding TEXT                      -- version 88: the saved card's funding (credit, debit, prepaid, unknown): no card fee on debit or prepaid
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -544,7 +546,8 @@ CREATE TABLE IF NOT EXISTS sale_refunds (
   kind TEXT NOT NULL DEFAULT 'refund' CHECK (kind IN ('refund','undo')),
   reason TEXT,
   created_by TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  fee INTEGER NOT NULL DEFAULT 0         -- version 88: 1 = the card fee given back because the card turned out to be debit or prepaid (the sale itself stands)
 );
 CREATE INDEX IF NOT EXISTS sale_refunds_created ON sale_refunds(created_at);
 CREATE INDEX IF NOT EXISTS sale_refunds_sale ON sale_refunds(sale_id);
@@ -2158,3 +2161,17 @@ CREATE TABLE IF NOT EXISTS group_messages (
   hidden_at TEXT, hidden_by TEXT                             -- a coach hid it: staff still see it, athletes don't
 );
 CREATE INDEX IF NOT EXISTS group_messages_group ON group_messages(group_id, created_at);
+
+-- Version 88: membership sessions carried into another month by the owner's agreement (owner decision: what's left of a
+-- month's sessions is lost unless the owner agrees to carry it over). Each row adds sessions to the client's limit for the
+-- paid period that starts on period_start; nothing else about the membership changes.
+CREATE TABLE IF NOT EXISTS visit_carryovers (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  period_start TEXT NOT NULL,            -- the paid period the sessions are added to (its start, UTC)
+  sessions INTEGER NOT NULL CHECK (sessions >= 1 AND sessions <= 100),
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS visit_carryovers_client ON visit_carryovers(client_id, period_start);

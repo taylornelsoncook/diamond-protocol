@@ -107,7 +107,7 @@ export const portalRoutes = [
     const places = new Map(ctx.db.all('SELECT id, name AS location_name, kind AS location_kind, address_line1, city, state, postal_code FROM locations').map((l) => [l.id, portal.placeOf(l)]));
     const series = new Map(ctx.db.all('SELECT id, description, active FROM class_series').map((x) => [x.id, x]));
     const member = new Set(ctx.db.all(`SELECT client_id FROM subscriptions WHERE status IN ('active','trialing','past_due')`).map((x) => x.client_id));
-    const credits = new Map(kids.map((k) => [k.id, commerce.creditBalances(ctx, k.id)]));
+    const credits = new Map(kids.map((k) => [k.id, commerce.creditDetail(ctx, k.id)]));
     return list(schedule.listSessions(ctx, { from, to }).filter((s) => ['group', 'clinic', 'camp'].includes(s.kind)).map((s) => ({
       id: s.id, name: s.name, kind: s.kind, starts_at: s.starts_at, ends_at: s.ends_at, ...places.get(s.location_id), coach_name: s.coach_name ?? null,
       spots_left: s.spots_left, capacity: s.capacity, waiting: s.waitlist_count, description: s.description ?? null, color: s.color ?? null,
@@ -236,11 +236,14 @@ export const portalRoutes = [
   ['POST', '/portal/api/parent-lessons/:id/complete', 'guardian', 'Mark a lesson for parents read (done=false to undo).', (ctx, r) => engage.completeParentLesson(ctx, r.guardian, r.params.id, r.body.done !== false)],
   ['POST', '/portal/api/athletes/:id/lessons/:lesson/quiz', 'guardian', 'Take the lesson quiz with your athlete: answers (choice numbers from 0). 80% or more finishes the lesson.', (ctx, r) => engage.takeQuiz(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body)],
   ['POST', '/portal/api/athletes/:id/lessons/:lesson/complete', 'guardian', 'Mark a lesson done for your athlete (done=false to undo).', (ctx, r) => engage.completeLesson(ctx, athleteOf(ctx, r, r.params.id).id, r.params.lesson, r.body.done !== false)],
-  ['GET', '/portal/api/store', 'guardian', 'Packs and memberships a parent can buy. Packs say their price a session and what they save against single sessions.', (ctx) => {
+  ['GET', '/portal/api/store', 'guardian', 'Packs and memberships a parent can buy. Packs say their price a session and what they save against single sessions.', (ctx, r) => {
     const products = commerce.listProducts(ctx).filter((p) => ['session', 'pack'].includes(p.kind));
     const single = (type) => products.filter((p) => p.kind === 'session' && (p.credit_type ?? 'private') === (type ?? 'private')).map((p) => p.price_cents).sort((a, b) => a - b)[0] ?? null;
     // The card fee, where the owner turned it on, is shown before the parent buys (fee_cents and total_cents on each item).
-    const withFee = (p, place) => { const fee = cardFee(ctx, p.price_cents, place).cents; return { ...p, fee_cents: fee, total_cents: p.price_cents + fee }; };
+    // The family's card decides: a debit or prepaid card pays no fee (version 88).
+    const fam = ctx.db.get('SELECT card_payment_method, card_funding FROM families WHERE id = ?', r.guardian.family_id);
+    const funding = fam?.card_payment_method ? fam.card_funding : null;
+    const withFee = (p, place) => { const fee = cardFee(ctx, p.price_cents, place, { funding }).cents; return { ...p, fee_cents: fee, total_cents: p.price_cents + fee }; };
     return {
       fee_label: feeSettings(ctx).label,
       products: products.map((p) => {

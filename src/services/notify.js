@@ -85,7 +85,9 @@ const signed = (c) => (c < 0 ? `-${money(-c)}` : money(c));      // a discount r
 export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   const s = ctx.db.get(`SELECT s.*, l.name AS location_name FROM sales s JOIN locations l ON l.id = s.location_id WHERE s.id = ?`, saleId);
   if (!s) return null;
-  if (!force && (s.status !== 'succeeded' || s.receipt_opt === 0 || (s.receipt_opt !== 1 && !on(ctx, 'receipts')))) return null;
+  const feeBack = ctx.db.get('SELECT COALESCE(SUM(amount_cents), 0) AS n FROM sale_refunds WHERE sale_id = ? AND fee = 1', saleId).n;   // the card fee given back on a debit card (version 88)
+  const paid = s.status === 'succeeded' || (s.status === 'partially_refunded' && feeBack === s.refunded_cents);   // a sale whose only refund is that fee is as paid
+  if (!force && (!paid || s.receipt_opt === 0 || (s.receipt_opt !== 1 && !on(ctx, 'receipts')))) return null;
   const payer = s.client_id ? payerFor(ctx, s.client_id) : null;
   const address = to ?? (s.receipt_opt === 1 ? s.receipt_email : null) ?? payer?.email;
   if (!address) return null;
@@ -100,7 +102,7 @@ export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   ];
   await send(ctx, address, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
     `Thanks! Here's your receipt.\n\n${lines.join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how} on ${day(ctx, s.completed_at ?? s.created_at)}\n` +
-    `${s.refunded_cents ? `Refunded: ${money(s.refunded_cents)}\n` : ''}${athlete ? `For ${athlete.name} at ${s.location_name}` : `At ${s.location_name}`}\nReceipt ${s.id}\n` +
+    `${feeBack ? `${feeSettings(ctx).label} given back (debit card): ${money(feeBack)}\n` : ''}${s.refunded_cents - feeBack > 0 ? `Refunded: ${money(s.refunded_cents - feeBack)}\n` : ''}${athlete ? `For ${athlete.name} at ${s.location_name}` : `At ${s.location_name}`}\nReceipt ${s.id}\n` +
     `${s.receipt_token ? `\nView or print it: ${base(ctx)}/receipt/${s.receipt_token}\n` : ''}\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
   ctx.db.run('UPDATE sales SET receipt_sent_at = ?, receipt_email = ? WHERE id = ?', ctx.now(), address, saleId);
   return address;

@@ -287,7 +287,7 @@ Later, as you grow: Postgres instead of SQLite (only `db.js` and a few date func
 | Done | Team contracts with monthly invoicing, rosters and attendance |
 | Done | Performance testing library, stopwatch entry, device imports and Hawkin sync |
 | Done | Staff roles, sign-in protection, activity log, daily backups; parent progress reports; hosting setup; iPhone rosters and testing |
-| Done | Family self sign-up, client import, terms and privacy with data requests, automatic emails |
+| Done | Family self sign-up, client import, terms and privacy with data requests, automatic emails, drafted waiver, terms, privacy and card-consent wording for the lawyer (`docs/legal/`, filled into Settings with one button; one signature covers all three) |
 | Next | Your accounts and first deploy; build the iPhone app on a Mac |
 | Then | Online programs for sale, pay links and text reminders, video uploads |
 | Then | Messaging, check-ins and progress photos, adherence analytics |

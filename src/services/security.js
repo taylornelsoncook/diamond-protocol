@@ -15,14 +15,15 @@ const OWNER_ONLY = [
   /^\/v1\/leads\/(report|export|import)(\/|$)/,   // CRM (version 45): lead reports, export and import are the owner's
   /^\/v1\/exercises\/import(\/|$)/,   // the video library (version 48): bringing in a list of exercises
   /^\/v1\/legal(\/|$)/,   // the drafted legal wording (version 87): the owner fills the Settings boxes from it
+  /^\/v1\/clients\/:id\/tags$/,   // profile tags (version 90): the owner adds or removes one by hand
   /^\/v1\/clients\/:id\/visits\/carry-over$/, /^\/v1\/visit-carryovers(\/|$)/,   // carried-over membership sessions (version 88): the owner's agreement
   /^\/v1\/vbt\/(waiting|imports?)(\/|$)/   // bar speed (version 81, owner decision): connecting, importing and linking are the owner's; coaches read the data
 ];
 // The owner changes these; others may read them (message templates for one-to-one emails and texts).
-const OWNER_WRITES = [/^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/, /^\/v1\/game-rules$/, /^\/v1\/vbt\/sets(\/:id)?$/];   // bar-speed sets: the owner (or the owner's results key) sends and removes them   // sprint references (version 65): the owner sets them, coaches read them
+const OWNER_WRITES = [/^\/v1\/profile-tags(\/|$)/, /^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/, /^\/v1\/game-rules$/, /^\/v1\/vbt\/sets(\/:id)?$/];   // bar-speed sets: the owner (or the owner's results key) sends and removes them   // sprint references (version 65): the owner sets them, coaches read them
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|profile-tags|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|groups|daily-check-ins|engagement|education|lessons|courses|skill-badges|feed)(\/|$)/],   // groups (version 87): front desk looks at the roster and the board, never posts
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],

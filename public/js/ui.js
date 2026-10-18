@@ -79,6 +79,12 @@ export function helpOff() { document.documentElement.dataset.help = 'off'; }
 export const input = (attrs = {}) => h('input', { class: 'dp-input', ...attrs });
 export const select = (options, attrs = {}) => h('select', { class: 'select', ...attrs }, options.map(([value, label]) => h('option', { value, selected: attrs.value === value }, label)));
 
+// A date with no time (2027-02-28) as Feb 28, 2027, the same day in every time zone.
+export const dayText = (ymd) => (ymd ? new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '—');
+// A profile tag beside a name (profile tags, version 90): the tag's symbol and name, highlighted in its colour.
+export const tagChip = (t) => h('span', { class: 'dp-tag', style: `--tag:${/^#[0-9a-fA-F]{6}$/.test(t.hex ?? '') ? t.hex : '#D4A72C'}`, title: t.how === 'hand' ? `${t.name} (added by the owner)` : t.name },
+  h('span', { 'aria-hidden': 'true' }, t.symbol ?? '★'), t.name);
+
 export function panel(title, { subtitle, action } = {}, ...children) {
   return h('section', { class: 'dp-panel' },
     title || action ? h('div', { class: 'dp-panel-head' }, h('div', null, title ? h('h2', { class: 'dp-panel-title' }, title) : null, subtitle ? h('p', { class: `dp-panel-sub${isHelp(subtitle) ? ' dp-help' : ''}` }, subtitle) : null), action || null) : null,

@@ -1,7 +1,7 @@
 // Owner screens: API & integrations and Settings (exercise library for all staff; staff, security, backups, data
 // requests and the activity report for owners). Also everyone's own Account page, the "forgot password" form
 // on the sign-in page and the page an emailed reset link opens. The server checks every rule; these screens only follow.
-import { h, fill, toast, date, ago, btn, busy, field, input, select, panel } from './ui.js';
+import { h, fill, toast, date, ago, btn, busy, field, input, select, panel, tagChip, dayText } from './ui.js';
 import { exerciseLibrary } from './programs-coach.js';
 import { vbtDevicesPanel } from './vbt-ui.js';
 
@@ -481,14 +481,14 @@ function rolesTable() {
 // =====================================================================================================================
 // Settings. Everyone sees the exercise library; the other tabs are the owner's (the server refuses them to staff anyway).
 // =====================================================================================================================
-const SETTINGS_TABS = [['exercises', 'Exercise library'], ['wearables', 'Wearables'], ['staff', 'Staff'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
+const SETTINGS_TABS = [['exercises', 'Exercise library'], ['wearables', 'Wearables'], ['staff', 'Staff'], ['tags', 'Profile tags'], ['security', 'Security'], ['backups', 'Backups & jobs'], ['requests', 'Data requests'], ['activity', 'Activity report']];
 export async function viewSettings(main) {
   const owner = me()?.role === 'owner', coach = me()?.role === 'coach';
   const list = owner ? SETTINGS_TABS : coach ? SETTINGS_TABS.slice(0, 2) : SETTINGS_TABS.slice(0, 1);   // coaches bring in data too; front desk sees the library
   const asked = queryOf().get('tab') === 'import' ? 'wearables' : queryOf().get('tab');   // the old Data import tab's links land on Wearables
   let current = list.some(([k]) => k === asked) ? asked : 'exercises';
   const body = h('div', { id: 'tab-panel', role: 'tabpanel', class: 'stack', style: 'margin-top:16px' });
-  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), wearables: wearablesTab, staff: staffTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
+  const loaders = { exercises: async (box) => fill(box, await exerciseLibrary()), wearables: wearablesTab, staff: staffTab, tags: tagsTab, security: securityTab, backups: backupsTab, requests: async (box) => fill(box, requestsPanel(await get('/v1/data-requests'))), activity: activityTab };
   let loading = 0;
   async function loadTab() {
     const n = ++loading;
@@ -505,8 +505,59 @@ export async function viewSettings(main) {
     catch (err) { helpOn.checked = !helpOn.checked; toast(err.message, 'warn'); }
   }));
   const helpRow = owner ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px;margin-top:8px' }, helpOn, h('span', null, 'Show the help sentences on my screens ', h('span', { class: 'muted' }, '(the short explanations under titles and fields; coaches, parents and athletes never see them)'))) : null;
-  fill(main, header('Settings', owner ? 'Your exercise library, wearables, staff, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and the wearables athletes connect.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), helpRow, t$?.bar, body);
+  fill(main, header('Settings', owner ? 'Your exercise library, wearables, staff, profile tags, security, backups, data requests and the activity report.' : coach ? 'The exercise library, and the wearables athletes connect.' : 'The exercise library: every exercise with its category, coaching cues and demo video.'), helpRow, t$?.bar, body);
   await loadTab();
+}
+
+// Profile tags (owner's ask: "tag profiles based off when they sign up: anyone who signs up from now until February 28th
+// gets a highlighted legacy star by their name"; profiletags.js). Each tag covers its dates; staff see it by the name on
+// the client list and page, and the owner adds or removes it on one client page with Tags.
+async function tagsTab(box) {
+  const { data, icons, colors } = await get('/v1/profile-tags');
+  const view = (t) => ({ ...t, symbol: icons[t.icon], hex: colors[t.color] });
+  const edit = (t = null) => {
+    const name = input({ maxlength: '30', value: t?.name ?? (data.length ? '' : 'Legacy'), required: true, placeholder: 'Legacy' });
+    const from = input({ type: 'date', value: t?.starts_on ?? new Date().toLocaleDateString('en-CA'), required: true });
+    const to = input({ type: 'date', value: t?.ends_on ?? '' });
+    const pick = (group, options, current) => h('div', { class: 'row wrap', role: 'radiogroup', style: 'gap:6px' }, Object.entries(options).map(([k, label]) =>
+      h('label', { class: 'dp-tag', style: `--tag:${group === 'color' ? label : '#E4E7E5'};cursor:pointer;min-height:36px` },
+        h('input', { type: 'radio', name: `tag-${group}`, value: k, checked: k === current, style: 'margin:0' }), group === 'color' ? k[0].toUpperCase() + k.slice(1) : label)));
+    const iconPick = pick('icon', icons, t?.icon ?? 'star'), colorPick = pick('color', colors, t?.color ?? 'gold');
+    const team = h('input', { type: 'checkbox', checked: !!t?.team_only });
+    const note = input({ maxlength: '300', value: t?.note ?? '', placeholder: 'What it means, for the staff' });
+    const preview = h('div');
+    const val = (el, g) => el.querySelector(`input[name=tag-${g}]:checked`)?.value;
+    const show = () => fill(preview, tagChip({ name: name.value.trim() || 'Tag', symbol: icons[val(iconPick, 'icon')], hex: colors[val(colorPick, 'color')] }));
+    for (const el of [name, iconPick, colorPick]) el.addEventListener('input', show), el.addEventListener('change', show);
+    show();
+    const err = h('div', { class: 'dp-error', role: 'alert' });
+    const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
+      const body = { name: name.value.trim(), icon: val(iconPick, 'icon'), color: val(colorPick, 'color'), starts_on: from.value, ends_on: to.value || null, team_only: team.checked, note: note.value.trim() || null };
+      try { t ? await patch(`/v1/profile-tags/${t.id}`, body) : await post('/v1/profile-tags', body); d.close(); toast(t ? 'Tag saved.' : `${body.name} tag made. Everyone who joined in its dates has it now.`); tagsTab(box); }
+      catch (x) { err.textContent = x.message; }
+    }); } },
+      h('h2', { class: 'week-title', style: 'color:var(--steel);margin:0' }, t ? `Change ${t.name}` : 'New profile tag'),
+      field('Name', name), field('Symbol', iconPick), field('Colour', colorPick),
+      h('div', { class: 'form-grid' }, field('Joined from', from), field('Joined until', to, 'Both days count. Leave empty for no end.')),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, team, h('span', null, 'Count team-only athletes too ', h('span', { class: 'muted' }, '(on a school or club roster with no membership)'))),
+      field('Note', note),
+      h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('span', { class: 'small muted' }, 'Looks like'), preview),
+      err, h('div', { class: 'row wrap' }, btn(t ? 'Save' : 'Make tag', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
+    setTimeout(() => name.focus(), 0);
+  };
+  const remove = (t) => (e) => busy(e.currentTarget, async () => {
+    if (!confirm(`Delete the ${t.name} tag? It comes off ${plural(t.clients, 'profile')}. The profiles themselves stay as they are.`)) return;
+    await del(`/v1/profile-tags/${t.id}`); toast(`${t.name} deleted.`); tagsTab(box);
+  });
+  fill(box, panel('Profile tags', { subtitle: 'A tag goes by the name of everyone whose profile was made in its dates, however they joined. Staff see it on the client list and the client page; families don\'t. Add or take one off a single client with Tags on their page.', action: btn('New tag', () => edit(), 'primary') },
+    data.length ? h('div', { class: 'stack' }, data.map((x) => { const t = view(x); return h('div', { class: 'list-item', style: 'flex-wrap:wrap;gap:12px;align-items:center' },
+      tagChip(t),
+      h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
+        h('span', { class: 'small' }, t.ends_on ? `Joined ${dayText(t.starts_on)} to ${dayText(t.ends_on)}` : `Joined from ${dayText(t.starts_on)} on, no end`, t.team_only ? ' · team-only athletes too' : ''),
+        h('span', { class: 'small muted' }, `${plural(t.clients, 'profile')} ${t.clients === 1 ? 'has' : 'have'} it`, t.note ? ` · ${t.note}` : '')),
+      h('a', { class: 'dp-btn dp-btn--ghost', href: `#/clients?tag=${encodeURIComponent(t.id)}` }, 'See them'),
+      btn('Change', () => edit(t), 'ghost', { 'aria-label': `Change ${t.name}` }), btn('Delete', remove(t), 'ghost', { 'aria-label': `Delete ${t.name}` })); }))
+      : h('p', { class: 'muted', style: 'margin:0' }, 'No tags yet. Make one, like Legacy ★ for everyone who joins before February 28.')));
 }
 
 // Wearables: which providers (WHOOP, Oura) are set up for athletes to connect, and how the owner sets one up. Owner

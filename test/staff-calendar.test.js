@@ -81,7 +81,7 @@ test('a version 83 database gains the calendar columns on users, opened twice', 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 88, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 89, `round ${round}`);
       const cols = d.all('PRAGMA table_info(users)').map((c) => c.name);
       assert.ok(cols.includes('calendar_token_hash') && cols.includes('calendar_created_at'));
       d.close();

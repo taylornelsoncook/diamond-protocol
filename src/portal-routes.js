@@ -9,6 +9,7 @@ import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
 import * as checkin from './services/checkin.js';
 import * as booknow from './services/booknow.js';
+import * as buyonline from './services/buyonline.js';
 import * as signup from './services/signup.js';
 import * as engage from './services/engage.js';
 import { cardFee, feeSettings } from './services/fees.js';
@@ -72,6 +73,13 @@ export const portalRoutes = [
   ['GET', '/portal/api/public/learn', 'public', 'Coach\'s education for the public page (/learn): published stand-alone lessons under Coach\'s education, newest first. No sign-in.', (ctx) => engage.publicLearn(ctx)],
   ['GET', '/portal/api/public/learn/:id', 'public', 'One published coach\'s education lesson: title, summary, text, video and minutes.', (ctx, r) => engage.publicLearnLesson(ctx, r.params.id)],
   ['GET', '/portal/api/public/legal', 'public', 'The current terms of service and privacy policy.', (ctx) => legal.legalDocs(ctx)],
+  // The online sales page (/buy, buyonline.js): memberships and packs bought by someone without an account.
+  ['GET', '/portal/api/public/buy', 'public', 'The online sales page: active membership plans (with what starting today charges) and session packs, the card fee, and whether the page is open.', (ctx) => buyonline.catalog(ctx)],
+  ['POST', '/portal/api/buy', 'public', 'Start an order: item (plan:<id> or product:<id>), athlete {first_name, last_name}, self (the athlete is buying, 18+), buyer {name, email, phone}, accept_terms, accept_renewal (memberships), skip_trial. Emails a code; the answer is the same for an email that already has an account.', (ctx, r) => buyonline.startOrder(ctx, r.body, r.ip)],
+  ['POST', '/portal/api/buy/verify', 'public', 'Confirm the order with order_id and the emailed code. Answers Stripe\'s card page (url), or test: true in test mode.', (ctx, r) => buyonline.verifyOrder(ctx, r.body)],
+  ['POST', '/portal/api/buy/:id/card', 'public', 'Another card page for an order whose card was declined or not saved.', (ctx, r) => buyonline.newCardPage(ctx, r.params.id)],
+  ['POST', '/portal/api/buy/:id/complete', 'public', 'Back from Stripe\'s card page with session_id: makes the account, charges the card and signs the buyer in. status paid (redirect) or declined (error).', (ctx, r) => buyonline.completeOrder(ctx, r.params.id, { sessionId: r.body.session_id, ip: r.ip, userAgent: r.userAgent })],
+  ['POST', '/portal/api/buy/:id/simulate', 'public', 'Test mode only: complete the order with a test card (funding credit, debit or prepaid; decline: true for a card that declines).', (ctx, r) => buyonline.completeOrder(ctx, r.params.id, { test: { funding: r.body.funding, decline: r.body.decline === true }, ip: r.ip, userAgent: r.userAgent })],
   ['POST', '/portal/api/signup', 'public', 'New family: parent {name, email, phone}, athletes [{name, birth_date, sex, sport, school, medical_notes, emergency_name, emergency_phone}], accept_terms=true. Emails a code.', (ctx, r) => signup.startSignup(ctx, r.body, r.ip)],
   ['POST', '/portal/api/signup/verify', 'public', 'Finish sign-up with signup_id and the emailed code. Creates the family and signs the parent in.', (ctx, r) => signup.finishSignup(ctx, r.body, r.ip, { userAgent: r.userAgent })],
   ['POST', '/portal/api/agreements', 'guardian', 'Accept the current terms of service and privacy policy: accept=true.', (ctx, r) => { if (r.body.accept !== true) throw badRequest('Tick the box to accept.'); return legal.recordConsent(ctx, r.guardian, { ip: r.ip }); }],

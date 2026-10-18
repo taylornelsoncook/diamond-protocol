@@ -152,6 +152,8 @@ function saveCard(ctx, payer, { paymentMethod, brand, last4, expMonth, expYear, 
   ctx.db.run(`UPDATE ${payer.table} SET card_payment_method = ?, card_brand = ?, card_last4 = ?, card_exp = ?, card_funding = ? WHERE id = ?`, paymentMethod ?? null, brand ?? null, last4 ?? null, paymentMethod ? cardExp(expMonth, expYear) : null, fund, payer.id);
   emit(ctx, 'client.card_updated', { [payer.metadataKey]: payer.id, client_name: payer.name, card_brand: paymentMethod ? brand ?? null : null, card_last4: paymentMethod ? last4 ?? null : null });
 }
+// The online sales page (buyonline.js) saves the card from Stripe's page on the new family.
+export const saveCardOn = (ctx, payer, info) => saveCard(ctx, payer, info);
 const payerById = (ctx, table, id) => {
   if (table === 'families') { const c = ctx.db.get('SELECT id FROM clients WHERE family_id = ? LIMIT 1', id); if (c) return payerFor(ctx, c.id); const f = ctx.db.get('SELECT * FROM families WHERE id = ?', id); return f && { table, id, name: f.name, metadataKey: 'family_id', ...f }; }
   return ctx.db.get('SELECT id FROM clients WHERE id = ?', id) ? payerFor(ctx, id) : null;
@@ -815,7 +817,9 @@ export async function handleStripeEvent(ctx, event) {
   } else if (event.type.startsWith('checkout.session.') && obj.mode === 'payment') {
     if (!(await handlePayLinkCheckout(ctx, event.type, obj))) await handleInvoiceCheckout(ctx, event.type, obj);
   } else if (event.type === 'checkout.session.completed' && obj.mode === 'setup') {
-    await applySetupSession(ctx, obj.id);
+    // A card saved on the online sales page: finish the order even if the buyer closed the tab before coming back.
+    if (obj.metadata?.web_order_id) { const { completeOrder } = await import('./buyonline.js'); await completeOrder(ctx, obj.metadata.web_order_id, { sessionId: obj.id, signIn: false }).catch((e) => console.error('web order', e.message)); }
+    else await applySetupSession(ctx, obj.id);
   }
   return { received: true };
 }

@@ -197,7 +197,7 @@ test('the version 86 upgrade adds the group tables', () => {
   raw.exec('PRAGMA user_version = 86');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 88);
+  assert.equal(db.get('PRAGMA user_version').user_version, 89);
   assert.deepEqual(db.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('groups', 'group_members', 'group_messages') ORDER BY name`).map((r) => r.name), ['group_members', 'group_messages', 'groups']);
   db.close();
 });

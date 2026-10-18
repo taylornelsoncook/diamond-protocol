@@ -139,7 +139,9 @@ function setStatus(ctx, subId, status, extra = {}) {
 
 // Start a subscription. With a trial, nothing is charged until the trial ends.
 // skipTrial: the owner or staff start the plan paid today (prorated to the 1st) instead of its free trial.
-export async function subscribe(ctx, clientId, planId, asOf = ctx.now(), { skipTrial = false } = {}) {
+// quiet (the online sales page): a declined first charge sends no "payment didn't go through" email; the page says so and
+// the caller cancels the membership, so nothing is left owing.
+export async function subscribe(ctx, clientId, planId, asOf = ctx.now(), { skipTrial = false, quiet = false } = {}) {
   const plan = getPlan(ctx, planId);
   if (!plan.active) throw badRequest('That plan is no longer offered.');
   if (currentSubscription(ctx, clientId)) throw conflict('This client already has a subscription. Change its plan instead.');
@@ -162,7 +164,7 @@ export async function subscribe(ctx, clientId, planId, asOf = ctx.now(), { skipT
     emit(ctx, 'subscription.created', { subscription_id: s.id, client_id: clientId, client_name: s.client_name, plan_name: s.plan_name, status: s.status, trial_ends_at: s.trial_ends_at });
   });
   // The answer carries the first charge (or the trial) so the counter and the client page can say what happened.
-  const inv = trial ? null : await invoiceAndCharge(ctx, sub.id, sub.start, sub.end, asOf, period.amount_cents);
+  const inv = trial ? null : await invoiceAndCharge(ctx, sub.id, sub.start, sub.end, asOf, period.amount_cents, { quiet });
   return { ...getSubscription(ctx, sub.id), first_charge: inv ? { invoice_id: inv.id, amount_cents: inv.amount_cents, fee_cents: inv.fee_cents, status: inv.status, error: inv.status === 'paid' ? null : inv.last_error ?? null, period_end: inv.period_end, prorated: period.prorated } : null };
 }
 
@@ -286,7 +288,7 @@ export function getInvoice(ctx, id) {
   return i;
 }
 
-async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf, amountCents = null) {
+async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf, amountCents = null, { quiet = false } = {}) {
   const s = getSubscription(ctx, subId);
   const id = newId('inv');
   const base = amountCents ?? s.price_cents;                                 // the full month, or the part of it that's left (periodFor)
@@ -295,7 +297,7 @@ async function invoiceAndCharge(ctx, subId, periodStart, periodEnd, asOf, amount
   ctx.db.run(
     `INSERT INTO invoices (id, subscription_id, client_id, amount_cents, status, period_start, period_end, attempts, created_at, fee_cents)
      VALUES (?, ?, ?, ?, 'open', ?, ?, 0, ?, ?)`, id, subId, s.client_id, base + fee, periodStart, periodEnd, ctx.now(), fee);
-  return attemptCharge(ctx, id, asOf);
+  return attemptCharge(ctx, id, asOf, { quiet });
 }
 
 // One charge or payment per invoice at a time: a retry waiting on Stripe and a pay link paid meanwhile can't both land.
@@ -315,7 +317,7 @@ function chargeDescription(ctx, inv) {
   const tz = zone(ctx), from = localDate(inv.period_start, tz), to = localDate(inv.period_end, tz);
   return `${s?.plan_name ?? 'Membership'} membership, ${inv.client_name}, ${from} to ${to}${inv.note ? ` (${inv.note})` : ''}`.slice(0, 200);
 }
-async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, source: sourceOpt = null, onlyIfFailed = false } = {}) {
+async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, source: sourceOpt = null, onlyIfFailed = false, quiet = false } = {}) {
   const source = SOURCES.includes(sourceOpt) ? sourceOpt : manualOpt ? 'owner' : 'automatic';
   const manual = source === 'owner' || source === 'parent';
   const inv = getInvoice(ctx, invoiceId);
@@ -373,7 +375,7 @@ async function chargeInvoice(ctx, invoiceId, asOf, { manual: manualOpt = false, 
     }
   });
   if (result.ok) await membershipReceipt(ctx, inv.id);
-  else await paymentFailed(ctx, inv.id);
+  else if (!quiet) await paymentFailed(ctx, inv.id);
   return getInvoice(ctx, inv.id);
 }
 

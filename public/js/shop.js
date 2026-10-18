@@ -42,6 +42,6 @@ function render(d) {
     h('h1', { class: 'p-title', style: 'text-align:center' }, 'Train with us from anywhere'),
     h('p', { class: 'muted', style: 'text-align:center;margin-top:0' }, 'Programs and courses from our coaches, in your athlete\'s app. Pay once; no membership needed.'),
     d.items.length ? d.items.map(card) : h('p', { class: 'muted', style: 'text-align:center' }, 'Nothing for sale right now. ', h('a', { href: '/start' }, 'Ask about training'), ' and we\'ll get back to you.'),
-    h('p', { class: 'small muted', style: 'text-align:center' }, 'Questions? ', h('a', { href: '/start' }, 'Ask us'), '.')));
+    h('p', { class: 'small muted', style: 'text-align:center' }, 'Training with us in person? ', h('a', { href: '/buy' }, 'Memberships and session packs'), '. Questions? ', h('a', { href: '/start' }, 'Ask us'), '.')));
 }
 boot();

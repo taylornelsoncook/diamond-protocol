@@ -27,7 +27,8 @@ export const EVENT_TYPES = [
   'plan.adjustment_suggested', 'plan.adjustment_applied',   // version 69 (the adaptive plan)
   'weekly_note.sent',   // version 71 (the weekly coach's note)
   'feed.posted',   // version 78 (the team feed)
-  'bar_speed.recorded'   // version 81 (bar speed from VBT devices)
+  'bar_speed.recorded',   // version 81 (bar speed from VBT devices)
+  'group.message'   // version 87 (groups: a message on a group's board)
 ];
 
 // What each event means, and a made-up example of its data (sent by "Send test event", marked "test": true, and shown in
@@ -106,6 +107,7 @@ const INFO = {
   'plan.adjustment_applied': ['A coach approved an adaptive-plan change (or auto mode made it): the athlete\'s calendar moved.', { adjustment_id: 'adj_sample', ...C, kind: 'shift', text: 'Move the plan a week forward.', weeks: 1, by: 'Riley' }],
   'weekly_note.sent': ['A coach sent an athlete their weekly note (or auto mode sent the draft): it shows on the Workout tab and taps the phone.', { weekly_note_id: 'wn_sample', ...C, week_start: '2026-10-12', by: 'Riley' }],
   'feed.posted': ['A coach posted to the team feed: to everyone, a team (contract_id) or a program (program_id), pinned until pinned_until when pinned.', { post_id: 'fp_sample', audience: 'team', contract_id: 'tc_sample', program_id: null, title: 'Saturday sprints', author_name: 'Coach Riley', pinned_until: '2026-10-18T00:00:00.000Z' }],
+  'group.message': ['A message on a group\'s board: from a coach (author_kind staff), an athlete or a parent writing for their athlete.', { group_id: 'grp_sample', group_name: 'Kings 2031', message_id: 'gm_sample', author_kind: 'athlete', author_name: 'Ava', ...C }],
   'client.claimed': ['A parent adds a team athlete to their family with the Athlete ID (name and birthday matched).', { ...C, athlete_id: 'AVALOP2026', family_id: 'fam_sample', guardian_name: 'Maria Lopez' }]
 };
 export const EVENT_INFO = Object.fromEntries(EVENT_TYPES.map((t) => [t, { about: INFO[t]?.[0] ?? '', sample: INFO[t]?.[1] ?? {} }]));

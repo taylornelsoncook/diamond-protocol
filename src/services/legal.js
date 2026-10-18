@@ -8,6 +8,7 @@ import { forExport as formChecksOf, removeAllFor as removeFormChecks } from './f
 import { forExport as sprintClipsOf, removeAllFor as removeSprintClips } from './sprint.js';
 import { forExport as progressionsOf } from './progression.js';
 import { forExport as swapsOf } from './live.js';
+import { forExport as groupsOf } from './groups.js';
 import { forExport as monthlyOf } from './monthly.js';
 import { forExport as trainingProfileOf, forgetClient as forgetTrainingProfile } from './startup.js';
 import { forExport as adjustmentsOf, forgetClient as forgetAdjustments } from './adapt.js';
@@ -101,6 +102,7 @@ export function exportFamily(ctx, familyId) {
       sprint_analyses: sprintClipsOf(ctx, k.id),   // grades, timing and the coach's notes; never the clips
       progression_steps: progressionsOf(ctx, k.id),
       exercise_swaps: swapsOf(ctx, k.id),
+      ...groupsOf(ctx, k.id),   // groups and group_messages (version 87): the groups the athlete is in and what they wrote on the boards
       bar_speed: barSpeedOf(ctx, k.id),   // sets from velocity-based training devices (version 81)
       games: gamesOf(ctx, k.id),   // the athlete's games for the game-week helper (version 82)
       monthly_reports: monthlyOf(ctx, k.id),

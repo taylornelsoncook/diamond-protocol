@@ -40,6 +40,7 @@ import * as teams from './services/teams.js';
 import * as perf from './services/performance.js';
 import * as perfImport from './services/perf-import.js';
 import * as vbt from './services/vbt.js';
+import * as groups from './services/groups.js';
 import * as uploads from './services/uploads.js';
 import * as queue from './services/queue.js';
 import * as security from './services/security.js';
@@ -831,6 +832,18 @@ export const routes = [
   ['POST', '/v1/clients/:id/targets', 'any', 'Engagement', 'Set a test target: test (key), target (like 84, 6\'5" or 1:05), optional due_date. Replaces an existing target for that test.', (ctx, r) => engage.setTarget(ctx, clients.getClient(ctx, r.params.id).id, r.body, r.user ?? r.apiKey), 201],
   ['DELETE', '/v1/targets/:id', 'any', 'Engagement', 'Remove a test target. Results stay.', (ctx, r) => engage.removeTarget(ctx, r.params.id)],
   ['PATCH', '/v1/goals/:id', 'any', 'Engagement', 'Change a goal\'s title or target, or end it with active=false.', (ctx, r) => engage.updateGoal(ctx, r.params.id, r.body)],
+  // Groups (version 87): a named group of athletes (Kings 2031) with a shared board. Owners and coaches run them; front desk looks.
+  ['GET', '/v1/groups', 'any', 'Teams', 'Groups of athletes: name, note, coach, how many athletes, how many messages and the latest, and how many athlete messages have no coach answer yet (unanswered).', (ctx) => list(groups.listGroups(ctx))],
+  ['POST', '/v1/groups', 'any', 'Teams', 'Make a group: name (unique, up to 60 characters), note, coach_id (an owner or coach), client_ids (athletes to put in it right away).', (ctx, r) => groups.createGroup(ctx, r.body, r.user ?? r.apiKey), 201],
+  ['GET', '/v1/groups/:id', 'any', 'Teams', 'One group: every athlete in it with how many times they attended (classes, team sessions and check-ins) and their best on each sprint test, the tests with a best (the columns), and the board (hidden messages marked).', (ctx, r) => groups.getGroup(ctx, r.params.id)],
+  ['PATCH', '/v1/groups/:id', 'any', 'Teams', 'Rename a group or change its note or coach_id (null = none).', (ctx, r) => groups.updateGroup(ctx, r.params.id, r.body)],
+  ['DELETE', '/v1/groups/:id', 'any', 'Teams', 'Delete a group. With athletes or messages in it, send confirm: true; the athletes\' profiles are untouched.', (ctx, r) => groups.deleteGroup(ctx, r.params.id, { confirm: r.body?.confirm === true || r.query?.confirm === 'true' })],
+  ['POST', '/v1/groups/:id/members', 'any', 'Teams', 'Put athletes in the group: client_ids (ids or Athlete IDs, up to 100). Archived athletes and athletes already in it are skipped and named.', (ctx, r) => groups.addMembers(ctx, r.params.id, r.body, r.user ?? r.apiKey), 201],
+  ['DELETE', '/v1/groups/:id/members/:cid', 'any', 'Teams', 'Take an athlete out of the group.', (ctx, r) => groups.removeMember(ctx, r.params.id, r.params.cid)],
+  ['GET', '/v1/groups/:id/messages', 'session', 'Teams', 'The group\'s board, newest first (?before=, ?limit=), hidden messages included and marked.', (ctx, r) => groups.listMessages(ctx, r.params.id, { ...r.query, staff: true })],
+  ['POST', '/v1/groups/:id/messages', 'session', 'Teams', 'Write on the group\'s board as the coach: body (up to 1,000 characters). Every athlete in the group gets a tap on their phone.', (ctx, r) => groups.postMessage(ctx, r.params.id, { kind: 'staff', user: r.user }, r.body), 201],
+  ['DELETE', '/v1/group-messages/:id', 'session', 'Teams', 'Hide a message on a board: staff still see it, athletes don\'t.', (ctx, r) => groups.hideMessage(ctx, r.params.id, r.user, { hide: true })],
+  ['POST', '/v1/group-messages/:id/unhide', 'session', 'Teams', 'Show a hidden message again.', (ctx, r) => groups.hideMessage(ctx, r.params.id, r.user, { hide: false })],
   ['GET', '/v1/teams', 'any', 'Engagement', 'Active teams for goals, messages and assigned reading (names and roster counts only).', (ctx) => list(engage.listTeams(ctx))],
   ['GET', '/v1/teams/:id/engagement', 'any', 'Engagement', 'A team\'s goals, messages and assigned reading, and which roster athletes have the app.', (ctx, r) => engage.teamEngagement(ctx, r.params.id)],
   ['POST', '/v1/teams/:id/goals', 'any', 'Engagement', 'Set a weekly goal for everyone on the roster: kind, target, optional title.', (ctx, r) => engage.createGoal(ctx, { contractId: r.params.id }, r.body, r.user ?? r.apiKey), 201],
@@ -912,6 +925,10 @@ export const routes = [
   ['POST', '/app/api/maxes', 'client', 'Client app', 'Enter or update a max: test, value (lb, or unit kg), optional date and note. Your program\'s weights use it from now on.', (ctx, r) => maxes.saveMax(ctx, r.client.id, r.body, r.actingParent ? { by: 'parent', name: r.actingParent.name } : { by: 'athlete', name: r.client.name }), 201],
   ['GET', '/app/api/vbt', 'client', 'Client app', 'Your bar speed by exercise: the load-velocity profile and estimated max, the fastest rep at each load, the trend at your usual load, and your recent sessions set by set.', (ctx, r) => vbt.profileFor(ctx, r.client.id)],
   ['DELETE', '/app/api/maxes/:id', 'client', 'Client app', 'Take back a max you entered.', (ctx, r) => maxes.removeMax(ctx, r.client.id, r.params.id)],
+  ['GET', '/app/api/groups', 'client', 'Client app', 'Your groups (Kings 2031): who is in each by first name, the coach, the board, and your own numbers: times attended and your best on each sprint test (results once a testing day is shared).', (ctx, r) => groups.forClient(ctx, r.client)],
+  ['GET', '/app/api/groups/:id/messages', 'client', 'Client app', 'Older messages on a group\'s board (?before=, ?limit=).', (ctx, r) => groups.listMessages(ctx, r.params.id, { ...r.query, client: r.client })],
+  ['POST', '/app/api/groups/:id/messages', 'client', 'Client app', 'Write on your group\'s board: body (up to 1,000 characters). Everyone in the group reads it; the coach is emailed.', (ctx, r) => groups.postMessage(ctx, r.params.id, r.actingParent ? { kind: 'parent', client: r.client, guardian: r.actingParent } : { kind: 'athlete', client: r.client }, r.body), 201],
+  ['DELETE', '/app/api/group-messages/:id', 'client', 'Client app', 'Take back a message you wrote.', (ctx, r) => groups.removeOwnMessage(ctx, r.params.id, r.client.id)],
   ['GET', '/app/api/games', 'client', 'Client app', 'Your games, races and competitions on file and your game-week plan: where today sits against them, each day of the next three weeks in its colour (green = the full workout, yellow = one set fewer on every exercise, red = half the sets) with the advice, and the workouts on it.', (ctx, r) => ({ ...gameweek.planFor(ctx, r.client.id) })],
   ['POST', '/app/api/games', 'client', 'Client app', 'Add a game: date, time (HH:MM, optional), title ("vs Westlake"), kind (game, tournament, scrimmage, race, meet, competition).', (ctx, r) => gameweek.addGame(ctx, r.client.id, r.body, r.actingParent ? { kind: 'parent', name: r.actingParent.name } : { kind: 'athlete', name: r.client.name }), 201],
   ['PATCH', '/app/api/games/:id', 'client', 'Client app', 'A game that moved: send the new date (or time, title, kind). Your calendar\'s colours and your sets follow at once.', (ctx, r) => gameweek.updateGame(ctx, r.client.id, r.params.id, r.body)],

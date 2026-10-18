@@ -81,7 +81,6 @@ const pageState = { q: '', level: '', sport: '', setting: '', author: '', exQ: '
 export async function viewPrograms(main) {
   const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules, notes, gameRules] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
     get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null), canEdit() ? get('/v1/weekly-notes').catch(() => null) : null, get('/v1/game-rules').catch(() => null)]);
-  const noVideo = exs.data.filter((x) => !x.video_url).length;
   const edit = canEdit();
 
   // Programs (version 74, owner's ask): one line per program, filtered by sport, setting, who wrote it and level.
@@ -129,12 +128,10 @@ export async function viewPrograms(main) {
   fill(main,
     deps.header('Programs', 'Build training, attach demo videos and assign to clients.', edit ? h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs/monthly' }, 'Monthly reports'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/dictate' }, 'Dictate a workout'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/board' }, 'Build from a picture'), h('a', { class: 'dp-btn dp-btn--secondary', href: '#/programs/import' }, 'Build from a PDF'), btn('New program', () => newProgramDialog(progs.data, tmpl.data))) : null),
     pulse,
-    h('div', { class: 'split' },
-      h('div', { class: 'stack', style: 'gap:24px' },
-        h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
-        cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, gameRules ? gameRulesPanel(gameRules, isOwner()) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null),
-      panel('Exercise library', { subtitle: `${plural(exs.data.length, 'exercise')}${noVideo ? ` · ${noVideo} without a demo video` : ''}. It lives in Settings.` },
-        h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/settings' }, 'Open the exercise library')))));
+    // One column (owner's ask: the exercise library lives in Settings only), so the calendar has the page's width.
+    h('div', { class: 'stack', style: 'gap:24px' },
+      h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
+      cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, gameRules ? gameRulesPanel(gameRules, isOwner()) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null));
 }
 
 // The month calendar (the redesign, step 3): a pick (everyone on a program, one program, a team or one athlete), a month

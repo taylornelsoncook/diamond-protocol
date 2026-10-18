@@ -14,6 +14,7 @@ const OWNER_ONLY = [
   /^\/v1\/sales\/:id\/refund$/, /^\/v1\/data-requests(\/|$)/, /^\/v1\/clients\/:id\/(merge|merge-preview)$/, /^\/v1\/(membership-requests|profile-claims)(\/|$)/, /^\/v1\/sessions\/:id\/trial-offer$/, /^\/v1\/coach-summary$/, /^\/v1\/families\/:id\/export$/, /^\/v1\/integrations\/(hawkin|:provider)(\/|$)/,
   /^\/v1\/leads\/(report|export|import)(\/|$)/,   // CRM (version 45): lead reports, export and import are the owner's
   /^\/v1\/exercises\/import(\/|$)/,   // the video library (version 48): bringing in a list of exercises
+  /^\/v1\/legal(\/|$)/,   // the drafted legal wording (version 87): the owner fills the Settings boxes from it
   /^\/v1\/vbt\/(waiting|imports?)(\/|$)/   // bar speed (version 81, owner decision): connecting, importing and linking are the owner's; coaches read the data
 ];
 // The owner changes these; others may read them (message templates for one-to-one emails and texts).

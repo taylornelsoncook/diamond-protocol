@@ -1,0 +1,23 @@
+CARD-SAVING CONSENT WORDING
+
+These short sentences appear wherever a card is saved or charged. They are built into the screens (the counter, the parent portal, the pay page and the membership start); the lawyer reviews them here. The waiver, terms and privacy policy carry the full version (terms section 8, privacy section 2).
+
+At the counter, beside the "Save this card" tick (the client agrees out loud; staff tick it):
+
+  Save this card with Stripe for {first name}'s future payments: memberships on the 1st, bookings and purchases they agree to. {{business_name}} never stores the card number.
+
+In the parent portal, under Add a card / Replace card:
+
+  By adding a card you agree that it may be charged for this family's memberships on the 1st of each month, for bookings and purchases you make, and to retry a declined payment, as our terms of service describe. Your card is stored by Stripe; {{business_name}} never sees the full card number. You can change or remove it here at any time; a membership needs a card on file to continue.
+
+When a membership is started (the dialog and the counter's Start panel already show the amount, the date of the next charge and the plan's class allowance):
+
+  Charged to the card on file now, then on the 1st of each month until you cancel. Cancel any time from the portal; it takes effect at the end of the paid month.
+
+On the pay page (a pay link), above the Pay button:
+
+  You'll pay on Stripe's secure page. We never see your card number. Saving the card is optional and lets us charge it for this family's future bookings and memberships with your agreement.
+
+On a receipt (email and printable), one line:
+
+  Paid with {brand} ending {last 4}. Card details are held by Stripe, not by {{business_name}}.

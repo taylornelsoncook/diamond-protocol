@@ -989,7 +989,7 @@ async function viewFamily(main) {
       state.me.payments.provider === 'stripe' ? btn(f.card.on_file ? 'Replace card' : 'Add card', (e) => busy(e.currentTarget, async () => { const { url } = await post('card/setup-link'); location.href = url; }), 'primary') : null,
       state.me.payments.can_simulate && !f.card.on_file ? btn('Add test card', (e) => busy(e.currentTarget, async () => { await post('card/test'); toast('Test card added. Any declined payment was tried again.'); await refresh({ keepScroll: true }); }), 'primary') : null,
       f.card.on_file ? btn('Remove card', (e) => { if (confirm(`Remove the ${cardName(f.card)}? You'll need a card again before booking anything that's paid.`)) busy(e.currentTarget, async () => { await api('DELETE', 'card'); toast('Card removed.'); await refresh({ keepScroll: true }); }); }, 'ghost') : null),
-    h('p', { class: 'small muted' }, declined.length ? 'Saving a new card tries every declined payment again right away. ' : '', 'Cards are stored by Stripe. Diamond Protocol never sees your full card number.'));
+    h('p', { class: 'small muted' }, declined.length ? 'Saving a new card tries every declined payment again right away. ' : '', `By adding a card you agree that it may be charged for this family's memberships on the 1st of each month, for bookings and purchases you make, and to retry a declined payment, as the terms of service describe. Your card is stored by Stripe; ${state.me.business_name ?? 'we'} never see${state.me.business_name ? 's' : ''} the full card number. Change or remove it here any time; a membership needs a card on file to continue.`));
 
   // Payments and receipts.
   const payRow = (x) => h('div', { class: 'p-row' },
@@ -1013,9 +1013,9 @@ async function viewFamily(main) {
     f.waiver.signed ? [h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Read the waiver'), h('div', { class: 'p-waiver', tabindex: '0' }, state.me.waiver_text)),
       btn('Email me a copy', (e) => busy(e.currentTarget, async () => { const r = await post('waiver/email'); toast(`Sent to ${r.sent_to}.`); }), 'ghost')]
       : [h('div', { class: 'p-waiver', tabindex: '0' }, state.me.waiver_text), h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
-        await post('waiver', { signed_name: sigName.value, agree: signed.checked }); toast('Waiver signed. You can book now.'); await refresh({ keepScroll: true });
+        await post('waiver', { signed_name: sigName.value, agree: signed.checked }); toast('Signed. The waiver, terms and privacy policy are all accepted; you can book now.'); await refresh({ keepScroll: true });
       }); } },
-        h('label', { class: 'row small', style: 'gap:10px;min-height:44px' }, signed, h('span', null, 'I have read and agree to the waiver for my athletes.')),
+        h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start;min-height:44px' }, signed, h('span', null, 'I have read and agree to the waiver for every athlete on this account, and to the ', h('a', { href: '/terms', target: '_blank' }, 'terms of service'), ' and ', h('a', { href: '/privacy', target: '_blank' }, 'privacy policy'), '. One signature covers all three.')),
         field('Type your full name to sign', sigName), btn('Sign waiver', null, 'primary', { type: 'submit' }))]);
 
   // Athletes: a summary line, then grouped fields that save in place.

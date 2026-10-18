@@ -1,0 +1,105 @@
+{{business_name}} PRIVACY POLICY
+
+This policy explains what information {{business_name}} ("we", "us", "our") collects about you and your athletes, why, who can see it, how long we keep it, and the choices you have. It applies to our website, the parent and athlete portal, the athlete app, our online store, our front desk and our coaching. We wrote it in plain language because most of the people it protects are children and the parents who sign for them.
+
+Our promises, in short:
+
+We never sell your data or your athlete's data, and we never use it for advertising.
+Your data is yours. You can download all of it, and you can delete your account and its personal data, at any time.
+We use your athlete's data only in their best interest: to coach them, keep them safe, and run the Services you asked for.
+We always ask your permission before sharing your athlete's data with anyone other than the people and services needed to provide the Services, and before using their image for marketing.
+Card details are stored by Stripe, never on our platform.
+
+1. CHILDREN'S PRIVACY
+
+Most of our athletes are under 18 and many are under 13. We do not knowingly collect personal information directly from a child under 13. Athlete accounts are created by a parent or legal guardian, who provides the athlete's information, consents to its use as described here, controls what is on the account, and can see everything the athlete does in the app. An athlete's own app access comes through the parent's account or a private link the parent controls. If you believe we have collected information from a child under 13 without a parent's consent, tell us at {{contact_email}} and we will delete it. We follow the Children's Online Privacy Protection Act (COPPA) and Colorado law.
+
+2. WHAT WE COLLECT
+
+Account and contact information: parent names, email addresses, phone numbers, relationship to the athlete, the family's name and, where you give it, your address.
+
+Athlete information: name, birth date, sex, sport, position, school, graduation year, emergency contact, and the medical notes you give us (conditions, allergies, medications, injuries) so coaches can keep the athlete safe.
+
+Training information: bookings and attendance, memberships, packs and credits, programs assigned, workouts logged (sets, reps, weights, effort, notes), test results and personal bests, maxes, progression steps, readiness check-ins (sleep, soreness, energy, mood, hydration), games and competition dates you enter, goals, badges and lessons read.
+
+Clips and photos: form-check and sprint clips the athlete or parent sends us or a coach records for coaching, kept in private storage; photos taken for coaching purposes.
+
+Wearable data: only if you connect a wearable (such as WHOOP or Oura) through the portal. We then receive daily recovery, sleep, heart rate variability, strain and workout summaries from that service for the athlete, until you disconnect it.
+
+Messages: coach messages, team feed posts and comments, group board messages, and email and text messages between you and us, including your text-message consent and any STOP request.
+
+Payment information: the card brand, last four digits and expiry date, a payment reference from Stripe, and the record of each charge, refund, credit, invoice and receipt. Full card numbers never reach us; they go directly to Stripe.
+
+Technical information: the time and approximate device and browser used to sign in to the portal or app, so you can see where your account is signed in and sign other devices out; the IP address recorded when you sign the waiver or accept these terms, as evidence of your signature; and basic server logs kept for security. We do not use advertising cookies or trackers. The portal uses only the cookie needed to keep you signed in.
+
+Inquiries: if you fill in our "ask about training" form or sign up from a link, we keep what you entered and where the link came from (for example a flyer or our website) so we can follow up.
+
+3. WHY WE USE IT
+
+To provide the Services you asked for: scheduling, coaching, programs, testing, the app, the portal, invoices and receipts.
+To keep athletes safe: medical notes and emergency contacts for coaches, concussion and injury tracking, readiness suggestions.
+To coach better: results, logs, clips, wearable data and check-ins are used to adjust the athlete's own training and to show the athlete and parent their progress.
+To run the business: payments, refunds, accounting, tax, daily money checks for errors, security and the prevention of fraud and abuse.
+To communicate with you: receipts, schedule changes, sign-in codes, reminders, coach messages, monthly progress reports, and, only if you have asked for them, texts and announcement emails. You can turn texts off by replying STOP and announcement emails off with the link in each one.
+To meet legal obligations, such as keeping financial records and responding to lawful requests.
+
+We do not use your data for advertising, we do not build profiles for marketing, and we do not make automated decisions with legal or similar effects about you or your athlete. Readiness, progression and program suggestions are coaching aids that a coach or you can override.
+
+4. WHO CAN SEE IT
+
+Your family: the account holder sees everything on the account. An athlete with their own sign-in sees their own information. Other parents on the account see the family's information.
+
+Our coaches and staff: owners and coaches see the athletes' training, medical and contact information so they can coach safely. Front-desk staff see what they need to check athletes in, take payments and help families, and do not see coach-only notes. Every change staff make is logged.
+
+Teams and groups: when an athlete is in a group or on a team roster, teammates see the athlete's first name and last initial and what the athlete writes on the shared board. They never see another athlete's results, attendance or medical information. Rankings are shown only if the owner turns them on and the athlete opts in, and then only to the athletes who opted in.
+
+Schools and clubs: when an athlete trains under a school or club contract, we share with that organization only what the contract needs, such as attendance for the sessions it pays for. We do not share medical notes or family contact details with schools without your permission.
+
+Service providers who work for us: Stripe (payments), our email provider (Resend), our text-message provider (Twilio, only if texts are on), our hosting provider (Render), our storage provider (Cloudflare, for backups and private clips), and the wearable services you connect (WHOOP, Oura). Where a coach uses an AI tool to read a program document or draft a progress note, only the document or the facts needed go to that provider (Anthropic), under terms that do not allow it to train on your data. Each of these providers may use your data only to provide its service to us.
+
+Nobody else, unless you say so or the law requires it. We ask your permission before sharing an athlete's data with anyone else, for example a doctor, physical therapist, school coach or recruiter. We may disclose information if required by law, court order or to protect someone's safety, and we will tell you unless the law forbids it. If the business is sold, your data goes with it only to a successor who is bound by this policy.
+
+5. PHOTOS, VIDEO AND YOUR ATHLETE'S IMAGE
+
+Coaching clips are private: seen only by our coaches and your family account, stored in a private bucket, never public. We do not use an athlete's name, image or likeness in marketing, on our website or on social media without your separate written permission, which you can withdraw at any time by writing to {{contact_email}}.
+
+6. HOW LONG WE KEEP IT
+
+While your account is open we keep what the account needs. Form-check and sprint clips are deleted automatically after the period the owner sets (90 days by default) unless you delete them sooner. Sign-in codes expire within minutes; sign-in sessions end after 30 days or when you sign out. Wearable data stops arriving the moment you disconnect the device, and what has arrived is yours to delete with your account.
+
+Transaction records (charges, refunds, credits, invoices, receipts) are kept for at least five years as accounting and tax law requires. When you delete your account, these records stay but your name and contact details are removed from them.
+
+Signed waivers and accepted terms are kept for as long as a claim could be brought, as the law allows, because they are evidence of your agreement.
+
+Backups are encrypted and kept for a limited period; deleted data drops out of backups as they age out.
+
+7. YOUR RIGHTS AND CHOICES
+
+You can do all of these yourself in the portal, or ask us at {{contact_email}}; we answer within 45 days and never charge for it:
+
+See and download everything we hold about your family (Family tab, Download my data).
+Correct anything that is wrong (edit the family and athlete details in the portal, or ask a coach).
+Delete your account and your family's personal data (Family tab, or email us). We confirm by email first. Financial records stay without your name, as section 6 explains; everything else is removed.
+Disconnect a wearable, delete a clip, turn texts off (reply STOP), unsubscribe from announcement emails, and sign out other devices, at any time.
+Withdraw permission you gave for marketing use of an athlete's image.
+Opt out of the sale of your data and of targeted advertising: there is nothing to opt out of, because we do neither.
+
+Colorado residents have these rights under the Colorado Privacy Act and may appeal a decision we make about a request by writing to {{contact_email}} with "Privacy appeal" in the subject; we respond within 45 days. We do not treat you differently for using your rights.
+
+8. SECURITY
+
+We protect your data with encryption in transit, encrypted off-site backups, role-based access for staff, audit logs of every change, rate limits and sign-in protections. Card numbers are handled only by Stripe. No system is perfectly secure; if we learn of a breach that affects your personal data, we will tell you and the authorities as Colorado law requires.
+
+9. TEXT MESSAGES
+
+We send texts only to parents who turned them on (at sign-up, in the portal or by replying to us), for reminders, schedule changes and replies to your questions. Message and data rates may apply. Reply STOP at any time to stop, and HELP for help. Your consent to texts is not a condition of buying anything.
+
+10. CHANGES TO THIS POLICY
+
+When we change this policy we post the new version at {{public_url}}/privacy with its date and ask the account holder to accept it in the portal before the next booking or purchase. If a change would let us use children's data in a new way, we ask for your consent first.
+
+11. CONTACT
+
+{{business_name}}
+{{business_address}}
+{{contact_email}}

@@ -24,7 +24,7 @@ Done on September 28: production runs the newest version (schema 48), off-site b
 
 ### Start this week: the two that unblock the most
 - [ ] **Stripe:** finish business verification, add your bank account, turn on Stripe Terminal (section 1). Nothing real can be charged until this is done.
-- [ ] **Lawyer:** waiver, terms of service, privacy policy and card-saving consent wording (sections 2 and 5). Nobody can sign up until these are real.
+- [ ] **Lawyer:** waiver, terms of service, privacy policy and card-saving consent wording (sections 2 and 5). Nobody can sign up until these are real. **Drafts are written** in `docs/legal/` (waiver, terms, privacy, card consent, with a README of the decisions and the Colorado points to confirm): send that folder to the lawyer, then on Settings press **Use the drafted wording** on each box, make the lawyer's changes and Save.
 
 ### Kept from before
 - [ ] **Staff:** add your real coaches and front desk under Settings → Staff. You chose to do this last, before the soft launch.
@@ -46,7 +46,7 @@ Done on September 28: production runs the newest version (schema 48), off-site b
 - [ ] **Addresses** for every place you take payments: the facility, your business address (used for the "Mobile" location that covers clients' homes), and each park you train in.
 - [ ] **Policies:** refunds, pack expiration (packs don't expire in the app today), cancellations, and failed payments (today: retry every 3 days, lock the family out after 4 declines, cancel after 5).
 - [ ] **Sales tax.** The app doesn't add tax. Ask your accountant whether you owe tax on sessions or gear in your state, and tell me what to build.
-- [ ] **Waiver.** Have a lawyer write your release of liability, medical consent and photo policy. Paste it in Schedule → Hours & settings.
+- [ ] **Waiver.** Have a lawyer review the draft in `docs/legal/waiver.txt` (release of liability, assumption of risk, medical consent, concussions, photo and video policy, Colorado parental release). Settings → Policies → **Use the drafted wording**, make the lawyer's changes, Save. Families sign it once in the portal; the one signature also accepts the terms and privacy policy.
 - [ ] **Class schedule:** each weekly class (days, time, location, ages, spots, drop-in price), your camps and clinics (dates, registration price), and your hours for privates and evaluations.
 - [ ] **Group vs private pricing:** which packs count as group classes and which as privates, and whether memberships cover group classes only (today: yes).
 - [ ] **Cancellation window** for parents (default 12 hours).
@@ -79,7 +79,7 @@ You'll be storing children's names, birthdays, medical notes and parents' paymen
 
 - [ ] **Terms of service** for families and schools: what you provide, payment terms, cancellations, refunds, and account closing.
 - [ ] **Privacy policy:** what you collect (athlete profiles, medical notes, test results, contact details), why, who can see it (your staff by role, Stripe for payments, Resend for email, your host), how long you keep it, and how a parent can ask for a copy or have it deleted. Ask your lawyer which children's privacy rules apply to you, since parents enter their kids' information.
-- [ ] **Waiver** (from section 2), finalized by your lawyer.
+- [ ] **Waiver** (from section 2), finalized by your lawyer. The terms and privacy drafts are in `docs/legal/terms.txt` and `docs/legal/privacy.txt`; the Settings boxes fill from them with Use the drafted wording.
 - [ ] **Card-saving consent wording** (from section 2).
 - [ ] **Insurance:** confirm your liability coverage includes training minors at your facility, parks and clients' homes.
 - [ ] **Paste the terms and privacy policy** into Schedule → Hours & settings. They appear at `/terms` and `/privacy`, new families agree to them at sign-up, and changing them later asks every parent to accept again.

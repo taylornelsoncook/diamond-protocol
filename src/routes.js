@@ -1,6 +1,7 @@
 import * as billing from './services/billing.js';
 import * as visits from './services/visits.js';
 import * as refunds from './services/refunds.js';
+import * as buyonline from './services/buyonline.js';
 import * as dataimport from './services/dataimport.js';
 import * as planner from './services/planner.js';
 import * as wearables from './services/wearables.js';
@@ -328,6 +329,7 @@ export const routes = [
     security.audit(ctx, { ...(r.user ? { actor_type: 'staff', actor_id: r.user.id, actor_name: r.user.name, role: r.user.role } : { actor_type: 'api_key', actor_id: r.apiKey?.id, actor_name: r.apiKey?.label }), action: `exported ${file.count} ${file.count === 1 ? 'invoice' : 'invoices'} as CSV`, target: null, status: 200, ip: r.ip });
     return { __file: file };
   }],
+  ['GET', '/v1/billing/online-sales', 'any', 'Billing', 'What the online sales page (/buy) sold, by who the buyer said helped them ("Who helped you?": an owner or coach, or no one). ?from= and ?to= (dates, the day the order was paid). by_helper has every owner and coach whose account is on (with orders, memberships, packs, charged_cents and their own link /buy?coach=<key>, which picks them on the form), anyone since gone who has sales, then No one; totals; and the latest 100 orders.', (ctx, r) => buyonline.salesReport(ctx, r.query)],
   ['GET', '/v1/billing/refunds', 'any', 'Billing', 'The refunds the app records, newest first (a pay link paid twice is refunded automatically and only emailed to the owners): membership refunds (in the app or the Stripe dashboard), sale refunds and undos, and card approvals that came in after a membership was already paid and were refunded automatically. Each has the athlete, Athlete ID, email and phone (the athlete\'s own, else the primary parent\'s), what it was for, the amount, reason and who refunded it. ?from= and ?to= (dates, the day the money went back), ?kind= membership, sale or paid_twice, ?q= athlete, email, phone, item or reason, ?limit= up to 1000. Returns the count and total for the whole filter.', (ctx, r) => refunds.refundReport(ctx, r.query)],
   ['GET', '/v1/billing/refunds/export', 'any', 'Billing', 'The refunds report (same filter) as a CSV file.', (ctx, r) => {
     const file = refunds.exportRefunds(ctx, r.query);

@@ -1610,6 +1610,38 @@ function refundsPanel() {
   return h('div', { id: 'bl-refunds' }, panel('Refunds', { subtitle: sub, action: csv },
     h('div', { class: 'row wrap', style: 'gap:8px' }, h('label', { class: 'row small', style: 'gap:6px' }, 'From', from), h('label', { class: 'row small', style: 'gap:6px' }, 'To', to), kind, q), out));
 }
+// Online sales by coach (owner's ask: "who helped you?" on the sales page, to count the sales coaches make through it).
+const onlineUi = { period: 'month' };
+function onlineSalesPanel() {
+  const period = select(BL_PERIODS, { value: onlineUi.period, 'aria-label': 'Paid', style: 'width:auto' });
+  const out = h('div', null, h('p', { class: 'muted small' }, 'Loading…')), sub = h('span');
+  async function draw() {
+    const p = onlineUi.period ? blPeriod(onlineUi.period) : {};
+    let r;
+    try { r = await get(`/v1/billing/online-sales?${new URLSearchParams(Object.entries(p).filter(([, x]) => x))}`); } catch (e) { return fill(out, h('p', { class: 'dp-error' }, e.message)); }
+    sub.textContent = r.totals.orders ? `${plural(r.totals.orders, 'order')} · ${money(r.totals.charged_cents)} · ${r.totals.helped} with a coach's help.` : 'No online orders in these dates.';
+    fill(out,
+      h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' },
+        h('thead', null, h('tr', null, ['Who helped', 'Orders', 'Memberships', 'Packs', 'Charged', 'Their link'].map((x) => h('th', null, x)))),
+        h('tbody', null, r.by_helper.map((x) => h('tr', null,
+          h('td', { class: x.user_id ? 'strong' : 'muted' }, x.name),
+          h('td', { style: 'font:600 20px/1 var(--font-display)' }, String(x.orders)), h('td', null, String(x.memberships)), h('td', null, String(x.packs)),
+          h('td', { style: 'white-space:nowrap' }, money(x.charged_cents)),
+          h('td', { class: 'bl-acts' }, x.link ? btn('Copy link', () => copyText(x.link, `${x.name}'s sales page link copied. Buyers who use it have ${x.name} picked already.`), 'ghost', { 'aria-label': `Copy ${x.name}'s sales page link` }) : null)))))),
+      r.orders.length ? h('div', { class: 'stack-tight', style: 'margin-top:12px' }, h('div', { class: 'dp-label' }, 'Latest orders'),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'table bl-cards' },
+          h('thead', null, h('tr', null, ['Paid', 'Athlete', 'Bought', 'Charged', 'Who helped'].map((x) => h('th', null, x)))),
+          h('tbody', null, r.orders.map((o) => h('tr', null,
+            h('td', { class: 'small', style: 'white-space:nowrap' }, date(o.paid_at)),
+            h('td', null, o.client_id ? h('a', { class: 'strong', href: `#/clients/${o.client_id}` }, o.athlete_name) : h('span', { class: 'muted' }, 'Removed')),
+            h('td', { class: 'small' }, o.item), h('td', { style: 'white-space:nowrap' }, money(o.charged_cents)),
+            h('td', { class: o.helped_by ? 'small' : 'small muted' }, o.helped_by ?? 'No one'))))))) : null);
+  }
+  period.addEventListener('change', () => { onlineUi.period = period.value; draw(); });
+  draw();
+  return h('div', { id: 'bl-online' }, panel('Online sales by coach', { subtitle: sub, action: period },
+    h('p', { class: 'small muted dp-help', style: 'margin:0 0 8px' }, 'Buyers on the sales page answer "Who helped you?" with a coach or No one. Give each coach their own link: it picks them for the buyer.'), out));
+}
 const BL_STATE = { failed: ['Failed', 'warn'], open: ['Open', 'neutral'], overdue: ['Overdue', 'warn'], paid: ['Paid', 'good'], partially_refunded: ['Part refunded', 'neutral'], refunded: ['Refunded', 'muted'], void: ['Void', 'muted'] };
 const blBadge = (st) => h('span', { class: `dp-badge dp-badge--${BL_STATE[st]?.[1] ?? 'muted'}` }, BL_STATE[st]?.[0] ?? st);
 const BL_VIEWS = [['all', 'All'], ['failed', 'Failed'], ['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['paid', 'Paid'], ['refunds', 'Refunds'], ['void', 'Void']];
@@ -1953,13 +1985,13 @@ async function viewBilling(main) {
       }), 'secondary'))))) : null;
   const checksPanel = h('div', { id: 'bl-checks' }, moneyChecksPanel(checks, render));
 
-  const jumps = [['bl-att', 'Needs attention', attN], ['bl-inv', 'Invoices'], ['bl-mem', 'Memberships'], ['bl-refunds', 'Refunds'], ['bl-plans', 'Plans'], ['bl-links', 'Pay links'], ['bl-checks', 'Money checks'], state.testMode ? ['bl-clock', 'Billing clock'] : null].filter(Boolean);
+  const jumps = [['bl-att', 'Needs attention', attN], ['bl-inv', 'Invoices'], ['bl-mem', 'Memberships'], ['bl-refunds', 'Refunds'], ['bl-plans', 'Plans'], ['bl-online', 'Online sales'], ['bl-links', 'Pay links'], ['bl-checks', 'Money checks'], state.testMode ? ['bl-clock', 'Billing clock'] : null].filter(Boolean);
   fill(main,
     header('Billing', 'Money in, money owed, and who is on which plan.'),
     numbers, monthNote,
     h('nav', { class: 'tm-jump', 'aria-label': 'Billing sections' }, jumps.map(([id, label, n]) => h('button', { type: 'button', onClick: () => jumpTo(id) }, label, n ? h('span', { class: 'warn-text', style: 'margin-left:6px' }, String(n)) : null))),
     checks.needs_look ? checksPanel : null,
-    attPanel, feePanel, invPanel, memPanel, refundsPanel(), planPanel, linksPanel,
+    attPanel, feePanel, invPanel, memPanel, refundsPanel(), planPanel, onlineSalesPanel(), linksPanel,
     checks.needs_look ? null : checksPanel,
     testPanel);
 }

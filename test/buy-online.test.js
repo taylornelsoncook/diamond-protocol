@@ -27,7 +27,7 @@ const pub = async (method, path, body, headers = {}) => {
   return { status: r.status, body: await r.json().catch(() => null), cookie: r.headers.get('set-cookie')?.split(';')[0] ?? null };
 };
 const mailTo = (email) => app.ctx.db.all('SELECT subject, body FROM outbox WHERE to_email = ? ORDER BY rowid', email);
-const buyer = (email, extra = {}) => ({ item: `product:${pack.id}`, athlete: { first_name: 'Ava', last_name: 'Lopez' }, buyer: { name: 'Maria Lopez', email, phone: '555-0100' }, accept_terms: true, ...extra });
+const buyer = (email, extra = {}) => ({ item: `product:${pack.id}`, athlete: { first_name: 'Ava', last_name: 'Lopez' }, buyer: { name: 'Maria Lopez', email, phone: '555-0100' }, accept_terms: true, helped_by: 'none', ...extra });
 // Start, confirm the code, and finish with a test card.
 async function buyAll(body, card = {}) {
   const started = await pub('POST', '/portal/api/buy', body);
@@ -103,7 +103,7 @@ test('buying a pack: a code proves the email, the card is saved, the account is 
 });
 
 test('buying a membership: charged the plan, a membership on the account; a trial plan charges nothing now unless they choose to pay now', async () => {
-  const r = await buyAll({ item: `plan:${plan.id}`, self: true, athlete: { first_name: 'Cole', last_name: 'Jensen' }, buyer: { email: 'cole@example.com' }, accept_terms: true, accept_renewal: true });
+  const r = await buyAll({ item: `plan:${plan.id}`, self: true, athlete: { first_name: 'Cole', last_name: 'Jensen' }, buyer: { email: 'cole@example.com' }, accept_terms: true, helped_by: 'none', accept_renewal: true });
   assert.equal(r.body.status, 'paid');
   const c = app.ctx.db.get(`SELECT * FROM clients WHERE name = 'Cole Jensen'`);
   assert.equal(app.ctx.db.get('SELECT relationship FROM guardians WHERE family_id = ?', c.family_id).relationship, 'self', 'an adult buying for themselves holds their own account');
@@ -111,14 +111,14 @@ test('buying a membership: charged the plan, a membership on the account; a tria
   assert.deepEqual([page.subscription.status, page.subscription.plan_name, page.visits.limit], ['active', 'Eight a month', 8]);
   assert.equal(r.body.summary.charged_cents, 14900);
   // A membership needs the renewal agreement.
-  const noRenewal = await pub('POST', '/portal/api/buy', { item: `plan:${plan.id}`, athlete: { first_name: 'X', last_name: 'Y' }, buyer: { name: 'Z', email: 'z@example.com' }, accept_terms: true });
+  const noRenewal = await pub('POST', '/portal/api/buy', { item: `plan:${plan.id}`, athlete: { first_name: 'X', last_name: 'Y' }, buyer: { name: 'Z', email: 'z@example.com' }, accept_terms: true, helped_by: 'none' });
   assert.equal(noRenewal.status, 400);
   assert.match(noRenewal.body.error.message, /renewal/);
   // A trial plan: nothing now.
-  const t = await buyAll({ item: `plan:${trialPlan.id}`, athlete: { first_name: 'Ivy', last_name: 'Park' }, buyer: { name: 'Dana Park', email: 'dana@example.com' }, accept_terms: true, accept_renewal: true });
+  const t = await buyAll({ item: `plan:${trialPlan.id}`, athlete: { first_name: 'Ivy', last_name: 'Park' }, buyer: { name: 'Dana Park', email: 'dana@example.com' }, accept_terms: true, helped_by: 'none', accept_renewal: true });
   assert.deepEqual([t.body.status, t.body.summary.charged_cents, !!t.body.summary.trial_ends_at], ['paid', 0, true]);
   // ... unless they tick "charge now instead of the trial".
-  const now = await buyAll({ item: `plan:${trialPlan.id}`, skip_trial: true, athlete: { first_name: 'Max', last_name: 'Hale' }, buyer: { name: 'Jo Hale', email: 'jo@example.com' }, accept_terms: true, accept_renewal: true });
+  const now = await buyAll({ item: `plan:${trialPlan.id}`, skip_trial: true, athlete: { first_name: 'Max', last_name: 'Hale' }, buyer: { name: 'Jo Hale', email: 'jo@example.com' }, accept_terms: true, helped_by: 'none', accept_renewal: true });
   assert.deepEqual([now.body.summary.charged_cents, now.body.summary.trial_ends_at], [24900, null]);
 });
 
@@ -134,7 +134,7 @@ test('a debit card pays no card fee; a credit card pays it, shown on the page fi
 });
 
 test('a declined card: nothing owing, no membership left behind, no "payment failed" email, and another card finishes it', async () => {
-  const started = await pub('POST', '/portal/api/buy', { item: `plan:${plan.id}`, athlete: { first_name: 'Nia', last_name: 'Cruz' }, buyer: { name: 'Rosa Cruz', email: 'rosa@example.com' }, accept_terms: true, accept_renewal: true });
+  const started = await pub('POST', '/portal/api/buy', { item: `plan:${plan.id}`, athlete: { first_name: 'Nia', last_name: 'Cruz' }, buyer: { name: 'Rosa Cruz', email: 'rosa@example.com' }, accept_terms: true, helped_by: 'none', accept_renewal: true });
   await pub('POST', '/portal/api/buy/verify', { order_id: started.body.order_id, code: started.body.dev_code });
   const no = await pub('POST', `/portal/api/buy/${started.body.order_id}/simulate`, { decline: true });
   assert.equal(no.status, 200, JSON.stringify(no.body));
@@ -210,6 +210,48 @@ test('Stripe: the card page returns to /buy with the session, the webhook finish
     const wrong = await pub('POST', `/portal/api/buy/${other.body.order_id}/complete`, { session_id: 'cs_web1' });
     assert.equal(wrong.status, 409);
   } finally { Object.assign(app.ctx.payments, real); }
+});
+
+test('who helped you: every owner and coach or No one, a coach\'s own link, and the owner\'s report of sales by coach', async () => {
+  createUser(app.ctx, { email: 'riley@test.dev', name: 'Riley', password: PW, role: 'coach' });
+  createUser(app.ctx, { email: 'desk@test.dev', name: 'Dee', password: PW, role: 'front_desk' });
+  const gone = createUser(app.ctx, { email: 'gone@test.dev', name: 'Gus', password: PW, role: 'coach' });
+  const d = (await pub('GET', '/portal/api/public/buy')).body;
+  const names = d.coaches.map((c) => c.name);
+  assert.ok(names.includes('Riley') && names.includes('Olivia') && names.includes('Gus'), 'owners and coaches');
+  assert.ok(!names.includes('Dee'), 'never front desk');
+  assert.ok(d.coaches.every((c) => !JSON.stringify(c).includes('usr_')), 'staff ids never reach the page');
+  const riley = d.coaches.find((c) => c.name === 'Riley').key, gus = d.coaches.find((c) => c.name === 'Gus').key;
+  // The answer is required, and only someone on the list.
+  assert.equal((await pub('POST', '/portal/api/buy', { ...buyer('h1@example.com'), helped_by: undefined })).status, 400);
+  assert.equal((await pub('POST', '/portal/api/buy', { ...buyer('h1@example.com'), helped_by: 'not-a-key' })).status, 400);
+  // Riley helped with a pack and a membership; Gus helped with one, then left; nobody helped with another.
+  await buyAll({ ...buyer('h1@example.com', { athlete: { first_name: 'Hal', last_name: 'One' } }), helped_by: riley });
+  await buyAll({ item: `plan:${plan.id}`, athlete: { first_name: 'Hana', last_name: 'Two' }, buyer: { name: 'Ho Two', email: 'h2@example.com' }, accept_terms: true, accept_renewal: true, helped_by: riley });
+  await buyAll({ ...buyer('h3@example.com', { athlete: { first_name: 'Hugo', last_name: 'Three' } }), helped_by: gus });
+  app.ctx.db.run('UPDATE users SET active = 0 WHERE id = ?', gone.id);
+  assert.ok(!(await pub('GET', '/portal/api/public/buy')).body.coaches.some((c) => c.name === 'Gus'), 'a turned-off account leaves the list');
+  assert.equal((await pub('POST', '/portal/api/buy', { ...buyer('h4@example.com'), helped_by: gus })).status, 400);
+  const ownerMail = mailTo('owner@test.dev').filter((m) => m.subject.startsWith('New online purchase: Hal One'));
+  assert.match(ownerMail[0].body, /Who helped them: Riley/);
+  const r = await owner('GET', '/v1/billing/online-sales');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const row = (name) => r.body.by_helper.find((x) => x.name === name);
+  assert.deepEqual([row('Riley').orders, row('Riley').packs, row('Riley').memberships, row('Riley').charged_cents], [2, 1, 1, 70000 + 14900]);
+  assert.equal(row('Riley').link, `https://app.example.org/buy?coach=${riley}`);
+  assert.deepEqual([row('Gus').orders, row('Gus').link], [1, null], 'someone gone still shows with their sales');
+  assert.equal(row('Olivia').orders, 0, 'every owner and coach has a row');
+  assert.equal(r.body.by_helper.at(-1).name, 'No one');
+  assert.ok(row('No one').orders >= 1);
+  assert.equal(r.body.totals.helped, 3);
+  assert.equal(r.body.orders.find((o) => o.athlete_name === 'Hana Two').helped_by, 'Riley');
+  assert.equal(r.body.orders.find((o) => o.athlete_name === 'Hana Two').item, 'Eight a month membership');
+  // Dates: nothing paid tomorrow; a bad date names the fix. Coaches never see it.
+  const tomorrow = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  assert.equal((await owner('GET', `/v1/billing/online-sales?from=${tomorrow}`)).body.totals.orders, 0);
+  assert.equal((await owner('GET', '/v1/billing/online-sales?from=soon')).status, 400);
+  const asCoach = await signIn('riley@test.dev');
+  assert.equal((await asCoach('GET', '/v1/billing/online-sales')).status, 403);
 });
 
 test('the version 88 upgrade adds the order table', () => {

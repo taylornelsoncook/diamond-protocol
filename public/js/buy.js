@@ -1,12 +1,13 @@
-import { h, fill, btn, busy, field, input, money } from './ui.js';
+import { h, fill, btn, busy, field, input, select, money } from './ui.js';
 
 // The online sales page (owner's ask: "a sales page where people can buy their package or membership online; when they
 // purchase it, it prompts them to create their profile"). Pick a membership or a pack, say who's training, confirm the
 // email with a code, save the card on Stripe's page, and land signed in on the profile (services/buyonline.js).
-// ?item=plan:<id> or product:<id> opens that item; ?order=<id>&session_id=… is Stripe sending the buyer back.
+// ?item=plan:<id> or product:<id> opens that item; ?coach=<key> picks that coach under "Who helped you?" (a coach's own
+// link, from Billing → Online sales by coach); ?order=<id>&session_id=… is Stripe sending the buyer back.
 const root = document.getElementById('root');
 const q = new URLSearchParams(location.search);
-const state = { data: null, item: null, order: null };
+const state = { data: null, item: null, order: null, coach: q.get('coach') };
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const classes = (n) => `${n} group class${n === 1 ? '' : 'es'}`;
 const longDay = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
@@ -103,6 +104,9 @@ function checkout(item, error) {
   const today = h('p', { style: 'margin:0' }, plan ? planToday(item.quote) : `${money(item.price_cents)} today.`);
   if (skip) skip.addEventListener('change', () => { today.textContent = planToday(skip.checked && item.quote_paid ? item.quote_paid : item.quote); });
   const fee = feeLine(plan ? 'memberships' : 'store');
+  // Who helped you? Every owner and coach, or No one (owner's ask: count the sales coaches make through the page).
+  const picked = prev.helped_by ?? (d.coaches.some((c) => c.key === state.coach) ? state.coach : '');
+  const helped = select([['', 'Choose one'], ['none', 'No one'], ...d.coaches.map((c) => [c.key, c.name])], { value: picked, required: true });
   const err = h('div', { class: 'dp-error', role: 'alert' }, error ?? '');
   const go = btn('Continue', null, 'primary', { type: 'submit', class: 'dp-btn dp-btn--primary dp-btn--block' });
   const label = (box, ...text) => h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start;min-height:44px' }, box, h('span', null, ...text));
@@ -121,7 +125,8 @@ function checkout(item, error) {
         h('div', { class: 'row wrap', style: 'gap:8px 20px' }, label(who.parent, 'My child (I\'m the parent or guardian)'), label(who.self, 'Me (18 or older)')),
         h('div', { class: 'form-grid' }, field('Athlete\'s first name', first), field('Athlete\'s last name', last))),
       h('section', { class: 'dp-panel stack' }, h('h2', { class: 'dp-panel-title' }, 'Your account'),
-        nameField, field('Email', email, 'You sign in with this email. We send a code to confirm it.'), field('Mobile phone', phone), trap),
+        nameField, field('Email', email, 'You sign in with this email. We send a code to confirm it.'), field('Mobile phone', phone), trap,
+        field('Who helped you?', helped, 'A coach who told you about us or helped you choose. If nobody did, pick No one.')),
       label(terms, 'I agree to the ', h('a', { href: '/terms', target: '_blank' }, 'terms of service'), ' and ', h('a', { href: '/privacy', target: '_blank' }, 'privacy policy'), '.'),
       renew ? label(renew, `I understand this membership renews automatically: ${money(item.price_cents)} is charged to my card on the 1st of every month until I cancel. I can cancel any time from my account; it ends after the month already paid.`) : null,
       err, go,
@@ -129,11 +134,12 @@ function checkout(item, error) {
   showName();
   async function start() {
     err.textContent = '';
-    const form = { self: who.self.checked, first_name: first.value, last_name: last.value, name: name.value, email: email.value, phone: phone.value };
+    const form = { self: who.self.checked, first_name: first.value, last_name: last.value, name: name.value, email: email.value, phone: phone.value, helped_by: helped.value };
+    if (!form.helped_by) { err.textContent = 'Tell us who helped you, or choose No one.'; helped.focus(); return; }
     remember.set({ form });
     try {
       const out = await post('/portal/api/buy', { item: `${item.kind}:${item.id}`, self: form.self, athlete: { first_name: form.first_name, last_name: form.last_name },
-        buyer: { name: form.self ? undefined : form.name, email: form.email, phone: form.phone }, accept_terms: terms.checked, accept_renewal: renew ? renew.checked : undefined, skip_trial: skip ? skip.checked : undefined, website: trap.value });
+        buyer: { name: form.self ? undefined : form.name, email: form.email, phone: form.phone }, accept_terms: terms.checked, accept_renewal: renew ? renew.checked : undefined, skip_trial: skip ? skip.checked : undefined, helped_by: form.helped_by, website: trap.value });
       codeStep(out, form.email);
     } catch (e) { err.textContent = e.message; }
   }

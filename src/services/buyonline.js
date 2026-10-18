@@ -13,7 +13,7 @@
 //      (credits, card fee by card type, receipt) and a membership through billing (prorated to the 1st, trials, invoice,
 //      receipt). The buyer is signed in and lands on their profile with the waiver as the one thing needed.
 //   A declined card leaves the account and nothing owing; the page offers another card.
-import { newId, sha256, v, badRequest, conflict, notFound, HttpError, safeEqual, withLock, addDays } from '../util.js';
+import { newId, sha256, v, badRequest, conflict, notFound, HttpError, safeEqual, withLock, addDays, isDate, zonedToUtc, addDaysToDate } from '../util.js';
 import { getSetting, startPortalSession, payerFor } from './families.js';
 import { createClient } from './clients.js';
 import { recordConsent, published } from './legal.js';
@@ -32,6 +32,20 @@ const money = (c) => `$${(c / 100).toLocaleString('en-US', { minimumFractionDigi
 export const isOpen = (ctx) => getSetting(ctx, 'buy_online') !== 'off';
 function mustBeOpen(ctx) { if (!isOpen(ctx)) throw new HttpError(403, 'buy_closed', 'Online buying is closed right now. Contact us to join.'); }
 
+// "Who helped you?" (owner's ask: track how many sales coaches make through the page). The page lists every owner and
+// coach whose account is on, by name, plus "No one". Staff user ids never leave the building, so the page sees a key made
+// from the id (also the ?coach= in a coach's own link); the order keeps the user id.
+export const helperKey = (id) => sha256(`helper:${id}`).slice(0, 12);
+const helpers = (ctx) => ctx.db.all(`SELECT id, name FROM users WHERE active = 1 AND role IN ('owner','coach') ORDER BY name COLLATE NOCASE`);
+function helperOf(ctx, key) {
+  const k = String(key ?? '').trim();
+  if (k === 'none') return null;
+  if (!k) throw badRequest('Tell us who helped you, or choose No one.');
+  const u = helpers(ctx).find((x) => helperKey(x.id) === k);
+  if (!u) throw badRequest('That coach isn\'t on the list any more. Choose another, or No one.');
+  return u.id;
+}
+
 // What the page sells: every active membership plan (with what starting today charges) and every active session and pack.
 const sellable = (p) => ['session', 'pack'].includes(p.kind);
 export function catalog(ctx) {
@@ -39,7 +53,7 @@ export function catalog(ctx) {
   const products = commerce.listProducts(ctx).filter(sellable);
   const single = (type) => products.filter((p) => p.kind === 'session' && (p.credit_type ?? 'private') === (type ?? 'private')).map((p) => p.price_cents).sort((a, b) => a - b)[0] ?? null;
   return {
-    business_name: biz(ctx), open: isOpen(ctx), terms_published: published(ctx, 'terms'), privacy_published: published(ctx, 'privacy'),
+    business_name: biz(ctx), open: isOpen(ctx), coaches: helpers(ctx).map((u) => ({ key: helperKey(u.id), name: u.name })), terms_published: published(ctx, 'terms'), privacy_published: published(ctx, 'privacy'),
     late_cancel_hours: Number(getSetting(ctx, 'late_cancel_hours')) || 12,
     fee: { label: fee.label, pct: fee.pct, flat_cents: fee.flat_cents, memberships: fee.on.includes('memberships'), store: fee.on.includes('store') },
     plans: billing.listPlans(ctx).map((p) => ({ id: p.id, name: p.name, price_cents: p.price_cents, trial_days: p.trial_days, sessions_per_month: p.sessions_per_month ?? null, quote: billing.quote(ctx, p.id), quote_paid: p.trial_days > 0 ? billing.quote(ctx, p.id, ctx.now(), { skipTrial: true }) : null })),
@@ -80,6 +94,7 @@ export async function startOrder(ctx, body = {}, ip) {
   if (body.accept_terms !== true) throw badRequest('Please agree to the terms of service and privacy policy.');
   if (item.kind === 'plan' && body.accept_renewal !== true) throw badRequest('Please agree to the monthly renewal: the membership renews every month until you cancel.');
   const skipTrial = item.kind === 'plan' && item.plan.trial_days > 0 && body.skip_trial === true;
+  const helpedBy = helperOf(ctx, body.helped_by);
   if (taken(ctx, buyer.email)) {
     await sendEmail(ctx, { to: buyer.email, subject: `You already have a ${biz(ctx)} account`,
       text: `Someone (probably you) started buying ${item.name} with this email, but you already have an account.\n\nSign in and buy it from the Programs tab: ${base(ctx)}/client?tab=programs\n\nIf this wasn't you, you can ignore this email.` });
@@ -88,8 +103,8 @@ export async function startOrder(ctx, body = {}, ip) {
   const recent = ctx.db.get('SELECT COUNT(*) AS n FROM web_orders WHERE email = ? AND created_at > ?', buyer.email, new Date(Date.parse(ctx.now()) - 3600000).toISOString()).n;
   if (recent >= 5) return out;
   const code = String(randomInt(0, 1000000)).padStart(6, '0');
-  ctx.db.run(`INSERT INTO web_orders (id, item_kind, item_id, email, payload, code_hash, ip, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    out.order_id, item.kind, item.id, buyer.email, JSON.stringify({ buyer, athlete, self, skip_trial: skipTrial }), sha256(`${out.order_id}:${code}`), ip ?? null,
+  ctx.db.run(`INSERT INTO web_orders (id, item_kind, item_id, email, payload, code_hash, helped_by, ip, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    out.order_id, item.kind, item.id, buyer.email, JSON.stringify({ buyer, athlete, self, skip_trial: skipTrial }), sha256(`${out.order_id}:${code}`), helpedBy, ip ?? null,
     new Date(Date.parse(ctx.now()) + CODE_MINUTES * 60000).toISOString(), ctx.now());
   await sendEmail(ctx, { to: buyer.email, subject: `Your ${biz(ctx)} code: ${code}`, sensitive: true,
     text: `Your code to finish buying ${item.name} is ${code}. It expires in ${CODE_MINUTES} minutes.\n\nIf you didn't ask for this, you can ignore this email.` });
@@ -203,7 +218,7 @@ async function completeNow(ctx, id, { sessionId = null, test = null, ip = null, 
     ctx.db.run(`UPDATE web_orders SET status = 'declined', error = ?, sale_id = NULL, subscription_id = NULL WHERE id = ?`, String(error).slice(0, 300), o.id);
     return { order_id: o.id, status: 'declined', error: `The card didn't go through: ${error} Try another card.` };
   }
-  ctx.db.run(`UPDATE web_orders SET status = 'paid', paid_at = ?, error = NULL, sale_id = ?, subscription_id = ? WHERE id = ?`, ctx.now(), saleId, subId, o.id);
+  ctx.db.run(`UPDATE web_orders SET status = 'paid', paid_at = ?, error = NULL, sale_id = ?, subscription_id = ?, charged_cents = ? WHERE id = ?`, ctx.now(), saleId, subId, charged, o.id);
   const after = rowOf(ctx, o.id);
   await tellEveryone(ctx, after, item, p, charged);
   return done(ctx, after, { signIn, userAgent });
@@ -233,12 +248,46 @@ async function tellEveryone(ctx, o, item, p, charged) {
   const athlete = ctx.db.get('SELECT name, athlete_id FROM clients WHERE id = ?', o.client_id);
   const firstOf = (n) => String(n ?? '').split(' ')[0];
   const self = p.self;
+  const helper = o.helped_by ? ctx.db.get('SELECT name FROM users WHERE id = ?', o.helped_by)?.name ?? 'a staff member no longer here' : 'No one';
   await sendEmail(ctx, { to: o.email, subject: `Welcome to ${biz(ctx)}`,
     text: `Hi ${firstOf(p.buyer.name)},\n\nThanks for buying ${item.name}${self ? '' : ` for ${athlete.name}`}. ${charged ? `We charged ${money(charged)} to your card; a receipt is on its way.` : 'Nothing was charged today.'}\n\n` +
       `${self ? 'Your' : `${firstOf(athlete.name)}'s`} Athlete ID is ${athlete.athlete_id}. Sign in any time at ${base(ctx)}/client with this email address (we email you a code; you can set a password once you're in).\n\n` +
       `One thing we need before ${self ? 'you train' : `${firstOf(athlete.name)} trains`}: sign the waiver (Family tab). Then book a session and finish ${self ? 'your' : 'the'} profile whenever you're ready.\n\nSee you soon,\n${biz(ctx)}` });
   for (const owner of ctx.db.all(`SELECT email FROM users WHERE role = 'owner' AND active = 1`)) {
     await sendEmail(ctx, { to: owner.email, subject: `New online purchase: ${athlete.name}, ${item.name}`,
-      text: `${p.buyer.name}${self ? '' : ` (parent of ${athlete.name})`} bought ${item.name} on the online sales page${charged ? ` and paid ${money(charged)}` : ' (free trial, nothing charged yet)'}.\n\nEmail: ${o.email}${p.buyer.phone ? `\nPhone: ${p.buyer.phone}` : ''}\nAthlete ID: ${athlete.athlete_id}\n\nTheir profile: ${base(ctx)}/#/clients/${o.client_id}\n\nThey still need to sign the waiver before they train.` });
+      text: `${p.buyer.name}${self ? '' : ` (parent of ${athlete.name})`} bought ${item.name} on the online sales page${charged ? ` and paid ${money(charged)}` : ' (free trial, nothing charged yet)'}.\n\nEmail: ${o.email}${p.buyer.phone ? `\nPhone: ${p.buyer.phone}` : ''}\nAthlete ID: ${athlete.athlete_id}\nWho helped them: ${helper}\n\nTheir profile: ${base(ctx)}/#/clients/${o.client_id}\n\nThey still need to sign the waiver before they train.` });
   }
+}
+
+// GET /v1/billing/online-sales (owner only, under /v1/billing): what the sales page sold, by who the buyer said helped
+// them. ?from= and ?to= are business-local days (the day the order was paid). Every owner and coach whose account is on
+// has a row (0 when they sold nothing), staff who have since left show while they have sales, and "No one" comes last.
+export function salesReport(ctx, query = {}) {
+  for (const [k, label] of [['from', 'start'], ['to', 'end']]) if (query[k] && !isDate(String(query[k]))) throw badRequest(`Choose a real ${label} date, like 2026-09-01.`);
+  if (query.from && query.to && String(query.from) > String(query.to)) throw badRequest('The start date is after the end date. Swap them.');
+  const z = getSetting(ctx, 'timezone');
+  const from = query.from ? zonedToUtc(String(query.from), '00:00', z) : '0000', to = query.to ? zonedToUtc(addDaysToDate(String(query.to), 1), '00:00', z) : '9999';
+  const orders = ctx.db.all(`SELECT o.id, o.item_kind, o.item_id, o.helped_by, o.charged_cents, o.paid_at, o.client_id, o.subscription_id, c.name AS athlete_name, c.athlete_id,
+      COALESCE(pl.name, pr.name) AS item_name, u.name AS helper_name
+    FROM web_orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN users u ON u.id = o.helped_by
+    LEFT JOIN plans pl ON o.item_kind = 'plan' AND pl.id = o.item_id LEFT JOIN products pr ON o.item_kind = 'product' AND pr.id = o.item_id
+    WHERE o.status = 'paid' AND o.paid_at >= ? AND o.paid_at < ? ORDER BY o.paid_at DESC`, from, to);
+  const rows = new Map(helpers(ctx).map((u) => [u.id, { user_id: u.id, name: u.name, orders: 0, memberships: 0, packs: 0, charged_cents: 0, link: `${base(ctx)}/buy?coach=${helperKey(u.id)}` }]));
+  const none = { user_id: null, name: 'No one', orders: 0, memberships: 0, packs: 0, charged_cents: 0, link: null };
+  for (const o of orders) {
+    let r = none;
+    if (o.helped_by) {
+      if (!rows.has(o.helped_by)) rows.set(o.helped_by, { user_id: o.helped_by, name: o.helper_name ?? 'A former staff member', orders: 0, memberships: 0, packs: 0, charged_cents: 0, link: null });
+      r = rows.get(o.helped_by);
+    }
+    r.orders += 1; r[o.item_kind === 'plan' ? 'memberships' : 'packs'] += 1; r.charged_cents += o.charged_cents ?? 0;
+  }
+  const by = [...rows.values()].sort((a, b) => b.orders - a.orders || b.charged_cents - a.charged_cents || a.name.localeCompare(b.name));
+  return {
+    by_helper: [...by, none],
+    totals: { orders: orders.length, charged_cents: orders.reduce((t, o) => t + (o.charged_cents ?? 0), 0), helped: orders.filter((o) => o.helped_by).length },
+    orders: orders.slice(0, 100).map((o) => ({ id: o.id, paid_at: o.paid_at, client_id: o.client_id, athlete_name: o.athlete_name, athlete_id: o.athlete_id,
+      item: o.item_kind === 'plan' ? asMembership(o.item_name) : o.item_name, kind: o.item_kind, charged_cents: o.charged_cents ?? 0,
+      helped_by: o.helped_by ? o.helper_name ?? 'A former staff member' : null }))
+  };
 }

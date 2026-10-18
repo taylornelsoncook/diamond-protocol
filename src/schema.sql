@@ -2196,6 +2196,8 @@ CREATE TABLE IF NOT EXISTS web_orders (
   guardian_id TEXT,
   sale_id TEXT,
   subscription_id TEXT,
+  helped_by TEXT,                        -- the staff member (owner or coach) the buyer said helped them; NULL = no one
+  charged_cents INTEGER,                 -- what the order charged when it was paid (0 for a free trial)
   error TEXT,
   ip TEXT,
   expires_at TEXT NOT NULL,

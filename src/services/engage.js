@@ -48,6 +48,7 @@ function training(ctx, clientId, from, to) {
     ...ctx.db.all('SELECT completed_at AS at FROM workout_logs WHERE client_id = ? AND completed_at >= ? AND completed_at < ?', clientId, lo, hi).map((r) => ({ kind: 'workouts', at: r.at })),
     ...ctx.db.all(`SELECT s.starts_at AS at FROM bookings b JOIN class_sessions s ON s.id = b.session_id WHERE b.client_id = ? AND b.status = 'attended' AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
     ...ctx.db.all('SELECT created_at AS at FROM check_ins WHERE client_id = ? AND created_at >= ? AND created_at < ?', clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
+    ...ctx.db.all('SELECT created_at AS at FROM open_gym_visits WHERE client_id = ? AND created_at >= ? AND created_at < ?', clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at })),
     ...ctx.db.all(`SELECT s.starts_at AS at FROM team_attendance a JOIN class_sessions s ON s.id = a.session_id WHERE a.client_id = ? AND s.starts_at >= ? AND s.starts_at < ?`, clientId, lo, hi).map((r) => ({ kind: 'sessions', at: r.at }))
   ];
   return rows.map((r) => ({ kind: r.kind, date: localDate(r.at, tz) }));
@@ -1231,6 +1232,8 @@ function dayDetails(ctx, clientId, from, to) {
     on(r.starts_at).sessions.push({ name: r.name, time: time(r.starts_at) });
   for (const r of ctx.db.all('SELECT k.created_at, l.name FROM check_ins k JOIN locations l ON l.id = k.location_id WHERE k.client_id = ? AND k.created_at >= ? AND k.created_at < ? ORDER BY k.created_at', clientId, lo, hi))
     on(r.created_at).sessions.push({ name: `Checked in at ${r.name}`, time: time(r.created_at) });
+  for (const r of ctx.db.all('SELECT g.created_at FROM open_gym_visits g WHERE g.client_id = ? AND g.created_at >= ? AND g.created_at < ? ORDER BY g.created_at', clientId, lo, hi))
+    on(r.created_at).sessions.push({ name: 'Open gym', time: time(r.created_at) });
   return out;
 }
 export function accountability(ctx, clientId, { guardianId } = {}) {

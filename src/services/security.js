@@ -23,7 +23,7 @@ const OWNER_ONLY = [
 const OWNER_WRITES = [/^\/v1\/profile-tags(\/|$)/, /^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/, /^\/v1\/game-rules$/, /^\/v1\/vbt\/sets(\/:id)?$/];   // bar-speed sets: the owner (or the owner's results key) sends and removes them   // sprint references (version 65): the owner sets them, coaches read them
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|profile-tags|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|profile-tags|open-gym|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|groups|daily-check-ins|engagement|education|lessons|courses|skill-badges|feed)(\/|$)/],   // groups (version 87): front desk looks at the roster and the board, never posts
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],

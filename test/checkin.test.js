@@ -45,7 +45,7 @@ before(async () => {
   lia = (await owner('POST', `/v1/families/${app.ctx.db.get('SELECT family_id FROM clients WHERE id = ?', ava.id).family_id}/athletes`, { name: 'Lia Lopez' })).body;
   ben = (await owner('POST', '/v1/clients', { name: 'Ben Van Park', parent: { name: 'Dana Park', email: 'dana@example.com' } })).body;
   speed = session('Speed', facility, 20);       // opens now: starts in 20 minutes
-  later = session('Strength', facility, 90);    // not open yet
+  later = session('Strength', facility, 150);   // not open yet (the sign-in tablet shows the next 2 hours)
   book(speed, ava); book(speed, ben, 'unpaid'); book(later, lia);
   const { body } = await (await fetch(base + '/portal/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'maria@example.com' }) })).json().then((b) => ({ body: b }));
   const v = await fetch(base + '/portal/api/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'maria@example.com', code: body.dev_code }) });

@@ -2033,10 +2033,19 @@ const receiptAddress = (c) => (c ? (c.family ? c.parents?.[0]?.email : c.email) 
 
 async function viewSell(main) {
   const role = state.user.role, seesTakings = role !== 'coach';
-  const [locs, prods, clients, readers, plans, settings] = await Promise.all([get('/v1/locations'), get('/v1/products'), get('/v1/clients'), get('/v1/readers'), get('/v1/plans'), get('/v1/settings').catch(() => ({}))]);
-  if (!locs.data.length || !prods.data.length) {
+  const [locs, prods, clients, readers, plans, settings, sched, series] = await Promise.all([get('/v1/locations'), get('/v1/products'), get('/v1/clients'), get('/v1/readers'), get('/v1/plans'), get('/v1/settings').catch(() => ({})), get('/v1/schedule').catch(() => ({ data: [] })), get('/v1/class-series').catch(() => ({ data: [] }))]);
+  // Classes in the next two weeks with a drop-in price, and camps and clinics sold as a whole (from the class list, so a camp
+  // weeks away is on sale now).
+  const sellableSession = (x) => x.status === 'scheduled' && x.starts_at > new Date().toISOString() && ['group', 'clinic', 'camp'].includes(x.kind) && x.drop_in_cents != null;
+  const sessionList = sched.data.filter(sellableSession);
+  const campsOf = () => series.data.filter((x) => x.active && ['camp', 'clinic'].includes(x.kind) && x.registration_cents != null && (!x.end_date || x.end_date >= bizDate()));
+  const planList = plans.data.filter((p) => p.active !== false && p.price_cents != null);
+  // Owner's ask: everything offered, listed, click to add to the account and buy. The counter shows as soon as there's a
+  // place to sell at and anything to sell: a membership plan, a product, a class on the schedule or a camp.
+  if (!locs.data.length || (!prods.data.length && !planList.length && !sessionList.length && !campsOf().length)) {
+    const missing = !locs.data.length ? 'the places you train (Locations, products & readers)' : 'what you sell: memberships under Billing → Plans, classes and camps on the Schedule, and sessions, packs and gear under Locations, products & readers';
     fill(main, header('Point of sale', 'Take payments at the facility, in the park and at clients\' homes.', setupLink()),
-      h('div', { class: 'empty' }, h('p', null, `Add ${!locs.data.length ? 'the places you train' : ''}${!locs.data.length && !prods.data.length ? ' and ' : ''}${!prods.data.length ? 'what you sell (sessions, packs, gear)' : ''} to start taking payments.`),
+      h('div', { class: 'empty' }, h('p', null, `Add ${missing} to start taking payments.`),
         h('p', { style: 'margin-top:12px' }, h('a', { class: 'dp-btn dp-btn--primary', href: '#/sell/setup' }, 'Set up point of sale'))));
     return;
   }
@@ -2058,7 +2067,7 @@ async function viewSell(main) {
 
   // ----- Where and who -----
   const locSel = select(locs.data.map((l) => [l.id, l.name]), { value: locs.data.some((l) => l.id === remember.get('dp_location')) ? remember.get('dp_location') : locs.data[0].id, 'aria-label': 'Location' });
-  locSel.addEventListener('change', () => { remember.set('dp_location', locSel.value); drawSale(); drawTakings(); });
+  locSel.addEventListener('change', () => { remember.set('dp_location', locSel.value); drawSale(); drawTakings(); drawClasses(); });
   const clashBox = h('div');
   const clientBox = h('div', { class: 'stack-tight' });
   const search = input({ type: 'search', placeholder: 'Name, parent, email or phone', 'aria-label': 'Find a client', autocomplete: 'off', role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'pos-hits', 'aria-autocomplete': 'list' });
@@ -2149,7 +2158,6 @@ async function viewSell(main) {
   // Owner's ask: every option listed before anything is clicked, the "charge now instead of the trial" tick on the page itself,
   // each plan showing what today's charge would be, and one tap (plus a confirm) to charge the card on file.
   const memberBox = h('div');
-  const planList = plans.data.filter((p) => p.active !== false && p.price_cents != null);
   const planGrid = h('div', { class: 'pos-tiles' });
   const anyTrial = planList.some((p) => p.trial_days);
   const skipTrial = { value: anyTrial && remember.get('dp_skip_trial') === 'on' };
@@ -2214,6 +2222,101 @@ async function viewSell(main) {
     memberBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
   loadQuotes();
+
+  // ----- Classes, camps and clinics (owner's ask: everything offered, in the one list) -----
+  // Classes are the next two weeks at this location; camps and clinics sold as a whole are listed while they have days to
+  // come. A class books the athlete the way the roster does (their membership or a pack session covers it, else it's collected
+  // now by the payment method chosen under the sale); a camp registers them for every day and collects the registration the
+  // same way. A full class goes to the waitlist and nothing is charged.
+  const classGrid = h('div', { class: 'pos-tiles' }), classBox = h('div', { class: 'stack-tight pos-group' });
+  const whenShort = (iso) => new Date(iso).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: tzName });
+  const dayShort = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const campInfo = {};                                     // series id → its upcoming days, read once per camp
+  function campDays(x) {
+    if (campInfo[x.id] !== undefined) return campInfo[x.id];
+    campInfo[x.id] = null;
+    get(`/v1/class-series/${x.id}`).then((d) => { campInfo[x.id] = d.upcoming_sessions ?? 0; drawClasses(); }).catch(() => { campInfo[x.id] = 0; });
+    return null;
+  }
+  function drawClasses() {
+    const c = client();
+    const camps = campsOf().filter((x) => x.location_id === locSel.value && campDays(x) !== 0);
+    const here = sessionList.filter((x) => x.location_id === locSel.value);
+    if (!camps.length && !here.length) { fill(classBox); return; }
+    fill(classBox, h('div', { class: 'dp-label' }, 'Classes, camps & clinics'),
+      h('p', { class: 'small muted dp-help', style: 'margin:0' }, 'Classes in the next two weeks here, and camps taking registrations. A membership or pack session covers a class when the athlete has one; otherwise it\'s collected now with the payment method under the sale.'),
+      classGrid);
+    const who = c ? `Tap to book ${firstName(c)}` : 'Choose who it\'s for first';
+    fill(classGrid,
+      ...camps.map((x) => {
+        const days = campInfo[x.id], left = x.capacity - x.enrolled_count, started = x.start_date < bizDate();
+        return h('button', { type: 'button', class: 'dp-panel pos-tile', 'aria-label': `${x.name}, ${x.kind}`, onClick: () => sellCamp(x) },
+          h('span', { class: 'strong' }, x.name),
+          h('span', { class: 'pos-price' }, x.registration_cents ? money(x.registration_cents) : 'Free'),
+          h('span', { class: 'small muted' }, `${x.kind === 'camp' ? 'Camp' : 'Clinic'} · ${days == null ? '…' : `${days} ${days === 1 ? 'day' : 'days'}`} ${started ? 'left' : `from ${dayShort(x.start_date)}`}`),
+          h('span', { class: `small ${left <= 0 ? 'warn-text' : 'muted'}` }, left <= 0 ? 'Full' : `${left} ${left === 1 ? 'spot' : 'spots'} left`),
+          h('span', { class: 'small muted' }, who));
+      }),
+      ...here.map((x) => {
+        const left = x.capacity - x.booked_count;
+        return h('button', { type: 'button', class: 'dp-panel pos-tile', 'aria-label': `${x.name}, ${whenShort(x.starts_at)}`, onClick: () => sellSession(x) },
+          h('span', { class: 'strong' }, x.name),
+          h('span', { class: 'pos-price' }, money(x.drop_in_cents)),
+          h('span', { class: 'small muted' }, whenShort(x.starts_at)),
+          h('span', { class: `small ${left <= 0 ? 'warn-text' : 'muted'}` }, left <= 0 ? 'Full · joins the waitlist' : `${left} ${left === 1 ? 'spot' : 'spots'} left`),
+          h('span', { class: 'small muted' }, who));
+      }));
+  }
+  const howPaid = () => (method.value === 'cash' ? 'in cash' : method.value === 'card_on_file' ? 'from the card on file' : method.value === 'reader' ? 'on the reader' : 'by Tap to Pay');
+  // Collect for a booking the roster leaves unpaid, with the method chosen under the sale (the same call as the roster's Collect).
+  async function collectFor(bookingId, what) {
+    const out = await post(`/v1/bookings/${bookingId}/pay`, { method: method.value, reader_id: method.value === 'reader' ? readerSel.value : undefined });
+    if (out.sale.status === 'succeeded') toast(`${what} · ${money(out.sale.amount_cents)} ${method.value === 'cash' ? 'in cash' : 'collected'}.`);
+    else if (out.sale.status === 'pending') toast(`${what} · waiting for the ${method.value === 'reader' ? 'reader' : 'tap on your iPhone'}. The booking updates when it's paid.`);
+    else toast(`${what}, but the payment didn't go through: ${out.sale.failure_reason}. Collect it from the session page.`, 'warn');
+  }
+  // Spots, registrations and takings changed: read everything again and redraw.
+  async function afterSale() {
+    try {
+      const [again, ser] = await Promise.all([get('/v1/schedule'), get('/v1/class-series')]);
+      sessionList.splice(0, sessionList.length, ...again.data.filter(sellableSession));
+      series.data = ser.data;
+    } catch { /* keep what we have */ }
+    drawClasses(); refreshRecent(); drawTakings(); refreshStock();
+  }
+  async function sellCamp(x) {
+    const c = client();
+    if (!c) { toast('Choose who the camp is for first.', 'warn'); search.focus(); return; }
+    const first = firstName(c), days = campInfo[x.id];
+    if (!confirm(`Register ${c.name} for ${x.name}${days ? ` (${days} ${days === 1 ? 'day' : 'days'})` : ''}?\n${x.registration_cents ? `${money(x.registration_cents)} ${howPaid()}.` : 'Free.'}`)) return;
+    try {
+      await post(`/v1/class-series/${x.id}/register`, { client_id: c.id });
+      const owed = x.registration_cents ? (await get(`/v1/clients/${c.id}/bookings`)).data.find((b) => b.session_name === x.name && b.coverage === 'unpaid') : null;
+      if (owed) await collectFor(owed.id, `${first} is registered for ${x.name}`); else toast(`${first} is registered for ${x.name}.`);
+    } catch (err) { toast(err.message, 'warn'); }
+    afterSale();
+  }
+  async function sellSession(x) {
+    const c = client();
+    if (!c) { toast('Choose who the class is for first.', 'warn'); search.focus(); return; }
+    const first = firstName(c);
+    if (!confirm(`Book ${c.name} into ${x.name}, ${whenShort(x.starts_at)}?\nA membership or pack session covers it if ${first} has one; otherwise ${money(x.drop_in_cents)} ${howPaid()}.`)) return;
+    try {
+      let b;
+      try { b = await post(`/v1/sessions/${x.id}/bookings`, { client_id: c.id }); }
+      catch (err) {
+        if (/ages? /.test(err.message) && confirm(`${err.message}\nBook ${first} anyway?`)) b = await post(`/v1/sessions/${x.id}/bookings`, { client_id: c.id, override_age: true });
+        else throw err;
+      }
+      const clash = b.clash ? ` ${first} is also booked for ${b.clash.name} at that time.` : '';
+      if (b.status === 'waitlisted') toast(`${x.name} is full, so ${first} is on the waitlist. Nothing was charged.${clash}`, 'warn');
+      else if (b.coverage === 'membership') toast(`${first} is booked into ${x.name}: covered by their membership.${clash}`);
+      else if (b.coverage === 'credit') toast(`${first} is booked into ${x.name}: one ${b.credit_type ?? 'pack'} session used.${clash}`);
+      else if (b.coverage === 'unpaid') await collectFor(b.id, `${first} is booked into ${x.name}`);
+      else toast(`${first} is booked into ${x.name}.${clash}`);
+    } catch (err) { toast(err.message, 'warn'); }
+    afterSale();
+  }
 
   // ----- The sale -----
   const subtotal = () => sale.cart.reduce((t, [key, q]) => t + cartItem(key).p.price_cents * q, 0) + (sale.custom?.amount_cents || 0);
@@ -2334,7 +2437,7 @@ async function viewSell(main) {
   }
   const bar = h('div', { class: 'pos-bar', role: 'region', 'aria-label': 'Sale total' });
   function drawSale() { drawCart(); drawDiscount(); drawMethods(); drawTotals(); }
-  function changed() { storeSale(); err.textContent = ''; drawClash(); drawClient(); drawProducts(); drawPlans(); drawSale(); }
+  function changed() { storeSale(); err.textContent = ''; drawClash(); drawClient(); drawProducts(); drawPlans(); drawClasses(); drawSale(); }
 
   async function startSale() {
     err.textContent = '';
@@ -2516,7 +2619,7 @@ async function viewSell(main) {
         panel(null, {}, h('div', { class: 'form-grid' }, field('Where', locSel), h('div', { class: 'dp-field' }, h('span', { class: 'dp-label' }, 'Who'), clientBox))),
         panel('What to sell', { subtitle: 'Everything you can charge for, in one list. Tap a membership to charge the card on file; tap anything else to add it to the sale.', action: prods.data.length > 8 ? prodSearch : null },
           planList.length ? h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Monthly memberships'), skipRow, planGrid, memberBox) : null,
-          productGrid, sizeBox,
+          classBox, productGrid, sizeBox,
           h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Custom amount'), customForm))),
       h('div', { class: 'stack pos-side', style: 'gap:24px' }, progress, lastBox, salePanel)),
     seesTakings ? takingsBox : null,

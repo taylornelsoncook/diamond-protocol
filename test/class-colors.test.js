@@ -87,7 +87,7 @@ test('a version 84 database colours its classes and upcoming one-off sessions, o
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 91, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
       assert.deepEqual(d.all('SELECT id, color FROM class_series ORDER BY id').map((r) => [r.id, r.color]), [['cs_1', CLASS_PALETTE[0]], ['cs_2', CLASS_PALETTE[1]], ['cs_3', CLASS_PALETTE[2]]]);
       assert.equal(d.get(`SELECT color FROM class_sessions WHERE id = 'cls_1'`).color, CLASS_PALETTE[3]);
       d.close();

@@ -195,7 +195,7 @@ test('the version 90 upgrade adds the open gym table', async () => {
   raw.exec('PRAGMA user_version = 90');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 91);
+  assert.equal(db.get('PRAGMA user_version').user_version, 92);
   assert.ok(db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'open_gym_visits'`));
   db.close();
 });

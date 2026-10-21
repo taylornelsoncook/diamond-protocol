@@ -13,7 +13,7 @@ export function publicSchedule(ctx) {
   if (!on) return { ...base, classes: [], evaluations: [] };
   const zone = base.timezone, from = ctx.now(), to = zonedToUtc(addDaysToDate(localDate(from, zone), DAYS + 1), '00:00', zone);
   const classes = listSessions(ctx, { from, to }).filter((s) => ['group', 'clinic', 'camp'].includes(s.kind)).map((s) => ({
-    id: s.id, name: s.name, kind: s.kind, starts_at: s.starts_at, ends_at: s.ends_at, location_name: s.location_name, description: s.description ?? null, color: s.color ?? null,
+    id: s.id, name: s.name, kind: s.kind, starts_at: s.starts_at, ends_at: s.ends_at, location_name: s.location_name, description: s.description ?? null, day_note: s.day_note ?? null, color: s.color ?? null,
     spots_left: s.spots_left, age_min: s.age_min ?? null, age_max: s.age_max ?? null,
     drop_in_cents: s.drop_in_cents ?? null, registration_cents: s.registration_cents ?? null
   }));

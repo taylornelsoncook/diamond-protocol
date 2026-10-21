@@ -39,6 +39,7 @@ function render(d) {
         h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, s.name),
           h('span', { class: 'small muted' }, [KIND[s.kind], s.location_name, ages(s), price(s)].filter(Boolean).join(' · ')),
           s.description ? h('span', { class: 'small', style: 'white-space:pre-wrap' }, s.description) : null,
+          s.day_note ? h('span', { class: 'small strong', style: 'white-space:pre-wrap' }, s.day_note) : null,
           h('span', { class: `small ${s.spots_left ? (s.spots_left <= 3 ? 'warn-text' : 'muted') : 'warn-text'}` }, s.spots_left ? `${s.spots_left} ${s.spots_left === 1 ? 'spot' : 'spots'} left` : 'Full: join the waitlist')),
         link('/client?book=classes', s.spots_left ? 'Book' : 'Waitlist', s.spots_left ? 'primary' : 'secondary'))];
     }));

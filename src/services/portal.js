@@ -2,7 +2,7 @@
 // calendar feed, membership panel and change requests, payments and receipts, retrying a declined charge, removing the
 // card, parents and devices, and the "to finish" list. Every function takes the signed-in parent's family and never
 // reads another family's data; routes in portal-routes.js pass r.guardian.
-import { v, notFound, conflict, badRequest, HttpError, newId, token, sha256, localDate, addDaysToDate, withLock } from '../util.js';
+import { v, notFound, conflict, badRequest, HttpError, newId, token, sha256, localDate, weekdayOf, addDaysToDate, withLock } from '../util.js';
 import { visitsFor } from './visits.js';
 import { getSetting, getFamily, cardExpiry, addGuardian, updateGuardian, payerFor } from './families.js';
 import * as billing from './billing.js';
@@ -43,22 +43,28 @@ export function placeOf(l) {
   const address = HOMEISH.includes(l.location_kind) ? null : addressOf(l) || null;
   return { location_name: l.location_name, address, directions_url: address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${l.location_name}, ${address}`)}` : null };
 }
-const BOOKING_SQL = `SELECT b.id, b.status, b.coverage, b.credit_type, b.note, b.created_at, b.client_id, s.id AS session_id, s.name AS session_name, s.kind, s.starts_at, s.ends_at, s.series_id,
+const BOOKING_SQL = `SELECT b.id, b.status, b.coverage, b.credit_type, b.note, b.created_at, b.client_id, s.id AS session_id, s.name AS session_name, s.kind, s.starts_at, s.ends_at, s.series_id, s.day_note AS own_day_note, cs.day_notes AS series_day_notes,
     l.name AS location_name, l.kind AS location_kind, l.address_line1, l.city, l.state, l.postal_code, u.name AS coach_name, e.kind AS enrollment_kind, sa.amount_cents AS paid_cents, sa.refunded_cents,
     (SELECT COUNT(*) FROM bookings w WHERE w.session_id = s.id AND w.status = 'waitlisted') AS waiting,
     (SELECT COUNT(*) FROM bookings w WHERE w.session_id = s.id AND w.status = 'waitlisted' AND (w.created_at < b.created_at OR (w.created_at = b.created_at AND w.id < b.id))) AS ahead
-  FROM bookings b JOIN class_sessions s ON s.id = b.session_id JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id
+  FROM bookings b JOIN class_sessions s ON s.id = b.session_id JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id LEFT JOIN class_series cs ON cs.id = s.series_id
   LEFT JOIN enrollments e ON e.id = b.enrollment_id LEFT JOIN sales sa ON sa.id = b.sale_id`;
 // How a booking is paid: membership, credit (from a pack), paid (card), registration (camp), unpaid (pay at the session),
 // waitlist (nothing charged yet), team (billed to the school or club) or free.
 const howPaid = (b) => (b.status === 'waitlisted' ? 'waitlist' : b.kind === 'team' ? 'team' : b.coverage === 'none' ? 'free' : b.coverage);
+// The day's line families see: the session's own, else the class's note for that weekday.
+function dayNoteOf(ctx, b) {
+  if (b.own_day_note) return b.own_day_note;
+  if (!b.series_day_notes) return null;
+  try { return JSON.parse(b.series_day_notes)[weekdayOf(localDate(b.starts_at, tz(ctx)))] ?? null; } catch { return null; }
+}
 function shapeBooking(ctx, b, lateHours) {
   const now = ctx.now();
   const cancellable = ['booked', 'waitlisted'].includes(b.status) && b.starts_at > now && b.kind !== 'team' && b.enrollment_kind !== 'registration';
   const name = ['private', 'evaluation'].includes(b.kind) && !b.series_id ? (b.kind === 'private' ? 'Private session' : 'Evaluation') : b.session_name;
   return {
     id: b.id, status: b.status, client_id: b.client_id, session_id: b.session_id, session_name: name, kind: b.kind, starts_at: b.starts_at, ends_at: b.ends_at,
-    ...placeOf(b), coach_name: b.coach_name ?? null, note: b.note ?? null,
+    ...placeOf(b), coach_name: b.coach_name ?? null, note: b.note ?? null, day_note: dayNoteOf(ctx, b),
     how_paid: howPaid(b), credit_type: b.credit_type ?? null, paid_cents: b.coverage === 'paid' ? b.paid_cents ?? null : null,
     waitlist_place: b.status === 'waitlisted' ? b.ahead + 1 : null, waiting: b.waiting,
     on_now: b.starts_at <= now && b.ends_at > now, checked_in: b.status === 'attended',

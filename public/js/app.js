@@ -2896,6 +2896,22 @@ async function viewSetup(main) {
 // ---------- Schedule ----------
 const KIND_LABEL = { group: 'Group', camp: 'Camp', clinic: 'Clinic', team: 'Team', evaluation: 'Evaluation', private: 'Private' };
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Notes by day (owner's ask: one line copied across every session, the description, and another for each day, like
+// "Mon/Tue Acceleration, Wed/Thu Agility, Friday Max velocity"): a box per weekday, shown while that day is ticked.
+// days = the Days checkboxes (labels wrapping an input), notes = { "1": "Acceleration" } from the class.
+function dayNotesFields(days, notes = {}) {
+  const inputs = DAY_NAMES.map((d, i) => input({ value: notes[String(i)] ?? '', maxlength: '300', placeholder: `What ${DAY_FULL[i]}s work on` }));
+  const rows = DAY_NAMES.map((d, i) => h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('span', { class: 'small strong', style: 'width:36px;flex-shrink:0' }, d), inputs[i]));
+  const sync = () => days.forEach((l, i) => { rows[i].hidden = !l.querySelector('input').checked; });
+  days.forEach((l) => l.querySelector('input').addEventListener('change', sync));
+  sync();
+  const el = h('div', { class: 'stack', style: 'gap:6px' }, h('div', { class: 'dp-label' }, 'Notes by day (parents see this)'), ...rows,
+    h('p', { class: 'small muted dp-help', style: 'margin:0' }, 'A line for each day under the description: Mon/Tue Acceleration, Wed/Thu Agility, Fri Max velocity. Every session on that day shows it; a single session can have its own line in Edit session.'));
+  // The notes as the API takes them: only ticked days with something written.
+  el.value = () => { const out = {}; days.forEach((l, i) => { const t = inputs[i].value.trim(); if (l.querySelector('input').checked && t) out[String(i)] = t; }); return out; };
+  return el;
+}
 let tzName;
 // Today's date in the business's time zone (the browser's own zone until the settings have loaded), not UTC.
 const bizDate = (days = 0) => new Intl.DateTimeFormat('en-CA', { timeZone: tzName, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + days * 86400000));
@@ -2949,7 +2965,7 @@ let lastScheduleHash = '#/schedule';     // the week and filters the Schedule bu
 function projectedRow(x) {
   return h('div', { class: 'list-item', style: 'flex-wrap:wrap;opacity:.8' },
     h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
-    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, x.name),
+    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, x.name, x.day_note ? h('span', { class: 'muted', style: 'font-weight:400' }, ` · ${x.day_note}`) : null),
       h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.capacity} spots · planned from the class list, created 8 weeks ahead`)),
     h('div', { class: 'row wrap', style: 'gap:6px;justify-content:flex-end' }, h('span', { class: 'dp-badge dp-badge--muted' }, 'Planned'), kindBadge(x.kind)));
 }
@@ -2958,7 +2974,7 @@ function sessionRow(x, { showState = false, state } = {}) {
   const full = x.booked_count >= x.capacity;
   return h('a', { class: 'list-item', href: `#/schedule/${x.id}`, style: 'text-decoration:none;color:inherit;flex-wrap:wrap' },
     h('div', { style: 'width:84px;flex-shrink:0;font:600 18px/1.1 var(--font-display)' }, timeOf(x.starts_at)),
-    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, x.name),
+    h('div', { class: 'grow stack-tight', style: 'min-width:180px' }, h('span', { class: 'strong' }, x.name, x.day_note ? h('span', { class: 'muted', style: 'font-weight:400' }, ` · ${x.day_note}`) : null),
       h('span', { class: 'small muted' }, `${x.location_name} · ${x.coach_name ?? 'No coach set'} · ${x.booked_count}/${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`),
       showState && st !== 'later' ? checkinBar(x) : null),
     h('div', { class: 'row wrap', style: 'gap:6px;justify-content:flex-end' },
@@ -3099,8 +3115,9 @@ function timeGrid({ columns, canAdd, canDrag, onSlot, onDrop, byCoach, byClass, 
       const place = `${x.location_name} · ${x.coach_name ?? 'No coach set'}`;
       const count = x.projected ? `${x.capacity} spots` : `${x.booked_count}/${x.capacity}${x.waitlist_count ? ` +${x.waitlist_count} wait` : ''}`;
       const style = `top:${topOf(it.s)}px;height:${topOf(it.e) - topOf(it.s) - 2}px;left:calc(${(100 / it.lanes) * it.lane}% + 2px);width:calc(${100 / it.lanes}% - 4px)`;
-      const title = `${x.name} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${place} · ${x.projected ? `${x.capacity} spots, planned from the class list (created 8 weeks ahead)` : `${x.booked_count} of ${x.capacity} booked${x.waitlist_count ? `, ${x.waitlist_count} waitlisted` : ''}${x.unpaid_count ? `, ${x.unpaid_count} unpaid` : ''}`}${it.clipped ? ' · runs outside 4 am to 10 pm' : ''}`;
+      const title = `${x.name}${x.day_note ? ` · ${x.day_note}` : ''} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${place} · ${x.projected ? `${x.capacity} spots, planned from the class list (created 8 weeks ahead)` : `${x.booked_count} of ${x.capacity} booked${x.waitlist_count ? `, ${x.waitlist_count} waitlisted` : ''}${x.unpaid_count ? `, ${x.unpaid_count} unpaid` : ''}`}${it.clipped ? ' · runs outside 4 am to 10 pm' : ''}`;
       const inner = [h('span', { class: 'sc-block-name' }, x.name),
+        tall && x.day_note ? h('span', { class: 'sc-block-line sc-block-note' }, x.day_note) : null,
         tall ? h('span', { class: 'sc-block-line' }, `${timeOf(x.starts_at)}–${timeOf(x.ends_at)}`) : null,
         tall ? h('span', { class: 'sc-block-line' }, `${count} · ${place}`) : h('span', { class: 'sc-block-line' }, `${timeOf(x.starts_at)} · ${count}`),
         x.unpaid_count && tall ? h('span', { class: 'sc-block-flag' }, `${x.unpaid_count} unpaid`) : null];
@@ -3142,6 +3159,7 @@ function editSeriesDialog(x, locs, coaches) {
     dropIn: input({ type: 'number', step: '0.01', min: '0', value: x.drop_in_cents != null ? (x.drop_in_cents / 100).toFixed(2) : '', placeholder: 'Not sold singly' }),
     reg: input({ type: 'number', step: '0.01', min: '0', value: x.registration_cents != null ? (x.registration_cents / 100).toFixed(2) : '', placeholder: 'Camps and clinics' }) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i), checked: x.weekdays.includes(i) }), d));
+  const dayNotes = dayNotesFields(days, x.day_notes ?? {});
   const cents = (el) => (el.value === '' ? null : Math.round(Number(el.value) * 100));
   const num = (el) => (el.value === '' ? null : Number(el.value));
   const body = h('div', { class: 'stack' },
@@ -3151,14 +3169,15 @@ function editSeriesDialog(x, locs, coaches) {
     h('div', { class: 'form-grid cols-3' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap, `${x.enrolled?.length ?? x.enrolled_count ?? 0} standing or registered`)),
     h('div', { class: 'form-grid cols-4' }, field('Min age', f.ageMin), field('Max age', f.ageMax), owner ? field('Drop-in ($)', f.dropIn) : null, owner ? field('Registration ($)', f.reg) : null),
     h('div', { class: 'form-grid' }, field('First day', f.start), field('Last day', f.end, ['camp', 'clinic'].includes(x.kind) ? 'Camps and clinics need a last day.' : 'Leave empty for weekly classes that keep going.')),
-    field('Description (parents see this)', f.desc, 'What the class is and who it\'s for. Shown when anyone clicks the class on the schedule, in the portal and on Book now.'),
+    field('Description (parents see this)', f.desc, 'What the class is and who it\'s for, the same on every session. Shown when anyone clicks the class on the schedule, in the portal and on Book now.'),
+    dayNotes,
     field('Colour on the schedule', color, 'Picked for the class when it was made; change it here.'));
   teamDialog(`Edit ${x.name}`, body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
     const next = { name: f.name.value.trim(), location_id: f.loc.value, coach_id: f.coach.value || null, weekdays, start_time: f.time.value, duration_min: num(f.dur), capacity: num(f.cap),
-      age_min: num(f.ageMin), age_max: num(f.ageMax), start_date: f.start.value, end_date: f.end.value || null, description: f.desc.value.trim() || null, color: color.value(),
+      age_min: num(f.ageMin), age_max: num(f.ageMax), start_date: f.start.value, end_date: f.end.value || null, description: f.desc.value.trim() || null, color: color.value(), day_notes: dayNotes.value(),
       ...(owner ? { drop_in_cents: cents(f.dropIn), registration_cents: cents(f.reg) } : {}) };
-    const cur = { ...x, coach_id: x.coach_id ?? null, end_date: x.end_date ?? null, description: x.description ?? null, color: x.color ?? null, age_min: x.age_min ?? null, age_max: x.age_max ?? null, drop_in_cents: x.drop_in_cents ?? null, registration_cents: x.registration_cents ?? null };
+    const cur = { ...x, coach_id: x.coach_id ?? null, end_date: x.end_date ?? null, description: x.description ?? null, color: x.color ?? null, day_notes: x.day_notes ?? {}, age_min: x.age_min ?? null, age_max: x.age_max ?? null, drop_in_cents: x.drop_in_cents ?? null, registration_cents: x.registration_cents ?? null };
     const changed = Object.fromEntries(Object.entries(next).filter(([k, val]) => JSON.stringify(val) !== JSON.stringify(k === 'weekdays' ? [...cur.weekdays].sort() : cur[k])));
     if (changed.weekdays) changed.weekdays = [...changed.weekdays].sort();
     if (!Object.keys(changed).length) throw new Error('Nothing to change.');
@@ -3273,6 +3292,7 @@ async function viewSchedule(main) {
       h('div', { class: 'row wrap', style: 'gap:6px' }, kindBadge(x.kind), x.projected ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Planned') : st === 'live' ? h('span', { class: 'dp-badge dp-badge--good' }, 'On now') : st === 'done' ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Done') : null,
         !x.projected && x.booked_count >= x.capacity ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Full') : null, x.unpaid_count ? h('span', { class: 'dp-badge dp-badge--warn' }, `${x.unpaid_count} unpaid`) : null),
       x.description ? h('p', { style: 'margin:0;white-space:pre-wrap' }, x.description) : h('p', { class: 'small muted', style: 'margin:0' }, leads() ? 'No description yet. Families see the description when they book: add one in Edit' + (x.series_id ? ' on the class.' : ' session.') : 'No description yet.'),
+      x.day_note ? h('p', { class: 'strong', style: 'margin:0;white-space:pre-wrap' }, `This day: ${x.day_note}`) : null,
       line('When', `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)}`), line('Where', x.location_name), line('Coach', x.coach_name ?? 'No coach set'),
       line('Spots', x.projected ? `${x.capacity} spots · planned from the class list, created 8 weeks ahead` : `${x.booked_count} of ${x.capacity} booked${x.waitlist_count ? ` · ${x.waitlist_count} waitlisted` : ''}`)),
       [...(x.projected ? [] : [{ label: 'Open session', variant: 'primary', onClick: () => { location.hash = `#/schedule/${x.id}`; } }]),
@@ -3415,12 +3435,13 @@ async function viewSchedule(main) {
     start: input({ type: 'date', value: today }), end: input({ type: 'date' }), desc: input({ placeholder: 'What athletes will work on' }),
     coach: coachPicker(coaches, state.user.role === 'coach' ? state.user.id : '', null) };
   const days = DAY_NAMES.map((d, i) => h('label', { class: 'row small', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', value: String(i) }), d));
+  const dayNotes = dayNotesFields(days);
   const dollars = (el) => (el.value === '' ? undefined : Math.round(Number(el.value) * 100));
   const form = h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
     const weekdays = days.map((l) => l.querySelector('input')).filter((i) => i.checked).map((i) => Number(i.value));
     const x = await saveAnyway((c) => post('/v1/class-series', { name: f.name.value, kind: f.kind.value, location_id: f.loc.value, weekdays, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value),
       age_min: f.ageMin.value ? Number(f.ageMin.value) : undefined, age_max: f.ageMax.value ? Number(f.ageMax.value) : undefined, drop_in_cents: dollars(f.dropIn), registration_cents: dollars(f.reg),
-      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined, coach_id: f.coach.value || null, ...c }));
+      start_date: f.start.value, end_date: f.end.value || undefined, description: f.desc.value || undefined, day_notes: dayNotes.value(), coach_id: f.coach.value || null, ...c }));
     if (!x) return;
     toast(`${x.name} added: ${x.upcoming_sessions} sessions on the schedule.`); render();
   }); } },
@@ -3429,7 +3450,8 @@ async function viewSchedule(main) {
     h('div', { class: 'form-grid cols-3' }, field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap)),
     h('div', { class: 'form-grid cols-4' }, field('Min age', f.ageMin), field('Max age', f.ageMax), field('Drop-in ($)', f.dropIn), field('Registration ($)', f.reg)),
     h('div', { class: 'form-grid' }, field('Where', f.loc), field('First day', f.start), field('Last day', f.end, 'Leave empty for weekly classes that keep going.')),
-    field('Description (parents see this)', f.desc),
+    field('Description (parents see this)', f.desc, 'The same line on every session.'),
+    dayNotes,
     h('div', null, btn('Add to schedule', null, 'primary', { type: 'submit' })));
   const addPanel = panel('Add a class, camp or clinic', { subtitle: 'Sessions are created automatically. Weekly classes are always scheduled 8 weeks ahead.' }, form);
 
@@ -3525,7 +3547,7 @@ function editSessionDialog(x, locs, coaches, again) {
   const f = { name: input({ value: x.name, maxlength: '80' }), date: input({ type: 'date', value: bizDay(x.starts_at), min: bizDate() }), time: input({ type: 'time', value: bizTime(x.starts_at) }),
     dur: input({ type: 'number', min: '10', max: '600', value: String(Math.round((Date.parse(x.ends_at) - Date.parse(x.starts_at)) / 60000)) }), cap: input({ type: 'number', min: String(Math.max(1, x.booked_count)), max: '500', value: String(x.capacity) }),
     loc: select(locs.map((l) => [l.id, l.name]), { value: x.location_id }), coach: coachPicker(coaches, x.coach_id, x.coach_name), note: textarea(x.staff_note ?? '', { maxlength: '500', placeholder: 'Only staff see this' }),
-    desc: textarea(x.description ?? '', { maxlength: '2000', placeholder: 'What it is and who it\'s for' }) };
+    desc: textarea(x.description ?? '', { maxlength: '2000', placeholder: 'What it is and who it\'s for' }), dayNote: input({ value: x.own_day_note ?? '', maxlength: '300', placeholder: x.series_id && x.day_note && !x.own_day_note ? `${x.day_note} (from the class)` : 'What this day works on' }) };
   const color = x.series_id ? null : colorPicker(x.color);
   const notify = h('input', { type: 'checkbox', checked: true });
   const body = h('div', { class: 'stack' },
@@ -3534,10 +3556,11 @@ function editSessionDialog(x, locs, coaches, again) {
     h('div', { class: 'form-grid cols-4' }, field('Date', f.date), field('Starts', f.time), field('Minutes', f.dur), field('Spots', f.cap, x.waitlist_count ? 'More spots move the waitlist up.' : x.booked_count ? `${x.booked_count} booked` : null)),
     field('Where', f.loc), field('Staff note', f.note, 'Families don\'t see it.'),
     x.series_id ? (x.description ? h('p', { class: 'small muted', style: 'margin:0' }, `Description (from the class): ${x.description}`) : null) : field('Description (parents see this)', f.desc, 'Shown when anyone clicks the session on the schedule, in the portal and on Book now.'),
+    field('Note for this day (parents see this)', f.dayNote, x.series_id ? 'Just this session, under the description. Leave it empty to show the class\'s note for this weekday.' : 'Under the description, when anyone clicks the session.'),
     color ? field('Colour on the schedule', color) : null,
     x.booked_count ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, notify, h('span', null, 'Email booked families if the time or place changes')) : null);
   teamDialog('Edit session', body, [{ label: 'Save changes', variant: 'primary', onClick: async () => {
-    const r = await saveAnyway((c) => patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked,
+    const r = await saveAnyway((c) => patch(`/v1/sessions/${x.id}`, { name: f.name.value, date: f.date.value, start_time: f.time.value, duration_min: Number(f.dur.value), capacity: Number(f.cap.value), location_id: f.loc.value, coach_id: f.coach.value || null, staff_note: f.note.value, notify: notify.checked, day_note: f.dayNote.value.trim() || null,
       ...(x.series_id ? {} : { description: f.desc.value.trim() || null, color: color.value() }), ...c }));
     if (!r) return false;
     toast([`Saved: ${r.changed.join(', ')}.`, r.promoted ? `${nplural(r.promoted, 'athlete')} moved up from the waitlist.` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed.` : null].filter(Boolean).join(' '));
@@ -3742,7 +3765,9 @@ async function viewSession(main, id) {
   fill(main,
     header(x.name, `${dayOf(x.starts_at)} · ${timeOf(x.starts_at)}–${timeOf(x.ends_at)} · ${x.location_name}${x.coach_name ? ` · ${x.coach_name}` : ''}${x.status === 'canceled' ? ' · CANCELED' : ''}`, h('a', { class: 'dp-btn dp-btn--secondary', href: lastScheduleHash }, 'Schedule')),
     panel(null, {}, h('div', { class: 'stack', style: 'gap:12px' }, h('div', { class: 'row wrap', style: 'gap:8px' }, stateBadge(st), kindBadge(x.kind), full && st !== 'done' ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'Full') : null, st !== 'later' ? checkinBar(x) : null),
-      coachLine, x.staff_note ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'dp-label', style: 'margin:0 8px 0 0' }, 'Staff note'), x.staff_note) : null, tools)),
+      coachLine,
+      x.description || x.day_note ? h('div', { class: 'stack-tight' }, x.description ? h('p', { class: 'small muted', style: 'margin:0;white-space:pre-wrap' }, x.description) : null, x.day_note ? h('p', { class: 'small', style: 'margin:0;white-space:pre-wrap' }, h('span', { class: 'dp-label', style: 'margin:0 8px 0 0' }, 'This day'), x.day_note) : null) : null,
+      x.staff_note ? h('p', { class: 'small', style: 'margin:0' }, h('span', { class: 'dp-label', style: 'margin:0 8px 0 0' }, 'Staff note'), x.staff_note) : null, tools)),
     st !== 'canceled' && (st !== 'later' || Date.parse(x.starts_at) - Date.parse(now) < 60 * 60000) ? livePanel(id, st, canPick && x.status === 'scheduled') : null,
     x.team ? panel(`${x.team.org_name} ${x.team.team_name}`, { subtitle: `${x.team.athletes.filter((a) => a.present).length} of ${x.team.athletes.length} here · billed through the team contract`, action: h('div', { class: 'row' },
         x.team.athletes.some((a) => !a.present) ? btn('Everyone\'s here', (e) => busy(e.currentTarget, async () => {

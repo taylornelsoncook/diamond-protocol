@@ -118,7 +118,7 @@ export const portalRoutes = [
     const credits = new Map(kids.map((k) => [k.id, commerce.creditDetail(ctx, k.id)]));
     return list(schedule.listSessions(ctx, { from, to }).filter((s) => ['group', 'clinic', 'camp'].includes(s.kind)).map((s) => ({
       id: s.id, name: s.name, kind: s.kind, starts_at: s.starts_at, ends_at: s.ends_at, ...places.get(s.location_id), coach_name: s.coach_name ?? null,
-      spots_left: s.spots_left, capacity: s.capacity, waiting: s.waitlist_count, description: s.description ?? null, color: s.color ?? null,
+      spots_left: s.spots_left, capacity: s.capacity, waiting: s.waitlist_count, description: s.description ?? null, day_note: s.day_note ?? null, color: s.color ?? null,
       age_min: s.age_min, age_max: s.age_max, drop_in_cents: s.drop_in_cents, registration_cents: s.registration_cents ?? null, series_id: s.series_id,
       registration_only: s.registration_cents != null && s.drop_in_cents == null, registration_open: !s.series_id || !!series.get(s.series_id)?.active,
       athletes: kids.map((k) => {

@@ -407,6 +407,7 @@ function sessionRow(u) {
   return h('button', { type: 'button', class: 'p-row p-row--tap', onClick: () => bookingDialog(u) },
     h('div', { class: 'p-time p-time--day' }, h('span', { class: 'p-time-day' }, relDay(u.starts_at)), h('span', { class: 'small muted', style: 'font-family:var(--font-sans)' }, timeLabel(u.starts_at))),
     h('div', { class: 'grow stack-tight', style: 'text-align:left' }, h('span', { class: 'strong p-wrap-text' }, u.session_name),
+      u.day_note ? h('span', { class: 'small' }, u.day_note) : null,
       h('span', { class: 'small muted' }, [fmt(u.starts_at, { month: 'short', day: 'numeric' }), u.location_name, u.coach_name ? `with ${u.coach_name.split(' ')[0]}` : null].filter(Boolean).join(' · ')),
       u.note ? h('span', { class: 'small muted p-clamp' }, `Note: ${u.note}`) : null),
     tags.length ? h('div', { class: 'stack-tight', style: 'align-items:flex-end' }, tags) : h('span', { class: 'p-chev', 'aria-hidden': 'true' }, '›'));
@@ -436,6 +437,7 @@ function bookingDialog(u) {
   const who = state.me.athletes.find((a) => a.id === u.client_id);
   openDialog(u.session_name, [
     h('p', { class: 'strong', style: 'margin:0' }, range(u.starts_at, u.ends_at)),
+    u.day_note ? h('p', { class: 'small', style: 'margin:0' }, h('b', null, 'This day: '), u.day_note) : null,
     h('dl', { class: 'dl' },
       who ? h('div', null, h('dt', null, 'Athlete'), h('dd', null, who.name)) : null,
       h('div', null, h('dt', null, 'Where'), h('dd', null, u.location_name, u.address ? h('div', { class: 'small muted' }, u.address) : null, u.directions_url ? h('a', { href: u.directions_url, target: '_blank', rel: 'noopener', class: 'small' }, 'Directions') : null)),
@@ -532,6 +534,7 @@ async function viewBook(main) {
     const row = h('div', { class: 'p-row p-row--tap', role: 'button', tabindex: '0', onClick: () => classDialog(a, s), onKeydown: (e) => { if (e.key === 'Enter') classDialog(a, s); } },
       h('div', { class: 'p-time' }, timeLabel(s.starts_at)),
       h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong p-wrap-text' }, s.name),
+        s.day_note ? h('span', { class: 'small' }, s.day_note) : null,
         h('span', { class: 'small muted' }, [s.location_name, s.coach_name ? `with ${s.coach_name.split(' ')[0]}` : null, s.spots_left ? `${s.spots_left} ${s.spots_left === 1 ? 'spot' : 'spots'} left` : `Full${s.waiting ? `, ${s.waiting} waiting` : ''}`].filter(Boolean).join(' · ')),
         me.clash ? h('span', { class: 'small warn-text' }, me.clash) : null),
       classAction(a, s, me));
@@ -545,6 +548,7 @@ async function viewBook(main) {
     openDialog(s.name, [
       h('p', { class: 'strong', style: 'margin:0' }, range(s.starts_at, s.ends_at)),
       s.description ? h('p', { class: 'small muted' }, s.description) : null,
+      s.day_note ? h('p', { class: 'small', style: 'margin:0' }, h('b', null, 'This day: '), s.day_note) : null,
       h('dl', { class: 'dl' },
         h('div', null, h('dt', null, 'Where'), h('dd', null, s.location_name, s.address ? h('div', { class: 'small muted' }, s.address) : null, s.directions_url ? h('a', { href: s.directions_url, target: '_blank', rel: 'noopener', class: 'small' }, 'Directions') : null)),
         s.coach_name ? h('div', null, h('dt', null, 'Coach'), h('dd', null, s.coach_name)) : null,

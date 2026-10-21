@@ -65,9 +65,11 @@ async function boot() {
     // From the online sales page (/buy): bought and signed in; now the profile.
     setTimeout(() => toast(q.has('bought') ? 'Thanks for your purchase! Now create your profile: sign the waiver first, then add the rest when you\'re ready.' : 'Welcome! Sign the waiver first. Birthday, sport, an emergency contact and a card can wait.'), 300);
   } else if (state.me && q.has('welcome')) {
-    state.tab = 'family'; history.replaceState(null, '', HERE);
+    // Just signed up at /join (owner's ask): land on the packs and memberships to choose one. The card is asked for at
+    // checkout and the waiver waits on the Family tab.
+    state.tab = 'programs'; state.welcome = true; history.replaceState(null, '', HERE);
     const claim = q.has('claim') ? ' We\'ll check the Athlete ID you gave with your coach.' : '';
-    setTimeout(() => toast(buying ? `Welcome! Add a card here, then buy it on the Programs tab.${claim}` : `Welcome! Sign the waiver and add a card, then you can book.${claim}`), 300);
+    setTimeout(() => toast(buying ? `Welcome! Add a card when you buy it.${claim}` : `Welcome! Choose the membership or pack that fits, then add a card when you buy.${claim}`), 300);
   } else if (buying) { state.tab = 'programs'; history.replaceState(null, '', HERE); }
   render();
 }
@@ -933,7 +935,13 @@ async function viewPrograms(main) {
   };
   const onlinePanel = shop.items.length ? panel('Online programs & courses', { subtitle: `Pay once and ${a.first_name} gets it in their app. No membership needed.` }, shop.items.map(onlineRow)) : null;
 
-  fill(main, top('Programs'), banners(), athleteChips(() => render({ keepScroll: true })), cardLine, state.buy ? onlinePanel : null, memPanel, signInPanel(), campPanel, groupPanel, storePanel, state.buy ? null : onlinePanel);
+  // A family that just signed up: the packs and memberships come first, under a welcome, so they pick one and buy it.
+  const fresh = state.welcome && !m && !a.credits.group && !a.credits.private;
+  const welcomePanel = fresh ? h('section', { class: 'dp-panel stack', id: 'p-welcome' },
+    h('h2', { class: 'dp-panel-title' }, `Welcome, ${f.name}!`),
+    h('p', { class: 'muted', style: 'margin:0' }, `Your account is ready. Choose what fits ${a.first_name} below: a membership covers every group class and holds a standing spot, a pack is a set of sessions to use when you like. We'll ask for a card when you buy.${f.waiver.signed ? '' : ' The waiver is on the Family tab; it\'s needed before the first session.'}`),
+    h('div', { class: 'row wrap' }, f.waiver.signed ? null : btn('Sign the waiver', () => go('family', { focus: 'waiver' }), 'outline'), btn('Not now', () => { state.welcome = false; render(); }, 'ghost'))) : null;
+  fill(main, top('Programs'), fresh ? null : banners(), athleteChips(() => render({ keepScroll: true })), welcomePanel, cardLine, state.buy ? onlinePanel : null, fresh ? storePanel : null, memPanel, signInPanel(), campPanel, groupPanel, fresh ? null : storePanel, state.buy ? null : onlinePanel);
   document.getElementById('buy-pick')?.scrollIntoView({ block: 'center' });
 }
 // Ask to switch plans, pause or cancel: the owner gets it and makes the change.

@@ -78,6 +78,7 @@ function renderCode(started) {
     if (!res.ok) { err.textContent = data.error?.message ?? 'That didn\'t work. Try again.'; return; }
     const buy = new URLSearchParams(location.search).get('buy');     // from the store page: land on what they came to buy
     const pending = (data.athletes ?? []).some((a) => a.claim === 'pending');   // an Athlete ID we'll check with the coach
+    // The account is made; now the packs and memberships (the portal's Programs tab) to choose one.
     location.href = `/client?welcome=1${pending ? '&claim=1' : ''}${buy && /^(program|course):[\w-]+$/.test(buy) ? `&buy=${encodeURIComponent(buy)}` : ''}`;
   }); } },
     h('h1', { class: 'p-title' }, 'Check your email'),

@@ -81,7 +81,7 @@ export function updateSettings(ctx, body) {
   if (body.business_address !== undefined) next.business_address = v.str(body.business_address, 'business_address', { max: 400, optional: true }) ?? '';
   if (body.payment_instructions !== undefined) next.payment_instructions = v.str(body.payment_instructions, 'payment_instructions', { max: 1000, optional: true }) ?? '';
   if (body.waiver_text !== undefined) {
-    const text = v.str(body.waiver_text, 'waiver_text', { max: 20000 });
+    const text = v.str(body.waiver_text, 'waiver_text', { max: 100000 });   // the same as the terms and privacy policy, so the combined legal document fits
     if (text !== cur.waiver_text) { next.waiver_text = text; next.waiver_version = String(Number(cur.waiver_version) + 1); }   // families re-sign a changed waiver
   }
   for (const kind of ['terms', 'privacy']) {

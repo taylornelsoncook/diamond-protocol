@@ -24,6 +24,7 @@ On Settings, each of the three text boxes has a **Use the drafted wording** butt
 - **Photos and video**: coaching clips private; any marketing use needs separate written permission the parent can withdraw.
 - **Disputes**: individual arbitration in Douglas County, Colorado (American Arbitration Association), small-claims carve-out, class-action waiver. Ask the lawyer whether to keep the arbitration clause: it protects the business but some owners prefer plain court venue.
 - **Limitation of liability**: what you paid in the last 12 months.
+- **Insurance is the athlete's** (owner's decision): the business provides no health, accident or other insurance for the athlete; the waiver's release section says insurance covering the athlete's training is the family's responsibility, that the athlete is covered by the family's health insurance or the family accepts every cost, and that no Released Party pays medical, hospital, ambulance or rehabilitation costs. The medical consent section says the same. The lawyer should confirm the wording sits well with the release and the parental release under C.R.S. § 13-22-107.
 - **Contact for everything**: the business email from your email settings.
 
 ## Colorado points for the lawyer to confirm

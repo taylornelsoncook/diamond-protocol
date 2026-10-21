@@ -9,6 +9,8 @@ These are **drafts** written for Diamond Protocol to hand to a Colorado lawyer. 
 | `privacy.txt` | Privacy policy: children's privacy (COPPA), what we collect (including wearables and clips), why, who sees it (family, staff by role, teammates, schools, service providers), never sold, best-interest use, permission before sharing, retention (clips, 5-year financial records, signed agreements), rights (download, correct, delete, Colorado Privacy Act appeal), security, texts | Settings → Privacy policy. Published at `/privacy`. |
 | `card-consent.txt` | The short consent sentences shown wherever a card is saved or charged | Built into the screens; reviewed here. |
 
+`complete-agreement.txt` is the four of them in one document (waiver, terms, privacy policy, card-consent wording) for reading or sending as a whole; the app still keeps them as separate boxes, because the terms and privacy policy are also public pages, and signing the waiver records agreement to all of them at once.
+
 ## How to put them in the app
 
 On Settings, each of the three text boxes has a **Use the drafted wording** button. It fills the box with the draft, with the business name, address, contact email, late-cancel window and web address filled in from your settings. Read it, change what the lawyer tells you to, then **Save**. Saving the waiver asks every family to sign the new version before their next booking; saving the terms or privacy policy asks every account holder to accept the new version.
@@ -24,6 +26,7 @@ On Settings, each of the three text boxes has a **Use the drafted wording** butt
 - **Photos and video**: coaching clips private; any marketing use needs separate written permission the parent can withdraw.
 - **Disputes**: individual arbitration in Douglas County, Colorado (American Arbitration Association), small-claims carve-out, class-action waiver. Ask the lawyer whether to keep the arbitration clause: it protects the business but some owners prefer plain court venue.
 - **Limitation of liability**: what you paid in the last 12 months.
+- **Insurance is the athlete's** (owner's decision): the business provides no health, accident or other insurance for the athlete; the waiver's release section says insurance covering the athlete's training is the family's responsibility, that the athlete is covered by the family's health insurance or the family accepts every cost, and that no Released Party pays medical, hospital, ambulance or rehabilitation costs. The medical consent section says the same. The lawyer should confirm the wording sits well with the release and the parental release under C.R.S. § 13-22-107.
 - **Contact for everything**: the business email from your email settings.
 
 ## Colorado points for the lawyer to confirm

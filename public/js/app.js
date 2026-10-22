@@ -3193,19 +3193,38 @@ function editSeriesDialog(x, locs, coaches) {
 
 // A coach's own calendar feed (owner: the whole schedule) for Apple, Google or Outlook: made once, shown once, reset at will.
 async function myCalendarDialog() {
-  const st = await get('/v1/me/calendar-feed');
+  const [st, coachList] = await Promise.all([get('/v1/me/calendar-feed'), isOwner() ? get('/v1/coaches') : { data: [] }]);
   const dialog = document.getElementById('dialog');
-  const show = (made) => teamDialog('Your calendar link', h('div', { class: 'stack' },
-    h('p', { style: 'margin:0' }, 'Add this address to your calendar as a subscription. The sessions you lead show up and stay up to date (the owner sees every session).'),
+  // show(made): the address, shown once. With a coach's name (the owner made it for them) the words say whose it is.
+  const show = (made) => teamDialog(made.coach_name ? `${made.coach_name}'s calendar link` : 'Your calendar link', h('div', { class: 'stack' },
+    h('p', { style: 'margin:0' }, made.coach_name ? `Send this address to ${made.coach_name}. Added to their calendar as a subscription, the sessions they lead and their open hours show up and stay up to date.` : 'Add this address to your calendar as a subscription. The sessions you lead and your open hours show up and stay up to date (the owner sees every session and everyone\'s hours).'),
     h('code', { class: 'small', style: 'word-break:break-all' }, made.url),
     h('div', { class: 'row wrap', style: 'gap:8px' }, btn('Copy', async () => { await navigator.clipboard?.writeText(made.url).catch(() => {}); toast('Calendar link copied.'); }, 'secondary'),
       h('a', { class: 'dp-btn dp-btn--secondary', href: made.webcal }, 'Open in calendar'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(made.webcal)}`, target: '_blank', rel: 'noopener' }, 'Google Calendar')),
     h('p', { class: 'small muted', style: 'margin:0' }, 'Google Calendar on a computer: Other calendars → + → From URL, paste the address. iPhone: Settings → Calendar → Accounts → Add Subscribed Calendar. Keep it private: anyone with it sees session names, times and places. It isn\'t shown again here; get a new link if you lose it.')),
     [{ label: 'Done', variant: 'primary' }]);
+  // Links per coach (owner's ask): the owner makes a coach's link here and hands it to them; a reset or Turn off kills it.
+  const others = coachList.data.filter((c) => c.id !== state.user.id);
+  const coachLinks = others.length ? h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:10px' },
+    h('div', { class: 'dp-label' }, 'Links for your coaches'),
+    h('p', { class: 'small muted dp-help', style: 'margin:0' }, 'Make a coach\'s link and send it to them; it shows the sessions they lead and their open hours. Getting a new one stops the old one.'),
+    ...others.map((c) => {
+      const line = h('span', { class: 'small muted' }, '…');
+      const row = h('div', { class: 'row wrap', style: 'gap:8px;align-items:center;min-height:40px' }, h('span', { class: 'strong grow', style: 'min-width:120px' }, c.name), line);
+      const draw = (cs) => {
+        line.textContent = cs.on ? `link on since ${tzFmt(cs.created_at, { month: 'short', day: 'numeric' })}` : 'no link yet';
+        row.querySelectorAll('button').forEach((b) => b.remove());
+        row.append(btn(cs.on ? 'New link' : 'Get a link', (e) => { if (cs.on && !confirm(`Make a new link for ${c.name}? The old one stops working.`)) return; busy(e.currentTarget, async () => { const made = await post(`/v1/coaches/${c.id}/calendar-feed`); dialog.addEventListener('close', () => setTimeout(() => show(made), 0), { once: true }); dialog.close(); }); }, 'secondary'),
+          ...(cs.on ? [btn('Turn off', (e) => { if (!confirm(`Turn off ${c.name}'s calendar link? Their calendar stops updating.`)) return; busy(e.currentTarget, async () => { draw(await del(`/v1/coaches/${c.id}/calendar-feed`)); toast(`${c.name}'s calendar link turned off.`); }); }, 'ghost')] : []));
+      };
+      get(`/v1/coaches/${c.id}/calendar-feed`).then(draw).catch(() => { line.textContent = 'couldn\'t load'; });
+      return row;
+    })) : null;
   teamDialog('My calendar', h('div', { class: 'stack' },
-    h('p', { style: 'margin:0' }, 'See your sessions in Apple, Google or Outlook calendar on your phone and computer, always up to date, with the roster a tap away.'),
-    h('p', { class: 'small muted', style: 'margin:0' }, st.on ? `Your calendar link is on (made ${tzFmt(st.created_at, { month: 'short', day: 'numeric', year: 'numeric' })}). Getting a new link stops the old one.` : 'You don\'t have a calendar link yet.')),
+    h('p', { style: 'margin:0' }, 'See your sessions and open hours in Apple, Google or Outlook calendar on your phone and computer, always up to date, with the roster a tap away.'),
+    h('p', { class: 'small muted', style: 'margin:0' }, st.on ? `Your calendar link is on (made ${tzFmt(st.created_at, { month: 'short', day: 'numeric', year: 'numeric' })}). Getting a new link stops the old one.` : 'You don\'t have a calendar link yet.'),
+    coachLinks),
     [{ label: st.on ? 'Get a new link' : 'Get my calendar link', variant: 'primary', onClick: async () => {
       if (st.on && !confirm('Make a new link? The old one stops working, so calendars using it stop updating.')) return false;
       const made = await post('/v1/me/calendar-feed');

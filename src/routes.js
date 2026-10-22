@@ -598,6 +598,10 @@ export const routes = [
   ['GET', '/v1/me/calendar-feed', 'session', 'Schedule', 'Your own calendar feed for Apple, Google or Outlook: on or off, and when it was made. The address itself is shown only when made.', (ctx, r) => staffcal.status(ctx.db.get('SELECT * FROM users WHERE id = ?', r.user.id))],
   ['POST', '/v1/me/calendar-feed', 'session', 'Schedule', 'Make (or reset) your private calendar feed address: the sessions you lead (the owner: every session), two weeks back to three months ahead. Shown once; the old address stops working.', (ctx, r) => staffcal.reset(ctx, r.user, r.baseUrl)],
   ['DELETE', '/v1/me/calendar-feed', 'session', 'Schedule', 'Turn your calendar feed off.', (ctx, r) => staffcal.stop(ctx, r.user)],
+  // Links per coach (owner's ask): the owner makes, resets or turns off a coach's calendar link and hands it to them.
+  ['GET', '/v1/coaches/:id/calendar-feed', 'session', 'Schedule', 'Owner: whether this coach has a calendar link and when it was made.', (ctx, r) => staffcal.coachStatus(ctx, staffcal.coachFor(ctx, r.params.id))],
+  ['POST', '/v1/coaches/:id/calendar-feed', 'session', 'Schedule', 'Owner: make (or reset) this coach\'s private calendar feed address, shown once, to hand to them; the old address stops working.', (ctx, r) => { const u = staffcal.coachFor(ctx, r.params.id); return { ...staffcal.reset(ctx, u, r.baseUrl), coach_id: u.id, coach_name: u.name }; }],
+  ['DELETE', '/v1/coaches/:id/calendar-feed', 'session', 'Schedule', 'Owner: turn this coach\'s calendar feed off.', (ctx, r) => { const u = staffcal.coachFor(ctx, r.params.id); return { ...staffcal.stop(ctx, u), coach_id: u.id, coach_name: u.name }; }],
   ['GET', '/v1/coaches', 'any', 'Schedule', 'Staff who can lead sessions (active owners and coaches), for coach pickers.', (ctx) => list(schedule.listCoaches(ctx))],
   ['GET', '/v1/schedule', 'any', 'Schedule', 'Sessions between ?from= and ?to= (default: next 14 days). Filter with ?kind=, ?location_id= and ?coach_id= (me for your own).', (ctx, r) => {
     const from = r.query.from ? v.date(r.query.from, 'from') : new Date(Date.now() - 3600000).toISOString();

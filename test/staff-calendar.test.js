@@ -72,6 +72,49 @@ test('a coach gets a private feed of the sessions they lead; the owner of everyt
   assert.equal((await desk('POST', '/v1/me/calendar-feed')).status, 403);
 });
 
+test('the owner makes a link per coach and hands it over; coaches and front desk can\'t; the feed carries bookable hours with the slots still open', async () => {
+  // A link for Riley, made by the owner: Riley's feed, shown once; the owner can see it's on, reset it and turn it off.
+  assert.deepEqual((await owner('GET', `/v1/coaches/${riley.id}/calendar-feed`)).body, { on: false, created_at: null, coach_id: riley.id, coach_name: 'Riley Brooks', role: 'coach' });
+  const made = (await owner('POST', `/v1/coaches/${riley.id}/calendar-feed`)).body;
+  assert.equal(made.coach_name, 'Riley Brooks'); assert.match(made.url, /\/cal\/staff\/[\w-]{32}\.ics$/);
+  const feed = await req('GET', made.url.replace('https://app.example.org', ''));
+  assert.equal(feed.status, 200); assert.match(feed.text, /X-WR-CALNAME:Diamond Protocol: Riley Brooks/); assert.match(feed.text, /Speed class/); assert.doesNotMatch(feed.text, /Evaluation day/);
+  assert.equal((await owner('GET', `/v1/coaches/${riley.id}/calendar-feed`)).body.on, true);
+  assert.equal((await coach('GET', '/v1/me/calendar-feed')).body.on, true, 'Riley sees the owner made one');
+  // Only the owner: a coach can't make another coach's link, front desk can't look; an unknown or front-desk id is 404.
+  const owners = (await owner('GET', '/v1/coaches')).body.data, me = owners.find((c) => c.name === 'Owner');
+  assert.equal((await coach('POST', `/v1/coaches/${me.id}/calendar-feed`)).status, 403);
+  assert.equal((await desk('GET', `/v1/coaches/${riley.id}/calendar-feed`)).status, 403);
+  assert.equal((await owner('POST', '/v1/coaches/usr_nobody/calendar-feed')).status, 404);
+  // Bookable hours in the feed: Riley's Monday 3 to 7 pm privates (four 60-minute slots) show as free time with the open count and the Book now link.
+  assert.equal((await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekdays: [1], start_time: '15:00', end_time: '19:00', slot_minutes: 60, price_cents: 8000, coach_id: riley.id })).status, 201);
+  const withHours = (await req('GET', made.url.replace('https://app.example.org', ''))).text;
+  assert.match(withHours, /SUMMARY:Open for privates: 4 of 4 slots open/);
+  assert.match(withHours, /TRANSP:TRANSPARENT/);
+  assert.match(withHours, /Book now page: https:\/\/app\.example\.org\/book/);
+  assert.match(withHours, /60-minute privates with Riley Brooks/);
+  assert.equal((withHours.match(/Open for privates/g) || []).length, 13, 'one entry per Monday over the next 92 days');
+  // A family books one of the slots: that Monday says 3 of 4 open, and the booking itself is a session in the feed.
+  const ava = (await owner('POST', '/v1/clients', { name: 'Ava Lopez', birth_date: '2012-04-03', parent: { name: 'Maria Lopez', email: 'maria@example.com' }, send_welcome: false })).body;
+  const slots = (await owner('GET', '/v1/slots?kind=private&days=14')).body.data.filter((s) => s.coach_id === riley.id);
+  assert.ok(slots.length >= 4);
+  const booked = await owner('POST', '/v1/slots/book', { client_id: ava.id, kind: 'private', starts_at: slots[0].starts_at, availability_id: slots[0].availability_id, pay: 'cash' });
+  assert.equal(booked.status, 201, JSON.stringify(booked.body));
+  const after = (await req('GET', made.url.replace('https://app.example.org', ''))).text;
+  assert.match(after, /SUMMARY:Open for privates: 3 of 4 slots open/);
+  assert.equal((after.match(/Open for privates: 4 of 4/g) || []).length, 12);
+  // The owner's feed carries everyone's hours; a day off takes that day's hours out.
+  const ownerMade = (await owner('POST', '/v1/me/calendar-feed')).body;
+  const all = (await req('GET', ownerMade.url.replace('https://app.example.org', ''))).text;
+  assert.equal((all.match(/Open for privates/g) || []).length, 13);
+  const nextMonday = slots[0].starts_at.slice(0, 10);
+  assert.equal((await owner('POST', '/v1/time-off', { user_id: riley.id, start_date: nextMonday, end_date: nextMonday, note: 'Away' })).status, 201);
+  assert.equal(((await req('GET', made.url.replace('https://app.example.org', ''))).text.match(/Open for privates/g) || []).length, 12);
+  // Off, by the owner.
+  assert.equal((await owner('DELETE', `/v1/coaches/${riley.id}/calendar-feed`)).body.on, false);
+  assert.equal((await req('GET', made.url.replace('https://app.example.org', ''))).status, 404);
+});
+
 test('a version 83 database gains the calendar columns on users, opened twice', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'dp-v83-')), file = join(tmp, 'dp.db');
   try {

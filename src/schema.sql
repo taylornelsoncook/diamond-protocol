@@ -604,7 +604,8 @@ CREATE TABLE IF NOT EXISTS class_series (
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,               -- who leads it (version 31)
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  color TEXT                             -- version 85: the class's colour on the schedule (#rrggbb), picked automatically when it's made
+  color TEXT,                            -- version 85: the class's colour on the schedule (#rrggbb), picked automatically when it's made
+  day_notes TEXT                         -- version 92: a line per weekday families see under the description, JSON {"1": "Acceleration"}
 );
 CREATE TABLE IF NOT EXISTS class_sessions (
   id TEXT PRIMARY KEY,
@@ -625,6 +626,7 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   staff_note TEXT,                       -- version 39: a note for staff on this one session (never shown to families)
   color TEXT,                            -- version 85: a one-off session's colour (a class session takes its class's)
   description TEXT,                      -- version 85: what a one-off session is, for families (a class session takes its class's)
+  day_note TEXT,                         -- version 92: this one session's own line for families (over the class's note for that weekday)
   UNIQUE (series_id, starts_at)
 );
 CREATE INDEX IF NOT EXISTS class_sessions_time ON class_sessions(starts_at);

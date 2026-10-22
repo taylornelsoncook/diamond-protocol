@@ -150,6 +150,23 @@ export function pickColor(ctx) {
   for (const r of ctx.db.all(`SELECT lower(color) AS color, COUNT(*) AS n FROM class_sessions WHERE series_id IS NULL AND status = 'scheduled' AND starts_at > ? AND color IS NOT NULL GROUP BY lower(color)`, ctx.now())) if (used.has(r.color)) used.set(r.color, used.get(r.color) + r.n);
   return [...used.entries()].sort((a, b) => a[1] - b[1])[0][0];
 }
+// Notes by day (owner's ask: one line copied across every session, the description, and another line for each day:
+// "Mon/Tue Acceleration, Wed/Thu Agility, Friday Max velocity"): { "1": "Acceleration", ... } keyed by weekday 0 to 6,
+// each up to DAY_NOTE_MAX characters; empty lines are dropped and nothing left means null. Stored as JSON on the class.
+export const DAY_NOTE_MAX = 300;
+export function dayNotesInput(x) {
+  if (x === null || x === undefined || x === '') return null;
+  if (typeof x !== 'object' || Array.isArray(x)) throw badRequest('day_notes must be an object keyed by weekday, like { "1": "Acceleration" }.');
+  const out = {};
+  for (const [k, val] of Object.entries(x)) {
+    if (!/^[0-6]$/.test(String(k))) throw badRequest('day_notes keys are weekdays 0 (Sunday) to 6 (Saturday).');
+    const t = val === null || val === undefined ? '' : String(val).trim();
+    if (t.length > DAY_NOTE_MAX) throw badRequest(`A day's note can be up to ${DAY_NOTE_MAX} characters.`);
+    if (t) out[k] = t;
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+const parseNotes = (json) => { if (!json) return {}; try { const o = JSON.parse(json); return o && typeof o === 'object' ? o : {}; } catch { return {}; } };
 function seriesInput(body, cur = {}) {
   const pick = (k, fn) => (body[k] !== undefined ? fn(body[k]) : cur[k]);
   const out = {
@@ -157,6 +174,7 @@ function seriesInput(body, cur = {}) {
     color: pick('color', (x) => colorInput(x)),
     kind: pick('kind', (x) => v.oneOf(x, 'kind', SERIES_KINDS)),
     description: pick('description', (x) => v.str(x, 'description', { max: 2000, optional: true })),
+    day_notes: pick('day_notes', dayNotesInput),
     location_id: pick('location_id', (x) => v.str(x, 'location_id')),
     weekdays: pick('weekdays', (x) => { if (!Array.isArray(x) || !x.length || x.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw badRequest('weekdays must list days 0 (Sunday) to 6 (Saturday).'); return JSON.stringify([...new Set(x)].sort()); }),
     start_time: pick('start_time', (x) => { if (!isTime(x)) throw badRequest('start_time must look like 17:30.'); return x; }),
@@ -188,9 +206,9 @@ export async function createSeries(ctx, body) {
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : null;
   confirmCoach(ctx, coachId, coachWarnings(ctx, coachId, plannedDays(ctx, s)), body);
   const id = newId('ser');
-  ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, coach_id, active, created_at, color)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    id, s.name, s.kind, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, contractId, coachId, ctx.now(), s.color ?? pickColor(ctx));
+  ctx.db.run(`INSERT INTO class_series (id, name, kind, description, location_id, weekdays, start_time, duration_min, capacity, age_min, age_max, drop_in_cents, registration_cents, start_date, end_date, contract_id, coach_id, active, created_at, color, day_notes)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    id, s.name, s.kind, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, contractId, coachId, ctx.now(), s.color ?? pickColor(ctx), s.day_notes ?? null);
   await generateSessions(ctx, id);
   return getSeries(ctx, id);
 }
@@ -198,6 +216,7 @@ export function getSeries(ctx, id) {
   const s = ctx.db.get('SELECT s.*, l.name AS location_name, u.name AS coach_name FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id WHERE s.id = ?', id);
   if (!s) throw notFound('Class');
   s.weekdays = JSON.parse(s.weekdays);
+  s.day_notes = parseNotes(s.day_notes);
   s.active = !!s.active;
   s.enrolled = ctx.db.all(`SELECT e.id, e.kind, c.id AS client_id, c.name FROM enrollments e JOIN clients c ON c.id = e.client_id WHERE e.series_id = ? AND e.status = 'active' ORDER BY c.name`, id);
   s.upcoming_sessions = ctx.db.get(`SELECT COUNT(*) AS n FROM class_sessions WHERE series_id = ? AND status = 'scheduled' AND starts_at > ?`, id, ctx.now()).n;
@@ -210,7 +229,7 @@ export function listSeries(ctx, { kind, includeInactive = false } = {}) {
   return ctx.db.all(`SELECT s.*, l.name AS location_name, u.name AS coach_name,
       (SELECT COUNT(*) FROM enrollments e WHERE e.series_id = s.id AND e.status = 'active') AS enrolled_count
     FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.kind, s.start_date, s.start_time`, ...p)
-    .map((s) => ({ ...s, weekdays: JSON.parse(s.weekdays), active: !!s.active }));
+    .map((s) => ({ ...s, weekdays: JSON.parse(s.weekdays), day_notes: parseNotes(s.day_notes), active: !!s.active }));
 }
 // Edit a class, camp or clinic. Every upcoming session follows what changed: a new time or place (booked families get
 // one email listing every session of theirs that moved), length, spots, ages, price, coach and name. A session changed on
@@ -225,7 +244,7 @@ const SESSION_COPIES = ['name', 'capacity', 'age_min', 'age_max', 'drop_in_cents
 async function updateSeriesNow(ctx, id, body) {
   const cur = getSeries(ctx, id);
   const zone = tz(ctx), now = ctx.now();
-  const s = seriesInput({ ...body, kind: undefined }, { ...cur, weekdays: JSON.stringify(cur.weekdays) });   // the type never changes
+  const s = seriesInput({ ...body, kind: undefined }, { ...cur, weekdays: JSON.stringify(cur.weekdays), day_notes: Object.keys(cur.day_notes ?? {}).length ? JSON.stringify(cur.day_notes) : null });   // the type never changes
   if (s.location_id !== cur.location_id) commerce.getLocation(ctx, s.location_id);
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : cur.coach_id ?? null;
   if (body.active === false) {
@@ -284,8 +303,8 @@ async function updateSeriesNow(ctx, id, body) {
       for (const [coach, slots] of byCoach) confirmCoach(ctx, coach, coachWarnings(ctx, coach, slots, { excludeSeries: id }), body);
     }
     ctx.db.tx(() => {
-      ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1, color = ? WHERE id = ?`,
-        s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, s.color ?? cur.color ?? pickColor(ctx), id);
+      ctx.db.run(`UPDATE class_series SET name = ?, description = ?, location_id = ?, weekdays = ?, start_time = ?, duration_min = ?, capacity = ?, age_min = ?, age_max = ?, drop_in_cents = ?, registration_cents = ?, start_date = ?, end_date = ?, coach_id = ?, active = 1, color = ?, day_notes = ? WHERE id = ?`,
+        s.name, s.description, s.location_id, s.weekdays, s.start_time, s.duration_min, s.capacity, s.age_min, s.age_max, s.drop_in_cents, s.registration_cents, s.start_date, s.end_date, coachId, s.color ?? cur.color ?? pickColor(ctx), s.day_notes ?? null, id);
       for (const { x, next } of plan) {
         const keys = Object.keys(next);
         if (keys.length) ctx.db.run(`UPDATE class_sessions SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, ...keys.map((k) => next[k]), x.id);
@@ -433,13 +452,13 @@ export function projectedSessions(ctx, { from, to, kind, locationId, coachId } =
   if (locationId) { where.push('s.location_id = ?'); args.push(locationId); }
   if (coachId) { where.push('s.coach_id = ?'); args.push(coachId); }
   const series = ctx.db.all(`SELECT s.*, l.name AS location_name, u.name AS coach_name FROM class_series s JOIN locations l ON l.id = s.location_id LEFT JOIN users u ON u.id = s.coach_id WHERE ${where.join(' AND ')} ORDER BY s.start_time, s.name`, ...args)
-    .map((x) => ({ ...x, days: JSON.parse(x.weekdays) }));
+    .map((x) => ({ ...x, days: JSON.parse(x.weekdays), notes: parseNotes(x.day_notes) }));
   const out = [];
   for (let d = first; d <= to; d = addDaysToDate(d, 1)) {
     for (const x of series) {
       if (!x.days.includes(weekdayOf(d)) || x.start_date > d || (x.end_date && x.end_date < d)) continue;
       const starts = zonedToUtc(d, x.start_time, zone);
-      out.push({ projected: true, series_id: x.id, name: x.name, kind: x.kind, location_id: x.location_id, location_name: x.location_name, coach_id: x.coach_id ?? null, coach_name: x.coach_name ?? null, color: x.color ?? null, description: x.description ?? null,
+      out.push({ projected: true, series_id: x.id, name: x.name, kind: x.kind, location_id: x.location_id, location_name: x.location_name, coach_id: x.coach_id ?? null, coach_name: x.coach_name ?? null, color: x.color ?? null, description: x.description ?? null, day_note: x.notes[weekdayOf(d)] ?? null,
         starts_at: starts, ends_at: new Date(Date.parse(starts) + x.duration_min * 60000).toISOString(), capacity: x.capacity, date: d });
     }
   }
@@ -485,12 +504,13 @@ export async function createSession(ctx, body) {
   confirmCoach(ctx, coachId, coachWarnings(ctx, coachId, [{ starts_at: starts, ends_at: new Date(Date.parse(starts) + dur * 60000).toISOString() }]), body);
   const id = newId('cls');
   const color = body.color !== undefined && body.color !== null && body.color !== '' ? colorInput(body.color) : pickColor(ctx), description = v.str(body.description, 'description', { max: 2000, optional: true });
-  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, staff_note, status, created_at, color, description)
-              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)`,
+  const dayNote = v.str(body.day_note, 'day_note', { max: DAY_NOTE_MAX, optional: true });
+  ctx.db.run(`INSERT INTO class_sessions (id, series_id, name, kind, location_id, starts_at, ends_at, capacity, age_min, age_max, drop_in_cents, coach_id, staff_note, status, created_at, color, description, day_note)
+              VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`,
     id, v.str(body.name, 'name', { max: 80 }), kind, loc.id, starts, new Date(Date.parse(starts) + dur * 60000).toISOString(),
     v.int(body.capacity ?? (kind === 'private' ? 1 : 12), 'capacity', { min: 1, max: 500 }),
     v.int(body.age_min, 'age_min', { min: 3, max: 99, optional: true }), v.int(body.age_max, 'age_max', { min: 3, max: 99, optional: true }),
-    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, v.str(body.staff_note, 'staff_note', { max: 500, optional: true }), ctx.now(), color, description);
+    v.int(body.drop_in_cents, 'drop_in_cents', { min: 0, max: 10000000, optional: true }), coachId, v.str(body.staff_note, 'staff_note', { max: 500, optional: true }), ctx.now(), color, description, dayNote || null);
   return getSession(ctx, id);
 }
 // Change one session: coach_id (a sub for this day; null leaves it with nobody), name, date and start_time, duration_min,
@@ -498,7 +518,7 @@ export async function createSession(ctx, body) {
 // count: nothing changed is refused. A new time or place emails booked families (one email each) unless notify is false.
 // A class session moved to another day still stands for its class day, so the schedule job doesn't add that day again.
 // Runs under the session's booking lock, so a booking can't slip in between the spots check and the save.
-const SESSION_FIELD_WORDS = { name: 'name', starts_at: 'time', ends_at: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note', color: 'color', description: 'description' };
+const SESSION_FIELD_WORDS = { name: 'name', starts_at: 'time', ends_at: 'length', capacity: 'spots', location_id: 'place', coach_id: 'coach', staff_note: 'note', color: 'color', description: 'description', day_note: 'note for the day' };
 export function updateSession(ctx, id, body) { return withLock(`book:${id}`, () => updateSessionNow(ctx, id, body)); }
 async function updateSessionNow(ctx, id, body) {
   const s = getSession(ctx, id);
@@ -510,6 +530,8 @@ async function updateSessionNow(ctx, id, body) {
   if (body.staff_note !== undefined) { const n = v.str(body.staff_note, 'staff_note', { max: 500, optional: true }); if (n !== (s.staff_note ?? null)) next.staff_note = n; }
   // A one-off session's own colour and description; a class session takes its class's (edit the class for those).
   if (body.description !== undefined) { const n = v.str(body.description, 'description', { max: 2000, optional: true }); if (s.series_id) { if (n !== (s.description ?? null)) throw badRequest('This session is part of a class: edit the class to change its description.'); } else if (n !== (s.own_description ?? null)) next.description = n; }
+  // The day's own line, on any session (a class session's stands over the class's note for that weekday).
+  if (body.day_note !== undefined) { const n = v.str(body.day_note, 'day_note', { max: DAY_NOTE_MAX, optional: true }) || null; if (n !== (s.own_day_note ?? null)) next.day_note = n; }
   if (body.color !== undefined) { const c = colorInput(body.color); if (s.series_id) { if (c !== (s.color ?? null)) throw badRequest('This session is part of a class: edit the class to change its colour.'); } else if (c !== (s.own_color ?? null)) next.color = c; }
   if (body.date !== undefined || body.start_time !== undefined || body.duration_min !== undefined) {
     const date = body.date ?? localDate(s.starts_at, zone), time = body.start_time ?? localTime(s.starts_at, zone);
@@ -585,7 +607,7 @@ export function clashFor(ctx, clientId, sessionId) {
 }
 
 const SESSION_LIST_SQL = `SELECT s.*, l.name AS location_name, cs.registration_cents, cu.name AS coach_name,
-    COALESCE(cs.color, s.color) AS color, COALESCE(cs.description, s.description) AS description, s.color AS own_color, s.description AS own_description,
+    COALESCE(cs.color, s.color) AS color, COALESCE(cs.description, s.description) AS description, s.color AS own_color, s.description AS own_description, s.day_note AS own_day_note, cs.day_notes AS series_day_notes,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status IN ('booked','attended')) AS booked_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'waitlisted') AS waitlist_count,
     (SELECT COUNT(*) FROM bookings b WHERE b.session_id = s.id AND b.status = 'attended') AS attended_count,
@@ -598,9 +620,12 @@ export function listSessions(ctx, { from, to, kind, locationId, coachId, include
   if (kind) { where.push('s.kind = ?'); p.push(kind); }
   if (locationId) { where.push('s.location_id = ?'); p.push(locationId); }
   if (!includeCanceled) where.push(`s.status = 'scheduled'`);
-  return ctx.db.all(`${SESSION_LIST_SQL} WHERE ${where.join(' AND ')} ORDER BY s.starts_at`, ...p).map(shapeSession);
+  const zone = tz(ctx);
+  return ctx.db.all(`${SESSION_LIST_SQL} WHERE ${where.join(' AND ')} ORDER BY s.starts_at`, ...p).map((s) => shapeSession(s, zone));
 }
-const shapeSession = (s) => ({ ...s, spots_left: Math.max(0, s.capacity - s.booked_count), credit_type: creditTypeFor(s.kind) });
+// day_note: the session's own line, else the class's note for the weekday the session falls on (business time).
+const shapeSession = ({ series_day_notes, ...s }, zone) => ({ ...s, spots_left: Math.max(0, s.capacity - s.booked_count), credit_type: creditTypeFor(s.kind),
+  day_note: s.own_day_note ?? parseNotes(series_day_notes)[weekdayOf(localDate(s.starts_at, zone))] ?? null });
 
 export function getSession(ctx, id) {
   const s = ctx.db.get(`${SESSION_LIST_SQL} WHERE s.id = ?`, id);
@@ -614,7 +639,7 @@ export function getSession(ctx, id) {
   const waiver = Number(getSetting(ctx, 'waiver_version')), day = localDate(s.starts_at, tz(ctx));
   const out = roster.map(({ waiver_version, ...r }) => ({ ...r, age: ageOn(r.birth_date, s.starts_at), has_medical_notes: !!r.medical_notes,
     no_waiver: !!r.family_id && Number(waiver_version ?? 0) !== waiver, birthday: isBirthday(r.birth_date, day) }));
-  return { ...shapeSession(s), roster: out, team: teamRosterFor(ctx, s) };
+  return { ...shapeSession(s, tz(ctx)), roster: out, team: teamRosterFor(ctx, s) };
 }
 // A birthday on this day (YYYY-MM-DD). Someone born on February 29 celebrates on February 28 in other years.
 export function isBirthday(birthDate, day) {

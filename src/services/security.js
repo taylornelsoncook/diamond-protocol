@@ -16,6 +16,7 @@ const OWNER_ONLY = [
   /^\/v1\/exercises\/import(\/|$)/,   // the video library (version 48): bringing in a list of exercises
   /^\/v1\/legal(\/|$)/,   // the drafted legal wording (version 87): the owner fills the Settings boxes from it
   /^\/v1\/clients\/:id\/tags$/,   // profile tags (version 90): the owner adds or removes one by hand
+  /^\/v1\/coaches\/:id\/calendar-feed$/,   // a calendar link per coach, made by the owner
   /^\/v1\/clients\/:id\/visits\/carry-over$/, /^\/v1\/visit-carryovers(\/|$)/,   // carried-over membership sessions (version 88): the owner's agreement
   /^\/v1\/vbt\/(waiting|imports?)(\/|$)/   // bar speed (version 81, owner decision): connecting, importing and linking are the owner's; coaches read the data
 ];

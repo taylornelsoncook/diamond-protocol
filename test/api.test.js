@@ -84,7 +84,9 @@ test('new clients start on a trial with their program and app link', async () =>
 
 test('billing: trial converts, failed card goes past due, retry recovers', async () => {
   let run = (await call('POST', '/v1/billing/run', { as_of: days(8) })).body;
-  assert.equal(run.renewed, 1); assert.equal(run.paid, 1);
+  // Memberships renew on the 1st: a trial ending in the last days of a month pays the days to the 1st and then the full
+  // month, so a run eight days out may renew twice when the test runs late in a month. Every renewal is paid.
+  assert.ok(run.renewed >= 1 && run.renewed <= 2, `renewed ${run.renewed}`); assert.equal(run.paid, run.renewed);
   assert.equal((await call('GET', `/v1/clients/${client.id}`)).body.status, 'active');
 
   await call('PATCH', `/v1/clients/${client.id}`, { card_status: 'declining' });

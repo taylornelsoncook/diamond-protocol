@@ -86,15 +86,18 @@ test('the owner makes a link per coach and hands it over; coaches and front desk
   assert.equal((await coach('POST', `/v1/coaches/${me.id}/calendar-feed`)).status, 403);
   assert.equal((await desk('GET', `/v1/coaches/${riley.id}/calendar-feed`)).status, 403);
   assert.equal((await owner('POST', '/v1/coaches/usr_nobody/calendar-feed')).status, 404);
-  // Bookable hours in the feed: Riley's Monday 3 to 7 pm privates (four 60-minute slots) show as free time with the open count and the Book now link.
-  assert.equal((await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekdays: [1], start_time: '15:00', end_time: '19:00', slot_minutes: 60, price_cents: 8000, coach_id: riley.id })).status, 201);
+  // Bookable hours in the feed: Riley's 3 to 7 pm privates one weekday (four 60-minute slots) show as free time with the open
+  // count and the Book now link. The weekday is the one four days out, so it is never the Speed class's (two days out),
+  // which would block one of the slots, and never today's, whose earlier slots are already past.
+  const hoursDay = new Date(dayFromNow(4) + 'T12:00:00Z').getUTCDay();
+  assert.equal((await owner('POST', '/v1/availability', { kind: 'private', location_id: facility.id, weekdays: [hoursDay], start_time: '15:00', end_time: '19:00', slot_minutes: 60, price_cents: 8000, coach_id: riley.id })).status, 201);
   const withHours = (await req('GET', made.url.replace('https://app.example.org', ''))).text;
   assert.match(withHours, /SUMMARY:Open for privates: 4 of 4 slots open/);
   assert.match(withHours, /TRANSP:TRANSPARENT/);
   assert.match(withHours, /Book now page: https:\/\/app\.example\.org\/book/);
   assert.match(withHours, /60-minute privates with Riley Brooks/);
-  assert.equal((withHours.match(/Open for privates/g) || []).length, 13, 'one entry per Monday over the next 92 days');
-  // A family books one of the slots: that Monday says 3 of 4 open, and the booking itself is a session in the feed.
+  assert.equal((withHours.match(/Open for privates/g) || []).length, 13, 'one entry per week over the next 92 days (days 4, 11, … 88)');
+  // A family books one of the slots: that day says 3 of 4 open, and the booking itself is a session in the feed.
   const ava = (await owner('POST', '/v1/clients', { name: 'Ava Lopez', birth_date: '2012-04-03', parent: { name: 'Maria Lopez', email: 'maria@example.com' }, send_welcome: false })).body;
   const slots = (await owner('GET', '/v1/slots?kind=private&days=14')).body.data.filter((s) => s.coach_id === riley.id);
   assert.ok(slots.length >= 4);
@@ -107,8 +110,8 @@ test('the owner makes a link per coach and hands it over; coaches and front desk
   const ownerMade = (await owner('POST', '/v1/me/calendar-feed')).body;
   const all = (await req('GET', ownerMade.url.replace('https://app.example.org', ''))).text;
   assert.equal((all.match(/Open for privates/g) || []).length, 13);
-  const nextMonday = slots[0].starts_at.slice(0, 10);
-  assert.equal((await owner('POST', '/v1/time-off', { user_id: riley.id, start_date: nextMonday, end_date: nextMonday, note: 'Away' })).status, 201);
+  const firstDay = slots[0].starts_at.slice(0, 10);
+  assert.equal((await owner('POST', '/v1/time-off', { user_id: riley.id, start_date: firstDay, end_date: firstDay, note: 'Away' })).status, 201);
   assert.equal(((await req('GET', made.url.replace('https://app.example.org', ''))).text.match(/Open for privates/g) || []).length, 12);
   // Off, by the owner.
   assert.equal((await owner('DELETE', `/v1/coaches/${riley.id}/calendar-feed`)).body.on, false);

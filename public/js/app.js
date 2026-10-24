@@ -4543,6 +4543,28 @@ async function viewTesting(main) {
     panel('Testing days', { action: h('div', { class: 'row wrap tm-views' }, toggles) }, h('div', null, find), list));
 }
 
+// New athlete from a name (owner's ask: "add athletes right at that spot to create a profile: first name, last name,
+// birthday, email and phone, but all we need is first name and last name to start"). post() makes the profile (a day's
+// quick-athlete route, or /v1/athletes/quick while a day is set up); done(r) gets the answer.
+function newAthleteDialog({ post: send, done, dayWords = 'adds them to today' }) {
+  const fn = input({ 'aria-label': 'First name', autocomplete: 'off' }), ln = input({ 'aria-label': 'Last name', autocomplete: 'off' }), bd = input({ type: 'date', 'aria-label': 'Birthday', max: bizDate() });
+  const em = input({ type: 'email', 'aria-label': 'Email', autocomplete: 'off', placeholder: 'Optional' }), ph = input({ type: 'tel', 'aria-label': 'Phone', autocomplete: 'off', placeholder: 'Optional' });
+  const isParent = h('input', { type: 'checkbox' }), pn = input({ 'aria-label': 'Parent name', placeholder: 'Parent\'s name' });
+  const parentRow = h('div', { hidden: true }, field('Parent\'s name', pn));
+  isParent.addEventListener('change', () => { parentRow.hidden = !isParent.checked; if (isParent.checked) pn.focus(); });
+  teamDialog('New athlete', h('div', { class: 'stack' },
+    h('div', { class: 'form-grid' }, field('First name', fn), field('Last name', ln)),
+    h('div', { class: 'form-grid cols-3' }, field('Birthday', bd, 'Optional'), field('Email', em), field('Phone', ph)),
+    h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, isParent, 'The email and phone are a parent\'s'), parentRow,
+    h('p', { class: 'small muted', style: 'margin:0' }, `First and last name are all that's needed: the profile and Athlete ID are made at once and this ${dayWords}. Add an email now and the account is made on it and they're emailed to finish the profile (the waiver is the only thing they must do); leave it empty and add the email and phone on the client page later.`)),
+    [{ label: 'Add', variant: 'primary', onClick: async () => {
+      if (!fn.value.trim() || !ln.value.trim()) throw new Error('Type the first and last name.');
+      const r = await send({ first_name: fn.value.trim(), last_name: ln.value.trim(), birth_date: bd.value || null, email: em.value.trim() || null, phone: ph.value.trim() || null, parent_name: isParent.checked ? pn.value.trim() || null : null });
+      toast(`${r.client.name} added (${r.client.athlete_id}).${r.sent_to?.length ? ` Email sent to ${r.sent_to.join(', ')}.` : ''}`);
+      done(r);
+    } }, { label: 'Cancel' }]);
+  fn.focus();
+}
 async function viewNewTesting(main) {
   if (deskStop(main, 'New testing day')) return;
   const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
@@ -4564,11 +4586,19 @@ async function viewNewTesting(main) {
   const countA = () => { aCount.textContent = `${picked.size} picked`; };
   const shownA = () => athletes.filter((a) => a.row.style.display !== 'none');
   findA.addEventListener('input', () => { const q = findA.value.trim().toLowerCase(); athletes.forEach((a) => { a.row.style.display = !q || `${a.name} ${a.athlete_id}`.toLowerCase().includes(q) ? '' : 'none'; }); });
+  const pickList = h('div', { class: 'ts-picklist' }, athleteRows.length ? athleteRows : h('p', { class: 'muted small' }, 'No clients yet. Add one with New athlete, or pick a team.'));
+  // A brand-new athlete made right here (owner's ask): the profile is made from the name and the row lands ticked.
+  const addNew = () => newAthleteDialog({ post: (body) => post('/v1/athletes/quick', body), dayWords: 'ticks them for this day', done: (r) => {
+    const c = r.client, a = { ...c, cb: h('input', { type: 'checkbox', 'aria-label': c.name, checked: true, onChange: (e) => { e.target.checked ? picked.add(c.id) : picked.delete(c.id); countA(); } }) };
+    a.row = h('label', { class: 'row small ts-pick' }, a.cb, h('span', null, c.name), h('span', { class: 'muted', style: 'font-family:var(--font-mono);font-size:12px' }, c.athlete_id), h('span', { class: 'dp-badge dp-badge--good' }, 'New'));
+    athletes.unshift(a); if (!athleteRows.length) pickList.replaceChildren(); athleteRows.unshift(a.row); pickList.prepend(a.row); picked.add(c.id); countA();
+  } });
   const athleteBox = h('div', { class: 'stack' }, h('div', { class: 'dp-label' }, 'Athletes (walk-ups can be added on the day)'),
     h('div', { class: 'row wrap' }, h('div', { class: 'grow', style: 'min-width:220px' }, findA),
+      btn('New athlete', addNew, 'secondary'),
       btn('Tick all shown', () => { shownA().forEach((a) => { a.cb.checked = true; picked.add(a.id); }); countA(); }, 'secondary'),
       btn('Clear', () => { athletes.forEach((a) => { a.cb.checked = false; }); picked.clear(); countA(); }, 'ghost'), aCount),
-    h('div', { class: 'ts-picklist' }, athleteRows.length ? athleteRows : h('p', { class: 'muted small' }, 'No clients yet. Add clients first, or pick a team.')));
+    pickList);
   countA();
 
   // Tests: find, presets, and the running order with remove buttons.
@@ -4704,21 +4734,7 @@ async function viewTestingDay(main, id) {
   walkUp.addEventListener('change', () => busy(walkUp, async () => { if (!walkUp.value) return; await post(`/v1/testing-sessions/${id}/athletes`, { client_id: walkUp.value }); toast('Added.'); redraw(); }));
   // A brand-new athlete at the door: name, email and phone make the profile and the account, and an email asks them to
   // finish the profile (the waiver is the only thing required). Owners, coaches and front desk.
-  const newAthlete = btn('New athlete', () => {
-    const fn = input({ 'aria-label': 'First name', autocomplete: 'off' }), ln = input({ 'aria-label': 'Last name', autocomplete: 'off' }), em = input({ type: 'email', 'aria-label': 'Email', autocomplete: 'off' }), ph = input({ type: 'tel', 'aria-label': 'Phone', autocomplete: 'off' });
-    const isParent = h('input', { type: 'checkbox' }), pn = input({ 'aria-label': 'Parent name', placeholder: 'Parent\'s name' });
-    const parentRow = h('div', { hidden: true }, field('Parent\'s name', pn));
-    isParent.addEventListener('change', () => { parentRow.hidden = !isParent.checked; if (isParent.checked) pn.focus(); });
-    teamDialog('New athlete', h('div', { class: 'stack' },
-      h('div', { class: 'form-grid' }, field('First name', fn), field('Last name', ln), field('Email', em), field('Phone', ph)),
-      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, isParent, 'The email and phone are a parent\'s'), parentRow,
-      h('p', { class: 'small muted', style: 'margin:0' }, 'This makes the profile and the account on that email, adds them to today, and emails them to finish the profile. The waiver is the only thing they must do; birthday, sport and the rest can wait.')),
-      [{ label: 'Add and email', variant: 'primary', onClick: async () => {
-        const r = await post(`/v1/testing-sessions/${id}/quick-athlete`, { first_name: fn.value, last_name: ln.value, email: em.value, phone: ph.value || null, parent_name: isParent.checked ? pn.value : null });
-        toast(`${r.client.name} added (${r.client.athlete_id}). Email sent to ${r.sent_to.join(', ')}.`); redraw();
-      } }, { label: 'Cancel' }]);
-    fn.focus();
-  }, 'secondary');
+  const newAthlete = btn('New athlete', () => newAthleteDialog({ post: (body) => post(`/v1/testing-sessions/${id}/quick-athlete`, body), done: redraw, dayWords: 'adds them to today' }), 'secondary');
   const headerActions = h('div', { class: 'row wrap' },
     manage ? (day.shared_at ? btn('Shared with parents ✓', (e) => { if (confirm('Hide these results from families again?')) busy(e.currentTarget, async () => { await del(`/v1/testing-sessions/${id}/share`); toast('Hidden from families.'); redraw(); }); }, 'outline')
       : btn('Share with parents', (e) => busy(e.currentTarget, share), day.tests.some((t) => t.timed) ? 'secondary' : 'primary')) : null,

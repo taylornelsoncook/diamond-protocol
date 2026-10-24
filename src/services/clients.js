@@ -331,11 +331,12 @@ function checkDuplicates(ctx, { name, email, phone, birthDate, parent, familyId,
 // front desk can't assign a program (that's for coaches).
 // inTx(clientId, familyId) runs inside the same transaction as the new client (converting a lead links the lead there, so
 // a failure leaves neither a client nor a half-converted lead).
-export async function createClient(ctx, body, { staff, inTx } = {}) {
+export async function createClient(ctx, body, { staff, inTx, emailOptional = false } = {}) {
   const name = v.str(body.name, 'name', { max: 120 });
   const hasParent = !!(body.family_id || body.parent);
-  // Athletes with a parent account don't need their own email; adults paying for themselves do.
-  const email = hasParent ? (body.email ? v.email(body.email) : null) : v.email(body.email);
+  // Athletes with a parent account don't need their own email; adults paying for themselves do (a quick add at a testing
+  // day, emailOptional, starts with a name alone: the email and phone come later).
+  const email = hasParent || emailOptional ? (body.email ? v.email(body.email) : null) : v.email(body.email);
   const phone = v.str(body.phone, 'phone', { max: 40, optional: true });
   const notes = v.str(body.notes, 'notes', { max: 2000, optional: true });
   const training = body.training_type === undefined ? null : trainingType(body.training_type);
@@ -373,13 +374,18 @@ export async function createClient(ctx, body, { staff, inTx } = {}) {
 // except the waiver"): one family account on that email. With parent_name the email and phone are a parent's;
 // without, the athlete is their own account holder (an adult, or an athlete who manages their own sign-in). The
 // welcome email is the finish-your-profile one (notify.finishProfile), sent by the caller, not the usual welcome.
+// Only the names are needed (owner: "all we need is first name and last name to start; I can add email and phone
+// later"): without an email the profile stands on its own, no family and no email sent, and the phone and birthday
+// land on the profile; with one, the family account is made on it as before.
 export async function quickAdd(ctx, body = {}, { staff } = {}) {
   const firstName = v.str(body.first_name, 'first name', { max: 60 }), lastName = v.str(body.last_name, 'last name', { max: 60 });
-  const email = v.email(body.email);
+  const email = body.email === undefined || body.email === null || String(body.email).trim() === '' ? null : v.email(body.email);
   const phone = v.str(body.phone, 'phone', { max: 40, optional: true });
   const parentName = v.str(body.parent_name, 'parent name', { max: 120, optional: true });
+  const birthDate = body.birth_date === undefined || body.birth_date === null || body.birth_date === '' ? undefined : body.birth_date;
   const name = `${firstName} ${lastName}`;
-  return createClient(ctx, { name, parent: { name: parentName ?? name, email, phone, relationship: parentName ? null : 'self' }, send_welcome: false, check_duplicates: false }, { staff });
+  if (!email) return createClient(ctx, { name, phone, birth_date: birthDate, send_welcome: false, check_duplicates: false }, { staff, emailOptional: true });
+  return createClient(ctx, { name, birth_date: birthDate, parent: { name: parentName ?? name, email, phone, relationship: parentName ? null : 'self' }, send_welcome: false, check_duplicates: false }, { staff });
 }
 
 export function updateClient(ctx, id, body) {

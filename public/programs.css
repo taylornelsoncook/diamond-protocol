@@ -169,3 +169,9 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 .cal-wo{display:flex;flex-direction:column;gap:3px;padding:6px 0;border-top:1px solid var(--line-subtle)}
 @media (max-width: 900px){.cal-cell{min-height:48px}.cal-card{display:none}.cal-cell--has .cal-n::after{content:' •';color:var(--green-bright)}}
 .pg-days--dragging .pg-dropzone{display:block}   /* the end-of-day drop target shows only while a line is dragged */
+/* Ticks on exercise lines and the bar for the ticked ones (make a complex, group as a block, remove); × removes one line. */
+.pg-line-tick{width:14px;height:14px;margin:3px 0 0;flex-shrink:0;accent-color:var(--green-bright)}
+.pg-line-x{min-height:22px;min-width:22px;padding:0 4px;font-size:14px;line-height:1;flex-shrink:0;color:var(--steel-muted);opacity:0}
+.pg-line:hover .pg-line-x,.pg-line:focus-within .pg-line-x{opacity:1}
+.pg-pickbar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 8px;border:1px solid var(--green-mid);border-radius:var(--radius-sm);background:var(--surface-raised);margin-top:4px}
+.pg-pickbar .dp-btn{min-height:26px;padding:2px 8px;font-size:12px}

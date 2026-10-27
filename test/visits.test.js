@@ -141,7 +141,7 @@ test('the version 85 upgrade adds the column and leaves existing plans unlimited
   raw.exec('PRAGMA user_version = 85');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 94);
+  assert.equal(db.get('PRAGMA user_version').user_version, 95);
   assert.equal(db.get("SELECT sessions_per_month FROM plans WHERE id = 'plan_old'").sessions_per_month, null);
   db.close();
 });

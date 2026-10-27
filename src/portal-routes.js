@@ -2,6 +2,7 @@
 import * as families from './services/families.js';
 import * as schedule from './services/schedule.js';
 import * as commerce from './services/commerce.js';
+import { balanceOf } from './services/funds.js';
 import * as billing from './services/billing.js';
 import * as clients from './services/clients.js';
 import { v, notFound, conflict, badRequest, HttpError, newId, ageOn, zonedToUtc, localDate, addDaysToDate } from './util.js';
@@ -49,7 +50,7 @@ function athleteSummary(ctx, id, guardianId) {
     emergency_name: c.emergency_name, emergency_phone: c.emergency_phone,
     membership: extras.membership, membership_request: extras.request, membership_answer: extras.last_answer,
     attended_30: extras.attended_30, next_testing_day: extras.next_testing_day,
-    credits: c.credits, program: c.program, app_link: c.app_link, engagement: { ...engage.badges(ctx, id, { guardianId }), overdue: extras.overdue_lessons },
+    credits: c.credits, prepaid_cents: balanceOf(ctx, id), program: c.program, app_link: c.app_link, engagement: { ...engage.badges(ctx, id, { guardianId }), overdue: extras.overdue_lessons },
     upcoming: portal.athleteBookings(ctx, id, { limit: 30 }),
     enrollments: ctx.db.all(`SELECT e.series_id, e.kind, s.name FROM enrollments e JOIN class_series s ON s.id = e.series_id WHERE e.client_id = ? AND e.status = 'active'`, id)
   };
@@ -252,8 +253,9 @@ export const portalRoutes = [
     const fam = ctx.db.get('SELECT card_payment_method, card_funding FROM families WHERE id = ?', r.guardian.family_id);
     const funding = fam?.card_payment_method ? fam.card_funding : null;
     const withFee = (p, place) => { const fee = cardFee(ctx, p.price_cents, place, { funding }).cents; return { ...p, fee_cents: fee, total_cents: p.price_cents + fee }; };
+    const prepaid = balanceOf(ctx, ctx.db.get('SELECT id FROM clients WHERE family_id = ? ORDER BY created_at LIMIT 1', r.guardian.family_id)?.id ?? '') || 0;   // the family's prepaid balance (version 95)
     return {
-      fee_label: feeSettings(ctx).label,
+      fee_label: feeSettings(ctx).label, prepaid_cents: prepaid,
       products: products.map((p) => {
         if (p.kind !== 'pack' || !p.sessions) return withFee(p, 'store');
         const each = Math.round(p.price_cents / p.sessions), one = single(p.credit_type);
@@ -267,7 +269,9 @@ export const portalRoutes = [
     const c = athleteOf(ctx, r, r.body.athlete_id);
     const p = commerce.getProduct(ctx, v.str(r.body.product_id, 'product_id'));
     if (!['session', 'pack'].includes(p.kind) || !p.active) throw badRequest('That item isn\'t sold online.');
-    const sale = await commerce.createSale(ctx, { location_id: commerce.onlineLocation(ctx), method: 'card_on_file', client_id: c.id, items: [{ product_id: p.id, quantity: 1 }] }, r.guardian.id, { online: true });
+    // The prepaid balance pays first when it covers the pack (version 95); otherwise the family card, with the card fee as before.
+    const method = balanceOf(ctx, c.id) >= p.price_cents ? 'balance' : 'card_on_file';
+    const sale = await commerce.createSale(ctx, { location_id: commerce.onlineLocation(ctx), method, client_id: c.id, items: [{ product_id: p.id, quantity: 1 }] }, r.guardian.id, { online: true });
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}. Nothing was charged.`);
     return { sale, athlete: athleteSummary(ctx, c.id, r.guardian.id) };
   }],

@@ -563,8 +563,9 @@ export async function runBilling(ctx, asOf = ctx.now()) {
 // made in the window, and school invoices paid (paid_on is a date).
 export function moneyIn(ctx, from, to) {
   const db = ctx.db;
-  const sales = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded','refunded') AND completed_at >= ? AND completed_at < ?`, from, to);
-  const saleRefunds = db.get('SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM sale_refunds WHERE created_at >= ? AND created_at < ?', from, to);
+  // A sale paid from the prepaid balance (version 95) isn't money in: the deposit it came from was, when it was taken.
+  const sales = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM sales WHERE status IN ('succeeded','partially_refunded','refunded') AND method != 'balance' AND completed_at >= ? AND completed_at < ?`, from, to);
+  const saleRefunds = db.get(`SELECT COALESCE(SUM(r.amount_cents), 0) AS c, COUNT(*) AS n FROM sale_refunds r JOIN sales s ON s.id = r.sale_id WHERE s.method != 'balance' AND r.created_at >= ? AND r.created_at < ?`, from, to);
   const members = db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM invoices WHERE status = 'paid' AND amount_cents > 0 AND paid_at >= ? AND paid_at < ?`, from, to);
   const memberRefunds = db.get('SELECT COALESCE(SUM(amount_cents), 0) AS c, COUNT(*) AS n FROM invoice_refunds WHERE created_at >= ? AND created_at < ?', from, to);
   // A school invoice's paid_on is a business-local date: it counts when that day's midnight falls in the window, so one

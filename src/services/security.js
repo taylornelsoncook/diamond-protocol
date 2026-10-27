@@ -18,6 +18,7 @@ const OWNER_ONLY = [
   /^\/v1\/clients\/:id\/tags$/,   // profile tags (version 90): the owner adds or removes one by hand
   /^\/v1\/coaches\/:id\/calendar-feed$/,   // a calendar link per coach, made by the owner
   /^\/v1\/clients\/:id\/visits\/carry-over$/, /^\/v1\/visit-carryovers(\/|$)/,   // carried-over membership sessions (version 88): the owner's agreement
+  /^\/v1\/clients\/:id\/prepaid\/adjust$/,   // the prepaid balance (version 95): only the owner changes it by hand
   /^\/v1\/vbt\/(waiting|imports?)(\/|$)/   // bar speed (version 81, owner decision): connecting, importing and linking are the owner's; coaches read the data
 ];
 // The owner changes these; others may read them (message templates for one-to-one emails and texts).
@@ -92,7 +93,7 @@ export function hideMoney(role, method, path, out) {
   return withoutCents(out);
 }
 // Activity that is only about money (memberships, refunds, school contracts) stays with the owner.
-export const OWNER_EVENTS = /^(invoice|subscription|team_invoice|team_contract|sale\.refunded)/;
+export const OWNER_EVENTS = /^(invoice|subscription|team_invoice|team_contract|sale\.refunded|prepaid\.)/;
 // Leads in the activity feed name families who asked about training: coaches see only the leads given to them, so none here.
 export const LEAD_EVENTS = /^leads?\./;
 export const roleName = (r) => ({ owner: 'Owner', coach: 'Coach', front_desk: 'Front desk' }[r] ?? r);

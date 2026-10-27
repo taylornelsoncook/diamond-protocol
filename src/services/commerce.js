@@ -8,6 +8,7 @@ import { notifyFamily } from './mail.js';
 import { retryWithNewCard, reconcileInvoicePayment, syncInvoiceRefundFromStripe } from './billing.js';
 import { stockFields, stockSettings, pickVariant, stockForSale, activeVariants } from './inventory.js';
 import { cardFee, feeSettings, CARD_METHODS, cardFunding, ensureFunding, feeFree, FUNDINGS } from './fees.js';
+import { balanceOf, addFunds, takenBackFor, MAX_DEPOSIT } from './funds.js';
 import { membershipCovers, visitsFor } from './visits.js';
 
 const KINDS = ['facility', 'mobile', 'park', 'client_home', 'other'];
@@ -313,8 +314,9 @@ export function listCheckIns(ctx, { clientId, limit = 50 } = {}) {
 }
 
 // ---------- Sales ----------
-const METHODS = ['tap_to_pay', 'reader', 'card_on_file', 'cash'];
-export const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Online' };
+const METHODS = ['tap_to_pay', 'reader', 'card_on_file', 'cash', 'balance'];   // balance: the prepaid balance (version 95)
+export const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Online', balance: 'Prepaid balance' };
+const NO_MONEY_MOVES = ['cash', 'balance'];   // nothing to ask the card processor for: cash is handed over, the balance is a ledger
 export const UNDO_MINUTES = 10;            // the person who rang up a sale can undo it this long after it was paid
 const money = (c) => `${c < 0 ? '-' : ''}$${(Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: Math.abs(c) % 100 ? 2 : 0 })}`;
 
@@ -454,8 +456,19 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
     lines.push({ product_id: p.id, variant_id: size?.id ?? null, name: size ? `${p.name} (${size.name})` : p.name, unit: p.price_cents, qty: v.int(it.quantity ?? 1, 'quantity', { min: 1, max: 99 }), sessions: p.sessions });
   }
   if (body.custom) lines.push({ product_id: null, name: v.str(body.custom.description, 'custom.description', { max: 80 }), unit: v.int(body.custom.amount_cents, 'custom.amount_cents', { min: 1, max: 10000000 }), qty: 1, sessions: 0 });
+  // A deposit onto the prepaid balance (version 95) is a sale of its own: one line, paid any way but from the balance,
+  // never discounted, credited to the family's (or the athlete's) balance when the sale is paid (completeSale).
+  const deposit = body.deposit_cents != null && body.deposit_cents !== '' ? v.int(body.deposit_cents, 'deposit_cents', { min: 1, max: MAX_DEPOSIT }) : 0;
+  if (deposit) {
+    if (!client) throw badRequest('Choose the client whose account the funds go on.');
+    if (lines.length) throw badRequest('Add funds as a sale of its own: take the other items off, or add the funds after.');
+    if (method === 'balance') throw badRequest('Funds can\'t be added from the balance they go on to. Choose how the deposit is paid.');
+    if (body.discount && (body.discount.value > 0)) throw badRequest('A deposit can\'t be discounted: the whole amount goes on the account.');
+    lines.push({ product_id: null, name: 'Prepaid balance (added to the account)', unit: deposit, qty: 1, sessions: 0 });
+  }
   if (!lines.length) throw badRequest('Add at least one item to the sale.');
   if (!client && lines.some((l) => l.sessions > 0)) throw badRequest('Choose a client. Sessions and packs are added to their account.');
+  if (method === 'balance' && !client) throw badRequest('Choose the client whose prepaid balance pays for this.');
   const subtotal = lines.reduce((t, l) => t + l.unit * l.qty, 0);
   if (subtotal <= 0) throw badRequest('The sale total must be more than $0.');
   const discount = parseDiscount(ctx, body.discount, subtotal, role);
@@ -477,6 +490,12 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
   const funding = method === 'card_on_file' && payer ? await ensureFunding(ctx, payer) : null;
   const fee = feeOn && CARD_METHODS.includes(method) ? cardFee(ctx, price, online ? 'store' : 'counter', { funding }) : { cents: 0 };
   const amount = price + fee.cents;
+  // Paid from the prepaid balance: it has to cover the price (no card fee: no card is charged). The ledger line is written with
+  // the sale, in one transaction, so two sales at once can't both take the last of it.
+  if (method === 'balance') {
+    const bal = balanceOf(ctx, client.id);
+    if (bal < price) throw new HttpError(402, 'insufficient_balance', `${client.name.split(' ')[0]}'s prepaid balance is ${money(bal)} and this sale is ${money(price)}. Add funds first, or pay another way.`);
+  }
   if (method === 'card_on_file' && !payer?.card_payment_method) throw conflict(client ? `${client.name.split(' ')[0]} has no card on file${payer.table === 'families' ? ' for the family' : ''}.` : 'Choose a client with a card on file.');
   if (method === 'card_on_file' && staleCard(ctx, payer)) throw conflict(staleCardText(payer));
   // Receipt: email_receipt true sends one (to receipt_email, or the family's billing email), false sends none,
@@ -487,16 +506,17 @@ async function createSaleNow(ctx, body, actor, { online = false, counter = false
 
   const id = newId('sale');
   ctx.db.tx(() => {
-    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token, booking_id, fee_cents)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ctx.db.run(`INSERT INTO sales (id, client_id, location_id, method, status, amount_cents, save_card, reader_id, note, created_by, created_at, discount_cents, discount_reason, request_id, receipt_opt, receipt_email, receipt_token, booking_id, fee_cents, deposit_cents)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id, client?.id, loc.id, method, amount, wantsSave, reader?.id, v.str(body.note, 'note', { max: 200, optional: true }), actor ?? null, ctx.now(),
-      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18), booking?.id ?? null, fee.cents);
+      discount.cents, discount.reason, requestId, receiptOpt, receiptEmail, token(18), booking?.id ?? null, fee.cents, deposit);
     for (const l of lines) ctx.db.run('INSERT INTO sale_items (id, sale_id, product_id, variant_id, name, unit_price_cents, quantity, sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', newId('si'), id, l.product_id, l.variant_id ?? null, l.name, l.unit, l.qty, l.sessions);
+    if (method === 'balance') addFunds(ctx, client.id, -price, { kind: 'sale', saleId: id, note: lines.map((l) => l.name).join(', ').slice(0, 200), createdBy: actor ?? null });
   });
   const description = `${lines.map((l) => l.name).join(', ')}${discount.cents ? ` less ${money(discount.cents)} discount` : ''}${fee.cents ? ` plus ${money(fee.cents)} ${fee.label.toLowerCase()}` : ''}`.slice(0, 200);
   const metadata = { sale_id: id, location: loc.name, ...(client ? { client_id: client.id } : {}) };
 
-  if (method === 'cash') {
+  if (NO_MONEY_MOVES.includes(method)) {
     completeSale(ctx, id, {});
   } else if (method === 'card_on_file') {
     let r;
@@ -572,6 +592,7 @@ function completeSale(ctx, id, { card, savedCard }) {
       ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, sale_id, created_at) VALUES (?, ?, ?, ?, 'purchase', ?, ?)`, newId('cr'), s.client_id, type, byType[type], id, ctx.now());
     }
     if (s.client_id && s.save_card && savedCard) saveCard(ctx, payerFor(ctx, s.client_id), { paymentMethod: savedCard, brand: card?.brand, last4: card?.last4, funding: card?.funding });
+    if (s.client_id && s.deposit_cents > 0) addFunds(ctx, s.client_id, s.deposit_cents, { kind: 'deposit', saleId: id, note: `Paid by ${METHOD_LABEL[s.method] ?? s.method}`, createdBy: s.created_by });   // the prepaid balance (version 95)
     if (s.booking_id) settleBooking(ctx, s.booking_id, id);
     stockForSale(ctx, id, -1, 'sale');
     emit(ctx, 'sale.completed', {
@@ -590,7 +611,7 @@ export async function removeDebitFee(ctx, id, funding) {
   if (!feeFree(funding)) return false;
   return withLock(`sale:${id}`, async () => {
     const s = ctx.db.get('SELECT * FROM sales WHERE id = ?', id);
-    if (!s || s.status !== 'succeeded' || !s.fee_cents || s.refunded_cents || s.method === 'cash') return false;
+    if (!s || s.status !== 'succeeded' || !s.fee_cents || s.refunded_cents || NO_MONEY_MOVES.includes(s.method)) return false;
     if (ctx.db.get('SELECT id FROM sale_refunds WHERE sale_id = ? AND fee = 1', id)) return false;
     const r = await ctx.payments.refund({ paymentRef: s.payment_ref, amountCents: s.fee_cents, idempotencyKey: `fee-refund-${id}` });
     if (!r.ok) { console.error('debit fee', id, r.error); return false; }
@@ -668,7 +689,14 @@ async function refundNow(ctx, id, body, { actor, kind = 'refund' } = {}) {
   const remaining = s.amount_cents - s.refunded_cents;
   const amount = body.amount_cents !== undefined ? v.int(body.amount_cents, 'amount_cents', { min: 1, max: remaining }) : remaining;
   const reason = v.str(body.reason, 'reason', { max: 120, optional: true });
-  if (s.method !== 'cash') {
+  // Refunding a deposit (version 95) takes it back off the prepaid balance, so what was spent from it can't come back too:
+  // the balance has to still hold that much (the card fee, if the deposit carried one, isn't on the balance).
+  const offBalance = s.deposit_cents > 0 && s.client_id ? Math.min(amount, Math.max(0, s.deposit_cents - takenBackFor(ctx, id))) : 0;
+  if (offBalance > 0) {
+    const bal = balanceOf(ctx, s.client_id);
+    if (bal < offBalance) throw conflict(`Only ${money(Math.max(bal, 0))} of this deposit is still on the account; the rest has been spent. Refund up to ${money(Math.max(bal, 0) + (amount - offBalance))}.`);
+  }
+  if (!NO_MONEY_MOVES.includes(s.method)) {
     const r = await ctx.payments.refund({ paymentRef: s.payment_ref, amountCents: amount, idempotencyKey: `refund-${id}-${s.refunded_cents + amount}` });
     if (!r.ok) throw new HttpError(502, 'refund_failed', `The refund didn't go through: ${r.error}`);
   }
@@ -677,6 +705,9 @@ async function refundNow(ctx, id, body, { actor, kind = 'refund' } = {}) {
   ctx.db.tx(() => {
     ctx.db.run('UPDATE sales SET refunded_cents = ?, status = ? WHERE id = ?', total, full ? 'refunded' : 'partially_refunded', id);
     ctx.db.run('INSERT INTO sale_refunds (id, sale_id, amount_cents, kind, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', newId('ref'), id, amount, kind, reason, actor ?? null, ctx.now());
+    // The prepaid balance (version 95): a sale paid from it goes back on it; a refunded deposit comes off it.
+    if (s.method === 'balance' && s.client_id) addFunds(ctx, s.client_id, amount, { kind: 'refund', saleId: id, note: kind === 'undo' ? 'Sale undone' : reason || 'Refund', createdBy: actor ?? null });
+    if (offBalance > 0) addFunds(ctx, s.client_id, -offBalance, { kind: 'refund', saleId: id, note: kind === 'undo' ? 'Deposit undone' : `Deposit refunded${reason ? `: ${reason}` : ''}`, createdBy: actor ?? null });
     // An undone sale never happened: a session or camp it paid for at the counter is unpaid again.
     if (kind === 'undo') {
       // A camp registration charged when it was made: its days carry the enrollment, not the sale.
@@ -760,18 +791,27 @@ export function takings(ctx, { date, locationId } = {}) {
   }
   const from = startOfLocalDay(zonedToUtc(day, '12:00', zone), zone), to = startOfLocalDay(zonedToUtc(addDaysToDate(day, 1), '12:00', zone), zone);
   const at = loc ? 'AND s.location_id = ?' : '', p = loc ? [loc.id] : [];
-  const sales = ctx.db.all(`SELECT s.method, s.amount_cents, s.discount_cents, s.fee_cents FROM sales s WHERE s.status IN ('succeeded','partially_refunded','refunded') AND s.completed_at >= ? AND s.completed_at < ? ${at}`, from, to, ...p);
+  // Sales paid from the prepaid balance aren't money taken (the deposit was); they're reported beside as prepaid_used_cents.
+  const sales = ctx.db.all(`SELECT s.method, s.amount_cents, s.discount_cents, s.fee_cents, s.deposit_cents FROM sales s WHERE s.status IN ('succeeded','partially_refunded','refunded') AND s.completed_at >= ? AND s.completed_at < ? ${at}`, from, to, ...p);
   const refunds = ctx.db.all(`SELECT s.method, r.amount_cents FROM sale_refunds r JOIN sales s ON s.id = r.sale_id WHERE r.created_at >= ? AND r.created_at < ? ${at}`, from, to, ...p);
   const by = Object.fromEntries(Object.keys(METHOD_LABEL).map((m) => [m, { method: m, label: METHOD_LABEL[m], sales: 0, taken_cents: 0, refunds: 0, refunded_cents: 0, net_cents: 0 }]));
-  const out = { date: day, timezone: zone, from, to, location_id: loc?.id ?? null, location_name: loc?.name ?? null, sales: 0, taken_cents: 0, discount_cents: 0, discounted_sales: 0, fee_cents: 0, refunds: 0, refunded_cents: 0, net_cents: 0 };
-  for (const s of sales) { const m = by[s.method]; m.sales++; m.taken_cents += s.amount_cents; out.sales++; out.taken_cents += s.amount_cents; out.discount_cents += s.discount_cents; if (s.discount_cents) out.discounted_sales++; out.fee_cents += s.fee_cents ?? 0; }
-  for (const r of refunds) { const m = by[r.method]; m.refunds++; m.refunded_cents += r.amount_cents; out.refunds++; out.refunded_cents += r.amount_cents; }
+  const out = { date: day, timezone: zone, from, to, location_id: loc?.id ?? null, location_name: loc?.name ?? null, sales: 0, taken_cents: 0, discount_cents: 0, discounted_sales: 0, fee_cents: 0, refunds: 0, refunded_cents: 0, net_cents: 0, deposits_cents: 0, prepaid_used_cents: 0 };
+  for (const s of sales) {
+    const m = by[s.method]; m.sales++; m.taken_cents += s.amount_cents;
+    if (s.method === 'balance') { out.prepaid_used_cents += s.amount_cents; continue; }
+    out.sales++; out.taken_cents += s.amount_cents; out.discount_cents += s.discount_cents; if (s.discount_cents) out.discounted_sales++; out.fee_cents += s.fee_cents ?? 0; out.deposits_cents += s.deposit_cents ?? 0;
+  }
+  for (const r of refunds) {
+    const m = by[r.method]; m.refunds++; m.refunded_cents += r.amount_cents;
+    if (r.method === 'balance') { out.prepaid_used_cents -= r.amount_cents; continue; }
+    out.refunds++; out.refunded_cents += r.amount_cents;
+  }
   for (const m of Object.values(by)) m.net_cents = m.taken_cents - m.refunded_cents;
   out.net_cents = out.taken_cents - out.refunded_cents;
   out.cash_cents = by.cash.net_cents;
   out.card_cents = by.tap_to_pay.net_cents + by.reader.net_cents + by.card_on_file.net_cents;
   out.online_cents = by.online.net_cents;
-  out.by_method = Object.values(by).filter((m) => m.sales || m.refunds || m.method !== 'online');
+  out.by_method = Object.values(by).filter((m) => m.sales || m.refunds || !['online', 'balance'].includes(m.method));
   return out;
 }
 

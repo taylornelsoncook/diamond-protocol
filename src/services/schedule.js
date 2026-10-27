@@ -6,6 +6,7 @@ import { getSetting, payerFor } from './families.js';
 import { notifyFamily, sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
 import * as commerce from './commerce.js';
+import { balanceOf } from './funds.js';
 import { teamRosterFor } from './teams.js';
 
 const SERIES_KINDS = ['group', 'camp', 'clinic', 'team', 'evaluation'];
@@ -708,6 +709,12 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPrice
     ctx.db.run(`INSERT INTO session_credits (id, client_id, credit_type, delta, reason, note, created_at) VALUES (?, ?, ?, -1, 'booking', ?, ?)`, newId('cr'), client.id, type, `${session.name} ${localDate(session.starts_at, tz(ctx))}`, ctx.now());
     return { coverage: 'credit', credit_type: type };
   }
+  // The prepaid balance (version 95, owner's ask: charged per session and it comes out of the lump sum): after the membership
+  // and a pack session, before the card, whenever it covers the drop-in. A cancellation refunds the sale, so it goes back on.
+  if (session.drop_in_cents && balanceOf(ctx, client.id) >= session.drop_in_cents) {
+    const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'balance', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))}`, amount_cents: session.drop_in_cents } }, actor, { fee: false });
+    return { coverage: 'paid', sale_id: sale.id };
+  }
   if (pay === 'card_on_file' && session.drop_in_cents) {
     const sale = await commerce.createSale(ctx, { location_id: session.location_id, method: 'card_on_file', client_id: client.id, custom: { description: `${session.name} ${localDate(session.starts_at, tz(ctx))}`, amount_cents: session.drop_in_cents } }, actor, { fee: false });
     if (sale.status !== 'succeeded') throw new HttpError(402, 'payment_failed', `The card was declined: ${sale.failure_reason}`);
@@ -717,7 +724,8 @@ async function cover(ctx, session, client, { pay, allowUnpaid, actor, offerPrice
   const options = [
     type === 'group' ? 'a membership' : null,
     type ? `a ${type} session pack` : null,
-    session.drop_in_cents ? `paying ${commerceMoney(session.drop_in_cents)} with the card on file` : null
+    session.drop_in_cents ? `paying ${commerceMoney(session.drop_in_cents)} with the card on file` : null,
+    session.drop_in_cents ? 'funds added to the prepaid balance' : null
   ].filter(Boolean);
   if (member?.member && !member.covers) throw new HttpError(402, 'payment_required', `${first(client.name)} ${member.reason} (${member.visits.used} of ${member.visits.limit} used; the count starts again on ${localDate(member.visits.period_end, tz(ctx))}). Book this one with ${options.filter((o) => o !== 'a membership').join(', or ') || 'help from your coach'}.`);
   throw new HttpError(402, 'payment_required', `${first(client.name)} has no ${type ?? ''} sessions left for this. Book with ${options.join(', or ') || 'help from your coach'}.`.replace('  ', ' '));

@@ -507,7 +507,7 @@ CREATE TABLE IF NOT EXISTS sales (
   fee_cents INTEGER NOT NULL DEFAULT 0,             -- version 51: a card processing fee passed to the payer, inside amount_cents
   client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,
   location_id TEXT NOT NULL REFERENCES locations(id),
-  method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash','online')),   -- online: paid through a pay link (version 15)
+  method TEXT NOT NULL CHECK (method IN ('tap_to_pay','reader','card_on_file','cash','online','balance')),   -- online: paid through a pay link (version 15); balance: paid from the prepaid balance (version 95)
   status TEXT NOT NULL CHECK (status IN ('pending','succeeded','failed','canceled','refunded','partially_refunded')),
   amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
   refunded_cents INTEGER NOT NULL DEFAULT 0,
@@ -533,9 +533,28 @@ CREATE TABLE IF NOT EXISTS sales (
   receipt_token TEXT,
   -- version 38 (batch B6): the unpaid booking this sale pays for, checked when the sale is made (before, a note
   -- 'booking:<id>' did this, so anyone could mark any booking paid by typing it in a note).
-  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL
+  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+  -- version 95: a deposit onto the prepaid balance (the sale's one line; credited to account_funds when the sale is paid)
+  deposit_cents INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS sales_created ON sales(created_at);
+
+-- Version 95: the prepaid balance (owner's ask: a parent pays a lump sum and sessions and packs come out of it). A ledger
+-- per payer (the family, so siblings share it; the athlete when there is no family): a deposit adds, a sale paid with
+-- method 'balance' takes, a refund of such a sale puts it back, the owner adjusts by hand. The balance is the sum.
+CREATE TABLE IF NOT EXISTS account_funds (
+  id TEXT PRIMARY KEY,
+  payer_kind TEXT NOT NULL CHECK (payer_kind IN ('families','clients')),
+  payer_id TEXT NOT NULL,
+  client_id TEXT REFERENCES clients(id) ON DELETE SET NULL,   -- the athlete it was done for
+  delta_cents INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('deposit','sale','refund','adjust')),
+  sale_id TEXT REFERENCES sales(id) ON DELETE SET NULL,
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS account_funds_payer ON account_funds(payer_kind, payer_id, created_at);
 CREATE INDEX IF NOT EXISTS sales_ref ON sales(payment_ref);
 CREATE INDEX IF NOT EXISTS sales_completed ON sales(completed_at);
 CREATE INDEX IF NOT EXISTS sales_request ON sales(request_id);

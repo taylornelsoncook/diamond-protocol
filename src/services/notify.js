@@ -1,4 +1,5 @@
 import { getSetting, payerFor } from './families.js';
+import { balanceOf } from './funds.js';
 import { clientLock, lockTries } from './lockout.js';
 import { sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
@@ -94,7 +95,8 @@ export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   const athlete = s.client_id ? ctx.db.get('SELECT name FROM clients WHERE id = ?', s.client_id) : null;
   const items = ctx.db.all('SELECT name, quantity, unit_price_cents FROM sale_items WHERE sale_id = ?', saleId);
   const card = s.card_last4 ?? (s.method === 'card_on_file' ? payer?.card_last4 : null);
-  const how = s.method === 'cash' ? 'cash' : s.method === 'online' ? 'card online' : card ? `card ending ${card}` : 'card';
+  const how = s.method === 'cash' ? 'cash' : s.method === 'balance' ? 'prepaid balance' : s.method === 'online' ? 'card online' : card ? `card ending ${card}` : 'card';
+  const prepaid = s.client_id && (s.method === 'balance' || s.deposit_cents > 0) ? `Prepaid balance now: ${money(balanceOf(ctx, s.client_id))}\n` : '';   // version 95
   const lines = [
     ...items.map((i) => `${i.name}${i.quantity > 1 ? ` × ${i.quantity}` : ''}  ${money(i.unit_price_cents * i.quantity)}`),
     ...(s.discount_cents ? [`Subtotal  ${money(s.amount_cents - (s.fee_cents ?? 0) + s.discount_cents)}`, `Discount${s.discount_reason ? ` (${s.discount_reason})` : ''}  ${signed(-s.discount_cents)}`] : []),
@@ -102,7 +104,7 @@ export async function saleReceipt(ctx, saleId, { to, force = false } = {}) {
   ];
   await send(ctx, address, `Receipt from ${biz(ctx)}: ${money(s.amount_cents)}`,
     `Thanks! Here's your receipt.\n\n${lines.join('\n')}\n\nTotal: ${money(s.amount_cents)}\nPaid by ${how} on ${day(ctx, s.completed_at ?? s.created_at)}\n` +
-    `${feeBack ? `${feeSettings(ctx).label} given back (debit card): ${money(feeBack)}\n` : ''}${s.refunded_cents - feeBack > 0 ? `Refunded: ${money(s.refunded_cents - feeBack)}\n` : ''}${athlete ? `For ${athlete.name} at ${s.location_name}` : `At ${s.location_name}`}\nReceipt ${s.id}\n` +
+    `${feeBack ? `${feeSettings(ctx).label} given back (debit card): ${money(feeBack)}\n` : ''}${s.refunded_cents - feeBack > 0 ? `Refunded: ${money(s.refunded_cents - feeBack)}\n` : ''}${prepaid}${athlete ? `For ${athlete.name} at ${s.location_name}` : `At ${s.location_name}`}\nReceipt ${s.id}\n` +
     `${s.receipt_token ? `\nView or print it: ${base(ctx)}/receipt/${s.receipt_token}\n` : ''}\n${biz(ctx)}${getSetting(ctx, 'business_address') ? `\n${getSetting(ctx, 'business_address')}` : ''}`);
   ctx.db.run('UPDATE sales SET receipt_sent_at = ?, receipt_email = ? WHERE id = ?', ctx.now(), address, saleId);
   return address;

@@ -261,7 +261,7 @@ test('the version 88 upgrade adds the order table', () => {
   raw.exec('PRAGMA user_version = 88');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 94);
+  assert.equal(db.get('PRAGMA user_version').user_version, 95);
   assert.ok(db.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'web_orders'"));
   db.close();
 });

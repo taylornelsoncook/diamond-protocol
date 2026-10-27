@@ -157,7 +157,7 @@ test('a version 92 database gains the time columns and logs past set 12, keeping
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 94, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 95, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(workout_exercises)').some((c) => c.name === 'time_seconds'));
       assert.ok(d.all('PRAGMA table_info(complex_exercises)').some((c) => c.name === 'time_seconds'));
       assert.deepEqual(d.all('SELECT set_no, weight FROM workout_sets ORDER BY set_no').map((r) => [r.set_no, r.weight]), round === 1 ? [[1, 135], [12, 135]] : [[1, 135], [12, 135], [50, 135]], 'the sets survive the rebuild');

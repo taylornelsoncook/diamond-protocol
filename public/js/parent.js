@@ -842,6 +842,8 @@ async function viewPrograms(main) {
   // Membership: status, trial end or next charge, what's left, and asking to switch, pause or cancel.
   const req = a.membership_request, answer = a.membership_answer;
   const KINDS = { switch: 'switch plans', pause: 'pause', cancel: 'cancel' };
+  // The prepaid balance (a lump sum the family paid in): sessions, packs and class bookings come out of it first.
+  const prepaidLine = a.prepaid_cents > 0 ? h('div', { class: 'p-banner p-banner--info' }, h('span', { class: 'grow' }, `Prepaid balance: ${money(a.prepaid_cents)}. Sessions, packs and class bookings come out of it before the card. Ask the front desk to add funds.`)) : null;
   const memPanel = panel(`${a.first_name}'s membership`, {},
     m ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Plan'), h('dd', null, m.plan_name, m.price_cents != null ? ` · ${money(m.price_cents)} a month${m.fee_cents ? ` plus a ${money(m.fee_cents)} ${(m.fee_label ?? 'card processing fee').toLowerCase()}` : ''}` : '')),
@@ -945,7 +947,7 @@ async function viewPrograms(main) {
     h('h2', { class: 'dp-panel-title' }, `Welcome, ${f.name}!`),
     h('p', { class: 'muted', style: 'margin:0' }, `Your account is ready. Choose what fits ${a.first_name} below: a membership covers every group class and holds a standing spot, a pack is a set of sessions to use when you like. We'll ask for a card when you buy.${f.waiver.signed ? '' : ' The waiver is on the Family tab; it\'s needed before the first session.'}`),
     h('div', { class: 'row wrap' }, f.waiver.signed ? null : btn('Sign the waiver', () => go('family', { focus: 'waiver' }), 'outline'), btn('Not now', () => { state.welcome = false; render(); }, 'ghost'))) : null;
-  fill(main, top('Programs'), fresh ? null : banners(), athleteChips(() => render({ keepScroll: true })), welcomePanel, cardLine, state.buy ? onlinePanel : null, fresh ? storePanel : null, memPanel, signInPanel(), campPanel, groupPanel, fresh ? null : storePanel, state.buy ? null : onlinePanel);
+  fill(main, top('Programs'), fresh ? null : banners(), athleteChips(() => render({ keepScroll: true })), welcomePanel, cardLine, prepaidLine, state.buy ? onlinePanel : null, fresh ? storePanel : null, memPanel, signInPanel(), campPanel, groupPanel, fresh ? null : storePanel, state.buy ? null : onlinePanel);
   document.getElementById('buy-pick')?.scrollIntoView({ block: 'center' });
 }
 // Ask to switch plans, pause or cancel: the owner gets it and makes the change.

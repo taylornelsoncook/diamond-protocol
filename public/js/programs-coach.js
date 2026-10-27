@@ -852,6 +852,9 @@ function assignDialog(p, query = '') {
   const need = Math.max(1, ...p.workouts.map((w) => w.day));
   const sched = scheduleFields({ need });        // the day week 1 starts and the weekdays they train, the same for everyone assigned here
   const q = input({ type: 'search', placeholder: 'Name or Athlete ID', 'aria-label': 'Find a client', value: query });
+  // Give it free (version 94): the app opens for this program with no membership and nothing is charged.
+  const free = h('input', { type: 'checkbox' });
+  const freeRow = h('label', { class: 'row small', style: 'gap:10px;min-height:40px' }, free, h('span', null, h('span', { class: 'strong' }, 'Give it free'), h('span', { class: 'muted' }, ' · the app opens for this program without a membership; nothing is charged')));
   const out = h('div', { class: 'stack', style: 'gap:0;max-height:50vh;overflow:auto' });
   let clients = null;
   const draw = () => {
@@ -866,9 +869,9 @@ function assignDialog(p, query = '') {
         on ? null : btn('Assign', (e) => {
           if (c.program && !confirm(`Move ${first(c.name)} off ${c.program.name} and onto ${p.name}? Their logged workouts stay.`)) return;
           busy(e.currentTarget, async () => {
-            await post(`/v1/programs/${p.id}/assign`, { client_id: c.id, ...sched.body() });
+            await post(`/v1/programs/${p.id}/assign`, { client_id: c.id, ...sched.body(), ...(free.checked ? { free: true } : {}) });
             document.getElementById('dialog').close();
-            toast(`${first(c.name)} is on ${p.name}. Use Send link to email the workout app link.`); deps.render();
+            toast(`${first(c.name)} is on ${p.name}${free.checked ? ', free' : ''}. Use Send link to email the workout app link.`); deps.render();
           });
         }, 'secondary', { 'aria-label': `Assign ${p.name} to ${c.name}` }));
     }) : h('p', { class: 'small muted' }, 'No clients match.'));
@@ -893,7 +896,7 @@ function assignDialog(p, query = '') {
         });
       }, 'secondary')), teamNote);
   let teams = null;
-  dialog(`Assign ${p.name}`, h('div', { class: 'stack' }, sched.el, teamBox, h('span', { class: 'dp-label' }, 'One athlete'), q, out), [{ label: 'Close', variant: 'ghost' }]);
+  dialog(`Assign ${p.name}`, h('div', { class: 'stack' }, sched.el, teamBox, h('span', { class: 'dp-label' }, 'One athlete'), q, freeRow, out), [{ label: 'Close', variant: 'ghost' }]);
   draw();
   get('/v1/clients').then((r) => { clients = r.data; draw(); }).catch((e) => fill(out, h('p', { class: 'dp-error' }, e.message)));
   get('/v1/teams').then((r) => { teams = r.data; if (!teams.length) { teamBox.hidden = true; return; } fill(teamSel, [['', 'Choose a team'], ...teams.map((t) => [t.id, `${t.label} · ${plural(t.roster_count, 'athlete')}`])].map(([value, label]) => h('option', { value }, label))); teamNote.textContent = 'Everyone on the roster (not archived) gets their own calendar with the start date and days above.'; }).catch(() => { teamBox.hidden = true; });

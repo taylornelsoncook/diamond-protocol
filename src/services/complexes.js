@@ -1,5 +1,5 @@
 import { newId, v, notFound, badRequest, conflict } from '../util.js';
-import { getExercise, slotFields, loadInput, syncBlocks } from './programs.js';
+import { getExercise, slotFields, loadInput, syncBlocks, addBlock } from './programs.js';
 import { GROUP_KINDS, SET_FIELDS, tagGroups } from './rx.js';
 
 // Complexes (version 74, owner's ask): a named group of exercises written once ("Acceleration Primer": backwards sprint,
@@ -93,6 +93,22 @@ export function saveBlockAsComplex(ctx, blockId, body = {}, user = null) {
     syncBlocks(ctx, b.workout_id);
   });
   return getComplex(ctx, id);
+}
+// Link exercises already on a day into a complex in one go (owner's ask: "link exercises together to make a complex"):
+// a new block holding them, in their order, saved to the library under name and pointing at it. At least two; all or
+// nothing (a taken name leaves the day as it was).
+export function linkIntoComplex(ctx, workoutId, body = {}, user = null) {
+  const ids = Array.isArray(body.exercise_ids) ? body.exercise_ids : [];
+  if (ids.length < 2) throw badRequest('Tick at least two exercises to link into a complex.');
+  const f = fields({ ...body, kind: body.kind ?? 'block' });
+  if (nameTaken(ctx, f.name)) throw conflict(`A complex called ${f.name} is already in the library. Pick another name.`);
+  let out;
+  ctx.db.tx(() => {
+    const w = addBlock(ctx, workoutId, { name: f.name, kind: f.kind, exercise_ids: ids });
+    out = saveBlockAsComplex(ctx, w.block_id, { name: f.name, kind: f.kind, note: f.note }, user);
+    out.block_id = w.block_id;
+  });
+  return out;
 }
 // Used by deleteExercise: an exercise in a complex can't leave the library.
 export const complexesUsing = (ctx, exerciseId) => ctx.db.all('SELECT DISTINCT c.name FROM complex_exercises cx JOIN complexes c ON c.id = cx.complex_id WHERE cx.exercise_id = ? ORDER BY c.name', exerciseId).map((r) => r.name);

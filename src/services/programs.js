@@ -720,6 +720,10 @@ export function addBlock(ctx, workoutId, body = {}) {
   const f = blockFields({ ...body, name: body.name ?? complex?.name, kind: body.kind ?? complex?.kind }, null);
   const n = ctx.db.get('SELECT COUNT(*) AS n FROM workout_blocks WHERE workout_id = ?', workoutId).n;
   if (n >= MAX_BLOCKS) throw badRequest(`A workout can have up to ${MAX_BLOCKS} blocks.`);
+  // Exercises already on this day linked into the new block (owner's ask: tick exercises, make them a block or a
+  // complex): they sit together where the first of them was, in the order they were in. All or nothing.
+  const linked = linkedExercises(ctx, workoutId, body.exercise_ids);
+  if (complex && linked.length) throw badRequest('Load a complex, or link exercises that are already on the day, not both.');
   const id = newId('wb');
   ctx.db.tx(() => {
     ctx.db.run('INSERT INTO workout_blocks (id, workout_id, name, kind, position, complex_id) VALUES (?, ?, ?, ?, ?, ?)', id, workoutId, f.name, f.kind, n + 1, complex?.id ?? null);
@@ -727,10 +731,23 @@ export function addBlock(ctx, workoutId, body = {}) {
       let at = ctx.db.get('SELECT COALESCE(MAX(position), 0) AS n FROM workout_exercises WHERE workout_id = ?', workoutId).n;
       for (const x of ctx.db.all('SELECT * FROM complex_exercises WHERE complex_id = ? ORDER BY position', complex.id)) insertSlot(ctx, workoutId, x.exercise_id, ++at, { ...x, block_id: id });
     }
+    linked.forEach((x, i) => ctx.db.run('UPDATE workout_exercises SET block_id = ?, position = ? WHERE id = ?', id, linked[0].position + i / (linked.length + 1), x.id));   // a run from the first one's place; syncBlocks renumbers
     syncBlocks(ctx, workoutId);
   });
   const out = getProgram(ctx, w.program_id).workouts.find((x) => x.id === workoutId);
   return { ...out, block_id: id };
+}
+// The exercises named by id (2 to MAX_COMPLEX_EXERCISES, every one on this day, no repeats), in the order they sit on
+// the day; an empty or missing list is none.
+export function linkedExercises(ctx, workoutId, ids) {
+  if (ids === undefined || ids === null) return [];
+  if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string' || !x)) throw badRequest('exercise_ids is a list of the exercises to link, by id.');
+  if (!ids.length) return [];
+  if (new Set(ids).size !== ids.length) throw badRequest('An exercise is in the list twice.');
+  if (ids.length > 30) throw badRequest('Link up to 30 exercises at a time.');
+  const rows = ctx.db.all(`SELECT id, position FROM workout_exercises WHERE workout_id = ? AND id IN (${ids.map(() => '?').join(',')}) ORDER BY position`, workoutId, ...ids);
+  if (rows.length !== ids.length) throw badRequest('Every exercise to link must be on this day.');
+  return rows;
 }
 // Rename a block, change how it runs, or move it among the workout's blocks (position 1..n).
 export function updateBlock(ctx, id, body = {}) {

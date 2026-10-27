@@ -1090,12 +1090,33 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
     onDragover: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('pg-over'); },
     onDragleave: (e) => e.currentTarget.classList.remove('pg-over'),
     onDrop: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.currentTarget.classList.remove('pg-over'); const pl = payloadOf(); if (pl.before_id === drag.id) return; drop(pl); } } : {});
+  // Ticked exercises on this day (owner's ask: link exercises together into a complex, or remove them): the bar under
+  // the lines offers Make a complex, Group as a block and Remove for the ticked ones.
+  const picked = new Set();
+  const pickBar = h('div', { class: 'pg-pickbar', hidden: true, role: 'region', 'aria-label': 'Ticked exercises' });
+  const removeOne = async (x) => {
+    const r = await del(`/v1/workout-exercises/${x.id}`);
+    reload();
+    undoToast(`${x.name} removed.`, () => busy(null, async () => { const { workout_id, ...back } = r.restore; await post(`/v1/workouts/${workout_id}/exercises`, back); toast(`${x.name} is back.`); reload(); }));
+  };
+  const drawPick = () => {
+    const ids = w.exercises.filter((x) => picked.has(x.id)).map((x) => x.id);   // in the day's order
+    pickBar.hidden = !ids.length;
+    if (!ids.length) return;
+    fill(pickBar, h('span', { class: 'small strong' }, `${ids.length} ticked`),
+      btn('Make a complex', () => linkDialog(w, ids, 'complex', reload), 'secondary', { disabled: ids.length < 2, title: ids.length < 2 ? 'Tick at least two' : 'Link them into a complex in the library' }),
+      btn('Group as a block', () => linkDialog(w, ids, 'block', reload), 'ghost', { title: 'Put them together in a named block on this day' }),
+      btn('Remove', (e) => { if (!confirm(`Remove ${plural(ids.length, 'exercise')} from ${w.title}?`)) return; busy(e.currentTarget, async () => { for (const id of ids) await del(`/v1/workout-exercises/${id}`); toast(`${plural(ids.length, 'exercise')} removed.`); reload(); }); }, 'ghost'),
+      btn('Clear', () => { picked.clear(); drawPick(); for (const el of pickBar.parentElement?.querySelectorAll('.pg-line-tick') ?? []) el.checked = false; }, 'ghost'));
+  };
   const row = (x, n) => h('div', { class: 'pg-line', ...dragProps(x), ...target(() => ({ before_id: x.id, block_id: x.block_id ?? null })) },
+    edit ? h('input', { type: 'checkbox', class: 'pg-line-tick', 'aria-label': `Tick ${x.name}`, onChange: (e) => { if (e.target.checked) picked.add(x.id); else picked.delete(x.id); drawPick(); } }) : null,
     n != null ? h('span', { class: 'pg-line-n' }, String(n)) : null,
     edit ? h('button', { type: 'button', class: 'pg-line-body', 'aria-label': `${x.name}, ${line(x)}: change, move or remove`, onClick: () => slotDialog(x, { p, w, exs, reload }) },
       h('span', { class: 'pg-line-name' }, x.name, x.form_check ? h('span', { class: 'pg-flag', title: x.form_check_note || 'The athlete is asked to send a clip' }, 'FC') : null), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null)
       : h('div', { class: 'pg-line-body' }, h('span', { class: 'pg-line-name' }, x.name), h('span', { class: 'pg-line-rx' }, line(x)), x.note ? h('span', { class: 'pg-line-note' }, x.note) : null),
-    x.video_url ? playBtn(x) : null);
+    x.video_url ? playBtn(x) : null,
+    edit ? btn('×', (e) => busy(e.currentTarget, () => removeOne(x)), 'ghost', { class: 'dp-btn dp-btn--ghost pg-line-x', 'aria-label': `Remove ${x.name} from ${w.title}`, title: 'Remove (Undo for a moment after)' }) : null);
   const blocks = w.blocks ?? [];
   const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
   const blockHead = (b, i) => h('div', { class: 'pg-bhead', ...target(() => ({ block_id: b.id })) },
@@ -1134,6 +1155,7 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
     w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
     w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
     rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),
+    pickBar,
     // The drop target for the end of the day (an exercise dragged here lands last, in no block); it shows only while a
     // line is being dragged (owner's ask: the standing "Drop here" line was puzzling).
     edit ? h('div', { class: 'pg-dropzone', ...target(() => ({ block_id: null })) }, 'Drop here to put it last on this day') : null,
@@ -1270,6 +1292,26 @@ function blockDialog(w, b, reload) {
       if (!f.name.value.trim()) throw new Error('Name the block, like Warm up or Strength.');
       if (b) { await patch(`/v1/workout-blocks/${b.id}`, { name: f.name.value, kind: f.kind.value }); toast('Block saved.'); }
       else { await post(`/v1/workouts/${w.id}/blocks`, { name: f.name.value, kind: f.kind.value }); toast(`${f.name.value.trim()} added. Now add its exercises.`); }
+      reload();
+    } },
+    { label: 'Cancel', variant: 'ghost' }]);
+  f.name.focus();
+}
+// Link the ticked exercises (owner's ask): into a complex in the library (a block on this day pointing at it) or just
+// into a named block on this day. They keep their order and sit together where the first of them was.
+function linkDialog(w, ids, mode, reload) {
+  const names = ids.map((id) => w.exercises.find((x) => x.id === id)?.name).filter(Boolean);
+  const f = blockFields(null);
+  if (mode === 'complex' && !f.name.value) f.name.value = '';
+  dialog(mode === 'complex' ? `Make a complex from ${plural(ids.length, 'exercise')}` : `Group ${plural(ids.length, 'exercise')} as a block`, h('div', { class: 'stack' },
+    h('p', { class: 'small muted', style: 'margin:0' }, names.join(' · ')),
+    f.el,
+    mode === 'complex' ? h('p', { class: 'small muted dp-help', style: 'margin:0' }, 'The complex goes into the library under this name, so you can load it into any workout, in any program, with Load a complex. On this day it becomes a block with these exercises.') : null), [
+    { label: mode === 'complex' ? 'Make the complex' : 'Group them', variant: 'primary', onClick: async () => {
+      const name = f.name.value.trim();
+      if (!name) throw new Error(mode === 'complex' ? 'Name the complex, like Acceleration Primer.' : 'Name the block, like Strength.');
+      if (mode === 'complex') { const c = await post(`/v1/workouts/${w.id}/complex`, { exercise_ids: ids, name, kind: f.kind.value }); toast(`${c.name} is in the library (${plural(c.exercises.length, 'exercise')}) and is a block on ${w.title}.`); }
+      else { await post(`/v1/workouts/${w.id}/blocks`, { name, kind: f.kind.value, exercise_ids: ids }); toast(`${name}: ${plural(ids.length, 'exercise')} grouped.`); }
       reload();
     } },
     { label: 'Cancel', variant: 'ghost' }]);

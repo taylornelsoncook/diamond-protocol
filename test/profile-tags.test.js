@@ -136,7 +136,7 @@ test('the version 89 upgrade adds the tag tables', () => {
   raw.exec('PRAGMA user_version = 89');
   raw.close();
   const db = openDb(file);
-  assert.equal(db.get('PRAGMA user_version').user_version, 93);
+  assert.equal(db.get('PRAGMA user_version').user_version, 94);
   for (const t of ['profile_tags', 'client_tags']) assert.ok(db.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
   db.close();
 });

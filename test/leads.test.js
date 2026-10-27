@@ -228,7 +228,7 @@ test('a version 74 database is rebuilt for the new sources, keeping its leads, o
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 94, `round ${round}`);
       assert.deepEqual(d.get('SELECT parent_name, source, status FROM leads WHERE id = ?', 'ld_old'), { parent_name: 'Old Lead', source: 'inquiry', status: 'new' });
       d.run(`INSERT INTO leads (id, parent_name, email, source, status, created_at, updated_at) VALUES (?, 'QR Lead', ?, 'qr', 'new', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')`, `ld_qr${round}`, `qr${round}@example.com`);
       d.close();

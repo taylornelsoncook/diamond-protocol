@@ -878,15 +878,26 @@ async function viewClient(main, id) {
     sched = scheduleFields({ days: defaultDays(need), need }); fill(schedBox, sched.el);
   };
   progSel.addEventListener('change', drawSched); drawSched();
+  // Given free (version 94, owner's ask: "add a workout for free to a person's account"): the app opens for the program with
+  // no membership and nothing charged. The tick gives it with the assignment; the line under it shows and takes it back.
+  const freeTick = h('input', { type: 'checkbox' });
+  const freeRow = role === 'front_desk' ? null : h('label', { class: 'row small', style: 'gap:10px;min-height:36px' }, freeTick, h('span', null, h('span', { class: 'strong' }, 'Give it free'), h('span', { class: 'muted' }, ' · the app opens for this program without a membership; nothing is charged')));
+  const freeNow = (c.free_programs ?? []).find((f) => f.program_id === c.program?.id);
+  const memberOpen = ['active', 'trialing'].includes(c.subscription?.status);
+  const freeLine = role === 'front_desk' || !c.program ? null : h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' },
+    freeNow ? [h('span', { class: 'dp-badge dp-badge--good' }, 'Given free'), h('span', { class: 'muted' }, `by ${freeNow.granted_by} on ${date(freeNow.created_at)}: the app opens for ${c.program.name} without a membership.`),
+      btn('Take back', (e) => { if (!confirm(`Take ${c.program.name} back? ${first}'s app closes for it unless a membership opens it. The program stays assigned.`)) return; busy(e.currentTarget, async () => { await del(`/v1/free-programs/${freeNow.id}`); toast('Taken back.'); render(); }); }, 'ghost')]
+      : memberOpen ? null : [h('span', { class: 'muted' }, `No membership: the app is closed for ${c.program.name}.`), btn('Give it free', (e) => busy(e.currentTarget, async () => { await post(`/v1/clients/${id}/free-programs`, { program_id: c.program.id }); toast(`${c.program.name} given free: ${first}'s app is open.`); render(); }), 'secondary')]);
   const appUrl = location.origin + c.app_link;
   const appTo = [c.email, ...(fam?.guardians ?? []).map((g) => g.email)].filter(Boolean);
   const training = panel('Training', { subtitle: c.program ? `On ${c.program.name}. ${plural(c.workouts_completed, 'workout')} logged.` : 'No program assigned yet.' },
     role === 'front_desk' ? null : h('div', { class: 'row' }, h('div', { class: 'grow' }, progSel), btn(c.program ? 'Switch program' : 'Assign program', (e) => busy(e.currentTarget, async () => {
       if (!progSel.value) throw new Error('Choose a program first.');
       if (c.program && c.program.id !== progSel.value && !confirm(`Move ${first} off ${c.program.name} and onto ${progSel.selectedOptions[0].textContent}? Their logged workouts stay.`)) return;
-      await post(`/v1/programs/${progSel.value}/assign`, { client_id: id, ...(sched ? sched.body() : {}) }); toast(`Program assigned to ${first}.`); render();
+      await post(`/v1/programs/${progSel.value}/assign`, { client_id: id, ...(sched ? sched.body() : {}), ...(freeTick.checked ? { free: true } : {}) }); toast(`Program assigned to ${first}${freeTick.checked ? ', free' : ''}.`); render();
     }), 'secondary')),
     role === 'front_desk' ? null : schedBox,
+    freeRow, freeLine,
     h('div', { class: 'stack-tight' }, h('span', { class: 'dp-label' }, 'Private app link'), h('span', { class: 'small muted' }, `${first}'s workouts, check-ins and progress. Anyone with the link can open it.`)),
     h('div', { class: 'row wrap' },
       !c.archived_at && appTo.length ? btn('Email app link', (e) => busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/app-link/email`); toast(`App link emailed to ${r.sent_to.join(' and ')}.`); }), 'secondary', { title: `Sends it to ${appTo.join(', ')}` }) : null,

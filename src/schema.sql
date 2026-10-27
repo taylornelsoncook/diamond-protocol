@@ -1254,7 +1254,8 @@ CREATE TABLE IF NOT EXISTS purchases (
   trial_ends_at TEXT,                          -- version 72: when the card is charged (a trial)
   charge_tries INTEGER NOT NULL DEFAULT 0,     -- version 72: charges tried at the end of the trial
   last_try_at TEXT,
-  canceled_at TEXT
+  canceled_at TEXT,
+  granted_by TEXT                              -- version 94: given free by this staff member (amount 0, no sale): the app opens for the program
 );
 CREATE INDEX IF NOT EXISTS purchases_client ON purchases(client_id, item_kind, item_id);
 -- Open-spot offers (version 27): a family is told a class it fits has room; the first to tap the link gets the spot.

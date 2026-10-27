@@ -109,7 +109,7 @@ function pageFields(ctx, body, cur) {
 function saleInfo(ctx, kind, id) {
   const row = kind === 'program' ? ctx.db.get('SELECT * FROM programs WHERE id = ?', id) : ctx.db.get('SELECT * FROM courses WHERE id = ?', id);
   const item = kind === 'program' ? programItem(ctx, row) : courseItem(ctx, row);
-  const sold = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS cents FROM purchases WHERE item_kind = ? AND item_id = ? AND status = 'active'`, kind, id);
+  const sold = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS cents FROM purchases WHERE item_kind = ? AND item_id = ? AND status = 'active' AND granted_by IS NULL`, kind, id);   // a program given free isn't a sale
   const listed = shopItems(ctx).some((x) => x.kind === kind && x.id === id);
   const why = !item.for_sale ? null : listed ? null : kind === 'program' ? 'Add at least one workout so it shows in the store.' : !row.published ? 'Publish the course so it shows in the store.' : 'Add a published lesson so it shows in the store.';
   return { ...item, listed, not_listed_because: why, sold: sold.n, sold_cents: sold.cents };
@@ -120,14 +120,45 @@ export function shopAdmin(ctx) {
   const courses = ctx.db.all(`SELECT id FROM courses WHERE audience = 'athletes' ORDER BY title`).map((c) => saleInfo(ctx, 'course', c.id));
   const recent = ctx.db.all(`SELECT b.*, c.name AS client_name FROM purchases b JOIN clients c ON c.id = b.client_id ORDER BY b.created_at DESC LIMIT 50`);
   const month = new Date(Date.parse(ctx.now()) - 30 * 86400000).toISOString();
-  const last30 = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS cents FROM purchases WHERE status = 'active' AND created_at >= ?`, month);
+  const last30 = ctx.db.get(`SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS cents FROM purchases WHERE status = 'active' AND granted_by IS NULL AND created_at >= ?`, month);
   return { programs, courses, recent, last_30_days: { sold: last30.n, cents: last30.cents } };
 }
+
+// ---------- A program given free (version 94, owner's ask: "add a workout for free to a person's account") ----------
+// A purchases row with nothing charged and granted_by = the staff member, so appAccess opens the app for that program
+// without a membership, the store never charges them for it, and it never counts as a sale. The athlete must be on the
+// program (assigned); taking it back closes the app again (the assignment stays).
+export function giveFree(ctx, clientId, programId, user = null) {
+  const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', clientId);
+  if (!c) throw notFound('Client');
+  if (c.archived_at) throw conflict(`${c.name.split(' ')[0]} is archived. Bring them back first.`);
+  const p = ctx.db.get(`SELECT id, name, kind FROM programs WHERE id = ?`, programId);
+  if (!p) throw notFound('Program');
+  if (p.kind !== 'program') throw conflict('A template can\'t be given: start a program from it first.');
+  if (!ctx.db.get('SELECT id FROM assignments WHERE client_id = ? AND program_id = ? AND active = 1', clientId, programId)) throw conflict(`${c.name.split(' ')[0]} isn\'t on ${p.name}. Assign it first.`);
+  const has = ctx.db.get(`SELECT id, granted_by FROM purchases WHERE client_id = ? AND item_kind = 'program' AND item_id = ? AND status IN ('active', 'trial')`, clientId, programId);
+  if (has) throw conflict(has.granted_by ? `${c.name.split(' ')[0]} already has ${p.name} free (given by ${has.granted_by}).` : `${c.name.split(' ')[0]} already bought ${p.name}.`);
+  const id = newId('buy');
+  ctx.db.run(`INSERT INTO purchases (id, client_id, item_kind, item_id, title, amount_cents, status, granted_by, created_at) VALUES (?, ?, 'program', ?, ?, 0, 'active', ?, ?)`, id, clientId, programId, p.name, user?.name ?? 'staff', ctx.now());
+  emit(ctx, 'program.given_free', { purchase_id: id, client_id: clientId, client_name: c.name, program_id: programId, program_name: p.name, given_by: user?.name ?? null });
+  return freeOf(ctx, id);
+}
+export function takeBackFree(ctx, purchaseId) {
+  const b = ctx.db.get(`SELECT * FROM purchases WHERE id = ? AND granted_by IS NOT NULL`, purchaseId);
+  if (!b) throw notFound('Free program');
+  if (b.status !== 'active') return freeOf(ctx, purchaseId);
+  ctx.db.run(`UPDATE purchases SET status = 'canceled', canceled_at = ? WHERE id = ?`, ctx.now(), purchaseId);
+  emit(ctx, 'program.free_taken_back', { purchase_id: purchaseId, client_id: b.client_id, program_id: b.item_id, program_name: b.title });
+  return freeOf(ctx, purchaseId);
+}
+const freeOf = (ctx, id) => { const r = ctx.db.get('SELECT id, client_id, item_id AS program_id, title AS program_name, status, granted_by, created_at, canceled_at FROM purchases WHERE id = ?', id); return { ...r, free: true }; };
+// The programs a client has free right now (the client page's Training tab).
+export const freeProgramsOf = (ctx, clientId) => ctx.db.all(`SELECT id, item_id AS program_id, title AS program_name, granted_by, created_at FROM purchases WHERE client_id = ? AND item_kind = 'program' AND granted_by IS NOT NULL AND status = 'active' ORDER BY created_at DESC`, clientId);
 
 // ---------- Families ----------
 export function ownedBy(ctx, clientIds) {
   if (!clientIds.length) return [];
-  return ctx.db.all(`SELECT id, client_id, item_kind, item_id, title, amount_cents, status, trial_ends_at, created_at FROM purchases WHERE status IN ('active', 'trial') AND client_id IN (${clientIds.map(() => '?').join(',')}) ORDER BY created_at DESC`, ...clientIds);
+  return ctx.db.all(`SELECT id, client_id, item_kind, item_id, title, amount_cents, status, trial_ends_at, created_at, (granted_by IS NOT NULL) AS free FROM purchases WHERE status IN ('active', 'trial') AND client_id IN (${clientIds.map(() => '?').join(',')}) ORDER BY created_at DESC`, ...clientIds);
 }
 export function familyShop(ctx, familyId) {
   const kids = ctx.db.all('SELECT id FROM clients WHERE family_id = ?', familyId).map((c) => c.id);

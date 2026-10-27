@@ -5,6 +5,7 @@ import * as programs from './programs.js';
 import { createFamilyWithGuardian, athleteFields, payerFor, getFamily, getSetting, staleCard } from './families.js';
 import { visitsFor, listCarryOvers } from './visits.js';
 import { creditDetail } from './commerce.js';
+import { balanceOf, summaryFor as prepaidFor } from './funds.js';
 import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
@@ -69,7 +70,8 @@ const shapeAll = (ctx, rows, role) => {
   const wv = Number(getSetting(ctx, 'waiver_version'));
   const tagsOf = tagger(ctx);   // profile tags (version 90): Legacy ★ for everyone who joined in the tag's dates
   // Session credits are worked out from the ledger with expiry (commerce.js creditDetail, version 88), not summed in SQL.
-  return rows.map((r) => { const c = shape(r, wv, role); c.credits = creditDetail(ctx, r.id); c.session_credits = c.credits.private + c.credits.group; c.tags = tagsOf(c); return c; });
+  // prepaid_balance (not _cents, so the counter's staff see it): the family's prepaid balance (version 95).
+  return rows.map((r) => { const c = shape(r, wv, role); c.credits = creditDetail(ctx, r.id); c.session_credits = c.credits.private + c.credits.group; c.tags = tagsOf(c); c.prepaid_balance = balanceOf(ctx, r.id); return c; });
 };
 
 // "Active client" means one thing everywhere (the Today metric, the client list's Active filter, the owner summary):
@@ -167,6 +169,7 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
   c.notes = extra.notes ?? null;
   c.visits = visitsFor(ctx, id);                                     // membership visits this period (null without a live membership)
   c.visit_carryovers = listCarryOvers(ctx, id);                      // sessions the owner carried into another month (version 88)
+  c.prepaid = prepaidFor(ctx, id);                                   // the prepaid balance and its ledger (version 95)
   c.free_programs = ctx.db.all(`SELECT id, item_id AS program_id, title AS program_name, granted_by, created_at FROM purchases WHERE client_id = ? AND item_kind = 'program' AND granted_by IS NOT NULL AND status = 'active' ORDER BY created_at DESC`, id);   // programs given free (version 94)
   c.card_status = payer.card_status;
   c.card = payer.card_payment_method ? { on_file: true, brand: payer.card_brand, last4: payer.card_last4, exp: payer.card_exp ?? null, funding: payer.card_funding ?? null, stale: staleCard(ctx, payer), owner: payer.table === 'families' ? 'family' : 'client' } : { on_file: false, owner: payer.table === 'families' ? 'family' : 'client' };

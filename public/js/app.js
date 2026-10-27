@@ -150,6 +150,7 @@ const EVENT_TEXT = {
   'workout.completed': (d) => `${d.client_name} finished ${d.workout_title} (${d.exercises_logged} of ${d.exercises_total} exercises${d.sets ? `, ${d.sets} ${d.sets === 1 ? 'set' : 'sets'}` : ''}${d.effort ? `, effort ${d.effort}/10` : ''})${d.bests?.length ? `. New best: ${d.bests.map((b) => `${b.name} ${b.weight} lb`).join(', ')}` : ''}`,
   'sale.completed': (d) => `${d.client_name} paid${d.amount_cents == null ? '' : ` ${money(d.amount_cents)}`} at ${d.location_name} (${METHOD_LABEL[d.method]})${d.sessions_added ? `, ${d.sessions_added} sessions added` : ''}`,
   'sale.failed': (d) => `${METHOD_LABEL[d.method]} payment${d.amount_cents == null ? '' : ` of ${money(d.amount_cents)}`} from ${d.client_name} didn't go through`,
+  'prepaid.changed': (d) => `${d.client_name ?? 'A client'}'s prepaid balance ${d.delta_cents > 0 ? 'went up' : 'went down'}${d.delta_cents == null ? '' : ` by ${money(Math.abs(d.delta_cents))}`} (${{ deposit: 'funds added', sale: 'a sale', refund: 'a refund', adjust: 'adjusted by the owner' }[d.kind] ?? d.kind})${d.balance_cents == null ? '' : `, now ${money(d.balance_cents)}`}`,
   'sale.refunded': (d) => `Refunded ${money(d.amount_cents)} to ${d.client_name}`,
   'stock.changed': (d) => `${d.product_name}${d.size ? ` (${d.size})` : ''}: ${{ received: `${d.delta} arrived`, count: 'counted', adjust: `${d.delta > 0 ? '+' : ''}${d.delta} adjusted` }[d.reason]}, ${d.on_hand} on hand`,
   'session.checked_in': (d) => `${d.client_name} checked in${d.location_name ? ` at ${d.location_name}` : ''}${d.covered_by === 'credit' ? ' (used a session)' : ''}`,
@@ -189,7 +190,7 @@ const EVENT_TEXT = {
   'session.messaged': (d) => `${d.by} emailed ${d.families} ${d.families === 1 ? 'family' : 'families'} about ${d.session_name}`,
   'client.card_updated': (d) => d.card_last4 ? `${d.client_name} saved a card ending ${d.card_last4}` : `${d.client_name}'s saved card was removed`
 };
-const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Pay link' };
+const METHOD_LABEL = { tap_to_pay: 'Tap to Pay', reader: 'Front-desk reader', card_on_file: 'Card on file', cash: 'Cash', online: 'Pay link', balance: 'Prepaid balance' };
 
 // Today keeps a little state between its one-minute refreshes: the check-in search, the activity filter and how much of
 // the feed is showing. A refresh asked for while one is running runs once more afterwards, so two quick check-ins in a
@@ -584,6 +585,20 @@ function teamFeedPanel() {
   const block = feedBlock(api, { staff: true, canPost: staff, onPost: (reload) => feedPostDialog(null, reload), onEdit: staff ? (p, reload) => feedPostDialog(p, reload) : null, limit: 8,
     empty: staff ? 'Nothing posted yet. Post a note for everyone, a team or a program: athletes and parents see it in the app and the portal.' : 'Nothing posted yet.' });
   return panel('Team feed', { subtitle: 'Posts to everyone, a team or a program. Athletes and parents fist-bump and comment; a pinned post shows on the weight-room screen until it unpins.' }, block);
+}
+// The prepaid balance's history: every deposit, sale, refund and adjustment on the family's (or the athlete's) account.
+function prepaidHistoryDialog(c) {
+  const d = document.getElementById('dialog');
+  const KIND = { deposit: 'Funds added', sale: 'Sale', refund: 'Refund', adjust: 'Adjusted by the owner' };
+  fill(d, h('div', { class: 'stack' },
+    h('h2', { class: 'week-title', style: 'color:var(--steel)' }, `Prepaid balance · ${money(c.prepaid.balance)}`),
+    h('p', { class: 'small muted', style: 'margin:0' }, c.prepaid.shared ? 'Shared by everyone in the family. Newest first.' : 'Newest first.'),
+    h('div', { class: 'stack-tight' }, ...c.prepaid.entries.map((e) => h('div', { class: 'list-item small' },
+      h('span', { class: 'grow' }, `${KIND[e.kind] ?? e.kind}${e.client_name && c.prepaid.shared ? ` · ${e.client_name.split(' ')[0]}` : ''}${e.note ? ` · ${e.note}` : ''}${e.created_by ? ` · ${e.created_by}` : ''} · ${date(e.created_at)}`),
+      h('span', { class: e.delta < 0 ? 'warn-text strong' : 'good-text strong', style: 'min-width:80px;text-align:right' }, signedMoney(e.delta))))),
+    h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Close', () => d.close(), 'secondary'))));
+  d.addEventListener('close', () => fill(d), { once: true });
+  d.showModal();
 }
 async function feedPostDialog(existing, reload) {
   const d = document.getElementById('dialog');
@@ -1009,6 +1024,18 @@ async function viewClient(main, id) {
         const note = prompt('Why? (kept on the record)', '') ?? '';
         busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/visits/carry-over`, { sessions: Number(n), note, period: 'next' }); toast(`${r.sessions} ${r.sessions === 1 ? 'session' : 'sessions'} carried into the month starting ${date(r.period_start)}.`); render(); });
       }, 'ghost') : null),
+    // The prepaid balance (owner's ask: a lump sum the family works off; shared by siblings): what's on it, its history, and
+    // the owner's hand adjustment. Funds are added at the counter (Add funds under What to sell), paid any way the counter takes money.
+    c.prepaid ? h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
+      h('span', { class: 'grow' }, h('span', { class: 'strong' }, `Prepaid balance: ${money(c.prepaid.balance)}`), h('span', { class: 'small muted' }, c.prepaid.shared ? ' · shared by the family · sessions, packs and class bookings come out of it first' : ' · sessions, packs and class bookings come out of it first')),
+      c.archived_at ? null : h('a', { class: 'dp-btn dp-btn--ghost', href: `#/sell?client=${id}` }, 'Add funds'),
+      c.prepaid.entries.length ? btn('History', () => prepaidHistoryDialog(c)) : null,
+      role === 'owner' ? btn('Adjust', (e) => {
+        const a = prompt(`Change ${first}'s prepaid balance by how much? (dollars; a minus takes off; now ${money(c.prepaid.balance)})`, ''); if (!a) return;
+        const cents = Math.round(Number(a) * 100); if (!cents) return toast('Enter an amount, like 50 or -25.', 'warn');
+        const note = prompt('Why? (kept on the record and shown on the history)', ''); if (!note?.trim()) return toast('Say why, so the family and your books agree.', 'warn');
+        busy(e.currentTarget, async () => { const r = await post(`/v1/clients/${id}/prepaid/adjust`, { amount_cents: cents, note: note.trim() }); toast(`Prepaid balance is now ${money(r.balance)}.`); render(); });
+      }, 'ghost') : null) : null,
     c.visit_carryovers?.length ? h('div', { class: 'stack-tight' }, ...c.visit_carryovers.slice(0, 3).map((k) => h('div', { class: 'list-item small' },
       h('span', { class: 'grow' }, `${k.sessions} carried into the month starting ${date(k.period_start)}${k.note ? ` · ${k.note}` : ''}${k.by_name ? ` · ${k.by_name}` : ''}`),
       role === 'owner' ? btn('Take back', (e) => busy(e.currentTarget, async () => { await api('DELETE', `/v1/visit-carryovers/${k.id}`); toast('Taken back.'); render(); }), 'ghost', { 'aria-label': `Take back ${k.sessions} carried-over sessions` }) : null))) : null,
@@ -2116,7 +2143,8 @@ async function viewSell(main) {
       h('div', { class: 'grow stack-tight' },
         h('span', { class: 'strong' }, c.name),
         h('span', { class: 'small muted' }, sub ? `${MEMBER_WORD[sub.status] ?? 'Member'}: ${sub.plan_name}` : 'No membership'),
-        h('span', { class: 'small muted' }, `${c.credits.group} group · ${c.credits.private} private ${c.credits.group + c.credits.private === 1 ? 'session' : 'sessions'} left · ${c.has_card ? 'Card on file' : 'No card on file'}`)),
+        h('span', { class: 'small muted' }, `${c.credits.group} group · ${c.credits.private} private ${c.credits.group + c.credits.private === 1 ? 'session' : 'sessions'} left · ${c.has_card ? 'Card on file' : 'No card on file'}`),
+        c.prepaid_balance ? h('span', { class: 'small strong' }, `Prepaid balance: ${money(c.prepaid_balance)}`) : null),
       btn('Walk-in instead', () => pickClient(null), 'ghost')));
   }
   function drawClash() {
@@ -2164,6 +2192,11 @@ async function viewSell(main) {
   const customDesc = input({ placeholder: 'Description', 'aria-label': 'Custom item description', maxlength: '80' }), customAmt = input({ type: 'number', min: '0.01', step: '0.01', inputmode: 'decimal', placeholder: '$', 'aria-label': 'Custom amount in dollars', style: 'width:110px' });
   const customForm = h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); const cents = Math.round(Number(customAmt.value) * 100); if (!customDesc.value.trim() || !(cents > 0)) return toast('Enter a description and an amount above $0.', 'warn'); sale.custom = { description: customDesc.value.trim(), amount_cents: cents }; customDesc.value = ''; customAmt.value = ''; changed(); } },
     h('div', { class: 'grow', style: 'min-width:160px' }, customDesc), customAmt, btn('Add', null, 'secondary', { type: 'submit' }));
+  // Add funds (owner's ask: a lump sum the family works off): a sale of its own that lands on the family's prepaid balance,
+  // paid any way but from the balance. Sessions, packs and bookings then come out of it (the Prepaid balance payment method).
+  const fundsAmt = input({ type: 'number', min: '1', step: '1', inputmode: 'decimal', placeholder: '$', 'aria-label': 'Amount to add to the prepaid balance, in dollars', style: 'width:110px' });
+  const fundsForm = h('form', { class: 'row wrap', onSubmit: (e) => { e.preventDefault(); const cents = Math.round(Number(fundsAmt.value) * 100); if (!client()) return toast('Choose the client whose account the funds go on.', 'warn'); if (!(cents > 0) || cents > 1000000) return toast('Enter an amount from $1 to $10,000.', 'warn'); if (sale.cart.length || (sale.custom && !sale.custom.deposit)) return toast('Add funds as a sale of its own: finish or clear this sale first.', 'warn'); sale.custom = { description: 'Prepaid balance (added to the account)', amount_cents: cents, deposit: true }; fundsAmt.value = ''; changed(); } },
+    h('span', { class: 'grow small muted', style: 'min-width:160px' }, 'A lump sum the family works off: sessions, packs and class bookings come out of it first.'), fundsAmt, btn('Add funds', null, 'secondary', { type: 'submit' }));
 
   // ----- Monthly memberships (renew on the saved card) -----
   // Owner's ask: every option listed before anything is clicked, the "charge now instead of the trial" tick on the page itself,
@@ -2278,7 +2311,7 @@ async function viewSell(main) {
           h('span', { class: 'small muted' }, who));
       }));
   }
-  const howPaid = () => (method.value === 'cash' ? 'in cash' : method.value === 'card_on_file' ? 'from the card on file' : method.value === 'reader' ? 'on the reader' : 'by Tap to Pay');
+  const howPaid = () => (method.value === 'cash' ? 'in cash' : method.value === 'balance' ? 'from the prepaid balance' : method.value === 'card_on_file' ? 'from the card on file' : method.value === 'reader' ? 'on the reader' : 'by Tap to Pay');
   // Collect for a booking the roster leaves unpaid, with the method chosen under the sale (the same call as the roster's Collect).
   async function collectFor(bookingId, what) {
     const out = await post(`/v1/bookings/${bookingId}/pay`, { method: method.value, reader_id: method.value === 'reader' ? readerSel.value : undefined });
@@ -2335,7 +2368,7 @@ async function viewSell(main) {
   const priceTotal = () => Math.max(subtotal() - discountCents(), 0);
   // The owner's card fee (settings card_fee_*) shows before the charge; the server adds the same amount to the sale.
   const feeOn = String(settings.card_fee_on ?? '').split(',').includes('counter');
-  const feeCents = () => (feeOn && method.value !== 'cash' && priceTotal() > 0 ? Math.round((priceTotal() * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0) : 0);
+  const feeCents = () => (feeOn && !['cash', 'balance'].includes(method.value) && priceTotal() > 0 ? Math.round((priceTotal() * (Number(settings.card_fee_pct) || 0)) / 100) + (Number(settings.card_fee_flat) || 0) : 0);
   const total = () => priceTotal() + feeCents();
   const itemCount = () => sale.cart.reduce((n, [, q]) => n + q, 0) + (sale.custom ? 1 : 0);
   const method = { value: remember.get('dp_method') || 'tap_to_pay' };
@@ -2405,7 +2438,7 @@ async function viewSell(main) {
       cents ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, `Discount${sale.discount.type === 'percent' ? ` ${sale.discount.value}%` : ''}`), h('span', null, signedMoney(-cents))) : null,
       feeCents() ? h('div', { class: 'row small muted' }, h('span', { class: 'grow' }, settings.card_fee_label || 'Card processing fee'), h('span', null, money(feeCents()))) : null,
       h('div', { class: 'row' }, h('span', { class: 'grow muted' }, 'Total'), h('span', { style: 'font:600 44px/1 var(--font-display)' }, money(total())))));
-    charge.textContent = !total() ? 'Charge' : method.value === 'cash' ? `Record ${money(total())} cash` : `Charge ${money(total())}`;
+    charge.textContent = !total() ? 'Charge' : method.value === 'cash' ? `Record ${money(total())} cash` : method.value === 'balance' ? `Take ${money(total())} from the balance` : `Charge ${money(total())}`;
     charge.disabled = !total() || !!clash;
     drawChange(); drawBar();
   }
@@ -2423,7 +2456,9 @@ async function viewSell(main) {
       ['tap_to_pay', 'Tap to Pay on iPhone', loc?.card_ready ? 'Client taps their card or phone on your iPhone.' : `Add an address to ${loc?.name} in setup first.`, !loc?.card_ready],
       ['reader', 'Front-desk reader', here.length ? (here.length === 1 ? `Sends the charge to ${here[0].label}.` : 'Sends the charge to the reader you choose.') : `No reader at ${loc?.name}. Register one in setup.`, !here.length],
       ['card_on_file', 'Card on file', c?.has_card ? 'Charges their saved card now.' : c ? 'No saved card for this client.' : 'Choose a client with a saved card.', !c?.has_card],
-      ['cash', 'Cash', 'Record a cash payment.', false]
+      ['cash', 'Cash', 'Record a cash payment.', false],
+      // The prepaid balance (a lump sum on the family's account): only when it covers the sale, never for a deposit onto itself.
+      ...(c ? [['balance', 'Prepaid balance', sale.custom?.deposit ? 'Funds are added some other way; they can\'t come from the balance.' : c.prepaid_balance ? `${money(c.prepaid_balance)} on the account${c.prepaid_balance < priceTotal() ? `: not enough for this sale (${money(priceTotal())}).` : '.'}` : 'Nothing on the account yet. Add funds below What to sell.', !!sale.custom?.deposit || !(c.prepaid_balance >= priceTotal() && priceTotal() > 0)]] : [])
     ];
     if (options.find(([k]) => k === method.value)?.[3]) method.value = options.find((o) => !o[3])[0];
     const addr = receipt.to ?? receiptAddress(c);
@@ -2456,7 +2491,7 @@ async function viewSell(main) {
     if (d && !d.reason?.trim()) { err.textContent = 'Add a reason for the discount, or remove it.'; return; }
     const receiptOn = receipt.on ?? !!receiptAddress(c);
     const body = { location_id: locSel.value, method: method.value, client_id: sale.clientId || undefined, request_id: sale.requestId,
-      items: sale.cart.map(([key, quantity]) => { const [product_id, variant_id] = key.split(':'); return { product_id, variant_id, quantity }; }), custom: sale.custom || undefined,
+      items: sale.cart.map(([key, quantity]) => { const [product_id, variant_id] = key.split(':'); return { product_id, variant_id, quantity }; }), custom: sale.custom && !sale.custom.deposit ? sale.custom : undefined, deposit_cents: sale.custom?.deposit ? sale.custom.amount_cents : undefined,
       discount: d ? { type: d.type, value: d.value, reason: d.reason.trim() } : undefined,
       email_receipt: receiptOn, receipt_email: receiptOn && (editingReceipt || !receiptAddress(c)) ? (receipt.to || undefined) : undefined,
       save_card: saveCard.checked && !!sale.clientId, reader_id: method.value === 'reader' ? readerSel.value : undefined };
@@ -2475,7 +2510,8 @@ async function viewSell(main) {
     clearTimeout(timer);
     if (s.status === 'succeeded' || s.status === 'refunded' || s.status === 'partially_refunded') {
       const cashBack = s.method === 'cash' && cashIn.value ? Math.round(Number(cashIn.value) * 100) - s.amount_cents : null;
-      toast(`${money(s.amount_cents)} ${s.method === 'cash' ? 'cash recorded' : 'paid'}${s.card_last4 ? ` with card ending ${s.card_last4}` : ''}.${cashBack > 0 ? ` Give ${money(cashBack)} change.` : ''}`);
+      toast(`${money(s.amount_cents)} ${s.method === 'cash' ? 'cash recorded' : s.method === 'balance' ? 'taken from the prepaid balance' : 'paid'}${s.card_last4 ? ` with card ending ${s.card_last4}` : ''}.${s.deposit_cents ? ' Added to the prepaid balance.' : ''}${cashBack > 0 ? ` Give ${money(cashBack)} change.` : ''}`);
+      if (s.client_id && (s.method === 'balance' || s.deposit_cents)) get(`/v1/clients/${s.client_id}`).then((fresh) => { const i = clients.data.findIndex((x) => x.id === fresh.id); if (i >= 0) clients.data[i] = fresh; drawClient(); drawMethods(); }).catch(() => {});   // the balance changed
       const keepClient = sale.clientId;
       resetSale(keepClient); Object.assign(sale, saleDraft);
       receipt.on = null; receipt.to = null; editingReceipt = false; receiptTo.value = ''; cashIn.value = '';
@@ -2520,10 +2556,10 @@ async function viewSell(main) {
     if (!s.receipt_sent_at) setTimeout(async () => { try { const fresh = await get(`/v1/sales/${s.id}`); if (fresh.receipt_sent_at && document.body.contains(lastBox) && lastBox.childElementCount) { Object.assign(s, { receipt_sent_at: fresh.receipt_sent_at, receipt_email: fresh.receipt_email }); draw(); } } catch { /* ignore */ } }, 1200);
   }
   async function undo(s, button) {
-    if (!confirm(`Undo this sale? ${money(s.amount_cents)} ${s.method === 'cash' ? 'is handed back in cash' : 'goes back to the card'}, and any sessions and stock go back.`)) return;
+    if (!confirm(`Undo this sale? ${money(s.amount_cents)} ${s.method === 'cash' ? 'is handed back in cash' : s.method === 'balance' ? 'goes back on the prepaid balance' : s.deposit_cents ? 'comes off the prepaid balance and goes back to the card' : 'goes back to the card'}, and any sessions and stock go back.`)) return;
     await busy(button, async () => {
       await post(`/v1/sales/${s.id}/undo`);
-      toast(s.method === 'cash' ? `Sale undone. Hand back ${money(s.amount_cents)} in cash.` : `Sale undone. ${money(s.amount_cents)} goes back to the card.`);
+      toast(s.method === 'cash' ? `Sale undone. Hand back ${money(s.amount_cents)} in cash.` : s.method === 'balance' ? `Sale undone. ${money(s.amount_cents)} is back on the prepaid balance.` : `Sale undone. ${money(s.amount_cents)} goes back to the card.`);
       clearTimeout(lastTimer); fill(lastBox); document.getElementById('dialog')?.open && document.getElementById('dialog').close();
       refreshRecent(); refreshStock(); drawTakings(); clients.data = (await get('/v1/clients')).data; changed();
     });
@@ -2560,7 +2596,7 @@ async function viewSell(main) {
       isOwner() && ['succeeded', 'partially_refunded'].includes(s.status) ? h('form', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:12px', onSubmit: (e) => { e.preventDefault();
         const cents = Math.round(Number(refundAmt.value) * 100);
         if (!(cents > 0) || cents > left) return toast(`Enter an amount from $0.01 to ${money(left)}.`, 'warn');
-        if (!confirm(`Refund ${money(cents)}${s.method === 'cash' ? ' in cash' : ' to the card'}?${cents === left ? ' Unused sessions from a pack come off, and gear goes back on the shelf.' : ''}`)) return;
+        if (!confirm(`Refund ${money(cents)}${s.method === 'cash' ? ' in cash' : s.method === 'balance' ? ' back on to the prepaid balance' : s.deposit_cents ? ' to the card (it comes off the prepaid balance)' : ' to the card'}?${cents === left ? ' Unused sessions from a pack come off, and gear goes back on the shelf.' : ''}`)) return;
         busy(e.submitter, async () => { await post(`/v1/sales/${s.id}/refund`, { amount_cents: cents, reason: refundWhy.value.trim() || undefined }); toast(`${money(cents)} refunded.${s.method === 'cash' ? ' Hand back the cash.' : ''}`); d.close(); refreshRecent(); refreshStock(); drawTakings(); });
       } }, h('div', { class: 'dp-label' }, 'Refund'),
         h('div', { class: 'row wrap', style: 'gap:8px' }, refundAmt, h('div', { class: 'grow', style: 'min-width:180px' }, refundWhy), btn('Refund', null, 'secondary', { type: 'submit' })),
@@ -2631,7 +2667,8 @@ async function viewSell(main) {
         panel('What to sell', { subtitle: 'Everything you can charge for, in one list. Tap a membership to charge the card on file; tap anything else to add it to the sale.', action: prods.data.length > 8 ? prodSearch : null },
           planList.length ? h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Monthly memberships'), skipRow, planGrid, memberBox) : null,
           classBox, productGrid, sizeBox,
-          h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Custom amount'), customForm))),
+          h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Custom amount'), customForm),
+          h('div', { class: 'stack-tight pos-group' }, h('div', { class: 'dp-label' }, 'Prepaid balance'), fundsForm))),
       h('div', { class: 'stack pos-side', style: 'gap:24px' }, progress, lastBox, salePanel)),
     seesTakings ? takingsBox : null,
     panel('Recent sales', { subtitle: role === 'coach' ? 'Sales you took. Tap one for details and the receipt.' : 'Tap a sale for details, the receipt and refunds.', action: h('div', { class: 'row wrap', style: 'gap:8px' }, dayChips, recentSearch, recentLoc) }, recent),

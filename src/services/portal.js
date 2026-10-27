@@ -7,6 +7,7 @@ import { visitsFor } from './visits.js';
 import { getSetting, getFamily, cardExpiry, addGuardian, updateGuardian, payerFor } from './families.js';
 import * as billing from './billing.js';
 import * as commerce from './commerce.js';
+import { balanceOf } from './funds.js';
 import { feeSettings, cardFee, cardFunding } from './fees.js';
 import { attendance } from './clients.js';
 import { education } from './engage.js';
@@ -153,7 +154,8 @@ export function membershipPanel(ctx, clientId) {
       pending_plan_name: s.pending_plan_name ?? null, pending_price_cents: s.pending_price_cents ?? null,   // the owner set a change for the renewal
       visits: visitsFor(ctx, clientId),   // sessions the plan covers this month and how many are used (limit null = unlimited)
       can_ask: s.status === 'paused' ? ['switch', 'cancel'] : REQUEST_KINDS } : null,
-    request: openRequest(ctx, clientId), last_answer: lastDone
+    request: openRequest(ctx, clientId), last_answer: lastDone,
+    prepaid_cents: balanceOf(ctx, clientId)   // the family's prepaid balance (version 95): sessions and packs come out of it first
   };
 }
 // Ask the owner to switch plans, pause or cancel. Nothing about billing changes here: the owner is emailed, sees it on the

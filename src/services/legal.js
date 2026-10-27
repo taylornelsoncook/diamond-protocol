@@ -129,6 +129,7 @@ export function exportFamily(ctx, familyId) {
       plan_adjustments: adjustmentsOf(ctx, k.id),   // the adaptive plan's changes to their calendar (version 69)
       ...weeklyOf(ctx, k.id),   // weekly_notes and team_board_opt_in (version 71)
       open_gym: openGymOf(ctx, k.id),   // open gym sign-ins from the front-desk tablet (version 91)
+      prepaid_funds: per(`SELECT delta_cents, kind, note, created_at FROM account_funds WHERE client_id = ? ORDER BY created_at`, k.id),   // the prepaid balance's ledger lines done for this athlete (version 95)
       profile_tags: profileTagsOf(ctx, k.id),   // tags like Legacy (version 90): staff-only labels, handed over on a data request
       wearables_linked: per(`SELECT provider, status, connected_by_kind, connected_at, last_sync_at FROM wearable_connections WHERE client_id = ? ORDER BY provider`, k.id),
       outside_data_imports: per(`SELECT source, file_kind, filename, days, workouts, from_day, to_day, created_by, created_by_kind, created_at, undone_at FROM data_imports WHERE client_id = ? ORDER BY created_at`, k.id),
@@ -220,6 +221,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
     // The audit log keeps what was done and by which record, but not the names of the family's parents or athletes.
     ctx.db.run(`UPDATE audit_log SET actor_name = NULL WHERE (actor_type = 'parent' AND actor_id IN (SELECT id FROM guardians WHERE family_id = ?)) OR (actor_type = 'athlete' AND actor_id IN (${kids.map(() => '?').join(', ') || 'NULL'}))`, familyId, ...kids);
     ctx.db.run('DELETE FROM profile_claims WHERE family_id = ?', familyId);
+    ctx.db.run(`DELETE FROM account_funds WHERE (payer_kind = 'families' AND payer_id = ?) OR client_id IN (${kids.map(() => '?').join(',') || "''"})`, familyId, ...kids);   // the prepaid balance ledger (version 95); the sales stay, without names
     ctx.db.run('DELETE FROM guardians WHERE family_id = ?', familyId);                            // their portal sessions and calendar feeds go with them
     ctx.db.run(`UPDATE families SET name = 'Deleted family', card_payment_method = NULL, card_brand = NULL, card_last4 = NULL, card_exp = NULL, stripe_customer_id = NULL, waiver_signed_by = NULL WHERE id = ?`, familyId);
     const note = `Deleted by ${actor?.name ?? 'an owner'} on ${ctx.now().slice(0, 10)}`;

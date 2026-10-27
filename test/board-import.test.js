@@ -161,7 +161,7 @@ test('a whole block loaded as a library complex, and adding the workout to a pro
 test('saving is all or nothing with every problem listed, and front desk can\'t', async () => {
   const before = db().get('SELECT COUNT(*) AS n FROM workouts').n, exBefore = db().get('SELECT COUNT(*) AS n FROM exercises').n;
   const r = await owner('POST', '/v1/programs/board-import', { program: { name: 'Bad board' }, title: 'x', week: 1, day: 9, blocks: [
-    { name: 'A', kind: 'sideways', exercises: [{ exercise_id: 'ex_gone', sets: 3, reps: '8' }, { new_exercise: { name: 'Rope chop' }, sets: 3, reps: '8' }, { sets: 3, reps: '8' }, { exercise_id: goodMorning.id, sets: 40, reps: '8' }, { complex_id: 'cpx_gone' }] },
+    { name: 'A', kind: 'sideways', exercises: [{ exercise_id: 'ex_gone', sets: 3, reps: '8' }, { new_exercise: { name: 'Rope chop' }, sets: 3, reps: '8' }, { sets: 3, reps: '8' }, { exercise_id: goodMorning.id, sets: 400, reps: '8' }, { complex_id: 'cpx_gone' }] },
     { name: 'B', kind: 'block', exercises: [], complex_id: 'cpx_gone' },
     { name: 'C', kind: 'block', save_as_complex: 'Dynamic flex', exercises: [{ exercise_id: goodMorning.id, sets: 3, reps: '8' }] },
     { name: 'D', kind: 'block', save_as_complex: 'Twice', exercises: [{ new_exercise: { name: 'Tyre flip' }, sets: 3, reps: '8' }] },

@@ -6,7 +6,7 @@ import { newId, v, badRequest, notFound } from '../util.js';
 import { programDetail, copyWeek, rxText, updateWorkoutExercise, guardLogged } from './programs.js';
 
 export const PHASE_KINDS = { base: 'Base', build: 'Build', peak: 'Peak', deload: 'Deload', test: 'Testing', other: 'Other' };
-const MAX_SETS = 12;
+const MAX_SETS = 99;   // the builder's limit (rx.js MAX_SETS; version 93 raised it from 12)
 
 const phasesOf = (ctx, programId) => ctx.db.all('SELECT id, program_id, name, kind, start_week, end_week, note FROM program_phases WHERE program_id = ? ORDER BY start_week', programId);
 const avg = (xs) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 10) / 10 : null);
@@ -84,7 +84,7 @@ export function copyPhases(ctx, fromId, toId, weeks) {
 // ---- Progression ----
 // Copies week from to weeks to..through, changing every exercise by the steps for each week of distance: week from+2
 // gets two steps. sets_step (whole sets, -3 to 3), pct_step (percent of a max, -20 to 20) and rpe_step (-2 to 2 in
-// halves); an exercise without that field is left as it is. Results stay within the builder's limits (1 to 12 sets,
+// halves); an exercise without that field is left as it is. Results stay within the builder's limits (1 to 99 sets,
 // 30 to 110 percent, RPE 1 to 10). Weeks with workouts are replaced only with replace: true, and confirm: true when
 // athletes logged them, like copying a week.
 const step = (val, name, min, max, halves = false) => {

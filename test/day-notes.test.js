@@ -113,7 +113,7 @@ test('the version 91 upgrade adds the day note columns', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(class_series)').some((c) => c.name === 'day_notes'));
       assert.ok(d.all('PRAGMA table_info(class_sessions)').some((c) => c.name === 'day_note'));
       d.close();

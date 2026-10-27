@@ -10,9 +10,11 @@ export const KIND_WORDS = { block: 'one after another', superset: 'one set of ea
 export function setFields(x = null, { hint = true } = {}) {
   const num = (i) => (i.value === '' ? null : Number(i.value));
   const txt = (i) => i.value.trim() || null;
-  const sets = input({ type: 'number', min: '1', max: '12', inputmode: 'numeric', placeholder: '3', value: x?.sets ? String(x.sets) : '', 'aria-label': 'Sets' });
-  const reps = input({ maxlength: '80', placeholder: '8, 8-10, 5/side, 40 sec', value: x?.reps ?? '', 'aria-label': 'Reps' });
+  const sets = input({ type: 'number', min: '1', max: '99', inputmode: 'numeric', placeholder: '3', value: x?.sets ? String(x.sets) : '', 'aria-label': 'Sets' });
+  const reps = input({ maxlength: '80', placeholder: '8, 8-10, 5/side, max', value: x?.reps ?? '', 'aria-label': 'Reps' });
   const distance = input({ maxlength: '20', placeholder: '20 yd, 40 m', value: x?.distance ?? '', 'aria-label': 'Distance' });
+  // How long each set runs (version 93): typed as seconds or minutes, kept on the server as seconds.
+  const time = input({ maxlength: '30', placeholder: '40 sec, 2 min', value: timeText(x?.time_seconds) ?? '', 'aria-label': 'Time each set runs' });
   const loadT = input({ maxlength: '40', placeholder: '135 lb, BW', value: x?.load_text ?? '', 'aria-label': 'Load' });
   const tempo = input({ maxlength: '20', placeholder: '3-1-1-0', value: x?.tempo ?? '', 'aria-label': 'Tempo, four counts: down, pause, up, pause' });
   const rest = input({ type: 'number', min: '0', max: '1800', step: '5', inputmode: 'numeric', placeholder: 'sec', value: x?.rest_seconds != null ? String(x.rest_seconds) : '', 'aria-label': 'Rest in seconds' });
@@ -28,13 +30,13 @@ export function setFields(x = null, { hint = true } = {}) {
   ask.addEventListener('change', sync); sync();
   const lab = (text, el, w) => h('label', { class: 'sf-field', style: w ? `flex:0 0 ${w}` : 'flex:1 1 120px' }, h('span', { class: 'small muted' }, text), el);
   const el = h('div', { class: 'stack-tight sf' },
-    h('div', { class: 'row wrap sf-row' }, lab('Sets', sets, '4.5rem'), lab('Reps', reps), lab('Distance', distance, '7rem'), lab('Load', loadT)),
+    h('div', { class: 'row wrap sf-row' }, lab('Sets', sets, '4.5rem'), lab('Reps', reps), lab('Distance', distance, '7rem'), lab('Time', time, '7rem'), lab('Load', loadT)),
     h('div', { class: 'row wrap sf-row' }, lab('Tempo (0-0-0-0)', tempo, '7rem'), lab('Rest (sec)', rest, '5.5rem'), lab('RPE', rpe, '5rem')),
     lab('Note', note),
     askRow,
-    hint ? h('span', { class: 'small muted' }, 'Sets and reps are what the athlete logs; reps can be a time, like 40 sec, and a distance has its own box. Tempo is four counts, down-pause-up-pause, like 3-1-1-0 (X = as fast as possible).') : null);
+    hint ? h('span', { class: 'small muted' }, 'Sets and reps are what the athlete logs; a distance and a time (how long each set runs, like 40 sec or 2 min) have their own boxes. Tempo is four counts, down-pause-up-pause, like 3-1-1-0 (X = as fast as possible).') : null);
   return { el, sets, reps, focus: () => sets.focus(), body: () => ({
-    sets: num(sets), reps: txt(reps), distance: txt(distance), load_text: txt(loadT), tempo: txt(tempo), rest_seconds: num(rest), target_rpe: num(rpe),
+    sets: num(sets), reps: txt(reps), distance: txt(distance), time_seconds: txt(time), load_text: txt(loadT), tempo: txt(tempo), rest_seconds: num(rest), target_rpe: num(rpe),
     note: txt(note), form_check: ask.checked, form_check_note: ask.checked ? txt(askNote) : null }) };
 }
 
@@ -49,13 +51,15 @@ export function rxTable(x, { compact = false } = {}) {
   const reps = x.target_reps != null && x.reps && /^\d/.test(String(x.reps)) ? String(x.reps) : x.reps ?? null;
   const weight = x.load?.lb != null ? `${x.load.lb} lb` : x.load_text ?? (x.load?.missing ? 'Set your max' : null);
   const pct = x.load_pct != null ? `${x.load_pct}%${LIFTS[x.load_test] ? ` ${LIFTS[x.load_test]}` : ''}` : null;
-  const cells = [['Sets', sets], ['Reps', reps], ['Distance', x.distance ?? null], ['Weight', weight], ['% max', pct], ['Tempo', x.tempo ?? null]];
+  const cells = [['Sets', sets], ['Reps', reps], ['Distance', x.distance ?? null], ['Time', timeText(x.time_seconds)], ['Weight', weight], ['% max', pct], ['Tempo', x.tempo ?? null]];
   const extra = [x.rest_seconds === 0 ? ['Rest', 'none'] : x.rest_seconds != null ? ['Rest', restText(x.rest_seconds)] : null, x.target_rpe != null ? ['RPE', String(x.target_rpe)] : null].filter(Boolean);
   return h('div', { class: `c-rx${compact ? ' c-rx--compact' : ''}`, role: 'table', 'aria-label': 'What to do' },
     ...[...cells, ...extra].map(([k, val]) => h('div', { class: `c-rx-cell${val == null || val === '' ? ' c-rx-cell--empty' : ''}`, role: 'row' },
       h('b', { role: 'rowheader' }, k), h('span', { role: 'cell' }, val == null || val === '' ? '–' : String(val)))));
 }
 function restText(s) { if (s < 60) return `${s} sec`; const m = Math.floor(s / 60), r = s % 60; return r ? `${m}:${String(r).padStart(2, '0')}` : `${m} min`; }
+// How long a set runs, as the coach reads it ("40 sec", "2 min", "1:30"; the server's rx.js timeText).
+export function timeText(s) { if (s == null) return null; if (s < 60) return `${s} sec`; if (s % 3600 === 0) return `${s / 3600} hr`; const m = Math.floor(s / 60), r = s % 60; return r ? `${m}:${String(r).padStart(2, '0')}` : `${m} min`; }
 // The block's heading: its name (older rows without one: "Superset A"), with how it runs for a superset or circuit.
 export const groupTitle = (x) => x.block_name ?? `${GROUP_KINDS[x.group_kind] ?? 'Group'} ${x.group_label}`;
 export const blockWords = (x) => (x.group_kind && x.group_kind !== 'block' ? KIND_WORDS[x.group_kind] : null);

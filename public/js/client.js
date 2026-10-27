@@ -790,7 +790,7 @@ function renderLogger(w) {
       return h('div', { class: `c-set${r.done ? ' c-set--done' : ''}` }, h('span', { class: 'c-set-no' }, `Set ${i + 1}`),
         counted ? [h('label', { class: 'c-set-field' }, wIn, h('span', { class: 'small muted' }, 'lb')), h('label', { class: 'c-set-field' }, rIn, h('span', { class: 'small muted' }, 'reps'))] : h('span', { class: 'grow small muted' }, i === 0 ? x.prescription : ''),
         tick);
-    }), h('div', { class: 'row' }, rows.length < 12 ? btn('Add a set', () => { const all = rowsFor(x); all.push({ weight: '', reps: '', done: false }); draft.sets[x.id] = all; saveDraft(); drawSets(x, setsBox, rows.length); }, 'ghost') : null));
+    }), h('div', { class: 'row' }, rows.length < 99 ? btn('Add a set', () => { const all = rowsFor(x); all.push({ weight: '', reps: '', done: false }); draft.sets[x.id] = all; saveDraft(); drawSets(x, setsBox, rows.length); }, 'ghost') : null));
     if (focus != null) setsBox.querySelector(`[data-set="${focus}"]`)?.focus();
   }
   function toggleSet(x, i, setsBox, weight, reps) {

@@ -71,7 +71,7 @@ button.pl-phase:hover{filter:brightness(1.15)}
 .pl-phase--other{background:var(--surface-raised);border-left-color:var(--line)}
 
 /* The week grid (the redesign, step 1): seven day columns, blocks with a letter circle, one line per exercise. */
-.pg-days{display:grid;grid-template-columns:repeat(7,minmax(190px,1fr));gap:8px;align-items:start;overflow-x:auto;padding-bottom:6px}
+.pg-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:start;overflow-x:auto;padding-bottom:6px}
 .pg-day{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .pg-day--empty{border-style:dashed;background:transparent;min-height:120px}
 .pg-day--selected{border-color:var(--green-mid);box-shadow:inset 0 0 0 1px var(--green-mid)}
@@ -116,12 +116,25 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 @media (max-width: 1100px){.pg-days{grid-template-columns:repeat(7,220px)}}
 
 /* Drag and drop and Send to (step 2). */
-.pg-grid-wrap{display:grid;grid-template-columns:minmax(0,1fr) 230px;gap:10px;align-items:start}
+.pg-grid-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:start}   /* the whole width: Send to opens above the grid now */
+.pg-top{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}
+.pg-drop{flex:0 0 auto;min-width:0}
+.pg-drop[open]{flex:1 1 100%}   /* closed: in the row with Send to and Sell online; open: the whole row, the toggles drop under it */
+.pg-drop>summary{list-style:none;display:inline-flex;cursor:pointer;width:auto}
+.pg-drop>summary::-webkit-details-marker{display:none}
+.pg-drop>summary::before{content:'▸';margin-right:6px;font-size:12px}
+.pg-drop[open]>summary::before{content:'▾'}
+.pg-drop-body{margin-top:8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:10px}
+.pg-top>.dp-btn{flex:0 0 auto}
+.pg-send--top{position:static;max-height:none}
+.pg-send--top .pg-send-list{flex-direction:row;flex-wrap:wrap;gap:4px;max-height:220px;align-content:flex-start}
+.pg-send--top .pg-send-group{flex:1 1 100%;margin:4px 0 0}
+.pg-send--top .pg-send-item{width:auto;flex:0 1 220px}
 .pg-dragging{opacity:.4}
 .pg-over{outline:2px dashed var(--green-bright);outline-offset:2px;background:var(--surface-raised)}
 .pg-line[draggable="true"]{cursor:grab}
 .pg-day-head[draggable="true"]{cursor:grab}
-.pg-dropzone{border:1px dashed var(--line-subtle);border-radius:var(--radius-sm);padding:4px 8px;font:400 11px var(--font-sans);color:var(--steel-muted);text-align:center;margin-top:2px}
+.pg-dropzone{display:none;border:1px dashed var(--line-subtle);border-radius:var(--radius-sm);padding:4px 8px;font:400 11px var(--font-sans);color:var(--steel-muted);text-align:center;margin-top:2px}
 .pg-send{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:10px;display:flex;flex-direction:column;gap:8px;position:sticky;top:12px;max-height:calc(100vh - 40px)}
 .pg-send-list{display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:0}
 .pg-send-group{font:600 10px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--steel-muted);margin:8px 0 2px}
@@ -132,7 +145,7 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 .pg-send-k--team{background:var(--green-bright);color:#0B0D0C}
 .pg-send-k:empty{display:none}
 .pg-x{background:none;border:0;color:inherit;cursor:pointer;font:700 14px/1 var(--font-sans);padding:0 2px}
-@media (max-width: 1100px){.pg-grid-wrap{grid-template-columns:1fr}.pg-send{position:static;max-height:none}}
+@media (max-width: 1100px){.pg-send{position:static;max-height:none}}
 
 /* The month calendar (step 3). */
 .cal-wrap{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}
@@ -155,3 +168,4 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 .cal-day{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:10px;display:flex;flex-direction:column;gap:8px;min-height:120px}
 .cal-wo{display:flex;flex-direction:column;gap:3px;padding:6px 0;border-top:1px solid var(--line-subtle)}
 @media (max-width: 900px){.cal-cell{min-height:48px}.cal-card{display:none}.cal-cell--has .cal-n::after{content:' •';color:var(--green-bright)}}
+.pg-days--dragging .pg-dropzone{display:block}   /* the end-of-day drop target shows only while a line is dragged */

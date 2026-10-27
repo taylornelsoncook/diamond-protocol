@@ -54,9 +54,9 @@ test('the workbook has a plan, a sheet per workout and the phases, with every se
   assert.equal(plan[4][4], 'Upper (0 exercises)');
   assert.deepEqual([plan[5][0], plan[5][1], plan[5][2]], ['2', 'Build', 'Lower (0 exercises)']);
   const lower = readXlsx(buf, 'W1 D1 Lower');
-  assert.deepEqual(lower[0], ['#', 'Exercise', 'Sets', 'Reps', 'Distance', 'Load', 'Tempo', 'Rest', 'Target RPE', 'Block', 'Cue', 'Form check']);
-  assert.deepEqual(lower[1], ['A1', 'Back squat', '4', '6', '', '75% of back squat max', '3-1-1-0', '2:00', '8', 'Superset A', 'Brace hard', 'Yes: Side view']);
-  assert.deepEqual(lower[2].slice(0, 6), ['A2', 'Bench press', '4', '8', '', '65 lb dumbbells']);
+  assert.deepEqual(lower[0], ['#', 'Exercise', 'Sets', 'Reps', 'Distance', 'Time', 'Load', 'Tempo', 'Rest', 'Target RPE', 'Block', 'Cue', 'Form check']);
+  assert.deepEqual(lower[1], ['A1', 'Back squat', '4', '6', '', '', '75% of back squat max', '3-1-1-0', '2:00', '8', 'Superset A', 'Brace hard', 'Yes: Side view']);
+  assert.deepEqual(lower[2].slice(0, 7), ['A2', 'Bench press', '4', '8', '', '', '65 lb dumbbells']);
   assert.ok(lower.some((r) => String(r[0]).startsWith('Warm-up: Hips') && String(r[1]).startsWith('Back squat 2 × 10')), JSON.stringify(lower.slice(3)));
   const phases = readXlsx(buf, 'Phases');
   assert.deepEqual(phases[1], ['Base', 'base', '1', '1', 'Learn the lifts']);

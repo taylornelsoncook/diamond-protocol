@@ -343,7 +343,13 @@ function complexDialog(c, exs) {
   name.focus();
 }
 // The short text for a row edited in a dialog, the way the server builds it (rx.js rxText).
-const rxLine = (f) => { const core = f.sets && (f.reps || f.distance) ? [f.sets, f.reps, f.distance].filter(Boolean).join(' × ') : f.sets ? `${f.sets} sets` : [f.reps, f.distance].filter(Boolean).join(' × '); return [core, f.load_text ? `@ ${f.load_text}` : null].filter(Boolean).join(' '); };
+const rxLine = (f) => {
+  const time = f.time_seconds != null && f.time_seconds !== '' ? String(f.time_seconds).trim() : '';   // typed as "40 sec" or "2 min"; the server keeps the seconds
+  const what = f.reps || f.distance ? [f.reps, f.distance].filter(Boolean).join(' × ') : time;
+  let core = f.sets && what ? `${f.sets} × ${what}` : f.sets ? `${f.sets} sets` : what;
+  if (time && (f.reps || f.distance)) core = `${core} · ${time}`;
+  return [core, f.load_text ? `@ ${f.load_text}` : null].filter(Boolean).join(' ');
+};
 function libraryPanel(exs, edit) {
   const cats = exs.categories ?? [];
   const q = input({ type: 'search', placeholder: 'Search exercises', 'aria-label': 'Search exercises', value: pageState.exQ });
@@ -547,7 +553,7 @@ function exerciseDialog(x, cats, tags = null) {
 }
 
 // ---------- Program builder ----------
-const builder = { focusTab: false, selected: new Set() };   // selected: the ticked days (workout ids) on the week grid
+const builder = { focusTab: false, selected: new Set(), clientsOpen: false, sendOpen: false, sellOpen: false };   // selected: the ticked days (workout ids) on the week grid; the *Open flags: the top bar's drop-down and toggles, kept across redraws
 const drag = { kind: null, id: null, days: [] };            // what is being dragged: an exercise line, or a day (with the ticked days)
 
 export async function viewProgram(main, id) {
@@ -635,11 +641,22 @@ export async function viewProgram(main, id) {
           btn('◀', () => step(-1), 'ghost', { 'aria-label': 'Previous week', disabled: week <= 1 }), h('h2', { class: 'week-title', style: 'margin:0' }, `Week ${week} of ${p.weeks}`), btn('▶', () => step(1), 'ghost', { 'aria-label': 'Next week', disabled: week >= p.weeks })),
         h('span', { class: 'small muted grow' }, days.length ? `${plural(days.length, 'day')} · ${weekReps.toLocaleString()} reps planned${logged ? ` · logged ${plural(logged, 'time')}` : ''}` : ''),
         weekActions),
-      h('div', { class: 'pg-grid-wrap' }, h('div', { class: 'pg-days', role: 'group', 'aria-label': `Week ${week}, days across` }, columns),
-        edit && p.kind !== 'template' ? sendPanel(p, { selected, onSend: () => { selected.clear(); drawBar(); drawWeek(); } }) : null));
+      h('div', { class: 'pg-grid-wrap' }, h('div', { class: 'pg-days', role: 'group', 'aria-label': `Week ${week}, days across` }, columns)));
     drawBar();
   };
   const isTemplate = p.kind === 'template';
+  // The top bar (owner's ask): who is on the program as a drop-down with a search bar to add more, and Send to and Sell
+  // online as toggles that open above the grid, so the seven day columns get the whole width of the page.
+  const sendBox = h('div', { id: 'pg-send-box', hidden: !builder.sendOpen }, edit && !isTemplate ? sendPanel(p, { selected, onSend: () => { selected.clear(); drawBar(); drawWeek(); }, top: true }) : null);
+  const sellBox = h('div', { id: 'pg-sell-box', hidden: !builder.sellOpen }, shop && !isTemplate ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render(), { get })) : null);
+  const toggle = (label, key, box) => {
+    const b = btn(label, () => { builder[key] = !builder[key]; box.hidden = !builder[key]; b.setAttribute('aria-pressed', String(builder[key])); b.setAttribute('aria-expanded', String(builder[key])); }, builder[key] ? 'secondary' : 'ghost', { 'aria-pressed': String(builder[key]), 'aria-expanded': String(builder[key]), 'aria-controls': box.id });
+    return b;
+  };
+  const topBar = isTemplate ? null : h('div', { class: 'pg-top' },
+    clientsDrop(p, edit),
+    edit ? toggle('Send to', 'sendOpen', sendBox) : null,
+    shop ? toggle('Sell online', 'sellOpen', sellBox) : null);
   const header = deps.header(isTemplate ? `${p.name} (template)` : p.name, isTemplate ? `Template · ${plural(p.weeks, 'week')} · ${p.level ?? 'Any level'} · nobody is assigned to a template: start a program from it` : `${plural(p.weeks, 'week')} · ${p.level ?? 'Any level'} · ${plural(p.clients.length, 'client')} · ${plural(p.logged_7d, 'workout')} logged in the last 7 days`,
     edit ? isTemplate ? btn('Start a program from it', () => get('/v1/programs?kind=template').then((t) => newProgramDialog([], t.data, p.id))) : btn('Assign to a client', () => assignDialog(p)) : null);
   fill(main, header,
@@ -648,9 +665,8 @@ export async function viewProgram(main, id) {
       btn(isTemplate ? 'Copy as a new template' : 'Save as template', () => saveTemplateDialog(p), 'ghost'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/program.html?id=${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener' }, 'Print or PDF'),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `/v1/programs/${encodeURIComponent(id)}/export.xlsx` }, 'Excel')) : null,
+    topBar, sendBox, sellBox,
     modeBar, tabsBox, weekBox, barBox, planBox,
-    isTemplate ? null : clientsPanel(p, edit),   // the grid comes first (the redesign); who is on the program sits under it
-    shop && !isTemplate ? panel('Sell online', { subtitle: 'Out-of-town athletes and families buy it from the store page.' }, saleForm(put, 'program', shop.programs.find((x) => x.id === id), () => deps.render(), { get })) : null,
     h('div', { class: 'row' }, h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'All programs'), h('span', { class: 'grow' }),
       edit ? btn('Delete program', (e) => { const logged = p.workouts.reduce((n, w) => n + w.logs, 0); if (confirm(`Delete ${p.name}?${logged ? ` Athletes logged its workouts ${plural(logged, 'time')}; those logs stay in the athletes' history.` : ''} This can't be undone.`)) busy(e.currentTarget, async () => { await del(`/v1/programs/${id}`); toast('Program deleted.'); location.hash = '#/programs'; }); }, 'ghost') : null));
   go(week);
@@ -794,9 +810,24 @@ function progressDialog(p, plan, reload) {
     { label: 'Cancel', variant: 'ghost' }]);
 }
 
-function clientsPanel(p, edit) {
-  return panel('Clients on this program', { subtitle: p.clients.length ? 'Workouts done, what\'s next and when they last trained. Amber means no workout in a week.' : null },
-    p.clients.length ? p.clients.map((c) => {
+// Who is on the program, as a drop-down at the top of the page (owner's ask), with a search bar to add a client or a
+// team: typing a name and pressing Enter (or Add) opens the Assign dialog on that name.
+function clientsDrop(p, edit) {
+  const n = p.clients.length;
+  const q = edit ? input({ type: 'search', placeholder: 'Add a client or team: type a name', 'aria-label': 'Add a client or team to this program', style: 'min-width:220px' }) : null;
+  const open = () => assignDialog(p, q.value.trim());
+  if (q) q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); open(); } });
+  const box = h('details', { class: 'pg-drop', open: builder.clientsOpen },
+    h('summary', { class: 'dp-btn dp-btn--ghost pg-drop-sum' }, `Clients on this program · ${n}`),
+    h('div', { class: 'pg-drop-body stack' },
+      edit ? h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('div', { class: 'grow', style: 'min-width:220px' }, q), btn('Add', open, 'secondary')) : null,
+      n ? h('p', { class: 'small muted dp-help', style: 'margin:0' }, 'Workouts done, what\'s next and when they last trained. Amber means no workout in a week.') : null,
+      clientRows(p, edit)));
+  box.addEventListener('toggle', () => { builder.clientsOpen = box.open; });
+  return box;
+}
+function clientRows(p, edit) {
+  return p.clients.length ? p.clients.map((c) => {
       const pct = c.total ? Math.round((c.done / c.total) * 100) : 0;
       const stale = !c.complete && c.days_idle >= 7;
       return h('div', { class: 'list-item pg-client' },
@@ -812,19 +843,22 @@ function clientsPanel(p, edit) {
             if (!confirm(`Take ${c.name} off ${p.name}? Their logged workouts stay in their history.`)) return;
             busy(e.currentTarget, async () => { await del(`/v1/programs/${p.id}/clients/${c.id}`); toast(`${first(c.name)} is off ${p.name}.`); deps.render(); });
           }, 'ghost', { 'aria-label': `Remove ${c.name} from this program` }) : null));
-    }) : h('p', { class: 'muted small' }, edit ? 'Nobody is on this program yet. Use Assign to a client.' : 'Nobody is on this program yet.'));
+    }) : h('p', { class: 'muted small', style: 'margin:0' }, edit ? 'Nobody is on this program yet. Type a name above to add someone.' : 'Nobody is on this program yet.');
 }
 
-function assignDialog(p) {
+// Assign the program: one athlete found by name or Athlete ID (the list shows only once something is typed, so a big
+// client list stays a search bar), or a whole team.
+function assignDialog(p, query = '') {
   const need = Math.max(1, ...p.workouts.map((w) => w.day));
   const sched = scheduleFields({ need });        // the day week 1 starts and the weekdays they train, the same for everyone assigned here
-  const q = input({ type: 'search', placeholder: 'Name or Athlete ID', 'aria-label': 'Find a client' });
+  const q = input({ type: 'search', placeholder: 'Name or Athlete ID', 'aria-label': 'Find a client', value: query });
   const out = h('div', { class: 'stack', style: 'gap:0;max-height:50vh;overflow:auto' });
   let clients = null;
   const draw = () => {
     if (!clients) return fill(out, h('p', { class: 'small muted' }, 'Loading clients…'));
     const needle = q.value.trim().toLowerCase();
-    const shown = clients.filter((c) => !needle || c.name.toLowerCase().includes(needle) || (c.athlete_id ?? '').toLowerCase().includes(needle)).slice(0, 30);
+    if (!needle) return fill(out, h('p', { class: 'small muted' }, `Type a name or Athlete ID to find someone (${plural(clients.length, 'client')}).`));
+    const shown = clients.filter((c) => c.name.toLowerCase().includes(needle) || (c.athlete_id ?? '').toLowerCase().includes(needle)).slice(0, 30);
     fill(out, shown.length ? shown.map((c) => {
       const on = c.program?.id === p.id;
       return h('div', { class: 'list-item' },
@@ -1050,8 +1084,8 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
   // ahead of the line it is dropped on, at the end of a block dropped on its heading, or at the end of a day.
   const drop = async (payload) => { try { await post(`/v1/workout-exercises/${drag.id}/move`, { workout_id: w.id, ...payload }); reload(); } catch (e) { toast(e.message, 'warn'); } };
   const dragProps = (x) => (edit ? { draggable: 'true',
-    onDragstart: (e) => { drag.id = x.id; drag.kind = 'exercise'; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', x.id); e.currentTarget.classList.add('pg-dragging'); },
-    onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.id = null; } } : {});
+    onDragstart: (e) => { drag.id = x.id; drag.kind = 'exercise'; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', x.id); e.currentTarget.classList.add('pg-dragging'); e.currentTarget.closest('.pg-days')?.classList.add('pg-days--dragging'); },
+    onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.id = null; e.currentTarget.closest('.pg-days')?.classList.remove('pg-days--dragging'); } } : {});
   const target = (payloadOf) => (edit ? {
     onDragover: (e) => { if (drag.kind !== 'exercise') return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; e.currentTarget.classList.add('pg-over'); },
     onDragleave: (e) => e.currentTarget.classList.remove('pg-over'),
@@ -1100,7 +1134,9 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
     w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
     w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
     rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),
-    edit ? h('div', { class: 'pg-dropzone', ...target(() => ({ block_id: null })) }, 'Drop here: end of the day, outside the blocks') : null,
+    // The drop target for the end of the day (an exercise dragged here lands last, in no block); it shows only while a
+    // line is being dragged (owner's ask: the standing "Drop here" line was puzzling).
+    edit ? h('div', { class: 'pg-dropzone', ...target(() => ({ block_id: null })) }, 'Drop here to put it last on this day') : null,
     edit ? h('div', { class: 'pg-day-foot' },
       btn('+ Block', () => blockDialog(w, null, reload), 'ghost'), btn('Load a complex', () => loadComplexDialog(w, reload), 'ghost'),
       btn('+ Exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' })) : null);
@@ -1115,8 +1151,8 @@ async function sendTargets() {
     teams: teams.data.map((t) => ({ kind: 'team', id: t.id, label: t.label, sub: plural(t.roster_count, 'athlete') })),
     athletes: clients.data.filter((c) => !c.archived_at).map((c) => ({ kind: 'client', id: c.id, label: c.name, sub: c.program ? `On ${c.program.name}` : 'No program' })) };
 }
-function sendPanel(p, { selected, onSend }) {
-  const box = h('aside', { class: 'pg-send', 'aria-label': 'Send to' });
+function sendPanel(p, { selected, onSend, top = false }) {
+  const box = h('aside', { class: `pg-send${top ? ' pg-send--top' : ''}`, 'aria-label': 'Send to' });
   const q = input({ type: 'search', placeholder: 'Find a school, team or athlete', 'aria-label': 'Find a school, team or athlete' });
   const list = h('div', { class: 'pg-send-list' });
   let targets = null;

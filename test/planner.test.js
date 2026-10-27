@@ -119,7 +119,7 @@ test('progression builds a run of weeks from one, stepping sets, percent and RPE
   assert.equal(empty.status, 400); assert.match(empty.body.error.message, /Week 7 has no workouts to build from/);
   assert.equal((await desk('POST', `/v1/programs/${p.id}/progress`, { from: 1, to: 2, pct_step: 5, replace: true })).status, 403);
   const d = await plan();
-  assert.deepEqual(d.weeks.map((w) => w.sets), [11, 11, 11, 20, 11, 37], 'the volume bar follows the steps: weeks 2 and 3 were rebuilt from week 1 with only a percent step, week 6 is two steps up from week 4');
+  assert.deepEqual(d.weeks.map((w) => w.sets), [11, 11, 11, 20, 11, 38], 'the volume bar follows the steps: weeks 2 and 3 were rebuilt from week 1 with only a percent step, week 6 is two steps up from week 4');
 });
 
 test('a version 49 database gains the phases table, opened twice', () => {
@@ -133,7 +133,7 @@ test('a version 49 database gains the phases table, opened twice', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
       assert.deepEqual(d.all('PRAGMA table_info(program_phases)').map((c) => c.name), ['id', 'program_id', 'name', 'kind', 'start_week', 'end_week', 'note', 'created_at']);
       d.run(`INSERT OR IGNORE INTO program_phases (id, program_id, name, kind, start_week, end_week, created_at) VALUES ('ph_1', 'prog_1', 'Base', 'base', 1, 2, '2026-09-01T00:00:00Z')`);
       assert.equal(d.get('SELECT COUNT(*) AS n FROM program_phases').n, 1);

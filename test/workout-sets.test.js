@@ -73,7 +73,8 @@ test('sets and reps come from the prescription', () => {
   assert.deepEqual(parseRx('8 × 30 sec hard, 60 sec easy'), { sets: 8, reps: null });
   assert.deepEqual(parseRx('10'), { sets: 1, reps: 10 });
   assert.deepEqual(parseRx('Easy jog'), { sets: 1, reps: null });
-  assert.deepEqual(parseRx('20 × 3'), { sets: 12, reps: 3 }, 'never more than 12 rows to start with');
+  assert.deepEqual(parseRx('20 × 3'), { sets: 20, reps: 3 });
+  assert.deepEqual(parseRx('100 × 3'), { sets: 1, reps: null }, 'never more than 99 rows to start with: the text stays whole');
   // The fields win over the text; a kept snapshot without them falls back to the text.
   assert.deepEqual(parseRx({ sets: 4, reps: '6-8', prescription: '3 × 10' }), { sets: 4, reps: 6 });
   assert.deepEqual(parseRx({ sets: null, reps: null, prescription: '3 × 10' }), { sets: 3, reps: 10 });
@@ -97,7 +98,7 @@ test('Finish saves every set, effort and the note together; mistakes are listed 
     assert.match(r.body.error.message, re);
   };
   await bad({ sets: [{ workout_exercise_id: 'wex_nope', set_no: 1 }] }, /Set 1: that exercise isn't in this workout/);
-  await bad({ sets: [{ workout_exercise_id: squat.id, set_no: 13 }] }, /Back squat: sets are numbered 1 to 12/);
+  await bad({ sets: [{ workout_exercise_id: squat.id, set_no: 100 }] }, /Back squat: sets are numbered 1 to 99/);
   await bad({ sets: [{ workout_exercise_id: squat.id, set_no: 1, weight: 2500 }] }, /Back squat, set 1: enter a weight from 0 to 2000 lb/);
   await bad({ sets: [{ workout_exercise_id: squat.id, set_no: 1, reps: 2.5 }] }, /Back squat, set 1: enter reps as a whole number/);
   await bad({ sets: [{ workout_exercise_id: squat.id, set_no: 1 }, { workout_exercise_id: squat.id, set_no: 1 }] }, /Back squat: set 1 is in the list twice/);

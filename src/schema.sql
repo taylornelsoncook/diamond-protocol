@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS complex_exercises (
   sets INTEGER,
   reps TEXT,
   distance TEXT,
+  time_seconds INTEGER,                          -- version 93: how long each set runs, in seconds
   tempo TEXT,
   rest_seconds INTEGER,
   target_rpe REAL,
@@ -257,6 +258,7 @@ CREATE TABLE IF NOT EXISTS workout_exercises (
   sets INTEGER,                                  -- version 49: structured set details; prescription is the short text built from them
   reps TEXT,                                     -- "8", "8-10", "5/side", "40 sec", "max"
   distance TEXT,                                 -- version 73: a distance per set ("20 yd"), beside the reps
+  time_seconds INTEGER,                          -- version 93: how long each set runs ("40 sec", "2 min"), beside the reps
   tempo TEXT,                                    -- version 73: four counts, down-pause-up-pause ("3-1-1-0", X = as fast as possible)
   rest_seconds INTEGER,
   target_rpe REAL,
@@ -1448,7 +1450,7 @@ CREATE TABLE IF NOT EXISTS workout_sets (
   workout_exercise_id TEXT NOT NULL,
   exercise_id TEXT,
   exercise_name TEXT NOT NULL,
-  set_no INTEGER NOT NULL CHECK (set_no BETWEEN 1 AND 12),
+  set_no INTEGER NOT NULL CHECK (set_no BETWEEN 1 AND 99),   -- version 93: up to 99 sets (was 12)
   weight REAL,
   reps INTEGER,
   created_at TEXT NOT NULL,

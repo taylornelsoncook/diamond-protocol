@@ -6,7 +6,7 @@ import { readinessToday } from './engage.js';
 import { suggestAfterLog, appliedFor } from './progression.js';
 import { blocksFor, attachFields as routineFields } from './routines.js';
 import { getSetting } from './families.js';
-import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, splitRx, rxText, parseRx, tagGroups, splitDistance, normalizeTempo } from './rx.js';
+import { MAX_SETS, GROUP_KINDS, SET_FIELDS, REST_MAX, TIME_MAX, splitRx, rxText, parseRx, tagGroups, splitDistance, normalizeTempo, parseTime } from './rx.js';
 import { trimPhases, copyPhases } from './planner.js';
 import { datedWorkouts, pickNext, parseDate, daysFor, today as localToday, weekOf, weekStats } from './training-calendar.js';
 import { estimatedMax, suggestions as maxSuggestions } from './maxes.js';
@@ -779,6 +779,12 @@ export function slotFields(body = {}, cur = null) {
   if (has('sets')) f.sets = blankOr('sets', () => v.int(body.sets, 'sets', { min: 1, max: MAX_SETS }));
   if (has('reps')) f.reps = blankOr('reps', () => v.str(body.reps, 'reps', { max: 80 }));
   if (has('distance')) f.distance = blankOr('distance', () => v.str(body.distance, 'distance', { max: 20 }));
+  // How long each set runs (version 93): seconds, or text like "40 sec", "2 min", "1:30".
+  if (has('time_seconds')) f.time_seconds = blankOr('time_seconds', () => {
+    const s = parseTime(typeof body.time_seconds === 'number' ? body.time_seconds : v.str(body.time_seconds, 'time_seconds', { max: 30 }));
+    if (s === undefined || s === null || s < 1 || s > TIME_MAX) throw badRequest('Write the time as seconds or minutes, like 40 sec, 2 min or 1:30, up to an hour.');
+    return s;
+  });
   // Reps typed as a distance ("20 yd", "5 × 20 yd") land in the distance field (version 73).
   if (has('reps') && f.reps && !has('distance')) { const d = splitDistance(f.reps); if (d.distance) { f.reps = d.reps; f.distance = d.distance; } }
   if (has('tempo')) f.tempo = blankOr('tempo', () => {
@@ -821,7 +827,7 @@ export function slotFields(body = {}, cur = null) {
     if (f.group_kind && !f.group_label) throw badRequest('Give the group a letter too (A, B, C...), so the exercises in it go together.');
     if (!f.group_kind) f.group_label = null;
   }
-  if (f.sets == null && !f.reps) throw badRequest('Add the sets and reps, like 3 × 8.');
+  if (f.sets == null && !f.reps && !f.distance && f.time_seconds == null) throw badRequest('Add the sets and reps, like 3 × 8, or a distance or time.');
   f.prescription = rxText(f);
   return f;
 }

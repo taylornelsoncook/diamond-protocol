@@ -241,7 +241,7 @@ test('a version 81 database gains the games table', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
       assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'games'`));
       d.close();
     }

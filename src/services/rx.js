@@ -3,10 +3,36 @@
 // the weight-room screen and older integrations show ("3 × 8 @ 135 lb"), built from the fields; text typed on its own
 // (an older integration, a program read from a PDF) is split into the fields, the best we can tell. No imports, so the
 // database upgrade can use it too.
-export const MAX_SETS = 12;
+export const MAX_SETS = 99;   // version 93: was 12 (owner's ask)
 export const GROUP_KINDS = { superset: 'Superset', circuit: 'Circuit', block: 'Block' };
-export const SET_FIELDS = ['sets', 'reps', 'distance', 'tempo', 'rest_seconds', 'target_rpe', 'load_text', 'group_label', 'group_kind', 'note', 'form_check', 'form_check_note'];   // form_check: version 61, the coach asks for a clip
+export const SET_FIELDS = ['sets', 'reps', 'distance', 'time_seconds', 'tempo', 'rest_seconds', 'target_rpe', 'load_text', 'group_label', 'group_kind', 'note', 'form_check', 'form_check_note'];   // form_check: version 61, the coach asks for a clip; time_seconds: version 93
 export const REST_MAX = 1800;
+export const TIME_MAX = 3600;   // a set runs up to an hour
+
+// How long a set runs (version 93), typed as "40", "40 sec", "2 min", "1:30" or "1 min 30 sec": the seconds, null for
+// nothing, undefined for text that isn't a time.
+export function parseTime(text) {
+  if (typeof text === 'number') return Number.isInteger(text) ? text : undefined;
+  const t = String(text ?? '').trim().toLowerCase();
+  if (!t) return null;
+  if (/^\d{1,5}$/.test(t)) return Number(t);
+  const clock = /^(\d{1,3}):([0-5]\d)$/.exec(t);
+  if (clock) return Number(clock[1]) * 60 + Number(clock[2]);
+  let secs = 0, rest = t.replace(/,/g, ' ');
+  const re = /(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)\b\.?/g;
+  let m, found = false;
+  while ((m = re.exec(rest))) { found = true; const n = Number(m[1]); secs += /^h/.test(m[2]) ? n * 3600 : /^m/.test(m[2]) ? n * 60 : n; }
+  if (!found || rest.replace(re, '').trim()) return undefined;
+  return Math.round(secs);
+}
+// The time as the coach reads it: "40 sec", "2 min", "1:30", "1 hr".
+export function timeText(s) {
+  if (s === null || s === undefined) return null;
+  if (s < 60) return `${s} sec`;
+  if (s % 3600 === 0) return `${s / 3600} hr`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return r ? `${m}:${String(r).padStart(2, '0')}` : `${m} min`;
+}
 
 const RX_SPLIT = /^(\d{1,2})\s*(?:×|x|\*|sets?\s+of)\s*(.+)$/i;
 // A distance on its own ("20 yd", "40 m", "1.5 mi"): since version 73 it's the distance field, not the reps.
@@ -58,10 +84,14 @@ export function splitRx(text) {
   return out;
 }
 
-// The short text: "3 × 8", "3 × 8 @ 135 lb", "3 sets", "4 × 20 yd", "3 × 5 × 20 yd", "Warm-up 5 min".
+// The short text: "3 × 8", "3 × 8 @ 135 lb", "3 sets", "4 × 20 yd", "3 × 5 × 20 yd", "Warm-up 5 min"; a time runs
+// in place of reps ("3 × 40 sec") or after them ("3 × 8 · 40 sec", "4 × 20 yd · 30 sec").
 export function rxText(f) {
   const sets = f.sets ?? null, reps = f.reps ? String(f.reps).trim() : '', distance = f.distance ? String(f.distance).trim() : '';
-  const core = sets && (reps || distance) ? [sets, reps, distance].filter(Boolean).join(' × ') : sets ? `${sets} ${sets === 1 ? 'set' : 'sets'}` : [reps, distance].filter(Boolean).join(' × ');
+  const time = f.time_seconds != null ? timeText(f.time_seconds) : '';
+  const what = reps || distance ? [reps, distance].filter(Boolean).join(' × ') : time;
+  let core = sets && what ? `${sets} × ${what}` : sets ? `${sets} ${sets === 1 ? 'set' : 'sets'}` : what;
+  if (time && (reps || distance)) core = `${core} · ${time}`;
   return [core, f.load_text ? `@ ${String(f.load_text).trim()}` : null].filter(Boolean).join(' ');
 }
 export function restText(s) {

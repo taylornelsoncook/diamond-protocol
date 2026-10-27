@@ -58,7 +58,8 @@ test('text is split into fields and fields make the text', () => {
   assert.deepEqual(splitRx('3 sets of 40 sec'), { sets: 3, reps: '40 sec', distance: null, load_text: null, target_rpe: null });
   assert.deepEqual(splitRx('5 sets'), { sets: 5, reps: null, distance: null, load_text: null, target_rpe: null });
   assert.deepEqual(splitRx('Easy jog 10 min'), { sets: null, reps: 'Easy jog 10 min', distance: null, load_text: null, target_rpe: null });
-  assert.deepEqual(splitRx('20 × 20 yd'), { sets: null, reps: '20 × 20 yd', distance: null, load_text: null, target_rpe: null }, 'more sets than an athlete can log stays text');
+  assert.deepEqual(splitRx('20 × 20 yd'), { sets: 20, reps: null, distance: '20 yd', load_text: null, target_rpe: null }, 'up to 99 sets (version 93)');
+  assert.deepEqual(splitRx('100 × 20 yd'), { sets: null, reps: '100 × 20 yd', distance: null, load_text: null, target_rpe: null }, 'more sets than an athlete can log stays text');
   assert.deepEqual(splitRx('3 × 5 @ RPE 7.5'), { sets: 3, reps: '5', distance: null, load_text: null, target_rpe: 7.5 });
   assert.deepEqual(splitRx(''), { sets: null, reps: null, distance: null, load_text: null, target_rpe: null });
   assert.equal(rxText({ sets: 3, reps: '8', load_text: '135 lb' }), '3 × 8 @ 135 lb');
@@ -72,7 +73,7 @@ test('text is split into fields and fields make the text', () => {
   assert.equal(rxDetails({}), null);
   assert.deepEqual(parseRx({ sets: 4, reps: '6-8' }), { sets: 4, reps: 6 });
   assert.deepEqual(parseRx({ sets: 3, reps: '40 sec' }), { sets: 3, reps: null });
-  assert.deepEqual(parseRx({ sets: null, reps: '20 × 3' }), { sets: 12, reps: 3 });
+  assert.deepEqual(parseRx({ sets: null, reps: '20 × 3' }), { sets: 20, reps: 3 });
 });
 
 test('an exercise is added with its fields; the text is built from them; older callers still send a prescription', async () => {
@@ -89,7 +90,7 @@ test('an exercise is added with its fields; the text is built from them; older c
   // Every problem says what to fix.
   const bad = async (body, re, why) => { const res = await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: plank.id, ...body }); assert.equal(res.status, 400, why ?? JSON.stringify(body)); assert.match(res.body.error.message, re); };
   await bad({}, /Add the sets and reps/);
-  await bad({ sets: 13, reps: '5' }, /between 1 and 12/);
+  await bad({ sets: 100, reps: '5' }, /between 1 and 99/);
   await bad({ sets: 3, reps: '5', target_rpe: 7.3 }, /in halves/);
   await bad({ sets: 3, reps: '5', rest_seconds: 2000 }, /between 0 and 1800/);
   await bad({ sets: 3, reps: '5', group_label: 'AA' }, /one letter/);
@@ -145,7 +146,7 @@ test('remove and undo, and copying a workout, keep every field', async () => {
   const sq = list[0];
   const gone = (await coach('DELETE', `/v1/workout-exercises/${sq.id}`)).body;
   assert.deepEqual(gone.restore, { workout_id: w1.id, exercise_id: squat.id, prescription: '4 × 5 @ 185 lb', load_test: null, load_pct: null, position: 1, block_id: sq.block_id,
-    sets: 4, reps: '5', distance: null, tempo: '3-1-1-0', rest_seconds: 120, target_rpe: 8, load_text: '185 lb', group_label: 'A', group_kind: 'circuit', note: 'Pause at the bottom', form_check: 0, form_check_note: null });
+    sets: 4, reps: '5', distance: null, time_seconds: null, tempo: '3-1-1-0', rest_seconds: 120, target_rpe: 8, load_text: '185 lb', group_label: 'A', group_kind: 'circuit', note: 'Pause at the bottom', form_check: 0, form_check_note: null });
   const { workout_id, ...back } = gone.restore;
   await coach('POST', `/v1/workouts/${workout_id}/exercises`, back);
   list = slots(await detail(program.id), w1.id);
@@ -196,18 +197,18 @@ test('Build from a PDF: the draft carries the fields and saving keeps them', asy
     ['Back squat', '5 × 3', 5, '3', '2-1-X-0', 180, 8.5, 'A', 'superset'],
     ['Bent-over row', '5 × 6', 5, '6', null, null, null, 'A', 'superset'],
     ['Plank', '3 × 45 sec', 3, '45 sec', null, null, null, null, null],
-    ['Sled push', '20 × 20 yd @ moderate', null, '20 × 20 yd', null, null, null, null, null]], 'an older draft\'s prescription is split; out-of-range values are dropped for the coach to fill in');
-  assert.deepEqual(read.body.notes.filter((n) => /Plank|Sled/.test(n)).length, 4, read.body.notes.join('\n'));
-  assert.ok(read.body.notes.some((n) => /Sled push: 20 sets is more than the 12/.test(n)));
+    ['Sled push', '20 × 20 yd @ moderate', 20, null, null, null, null, null, null]], 'an older draft\'s prescription is split; out-of-range values are dropped for the coach to fill in');
+  assert.deepEqual(read.body.notes.filter((n) => /Plank|Sled/.test(n)).length, 3, read.body.notes.join('\n'));
+  assert.ok(!read.body.notes.some((n) => /Sled push: 20 sets/.test(n)), '20 sets is within the limit since version 93');
   assert.ok(read.body.notes.some((n) => /Plank: a rest of 5000 seconds/.test(n)) && read.body.notes.some((n) => /Plank: an RPE of 11/.test(n)) && read.body.notes.some((n) => /Plank: the group "ZZ"/.test(n)));
   const split = await coach('POST', '/v1/programs/import', { program: { name: 'Split group' }, workouts: [{ week: 1, day: 1, title: 'Day 1', exercises: [
     { exercise_id: squat.id, sets: 3, reps: '5', group_label: 'A', group_kind: 'superset' }, { exercise_id: plank.id, sets: 3, reps: '30 sec' }, { exercise_id: row.id, sets: 3, reps: '8', group_label: 'A', group_kind: 'circuit' }] }] });
   assert.equal(split.status, 400);
   assert.deepEqual(split.body.error.details.problems, ['Week 1, day 1: the exercises in group A (1, 3) need to be next to each other.']);
   const bad = await coach('POST', '/v1/programs/import', { program: { name: 'From the file' }, workouts: [{ week: 1, day: 1, title: 'Day 1', exercises: [
-    { exercise_id: squat.id, sets: 13, reps: '3' }, { exercise_id: rdl.id, sets: 3, reps: '8', group_kind: 'circuit' }, { exercise_id: plank.id }] }] });
+    { exercise_id: squat.id, sets: 100, reps: '3' }, { exercise_id: rdl.id, sets: 3, reps: '8', group_kind: 'circuit' }, { exercise_id: plank.id }] }] });
   assert.equal(bad.status, 400);
-  assert.deepEqual(bad.body.error.details.problems, ['Week 1, day 1, exercise 1: sets must be a whole number between 1 and 12.', 'Week 1, day 1, exercise 2: give the group a letter too (A, B, C...), so the exercises in it go together.', 'Week 1, day 1, exercise 3: add the sets and reps, like 3 × 8.']);
+  assert.deepEqual(bad.body.error.details.problems, ['Week 1, day 1, exercise 1: sets must be a whole number between 1 and 99.', 'Week 1, day 1, exercise 2: give the group a letter too (A, B, C...), so the exercises in it go together.', 'Week 1, day 1, exercise 3: add the sets and reps, like 3 × 8, or a distance or time.']);
   const ok = await coach('POST', '/v1/programs/import', { program: { name: 'From the file' }, workouts: [{ week: 1, day: 1, title: 'Day 1', exercises: [
     { exercise_id: squat.id, sets: 5, reps: '3', tempo: '2-1-X', rest_seconds: 180, target_rpe: 8.5, group_label: 'A', group_kind: 'superset' },
     { exercise_id: row.id, sets: 5, reps: '6', group_label: 'A', group_kind: 'circuit', note: 'Elbows in' },
@@ -234,13 +235,13 @@ test('a version 48 database gains the fields and its prescriptions are split, op
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
       const rows = d.all('SELECT id, prescription, sets, reps, load_text, target_rpe, load_test, load_pct, group_label FROM workout_exercises ORDER BY position').map((r) => ({ ...r }));
       assert.deepEqual(rows, [
         { id: 'wex_1', prescription: '3 × 8 @ 135 lb', sets: 3, reps: '8', load_text: '135 lb', target_rpe: null, load_test: null, load_pct: null, group_label: null },
         { id: 'wex_2', prescription: '4x5/side', sets: 4, reps: '5/side', load_text: null, target_rpe: null, load_test: 'squat_1rm', load_pct: 75, group_label: null },
         { id: 'wex_3', prescription: 'Easy jog 10 min', sets: null, reps: 'Easy jog 10 min', load_text: null, target_rpe: null, load_test: null, load_pct: null, group_label: null },
-        { id: 'wex_4', prescription: '20 × 20 yd', sets: null, reps: '20 × 20 yd', load_text: null, target_rpe: null, load_test: null, load_pct: null, group_label: null },
+        { id: 'wex_4', prescription: '20 × 20 yd', sets: 20, reps: null, load_text: null, target_rpe: null, load_test: null, load_pct: null, group_label: null },
         { id: 'wex_5', prescription: '3 × 5 RPE 8', sets: 3, reps: '5', load_text: null, target_rpe: 8, load_test: null, load_pct: null, group_label: null }], `round ${round}: the text stays, the fields are the best we can tell`);
       const fresh = openDb(':memory:');
       assert.deepEqual(d.all('PRAGMA table_info(workout_exercises)').map((c) => c.name).sort(), fresh.all('PRAGMA table_info(workout_exercises)').map((c) => c.name).sort());
@@ -298,7 +299,7 @@ test('a version 72 database: reps that were a distance move over and tempos get 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
       const rows = d.all('SELECT id, reps, distance, tempo, prescription FROM workout_exercises ORDER BY position');
       assert.deepEqual(rows, [
         { id: 'x1', reps: null, distance: '20 yd', tempo: null, prescription: '6 × 20 yd' },

@@ -101,7 +101,7 @@ test('a parent course goes in order too; a version 74 database gains in_order on
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 92, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 93, `round ${round}`);
       assert.deepEqual(d.get('SELECT title, in_order FROM courses WHERE id = ?', 'crs_old'), { title: 'Old course', in_order: 1 }, 'existing courses go in order');
       d.close();
     }

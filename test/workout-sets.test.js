@@ -113,6 +113,9 @@ test('Finish saves every set, effort and the note together; mistakes are listed 
   });
   assert.equal(r.status, 201);
   assert.deepEqual([r.body.finished.exercises_logged, r.body.finished.exercises_total, r.body.finished.sets, r.body.finished.rpe, r.body.finished.minutes, r.body.finished.bests], [2, 2, 5, 7, 42, []]);
+  // The summary after Finish (owner's ask): every exercise with its sets, and the totals.
+  assert.deepEqual(r.body.finished.exercises.map((x) => [x.name, x.done, x.sets.map((s) => [s.set_no, s.weight, s.reps])]), [['Back squat', true, [[1, 150, 5], [2, 150, 5], [3, 150, 5]]], ['Front plank', true, [[1, null, null], [2, null, null]]]]);
+  assert.deepEqual(r.body.finished.totals, { exercises_done: 2, exercises_total: 2, sets: 5, reps: 15, tonnage_lb: 2250 });
   assert.equal(r.body.next.workout.id, w2.id);
   const next = r.body.next.workout.exercises[0];
   assert.deepEqual([next.last.sets.map((s) => [s.weight, s.reps]), next.best_weight], [[[150, 5], [150, 5], [150, 5]], 150], 'last time and best follow the exercise');

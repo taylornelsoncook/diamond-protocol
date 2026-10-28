@@ -950,20 +950,38 @@ async function finish(d, w) {
   } else {
     // Not sent yet: say so, with what we know on the phone.
     const sets = body.sets.length;
-    state.done = { offline: true, title: d.title, sets, rpe: body.rpe ?? null, minutes: d.started_at ? Math.round((Date.now() - Date.parse(d.started_at)) / 60000) : null, bests: [], next: null, upcoming: state.home?.upcoming ?? [] };
+    // The summary from what the phone has: each exercise of the workout with the sets ticked.
+    const exercises = (w?.exercises ?? []).map((x) => { const rows = d.sets[x.id] ?? []; const logged = rows.map((r, i) => (r.done ? { set_no: i + 1, weight: r.weight === '' || r.weight == null ? null : Number(r.weight), reps: r.reps === '' || r.reps == null ? null : Number(r.reps) } : null)).filter(Boolean); return { id: x.id, name: x.name, prescription: x.prescription, done: logged.length > 0, sets: logged }; });
+    const all = exercises.flatMap((x) => x.sets);
+    const totals = { exercises_done: exercises.filter((x) => x.done).length, exercises_total: exercises.length, sets: all.length, reps: all.reduce((t, s) => t + (s.reps || 0), 0), tonnage_lb: Math.round(all.reduce((t, s) => t + (s.weight != null && s.reps != null ? s.weight * s.reps : 0), 0)) };
+    state.done = { offline: true, title: d.title, sets, rpe: body.rpe ?? null, notes: body.notes ?? null, minutes: d.started_at ? Math.round((Date.now() - Date.parse(d.started_at)) / 60000) : null, bests: [], next: null, upcoming: state.home?.upcoming ?? [], exercises, totals };
   }
   engage.load().catch(() => {});
   render();
   window.scrollTo(0, 0);
 }
 
+// The summary after Finish (owner's ask: "a summary page of everything they did from that workout"): the totals as tiles,
+// then every exercise with the sets logged (weight × reps), the ones skipped marked, bests, maxes, steps up and the note.
 function renderDone(f) {
-  const facts = [f.sets ? `${f.sets} ${f.sets === 1 ? 'set' : 'sets'}` : null, f.minutes && f.minutes >= 1 && f.minutes <= 240 ? `${f.minutes} min` : null, f.rpe ? `effort ${f.rpe}/10 (${RPE_WORDS[f.rpe].toLowerCase()})` : null].filter(Boolean);
+  const t = f.totals ?? null;
+  const facts = [f.minutes && f.minutes >= 1 && f.minutes <= 240 ? `${f.minutes} min` : null, f.rpe ? `effort ${f.rpe}/10 (${RPE_WORDS[f.rpe].toLowerCase()})` : null].filter(Boolean);
+  const tile = (n, label) => h('div', { class: 'c-sum-tile' }, h('span', { class: 'c-sum-n' }, n), h('span', { class: 'c-sum-l' }, label));
+  const tiles = t ? h('div', { class: 'c-sum-tiles', role: 'list' },
+    tile(`${t.exercises_done}${t.exercises_total ? `/${t.exercises_total}` : ''}`, 'exercises'), tile(String(t.sets), t.sets === 1 ? 'set' : 'sets'), t.reps ? tile(t.reps.toLocaleString(), 'reps') : null, t.tonnage_lb ? tile(`${t.tonnage_lb.toLocaleString()} lb`, 'lifted') : null,
+    f.minutes && f.minutes >= 1 && f.minutes <= 240 ? tile(`${f.minutes}`, 'min') : null) : null;
+  const exLine = (x) => h('div', { class: `c-sum-ex${x.done ? '' : ' c-sum-ex--skipped'}` },
+    h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong grow' }, x.name, x.swapped_from ? h('span', { class: 'small muted' }, ` (instead of ${x.swapped_from})`) : null, x.removed ? h('span', { class: 'small muted' }, ' (no longer in the workout)') : null), x.prescription ? h('span', { class: 'small muted' }, x.prescription) : null),
+    x.done ? h('div', { class: 'small c-sum-sets' }, x.sets.map((s) => h('span', { class: 'c-sum-set' }, `${s.set_no}`, h('span', { class: 'muted' }, ' · '), setText(s)))) : h('div', { class: 'small muted' }, 'Not logged'));
   const nextUp = f.next ?? null;
   fill(view, top(), pendingBox,
     h('div', { class: 'dp-panel stack' }, h('h1', { class: 'c-done', tabindex: '-1' }, f.edited ? 'Changes saved' : 'Workout logged'),
-      h('p', { class: 'muted' }, f.offline ? 'Saved on this phone. It sends when you\'re back online, and your coach sees it then.' : f.merged ? 'Added to the workout you logged on the weight-room screen. Your coach can see it now.' : 'Your coach can see it now.'),
-      facts.length ? h('p', { class: 'strong' }, facts.join(' · ')) : null,
+      h('p', { class: 'muted' }, `${f.title ? `${f.title}${f.week ? ` · week ${f.week} day ${f.day}` : ''}. ` : ''}${f.offline ? 'Saved on this phone. It sends when you\'re back online, and your coach sees it then.' : f.merged ? 'Added to the workout you logged on the weight-room screen. Your coach can see it now.' : 'Your coach can see it now.'}`),
+      tiles,
+      facts.length ? h('p', { class: 'strong', style: 'margin:0' }, facts.join(' · ')) : null,
+      f.exercises?.length ? h('section', { class: 'stack-tight', 'aria-label': 'What you did' }, h('h2', { class: 'dp-panel-title' }, 'What you did'), f.exercises.map(exLine)) : null,
+      f.progressions?.length ? h('div', { class: 'c-bests stack-tight', role: 'note' }, h('div', { class: 'strong' }, 'Steps up'), f.progressions.map((p) => h('div', null, `${p.exercise_name}: ${p.text}${p.status === 'approved' ? '' : ' (your coach will confirm it)'}`))) : null,
+      f.notes ? h('p', { class: 'small' }, h('span', { class: 'muted' }, 'Your note: '), f.notes) : null,
       f.bests?.length ? h('div', { class: 'c-bests' }, h('div', { class: 'strong' }, 'New best'), f.bests.map((b) => h('div', null, `${b.name}: ${lb(b.weight)} (was ${lb(b.previous)})`))) : null,
       f.new_maxes?.length ? h('div', { class: 'c-bests stack-tight', role: 'note' }, h('div', { class: 'strong' }, 'Your maxes'), f.new_maxes.map((m) => {
         const line = h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' }, h('span', { class: 'grow' }, `${m.lift.charAt(0).toUpperCase() + m.lift.slice(1)}: your sets put your max around ${m.value} lb${m.on_file ? ` (on file: ${m.on_file} lb)` : ''}.`),

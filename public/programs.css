@@ -71,11 +71,20 @@ button.pl-phase:hover{filter:brightness(1.15)}
 .pl-phase--other{background:var(--surface-raised);border-left-color:var(--line)}
 
 /* The week grid (the redesign, step 1): seven day columns, blocks with a letter circle, one line per exercise. */
-.pg-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:start;overflow-x:auto;padding-bottom:6px}
+/* Columns never go under 150px (owner: names were breaking one letter a line on a narrow window): past that the week scrolls sideways. */
+.pg-days{display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:8px;align-items:start;overflow-x:auto;padding-bottom:6px}
+/* One day on its own (owner's ask: click into a day and work on it without the whole program): one wide column. */
+.pg-days--one{grid-template-columns:minmax(0,760px)}
+.pg-days--one .pg-day{padding:12px 14px}
+.pg-days--one .pg-line-name{font-size:14px}
+.pg-days--one .pg-line-rx,.pg-days--one .pg-line-note{font-size:13px}
+.pg-day-nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .pg-day{border:1px solid var(--line);border-radius:var(--radius-md);background:var(--ground);padding:8px 10px;display:flex;flex-direction:column;gap:6px;min-width:0}
 .pg-day--empty{border-style:dashed;background:transparent;min-height:120px}
 .pg-day--selected{border-color:var(--green-mid);box-shadow:inset 0 0 0 1px var(--green-mid)}
 .pg-day-head{display:flex;align-items:flex-start;gap:6px}
+.pg-day-head .pg-open{color:var(--green-bright)}
+.pg-day-head .pg-open:hover{text-decoration:underline}
 .pg-day-head .pg-title{min-height:0;font-size:14px;line-height:1.25;text-align:left}
 .pg-tick{width:18px;height:18px;margin:2px 0 0;flex-shrink:0;accent-color:var(--green-mid)}
 .pg-menu{position:relative;flex-shrink:0}
@@ -87,29 +96,32 @@ button.pl-phase:hover{filter:brightness(1.15)}
 .pg-instr{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-left:3px solid var(--green-mid);background:var(--surface-raised);border-radius:var(--radius-sm)}
 .pg-instr-k{font:600 10px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright)}
 .pg-day-body{display:flex;flex-direction:column;gap:3px}
-.pg-bhead{display:flex;align-items:center;gap:6px;margin-top:6px;min-width:0}
+.pg-bhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;min-width:0}   /* the actions drop under the name when the column is tight */
 .pg-letter{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font:700 11px var(--font-display);flex-shrink:0;color:#0B0D0C}
 .pg-letter--lift{background:var(--steel)}
 .pg-letter--warm{background:#F0B458}
 .pg-letter--speed{background:var(--green-bright)}
 .pg-letter--cool{background:#7FB8E6}
-.pg-bname{font:600 12px/1.2 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--steel);background:none;border:0;padding:0;text-align:left;cursor:default;min-width:0;flex:1 1 auto}
+.pg-bname{font:600 12px/1.2 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:var(--steel);background:none;border:0;padding:0;text-align:left;cursor:default;min-width:0;flex:1 1 90px;overflow-wrap:break-word}
 button.pg-bname{cursor:pointer}
 button.pg-bname:hover{text-decoration:underline}
 .pg-bkind{text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)}
 .pg-bacts{display:flex;gap:0;flex-shrink:0}
 .pg-bacts .dp-btn{min-height:24px;min-width:24px;padding:0 5px;font-size:12px}
 @media (hover:hover){.pg-bacts{opacity:.3;transition:opacity .15s}.pg-bhead:hover .pg-bacts,.pg-bhead:focus-within .pg-bacts{opacity:1}}
-.pg-line{display:flex;align-items:flex-start;gap:6px;padding-left:4px;min-width:0}
-.pg-line-n{width:18px;flex-shrink:0;text-align:right;font:700 11px/18px var(--font-display);color:var(--green-bright)}
-.pg-line-body{display:flex;flex-direction:column;gap:1px;flex:1 1 auto;min-width:0;background:none;border:0;padding:1px 0;text-align:left;color:inherit;font:inherit;cursor:default;border-radius:var(--radius-sm)}
+/* A line wraps as a whole: the name, sets and note never go under 60px wide (words break only when one word is wider than that), and the
+   demo thumbnail and × drop under the text when the column is too tight for them beside it. */
+.pg-line{display:flex;flex-wrap:wrap;align-items:flex-start;gap:4px;padding-left:4px;min-width:0}
+.pg-line-n{width:14px;flex-shrink:0;text-align:right;font:700 11px/18px var(--font-display);color:var(--green-bright)}
+.pg-line-body{display:flex;flex-direction:column;gap:1px;flex:1 1 60px;min-width:60px;background:none;border:0;padding:1px 0;text-align:left;color:inherit;font:inherit;cursor:default;border-radius:var(--radius-sm)}
 button.pg-line-body{cursor:pointer}
 button.pg-line-body:hover .pg-line-name{text-decoration:underline}
-.pg-line-name{font:500 13px/1.25 var(--font-sans);color:var(--steel);overflow-wrap:anywhere}
+.pg-line-name{font:500 13px/1.25 var(--font-sans);color:var(--steel);overflow-wrap:break-word}
+.pg-day-head .pg-title,.pg-day-head .small{overflow-wrap:break-word;min-width:0}
 .pg-line-rx{font:400 12px/1.25 var(--font-sans);color:var(--steel-muted)}
 .pg-line-note{font:400 12px/1.25 var(--font-sans);color:var(--steel);font-style:italic}
 .pg-flag{display:inline-block;margin-left:6px;font:700 9px/1 var(--font-sans);letter-spacing:.06em;padding:2px 4px;border-radius:3px;background:var(--surface-raised);color:var(--green-bright);vertical-align:middle}
-.pg-line .dp-ex-play{width:26px;height:26px;min-height:26px;flex-shrink:0}
+.pg-line .dp-ex-play{width:26px;height:26px;min-height:26px;flex-shrink:0;margin-left:auto}
 .pg-day-foot{display:flex;flex-wrap:wrap;gap:2px;border-top:1px solid var(--line-subtle);padding-top:6px;margin-top:2px}
 .pg-day-foot .dp-btn{min-height:28px;padding:2px 8px;font-size:12px}
 .pg-bar{position:sticky;bottom:12px;z-index:6;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 14px;background:var(--surface);border:1px solid var(--green-mid);border-radius:var(--radius-md);box-shadow:0 8px 24px rgba(0,0,0,.45)}
@@ -171,7 +183,7 @@ button.pg-line-body:hover .pg-line-name{text-decoration:underline}
 .pg-days--dragging .pg-dropzone{display:block}   /* the end-of-day drop target shows only while a line is dragged */
 /* Ticks on exercise lines and the bar for the ticked ones (make a complex, group as a block, remove); × removes one line. */
 .pg-line-tick{width:14px;height:14px;margin:3px 0 0;flex-shrink:0;accent-color:var(--green-bright)}
-.pg-line-x{min-height:22px;min-width:22px;padding:0 4px;font-size:14px;line-height:1;flex-shrink:0;color:var(--steel-muted);opacity:0}
+.pg-line-x{min-height:22px;min-width:20px;padding:0 3px;font-size:14px;line-height:1;flex-shrink:0;color:var(--steel-muted);opacity:0}
 .pg-line:hover .pg-line-x,.pg-line:focus-within .pg-line-x{opacity:1}
 .pg-pickbar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 8px;border:1px solid var(--green-mid);border-radius:var(--radius-sm);background:var(--surface-raised);margin-top:4px}
 .pg-pickbar .dp-btn{min-height:26px;padding:2px 8px;font-size:12px}

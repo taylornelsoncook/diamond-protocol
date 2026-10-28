@@ -100,3 +100,12 @@
 .c-plan .c-rx-cell b{font-size:9px;line-height:12px}
 .c-plan .c-rx-cell span{font-size:13px;line-height:17px}
 .c-plan .dp-ex-sets{font-size:12px}
+/* The summary after Finish: totals as tiles, then each exercise with its sets. */
+.c-sum-tiles{display:flex;flex-wrap:wrap;gap:8px}
+.c-sum-tile{flex:1 1 72px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 6px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface-raised)}
+.c-sum-n{font:700 22px/1 var(--font-display);color:var(--green-bright)}
+.c-sum-l{font:500 11px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--steel-muted)}
+.c-sum-ex{padding:8px 0;border-top:1px solid var(--line-subtle);display:flex;flex-direction:column;gap:4px}
+.c-sum-ex--skipped .strong{color:var(--steel-muted)}
+.c-sum-sets{display:flex;flex-wrap:wrap;gap:4px 10px}
+.c-sum-set{white-space:nowrap}

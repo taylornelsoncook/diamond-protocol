@@ -561,8 +561,12 @@ export async function viewProgram(main, id) {
   const edit = canEdit();
   const qs = new URLSearchParams(location.hash.split('?')[1] ?? '');
   let week = Math.min(Math.max(Number(qs.get('week')) || 1, 1), p.weeks);
-  let mode = qs.get('view') === 'plan' ? 'plan' : 'week';     // one week at a time, or the whole plan (the planner)
-  const go = (n) => { history.replaceState(null, '', `#/programs/${id}?week=${n}${mode === 'plan' ? '&view=plan' : ''}`); };
+  // One week at a time, the whole plan (the planner), or one day on its own (owner's ask: click into a day and adjust only
+  // that day, without the whole program on the screen; `day` is the workout's id, kept in the address so a reload stays there).
+  let dayId = qs.get('day') || null;
+  let mode = qs.get('view') === 'plan' ? 'plan' : qs.get('view') === 'day' && p.workouts.some((w) => w.id === dayId) ? 'day' : 'week';
+  if (mode !== 'day') dayId = null;
+  const go = (n) => { history.replaceState(null, '', `#/programs/${id}?week=${n}${mode === 'plan' ? '&view=plan' : mode === 'day' ? `&view=day&day=${dayId}` : ''}`); };
   const reload = (n = week) => { go(n); deps.render(); };
   const daysIn = (n) => p.workouts.filter((w) => w.week === n);
 
@@ -587,18 +591,40 @@ export async function viewProgram(main, id) {
   // The planner: weeks down, days across, phases as bands, each week's volume and intensity.
   const planBox = h('section', { class: 'stack', 'aria-label': 'Whole plan' });
   const modeBar = h('div', { class: 'row wrap', role: 'group', 'aria-label': 'How to see the program' });
-  const drawMode = () => fill(modeBar, [['week', 'Week by week'], ['plan', 'Whole plan']].map(([m, label]) => btn(label, () => { if (mode === m) return; mode = m; go(week); draw(); }, mode === m ? 'secondary' : 'ghost', { 'aria-pressed': String(mode === m) })));
+  const drawMode = () => fill(modeBar, [['week', 'Week by week'], ['plan', 'Whole plan'], ...(mode === 'day' ? [['day', 'One day']] : [])].map(([m, label]) => btn(label, () => { if (mode === m) return; mode = m; dayId = null; go(week); draw(); }, mode === m ? 'secondary' : 'ghost', { 'aria-pressed': String(mode === m) })));
+  const openDay = (w) => { mode = 'day'; dayId = w.id; week = w.week; go(week); draw(); window.scrollTo({ top: 0 }); };
+  const closeDay = () => { mode = 'week'; dayId = null; go(week); draw(); };
   const drawPlan = async () => {
     fill(planBox, h('p', { class: 'muted small' }, 'Loading the plan…'));
     const plan = await get(`/v1/programs/${id}/plan`);
     fill(planBox, planPanel(p, plan, edit, { openWeek: (n) => { mode = 'week'; week = n; go(n); draw(); }, reload }));
   };
   const draw = () => {
+    if (mode === 'day' && !p.workouts.some((w) => w.id === dayId)) { mode = 'week'; dayId = null; go(week); }   // the day was deleted
     drawMode();
-    tabsBox.hidden = weekBox.hidden = mode === 'plan';
+    weekBox.hidden = mode === 'plan';
+    tabsBox.hidden = mode !== 'week';
     planBox.hidden = mode !== 'plan';
     if (mode === 'plan') drawPlan().catch((e) => fill(planBox, h('div', { class: 'dp-error', role: 'alert' }, e.message)));
+    else if (mode === 'day') drawDay();
     else { drawTabs(); drawWeek(); }
+  };
+  // One day on its own: the same column as in the week grid, the width of the page, with arrows to the day before and after
+  // (in the program's order, skipping empty days) and a way back to the week. Everything on it edits as in the grid.
+  const drawDay = () => {
+    const w = p.workouts.find((x) => x.id === dayId);
+    const all = [...p.workouts].sort((a, b) => a.week - b.week || a.day - b.day);
+    const at = all.findIndex((x) => x.id === w.id), prev = all[at - 1], next = all[at + 1];
+    weekBox.setAttribute('aria-labelledby', 'pg-day-title');
+    fill(weekBox,
+      h('div', { class: 'pg-day-nav' },
+        btn('◀', () => openDay(prev), 'ghost', { 'aria-label': prev ? `Day before: week ${prev.week} day ${prev.day}, ${prev.title}` : 'No day before', disabled: !prev }),
+        h('h2', { class: 'week-title', id: 'pg-day-title', style: 'margin:0' }, `Week ${w.week} · Day ${w.day}`),
+        btn('▶', () => openDay(next), 'ghost', { 'aria-label': next ? `Day after: week ${next.week} day ${next.day}, ${next.title}` : 'No day after', disabled: !next }),
+        h('span', { class: 'small muted grow' }, `${w.title}${repsOf(w) ? ` · ${repsOf(w).toLocaleString()} reps planned` : ''}${w.logs ? ` · logged ${plural(w.logs, 'time')}` : ''}`),
+        btn(`Back to week ${w.week}`, closeDay, 'secondary')),
+      h('div', { class: 'pg-days pg-days--one', role: 'group', 'aria-label': `Week ${w.week}, day ${w.day} on its own` }, dayColumn(p, w, exs, edit, reload, { selected, onSelect: drawBar, openDay: null })));
+    drawBar();
   };
 
   // The week grid (the redesign, step 1): the seven days across, each a column of blocks with one line per exercise;
@@ -634,7 +660,7 @@ export async function viewProgram(main, id) {
         if (!confirm(msg)) return;
         busy(e.currentTarget, async () => { await del(`/v1/programs/${id}/weeks/${week}`, { confirm: true }); toast(`Week ${week} deleted.`); reload(Math.min(week, isLast && p.weeks > 1 ? p.weeks - 1 : p.weeks)); });
       }, 'ghost') : null) : null;
-    const columns = [1, 2, 3, 4, 5, 6, 7].map((d) => { const w = days.find((x) => x.day === d); return w ? dayColumn(p, w, exs, edit, reload, { selected, onSelect: drawBar }) : emptyDay(p, week, d, edit, reload); });
+    const columns = [1, 2, 3, 4, 5, 6, 7].map((d) => { const w = days.find((x) => x.day === d); return w ? dayColumn(p, w, exs, edit, reload, { selected, onSelect: drawBar, openDay }) : emptyDay(p, week, d, edit, reload); });
     fill(weekBox,
       h('div', { class: 'row wrap', style: 'align-items:center' },
         h('div', { class: 'row', style: 'gap:4px;align-items:center' },
@@ -1081,7 +1107,7 @@ const letterOf = (i) => String.fromCharCode(65 + Math.min(i, 25));
 
 // One day of the week grid: the tick, the title, the day's instructions, each block with its letter and its exercises
 // one line each, and the adds at the foot.
-function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
+function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null }) {
   const line = (x) => [x.prescription, x.rest_seconds != null ? (x.rest_seconds === 0 ? 'no rest' : `${restWord(x.rest_seconds)} rest`) : null, x.tempo ? `tempo ${x.tempo}` : null, x.target_rpe != null ? `RPE ${x.target_rpe}` : null, loadText(x)].filter(Boolean).join(' · ');
   // Drag and drop (step 2): a line is dragged within the day, into a block, or onto another day; the drop lands it
   // ahead of the line it is dropped on, at the end of a block dropped on its heading, or at the end of a day.
@@ -1142,6 +1168,7 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
   const tick = edit ? h('input', { type: 'checkbox', class: 'pg-tick', checked: selected.has(w.id), 'aria-label': `Select day ${w.day}, ${w.title}`, onChange: (e) => { if (e.target.checked) selected.add(w.id); else selected.delete(w.id); onSelect(); } }) : null;
   const menu = edit ? h('details', { class: 'pg-menu' }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
     h('div', { class: 'pg-menu-list' },
+      openDay ? btn('Open this day on its own', () => openDay(w), 'ghost') : null,
       btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
       btn('Warm-up and cool-down', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost'),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost'),
@@ -1154,7 +1181,10 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect }) {
   return h('div', { class: `pg-day${selected.has(w.id) ? ' pg-day--selected' : ''}`, 'data-day': String(w.day) },
     h('div', { class: 'pg-day-head', ...dayDrag, title: edit ? 'Drag onto an athlete, a team or a school in Send to' : null }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
       h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${w.logs}×` : ''}${reps ? ` · ${reps} reps` : ''}`),
-      edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title)), menu),
+      // Owner's ask: click into a day and work on it alone, without the whole program on the screen: the title opens it (Rename is
+      // in the ⋮ menu); on its own page the title renames it.
+      openDay ? h('button', { type: 'button', class: 'pg-title strong pg-open', 'aria-label': `Open day ${w.day}, ${w.title}, on its own`, title: 'Open this day on its own', onClick: () => openDay(w) }, w.title)
+        : edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title)), menu),
     w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
     w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
     rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),

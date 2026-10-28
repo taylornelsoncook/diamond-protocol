@@ -1311,6 +1311,20 @@ function finishedSummary(ctx, logId, extra = {}) {
   return { id: l.id, title: l.workout_title, week: l.week, day: l.day, program_name: l.program_name, exercises_logged: l.exercises_logged, exercises_total: l.exercises_total,
     sets: l.sets, rpe: l.rpe, notes: l.notes, minutes: minutesOf(l), bests: bestsOf(ctx, l.id), completed_at: l.completed_at, reopen_hours: REOPEN_HOURS, ...extra };
 }
+// The summary the app shows after Finish (owner's ask: "a summary page of everything they did from that workout"): every
+// exercise of the workout with the sets logged (weight and reps), whether it was done, and the totals: exercises done, sets,
+// reps, and the weight lifted (weight × reps, in pounds, over the sets that had both).
+function finishDetail(ctx, client, logId) {
+  const d = logDetail(ctx, client, logId);
+  const sets = d.exercises.flatMap((x) => x.sets);
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return {
+    exercises: d.exercises.map((x) => ({ id: x.id, name: x.name, prescription: x.prescription, done: x.done, ...(x.removed ? { removed: true } : {}), ...(x.swapped_from ? { swapped_from: x.swapped_from } : {}), sets: x.sets })),
+    totals: { exercises_done: d.exercises.filter((x) => x.done).length, exercises_total: d.exercises.filter((x) => !x.removed).length, sets: sets.length, reps: sets.reduce((t, s) => t + n(s.reps), 0),
+      tonnage_lb: Math.round(sets.reduce((t, s) => t + (s.weight != null && s.reps != null ? n(s.weight) * n(s.reps) : 0), 0)) }
+  };
+}
+const finishedFull = (ctx, client, logId, extra = {}) => ({ ...finishedSummary(ctx, logId, extra), ...finishDetail(ctx, client, logId) });
 function announce(ctx, client, logId) {
   const f = finishedSummary(ctx, logId);
   const l = ctx.db.get('SELECT workout_id, session_id FROM workout_logs WHERE id = ?', logId);
@@ -1326,7 +1340,7 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
   const requestId = v.str(body.request_id, 'request_id', { max: 80, optional: true });
   if (requestId) {
     const first = ctx.db.get('SELECT id FROM workout_logs WHERE client_id = ? AND request_id = ?', client.id, requestId);
-    if (first) return { id: first.id, repeat: true, finished: finishedSummary(ctx, first.id), next: clientHome(ctx, client) };
+    if (first) return { id: first.id, repeat: true, finished: finishedFull(ctx, client, first.id), next: clientHome(ctx, client) };
   }
   const access = appAccess(ctx, client);
   if (!access.open) throw conflict(access.message);
@@ -1343,7 +1357,7 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
       ctx.db.run('UPDATE workout_logs SET notes = COALESCE(?, notes), rpe = ?, started_at = COALESCE(started_at, ?), request_id = COALESCE(request_id, ?) WHERE id = ?', data.notes, data.rpe, data.started_at, requestId, existing.id);
       saveSets(ctx, existing.id, data);
     });
-    return { id: existing.id, merged: true, finished: finishedSummary(ctx, existing.id, { merged: true }), next: clientHome(ctx, client) };
+    return { id: existing.id, merged: true, finished: finishedFull(ctx, client, existing.id, { merged: true }), next: clientHome(ctx, client) };
   }
   const id = newId('log');
   ctx.db.tx(() => {
@@ -1357,7 +1371,7 @@ export function completeWorkout(ctx, client, workoutId, body = {}) {
   try { adaptAfterLog(ctx, client.id); } catch (e) { console.error('adaptive plan check:', e.message); }                   // a clean fortnight can offer the next phase (adapt.js)
   let newMaxes = [];
   try { newMaxes = maxSuggestions(ctx, client.id); } catch (e) { console.error('max estimate:', e.message); }   // a suggestion is never worth failing the save
-  return { id, finished: { ...finishedSummary(ctx, id), progressions: progressions.map((p) => ({ exercise_name: p.exercise_name, text: p.text, status: p.status })), new_maxes: newMaxes }, next: clientHome(ctx, client) };
+  return { id, finished: { ...finishedFull(ctx, client, id), progressions: progressions.map((p) => ({ exercise_name: p.exercise_name, text: p.text, status: p.status })), new_maxes: newMaxes }, next: clientHome(ctx, client) };
 }
 
 // Save a reopened workout again: the whole log is replaced with what was sent (sending it twice changes nothing).
@@ -1376,7 +1390,7 @@ export function editLog(ctx, client, logId, body = {}) {
     ctx.db.run('UPDATE workout_logs SET notes = ?, rpe = ?, edited_at = ? WHERE id = ?', data.notes, data.rpe, ctx.now(), l.id);
     saveSets(ctx, l.id, data);
   });
-  return { id: l.id, finished: finishedSummary(ctx, l.id, { edited: true }), next: clientHome(ctx, client) };
+  return { id: l.id, finished: finishedFull(ctx, client, l.id, { edited: true }), next: clientHome(ctx, client) };
 }
 
 // One finished workout in full, for the athlete who logged it: every exercise, whether it was done, and its sets.

@@ -158,7 +158,7 @@ export function getProgram(ctx, id) {
   const named = ctx.db.all('SELECT b.* FROM workout_blocks b JOIN workouts w ON w.id = b.workout_id WHERE w.program_id = ? ORDER BY b.position', id);   // the named blocks (version 74), empty ones too
   p.workouts = rows.map((w) => ({
     ...w, warmup: blocks.get(w.warmup_id) ?? null, cooldown: blocks.get(w.cooldown_id) ?? null,
-    blocks: named.filter((b) => b.workout_id === w.id).map(({ workout_id, ...b }) => ({ ...b, count: items.filter((i) => i.block_id === b.id).length })),
+    blocks: named.filter((b) => b.workout_id === w.id).map(({ workout_id, ...b }) => blockShape(b, items.filter((i) => i.block_id === b.id))),
     exercises: tagGroups(items.filter((i) => i.workout_id === w.id).map(({ workout_id, ...rest }) => rest))
   }));
   p.clients = ctx.db.all(
@@ -755,11 +755,22 @@ export function linkedExercises(ctx, workoutId, ids) {
   return rows;
 }
 // Rename a block, change how it runs, or move it among the workout's blocks (position 1..n).
+// A block as the API answers it: its exercise count and its sets (owner's ask: adjust how many sets a block or complex
+// runs right on its heading). Nothing is stored on the block: `sets` is the number every exercise in it has, or null
+// when they differ (`sets_range` says the spread) or the block is empty.
+function blockShape(b, items) {
+  const sets = items.map((i) => i.sets).filter((n) => n != null);
+  const same = sets.length && sets.every((n) => n === sets[0]);
+  return { ...b, count: items.length, sets: same ? sets[0] : null, sets_range: sets.length && !same ? [Math.min(...sets), Math.max(...sets)] : null };
+}
 export function updateBlock(ctx, id, body = {}) {
   const b = blockOf(ctx, id);
   const f = blockFields(body, b);
+  // `sets` puts that many sets on every exercise in the block (each through updateWorkoutExercise, so the short text is rebuilt).
+  const sets = body.sets === undefined || body.sets === null || body.sets === '' ? null : v.int(body.sets, 'sets', { min: 1, max: MAX_SETS });
   ctx.db.tx(() => {
     ctx.db.run('UPDATE workout_blocks SET name = ?, kind = ? WHERE id = ?', f.name, f.kind, id);
+    if (sets) for (const x of ctx.db.all('SELECT id FROM workout_exercises WHERE block_id = ? ORDER BY position', id)) updateWorkoutExercise(ctx, x.id, { sets });
     if (body.position !== undefined && body.position !== null) {
       // Moving a block moves its exercises to sit just before (up) or after (down) the block now at that place; an
       // empty block only moves among the empty ones at the end.

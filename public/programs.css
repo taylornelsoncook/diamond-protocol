@@ -91,7 +91,7 @@ button.pl-phase:hover{filter:brightness(1.15)}
 .pg-menu>summary{list-style:none;cursor:pointer;width:28px;height:28px;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);color:var(--steel-muted);font:700 16px var(--font-sans)}
 .pg-menu>summary::-webkit-details-marker{display:none}
 .pg-menu>summary:hover{background:var(--surface-raised);color:var(--steel)}
-.pg-menu-list{position:absolute;right:0;top:30px;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:4px;display:flex;flex-direction:column;min-width:190px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.pg-menu-list{position:absolute;right:0;top:30px;z-index:50;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md);padding:4px;display:flex;flex-direction:column;min-width:190px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
 .pg-menu-list .dp-btn{justify-content:flex-start;text-align:left;min-height:36px}
 .pg-instr{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-left:3px solid var(--green-mid);background:var(--surface-raised);border-radius:var(--radius-sm)}
 .pg-instr-k{font:600 10px/1 var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--green-bright)}

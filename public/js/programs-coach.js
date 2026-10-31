@@ -1166,7 +1166,7 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
   });
   for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 30px' }, edit ? 'Empty. Press + to add an exercise.' : 'Empty.'));
   const tick = edit ? h('input', { type: 'checkbox', class: 'pg-tick', checked: selected.has(w.id), 'aria-label': `Select day ${w.day}, ${w.title}`, onChange: (e) => { if (e.target.checked) selected.add(w.id); else selected.delete(w.id); onSelect(); } }) : null;
-  const menu = edit ? h('details', { class: 'pg-menu' }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
+  const menu = edit ? h('details', { class: 'pg-menu', onToggle: (e) => placeMenu(e.currentTarget) }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
     h('div', { class: 'pg-menu-list' },
       openDay ? btn('Open this day on its own', () => openDay(w), 'ghost') : null,
       btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
@@ -1195,6 +1195,27 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
     edit ? h('div', { class: 'pg-day-foot' },
       btn('+ Block', () => blockDialog(w, null, reload), 'ghost'), btn('Load a complex', () => loadComplexDialog(w, reload), 'ghost'),
       btn('+ Exercise', () => pickExercise({ title: `Add to ${w.title}`, exs, program: p, workout: w, onAdd: () => reload() }), 'ghost', { title: 'Outside any block' })) : null);
+}
+// The day's ⋮ menu is placed on the screen itself when it opens (owner: on the first column half of it was cut off: the week
+// grid scrolls sideways, so it clips anything that spills past its edge). Right-aligned under the button, pushed back inside
+// the window when it would go past either edge; it closes on a scroll or a click elsewhere, since a fixed box doesn't follow.
+function placeMenu(d) {
+  const list = d.querySelector('.pg-menu-list');
+  if (!list) return;
+  if (!d.open) { list.style.cssText = ''; return; }
+  const r = d.querySelector('summary').getBoundingClientRect();
+  list.style.position = 'fixed'; list.style.top = `${Math.round(r.bottom + 2)}px`; list.style.right = 'auto'; list.style.left = '0';
+  const w = list.offsetWidth;
+  let left = Math.round(r.right - w);
+  if (left + w > window.innerWidth - 8) left = window.innerWidth - 8 - w;
+  if (left < 8) left = 8;
+  list.style.left = `${left}px`;
+  const below = window.innerHeight - r.bottom - 8;
+  if (list.offsetHeight > below && r.top > below) list.style.top = `${Math.max(8, Math.round(r.top - 2 - list.offsetHeight))}px`;   // not enough room under: open upward
+  const close = (ev) => { if (ev.type === 'click' && d.contains(ev.target)) return; d.open = false; };
+  const off = () => { window.removeEventListener('scroll', close, true); document.removeEventListener('click', close, true); };
+  d.addEventListener('toggle', off, { once: true });
+  setTimeout(() => { window.addEventListener('scroll', close, true); document.addEventListener('click', close, true); }, 0);
 }
 const restWord = (secs) => (secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`);
 // Send to (step 2): a panel of schools, teams and athletes beside the grid that takes dragged days, and the dialog that

@@ -65,6 +65,13 @@ test('blocks: named, in order, exercises added into them, renamed, moved and rem
   const moved = (await coach('PATCH', `/v1/workout-blocks/${accel.block_id}`, { name: 'Accel primer', kind: 'superset', position: 1 })).body;
   assert.deepEqual(moved.blocks.map((b) => [b.name, b.kind, b.position]), [['Accel primer', 'superset', 1], ['Warm up', 'block', 2]]);
   assert.deepEqual(names(moved).map((x) => [x[0], x[3]]), [['Backwards sprint', 'A1'], ['Broad jump', 'A2'], ['Sled sprint', 'A3'], ['Back squat', 'B1'], ['Back squat', 'B2']]);
+  // Sets on the whole block (owner's ask): the block answers the sets its exercises share, and PATCH { sets } puts the number on each.
+  assert.deepEqual(moved.blocks.map((b) => [b.name, b.sets, b.sets_range]), [['Accel primer', 3, null], ['Warm up', null, [3, 5]]]);
+  const four = (await coach('PATCH', `/v1/workout-blocks/${accel.block_id}`, { sets: 4 })).body;
+  assert.deepEqual(four.blocks.map((b) => [b.name, b.sets]), [['Accel primer', 4], ['Warm up', null]]);
+  assert.deepEqual(four.exercises.filter((x) => x.block_name === 'Accel primer').map((x) => [x.sets, x.prescription]), [[4, '4 × 20 yd'], [4, '4 × 3'], [4, '4 × 20 yd']]);
+  assert.equal((await coach('PATCH', `/v1/workout-blocks/${accel.block_id}`, { sets: 0 })).status, 400);
+  assert.equal((await coach('PATCH', `/v1/workout-blocks/${accel.block_id}`, { sets: 100 })).status, 400);
   assert.equal((await coach('PATCH', `/v1/workout-blocks/${accel.block_id}`, { name: '' })).status, 400);
   assert.equal((await coach('PATCH', `/v1/workout-blocks/${accel.block_id}`, { kind: 'tabata' })).status, 400);
   assert.equal((await coach('POST', `/v1/workouts/${w1.id}/exercises`, { exercise_id: sled.id, sets: 1, reps: '1', block_id: 'wb_nope' })).status, 404);

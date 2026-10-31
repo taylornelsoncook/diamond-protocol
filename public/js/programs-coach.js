@@ -291,10 +291,16 @@ export async function exerciseLibrary() {
 // already built from one keep what they have.
 function complexDialog(c, exs) {
   const name = input({ value: c?.name ?? '', maxlength: '60', required: true, placeholder: 'Acceleration Primer' });
-  const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, `${GROUP_KINDS[k]} · ${KIND_WORDS[k]}`]), { value: c?.kind ?? 'block', 'aria-label': 'How it runs' });
+  const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, GROUP_KINDS[k]]), { value: c?.kind ?? 'block', 'aria-label': 'How it runs' });
   const note = input({ value: c?.note ?? '', maxlength: '500', placeholder: 'What it\'s for (optional)' });
   const rows = (c?.exercises ?? []).map((x) => ({ ...x }));
   const rowsBox = h('div', { class: 'stack-tight' });
+  // Owner's ask: the sets for the whole complex in one box; it writes the number onto every exercise (each can still be changed on its own).
+  const allSets = input({ type: 'number', min: '1', max: '99', inputmode: 'numeric', 'aria-label': 'Sets on every exercise', style: 'width:5rem', onChange: (e) => {
+    const n = Number(e.target.value); if (!Number.isInteger(n) || n < 1 || n > 99) { e.target.value = ''; return toast('Sets are 1 to 99.', 'warn'); }
+    for (const x of rows) { x.sets = n; x.prescription = rxLine(x); } draw();
+  } });
+  const syncAllSets = () => { const ss = rows.map((x) => x.sets).filter((n) => n != null); allSets.value = ss.length && ss.every((n) => n === ss[0]) ? String(ss[0]) : ''; allSets.placeholder = ss.length ? 'mixed' : ''; };
   const line = (x) => [detailsOf(x), loadText(x)].filter(Boolean).join(' · ');
   const editRow = (x, i) => {
     const sf = setFields(x, { hint: false }), load = loadFields(x);
@@ -303,14 +309,14 @@ function complexDialog(c, exs) {
       { label: 'Cancel', variant: 'ghost' }]);
     sf.focus();
   };
-  const draw = () => fill(rowsBox, rows.length ? rows.map((x, i) => h('div', { class: 'row pg-ex sf-in-group' },
+  const draw = () => { fill(rowsBox, rows.length ? rows.map((x, i) => h('div', { class: 'row pg-ex sf-in-group' },
     h('span', { class: 'sf-tag', 'aria-hidden': 'true' }, String(i + 1)),
     h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}: change sets and reps`, onClick: () => editRow(x, i) },
       h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, line(x) || 'Set the sets and reps')), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit')),
     i > 0 ? btn('↑', () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} up` }) : null,
     i < rows.length - 1 ? btn('↓', () => { [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} down` }) : null,
     btn('Remove', () => { rows.splice(i, 1); draw(); }, 'ghost', { 'aria-label': `Remove ${x.name}` })))
-    : h('p', { class: 'small muted', style: 'margin:0' }, 'No exercises yet.'));
+    : h('p', { class: 'small muted', style: 'margin:0' }, 'No exercises yet.')); syncAllSets(); };
   draw();
   const addEx = () => pickExercise({ title: `Add to ${name.value.trim() || 'the complex'}`, exs, program: { workouts: [] }, onPick: async (ex) => {
     rows.push({ exercise_id: ex.id, name: ex.name, sets: 3, reps: '8', prescription: '3 × 8' }); draw();
@@ -329,8 +335,8 @@ function complexDialog(c, exs) {
     if (!confirm(`Delete ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`)) return false;
     await del(`/v1/complexes/${c.id}`); toast(`${c.name} deleted.`); deps.render();
   } });
-  dialog(c ? `Edit ${c.name}` : 'New complex', h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('How the athlete runs it', kind)), field('Note', note),
-    h('div', { class: 'dp-label' }, 'Exercises, in order'), rowsBox), actions);
+  dialog(c ? `Edit ${c.name}` : 'New complex', h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('How the athlete runs it', kind, `Block: ${KIND_WORDS.block}. Superset: ${KIND_WORDS.superset}. Circuit: ${KIND_WORDS.circuit}.`)), field('Note', note),
+    h('div', { class: 'row wrap', style: 'align-items:flex-end;gap:12px' }, h('div', { class: 'dp-label grow' }, 'Exercises, in order'), field('Sets on every exercise', allSets)), rowsBox), actions);
   name.focus();
 }
 // The short text for a row edited in a dialog, the way the server builds it (rx.js rxText).
@@ -1149,8 +1155,15 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
   const byId = new Map(blocks.map((b, i) => [b.id, { b, i }]));
   const blockHead = (b, i) => h('div', { class: 'pg-bhead', ...target(() => ({ block_id: b.id })) },
     h('span', { class: `pg-letter pg-letter--${blockTone(b.name)}`, 'aria-hidden': 'true' }, letterOf(i)),
-    edit ? h('button', { type: 'button', class: 'pg-bname', 'aria-label': `${b.name}: rename, change or remove`, onClick: () => blockDialog(w, b, reload) }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null)
-      : h('span', { class: 'pg-bname' }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${KIND_WORDS[b.kind]}`) : null),
+    // Owner's asks: the kind is one word ("Superset", not the explanation), and the sets every exercise in the block runs
+    // are adjusted right here (the number is written onto each exercise through PATCH /v1/workout-blocks/:id { sets }).
+    edit ? h('button', { type: 'button', class: 'pg-bname', 'aria-label': `${b.name}: rename, change or remove`, onClick: () => blockDialog(w, b, reload) }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${GROUP_KINDS[b.kind]}`) : null)
+      : h('span', { class: 'pg-bname' }, b.name, b.kind !== 'block' ? h('span', { class: 'pg-bkind' }, ` · ${GROUP_KINDS[b.kind]}`) : null),
+    b.count && edit ? h('label', { class: 'pg-bsets', title: `How many sets every exercise in ${b.name} runs` },
+      h('input', { type: 'number', min: '1', max: '99', inputmode: 'numeric', class: 'pg-bsets-in', value: b.sets ?? '', placeholder: b.sets_range ? `${b.sets_range[0]}–${b.sets_range[1]}` : '', 'aria-label': `Sets for every exercise in ${b.name}`,
+        onChange: (e) => { const n = Number(e.target.value); if (!Number.isInteger(n) || n < 1 || n > 99) { e.target.value = b.sets ?? ''; return toast('Sets are 1 to 99.', 'warn'); } busy(e.target, async () => { await patch(`/v1/workout-blocks/${b.id}`, { sets: n }); toast(`${b.name}: ${plural(n, 'set')} on each exercise.`); reload(); }); } }),
+      h('span', null, b.sets === 1 ? 'set' : 'sets')) : null,
+    b.count && !edit ? h('span', { class: 'pg-bsets' }, b.sets ? plural(b.sets, 'set') : b.sets_range ? `${b.sets_range[0]}–${b.sets_range[1]} sets` : null) : null,
     edit ? h('div', { class: 'pg-bacts' },
       btn('+', () => pickExercise({ title: `Add to ${b.name}`, exs, program: p, workout: w, block: b, onAdd: () => reload() }), 'ghost', { 'aria-label': `Add an exercise to ${b.name}`, title: 'Add an exercise' }),
       b.count && i > 0 && blocks[i - 1].count ? btn('↑', (e) => busy(e.currentTarget, async () => { await patch(`/v1/workout-blocks/${b.id}`, { position: i }); reload(); }), 'ghost', { 'aria-label': `Move ${b.name} up` }) : null,
@@ -1337,8 +1350,8 @@ const BLOCK_NAMES = ['Warm up', 'Activation', 'Acceleration', 'Speed', 'Plyometr
 function blockFields(b = null) {
   const datalist = h('datalist', { id: 'dp-block-names' }, BLOCK_NAMES.map((n) => h('option', { value: n })));
   const name = input({ value: b?.name ?? '', maxlength: '40', list: 'dp-block-names', placeholder: 'Warm up, Speed, Strength, Acceleration Primer…', autocomplete: 'off', required: true, 'aria-label': 'Block name' });
-  const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, `${GROUP_KINDS[k]} · ${KIND_WORDS[k]}`]), { value: b?.kind ?? 'block', 'aria-label': 'How it runs' });
-  return { name, kind, el: h('div', { class: 'stack' }, datalist, field('Name', name), field('How the athlete runs it', kind, 'A block runs one exercise after another. A superset or circuit runs one set of each exercise, then the rest.')) };
+  const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, GROUP_KINDS[k]]), { value: b?.kind ?? 'block', 'aria-label': 'How it runs' });
+  return { name, kind, el: h('div', { class: 'stack' }, datalist, field('Name', name), field('How the athlete runs it', kind, `Block: ${KIND_WORDS.block}. Superset: ${KIND_WORDS.superset}. Circuit: ${KIND_WORDS.circuit}.`)) };
 }
 function blockDialog(w, b, reload) {
   const f = blockFields(b);

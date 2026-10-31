@@ -13,7 +13,9 @@ const req = async (method, path, body, headers = {}) => {
 };
 const coach = (m, p, b) => req(m, p, b, { cookie });
 const today = () => localDate(new Date().toISOString(), TZ);
-const monthsAgo = (n) => { const d = new Date(`${today()}T12:00:00Z`); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 10); };
+// n months before today, clamped to the month's last day the way the service steps billing months (on the 31st a month ago is the
+// 30th, not the 1st of this month), so the expected dates agree with the invoices on every day of the year.
+const monthsAgo = (n) => { const [y, m, d] = today().split('-').map(Number); const t = new Date(Date.UTC(y, m - 1 - n, 1)); const last = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate(); t.setUTCDate(Math.min(d, last)); return t.toISOString().slice(0, 10); };
 let facility;
 
 before(async () => {

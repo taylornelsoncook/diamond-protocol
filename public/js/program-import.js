@@ -115,6 +115,34 @@ export async function importView(main, deps, mode = 'file') {
   const file = h('input', { type: 'file', class: 'dp-input', accept: '.pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/*', 'aria-label': 'The program file' });
   const text = textarea('', { rows: '8', maxlength: '20000', 'aria-label': 'The workout, in your words', placeholder: 'Lower body. Back squat 4 by 5 at 75 percent of their max, 2 minutes rest. Superset RDL 3 by 8 with split squats 3 by 8 each side. Finish with 3 rounds of plank 40 seconds and dead bugs 10 each side, no rest.' });
   const where = select([['', 'A new program'], ...progs.data.map((p) => [p.id, `Add to ${p.name}`])], { 'aria-label': 'Where it goes' });
+  // Dictating (owner's ask): choose the program, then the week and the day of the week the workout goes to. The program's
+  // days are read so a taken day says so; the draft's week and day start from the choice and can still be changed there.
+  const DAYS = [1, 2, 3, 4, 5, 6, 7];
+  const weekSel = select([['1', 'Week 1']], { 'aria-label': 'Week' });
+  const daySel = select(DAYS.map((d) => [String(d), `Day ${d}`]), { 'aria-label': 'Day of the week' });
+  const slotBox = h('div', { class: 'row wrap', style: 'display:none' }, field('Week', weekSel), field('Day of the week', daySel, 'A day that already has a workout says so.'));
+  let targetDays = [];
+  const drawSlotDays = () => {
+    const wk = Number(weekSel.value);
+    const taken = (d) => targetDays.find((w) => w.week === wk && w.day === d);
+    fill(daySel, DAYS.map((d) => h('option', { value: String(d) }, taken(d) ? `Day ${d} · taken: ${taken(d).title}` : `Day ${d}`)));
+    daySel.value = String(DAYS.find((d) => !taken(d)) ?? 1);
+  };
+  const slotFor = async () => {
+    if (!spoken || !where.value) { slotBox.style.display = 'none'; return; }
+    const prog = await get(`/v1/programs/${where.value}`);
+    targetDays = prog.workouts ?? [];
+    const weeks = Math.min(52, (prog.weeks || 1) + 1);
+    fill(weekSel, Array.from({ length: weeks }, (_, i) => h('option', { value: String(i + 1) }, i + 1 > (prog.weeks || 0) ? `Week ${i + 1} (new)` : `Week ${i + 1}`)));
+    // Start on the first week with a free day, so the workout lands where the program has room.
+    const firstFree = Array.from({ length: weeks }, (_, i) => i + 1).find((wk) => DAYS.some((d) => !targetDays.find((w) => w.week === wk && w.day === d))) ?? 1;
+    weekSel.value = String(firstFree);
+    drawSlotDays();
+    slotBox.style.display = '';
+  };
+  where.addEventListener('change', () => slotFor().catch((e) => toast(e.message, 'warn')));
+  weekSel.addEventListener('change', drawSlotDays);
+  const slot = () => (spoken && where.value ? { week: Number(weekSel.value), day: Number(daySel.value) } : null);
   const draftBox = h('div', { class: 'stack' });
   // Check the connection: one tiny request to Anthropic, so a key, credit or model problem shows here in plain words before a file is sent.
   const checkOut = h('span', { class: 'small muted', role: 'status' });
@@ -155,11 +183,12 @@ export async function importView(main, deps, mode = 'file') {
     rec.start(); speak.textContent = 'Stop listening'; speak.setAttribute('aria-pressed', 'true');
   }, 'secondary', { 'aria-pressed': 'false' }) : null;
   // While a draft is open, where it goes is fixed (it was set up for that); Start over frees it.
-  const lock = (on) => { where.disabled = on; file.disabled = on; text.disabled = on; readBtn.disabled = on; if (speak) speak.disabled = on; };
+  const lock = (on) => { where.disabled = on; weekSel.disabled = on; daySel.disabled = on; file.disabled = on; text.disabled = on; readBtn.disabled = on; if (speak) speak.disabled = on; };
   fill(box, spoken
     ? panel('Your workout, in your words', { subtitle: 'Say the exercises with their sets and reps, and anything else you\'d tell the athlete: tempo, rest, effort, a load, and which ones go together. Claude turns it into a draft; you check every line before anything is saved.' },
       field('The workout', text, SR ? 'Press Speak and talk, or type. Numbers can be words ("three by eight"). "Superset" or "then" groups exercises.' : 'Type it, or use your keyboard\'s microphone key to dictate into this box (an iPhone, iPad or Mac has one).'),
       h('div', { class: 'row wrap' }, speak, h('div', { style: 'width:260px' }, field('Save it as', where))),
+      slotBox,
       h('p', { class: 'small muted' }, 'What you write is sent to Anthropic (Claude). Leave athletes\' names out of it.'),
       h('div', null, readBtn))
     : panel('Your program file', { subtitle: 'A PDF of the program, or a clear photo of a printed one. Claude reads it into a draft; you check every line before anything is saved.' },
@@ -177,6 +206,9 @@ export async function importView(main, deps, mode = 'file') {
     const datalist = h('datalist', { id: listId }, exs.data.map((e) => h('option', { value: e.name })));
     // Adding to a program: the file's weeks go after the ones it has (the coach can change them).
     const shift = target ? target.weeks : 0;
+    // Dictated into a program: the first workout lands on the chosen week and day, any others keep their distance from it.
+    const at = target ? slot() : null;
+    const firstWeek = d.workouts[0]?.week ?? 1;
     const name = input({ value: d.program.name, maxlength: '120', 'aria-label': 'Program name' });
     const level = select([['', 'Any level'], ...status.levels.map((l) => [l, l])], { value: d.program.level, 'aria-label': 'Level' });
     const desc = textarea(d.program.description, { rows: '3', maxlength: '2000', 'aria-label': 'Description' });
@@ -186,8 +218,8 @@ export async function importView(main, deps, mode = 'file') {
     const rowFor = (x, remove) => exerciseRow(x, { byName, listId, status, remove });
 
     function dayFor(w) {
-      const week = input({ type: 'number', min: '1', max: '52', inputmode: 'numeric', value: String(Math.min(52, w.week + shift)), 'aria-label': 'Week', style: 'width:5rem' });
-      const day = input({ type: 'number', min: '1', max: '7', inputmode: 'numeric', value: String(w.day), 'aria-label': 'Day', style: 'width:5rem' });
+      const week = input({ type: 'number', min: '1', max: '52', inputmode: 'numeric', value: String(Math.min(52, at ? at.week + (w.week - firstWeek) : w.week + shift)), 'aria-label': 'Week', style: 'width:5rem' });
+      const day = input({ type: 'number', min: '1', max: '7', inputmode: 'numeric', value: String(at && w === d.workouts[0] ? at.day : w.day), 'aria-label': 'Day', style: 'width:5rem' });
       const title = input({ value: w.title, maxlength: '120', 'aria-label': 'Workout title' });
       const rows = [];
       const rowsBox = h('div');
@@ -230,7 +262,8 @@ export async function importView(main, deps, mode = 'file') {
 
     fill(draftBox,
       panel(`Check the draft from ${d.filename}`, { subtitle: `${plural(c.workouts, 'workout')} over ${plural(d.weeks, 'week')} · ${plural(c.exercises, 'exercise')}: ${c.exact} matched to your library, ${c.suggested} to check, ${c.new} new.` },
-        target ? h('p', { class: 'small' }, `These workouts are added to ${target.name}, after its ${plural(target.weeks, 'week')} (from week ${target.weeks + 1}). Change the weeks if you want them somewhere else; days it already has are refused.`)
+        target && at ? h('p', { class: 'small' }, `This goes to ${target.name}, week ${at.week}, day ${at.day}${d.workouts.length > 1 ? ' (the first workout; the others follow it)' : ''}. Change the week or day below if you want it somewhere else; a day the program already has is refused.`)
+          : target ? h('p', { class: 'small' }, `These workouts are added to ${target.name}, after its ${plural(target.weeks, 'week')} (from week ${target.weeks + 1}). Change the weeks if you want them somewhere else; days it already has are refused.`)
           : h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Program name', name), field('Level', level)), field('Description', desc)),
         d.notes.length ? h('div', { class: 'stack-tight' }, h('strong', { class: 'small warn-text' }, `Claude wasn't sure about these. Check them against ${spoken ? 'what you said' : 'the file'}:`), h('ul', null, d.notes.map((n) => h('li', { class: 'small' }, n)))) : null,
         h('p', { class: 'small muted' }, 'Check each exercise: "Matched" is the same name as in your library. A closest match is only offered: press Use it, or type to choose another. Anything not in your library can be added as a new one. Sets and reps read like 3 × 8.'),

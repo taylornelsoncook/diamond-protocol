@@ -79,7 +79,7 @@ async function sendLink(c) {
 const pageState = { q: '', level: '', sport: '', setting: '', author: '', exQ: '', exCat: '', exFilter: '', exMove: '', exEquip: '', tags: null };
 
 export async function viewPrograms(main) {
-  const [progs, exs, act, shop, blocks, tmpl, wtmpl, rules, notes, gameRules] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/routines').catch(() => ({ data: [] })),
+  const [progs, exs, act, shop, cpx, tmpl, wtmpl, rules, notes, gameRules] = await Promise.all([get('/v1/programs'), get('/v1/exercises'), get('/v1/programs/activity'), isOwner() ? get('/v1/shop') : null, get('/v1/complexes').catch(() => ({ data: [] })),
     get('/v1/programs?kind=template').catch(() => ({ data: [] })), get('/v1/workout-templates').catch(() => ({ data: [] })), get('/v1/program-rules').catch(() => null), canEdit() ? get('/v1/weekly-notes').catch(() => null) : null, get('/v1/game-rules').catch(() => null)]);
   const edit = canEdit();
 
@@ -131,7 +131,7 @@ export async function viewPrograms(main) {
     // One column (owner's ask: the exercise library lives in Settings only), so the calendar has the page's width.
     h('div', { class: 'stack', style: 'gap:24px' },
       h('div', { class: 'stack', style: 'gap:8px' }, search, h('div', { class: 'form-grid cols-4', style: 'gap:8px' }, sportSel, settingSel, authorSel, levelSel)),
-      cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, gameRules ? gameRulesPanel(gameRules, isOwner()) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit), routinesPanel(blocks.data, exs.data, edit), checkOn, feed, shop ? storePanel(shop) : null));
+      cards, calendarPanel(progs.data, edit), weekPanel, notes ? weeklyNotesPanel(notes) : null, rules ? rulesPanel(rules, progs.data, edit) : null, gameRules ? gameRulesPanel(gameRules, isOwner()) : null, templatesPanel(tmpl.data, wtmpl.data, progs.data, edit, cpx.data, exs.data), checkOn, feed, shop ? storePanel(shop) : null));
 }
 
 // The month calendar (the redesign, step 3): a pick (everyone on a program, one program, a team or one athlete), a month
@@ -283,21 +283,12 @@ function storePanel(shop) {
 
 // ---------- Exercise library (the first tab of Settings) ----------
 export async function exerciseLibrary() {
-  const [exs, cx] = await Promise.all([get('/v1/exercises'), get('/v1/complexes').catch(() => ({ data: [] }))]);
-  return h('div', { class: 'stack', style: 'gap:24px' }, libraryPanel(exs, canEdit()), complexesPanel(cx.data, exs, canEdit()));
+  const exs = await get('/v1/exercises');
+  return libraryPanel(exs, canEdit());
 }
 // Complexes (version 74, owner's ask): a named group of exercises written once ("Acceleration Primer") and loaded into any
-// workout as a block with Load a complex. Edited here; workouts already built from one keep what they have.
-function complexesPanel(list, exs, edit) {
-  const row = (c) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow stack-tight' }, h('span', null, h('span', { class: 'strong' }, c.name), c.kind !== 'block' ? h('span', { class: 'small muted' }, ` · ${c.kind_label.toLowerCase()}`) : null),
-      h('span', { class: 'small muted' }, `${c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${c.used_in ? ` · loaded into ${plural(c.used_in, 'workout')}` : ''}`),
-      c.note ? h('span', { class: 'small pg-note' }, c.note) : null),
-    edit ? btn('Edit', () => complexDialog(c, exs), 'ghost', { 'aria-label': `Edit ${c.name}` }) : null);
-  return panel('Complexes', { subtitle: 'A named group of exercises, like Acceleration Primer, loaded into any workout in one click (the builder\'s Load a complex). Changes here don\'t touch workouts already built from it.',
-    action: edit ? btn('New complex', () => complexDialog(null, exs), 'secondary') : null },
-    list.length ? list.map(row) : h('p', { class: 'small muted' }, 'No complexes yet. Build a block in a workout and Save as complex, or start one here.'));
-}
+// workout as a block with Load a complex. Saved from a block and edited under Templates on the Programs page; workouts
+// already built from one keep what they have.
 function complexDialog(c, exs) {
   const name = input({ value: c?.name ?? '', maxlength: '60', required: true, placeholder: 'Acceleration Primer' });
   const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, `${GROUP_KINDS[k]} · ${KIND_WORDS[k]}`]), { value: c?.kind ?? 'block', 'aria-label': 'How it runs' });
@@ -332,7 +323,7 @@ function complexDialog(c, exs) {
     if (!name.value.trim()) throw new Error('Name the complex.');
     if (!rows.length) throw new Error('Add at least one exercise.');
     if (c) await patch(`/v1/complexes/${c.id}`, body()); else await post('/v1/complexes', body());
-    toast(c ? 'Complex saved. Workouts already built from it keep what they have.' : 'Complex added. Load it into a workout from the builder.'); deps.render();
+    toast(c ? 'Complex saved. Workouts already built from it keep what they have.' : 'Complex saved. Load it into a workout with Load a complex.'); deps.render();
   } }, { label: 'Add exercise', onClick: () => { addEx(); return false; } }, { label: 'Cancel', variant: 'ghost' }];
   if (c) actions.push({ label: 'Delete', variant: 'ghost', onClick: async () => {
     if (!confirm(`Delete ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`)) return false;
@@ -1063,16 +1054,24 @@ function ruleDialog(q, programs, rule = null) {
     } },
     { label: 'Cancel', variant: 'ghost' }]);
 }
-function templatesPanel(templates, workoutTemplates, programs, edit) {
-  if (!templates.length && !workoutTemplates.length) return panel('Templates', { subtitle: 'Save any program with Save as template, or any workout from its card, and start new ones from them here.' }, h('p', { class: 'muted small' }, 'No templates yet.'));
-  return panel('Templates', { subtitle: 'Programs and workouts saved to start from. A template is never assigned or sold.' },
+// Templates: program templates, workout templates and complexes (owner's ask: a block saved as a complex is kept and
+// adjusted here, under Templates).
+function templatesPanel(templates, workoutTemplates, programs, edit, complexes = [], exs = []) {
+  if (!templates.length && !workoutTemplates.length && !complexes.length) return panel('Templates', { subtitle: 'Save any program with Save as template, any workout from its ⋮ menu, or any block with Save as complex, and start new ones from them here.' }, h('p', { class: 'muted small' }, 'No templates yet.'));
+  return panel('Templates', { subtitle: 'Programs, workouts and complexes saved to start from. A template is never assigned or sold.' },
     templates.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Program templates'), templates.map((t) => h('div', { class: 'list-item' },
       h('div', { class: 'grow stack-tight' }, h('a', { href: `#/programs/${t.id}`, class: 'strong', style: 'color:inherit' }, t.name), h('span', { class: 'small muted' }, [plural(t.weeks, 'week'), t.level ?? 'Any level', plural(t.workout_count, 'workout')].join(' · '))),
       edit ? btn('Start a program', () => newProgramDialog(programs, templates, t.id), 'secondary', { 'aria-label': `Start a program from ${t.name}` }) : null,
       edit ? btn('Delete', (e) => { if (!confirm(`Delete the template ${t.name}? Programs started from it aren't touched.`)) return; busy(e.currentTarget, async () => { await del(`/v1/programs/${t.id}`); toast('Template deleted.'); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the template ${t.name}` }) : null))) : null,
     workoutTemplates.length ? h('div', { class: 'stack-tight', style: 'margin-top:8px' }, h('span', { class: 'small strong' }, 'Workout templates'), h('span', { class: 'small muted' }, 'In the builder, Add day → Start from.'), workoutTemplates.map((t) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.name), h('span', { class: 'small muted' }, [t.exercise_names.join(', ') || 'No exercises', t.warmup ? `warm-up ${t.warmup}` : null, t.cooldown ? `cool-down ${t.cooldown}` : null].filter(Boolean).join(' · '))),
-      edit ? btn('Delete', (e) => { if (!confirm(`Delete the workout template ${t.name}?`)) return; busy(e.currentTarget, async () => { await del(`/v1/workout-templates/${t.id}`); toast('Template deleted.'); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the workout template ${t.name}` }) : null))) : null);
+      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.name), h('span', { class: 'small muted' }, t.exercise_names.join(', ') || 'No exercises')),
+      edit ? btn('Delete', (e) => { if (!confirm(`Delete the workout template ${t.name}?`)) return; busy(e.currentTarget, async () => { await del(`/v1/workout-templates/${t.id}`); toast('Template deleted.'); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the workout template ${t.name}` }) : null))) : null,
+    complexes.length ? h('div', { class: 'stack-tight', style: 'margin-top:8px' }, h('span', { class: 'small strong' }, 'Complexes'), h('span', { class: 'small muted' }, 'A block saved from a workout. Load one into any workout with Load a complex; changes here don\'t touch workouts already built from it.'), complexes.map((c) => h('div', { class: 'list-item' },
+      h('div', { class: 'grow stack-tight' }, h('span', null, h('span', { class: 'strong' }, c.name), c.kind !== 'block' ? h('span', { class: 'small muted' }, ` · ${c.kind_label.toLowerCase()}`) : null),
+        h('span', { class: 'small muted' }, `${c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${c.used_in ? ` · loaded into ${plural(c.used_in, 'workout')}` : ''}`),
+        c.note ? h('span', { class: 'small pg-note' }, c.note) : null),
+      edit ? btn('Edit', () => complexDialog(c, exs), 'secondary', { 'aria-label': `Edit the complex ${c.name}` }) : null,
+      edit ? btn('Delete', (e) => { if (!confirm(`Delete the complex ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`)) return; busy(e.currentTarget, async () => { await del(`/v1/complexes/${c.id}`); toast(`${c.name} deleted.`); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the complex ${c.name}` }) : null))) : null);
 }
 function copyWeekDialog(p, week, reload) {
   const to = input({ type: 'number', min: '1', max: '52', value: String(Math.min(week + 1, 52)), inputmode: 'numeric' });
@@ -1170,7 +1169,6 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
     h('div', { class: 'pg-menu-list' },
       openDay ? btn('Open this day on its own', () => openDay(w), 'ghost') : null,
       btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
-      btn('Warm-up and cool-down', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost'),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost'),
       btn('Move', () => bulkDialog(p, [w.id], 'move', (r) => reload(r?.days?.[0]?.week ?? w.week)), 'ghost'),
       btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost'),
@@ -1187,7 +1185,6 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
       openDay ? h('button', { type: 'button', class: 'pg-title strong pg-open', 'aria-label': `Open day ${w.day}, ${w.title}, on its own`, title: 'Open this day on its own', onClick: () => openDay(w) }, w.title)
         : edit ? h('button', { type: 'button', class: 'pg-title strong', 'aria-label': `Rename ${w.title}`, onClick: () => renameDialog(w, reload) }, w.title) : h('span', { class: 'strong' }, w.title)), menu),
     w.instructions ? h('div', { class: 'pg-instr' }, h('span', { class: 'pg-instr-k' }, 'Instructions'), h('span', { class: 'small' }, w.instructions)) : null,
-    w.warmup || w.cooldown ? h('div', { class: 'small muted' }, [w.warmup ? `Warm-up: ${w.warmup.name}` : null, w.cooldown ? `Cool-down: ${w.cooldown.name}` : null].filter(Boolean).join(' · ')) : null,
     rows.length ? h('div', { class: 'pg-day-body' }, rows) : h('p', { class: 'small muted', style: 'margin:0' }, edit ? 'Empty. Add a block or load a complex.' : 'Empty.'),
     pickBar,
     // The drop target for the end of the day (an exercise dragged here lands last, in no block); it shows only while a
@@ -1378,75 +1375,21 @@ function linkDialog(w, ids, mode, reload) {
 // Load a complex from the library into this workout as a block with every exercise in it, in one go.
 async function loadComplexDialog(w, reload) {
   const all = (await get('/v1/complexes')).data;
-  if (!all.length) return toast('No complexes yet. Build a block, then Save as complex, or write one under Settings → Exercise library → Complexes.', 'warn');
+  if (!all.length) return toast('No complexes yet. Build a block, then Save as complex, or write one under Templates on the Programs page.', 'warn');
   const pick = select(all.map((c) => [c.id, `${c.name} (${plural(c.exercises.length, 'exercise')}${c.kind !== 'block' ? `, ${GROUP_KINDS[c.kind].toLowerCase()}` : ''})`]), { 'aria-label': 'Complex' });
   const preview = h('p', { class: 'small muted', style: 'margin:0' });
   const draw = () => { const c = all.find((x) => x.id === pick.value); preview.textContent = c ? c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ') : ''; };
   pick.addEventListener('change', draw); draw();
-  dialog(`Load a complex into ${w.title}`, h('div', { class: 'stack' }, field('Complex', pick), preview, h('p', { class: 'small muted', style: 'margin:0' }, 'It comes in as a block with its name and every exercise. Changes you make here stay in this workout; the complex itself is edited under Settings → Exercise library → Complexes.')), [
+  dialog(`Load a complex into ${w.title}`, h('div', { class: 'stack' }, field('Complex', pick), preview, h('p', { class: 'small muted', style: 'margin:0' }, 'It comes in as a block with its name and every exercise. Changes you make here stay in this workout; the complex itself is edited under Templates on the Programs page.')), [
     { label: 'Load it', variant: 'primary', onClick: async () => { const c = all.find((x) => x.id === pick.value); await post(`/v1/workouts/${w.id}/blocks`, { complex_id: pick.value }); toast(`${c.name} loaded: ${plural(c.exercises.length, 'exercise')}.`); reload(); } },
     { label: 'Cancel', variant: 'ghost' }]);
 }
 function saveComplexDialog(b) {
   const name = input({ value: b.name, maxlength: '60', required: true, 'aria-label': 'Complex name' });
-  dialog(`Save ${b.name} as a complex`, h('div', { class: 'stack' }, field('Name', name, 'Load it into any workout, in any program, with Load a complex. Edit it later under Settings → Exercise library → Complexes.')), [
-    { label: 'Save complex', variant: 'primary', onClick: async () => { const c = await post(`/v1/workout-blocks/${b.id}/save-complex`, { name: name.value }); toast(`${c.name} is in the library (${plural(c.exercises.length, 'exercise')}).`); } },
+  dialog(`Save ${b.name} as a complex`, h('div', { class: 'stack' }, field('Name', name, 'Load it into any workout, in any program, with Load a complex. Edit it later under Templates on the Programs page.')), [
+    { label: 'Save complex', variant: 'primary', onClick: async () => { const c = await post(`/v1/workout-blocks/${b.id}/save-complex`, { name: name.value }); toast(`${c.name} saved as a complex (${plural(c.exercises.length, 'exercise')}). Adjust it under Templates on the Programs page.`); } },
     { label: 'Cancel', variant: 'ghost' }]);
   name.select();
-}
-// Attach a warm-up and a cool-down to a workout, from the blocks written on the Programs page.
-async function blocksDialog(w, reload) {
-  const all = (await get('/v1/routines')).data;
-  const pick = (kind, cur) => select([['', 'None'], ...all.filter((r) => r.kind === kind).map((r) => [r.id, `${r.name} (${plural(r.exercises.length, 'move')})`])], { value: cur ?? '' });
-  const warm = pick('warmup', w.warmup?.id), cool = pick('cooldown', w.cooldown?.id);
-  dialog(`Warm-up and cool-down for ${w.title}`, h('div', { class: 'stack' },
-    all.length ? null : h('p', { class: 'small muted' }, 'No blocks yet. Write one under Warm-ups and cool-downs on the Programs page, then attach it here.'),
-    h('div', { class: 'form-grid' }, field('Warm-up', warm), field('Cool-down', cool)),
-    h('p', { class: 'small muted', style: 'margin:0' }, 'The block shows with this workout in the app, on the weight-room screen and on the session\'s Live panel. Nothing in it is logged.')), [
-    { label: 'Save', variant: 'primary', onClick: async () => { await patch(`/v1/workouts/${w.id}`, { warmup_id: warm.value || null, cooldown_id: cool.value || null }); toast('Saved.'); reload(); } },
-    { label: 'Cancel', variant: 'ghost' }]);
-}
-// Warm-ups and cool-downs, written once. A block is a name and a short list of moves with what to do.
-function routinesPanel(list, exs, edit) {
-  const row = (r) => h('div', { class: 'list-item' },
-    h('div', { class: 'grow stack-tight' }, h('span', null, h('span', { class: 'strong' }, r.name), h('span', { class: 'small muted' }, ` · ${r.kind_label}`)),
-      h('span', { class: 'small muted' }, `${r.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${r.used_in ? ` · on ${plural(r.used_in, 'workout')}` : ' · not on a workout yet'}`)),
-    edit ? btn('Edit', () => routineDialog(r, r.kind, exs), 'ghost', { 'aria-label': `Edit ${r.name}` }) : null);
-  return panel('Warm-ups and cool-downs', { subtitle: 'Write a block once and attach it to workouts from the builder. It shows with the workout in the app, on the weight-room screen and on the Live panel.',
-    action: edit ? h('div', { class: 'row wrap' }, btn('New warm-up', () => routineDialog(null, 'warmup', exs), 'secondary'), btn('New cool-down', () => routineDialog(null, 'cooldown', exs), 'secondary')) : null },
-    list.length ? list.map(row) : h('p', { class: 'small muted' }, 'No blocks yet.'));
-}
-function routineDialog(r, kind, exs) {
-  const name = input({ value: r?.name ?? '', placeholder: kind === 'warmup' ? 'Dynamic warm-up' : 'Stretch out', required: true });
-  const note = input({ value: r?.note ?? '', maxlength: '500', placeholder: 'A line for the athlete (optional)' });
-  const datalist = h('datalist', { id: 'dp-rtn-list' }, exs.map((e) => h('option', { value: e.name })));
-  const rowsBox = h('div', { class: 'stack-tight' });
-  const rows = (r?.exercises ?? []).map((x) => ({ name: x.name, prescription: x.prescription, note: x.note ?? '' }));
-  if (!rows.length) rows.push({ name: '', prescription: '', note: '' });
-  const draw = () => fill(rowsBox, rows.map((x, i) => {
-    const nm = input({ list: 'dp-rtn-list', value: x.name, placeholder: 'Exercise', 'aria-label': `Move ${i + 1}`, autocomplete: 'off', onInput: (e) => { x.name = e.target.value; } });
-    const rx = input({ value: x.prescription, maxlength: '80', placeholder: '2 × 10, 30 sec each side', 'aria-label': `What to do, move ${i + 1}`, onInput: (e) => { x.prescription = e.target.value; } });
-    const nt = input({ value: x.note, maxlength: '200', placeholder: 'Cue (optional)', 'aria-label': `Cue, move ${i + 1}`, onInput: (e) => { x.note = e.target.value; } });
-    return h('div', { class: 'row wrap', style: 'gap:6px;align-items:center' }, h('span', { class: 'small muted', style: 'width:20px' }, `${i + 1}.`), h('div', { class: 'grow', style: 'min-width:160px' }, nm), h('div', { style: 'flex:0 1 180px' }, rx), h('div', { class: 'grow', style: 'min-width:120px' }, nt),
-      rows.length > 1 ? btn('Remove', () => { rows.splice(i, 1); draw(); }, 'ghost', { 'aria-label': `Remove move ${i + 1}` }) : null);
-  }), h('div', { class: 'row' }, rows.length < 20 ? btn('Add a move', () => { rows.push({ name: '', prescription: '', note: '' }); draw(); }, 'ghost') : null));
-  draw();
-  const body = () => ({ name: name.value.trim(), kind, note: note.value.trim() || null, exercises: rows.map((x, i) => {
-    const e = exs.find((ex) => ex.name.toLowerCase() === x.name.trim().toLowerCase());
-    if (!e) throw new Error(`Move ${i + 1}: pick an exercise from the library (type a few letters of its name).`);
-    return { exercise_id: e.id, prescription: x.prescription.trim(), note: x.note.trim() || null };
-  }) });
-  const actions = [{ label: r ? 'Save block' : `Add ${kind === 'warmup' ? 'warm-up' : 'cool-down'}`, variant: 'primary', onClick: async () => {
-    if (r) await patch(`/v1/routines/${r.id}`, body()); else await post('/v1/routines', body());
-    toast(r ? 'Block saved. Every workout it\'s on shows the change.' : 'Block added. Attach it to a workout from the builder.'); deps.render();
-  } }, { label: 'Cancel', variant: 'ghost' }];
-  if (r) actions.push({ label: 'Delete block', variant: 'ghost', onClick: async () => {
-    if (!confirm(`Delete ${r.name}?${r.used_in ? ` It comes off ${plural(r.used_in, 'workout')}.` : ''}`)) return false;
-    await del(`/v1/routines/${r.id}`, { confirm: true }); toast(`${r.name} deleted.`); deps.render();
-  } });
-  dialog(r ? `Edit ${r.name}` : kind === 'warmup' ? 'New warm-up' : 'New cool-down', h('div', { class: 'stack' }, datalist, h('div', { class: 'form-grid' }, field('Name', name), field('Note for the athlete', note)),
-    h('div', { class: 'dp-label' }, 'Moves, in order'), rowsBox), actions);
-  name.focus();
 }
 function renameDialog(w, reload) {
   const title = input({ value: w.title });

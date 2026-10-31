@@ -452,7 +452,12 @@ export function bulkDays(ctx, programId, action, body = {}) {
     for (let k = 1; k <= times; k++) for (const w of src) plan.push({ src: w, week: w.week - weeksOf[0] + last + 1 + (k - 1) * span, day: w.day });
   } else {
     const toWeek = v.int(body.to_week, 'to_week', { min: 1, max: 52 });
-    for (const w of src) plan.push({ src: w, week: toWeek + (w.week - weeksOf[0]), day: w.day });
+    // to_day (owner's ask: copy or move a workout to a certain day in a certain week): one day at a time lands on that day;
+    // several ticked days keep their weekdays.
+    const toDay = body.to_day != null && body.to_day !== '' ? v.int(body.to_day, 'to_day', { min: 1, max: 7 }) : null;
+    if (toDay && src.length > 1) throw badRequest('Pick a day for one workout at a time. With several ticked, each keeps its weekday.');
+    if (toDay && act === 'move' && src[0].week === toWeek && src[0].day === toDay) throw badRequest(`That workout is already on week ${toWeek}, day ${toDay}.`);
+    for (const w of src) plan.push({ src: w, week: toWeek + (w.week - weeksOf[0]), day: toDay ?? w.day });
   }
   const lastWeek = Math.max(...plan.map((x) => x.week));
   if (lastWeek > 52) throw badRequest('That goes past week 52.');

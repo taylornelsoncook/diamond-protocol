@@ -1172,6 +1172,7 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
       btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
       btn('Warm-up and cool-down', (e) => busy(e.currentTarget, () => blocksDialog(w, reload)), 'ghost'),
       btn('Copy', () => copyWorkoutDialog(p, w, reload), 'ghost'),
+      btn('Move', () => bulkDialog(p, [w.id], 'move', (r) => reload(r?.days?.[0]?.week ?? w.week)), 'ghost'),
       btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost'),
       btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost'))) : null;
   const reps = repsOf(w);
@@ -1294,11 +1295,14 @@ function bulkDialog(p, ids, action, after) {
     for (const x of [...a.data, ...b.data]) if (x.id !== p.id) target.append(h('option', { value: x.id }, `${x.kind === 'template' ? 'Template: ' : ''}${x.name}`));
   }).catch(() => {});
   const what = `${plural(days.length, 'day')} (${days.map((w) => `wk ${w.week} d${w.day}`).join(', ')})`;
-  const body = action === 'copy' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Copy ${what}. Each keeps its weekday; days from several weeks land in consecutive weeks.`), h('div', { class: 'form-grid' }, field('To week', weekSel), field('In', target)))
-    : action === 'move' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Move ${what}. Each keeps its weekday.`), field('To week', weekSel))
+  // One day: it can land on a chosen day of the week (owner's ask); several keep their weekdays.
+  const one = days.length === 1 ? days[0] : null;
+  const daySel = one ? select([['', `Keep its weekday (day ${one.day})`], ...[1, 2, 3, 4, 5, 6, 7].map((d) => [String(d), `Day ${d}`])], { 'aria-label': 'To day' }) : null;
+  const body = action === 'copy' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, one ? `Copy ${one.title} (week ${one.week}, day ${one.day}).` : `Copy ${what}. Each keeps its weekday; days from several weeks land in consecutive weeks.`), h('div', { class: 'form-grid' }, field('To week', weekSel), daySel ? field('Day', daySel) : null, field('In', target)))
+    : action === 'move' ? h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, one ? `Move ${one.title} (week ${one.week}, day ${one.day}).` : `Move ${what}. Each keeps its weekday.`), h('div', { class: 'form-grid' }, field('To week', weekSel), daySel ? field('Day', daySel) : null))
     : h('div', { class: 'stack' }, h('p', { class: 'small muted', style: 'margin:0' }, `Repeat ${what} into the weeks after week ${weeks.at(-1)}.`), field('How many times', times, 'Each repeat is the same run of days again; the program grows as needed.'));
   const send = async (extra = {}) => {
-    const payload = { workouts: ids, ...(action === 'repeat' ? { times: Number(times.value) } : { to_week: Number(weekSel.value) }), ...(action === 'copy' && target.value !== p.id ? { to_program_id: target.value } : {}), ...extra };
+    const payload = { workouts: ids, ...(action === 'repeat' ? { times: Number(times.value) } : { to_week: Number(weekSel.value) }), ...(daySel?.value && action !== 'repeat' ? { to_day: Number(daySel.value) } : {}), ...(action === 'copy' && target.value !== p.id ? { to_program_id: target.value } : {}), ...extra };
     try { return await post(`/v1/programs/${p.id}/days/${action}`, payload); }
     catch (e) {
       if (e.code === 'replace_needed') { if (!confirm(`${e.message}`)) return null; return send({ ...extra, replace: true }); }

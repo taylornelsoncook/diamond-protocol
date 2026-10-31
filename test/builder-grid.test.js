@@ -123,3 +123,29 @@ test('a version 74 database gains the instructions column, opened twice', () => 
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 });
+
+test('one ticked day can go to a chosen day of the week (to_day) when copied or moved; several keep their weekdays', async () => {
+  const p0 = await detail();
+  const wk = p0.weeks + 1;   // a fresh week, so nothing earlier tests made is in the way
+  assert.equal((await coach('PATCH', `/v1/programs/${program.id}`, { weeks: wk })).status, 200);
+  const src = await day(wk, 5, 'Mobility');
+  assert.ok(src?.id && src.week === wk, JSON.stringify(src).slice(0, 300));
+  // Copy that week's day 5 to the next week's day 2.
+  const c = await coach('POST', `/v1/programs/${program.id}/days/copy`, { workouts: [src.id], to_week: wk + 1, to_day: 2 });
+  assert.equal(c.status, 200, JSON.stringify(c.body));
+  assert.deepEqual(c.body.days.map((d) => `${d.week}:${d.day}`), [`${wk + 1}:2`]);
+  assert.equal(c.body.workouts.find((w) => w.week === wk + 1 && w.day === 2).title, 'Mobility');
+  // Move the original to the next week's day 6; its old slot is empty afterwards.
+  const m = await coach('POST', `/v1/programs/${program.id}/days/move`, { workouts: [src.id], to_week: wk + 1, to_day: 6 });
+  assert.equal(m.status, 200, JSON.stringify(m.body));
+  assert.deepEqual(m.body.days, [{ id: src.id, week: wk + 1, day: 6 }]);
+  assert.equal(m.body.workouts.some((w) => w.week === wk && w.day === 5), false);
+  // A taken day still asks to replace; its own slot, a day off the week and several days with to_day are refused.
+  const taken = await coach('POST', `/v1/programs/${program.id}/days/move`, { workouts: [src.id], to_week: wk + 1, to_day: 2 });
+  assert.equal(taken.status, 409); assert.equal(taken.body.error.code, 'replace_needed');
+  assert.match((await coach('POST', `/v1/programs/${program.id}/days/move`, { workouts: [src.id], to_week: wk + 1, to_day: 6 })).body.error.message, new RegExp(`already on week ${wk + 1}, day 6`));
+  assert.equal((await coach('POST', `/v1/programs/${program.id}/days/copy`, { workouts: [src.id], to_week: wk + 2, to_day: 8 })).status, 400);
+  const two = m.body.workouts.filter((w) => w.week === wk + 1).map((w) => w.id);
+  assert.equal(two.length, 2);
+  assert.match((await coach('POST', `/v1/programs/${program.id}/days/copy`, { workouts: two, to_week: wk + 2, to_day: 1 })).body.error.message, /one workout at a time/);
+});

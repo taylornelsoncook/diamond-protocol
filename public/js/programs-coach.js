@@ -289,7 +289,7 @@ export async function exerciseLibrary() {
 // Complexes (version 74, owner's ask): a named group of exercises written once ("Acceleration Primer") and loaded into any
 // workout as a block with Load a complex. Saved from a block and edited under Templates on the Programs page; workouts
 // already built from one keep what they have.
-function complexDialog(c, exs) {
+function complexDialog(c, exs, readOnly = false) {
   const name = input({ value: c?.name ?? '', maxlength: '60', required: true, placeholder: 'Acceleration Primer' });
   const kind = select(Object.keys(GROUP_KINDS).map((k) => [k, GROUP_KINDS[k]]), { value: c?.kind ?? 'block', 'aria-label': 'How it runs' });
   const note = input({ value: c?.note ?? '', maxlength: '500', placeholder: 'What it\'s for (optional)' });
@@ -311,11 +311,11 @@ function complexDialog(c, exs) {
   };
   const draw = () => { fill(rowsBox, rows.length ? rows.map((x, i) => h('div', { class: 'row pg-ex sf-in-group' },
     h('span', { class: 'sf-tag', 'aria-hidden': 'true' }, String(i + 1)),
-    h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}: change sets and reps`, onClick: () => editRow(x, i) },
-      h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, line(x) || 'Set the sets and reps')), h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit')),
-    i > 0 ? btn('↑', () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} up` }) : null,
-    i < rows.length - 1 ? btn('↓', () => { [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} down` }) : null,
-    btn('Remove', () => { rows.splice(i, 1); draw(); }, 'ghost', { 'aria-label': `Remove ${x.name}` })))
+    h('button', { type: 'button', class: 'grow pg-ex-body', 'aria-label': `${x.name}: change sets and reps`, onClick: () => { if (!readOnly) editRow(x, i); } },
+      h('span', { class: 'stack-tight grow' }, h('span', null, x.name), h('span', { class: 'small muted' }, line(x) || 'Set the sets and reps')), readOnly ? null : h('span', { class: 'small muted', 'aria-hidden': 'true' }, 'Edit')),
+    readOnly ? null : i > 0 ? btn('↑', () => { [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} up` }) : null,
+    readOnly ? null : i < rows.length - 1 ? btn('↓', () => { [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]]; draw(); }, 'ghost', { 'aria-label': `Move ${x.name} down` }) : null,
+    readOnly ? null : btn('Remove', () => { rows.splice(i, 1); draw(); }, 'ghost', { 'aria-label': `Remove ${x.name}` })))
     : h('p', { class: 'small muted', style: 'margin:0' }, 'No exercises yet.')); syncAllSets(); };
   draw();
   const addEx = () => pickExercise({ title: `Add to ${name.value.trim() || 'the complex'}`, exs, program: { workouts: [] }, onPick: async (ex) => {
@@ -335,7 +335,8 @@ function complexDialog(c, exs) {
     if (!confirm(`Delete ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`)) return false;
     await del(`/v1/complexes/${c.id}`); toast(`${c.name} deleted.`); deps.render();
   } });
-  dialog(c ? `Edit ${c.name}` : 'New complex', h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('How the athlete runs it', kind, `Block: ${KIND_WORDS.block}. Superset: ${KIND_WORDS.superset}. Circuit: ${KIND_WORDS.circuit}.`)), field('Note', note),
+  if (readOnly) { for (const el of [name, kind, note, allSets]) el.disabled = true; actions.splice(0, actions.length, { label: 'Close', variant: 'ghost' }); }
+  dialog(c ? (readOnly ? c.name : `Edit ${c.name}`) : 'New complex', h('div', { class: 'stack' }, h('div', { class: 'form-grid' }, field('Name', name), field('How the athlete runs it', kind, `Block: ${KIND_WORDS.block}. Superset: ${KIND_WORDS.superset}. Circuit: ${KIND_WORDS.circuit}.`)), field('Note', note),
     h('div', { class: 'row wrap', style: 'align-items:flex-end;gap:12px' }, h('div', { class: 'dp-label grow' }, 'Exercises, in order'), field('Sets on every exercise', allSets)), rowsBox), actions);
   name.focus();
 }
@@ -1060,24 +1061,56 @@ function ruleDialog(q, programs, rule = null) {
     } },
     { label: 'Cancel', variant: 'ghost' }]);
 }
-// Templates: program templates, workout templates and complexes (owner's ask: a block saved as a complex is kept and
-// adjusted here, under Templates).
+// Templates (owner's ask: "a drop down menu of all the complexes and a drop down of workout templates; once one is
+// selected you can go to that specific template or complex and make adjustments"): three drop-downs, program templates,
+// workout templates and complexes, each with Open (the builder, the template's own page, or the complex dialog) and Delete.
 function templatesPanel(templates, workoutTemplates, programs, edit, complexes = [], exs = []) {
   if (!templates.length && !workoutTemplates.length && !complexes.length) return panel('Templates', { subtitle: 'Save any program with Save as template, any workout from its ⋮ menu, or any block with Save as complex, and start new ones from them here.' }, h('p', { class: 'muted small' }, 'No templates yet.'));
-  return panel('Templates', { subtitle: 'Programs, workouts and complexes saved to start from. A template is never assigned or sold.' },
-    templates.length ? h('div', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Program templates'), templates.map((t) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('a', { href: `#/programs/${t.id}`, class: 'strong', style: 'color:inherit' }, t.name), h('span', { class: 'small muted' }, [plural(t.weeks, 'week'), t.level ?? 'Any level', plural(t.workout_count, 'workout')].join(' · '))),
-      edit ? btn('Start a program', () => newProgramDialog(programs, templates, t.id), 'secondary', { 'aria-label': `Start a program from ${t.name}` }) : null,
-      edit ? btn('Delete', (e) => { if (!confirm(`Delete the template ${t.name}? Programs started from it aren't touched.`)) return; busy(e.currentTarget, async () => { await del(`/v1/programs/${t.id}`); toast('Template deleted.'); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the template ${t.name}` }) : null))) : null,
-    workoutTemplates.length ? h('div', { class: 'stack-tight', style: 'margin-top:8px' }, h('span', { class: 'small strong' }, 'Workout templates'), h('span', { class: 'small muted' }, 'In the builder, Add day → Start from.'), workoutTemplates.map((t) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, t.name), h('span', { class: 'small muted' }, t.exercise_names.join(', ') || 'No exercises')),
-      edit ? btn('Delete', (e) => { if (!confirm(`Delete the workout template ${t.name}?`)) return; busy(e.currentTarget, async () => { await del(`/v1/workout-templates/${t.id}`); toast('Template deleted.'); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the workout template ${t.name}` }) : null))) : null,
-    complexes.length ? h('div', { class: 'stack-tight', style: 'margin-top:8px' }, h('span', { class: 'small strong' }, 'Complexes'), h('span', { class: 'small muted' }, 'A block saved from a workout. Load one into any workout with Load a complex; changes here don\'t touch workouts already built from it.'), complexes.map((c) => h('div', { class: 'list-item' },
-      h('div', { class: 'grow stack-tight' }, h('span', null, h('span', { class: 'strong' }, c.name), c.kind !== 'block' ? h('span', { class: 'small muted' }, ` · ${c.kind_label.toLowerCase()}`) : null),
-        h('span', { class: 'small muted' }, `${c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${c.used_in ? ` · loaded into ${plural(c.used_in, 'workout')}` : ''}`),
-        c.note ? h('span', { class: 'small pg-note' }, c.note) : null),
-      edit ? btn('Edit', () => complexDialog(c, exs), 'secondary', { 'aria-label': `Edit the complex ${c.name}` }) : null,
-      edit ? btn('Delete', (e) => { if (!confirm(`Delete the complex ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`)) return; busy(e.currentTarget, async () => { await del(`/v1/complexes/${c.id}`); toast(`${c.name} deleted.`); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the complex ${c.name}` }) : null))) : null);
+  // One row: a label, the drop-down, a line about the chosen one, and the buttons that act on it.
+  const row = (label, items, { describe, open, extra = null, remove }) => {
+    if (!items.length) return null;
+    const sel = select(items.map((t) => [t.id, t.name]), { 'aria-label': label });
+    const line = h('span', { class: 'small muted', style: 'display:block' });
+    const chosen = () => items.find((t) => t.id === sel.value);
+    const drawLine = () => { line.textContent = describe(chosen()); };
+    sel.addEventListener('change', drawLine); drawLine();
+    return h('div', { class: 'stack-tight', style: 'margin-top:8px' }, h('span', { class: 'small strong' }, label),
+      h('div', { class: 'row wrap', style: 'align-items:center' }, h('div', { style: 'flex:1 1 220px;min-width:0' }, sel),
+        btn(edit ? 'Open' : 'Look', () => open(chosen()), 'secondary', { 'aria-label': `Open the chosen ${label.toLowerCase().replace(/s$/, '')}` }),
+        extra ? btn(extra.label, () => extra.onClick(chosen()), 'ghost') : null,
+        edit ? btn('Delete', (e) => { const t = chosen(); if (!confirm(remove.ask(t))) return; busy(e.currentTarget, async () => { await remove.run(t); toast(remove.done); deps.render(); }); }, 'ghost', { 'aria-label': `Delete the chosen ${label.toLowerCase().replace(/s$/, '')}` }) : null),
+      line);
+  };
+  return panel('Templates', { subtitle: 'Programs, workouts and complexes saved to start from. Pick one and Open to adjust it. A template is never assigned or sold.' },
+    row('Program templates', templates, {
+      describe: (t) => [plural(t.weeks, 'week'), t.level ?? 'Any level', plural(t.workout_count, 'workout')].join(' · '),
+      open: (t) => { location.hash = `#/programs/${t.id}`; },
+      extra: edit ? { label: 'Start a program', onClick: (t) => newProgramDialog(programs, templates, t.id) } : null,
+      remove: { ask: (t) => `Delete the template ${t.name}? Programs started from it aren't touched.`, run: (t) => del(`/v1/programs/${t.id}`), done: 'Template deleted.' } }),
+    row('Workout templates', workoutTemplates, {
+      describe: (t) => t.exercise_names.join(', ') || 'No exercises',
+      open: (t) => { location.hash = `#/programs/templates/workout/${t.id}`; },
+      remove: { ask: (t) => `Delete the workout template ${t.name}? Days already started from it aren't touched.`, run: (t) => del(`/v1/workout-templates/${t.id}`), done: 'Template deleted.' } }),
+    row('Complexes', complexes, {
+      describe: (c) => `${c.kind !== 'block' ? `${c.kind_label} · ` : ''}${c.exercises.map((x) => `${x.name} ${x.prescription}`).join(' · ')}${c.used_in ? ` · loaded into ${plural(c.used_in, 'workout')}` : ''}${c.note ? ` · ${c.note}` : ''}`,
+      open: (c) => complexDialog(c, exs, !edit),
+      remove: { ask: (c) => `Delete the complex ${c.name}?${c.used_in ? ` The ${plural(c.used_in, 'workout')} built from it stay as they are.` : ''}`, run: (c) => del(`/v1/complexes/${c.id}`), done: 'Complex deleted.' } }));
+}
+// A workout template on its own page (owner's ask: open the chosen template and adjust it): the same day column as the
+// builder, in template mode, editing the workout that lives in the hidden holder program.
+export async function viewWorkoutTemplate(main) {
+  const id = location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[3];
+  const back = h('a', { class: 'dp-btn dp-btn--ghost', href: '#/programs' }, 'Back to programs');
+  const list = (await get('/v1/workout-templates')).data;
+  const t = list.find((x) => x.id === id);
+  if (!t) { fill(main, deps.header('Workout template', 'This template is gone.', back), panel('Not found', {}, h('p', { class: 'muted small' }, 'It was deleted, or the link is wrong. Pick one under Templates on the Programs page.'))); return; }
+  const [p, exs] = await Promise.all([get(`/v1/programs/${t.program_id}`), get('/v1/exercises')]);
+  const w = p.workouts.find((x) => x.id === id);
+  const edit = canEdit();
+  const reload = () => deps.render();
+  fill(main, deps.header(`Workout template: ${w.title}`, 'Changes here go into days started from it later. Days already made from it keep what they have.', back),
+    h('div', { class: 'pg-days pg-days--one', role: 'group', 'aria-label': `The workout template ${w.title}` },
+      dayColumn(p, w, exs, edit, reload, { selected: new Set(), onSelect: () => {}, openDay: null, template: true })));
 }
 function copyWeekDialog(p, week, reload) {
   const to = input({ type: 'number', min: '1', max: '52', value: String(Math.min(week + 1, 52)), inputmode: 'numeric' });
@@ -1112,7 +1145,7 @@ const letterOf = (i) => String.fromCharCode(65 + Math.min(i, 25));
 
 // One day of the week grid: the tick, the title, the day's instructions, each block with its letter and its exercises
 // one line each, and the adds at the foot.
-function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null }) {
+function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null, template = false }) {
   const line = (x) => [x.prescription, x.rest_seconds != null ? (x.rest_seconds === 0 ? 'no rest' : `${restWord(x.rest_seconds)} rest`) : null, x.tempo ? `tempo ${x.tempo}` : null, x.target_rpe != null ? `RPE ${x.target_rpe}` : null, loadText(x)].filter(Boolean).join(' · ');
   // Drag and drop (step 2): a line is dragged within the day, into a block, or onto another day; the drop lands it
   // ahead of the line it is dropped on, at the end of a block dropped on its heading, or at the end of a day.
@@ -1177,8 +1210,13 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
     rows.push(row(x, x.block_id ? ++n : null));
   });
   for (const b of blocks.filter((b) => !b.count)) rows.push(blockHead(b, byId.get(b.id).i), h('p', { class: 'small muted', style: 'margin:0 0 0 30px' }, edit ? 'Empty. Press + to add an exercise.' : 'Empty.'));
-  const tick = edit ? h('input', { type: 'checkbox', class: 'pg-tick', checked: selected.has(w.id), 'aria-label': `Select day ${w.day}, ${w.title}`, onChange: (e) => { if (e.target.checked) selected.add(w.id); else selected.delete(w.id); onSelect(); } }) : null;
-  const menu = edit ? h('details', { class: 'pg-menu', onToggle: (e) => placeMenu(e.currentTarget) }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
+  const tick = edit && !template ? h('input', { type: 'checkbox', class: 'pg-tick', checked: selected.has(w.id), 'aria-label': `Select day ${w.day}, ${w.title}`, onChange: (e) => { if (e.target.checked) selected.add(w.id); else selected.delete(w.id); onSelect(); } }) : null;
+  // A workout template (its own page, owner's ask) has a short menu: rename, instructions, delete the template.
+  const menu = edit && template ? h('details', { class: 'pg-menu', onToggle: (e) => placeMenu(e.currentTarget) }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
+    h('div', { class: 'pg-menu-list' },
+      btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
+      btn('Delete template', (e) => { if (!confirm(`Delete the workout template ${w.title}? Days already started from it aren't touched.`)) return; busy(e.currentTarget, async () => { await del(`/v1/workout-templates/${w.id}`); toast('Template deleted.'); location.hash = '#/programs'; }); }, 'ghost')))
+  : edit ? h('details', { class: 'pg-menu', onToggle: (e) => placeMenu(e.currentTarget) }, h('summary', { 'aria-label': `More for ${w.title}` }, '⋮'),
     h('div', { class: 'pg-menu-list' },
       openDay ? btn('Open this day on its own', () => openDay(w), 'ghost') : null,
       btn('Rename', () => renameDialog(w, reload), 'ghost'), btn(w.instructions ? 'Edit instructions' : 'Add instructions', () => instructionsDialog(w, reload), 'ghost'),
@@ -1187,12 +1225,12 @@ function dayColumn(p, w, exs, edit, reload, { selected, onSelect, openDay = null
       btn('Save as template', () => { const name = prompt(`Save ${w.title} as a workout template. Name it:`, w.title); if (name === null) return; post(`/v1/workouts/${w.id}/save-template`, { name: name.trim() || w.title }).then(() => toast('Template saved. Start a day from it with Add day.')).catch((e) => toast(e.message, 'warn')); }, 'ghost'),
       btn('Delete', (e) => { if (confirm(`Delete ${w.title}?${w.logs ? ` Athletes logged it ${plural(w.logs, 'time')}; those logs stay in the athletes' history.` : ''}`)) busy(e.currentTarget, async () => { await del(`/v1/workouts/${w.id}`, { confirm: true }); toast('Workout deleted.'); reload(); }); }, 'ghost'))) : null;
   const reps = repsOf(w);
-  const dayDrag = edit ? { draggable: 'true',
+  const dayDrag = edit && !template ? { draggable: 'true',
     onDragstart: (e) => { drag.kind = 'day'; drag.days = selected.has(w.id) ? [...selected] : [w.id]; e.dataTransfer.effectAllowed = 'copy'; e.dataTransfer.setData('text/plain', drag.days.join(',')); e.currentTarget.classList.add('pg-dragging'); },
     onDragend: (e) => { e.currentTarget.classList.remove('pg-dragging'); drag.kind = null; } } : {};
   return h('div', { class: `pg-day${selected.has(w.id) ? ' pg-day--selected' : ''}`, 'data-day': String(w.day) },
-    h('div', { class: 'pg-day-head', ...dayDrag, title: edit ? 'Drag onto an athlete, a team or a school in Send to' : null }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
-      h('span', { class: 'small muted' }, `Day ${w.day}${w.logs ? ` · logged ${w.logs}×` : ''}${reps ? ` · ${reps} reps` : ''}`),
+    h('div', { class: 'pg-day-head', ...dayDrag, title: edit && !template ? 'Drag onto an athlete, a team or a school in Send to' : null }, tick, h('div', { class: 'grow stack-tight', style: 'gap:0;min-width:0' },
+      h('span', { class: 'small muted' }, template ? `Workout template${reps ? ` · ${reps} reps` : ''}` : `Day ${w.day}${w.logs ? ` · logged ${w.logs}×` : ''}${reps ? ` · ${reps} reps` : ''}`),
       // Owner's ask: click into a day and work on it alone, without the whole program on the screen: the title opens it (Rename is
       // in the ⋮ menu); on its own page the title renames it.
       openDay ? h('button', { type: 'button', class: 'pg-title strong pg-open', 'aria-label': `Open day ${w.day}, ${w.title}, on its own`, title: 'Open this day on its own', onClick: () => openDay(w) }, w.title)

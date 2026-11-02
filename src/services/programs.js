@@ -245,7 +245,7 @@ export function saveProgramTemplate(ctx, programId, body = {}) {
   if (src.kind === 'workouts') throw conflict('That isn\'t a program.');
   return duplicateProgram(ctx, programId, { name: body.name ? v.str(body.name, 'name', { max: 120 }) : src.kind === 'template' ? `${src.name} (copy)` : src.name, kind: 'template' });
 }
-const shapeWorkoutTemplate = (w) => ({ id: w.id, name: w.title, exercises: w.exercises.length, exercise_names: w.exercises.map((x) => x.name), warmup: w.warmup?.name ?? null, cooldown: w.cooldown?.name ?? null, created_at: w.created_at ?? null });
+const shapeWorkoutTemplate = (w) => ({ id: w.id, program_id: w.program_id, name: w.title, exercises: w.exercises.length, exercise_names: w.exercises.map((x) => x.name), warmup: w.warmup?.name ?? null, cooldown: w.cooldown?.name ?? null, created_at: w.created_at ?? null });
 export function listWorkoutTemplates(ctx) {
   const h = ctx.db.get(`SELECT id FROM programs WHERE kind = 'workouts'`);
   if (!h) return [];

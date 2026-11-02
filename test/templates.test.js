@@ -79,6 +79,7 @@ test('a workout becomes a template and a day starts from it', async () => {
   const t2 = (await coach('POST', `/v1/workouts/${lower.id}/save-template`, {})).body;
   assert.equal(t2.name, 'Lower', 'the title is the default name');
   const list = (await desk('GET', '/v1/workout-templates')).body.data;
+  assert.ok(list.every((t) => t.program_id), 'each template names the holder program, so the template page can open it in the builder');
   assert.deepEqual(list.map((x) => x.name), ['Heavy lower day', 'Lower']);
   // The holder never shows as a program and can't be deleted.
   assert.deepEqual((await coach('GET', '/v1/programs')).body.data.map((p) => p.name).sort(), ['Fall strength', 'Winter strength']);

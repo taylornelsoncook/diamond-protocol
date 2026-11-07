@@ -126,6 +126,7 @@ Push changes to the repository. GitHub runs the full test suite and checks the D
 | --- | --- |
 | `PUBLIC_URL` | Your https address. Required. |
 | `DP_TEST_MODE` | `false` in production. |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | Optional. The "are you a person" check (Cloudflare Turnstile, free) on the public forms: Ask about training, the family sign-up and the online sales page. Make a site at Cloudflare → Turnstile (hostname = your app's address, Managed mode) and copy both keys here; the forms show the check from the next restart. Without them the forms rely on the hidden bot-trap field and the rate limits. |
 | `TRUST_PROXY` | How many proxies sit in front of the app, so HTTPS and visitors' addresses are recognized. The Dockerfile sets `true` (one proxy). **On Render set `TRUST_PROXY=2`**: Render puts its own Cloudflare edge in front of its load balancer, so two addresses arrive. Add one more (`3`) if you also turn on your own Cloudflare proxy (orange cloud) for the domain. To confirm it, sign in as the owner and open Staff & security → Connection check: the address the app decided on should be your own internet address, and the check lists what each value would pick. |
 | `DB_FILE`, `BACKUP_DIR` | `/data/dp.db`, `/data/dp-backups` (set in the Dockerfile). |
 | `BACKUP_KEEP` | How many daily backups to keep (default 30). |

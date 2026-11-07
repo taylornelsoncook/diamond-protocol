@@ -1,4 +1,5 @@
 import { h, fill, busy, btn, field, input, select } from './ui.js';
+import { captchaBox } from './captcha.js';
 
 // Public sign-up for new families: parent, athletes, agreement, then an emailed code.
 const root = document.getElementById('root');
@@ -15,7 +16,8 @@ async function boot() {
 }
 const logoBlock = () => h('img', { src: '/brand/logo.png', alt: 'Diamond Protocol. Built under pressure.', style: 'width:160px;align-self:center' });
 
-function renderForm(error) {
+async function renderForm(error) {
+  const cap = await captchaBox();   // the "are you a person" check, when the owner set it up
   const p = state.parent ?? { name: '', email: '', phone: '' };
   const pName = input({ autocomplete: 'name', value: p.name, required: true }), pEmail = input({ type: 'email', autocomplete: 'email', inputmode: 'email', value: p.email, required: true }), pPhone = input({ type: 'tel', autocomplete: 'tel', value: p.phone });
   const trap = h('input', { type: 'text', name: 'website', tabindex: '-1', autocomplete: 'off', 'aria-hidden': 'true', style: 'position:absolute;left:-9999px;width:1px;height:1px;opacity:0' });
@@ -28,14 +30,14 @@ function renderForm(error) {
     logoBlock(),
     h('h1', { class: 'p-title', style: 'text-align:center' }, `Join ${state.info.business_name}`),
     h('p', { class: 'muted', style: 'text-align:center;margin:0' }, 'Create your family account in a couple of minutes. You\'ll book sessions, pay and see progress in one place.'),
-    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); save(); busy(submit, () => start(trap.value, agree.checked, err)); } },
+    h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); save(); busy(submit, () => start(trap.value, agree.checked, err, cap)); } },
       h('section', { class: 'dp-panel stack' }, h('h2', { class: 'dp-panel-title' }, 'You'), h('p', { class: 'small muted', style: 'margin:0' }, 'The parent or guardian who manages the account.'),
         field('Full name', pName), field('Email', pEmail, 'You\'ll sign in with this email. No password.'), field('Mobile phone', pPhone), trap),
       ...cards,
       btn('+ Add another athlete', () => { save(); readCards(); state.athletes.push(blankAthlete()); renderForm(); }, 'secondary'),
       h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start;min-height:44px' }, agree,
         h('span', null, 'I agree to the ', h('a', { href: '/terms', target: '_blank' }, 'terms of service'), ' and ', h('a', { href: '/privacy', target: '_blank' }, 'privacy policy'), ', and I\'m the parent or legal guardian of the athletes I\'m adding.')),
-      err, submit,
+      cap.el, err, submit,
       h('p', { class: 'small muted', style: 'text-align:center' }, 'Already have an account? ', h('a', { href: '/client' }, 'Sign in')))));
   function readCards() { root.querySelectorAll('[data-athlete]').forEach((el) => { const i = Number(el.dataset.athlete); for (const k of Object.keys(state.athletes[i])) { const f = el.querySelector(`[name="${k}"]`); if (f) state.athletes[i][k] = f.value; } }); }
   state.readCards = readCards;
@@ -58,13 +60,13 @@ function athleteCard(a, i) {
       field('Athlete ID (optional)', f('athlete_code', { autocomplete: 'off', autocapitalize: 'characters', placeholder: 'AVALOP2026', maxlength: '14' }), 'On their team roster or progress report. With the same name and birthday, their team results stay on one profile.')));
 }
 
-async function start(trap, agreed, errEl) {
+async function start(trap, agreed, errEl, cap) {
   state.readCards();
   errEl.textContent = '';
   if (!agreed) { errEl.textContent = 'Please agree to the terms and privacy policy.'; return; }
-  const res = await fetch('/portal/api/signup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent: state.parent, athletes: state.athletes, accept_terms: true, website: trap }) });
+  const res = await fetch('/portal/api/signup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parent: state.parent, athletes: state.athletes, accept_terms: true, website: trap, captcha_token: cap.token() }) });
   const data = await res.json();
-  if (!res.ok) { errEl.textContent = data.error?.message ?? 'Something went wrong. Try again.'; return; }
+  if (!res.ok) { errEl.textContent = data.error?.message ?? 'Something went wrong. Try again.'; cap.reset(); return; }
   renderCode(data);
 }
 

@@ -1,4 +1,5 @@
 import { h, fill, btn, busy, field, input, select, money } from './ui.js';
+import { captchaBox } from './captcha.js';
 
 // The online sales page (owner's ask: "a sales page where people can buy their package or membership online; when they
 // purchase it, it prompts them to create their profile"). Pick a membership or a pack, say who's training, confirm the
@@ -87,7 +88,8 @@ function catalog() {
 }
 
 // The buyer's details and the agreements, then the emailed code.
-function checkout(item, error) {
+async function checkout(item, error) {
+  const cap = await captchaBox();   // the "are you a person" check, when the owner set it up
   state.item = item;
   history.replaceState(null, '', `?item=${item.kind}:${encodeURIComponent(item.id)}`);
   const d = state.data, plan = item.kind === 'plan';
@@ -129,7 +131,7 @@ function checkout(item, error) {
         field('Who helped you?', helped, 'A coach who told you about us or helped you choose. If nobody did, pick No one.')),
       label(terms, 'I agree to the ', h('a', { href: '/terms', target: '_blank' }, 'terms of service'), ' and ', h('a', { href: '/privacy', target: '_blank' }, 'privacy policy'), '.'),
       renew ? label(renew, `I understand this membership renews automatically: ${money(item.price_cents)} is charged to my card on the 1st of every month until I cancel. I can cancel any time from my account; it ends after the month already paid.`) : null,
-      err, go,
+      cap.el, err, go,
       h('p', { class: 'small muted', style: 'margin:0;text-align:center' }, 'Your card is saved on Stripe\'s secure page in the next step. We never see the full number.')));
   showName();
   async function start() {
@@ -139,9 +141,9 @@ function checkout(item, error) {
     remember.set({ form });
     try {
       const out = await post('/portal/api/buy', { item: `${item.kind}:${item.id}`, self: form.self, athlete: { first_name: form.first_name, last_name: form.last_name },
-        buyer: { name: form.self ? undefined : form.name, email: form.email, phone: form.phone }, accept_terms: terms.checked, accept_renewal: renew ? renew.checked : undefined, skip_trial: skip ? skip.checked : undefined, helped_by: form.helped_by, website: trap.value });
+        buyer: { name: form.self ? undefined : form.name, email: form.email, phone: form.phone }, accept_terms: terms.checked, accept_renewal: renew ? renew.checked : undefined, skip_trial: skip ? skip.checked : undefined, helped_by: form.helped_by, website: trap.value, captcha_token: cap.token() });
       codeStep(out, form.email);
-    } catch (e) { err.textContent = e.message; }
+    } catch (e) { err.textContent = e.message; cap.reset(); }
   }
 }
 

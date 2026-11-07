@@ -45,6 +45,11 @@ services:
       # Optional: Claude reads program PDFs (Programs > Build from a PDF) and rewords progress notes.
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Optional: the "are you a person" check on the public forms (Cloudflare Turnstile, free).
+      - key: TURNSTILE_SITE_KEY
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
       # Only when the Anthropic key was made at the organization level (not inside a workspace): the workspace's ID.
       - key: ANTHROPIC_WORKSPACE_ID
         sync: false
@@ -121,6 +126,11 @@ services:
         sync: false
       # Optional: Claude reads program PDFs (Programs > Build from a PDF) and rewords progress notes for parents.
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Optional: the "are you a person" check on the public forms (Cloudflare Turnstile, free).
+      - key: TURNSTILE_SITE_KEY
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
         sync: false
       # Only when the Anthropic key was made at the organization level (not inside a workspace): the workspace's ID.
       - key: ANTHROPIC_WORKSPACE_ID

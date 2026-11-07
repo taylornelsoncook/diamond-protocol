@@ -1,4 +1,5 @@
 import { h, fill, busy, btn, field, input } from './ui.js';
+import { captchaBox } from './captcha.js';
 
 // Public "Ask about training" form. Link it from the website. Each inquiry becomes a lead on the Leads tab and gets
 // a thank-you email with the sign-up link; follow-up emails go out after 2 and 7 days unless the family signs up.
@@ -14,7 +15,8 @@ async function boot() {
   renderForm();
 }
 
-function renderForm() {
+async function renderForm() {
+  const cap = await captchaBox();   // the "are you a person" check, when the owner set it up
   const name = input({ autocomplete: 'name', required: true }), email = input({ type: 'email', autocomplete: 'email', inputmode: 'email', required: true }), phone = input({ type: 'tel', autocomplete: 'tel' });
   const athlete = input({ autocomplete: 'off' }), age = input({ inputmode: 'numeric', maxlength: '3' }), sport = input();
   const message = h('textarea', { class: 'dp-input', placeholder: 'Goals, questions, days and times that work for you' });
@@ -26,10 +28,10 @@ function renderForm() {
     err.textContent = '';
     if (textsOk.checked && !phone.value.trim()) { err.textContent = 'Add your mobile number to get texts, or untick the box.'; return; }
     const res = await fetch('/portal/api/public/inquiry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-      parent_name: name.value, email: email.value, phone: phone.value, athlete_name: athlete.value, athlete_age: age.value, sport: sport.value, message: message.value, texts_ok: textsOk.checked, website: trap.value,
+      parent_name: name.value, email: email.value, phone: phone.value, athlete_name: athlete.value, athlete_age: age.value, sport: sport.value, message: message.value, texts_ok: textsOk.checked, website: trap.value, captcha_token: cap.token(),
       from: new URLSearchParams(location.search).get('from') ?? sessionStorage.getItem('dp_from') ?? null }) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { err.textContent = data.error?.message ?? 'Something went wrong. Try again.'; return; }
+    if (!res.ok) { err.textContent = data.error?.message ?? 'Something went wrong. Try again.'; cap.reset(); return; }
     renderThanks(email.value);
   };
   fill(root, h('main', { class: 'p-wrap' },
@@ -45,7 +47,7 @@ function renderForm() {
         field('Athlete\'s name (optional)', athlete),
         h('div', { class: 'form-grid' }, field('Age', age), field('Sport', sport)),
         field('Anything we should know? (optional)', message)),
-      err, submit,
+      cap.el, err, submit,
       h('p', { class: 'small muted', style: 'text-align:center' }, 'Ready to sign up now? ', h('a', { href: '/join' }, 'Create a family account'), '. Already a member? ', h('a', { href: '/client' }, 'Sign in')))));
 }
 

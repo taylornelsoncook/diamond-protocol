@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import * as captcha from './captcha.js';
 import { newId, token, sha256, v, badRequest, conflict, HttpError, addDays, safeEqual, isDate } from '../util.js';
 import { getSetting, createFamilyWithGuardian, startPortalSession } from './families.js';
 import { createClient } from './clients.js';
@@ -36,6 +37,7 @@ export async function startSignup(ctx, body, ip) {
   if (getSetting(ctx, 'public_signup') !== 'on') throw new HttpError(403, 'signup_closed', 'Sign-up is closed right now. Contact us to join.');
   const out = { signup_id: newId('su'), message: 'Check your email for a 6-digit code to finish signing up.' };
   if (body.website) return out;                                                   // hidden field only bots fill in
+  await captcha.check(ctx, body.captcha_token, ip);                               // the "are you a person" check, when the owner set it up
   if (body.accept_terms !== true) throw badRequest('Please agree to the terms of service and privacy policy.');
   const parent = { name: v.str(body.parent?.name, 'your name', { max: 120 }), email: v.email(body.parent?.email, 'your email'), phone: v.str(body.parent?.phone, 'phone', { max: 40, optional: true }) ?? undefined };
   const athletes = Array.isArray(body.athletes) ? body.athletes : [];

@@ -33,6 +33,7 @@ import { runMoneyChecks } from './services/moneychecks.js';
 import { syncAll as syncWearables } from './services/wearables.js';
 import { lookupFundings } from './services/fees.js';
 import { cleanup as cleanupFormChecks, storageOrigin as formCheckStorage } from './services/formchecks.js';
+import { enabled as captchaOn, ORIGIN as CAPTCHA_ORIGIN } from './services/captcha.js';
 import { cleanup as cleanupCues } from './services/cues.js';
 import { runAdapt } from './services/adapt.js';
 import { runReminders as runPushReminders, cleanup as cleanupPush } from './services/push.js';
@@ -56,11 +57,23 @@ const PAGES = { '/': 'index.html', '/app': 'client.html', '/client': 'parent.htm
 const CSP = [
   "default-src 'self'", "script-src 'self' 'wasm-unsafe-eval'", "img-src 'self' data: https:", "media-src 'self' https: blob:",
   "style-src 'self' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com",
-  "frame-src 'self' https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
+  "frame-src 'self' https://www.youtube-nocookie.com https://player.vimeo.com", "connect-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'"
 ].join('; ');
 // The athlete app and the client page upload form-check clips straight to the owner's private bucket, so that one
 // address is allowed for connections when it's set up.
 const csp = () => { const o = formCheckStorage(); return o ? CSP.replace("connect-src 'self'", `connect-src 'self' ${o}`) : CSP; };
+// The three public forms load Cloudflare's "are you a person" widget while the check is on (captcha.js): its script and its frame.
+const CAPTCHA_PAGES = new Set(['start.html', 'join.html', 'buy.html']);
+const withCaptcha = (policy) => policy.replace("script-src 'self'", `script-src 'self' ${CAPTCHA_ORIGIN}`).replace("frame-src 'self'", `frame-src 'self' ${CAPTCHA_ORIGIN}`);
+// The headers every HTML page carries beside its CSP: no sniffing, a tight referrer, the browser features a page may use
+// (our own origin only: the camera and microphone for form checks and cues), no framing except where the CSP allows it
+// (book.html is made to be framed by the business's website, client.html by our own portal), and a separate browsing
+// context group so another site can't hold a reference to our window.
+const htmlHeaders = (policy, { framed = 'none' } = {}) => ({
+  'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin',
+  'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=(self), usb=(), interest-cohort=()',
+  ...(framed === 'none' ? { 'x-frame-options': 'DENY', 'cross-origin-opener-policy': 'same-origin' } : framed === 'self' ? { 'x-frame-options': 'SAMEORIGIN', 'cross-origin-opener-policy': 'same-origin' } : {}),
+});
 
 // allowPrivateWebhooks: webhooks may go to addresses inside a private network (this computer, the office network). Only
 // for local development and the tests: on by default in test mode without a PUBLIC_URL, off everywhere else.
@@ -124,7 +137,7 @@ export function createApp({ dbFile = ':memory:', testMode = false, payments = cr
         rateLimit(`blog:${clientIp(req)}`, 240, 15 * 60000);
         const out = url.pathname === '/robots.txt' ? robotsTxt(baseUrl) : renderBlog(ctx, url.pathname, Object.fromEntries(url.searchParams), baseUrl);
         if (out.redirect) { res.writeHead(301, { location: out.redirect, 'cache-control': 'no-store' }); return res.end(); }
-        res.writeHead(out.status, { 'content-type': out.type, ...(out.type.startsWith('text/html') ? { 'content-security-policy': csp() } : {}), 'cache-control': out.status === 200 ? 'public, max-age=300' : 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin' });
+        res.writeHead(out.status, { 'content-type': out.type, ...(out.type.startsWith('text/html') ? htmlHeaders(csp()) : {}), 'cache-control': out.status === 200 ? 'public, max-age=300' : 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin' });
         return res.end(req.method === 'HEAD' ? undefined : out.body);
       }
       const route = routes.find((r) => r.method === req.method && r.regex.test(url.pathname));
@@ -401,8 +414,9 @@ async function serveStatic(res, pathname, search = '') {
     // The Book now page is made to sit inside the business's own website, so any site may frame it. It only shows
     // public information and every button opens the parent portal in a new tab.
     // The athlete app (client.html) sits inside the family portal's Workout tab, so our own pages may frame it.
-    const policy = file === 'book.html' ? csp().replace("frame-ancestors 'none'", 'frame-ancestors *') : file === 'client.html' ? csp().replace("frame-ancestors 'none'", "frame-ancestors 'self'") : csp();
-    res.writeHead(200, { 'content-type': type, 'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'cache-control': type.startsWith('text/html') ? 'no-store' : file.startsWith('vendor/') ? 'public, max-age=604800' : 'public, max-age=300' });   // vendor/: the pose model, large and versioned
+    const base = CAPTCHA_PAGES.has(file) && captchaOn() ? withCaptcha(csp()) : csp();
+    const policy = file === 'book.html' ? base.replace("frame-ancestors 'none'", 'frame-ancestors *') : file === 'client.html' ? base.replace("frame-ancestors 'none'", "frame-ancestors 'self'") : base;
+    res.writeHead(200, { 'content-type': type, ...(type.startsWith('text/html') ? htmlHeaders(policy, { framed: file === 'book.html' ? 'any' : file === 'client.html' ? 'self' : 'none' }) : { 'content-security-policy': policy, 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin' }), 'cache-control': type.startsWith('text/html') ? 'no-store' : file.startsWith('vendor/') ? 'public, max-age=604800' : 'public, max-age=300' });   // vendor/: the pose model, large and versioned
     res.end(body);
   } catch {
     json(res, 404, { error: { code: 'not_found', message: 'Not found.' } });

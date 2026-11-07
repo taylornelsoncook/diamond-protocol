@@ -226,7 +226,7 @@ test/                   end-to-end tests (API, point of sale, Stripe against a s
 ios/                    DP Coach iPhone app (SwiftUI + Stripe Terminal)
 ```
 
-Security in place: passwords hashed with scrypt; sessions in HttpOnly cookies; API keys and sessions stored only as hashes; cross-site request protection; strict content security policy; parameterized SQL everywhere; input validation with clear messages; API keys can't manage other keys or webhooks.
+Security in place: passwords hashed with scrypt; sessions in HttpOnly cookies; API keys and sessions stored only as hashes; cross-site request protection; strict content security policy and hardening headers (HSTS, frame, permissions and opener policies); parameterized SQL everywhere; input validation with clear messages; API keys can't manage other keys or webhooks; rate limits on every public endpoint; an optional "are you a person" check (Cloudflare Turnstile) on the public forms. `docs/security-audit-2026-11.md` walks the usual pre-launch checklist item by item.
 
 ## Payments: test mode and Stripe
 

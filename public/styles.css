@@ -52,6 +52,7 @@
 .dp-input[aria-invalid="true"]{border-color:var(--amber)}
 .dp-hint{font:400 13px/18px var(--font-sans);color:var(--steel-muted)}
 .dp-error{font:500 13px/18px var(--font-sans);color:var(--amber)}
+.dp-captcha{min-height:65px}   /* the "are you a person" widget's box, so the form doesn't jump when it loads */
 .dp-toggle{min-width:72px;min-height:44px;padding:0 var(--space-4);border-radius:var(--radius-pill);font:600 14px/1 var(--font-sans);cursor:pointer;background:var(--surface);color:var(--steel-muted);border:1px solid var(--control-border)}
 .dp-toggle[aria-pressed="true"]{background:var(--green);color:var(--on-green);border-color:var(--green-mid)}
 .dp-ex{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-md)}

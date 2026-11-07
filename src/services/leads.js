@@ -3,6 +3,7 @@ import { getSetting, createFamilyWithGuardian } from './families.js';
 import { sendEmail } from './mail.js';
 import { sendText, normalizePhone, numberStopped } from './sms.js';
 import { emit } from './events.js';
+import * as captcha from './captcha.js';
 import { createClient, getClient } from './clients.js';
 import { findByAthleteId } from './athlete-ids.js';
 import { welcomeFamily } from './notify.js';
@@ -145,9 +146,10 @@ function duplicateMessage(dups) {
 }
 
 // ---------- Public "Ask about training" form ----------
-export async function submitInquiry(ctx, body) {
+export async function submitInquiry(ctx, body, ip = null) {
   const out = { ok: true, message: 'Thanks! We\'ll be in touch soon. Check your email for next steps.' };
   if (body.website) return out;                                     // hidden field only bots fill in
+  await captcha.check(ctx, body.captcha_token, ip);                 // the "are you a person" check, when the owner set it up
   const data = leadInput(body);
   // Texts only go to US numbers that haven't texted STOP: a public form must not be usable to text strangers abroad.
   const textsOk = body.texts_ok === true && US_MOBILE.test(data.phone ?? '') && !numberStopped(ctx, data.phone);

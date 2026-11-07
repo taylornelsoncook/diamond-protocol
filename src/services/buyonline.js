@@ -22,6 +22,7 @@ import { feeSettings, cardFee } from './fees.js';
 import * as billing from './billing.js';
 import * as commerce from './commerce.js';
 import { randomInt } from 'node:crypto';
+import * as captcha from './captcha.js';
 
 const CODE_MINUTES = 30, CARD_HOURS = 24, MAX_ATTEMPTS = 5, KEEP_DAYS = 7, SESSION_DAYS = 30;
 const biz = (ctx) => getSetting(ctx, 'business_name');
@@ -87,6 +88,7 @@ export async function startOrder(ctx, body = {}, ip) {
   const item = itemOf(ctx, body.item);
   const out = { order_id: newId('wo'), message: 'Check your email for a 6-digit code to continue.' };
   if (body.website) return out;                                             // a hidden field only bots fill in
+  await captcha.check(ctx, body.captcha_token, ip);                         // the "are you a person" check, when the owner set it up
   const self = body.self === true;
   const first = v.str(body.athlete?.first_name, 'athlete\'s first name', { max: 60 }), last = v.str(body.athlete?.last_name, 'athlete\'s last name', { max: 60 });
   const athlete = `${first.trim()} ${last.trim()}`;

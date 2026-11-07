@@ -4,14 +4,18 @@
 // empty message signed with the server's key (so nothing personal travels through Apple's or Google's push service),
 // and the phone's service worker (public/sw.js) then asks us what's new (POST /push/pending with its own endpoint) and
 // shows it. What gets a push: a coach's message (form-check answers and sprint reviews arrive as messages), the first
-// program being ready, and a morning reminder on a day with a workout (push_reminder_hour, business time). A push
-// service that answers 404 or 410 ends that subscription.
+// program being ready, and a morning reminder on a day with a workout (push_reminder_hour, business time; version 96:
+// an athlete picks their own hour, or turns it off, on the Profile tab, clients.reminder_hour). A push service that
+// answers 404 or 410 ends that subscription. Every notice is also the app's notifications list (version 96, owner's ask:
+// "a notifications icon at the top of the today page for badges and they have to click through the notifications to
+// clear it"): the bell on the Workout tab counts the notices not yet tapped (seen_at), and only a tap on each one clears it.
 import { createPublicKey, createPrivateKey, generateKeyPairSync, sign, createHash, randomBytes } from 'node:crypto';
 import { newId, v, badRequest, notFound } from '../util.js';
 import { getSetting } from './families.js';
 import { rateLimit } from './security.js';
 
-const TTL = 24 * 60 * 60, JWT_HOURS = 12, KEEP_DAYS = 7, MAX_PER_CLIENT = 8;
+const TTL = 24 * 60 * 60, JWT_HOURS = 12, KEEP_DAYS = 7, LIST_DAYS = 30, MAX_PER_CLIENT = 8;
+export const REMINDER_MIN = 5, REMINDER_MAX = 20;
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
 const hashOf = (s) => createHash('sha256').update(String(s)).digest('hex');
 const setting = (ctx, key) => ctx.db.get('SELECT value FROM settings WHERE key = ?', key)?.value ?? null;
@@ -48,7 +52,18 @@ export const publicKeyObject = (publicKey) => { const raw = Buffer.from(publicKe
 // ---------- Subscriptions ----------
 export function status(ctx, clientId) {
   const subs = ctx.db.all('SELECT id, endpoint, user_agent, created_at, last_used_at FROM push_subscriptions WHERE client_id = ? ORDER BY created_at', clientId);
-  return { public_key: keys(ctx).publicKey, subscriptions: subs.map((s) => ({ id: s.id, endpoint_host: new URL(s.endpoint).host, device: s.user_agent, created_at: s.created_at, last_used_at: s.last_used_at })), reminder_hour: reminderHour(ctx) };
+  const own = ctx.db.get('SELECT reminder_hour FROM clients WHERE id = ?', clientId)?.reminder_hour ?? null;
+  return { public_key: keys(ctx).publicKey, subscriptions: subs.map((s) => ({ id: s.id, endpoint_host: new URL(s.endpoint).host, device: s.user_agent, created_at: s.created_at, last_used_at: s.last_used_at })),
+    reminder_hour: reminderHourFor(ctx, own), reminder_own: own, reminder_default: reminderHour(ctx) };
+}
+// The athlete's own reminder hour (the Profile tab): hour null = the business's usual hour, 0 = no reminder, else 5 to 20
+// (business time). The reminder job reads it for the athlete.
+export function setReminder(ctx, client, body = {}) {
+  let hour = body.hour;
+  if (hour === null || hour === undefined || hour === '') hour = null;
+  else { hour = v.int(hour, 'hour', { min: 0, max: REMINDER_MAX }); if (hour !== 0 && hour < REMINDER_MIN) throw badRequest(`hour must be 0 (off) or between ${REMINDER_MIN} and ${REMINDER_MAX}.`); }
+  ctx.db.run('UPDATE clients SET reminder_hour = ? WHERE id = ?', hour, client.id);
+  return status(ctx, client.id);
 }
 // body.subscription is what the browser's pushManager.subscribe answered: { endpoint, keys: { p256dh, auth } }.
 export function subscribe(ctx, client, body = {}, { userAgent = null } = {}) {
@@ -75,11 +90,13 @@ export function unsubscribe(ctx, client, body = {}) {
 // ---------- Sending ----------
 // Write the notice and nudge every phone. Nothing is awaited by callers; a push service that is down is tried again
 // by the next notice (the notice itself waits in push_notices until a phone asks).
+// The notice is always written (it is the app's notifications list too); with no phone subscribed it is marked shown
+// at once, so a phone subscribed later isn't handed a week of old taps.
 export function notify(ctx, clientId, { title, body, url = '/app', kind = 'message' }) {
   const subs = ctx.db.all('SELECT * FROM push_subscriptions WHERE client_id = ?', clientId);
-  if (!subs.length) return { notice: null, sent: 0 };
-  const id = newId('pn');
-  ctx.db.run('INSERT INTO push_notices (id, client_id, kind, title, body, url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, clientId, kind, String(title).slice(0, 120), String(body ?? '').slice(0, 300), url, ctx.now());
+  const id = newId('pn'), now = ctx.now();
+  ctx.db.run('INSERT INTO push_notices (id, client_id, kind, title, body, url, created_at, shown_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, clientId, kind, String(title).slice(0, 120), String(body ?? '').slice(0, 300), url, now, subs.length ? null : now);
+  if (!subs.length) return { notice: id, sent: 0 };
   const p = Promise.allSettled(subs.map((s) => wake(ctx, s)));
   if (ctx.pushPending) ctx.pushPending.push(p);   // tests await the sends
   return { notice: id, sent: subs.length };
@@ -108,6 +125,25 @@ export function pending(ctx, body = {}, { ip = null } = {}) {
   ctx.db.run('UPDATE push_subscriptions SET last_used_at = ? WHERE id = ?', ctx.now(), s.id);
   return { data: rows };
 }
+// ---------- The notifications list (the bell) ----------
+// The last 30 days of notices for the athlete, newest first, and how many haven't been tapped yet (the badge).
+export function inbox(ctx, clientId) {
+  const since = new Date(Date.parse(ctx.now()) - LIST_DAYS * 86400000).toISOString();
+  const rows = ctx.db.all('SELECT id, kind, title, body, url, created_at, seen_at FROM push_notices WHERE client_id = ? AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT 200', clientId, since);
+  return { data: rows, unseen: rows.filter((r) => !r.seen_at).length };
+}
+export function unseenCount(ctx, clientId) {
+  const since = new Date(Date.parse(ctx.now()) - LIST_DAYS * 86400000).toISOString();
+  return ctx.db.get('SELECT COUNT(*) AS n FROM push_notices WHERE client_id = ? AND seen_at IS NULL AND created_at >= ?', clientId, since).n;
+}
+// A tap on one notice clears it (and only it: owner decision, every notification is clicked through).
+export function markSeen(ctx, clientId, id) {
+  const row = ctx.db.get('SELECT id, url, seen_at FROM push_notices WHERE id = ? AND client_id = ?', id, clientId);
+  if (!row) throw notFound('Notification');
+  if (!row.seen_at) ctx.db.run('UPDATE push_notices SET seen_at = ? WHERE id = ?', ctx.now(), id);
+  return { id, url: row.url, unseen: unseenCount(ctx, clientId) };
+}
+
 // A test tap from the app's own button.
 export function sendTest(ctx, client) {
   if (!ctx.db.get('SELECT id FROM push_subscriptions WHERE client_id = ?', client.id)) throw badRequest('Turn notifications on first.');
@@ -115,17 +151,23 @@ export function sendTest(ctx, client) {
 }
 
 // ---------- The morning reminder ----------
-const reminderHour = (ctx) => Math.min(20, Math.max(5, Number(getSetting(ctx, 'push_reminder_hour')) || 7));
-// Hourly: from the reminder hour on, every athlete with a phone subscribed and a workout dated today not yet logged gets
-// one nudge a day (the notice's kind and day say so).
+const reminderHour = (ctx) => Math.min(REMINDER_MAX, Math.max(REMINDER_MIN, Number(getSetting(ctx, 'push_reminder_hour')) || 7));
+// The hour one athlete gets it: their own (0 = never), else the business's.
+const reminderHourFor = (ctx, own) => (own === null || own === undefined ? reminderHour(ctx) : own === 0 ? 0 : Math.min(REMINDER_MAX, Math.max(REMINDER_MIN, Number(own))));
+// Hourly: from the reminder hour on (the athlete's own, or the business's), every athlete with a phone subscribed and a
+// workout dated today not yet logged gets one nudge a day (the notice's kind and day say so).
 export function runReminders(ctx) {
   const zone = getSetting(ctx, 'timezone');
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hour: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(ctx.now())).map((p) => [p.type, p.value]));
-  if (Number(parts.hour) < reminderHour(ctx)) return { skipped: 'early' };
+  const hourNow = Number(parts.hour);
+  const athletes = ctx.db.all(`SELECT DISTINCT c.id, c.name, c.reminder_hour FROM push_subscriptions s JOIN clients c ON c.id = s.client_id JOIN assignments a ON a.client_id = c.id AND a.active = 1 WHERE c.archived_at IS NULL`);
+  const earliest = Math.min(reminderHour(ctx), ...athletes.map((c) => reminderHourFor(ctx, c.reminder_hour) || Infinity));
+  if (hourNow < earliest) return { skipped: 'early' };
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ctx.now()));
-  const athletes = ctx.db.all(`SELECT DISTINCT c.id, c.name FROM push_subscriptions s JOIN clients c ON c.id = s.client_id JOIN assignments a ON a.client_id = c.id AND a.active = 1 WHERE c.archived_at IS NULL`);
   let sent = 0;
   for (const c of athletes) {
+    const at = reminderHourFor(ctx, c.reminder_hour);
+    if (!at || hourNow < at) continue;
     if (ctx.db.get(`SELECT id FROM push_notices WHERE client_id = ? AND kind = ? `, c.id, `workout:${day}`)) continue;
     const home = ctx.workoutToday?.(c.id);   // set in server.js: today's unlogged workout, if any (programs.js knows the calendar)
     if (!home) continue;
@@ -134,9 +176,9 @@ export function runReminders(ctx) {
   }
   return { athletes: athletes.length, sent };
 }
-// Housekeeping with the daily clean-up: notices older than a week.
+// Housekeeping with the daily clean-up: notices older than the list keeps (30 days).
 export function cleanup(ctx) {
-  const since = new Date(Date.parse(ctx.now()) - KEEP_DAYS * 86400000).toISOString();
+  const since = new Date(Date.parse(ctx.now()) - LIST_DAYS * 86400000).toISOString();
   return { notices_removed: ctx.db.run('DELETE FROM push_notices WHERE created_at < ?', since).changes };
 }
 export function forgetClient(ctx, clientId) {

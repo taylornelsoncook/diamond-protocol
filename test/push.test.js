@@ -120,6 +120,67 @@ test('a push service that says gone ends the subscription; turning off removes i
   assert.equal(pushes.length, before, 'no phones: no push');
 });
 
+test('the notifications list: every notice lands in it (phone or not), the badge counts the ones not tapped, and only a tap on each one clears it', async () => {
+  // Nobody listening: the coach's last message still landed in the list, marked shown (nothing to show it on).
+  let inbox = (await athlete('GET', '/app/api/notices')).body;
+  const nobody = inbox.data.find((n) => n.body === 'Nobody listening.');
+  assert.ok(nobody, 'written with no phone');
+  assert.ok(app.ctx.db.get('SELECT shown_at FROM push_notices WHERE id = ?', nobody.id).shown_at, 'marked shown so a phone subscribed later is not handed it');
+  assert.equal(inbox.unseen, inbox.data.length, 'nothing tapped yet');
+  assert.ok(inbox.data.length >= 4, 'the messages, the reminder and the test tap');
+  assert.equal(inbox.data[0].id, nobody.id, 'newest first');
+  // The app's home carries the count for the badge.
+  const home = (await athlete('GET', '/app/api/home')).body;
+  assert.equal(home.notices_unseen, inbox.unseen);
+  // A tap clears one; the others stay.
+  const tap = await athlete('POST', `/app/api/notices/${nobody.id}/seen`, {});
+  assert.equal(tap.status, 200, JSON.stringify(tap.body));
+  assert.deepEqual([tap.body.url, tap.body.unseen], ['/app', inbox.unseen - 1]);
+  inbox = (await athlete('GET', '/app/api/notices')).body;
+  assert.equal(inbox.unseen, inbox.data.length - 1);
+  assert.ok(inbox.data.find((n) => n.id === nobody.id).seen_at);
+  assert.equal((await athlete('POST', `/app/api/notices/${nobody.id}/seen`, {})).body.unseen, inbox.unseen, 'tapping again changes nothing');
+  assert.equal((await athlete('POST', '/app/api/notices/pn_nope/seen', {})).status, 404);
+  // Another athlete's notice can't be tapped from this account.
+  const theo = (await coach('POST', '/v1/clients', { name: 'Theo Jensen', parent: { name: 'Kurt Jensen', email: 'kurt@example.com' } })).body; assert.ok(theo.id, JSON.stringify(theo));
+  const tm = await coach('POST', `/v1/clients/${theo.id}/messages`, { body: 'For Theo.' }); assert.equal(tm.status, 201, JSON.stringify(tm.body));
+  const his = app.ctx.db.get('SELECT id FROM push_notices WHERE client_id = ?', theo.id);
+  assert.equal((await athlete('POST', `/app/api/notices/${his.id}/seen`, {})).status, 404);
+  assert.equal((await athlete('GET', '/app/api/notices')).body.data.some((n) => n.id === his.id), false);
+});
+
+test('the athlete\'s own reminder hour: the usual time, their own hour, or off', async () => {
+  await athlete('POST', '/app/api/push/subscribe', { subscription: SUB(3) });
+  let st = (await athlete('GET', '/app/api/push')).body;
+  assert.deepEqual([st.reminder_hour, st.reminder_own, st.reminder_default], [7, null, 7]);
+  for (const bad of [{ hour: 3 }, { hour: 21 }, { hour: 'nine' }]) assert.equal((await athlete('PATCH', '/app/api/push/reminder', bad)).status, 400, JSON.stringify(bad));
+  st = (await athlete('PATCH', '/app/api/push/reminder', { hour: 9 })).body;
+  assert.deepEqual([st.reminder_hour, st.reminder_own], [9, 9]);
+  // Monday again, nothing logged: at 7:30 the business's hour has come but not Ava's; at 9:30 it goes.
+  app.ctx.db.run(`DELETE FROM push_notices WHERE kind = 'workout:2026-10-19'`);
+  try {
+    app.ctx.now = () => '2026-10-19T12:30:00.000Z';   // 7:30 am
+    assert.deepEqual(runReminders(app.ctx), { athletes: 1, sent: 0 });
+    app.ctx.now = () => '2026-10-19T14:30:00.000Z';   // 9:30 am
+    assert.deepEqual(runReminders(app.ctx), { athletes: 1, sent: 1 });
+    await flush();
+    // Off: never.
+    st = (await athlete('PATCH', '/app/api/push/reminder', { hour: 0 })).body;
+    assert.deepEqual([st.reminder_hour, st.reminder_own], [0, 0]);
+    app.ctx.db.run(`DELETE FROM push_notices WHERE kind = 'workout:2026-10-19'`);
+    app.ctx.now = () => '2026-10-19T20:00:00.000Z';   // 3 pm
+    assert.deepEqual(runReminders(app.ctx), { athletes: 1, sent: 0 });
+    // Back to the usual: 5 am is too early for everyone, 7:30 goes.
+    st = (await athlete('PATCH', '/app/api/push/reminder', { hour: null })).body;
+    assert.deepEqual([st.reminder_hour, st.reminder_own], [7, null]);
+    app.ctx.now = () => '2026-10-19T10:30:00.000Z';   // 5:30 am
+    assert.deepEqual(runReminders(app.ctx), { skipped: 'early' });
+    app.ctx.now = () => '2026-10-19T12:30:00.000Z';
+    assert.deepEqual(runReminders(app.ctx), { athletes: 1, sent: 1 });
+    await flush();
+  } finally { app.ctx.now = () => NOW; await athlete('POST', '/app/api/push/unsubscribe', { endpoint: SUB(3).endpoint }); }
+});
+
 test('the manifest and the service worker are served; a version 69 database gains the push tables', async () => {
   const man = await fetch(base + '/app.webmanifest');
   assert.equal(man.headers.get('content-type'), 'application/manifest+json');
@@ -138,8 +199,30 @@ test('the manifest and the service worker are served; a version 69 database gain
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 95, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 96, `round ${round}`);
       for (const t of ['push_subscriptions', 'push_notices']) assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
+      assert.ok(d.all('PRAGMA table_info(push_notices)').some((c) => c.name === 'seen_at'), 'seen_at');
+      assert.ok(d.all('PRAGMA table_info(clients)').some((c) => c.name === 'reminder_hour'), 'reminder_hour');
+      d.close();
+    }
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('a version 95 database gains the notifications list and the reminder hour, keeping its notices', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dp-push95-'));
+  const file = join(tmp, 'old.db');
+  try {
+    const old = new DatabaseSync(file);
+    old.exec(readFileSync(new URL('./fixtures/schema-v95.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 95');
+    old.exec(`INSERT INTO clients (id, name, access_token, created_at) VALUES ('cl_1', 'Ava Lopez', 'tok_1', '2026-10-01T00:00:00.000Z')`);
+    old.exec(`INSERT INTO push_notices (id, client_id, kind, title, body, url, created_at, shown_at) VALUES ('pn_1', 'cl_1', 'message', 'Coach Riley', 'Hi', '/app', '2026-10-18T00:00:00.000Z', '2026-10-18T00:01:00.000Z')`);
+    old.close();
+    for (const round of [1, 2]) {
+      const d = openDb(file);
+      assert.equal(d.get('PRAGMA user_version').user_version, 96, `round ${round}`);
+      assert.deepEqual(d.get('SELECT title, seen_at FROM push_notices WHERE id = ?', 'pn_1'), { title: 'Coach Riley', seen_at: null });
+      assert.equal(d.get('SELECT reminder_hour FROM clients WHERE id = ?', 'cl_1').reminder_hour, null);
       d.close();
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }

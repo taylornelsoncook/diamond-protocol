@@ -148,6 +148,7 @@ function renderProfile(where) {
     maxes,
     gamesSection(),
     formChecksSection(),
+    reminderPanel(),
     signInPanel(),
     devicesPanel(),
     h('section', { class: 'dp-panel' }, h('h2', { class: 'dp-panel-title' }, 'Everything you did'), h('p', { class: 'dp-panel-sub' }, 'Workouts, results, maxes, sprint reps, form checks, check-ins, sessions, badges and reading, newest first.'),
@@ -155,6 +156,31 @@ function renderProfile(where) {
     links);
 }
 
+// The workout reminder's time (owner's ask: "a setting that allows them to change the time they get a reminder
+// notification on their phone"): the athlete's own hour, the business's usual one, or off. A parent inside the family
+// frame sets it for the athlete they're looking at.
+const hourText = (hr) => (hr === 0 ? '12 am' : hr < 12 ? `${hr} am` : hr === 12 ? '12 pm' : `${hr - 12} pm`);
+function reminderPanel() {
+  const box = h('section', { class: 'dp-panel stack-tight' }, h('h2', { class: 'dp-panel-title' }, 'Workout reminder'));
+  const draw = async () => {
+    let s;
+    try { s = await api('GET', '/app/api/push'); } catch { return fill(box); }
+    const notifOn = (s.subscriptions ?? []).length > 0;
+    const opts = [['', `The usual time (${hourText(s.reminder_default)})`], ['0', 'No reminder']];
+    for (let hr = 5; hr <= 20; hr++) opts.push([String(hr), hourText(hr)]);
+    const sel = h('select', { class: 'select', 'aria-label': 'Reminder time', onChange: (e) => busy(e.target, async () => {
+      const val = e.target.value;
+      try { await api('PATCH', '/app/api/push/reminder', { hour: val === '' ? null : Number(val) }); toast(val === '0' ? 'Reminder off.' : `Reminder set for ${hourText(val === '' ? s.reminder_default : Number(val))}.`); draw(); }
+      catch (x) { toast(x.message, 'bad'); draw(); }
+    }) }, opts.map(([value, label]) => h('option', { value, selected: value === (s.reminder_own == null ? '' : String(s.reminder_own)) }, label)));
+    fill(box, h('h2', { class: 'dp-panel-title' }, 'Workout reminder'),
+      h('p', { class: 'small muted', style: 'margin:0' }, 'On a day with a workout on your plan that you haven\'t logged yet, your phone gets a nudge at this time.'),
+      h('label', { class: 'stack-tight' }, h('span', { class: 'small strong' }, 'Remind me at'), sel),
+      notifOn ? null : h('p', { class: 'small muted', style: 'margin:0' }, embedded ? 'Reminders reach a phone with notifications turned on in the app.' : 'Turn notifications on from the Workout tab\'s card so the reminder reaches this phone.'));
+  };
+  draw();
+  return box;
+}
 // Your sign-in (owner's ask): set, change or remove the password for the athlete's own email, right here on the Profile
 // tab; a parent inside the family portal's frame does it on the portal's Family tab instead, so the panel is left out there.
 function signInPanel() {
@@ -397,7 +423,7 @@ function installCard(home) {
     }
     if (pushSupported() || isIOS()) {
       rows.push(h('div', { class: 'row wrap', style: 'align-items:center;gap:8px' }, h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, notifOn ? 'Notifications are on' : 'Notifications'),
-        h('span', { class: 'small muted' }, notifOn ? `A tap when your coach writes, and a nudge at ${st.reminder_hour > 12 ? `${st.reminder_hour - 12} pm` : `${st.reminder_hour} am`} on a day with a workout.` : 'Hear from your coach, and get a nudge on the days you train.')),
+        h('span', { class: 'small muted' }, notifOn ? `A tap when your coach writes${st.reminder_hour ? `, and a nudge at ${hourText(st.reminder_hour)} on a day with a workout` : ''}. Change the reminder time on Profile.` : 'Hear from your coach, and get a nudge on the days you train.')),
         notifOn ? btn('Test', (e) => busy(e.currentTarget, async () => { await api('POST', '/app/api/push/test'); toast('Sent. It shows in a moment.'); }), 'ghost') : null,
         notifOn ? btn('Turn off', (e) => busy(e.currentTarget, async () => { await pushOff(); toast('Notifications are off.'); render(); }), 'ghost')
           : btn('Turn on', (e) => busy(e.currentTarget, async () => { await pushOn(); toast('Notifications are on.'); render(); }), 'secondary')));
@@ -489,7 +515,45 @@ const lb = (w) => (w == null ? '' : `${Number.isInteger(w) ? w : w.toFixed(1)} l
 const setText = (s) => [s.weight != null ? lb(s.weight) : null, s.reps != null ? `${s.reps} reps` : null].filter(Boolean).join(' × ') || 'done';
 const shortDate = (iso) => new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const RPE_WORDS = ['', 'Very easy', 'Easy', 'Moderate', 'Somewhat hard', 'Hard', 'Hard', 'Very hard', 'Very hard', 'Near max', 'Max effort'];
-const top = () => (embedded ? null : h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }));
+// The top of the Workout tab: the mark (the portal's own header stands in when embedded) and the notifications bell
+// (owner's ask: "a notifications icon at the top of the today page for badges and they have to click through the
+// notifications to clear it"): the badge counts the notices not yet tapped; tapping one in the list clears that one.
+const top = () => h('div', { class: 'c-top' }, embedded ? h('span') : h('img', { class: 'c-mark', src: '/brand/mark.png', alt: 'Diamond Protocol' }), bell());
+let bellBadge = null;
+function bell() {
+  const n = state.home?.notices_unseen ?? 0;
+  bellBadge = h('span', { class: 'c-bell-n', hidden: !n }, n > 99 ? '99+' : String(n));
+  return h('button', { type: 'button', class: 'c-bell', 'aria-label': n ? `Notifications, ${n} new` : 'Notifications', onClick: openNotices }, tabIcon('bell'), bellBadge);
+}
+function setUnseen(n) {
+  if (state.home) state.home.notices_unseen = n;
+  if (bellBadge) { bellBadge.textContent = n > 99 ? '99+' : String(n); bellBadge.hidden = !n; bellBadge.parentElement?.setAttribute('aria-label', n ? `Notifications, ${n} new` : 'Notifications'); }
+}
+const whenShort = (iso) => { const d = new Date(iso), days = Math.floor((Date.now() - d) / 86400000); return days <= 0 ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : days === 1 ? 'Yesterday' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+async function openNotices() {
+  const list = h('div', { class: 'c-notices' }, h('p', { class: 'small muted', style: 'margin:0' }, 'Loading…'));
+  const d = h('dialog', { class: 'c-notices-dlg', 'aria-label': 'Notifications' }, h('div', { class: 'row', style: 'align-items:center;justify-content:space-between' }, h('h2', { class: 'dp-panel-title', style: 'margin:0' }, 'Notifications'), btn('Close', () => d.close(), 'ghost')), list);
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  d.showModal();
+  const go = (url) => {
+    d.close();
+    if (!url) return;
+    if (url.startsWith('/app')) { const m = url.match(/#(\w+)/); show(m ? m[1] : 'workout'); return; }
+    location.assign(url);
+  };
+  const draw = (r) => fill(list,
+    !r.data.length ? h('p', { class: 'small muted', style: 'margin:0' }, 'Nothing yet. Messages from your coach, workout reminders and team posts land here.') : null,
+    r.data.length ? h('p', { class: 'small muted', style: 'margin:0' }, r.unseen ? `${r.unseen} new. Tap each one to clear it.` : 'All caught up.') : null,
+    r.data.map((n) => h('button', { type: 'button', class: `c-notice${n.seen_at ? '' : ' is-new'}`, onClick: (e) => busy(e.currentTarget, async () => {
+      let out = { url: n.url };
+      if (!n.seen_at) { try { out = await api('POST', `/app/api/notices/${n.id}/seen`, {}); n.seen_at = new Date().toISOString(); setUnseen(out.unseen); } catch {} }
+      go(out.url ?? n.url);
+    }) },
+      h('span', { class: 'c-notice-dot', 'aria-hidden': 'true' }), h('span', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, n.title), n.body ? h('span', { class: 'small' }, n.body) : null, h('span', { class: 'small muted' }, whenShort(n.created_at))))));
+  try { const r = await api('GET', '/app/api/notices'); setUnseen(r.unseen); draw(r); }
+  catch { fill(list, h('p', { class: 'small muted', style: 'margin:0' }, 'Couldn\'t load your notifications. Try again when you have a signal.')); }
+}
 
 function render() {
   const home = state.home;

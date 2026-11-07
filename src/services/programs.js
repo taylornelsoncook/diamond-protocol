@@ -15,6 +15,7 @@ import { cuesFor } from './cues.js';
 import { activeMinimum, forAthlete as adjustmentsFor, checkAthlete as adaptAfterLog } from './adapt.js';
 import { thisWeek as weekStrip, forAthlete as weeklyNoteFor } from './weekly.js';
 import { homeSummary as gameSummary, cutFor as gameCutFor, cutSets as gameCutSets } from './gameweek.js';
+import { unseenCount as unseenNotices } from './push.js';
 export { parseRx, rxText, splitRx, GROUP_KINDS, SET_FIELDS } from './rx.js';
 
 // ---- Exercise library ----
@@ -1274,7 +1275,7 @@ function startupState(ctx, clientId, hasProgram) {
 // at: 'home' when a "both" athlete says they're training at home today (the gear swaps apply).
 export function clientHome(ctx, client, { at = null } = {}) {
   const access = appAccess(ctx, client);
-  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status };
+  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status, notices_unseen: unseenNotices(ctx, client.id) };
   if (!access.open) return { ...base, locked: true, message: access.message };
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
   const own = nextWorkoutFor(ctx, client.id);

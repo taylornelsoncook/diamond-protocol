@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS clients (
   training_type TEXT CHECK (training_type IN ('hybrid','in_facility','remote')),   -- version 46: how they train, picked by staff (shown under the name)
   password_hash TEXT,                    -- version 60: an athlete with their own email signs in to the portal; an optional password
   password_set_at TEXT,
-  card_funding TEXT                      -- version 88: the saved card's funding (credit, debit, prepaid, unknown): no card fee on debit or prepaid
+  card_funding TEXT,                     -- version 88: the saved card's funding (credit, debit, prepaid, unknown): no card fee on debit or prepaid
+  reminder_hour INTEGER                  -- version 96: the athlete's own hour for the workout reminder (NULL = the business's push_reminder_hour, 0 = off)
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -2036,7 +2037,8 @@ CREATE TABLE IF NOT EXISTS push_notices (
   body TEXT,
   url TEXT,
   created_at TEXT NOT NULL,
-  shown_at TEXT
+  shown_at TEXT,            -- shown on a phone by the service worker (or nothing to show it on)
+  seen_at TEXT              -- version 96: tapped in the app's notifications list (the bell on the Workout tab)
 );
 CREATE INDEX IF NOT EXISTS push_notices_client ON push_notices(client_id, shown_at);
 -- Version 71: the weekly coach's note (services/weekly.js): drafted each Monday from last week's facts, read and sent by

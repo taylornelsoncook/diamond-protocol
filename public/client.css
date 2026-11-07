@@ -1,5 +1,16 @@
 .c-wrap{max-width:520px;margin:0 auto;padding:calc(24px + env(safe-area-inset-top,0px)) 20px calc(32px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px}
 .c-mark{width:56px;height:auto}
+/* The top of the Workout tab: the mark and the notifications bell with its badge (cleared one tap at a time). */
+.c-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.c-bell{position:relative;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid var(--line);border-radius:50%;background:var(--surface);color:var(--steel);cursor:pointer;padding:0}
+.c-bell svg{width:24px;height:24px}
+.c-bell-n{position:absolute;top:-4px;right:-4px;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--amber);color:var(--black);font:700 12px/20px var(--font-body);text-align:center}
+.c-notices-dlg{width:min(520px,94vw);max-height:85vh;overflow:auto;padding:16px}
+.c-notices{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.c-notice{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:12px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface);color:var(--steel);cursor:pointer;font:inherit}
+.c-notice.is-new{border-color:var(--green-mid)}
+.c-notice-dot{flex:none;width:10px;height:10px;border-radius:50%;background:transparent;margin-top:6px}
+.c-notice.is-new .c-notice-dot{background:var(--green-bright)}
 .c-title{font:700 38px/1 var(--font-display);letter-spacing:.05em;text-transform:uppercase;color:var(--steel)}
 .c-progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
 .c-progress>div{height:6px;background:var(--green-mid)}

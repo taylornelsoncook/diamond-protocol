@@ -99,7 +99,8 @@ test('Monday: last week\'s notes are drafted from the facts; a coach reads, chan
   assert.equal((await coach('PATCH', `/v1/weekly-notes/${avaNote.id}`, { body: 'x' })).status, 409, 'sent notes never change');
   const home = (await ava.app('GET', '/app/api/home')).body;
   assert.deepEqual([home.weekly_note.body, home.weekly_note.by, home.weekly_note.week_label], ['Ava: three for three and the squat is moving. This week we add a set on Friday.', 'Riley', 'Oct 12 to Oct 18']);
-  assert.ok(app.ctx.db.get(`SELECT id FROM push_notices WHERE client_id = ? AND kind = 'weekly_note'`, ava.id) === undefined, 'no phone subscribed: no notice row');
+  const notice = app.ctx.db.get(`SELECT id, shown_at, seen_at FROM push_notices WHERE client_id = ? AND kind = 'weekly_note'`, ava.id);
+  assert.ok(notice && notice.shown_at && !notice.seen_at, 'no phone subscribed: the notice still lands in the app\'s notifications list, marked shown (nothing to show it on) and not yet tapped');
   assert.ok(app.ctx.db.get(`SELECT id FROM events WHERE type = 'weekly_note.sent'`));
   // Skip the other; Send all with nothing left; the export.
   assert.equal((await coach('POST', `/v1/weekly-notes/${kaiNote.id}/skip`)).body.status, 'skipped');
@@ -155,7 +156,7 @@ test('a version 70 database gains the weekly note tables', () => {
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 95, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 96, `round ${round}`);
       for (const t of ['weekly_notes', 'leaderboard_optins']) assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
       d.close();
     }

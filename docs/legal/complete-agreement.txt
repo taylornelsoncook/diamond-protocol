@@ -1,7 +1,7 @@
 {{business_name}}
 TRAINING AGREEMENT
 
-This document gathers everything a family agrees to when they train with {{business_name}}, in one place:
+This document gathers everything a family agrees to when they train with {{business_name}}, the training brand of Ad Astra Human Performance LLC, in one place:
 
   Part 1. Waiver: release of liability, assumption of risk, medical consent, concussion acknowledgment, and photo and video policy
   Part 2. Terms of service
@@ -21,7 +21,7 @@ Release of liability, assumption of risk, medical consent, concussion acknowledg
 
 PLEASE READ CAREFULLY. This agreement affects your legal rights and your athlete's legal rights. Signing it once covers every athlete on your family account, every program, class, camp, clinic, evaluation, testing day, team session and private session we provide, wherever it takes place, until we ask you to sign a new version.
 
-In this agreement, "we", "us" and "our" mean {{business_name}} and its owners, officers, employees, coaches, independent contractors, interns, volunteers, agents, successors and insurers (together, the "Released Parties"). "Athlete" means each child you add to your account, or you yourself if you are 18 or older and train with us. "You" and "parent" mean the parent or legal guardian signing for a minor athlete, or the adult athlete signing for themselves.
+In this agreement, "we", "us" and "our" mean Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, and its owners, officers, employees, coaches, independent contractors, interns, volunteers, agents, successors and insurers (together, the "Released Parties"). "Athlete" means each child you add to your account, or you yourself if you are 18 or older and train with us. "You" and "parent" mean the parent or legal guardian signing for a minor athlete, or the adult athlete signing for themselves.
 
 1. WHAT WE DO, AND WHO SIGNS
 
@@ -97,7 +97,7 @@ You agree that typing your full name and checking the box in your account is you
 
 BY SIGNING, YOU CONFIRM THAT YOU HAVE READ THIS WHOLE AGREEMENT, THAT YOU UNDERSTAND IT IS A RELEASE OF LIABILITY AND A CONTRACT, THAT YOU HAVE HAD THE CHANCE TO ASK QUESTIONS AND TO CONSULT A LAWYER, THAT YOU ARE SIGNING IT VOLUNTARILY, AND THAT IT APPLIES TO EVERY ATHLETE ON YOUR ACCOUNT.
 
-{{business_name}}
+Ad Astra Human Performance LLC, doing business as {{business_name}}
 {{business_address}}
 {{contact_email}}
 
@@ -107,11 +107,11 @@ PART 2. TERMS OF SERVICE
 
 {{business_name}} TERMS OF SERVICE
 
-These terms are the agreement between you and {{business_name}} ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
+These terms are the agreement between you and Ad Astra Human Performance LLC, doing business as {{business_name}} ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
 
 1. WHO WE ARE AND WHO YOU ARE
 
-We are {{business_name}}, {{business_address}}. You can reach us at {{contact_email}}.
+We are Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, {{business_address}}. You can reach us at {{contact_email}}.
 
 Most of our athletes are children. An account is held by a parent or legal guardian (the "account holder") who is responsible for every athlete on it, for everyone who uses the account, and for every booking, purchase and message made through it. An adult who trains with us may hold their own account. You must be 18 or older to hold an account. You agree that the information on your account is true and kept current, including the athlete's medical information and your emergency contact.
 
@@ -219,7 +219,7 @@ PART 3. PRIVACY POLICY
 
 {{business_name}} PRIVACY POLICY
 
-This policy explains what information {{business_name}} ("we", "us", "our") collects about you and your athletes, why, who can see it, how long we keep it, and the choices you have. It applies to our website, the parent and athlete portal, the athlete app, our online store, our front desk and our coaching. We wrote it in plain language because most of the people it protects are children and the parents who sign for them.
+This policy explains what information Ad Astra Human Performance LLC, doing business as {{business_name}} ("we", "us", "our"), collects about you and your athletes, why, who can see it, how long we keep it, and the choices you have. It applies to our website, the parent and athlete portal, the athlete app, our online store, our front desk and our coaching. We wrote it in plain language because most of the people it protects are children and the parents who sign for them.
 
 Our promises, in short:
 
@@ -319,7 +319,7 @@ When we change this policy we post the new version at {{public_url}}/privacy wit
 
 11. CONTACT
 
-{{business_name}}
+Ad Astra Human Performance LLC, doing business as {{business_name}}
 {{business_address}}
 {{contact_email}}
 

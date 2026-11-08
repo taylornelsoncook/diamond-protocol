@@ -1,6 +1,6 @@
 # Legal documents: drafts for the lawyer
 
-These are **drafts** written for Diamond Protocol to hand to a Colorado lawyer. They are not legal advice and have not been reviewed by one. Have them reviewed before publishing them; the Settings page keeps the placeholders (which start with `[`) until the owner replaces them, so nothing is shown to families by accident.
+These are **drafts** written for Diamond Protocol, the training brand of **Ad Astra Human Performance LLC** (the legal entity that owns the business, contracts with families and is named as the party in every document; the brand name is what families see), to hand to a Colorado lawyer. They are not legal advice and have not been reviewed by one. Have them reviewed before publishing them; the Settings page keeps the placeholders (which start with `[`) until the owner replaces them, so nothing is shown to families by accident.
 
 | File | What it is | Where it goes |
 | --- | --- | --- |

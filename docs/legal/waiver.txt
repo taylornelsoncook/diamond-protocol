@@ -3,7 +3,7 @@ Release of liability, assumption of risk, medical consent, concussion acknowledg
 
 PLEASE READ CAREFULLY. This agreement affects your legal rights and your athlete's legal rights. Signing it once covers every athlete on your family account, every program, class, camp, clinic, evaluation, testing day, team session and private session we provide, wherever it takes place, until we ask you to sign a new version.
 
-In this agreement, "we", "us" and "our" mean {{business_name}} and its owners, officers, employees, coaches, independent contractors, interns, volunteers, agents, successors and insurers (together, the "Released Parties"). "Athlete" means each child you add to your account, or you yourself if you are 18 or older and train with us. "You" and "parent" mean the parent or legal guardian signing for a minor athlete, or the adult athlete signing for themselves.
+In this agreement, "we", "us" and "our" mean Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, and its owners, officers, employees, coaches, independent contractors, interns, volunteers, agents, successors and insurers (together, the "Released Parties"). "Athlete" means each child you add to your account, or you yourself if you are 18 or older and train with us. "You" and "parent" mean the parent or legal guardian signing for a minor athlete, or the adult athlete signing for themselves.
 
 1. WHAT WE DO, AND WHO SIGNS
 
@@ -79,6 +79,6 @@ You agree that typing your full name and checking the box in your account is you
 
 BY SIGNING, YOU CONFIRM THAT YOU HAVE READ THIS WHOLE AGREEMENT, THAT YOU UNDERSTAND IT IS A RELEASE OF LIABILITY AND A CONTRACT, THAT YOU HAVE HAD THE CHANCE TO ASK QUESTIONS AND TO CONSULT A LAWYER, THAT YOU ARE SIGNING IT VOLUNTARILY, AND THAT IT APPLIES TO EVERY ATHLETE ON YOUR ACCOUNT.
 
-{{business_name}}
+Ad Astra Human Performance LLC, doing business as {{business_name}}
 {{business_address}}
 {{contact_email}}

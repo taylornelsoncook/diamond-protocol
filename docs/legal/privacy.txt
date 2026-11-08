@@ -1,6 +1,6 @@
 {{business_name}} PRIVACY POLICY
 
-This policy explains what information {{business_name}} ("we", "us", "our") collects about you and your athletes, why, who can see it, how long we keep it, and the choices you have. It applies to our website, the parent and athlete portal, the athlete app, our online store, our front desk and our coaching. We wrote it in plain language because most of the people it protects are children and the parents who sign for them.
+This policy explains what information Ad Astra Human Performance LLC, doing business as {{business_name}} ("we", "us", "our"), collects about you and your athletes, why, who can see it, how long we keep it, and the choices you have. It applies to our website, the parent and athlete portal, the athlete app, our online store, our front desk and our coaching. We wrote it in plain language because most of the people it protects are children and the parents who sign for them.
 
 Our promises, in short:
 
@@ -100,6 +100,6 @@ When we change this policy we post the new version at {{public_url}}/privacy wit
 
 11. CONTACT
 
-{{business_name}}
+Ad Astra Human Performance LLC, doing business as {{business_name}}
 {{business_address}}
 {{contact_email}}

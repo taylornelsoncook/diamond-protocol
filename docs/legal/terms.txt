@@ -1,10 +1,10 @@
 {{business_name}} TERMS OF SERVICE
 
-These terms are the agreement between you and {{business_name}} ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
+These terms are the agreement between you and Ad Astra Human Performance LLC, doing business as {{business_name}} ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
 
 1. WHO WE ARE AND WHO YOU ARE
 
-We are {{business_name}}, {{business_address}}. You can reach us at {{contact_email}}.
+We are Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, {{business_address}}. You can reach us at {{contact_email}}.
 
 Most of our athletes are children. An account is held by a parent or legal guardian (the "account holder") who is responsible for every athlete on it, for everyone who uses the account, and for every booking, purchase and message made through it. An adult who trains with us may hold their own account. You must be 18 or older to hold an account. You agree that the information on your account is true and kept current, including the athlete's medical information and your emergency contact.
 

@@ -1,0 +1,59 @@
+{{business_name}} PHOTO, VIDEO AND MEDIA RELEASE
+
+We film training to coach better, and we would love to celebrate our athletes. You choose what we may do with your athlete's image. Saying no never affects membership, coaching or how the athlete is treated. You can change your choices at any time by writing to {{contact_email}}; removal from future posts begins within seven days (we cannot recall printed material already distributed or copies others have made).
+
+In this release, "we", "us" and "our" mean Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, and its owners, employees, coaches, contractors, successors and assigns. "Athlete" means the athlete named below. "You" means the athlete's parent or legal guardian, or the athlete if 18 or older. "Media" means photographs, video, audio, likeness, voice, name, school, team, results, quotes and story.
+
+1. COACHING USE (ALWAYS ON)
+
+Our coaches record and photograph athletes during sessions and testing for coaching: form checks, sprint and lifting analysis, technique feedback and progress tracking. Athletes and parents may also send clips through the app. Coaching media are kept in private storage, are seen only by our coaches and the athlete's own family account, are never posted publicly, and are deleted on the schedule in our privacy policy or sooner on your request. Coaching use is part of the service you signed up for and is covered by the Participation Agreement; it does not need a tick below. Security cameras in public areas of the facility are for safety only.
+
+2. YOUR CHOICES FOR PUBLIC USE (TICK WHAT YOU ALLOW)
+
+[ ] Social media and website: photos and video of the athlete on our social media channels, website, app and newsletters.
+[ ] First name with posts.
+[ ] Full name with posts.
+[ ] School, team, position and commitment news (for example college signings), where the athlete has made it public.
+[ ] Paid advertising and printed marketing: ads, flyers, banners, brochures and sponsor material.
+[ ] Testimonials and quotes from the athlete or parent, each approved by you in writing before it is used.
+[ ] Live streams and recorded broadcasts of events, camps and testing days.
+[ ] Media interviews and third-party coverage we arrange (a newspaper, a television station, a college), with your approval each time.
+
+Nothing ticked means coaching use only. Group photographs at public events where the athlete is not identified by name may still be used unless you tell us you object.
+
+3. WHAT YOU GRANT
+
+For the uses you tick, you grant us a worldwide, royalty-free, non-exclusive, irrevocable (for material already published) license to record, photograph, edit, crop, reproduce, publish, display, distribute and otherwise use the athlete's Media, in any medium now known or later developed, for the purposes ticked, including our own marketing, education and historical records, for as long as the material remains in use or until you withdraw consent for future use. You waive the right to inspect or approve the finished material, except testimonials and third-party coverage as ticked above, and any right to payment or other compensation. We may edit the material and combine it with other material, but we will not use it in a way that is false, defamatory or that would embarrass the athlete.
+
+4. OWNERSHIP
+
+We own the photos, video and recordings we create, including the copyright. Clips you send us remain yours; by sending them you give us the license above for the uses you have ticked and for coaching. We may keep copies for our records even after a withdrawal, but we will not use them publicly again.
+
+5. WHAT WE WILL NEVER DO
+
+We will not post an athlete who is injured, ill or in distress; locker rooms or changing areas; a home address, phone number or email; a schedule, location or routine that shows where a minor will be at a given time; an athlete's health information or results they have not made public; or anything that implies the athlete endorses a product, service or brand other than ours. We will not sell or license an athlete's Media to anyone else, and we will not use it in connection with a political, religious or controversial cause.
+
+6. ATHLETES WITH NIL, COLLEGE OR LEAGUE RULES
+
+If the athlete has or expects name, image and likeness deals, or is subject to high school association, NCAA or other eligibility rules, you are responsible for making sure that our use of the athlete's Media is allowed and that the athlete receives nothing of value from us for it. Our use is never an endorsement by the athlete of any product or service, and we will stop a use on request if it creates a conflict.
+
+7. RELEASE
+
+To the fullest extent the law allows, you release and hold harmless us and the people and companies named above from any claim arising from the uses you have permitted while your permission was in force, including claims for invasion of privacy, right of publicity, defamation, misappropriation, copyright and emotional distress, and from any use by third parties of material we published lawfully under this release. This release does not cover a use we make after you have withdrawn consent and the seven-day period has passed, or a use that section 5 forbids.
+
+8. OTHER PEOPLE'S CAMERAS
+
+Other families, spectators and athletes may photograph or film at sessions, events and public places. We ask them to respect every athlete's privacy and we remove people who do not, but we do not control what they capture or post and are not responsible for it.
+
+9. TERM, CHANGES AND GOVERNING LAW
+
+This release takes effect when signed and continues until the athlete turns 18 (the athlete then signs their own) or until you withdraw it in writing, whichever comes first; withdrawal covers future use only. It is governed by Colorado law. If any part is unenforceable, the rest stays in force. Typing your name and ticking the boxes in your account, or signing on a screen or paper, is your signature under the federal E-SIGN Act and Colorado's Uniform Electronic Transactions Act.
+
+Athlete name and date of birth: ______________________________
+Athlete signature (13 and older): ______________________________
+Parent or legal guardian name, relationship and signature: ______________________________
+Date: ______________
+
+Ad Astra Human Performance LLC, doing business as {{business_name}}
+{{business_address}}
+{{contact_email}}

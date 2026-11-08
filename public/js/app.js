@@ -1105,6 +1105,9 @@ async function viewClient(main, id) {
   const openAdd = hashQuery().get('add') === 'sibling';
   const familyPanel = fam ? panel(fam.name, { subtitle: fam.waiver.signed ? `Waiver signed ${date(fam.waiver.signed_at)} by ${fam.waiver.signed_by?.split(' <')[0]}` : 'Waiver not signed yet. Parents sign it in the portal before booking.' },
       ...fam.guardians.map(guardianRow),
+      // Photo and video (version 98): what the parent allowed for this athlete; a coach checks it before posting anything.
+      h('p', { class: 'small', style: 'margin:0' }, 'Photos and video for ', c.name.split(' ')[0], ': ', h('strong', null, c.media?.summary ?? 'Coaching use only'),
+        c.media?.signed ? ` (chosen by ${c.media.signed_by?.split(' <')[0]} ${date(c.media.signed_at)}${c.media.withdrawn_at ? `, public use withdrawn ${date(c.media.withdrawn_at)}` : c.media.current ? '' : ', under earlier wording'})` : c.media?.published ? ' (no release signed yet: coaching use only, nothing public)' : ' (the release isn\'t published yet)'),
       fam.waiver.signed ? null : h('form', { class: 'row wrap', style: 'align-items:flex-end', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
         if (!paperBy.value.trim()) throw new Error('Enter the name of the parent who signed.');
         if (!confirm(`Record that ${paperBy.value.trim()} signed the current waiver on paper today? Keep the paper copy.`)) return;
@@ -2731,6 +2734,16 @@ async function viewInventory(main) {
 
 // Setup forms open in the shared dialog. onSave returns a toast message; errors stay in the dialog to fix.
 // Settings: fill a legal text box from the drafted wording (GET /v1/legal/drafts, owner). The owner reads it and saves.
+// Owner's ask: every box filled from the drafts in one click (the owner still presses Save on each panel).
+async function fillAllDrafts(e, boxes) {
+  const filled = Object.values(boxes).some((b) => b.value.trim() && !b.value.trim().startsWith('['));
+  if (filled && !confirm('Replace the wording in every box with the drafts? Nothing is saved until you press Save on each panel.')) return;
+  await busy(e.currentTarget, async () => {
+    const d = await get('/v1/legal/drafts');
+    for (const [kind, box] of Object.entries(boxes)) { box.value = d[kind]; box.dispatchEvent(new Event('input')); }
+    toast('All four boxes are filled. Press Save on the Policies panel and on the terms, privacy and media release panel.');
+  });
+}
 async function useDraft(e, kind, box) {
   if (box.value.trim() && !box.value.trim().startsWith('[') && !confirm('Replace the wording in this box with the draft? Nothing is saved until you press Save.')) return;
   await busy(e.currentTarget, async () => {
@@ -4055,16 +4068,20 @@ async function viewScheduleSetup(main) {
     h('div', null, btn('Save', (e) => busy(e.currentTarget, async () => { await patch('/v1/settings', { public_signup: signupToggle.checked ? 'on' : 'off' }); toast(signupToggle.checked ? 'Sign-up is open.' : 'Sign-up is closed.'); render(); }), 'secondary')));
   const terms = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); terms.value = settings.terms_text;
   const privacy = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); privacy.value = settings.privacy_text;
+  const mediaBox = h('textarea', { class: 'dp-input', style: 'min-height:200px' }); mediaBox.value = settings.media_release_text ?? '';
   const legalPanel = panel('Terms of service and privacy policy', { subtitle: 'Paste your lawyer\'s wording. Parents agree when they sign up; changing either asks every parent to accept again before their next booking or purchase. Blank lines start new paragraphs.' },
     field(`Terms of service (version ${settings.terms_version}${settings.terms_text.trim().startsWith('[') ? ', not published yet' : ''})`, terms),
     h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('a', { class: 'small', href: '/terms', target: '_blank' }, 'See the public page'), btn('Use the drafted wording', (e) => useDraft(e, 'terms', terms), 'ghost')),
     field(`Privacy policy (version ${settings.privacy_version}${settings.privacy_text.trim().startsWith('[') ? ', not published yet' : ''})`, privacy),
     h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, h('a', { class: 'small', href: '/privacy', target: '_blank' }, 'See the public page'), btn('Use the drafted wording', (e) => useDraft(e, 'privacy', privacy), 'ghost')),
+    field(`Photo, video and media release (version ${settings.media_release_version ?? 1}${String(settings.media_release_text ?? '[').trim().startsWith('[') ? ', not published yet' : ''})`, mediaBox, 'Not a public page: parents read it on the Family tab and tick, per athlete, which public uses they allow (social media, names, advertising, testimonials, live streams, press). Nothing is ticked until they do, and coaches see each athlete\'s choices on the client page before posting anything.'),
+    h('div', { class: 'row wrap', style: 'gap:12px;align-items:center' }, btn('Use the drafted wording', (e) => useDraft(e, 'media_release', mediaBox), 'ghost'),
+      btn('Fill every box from the drafts', (e) => fillAllDrafts(e, { waiver, terms, privacy, media_release: mediaBox }), 'ghost'), h('span', { class: 'small muted' }, 'Fills the waiver (above), the terms, the privacy policy and the media release in one go. Then press Save on each panel.')),
     h('p', { class: 'small muted', style: 'margin:0' }, 'The drafts (docs/legal in the code, with a README for the lawyer) cover the release of liability, medical consent, concussions, the photo policy, the 14-day cancellation policy and training credit, sales tax, cards held by Stripe, 5-year transaction records, children\'s privacy, no selling of data, deletion on request and Colorado law. The card-saving consent sentences are built into the counter, the portal and the pay page.'),
     h('div', null, btn('Save', (e) => {
-      const changed = terms.value !== settings.terms_text || privacy.value !== settings.privacy_text;
+      const changed = terms.value !== settings.terms_text || privacy.value !== settings.privacy_text || mediaBox.value !== (settings.media_release_text ?? '');
       if (changed && !confirm('Every parent will be asked to accept the new version before their next booking or purchase. Continue?')) return;
-      busy(e.currentTarget, async () => { await patch('/v1/settings', { terms_text: terms.value, privacy_text: privacy.value }); toast('Saved.'); render(); });
+      busy(e.currentTarget, async () => { await patch('/v1/settings', { terms_text: terms.value, privacy_text: privacy.value, media_release_text: mediaBox.value }); toast('Saved.'); render(); });
     }, 'secondary')));
   const EMAILS = { welcome: 'Welcome, when a family signs up or you add them', receipts: 'Receipts for sales and membership payments', trial_ending: 'Reminder 3 days before a free trial ends', payment_failed: 'When a membership payment doesn\'t go through' };
   const off = new Set((settings.emails_off ?? '').split(',').filter(Boolean));

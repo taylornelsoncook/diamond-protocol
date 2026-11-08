@@ -179,7 +179,7 @@ test('a version 94 database gains the ledger and the balance method, opened twic
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 97, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 98, `round ${round}`);
       assert.ok(d.all('PRAGMA table_info(sales)').some((c) => c.name === 'deposit_cents'));
       assert.equal(d.get('SELECT amount_cents, deposit_cents FROM sales WHERE id = ?', 'sale1').deposit_cents, 0, 'the sale survived the rebuild');
       d.run(`INSERT INTO sales (id, location_id, method, status, amount_cents, created_at, receipt_token) VALUES (?, 'loc1', 'balance', 'succeeded', 500, '2026-01-02T00:00:00.000Z', ?)`, `s${round}`, `t${round}`);

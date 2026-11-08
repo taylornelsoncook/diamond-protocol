@@ -20,6 +20,9 @@ const DEFAULTS = {
   privacy_text: '[Your privacy policy goes here. Have a lawyer write it: what you collect, why, who can see it, how long you keep it, and how a parent can get a copy or have it deleted.]',
   privacy_version: '1',
   privacy_updated: '',
+  media_release_text: '[Your photo, video and media release goes here. Have a lawyer write it: coaching use of clips, and the public uses a parent may allow (social media, names, advertising, testimonials).]',   // version 97: the portal shows the release and parents tick their choices only once this is real wording
+  media_release_version: '1',
+  media_release_updated: '',
   public_signup: 'on',
   buy_online: 'on',                       // the online sales page (/buy): memberships and session packs bought without an account; off shows a closed page
   rankings: 'off',                        // athletes and parents see where a best result ranks (no names); coaches turn it on
@@ -84,7 +87,7 @@ export function updateSettings(ctx, body) {
     const text = v.str(body.waiver_text, 'waiver_text', { max: 100000 });   // the same as the terms and privacy policy, so the combined legal document fits
     if (text !== cur.waiver_text) { next.waiver_text = text; next.waiver_version = String(Number(cur.waiver_version) + 1); }   // families re-sign a changed waiver
   }
-  for (const kind of ['terms', 'privacy']) {
+  for (const kind of ['terms', 'privacy', 'media_release']) {
     if (body[`${kind}_text`] === undefined) continue;
     const text = v.str(body[`${kind}_text`], `${kind}_text`, { max: 100000 });
     if (text !== cur[`${kind}_text`]) { next[`${kind}_text`] = text; next[`${kind}_version`] = String(Number(cur[`${kind}_version`]) + 1); next[`${kind}_updated`] = ctx.now().slice(0, 10); }   // parents accept a changed version

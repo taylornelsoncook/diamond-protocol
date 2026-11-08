@@ -199,7 +199,7 @@ test('the manifest and the service worker are served; a version 69 database gain
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 97, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 98, `round ${round}`);
       for (const t of ['push_subscriptions', 'push_notices']) assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t), t);
       assert.ok(d.all('PRAGMA table_info(push_notices)').some((c) => c.name === 'seen_at'), 'seen_at');
       assert.ok(d.all('PRAGMA table_info(clients)').some((c) => c.name === 'reminder_hour'), 'reminder_hour');
@@ -220,7 +220,7 @@ test('a version 95 database gains the notifications list and the reminder hour, 
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 97, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 98, `round ${round}`);
       assert.deepEqual(d.get('SELECT title, seen_at FROM push_notices WHERE id = ?', 'pn_1'), { title: 'Coach Riley', seen_at: null });
       assert.equal(d.get('SELECT reminder_hour FROM clients WHERE id = ?', 'cl_1').reminder_hour, null);
       d.close();

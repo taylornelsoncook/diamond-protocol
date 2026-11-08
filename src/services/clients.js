@@ -10,6 +10,7 @@ import { newAthleteId, validateAthleteId } from './athlete-ids.js';
 import { welcomeFamily, welcomeClient, sendAppLink } from './notify.js';
 import { clientBookings, endEnrollment, cancelBooking } from './schedule.js';
 import { clientLock } from './lockout.js';
+import { status as mediaStatus } from './media.js';
 import { tagger } from './profiletags.js';
 import { priceSql, lockSql, listFor as locksFor } from './pricelocks.js';
 
@@ -172,6 +173,7 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
   c.visits = visitsFor(ctx, id);                                     // membership visits this period (null without a live membership)
   c.visit_carryovers = listCarryOvers(ctx, id);                      // sessions the owner carried into another month (version 88)
   c.prepaid = prepaidFor(ctx, id);                                   // the prepaid balance and its ledger (version 95)
+  c.media = mediaStatus(ctx, id);                                    // photo and video: the public uses the parent allowed (version 98), so a coach checks before posting
   c.price_locks = locksFor(ctx, id);                                 // locked package prices, live and ended (version 97)
   c.free_programs = ctx.db.all(`SELECT id, item_id AS program_id, title AS program_name, granted_by, created_at FROM purchases WHERE client_id = ? AND item_kind = 'program' AND granted_by IS NOT NULL AND status = 'active' ORDER BY created_at DESC`, id);   // programs given free (version 94)
   c.card_status = payer.card_status;

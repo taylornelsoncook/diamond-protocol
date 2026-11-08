@@ -20,17 +20,19 @@ import { forExport as barSpeedOf, forgetClient as forgetBarSpeed } from './vbt.j
 import { forExport as profileTagsOf } from './profiletags.js';
 import { forExport as priceLocksOf } from './pricelocks.js';
 import { forExport as openGymOf } from './opengym.js';
+import { forExport as mediaOf, published as mediaPublished } from './media.js';
 
 // ---------- Terms and privacy ----------
 export const published = (ctx, kind) => !getSetting(ctx, `${kind}_text`).trim().startsWith('[');
 export function legalDocs(ctx) {
   const doc = (kind) => ({ text: getSetting(ctx, `${kind}_text`), version: Number(getSetting(ctx, `${kind}_version`)), updated: getSetting(ctx, `${kind}_updated`) || null, published: published(ctx, kind) });
-  return { business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address'), terms: doc('terms'), privacy: doc('privacy') };
+  // The media release is signed per athlete in the portal, never a public page: only whether it is published is answered here.
+  return { business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address'), terms: doc('terms'), privacy: doc('privacy'), media_release: { version: Number(getSetting(ctx, 'media_release_version')), updated: getSetting(ctx, 'media_release_updated') || null, published: mediaPublished(ctx) } };
 }
 // The drafted wording (docs/legal/*.txt, written for the owner's lawyer to review): the owner presses "Use the drafted
 // wording" on Settings and the text lands in the box with the business's details filled in, to read, change and save.
 // Nothing is published by this: the owner still saves. {{contact_email}} is the sending address's email part.
-export const DRAFT_KINDS = ['waiver', 'terms', 'privacy', 'card-consent'];
+export const DRAFT_KINDS = ['waiver', 'terms', 'privacy', 'media-release', 'card-consent'];
 export function drafts(ctx) {
   const from = String(ctx.mail?.from ?? '');
   const email = (from.match(/<([^>]+)>/)?.[1] ?? (from.includes('@') ? from : '')).trim() || '[your contact email]';
@@ -125,6 +127,7 @@ export function exportFamily(ctx, familyId) {
       ...groupsOf(ctx, k.id),   // groups and group_messages (version 87): the groups the athlete is in and what they wrote on the boards
       bar_speed: barSpeedOf(ctx, k.id),   // sets from velocity-based training devices (version 81)
       games: gamesOf(ctx, k.id),   // the athlete's games for the game-week helper (version 82)
+      media_release: mediaOf(ctx, k.id),   // the public uses a parent allowed for photos and video, and any withdrawal (version 98)
       monthly_reports: monthlyOf(ctx, k.id),
       training_profile: trainingProfileOf(ctx, k.id),   // the start-up answers and the gear at home (version 67)
       plan_adjustments: adjustmentsOf(ctx, k.id),   // the adaptive plan's changes to their calendar (version 69)
@@ -192,7 +195,7 @@ export async function deleteFamilyData(ctx, familyId, { confirm, requestId, acto
       forgetPush(ctx, id);
       forgetWeekly(ctx, id);
       forgetBarSpeed(ctx, id);
-      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced', 'data_imports', 'progressions', 'exercise_swaps', 'monthly_reports']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
+      for (const t of ['daily_checkins', 'goal_checks', 'message_reads', 'lesson_progress', 'lesson_views', 'lesson_reminders', 'test_targets', 'goals', 'coach_messages', 'lesson_assignments', 'badge_awards', 'quiz_attempts', 'course_certificates', 'progress_notes', 'client_notes', 'report_links', 'athlete_metrics', 'athlete_workouts', 'data_import_replaced', 'data_imports', 'progressions', 'exercise_swaps', 'monthly_reports', 'media_releases']) ctx.db.run(`DELETE FROM ${t} WHERE client_id = ?`, id);
       ctx.db.run(`DELETE FROM bookings WHERE client_id = ? AND status IN ('booked','waitlisted')`, id);
       ctx.db.run(`DELETE FROM enrollments WHERE client_id = ?`, id);
       ctx.db.run(`UPDATE sales SET receipt_email = NULL, receipt_token = NULL WHERE client_id = ?`, id);   // sales stay; where receipts went and their links go

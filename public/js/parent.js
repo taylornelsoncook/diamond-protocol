@@ -142,7 +142,7 @@ function openDialog(title, body, actions = []) {
 }
 const closeDialog = () => { const d = document.getElementById('dialog'); if (d.open) d.close(); };
 
-// Photos and video (version 97; owner's ask): the media release, read here, and per athlete the public uses this
+// Photos and video (version 98; owner's ask): the media release, read here, and per athlete the public uses this
 // family allows. Coaching use is always on and private (the waiver covers it); nothing public is ticked until a parent
 // ticks it. Hidden until the owner publishes the release's wording.
 function mediaPanel() {

@@ -18,6 +18,7 @@ import { forExport as weeklyOf, forgetClient as forgetWeekly } from './weekly.js
 import { forExport as feedOf } from './feed.js';
 import { forExport as barSpeedOf, forgetClient as forgetBarSpeed } from './vbt.js';
 import { forExport as profileTagsOf } from './profiletags.js';
+import { forExport as priceLocksOf } from './pricelocks.js';
 import { forExport as openGymOf } from './opengym.js';
 import { forExport as mediaOf, published as mediaPublished } from './media.js';
 
@@ -126,7 +127,7 @@ export function exportFamily(ctx, familyId) {
       ...groupsOf(ctx, k.id),   // groups and group_messages (version 87): the groups the athlete is in and what they wrote on the boards
       bar_speed: barSpeedOf(ctx, k.id),   // sets from velocity-based training devices (version 81)
       games: gamesOf(ctx, k.id),   // the athlete's games for the game-week helper (version 82)
-      media_release: mediaOf(ctx, k.id),   // the public uses a parent allowed for photos and video, and any withdrawal (version 97)
+      media_release: mediaOf(ctx, k.id),   // the public uses a parent allowed for photos and video, and any withdrawal (version 98)
       monthly_reports: monthlyOf(ctx, k.id),
       training_profile: trainingProfileOf(ctx, k.id),   // the start-up answers and the gear at home (version 67)
       plan_adjustments: adjustmentsOf(ctx, k.id),   // the adaptive plan's changes to their calendar (version 69)
@@ -134,6 +135,7 @@ export function exportFamily(ctx, familyId) {
       open_gym: openGymOf(ctx, k.id),   // open gym sign-ins from the front-desk tablet (version 91)
       prepaid_funds: per(`SELECT delta_cents, kind, note, created_at FROM account_funds WHERE client_id = ? ORDER BY created_at`, k.id),   // the prepaid balance's ledger lines done for this athlete (version 95)
       profile_tags: profileTagsOf(ctx, k.id),   // tags like Legacy (version 90): staff-only labels, handed over on a data request
+      price_locks: priceLocksOf(ctx, k.id),   // locked package prices (version 97)
       wearables_linked: per(`SELECT provider, status, connected_by_kind, connected_at, last_sync_at FROM wearable_connections WHERE client_id = ? ORDER BY provider`, k.id),
       outside_data_imports: per(`SELECT source, file_kind, filename, days, workouts, from_day, to_day, created_by, created_by_kind, created_at, undone_at FROM data_imports WHERE client_id = ? ORDER BY created_at`, k.id),
       lessons_completed: per(`SELECT l.title AS lesson, p.completed_at FROM lesson_progress p JOIN lessons l ON l.id = p.lesson_id WHERE p.client_id = ? ORDER BY p.completed_at`, k.id),

@@ -115,7 +115,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   pending_plan_id TEXT REFERENCES plans(id),   -- version 46: the plan it moves to at the next renewal ("wait till the end of the membership")
-  pending_set_at TEXT
+  pending_set_at TEXT,
+  pending_keep_lock INTEGER NOT NULL DEFAULT 0   -- version 97: the waiting change keeps the current plan's locked price (the in-season drop)
 );
 CREATE INDEX IF NOT EXISTS subscriptions_client ON subscriptions(client_id);
 CREATE INDEX IF NOT EXISTS subscriptions_due ON subscriptions(status, current_period_end);
@@ -2245,7 +2246,9 @@ CREATE TABLE IF NOT EXISTS profile_tags (
   team_only INTEGER NOT NULL DEFAULT 0,  -- 1 = team-only athletes (a roster, no membership) count too
   note TEXT,
   created_by TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  locks_price INTEGER NOT NULL DEFAULT 0, -- version 97: 1 = a member with the tag keeps the price of the package they start (pricelocks.js)
+  lock_limit INTEGER                      -- version 97: how many members can get a lock from the tag (the first 100); NULL = no limit
 );
 -- The owner's hand changes on one profile: 'added' (has it whatever the dates) or 'removed' (never, whatever the dates).
 CREATE TABLE IF NOT EXISTS client_tags (
@@ -2256,6 +2259,24 @@ CREATE TABLE IF NOT EXISTS client_tags (
   created_at TEXT NOT NULL,
   PRIMARY KEY (client_id, tag_id)
 );
+-- Version 97 (services/pricelocks.js): a member's locked price on one package (membership plan), the Legacy price lock.
+-- Live while ended_at is empty; one live lock per member and plan. A membership charge on that plan uses the lower of the
+-- lock and the plan's price. tag_id is the tag that gave it (NULL when set by hand without one, or the tag was deleted).
+CREATE TABLE IF NOT EXISTS price_locks (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  plan_id TEXT NOT NULL REFERENCES plans(id),
+  tag_id TEXT REFERENCES profile_tags(id) ON DELETE SET NULL,
+  subscription_id TEXT REFERENCES subscriptions(id) ON DELETE SET NULL,   -- the membership it started with
+  price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+  source TEXT NOT NULL CHECK (source IN ('tag','hand')),
+  by_name TEXT,
+  created_at TEXT NOT NULL,
+  ended_at TEXT,
+  end_reason TEXT                       -- canceled, plan changed, replaced, ended by hand
+);
+CREATE UNIQUE INDEX IF NOT EXISTS price_locks_live ON price_locks(client_id, plan_id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS price_locks_tag ON price_locks(tag_id);
 
 -- Open gym (version 91; services/opengym.js): an athlete signing in for open gym on the front-desk tablet. Only kept to
 -- track who uses open gym: it never uses a membership visit or a pack session. One per athlete, location and business day.
@@ -2270,7 +2291,7 @@ CREATE TABLE IF NOT EXISTS open_gym_visits (
   UNIQUE (client_id, location_id, day)
 );
 CREATE INDEX IF NOT EXISTS open_gym_visits_day ON open_gym_visits(day, location_id);
--- Version 97: the photo, video and media release (services/media.js). One row per signature: the public uses a parent
+-- Version 98: the photo, video and media release (services/media.js). One row per signature: the public uses a parent
 -- ticked for one athlete (a JSON list of keys; empty = coaching use only), under which version of the owner's wording,
 -- and a withdrawal when the parent takes every public use back. The latest row is the athlete's standing.
 CREATE TABLE IF NOT EXISTS media_releases (

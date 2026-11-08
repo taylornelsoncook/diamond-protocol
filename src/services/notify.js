@@ -5,6 +5,7 @@ import { sendEmail } from './mail.js';
 import { textFamily } from './sms.js';
 import { invoicePayLink } from './paylinks.js';
 import { feeSettings } from './fees.js';
+import { priceSql } from './pricelocks.js';
 
 // Automatic emails. Each kind can be turned off in Hours & settings; everything lands in the outbox either way.
 export const EMAIL_KINDS = {
@@ -122,7 +123,7 @@ export async function membershipReceipt(ctx, invoiceId, { how } = {}) {
 export async function trialReminders(ctx, asOf = ctx.now()) {
   if (!on(ctx, 'trial_ending')) return 0;
   const soon = new Date(Date.parse(asOf) + 3 * 86400000).toISOString();
-  const subs = ctx.db.all(`SELECT s.id, s.client_id, s.trial_ends_at, p.price_cents, p.name AS plan_name, c.name AS client_name FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = s.client_id
+  const subs = ctx.db.all(`SELECT s.id, s.client_id, s.trial_ends_at, ${priceSql()} AS price_cents, p.name AS plan_name, c.name AS client_name FROM subscriptions s JOIN plans p ON p.id = s.plan_id JOIN clients c ON c.id = s.client_id
     WHERE s.status = 'trialing' AND s.trial_ends_at > ? AND s.trial_ends_at <= ? AND s.trial_reminded_at IS NULL`, asOf, soon);
   for (const s of subs) {
     const payer = payerFor(ctx, s.client_id);

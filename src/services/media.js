@@ -1,4 +1,4 @@
-// The photo, video and media release (version 97; owner's ask: "put all the waivers, privacy policy, media release in
+// The photo, video and media release (version 98; owner's ask: "put all the waivers, privacy policy, media release in
 // to the diamond protocol app"). Coaching use of clips and photos is always on and private (the waiver covers it); every
 // public use is a separate choice a parent ticks for one athlete: social media, first or full name, school and
 // commitments, paid advertising, testimonials, live streams, press. Nothing is ticked by default. The release's wording

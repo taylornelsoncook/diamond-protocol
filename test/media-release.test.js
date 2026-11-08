@@ -105,17 +105,17 @@ test('the owner publishes the draft; a parent ticks the uses for one athlete; co
   assert.equal(app.ctx.db.get('SELECT COUNT(*) AS n FROM media_releases WHERE client_id = ?', ava.id).n, 0);
 });
 
-test('a version 96 database gains the media release table, opened twice', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'dp-media-'));
+test('a version 97 database gains the media release table, opened twice', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'dp-media97-'));
   const file = join(tmp, 'old.db');
   try {
     const old = new DatabaseSync(file);
-    old.exec(readFileSync(new URL('./fixtures/schema-v96.sql', import.meta.url), 'utf8'));
-    old.exec('PRAGMA user_version = 96');
+    old.exec(readFileSync(new URL('./fixtures/schema-v97.sql', import.meta.url), 'utf8'));
+    old.exec('PRAGMA user_version = 97');
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 97, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 98, `round ${round}`);
       assert.ok(d.get(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'media_releases'`));
       d.close();
     }

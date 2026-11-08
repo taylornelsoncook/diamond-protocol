@@ -15,6 +15,7 @@ import { getTest } from './performance.js';
 import { sendEmail } from './mail.js';
 import { portalInvite } from './notify.js';
 import { emit } from './events.js';
+import { priceSql, pendingPriceSql } from './pricelocks.js';
 
 const tz = (ctx) => getSetting(ctx, 'timezone');
 const biz = (ctx) => getSetting(ctx, 'business_name');
@@ -144,7 +145,7 @@ const REQUEST_KINDS = ['switch', 'pause', 'cancel'];
 const requestCols = `r.id, r.kind, r.status, r.note, r.created_at, r.resolved_at, r.resolved_by, r.resolution_note, r.guardian_name, r.plan_id, p.name AS plan_name`;
 const openRequest = (ctx, clientId) => ctx.db.get(`SELECT ${requestCols} FROM membership_requests r LEFT JOIN plans p ON p.id = r.plan_id WHERE r.client_id = ? AND r.status = 'open'`, clientId) ?? null;
 export function membershipPanel(ctx, clientId) {
-  const s = ctx.db.get(`SELECT s.*, p.name AS plan_name, p.price_cents, pp.name AS pending_plan_name, pp.price_cents AS pending_price_cents FROM subscriptions s JOIN plans p ON p.id = s.plan_id LEFT JOIN plans pp ON pp.id = s.pending_plan_id WHERE s.client_id = ? AND s.status != 'canceled' ORDER BY s.created_at DESC LIMIT 1`, clientId);
+  const s = ctx.db.get(`SELECT s.*, p.name AS plan_name, ${priceSql()} AS price_cents, pp.name AS pending_plan_name, ${pendingPriceSql()} AS pending_price_cents FROM subscriptions s JOIN plans p ON p.id = s.plan_id LEFT JOIN plans pp ON pp.id = s.pending_plan_id WHERE s.client_id = ? AND s.status != 'canceled' ORDER BY s.created_at DESC LIMIT 1`, clientId);
   const lastDone = ctx.db.get(`SELECT ${requestCols} FROM membership_requests r LEFT JOIN plans p ON p.id = r.plan_id WHERE r.client_id = ? AND r.status IN ('done','declined') AND r.resolved_at > ? ORDER BY r.resolved_at DESC LIMIT 1`,
     clientId, new Date(Date.parse(ctx.now()) - 30 * 86400000).toISOString()) ?? null;
   const pastDue = s ? ctx.db.get(`SELECT COALESCE(SUM(amount_cents), 0) AS n FROM invoices WHERE subscription_id = ? AND status = 'failed'`, s.id).n : 0;

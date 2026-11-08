@@ -8,6 +8,7 @@ import * as clients from './services/clients.js';
 import { v, notFound, conflict, badRequest, HttpError, newId, ageOn, zonedToUtc, localDate, addDaysToDate } from './util.js';
 import * as reports from './services/reports.js';
 import * as legal from './services/legal.js';
+import * as media from './services/media.js';
 import * as checkin from './services/checkin.js';
 import * as booknow from './services/booknow.js';
 import * as buyonline from './services/buyonline.js';
@@ -51,7 +52,7 @@ function athleteSummary(ctx, id, guardianId) {
     emergency_name: c.emergency_name, emergency_phone: c.emergency_phone,
     membership: extras.membership, membership_request: extras.request, membership_answer: extras.last_answer,
     attended_30: extras.attended_30, next_testing_day: extras.next_testing_day,
-    credits: c.credits, prepaid_cents: balanceOf(ctx, id), program: c.program, app_link: c.app_link, engagement: { ...engage.badges(ctx, id, { guardianId }), overdue: extras.overdue_lessons },
+    credits: c.credits, prepaid_cents: balanceOf(ctx, id), program: c.program, media: c.media, app_link: c.app_link, engagement: { ...engage.badges(ctx, id, { guardianId }), overdue: extras.overdue_lessons },
     upcoming: portal.athleteBookings(ctx, id, { limit: 30 }),
     enrollments: ctx.db.all(`SELECT e.series_id, e.kind, s.name FROM enrollments e JOIN class_series s ON s.id = e.series_id WHERE e.client_id = ? AND e.status = 'active'`, id)
   };
@@ -310,6 +311,9 @@ export const portalRoutes = [
   ['GET', '/portal/api/calendar', 'guardian', 'Whether your private calendar feed is on.', (ctx, r) => portal.calendarStatus(r.guardian)],
   ['POST', '/portal/api/calendar', 'guardian', 'Make (or reset) your private calendar feed address for Apple, Google or Outlook. The address is shown once; the old one stops working.', (ctx, r) => portal.resetCalendar(ctx, r.guardian, r.baseUrl)],
   ['DELETE', '/portal/api/calendar', 'guardian', 'Turn off your calendar feed.', (ctx, r) => portal.stopCalendar(ctx, r.guardian)],
+  ['GET', '/portal/api/media-release', 'guardian', 'The photo, video and media release: its wording (null until the owner publishes it), the choices a parent can tick, and each athlete\'s standing (choices, who signed and when, whether under the current wording).', (ctx, r) => media.forFamily(ctx, portal.familyAthletes(ctx, r.guardian.family_id))],
+  ['POST', '/portal/api/athletes/:id/media-release', 'guardian', 'Sign the release for one athlete: choices (the public uses you allow; may be empty for coaching use only), signed_name, agree=true.', (ctx, r) => media.sign(ctx, portal.athleteOfFamily(ctx, r.guardian.family_id, r.params.id), r.guardian, r.body, { ip: r.ip })],
+  ['DELETE', '/portal/api/athletes/:id/media-release', 'guardian', 'Withdraw every public use for one athlete (coaching use stays, as the waiver says).', (ctx, r) => media.withdraw(ctx, portal.athleteOfFamily(ctx, r.guardian.family_id, r.params.id), r.guardian)],
   ['POST', '/portal/api/waiver/email', 'guardian', 'Email yourself a copy of the signed waiver.', (ctx, r) => portal.emailWaiverCopy(ctx, r.guardian)],
   ['POST', '/portal/api/waiver', 'guardian', 'Sign the current waiver: signed_name, agree=true. One signature (owner decision: sign once) also records acceptance of the current terms of service and privacy policy.', (ctx, r) => { const w = families.signWaiver(ctx, r.guardian.family_id, r.guardian, r.body); const a = legal.recordConsent(ctx, r.guardian, { ip: r.ip }); return { ...w, agreements: { needs: a.needs, ok: a.ok } }; }],
   ['POST', '/portal/api/athletes', 'guardian', 'Add an athlete to the family: name, birth_date, sex, sport, school, medical notes, emergency contact. Already has a profile (a team athlete)? Add athlete_code, their Athlete ID: when the name and birthday match, that profile joins your family instead of a second one being made.', async (ctx, r) => {

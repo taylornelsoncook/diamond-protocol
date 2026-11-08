@@ -142,6 +142,41 @@ function openDialog(title, body, actions = []) {
 }
 const closeDialog = () => { const d = document.getElementById('dialog'); if (d.open) d.close(); };
 
+// Photos and video (version 97; owner's ask): the media release, read here, and per athlete the public uses this
+// family allows. Coaching use is always on and private (the waiver covers it); nothing public is ticked until a parent
+// ticks it. Hidden until the owner publishes the release's wording.
+function mediaPanel() {
+  const box = h('section', { class: 'dp-panel stack', id: 'fam-media', hidden: true });
+  const draw = async () => {
+    let r;
+    try { r = await get('media-release'); } catch { return; }
+    if (!r.published) return;
+    const rows = r.athletes.map((a) => {
+      const open = h('div', { class: 'stack', hidden: true });
+      const line = h('div', { class: 'p-row', style: 'align-items:flex-start' },
+        h('div', { class: 'grow stack-tight' }, h('span', { class: 'strong' }, a.first_name), h('span', { class: 'small' }, a.summary),
+          a.signed ? h('span', { class: 'small muted' }, `Chosen by ${a.signed_by?.split(' <')[0]} on ${fmt(a.signed_at, { month: 'short', day: 'numeric', year: 'numeric' })}${a.withdrawn_at ? `; public use withdrawn ${fmt(a.withdrawn_at, { month: 'short', day: 'numeric' })}` : a.current ? '' : '. The wording has changed since: please review your choices.'}`) : h('span', { class: 'small muted' }, 'Nothing public is allowed until you choose.')),
+        h('div', { class: 'row wrap' }, btn(a.signed ? 'Change' : 'Choose', () => { open.hidden = !open.hidden; }, 'outline'),
+          a.choices.length ? btn('Withdraw', (e) => { if (!confirm(`Take back every public use for ${a.first_name}? Coaching clips stay private as before.`)) return; busy(e.currentTarget, async () => { await api('DELETE', `athletes/${a.id}/media-release`); toast('Withdrawn. Coaching use only from now on.'); draw(); }); }, 'ghost') : null));
+      const ticks = r.choices.map((c) => { const cb = h('input', { type: 'checkbox', value: c.key, checked: a.choices.includes(c.key) }); return { cb, el: h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start;min-height:44px' }, cb, h('span', null, h('span', { class: 'strong' }, c.label), ' ', h('span', { class: 'muted' }, c.detail))) }; });
+      const agree = h('input', { type: 'checkbox' }), name = input({ autocomplete: 'name', placeholder: state.me.guardian.name });
+      fill(open, h('details', null, h('summary', { class: 'small', style: 'cursor:pointer;min-height:44px;display:flex;align-items:center' }, 'Read the release'), h('div', { class: 'p-waiver', tabindex: '0' }, r.text)),
+        h('p', { class: 'small muted', style: 'margin:0' }, `Tick what we may do with ${a.first_name}'s photos and video. Nothing ticked means coaching use only. Saying no never affects membership or coaching.`),
+        ...ticks.map((t) => t.el),
+        h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
+          await post(`athletes/${a.id}/media-release`, { choices: ticks.filter((t) => t.cb.checked).map((t) => t.cb.value), signed_name: name.value, agree: agree.checked });
+          toast(`Saved ${a.first_name}'s choices.`); draw();
+        }); } },
+          h('label', { class: 'row small', style: 'gap:10px;align-items:flex-start;min-height:44px' }, agree, h('span', null, `I am ${a.first_name}'s parent or legal guardian, I have read the release, and I allow only the uses ticked above.`)),
+          field('Type your full name to sign', name), btn('Save choices', null, 'primary', { type: 'submit' })));
+      return h('div', { class: 'stack-tight' }, line, open);
+    });
+    fill(box, h('div', null, h('h2', { class: 'dp-panel-title' }, 'Photos and video'), h('p', { class: 'dp-panel-sub' }, 'Coaching clips are always private: seen only by the coaches and your account. Anything public, like a post with your athlete in it, needs your say-so here, athlete by athlete.')), ...rows);
+    box.hidden = false;
+  };
+  draw();
+  return box;
+}
 // Setup nudges shown until done: terms, waiver, card (missing, expired, expiring) and a declined payment.
 function banners({ card = true } = {}) {
   const out = [], f = state.me.family, fin = state.me.to_finish ?? [];
@@ -1077,7 +1112,7 @@ async function viewFamily(main) {
         }, 'ghost')),
     h('p', { class: 'small muted' }, h('a', { href: '/terms', target: '_blank' }, 'Terms of service'), ' · ', h('a', { href: '/privacy', target: '_blank' }, 'Privacy policy')));
 
-  fill(main, top('Family'), lockNote, back, finish, agreementsPanel, cardPanel, payPanel, waiverPanel, h('div', { class: 'dp-label' }, 'Athletes'), athletes, add,
+  fill(main, top('Family'), lockNote, back, finish, agreementsPanel, cardPanel, payPanel, waiverPanel, mediaPanel(), h('div', { class: 'dp-label' }, 'Athletes'), athletes, add,
     parentsPanel(), textsPanel, signInPanel(), devicesPanel(), dataPanel,
     btn('Sign out', (e) => busy(e.currentTarget, async () => { await post('logout'); state.me = null; state.session = null; render(); }), 'ghost'));
   if (focus) setTimeout(() => scrollTo(focus === 'card' ? 'fam-card' : focus === 'waiver' ? 'fam-waiver' : focus), 50);

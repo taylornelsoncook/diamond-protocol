@@ -2270,3 +2270,20 @@ CREATE TABLE IF NOT EXISTS open_gym_visits (
   UNIQUE (client_id, location_id, day)
 );
 CREATE INDEX IF NOT EXISTS open_gym_visits_day ON open_gym_visits(day, location_id);
+-- Version 97: the photo, video and media release (services/media.js). One row per signature: the public uses a parent
+-- ticked for one athlete (a JSON list of keys; empty = coaching use only), under which version of the owner's wording,
+-- and a withdrawal when the parent takes every public use back. The latest row is the athlete's standing.
+CREATE TABLE IF NOT EXISTS media_releases (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  family_id TEXT REFERENCES families(id) ON DELETE SET NULL,
+  guardian_id TEXT REFERENCES guardians(id) ON DELETE SET NULL,
+  choices TEXT NOT NULL,                 -- JSON list: social, first_name, full_name, school_team, advertising, testimonials, livestream, press
+  version INTEGER NOT NULL,              -- media_release_version when signed
+  signed_by TEXT NOT NULL,               -- name and email at the time, kept even if the account is deleted
+  ip TEXT,
+  signed_at TEXT NOT NULL,
+  withdrawn_at TEXT,
+  withdrawn_by TEXT
+);
+CREATE INDEX IF NOT EXISTS media_releases_client ON media_releases(client_id, signed_at);

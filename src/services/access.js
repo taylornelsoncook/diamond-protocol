@@ -11,6 +11,7 @@ import { waiting as weeklyWaiting } from './weekly.js';
 import { OWNER_EVENTS, LEAD_EVENTS, can } from './security.js';
 import { clientCounts } from './clients.js';
 import { moneyIn, todayBounds, lateChargeAlerts } from './billing.js';
+import { priceSql } from './pricelocks.js';
 
 const SESSION_DAYS = 14;
 
@@ -234,7 +235,7 @@ export function pulse(ctx, { role = 'owner', userId = null } = {}) {
     leads: { this_month: leads.n, won: leads.won ?? 0, open: leads.open ?? 0 }
   };
   if (role !== 'owner') return out;
-  const mrr = db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS c, COUNT(*) AS n FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`);
+  const mrr = db.get(`SELECT COALESCE(SUM(${priceSql()}), 0) AS c, COUNT(*) AS n FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`);
   const teams = teamSummary(ctx);
   const risk = db.get(`SELECT COALESCE(SUM(i.amount_cents), 0) AS c, COUNT(*) AS n FROM invoices i WHERE i.status = 'failed'`);
   const tb = todayBounds(ctx), day = moneyIn(ctx, tb.from, tb.to);   // the day's takings: sales paid today minus refunds made today
@@ -265,9 +266,9 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
   // Client counts come from the same place as the client list's filters (clients.js#clientCounts), so "Active clients"
   // here is exactly what the list's Active filter shows: not archived, paid up or on a free trial.
   const counts = clientCounts(ctx);
-  const active = { n: counts.active, mrr: db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS mrr FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`).mrr };
+  const active = { n: counts.active, mrr: db.get(`SELECT COALESCE(SUM(${priceSql()}), 0) AS mrr FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'active'`).mrr };
   const trialing = counts.trialing;
-  const pastDue = { n: counts.past_due, risk: db.get(`SELECT COALESCE(SUM(p.price_cents), 0) AS risk FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'past_due'`).risk };
+  const pastDue = { n: counts.past_due, risk: db.get(`SELECT COALESCE(SUM(${priceSql()}), 0) AS risk FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.status = 'past_due'`).risk };
   const weekAgo = addDays(ctx.now(), -7);
   const workouts = db.get('SELECT COUNT(*) AS n FROM workout_logs WHERE completed_at >= ?', weekAgo).n;
 
@@ -277,7 +278,7 @@ export function dashboard(ctx, { role = 'owner', userId = null } = {}) {
      JOIN invoices i ON i.subscription_id = s.id AND i.status = 'failed'
      WHERE s.status = 'past_due' ORDER BY i.created_at`).map((r) => ({ kind: 'payment_failed', ...r }));
   const trials = db.all(
-    `SELECT c.id AS client_id, c.name, s.trial_ends_at, p.name AS plan_name, p.price_cents AS amount_cents
+    `SELECT c.id AS client_id, c.name, s.trial_ends_at, p.name AS plan_name, ${priceSql()} AS amount_cents
      FROM subscriptions s JOIN clients c ON c.id = s.client_id JOIN plans p ON p.id = s.plan_id
      WHERE s.status = 'trialing' AND s.trial_ends_at <= ? ORDER BY s.trial_ends_at`, addDays(ctx.now(), 3)).map((r) => ({ kind: 'trial_ending', ...r }));
   const quiet = db.all(

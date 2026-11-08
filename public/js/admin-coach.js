@@ -525,6 +525,9 @@ async function tagsTab(box) {
     const iconPick = pick('icon', icons, t?.icon ?? 'star'), colorPick = pick('color', colors, t?.color ?? 'gold');
     const team = h('input', { type: 'checkbox', checked: !!t?.team_only });
     const note = input({ maxlength: '300', value: t?.note ?? '', placeholder: 'What it means, for the staff' });
+    // Version 97 (pricelocks.js): the tag locks the price of the package a member starts, for life while it stays active.
+    const locks = h('input', { type: 'checkbox', checked: !!t?.locks_price });
+    const limit = input({ type: 'number', min: '1', max: '100000', step: '1', inputmode: 'numeric', value: t?.lock_limit ?? '', placeholder: 'No limit' });
     const preview = h('div');
     const val = (el, g) => el.querySelector(`input[name=tag-${g}]:checked`)?.value;
     const show = () => fill(preview, tagChip({ name: name.value.trim() || 'Tag', symbol: icons[val(iconPick, 'icon')], hex: colors[val(colorPick, 'color')] }));
@@ -532,7 +535,8 @@ async function tagsTab(box) {
     show();
     const err = h('div', { class: 'dp-error', role: 'alert' });
     const d = openDialog(h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); err.textContent = ''; busy(e.submitter, async () => {
-      const body = { name: name.value.trim(), icon: val(iconPick, 'icon'), color: val(colorPick, 'color'), starts_on: from.value, ends_on: to.value || null, team_only: team.checked, note: note.value.trim() || null };
+      const body = { name: name.value.trim(), icon: val(iconPick, 'icon'), color: val(colorPick, 'color'), starts_on: from.value, ends_on: to.value || null, team_only: team.checked, note: note.value.trim() || null,
+        locks_price: locks.checked, lock_limit: limit.value ? Number(limit.value) : null };
       try { t ? await patch(`/v1/profile-tags/${t.id}`, body) : await post('/v1/profile-tags', body); d.close(); toast(t ? 'Tag saved.' : `${body.name} tag made. Everyone who joined in its dates has it now.`); tagsTab(box); }
       catch (x) { err.textContent = x.message; }
     }); } },
@@ -541,6 +545,8 @@ async function tagsTab(box) {
       h('div', { class: 'form-grid' }, field('Joined from', from), field('Joined until', to, 'Both days count. Leave empty for no end.')),
       h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, team, h('span', null, 'Count team-only athletes too ', h('span', { class: 'muted' }, '(on a school or club roster with no membership)'))),
       field('Note', note),
+      h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, locks, h('span', null, 'Lock the package price ', h('span', { class: 'muted' }, '(a member with this tag keeps the price of the plan they start for as long as the membership stays active)'))),
+      field('Price locks for up to', limit, 'Members, like 100 for the founding members. Leave empty for no limit. A member whose lock ended still uses their spot.'),
       h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('span', { class: 'small muted' }, 'Looks like'), preview),
       err, h('div', { class: 'row wrap' }, btn(t ? 'Save' : 'Make tag', null, 'primary', { type: 'submit' }), btn('Cancel', () => d.close(), 'ghost'))));
     setTimeout(() => name.focus(), 0);
@@ -554,7 +560,8 @@ async function tagsTab(box) {
       tagChip(t),
       h('div', { class: 'grow stack-tight', style: 'min-width:200px' },
         h('span', { class: 'small' }, t.ends_on ? `Joined ${dayText(t.starts_on)} to ${dayText(t.ends_on)}` : `Joined from ${dayText(t.starts_on)} on, no end`, t.team_only ? ' · team-only athletes too' : ''),
-        h('span', { class: 'small muted' }, `${plural(t.clients, 'profile')} ${t.clients === 1 ? 'has' : 'have'} it`, t.note ? ` · ${t.note}` : '')),
+        h('span', { class: 'small muted' }, `${plural(t.clients, 'profile')} ${t.clients === 1 ? 'has' : 'have'} it`, t.note ? ` · ${t.note}` : ''),
+        t.locks_price ? h('span', { class: 'small' }, `Locks package prices · ${t.lock_limit ? `${t.locks_used ?? 0} of ${t.lock_limit} spots used` : `${plural(t.locks_used ?? 0, 'member')} locked`}`) : null),
       h('a', { class: 'dp-btn dp-btn--ghost', href: `#/clients?tag=${encodeURIComponent(t.id)}` }, 'See them'),
       btn('Change', () => edit(t), 'ghost', { 'aria-label': `Change ${t.name}` }), btn('Delete', remove(t), 'ghost', { 'aria-label': `Delete ${t.name}` })); }))
       : h('p', { class: 'muted', style: 'margin:0' }, 'No tags yet. Make one, like Legacy ★ for everyone who joins before February 28.')));

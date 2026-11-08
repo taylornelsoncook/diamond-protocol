@@ -16,6 +16,7 @@ const OWNER_ONLY = [
   /^\/v1\/exercises\/import(\/|$)/,   // the video library (version 48): bringing in a list of exercises
   /^\/v1\/legal(\/|$)/,   // the drafted legal wording (version 87): the owner fills the Settings boxes from it
   /^\/v1\/clients\/:id\/tags$/,   // profile tags (version 90): the owner adds or removes one by hand
+  /^\/v1\/clients\/:id\/price-locks(\/|$)/,   // locked prices (version 97): the owner sees, sets and ends them
   /^\/v1\/coaches\/:id\/calendar-feed$/,   // a calendar link per coach, made by the owner
   /^\/v1\/clients\/:id\/visits\/carry-over$/, /^\/v1\/visit-carryovers(\/|$)/,   // carried-over membership sessions (version 88): the owner's agreement
   /^\/v1\/clients\/:id\/prepaid\/adjust$/,   // the prepaid balance (version 95): only the owner changes it by hand

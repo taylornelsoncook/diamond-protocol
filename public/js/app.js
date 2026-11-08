@@ -865,11 +865,13 @@ async function viewClient(main, id) {
     sub ? h('dl', { class: 'dl' },
       h('div', null, h('dt', null, 'Status'), h('dd', null, badge(sub.status))),
       h('div', null, h('dt', null, 'Plan'), h('dd', null, sub.plan_name, sub.pending_plan_name ? h('div', { class: 'small muted' }, `Moves to ${sub.pending_plan_name} on ${date(sub.current_period_end)}`) : null)),
-      sub.price_cents == null ? null : h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents))),
+      sub.price_cents == null ? null : h('div', null, h('dt', null, 'Monthly'), h('dd', null, money(sub.price_cents),
+        sub.locked_price_cents != null ? h('div', { class: 'small muted' }, `Locked price${sub.plan_price_cents > sub.price_cents ? `; ${sub.plan_name} is ${money(sub.plan_price_cents)} for new members` : ''}`) : null)),
       h('div', null, h('dt', null, sub.status === 'trialing' ? 'Trial ends' : 'Next charge'), h('dd', null, ['canceled', 'paused'].includes(sub.status) ? '—' : date(sub.current_period_end)))) : null,
     sub && sub.status !== 'canceled' ? h('div', { class: 'stack' },
       isOwner() ? h('div', { class: 'row wrap' }, btn('Change plan', () => changePlanDialog({ client_id: id, client_name: c.name, ...sub }, plans.data), 'secondary'),
         sub.pending_plan_name ? btn('Cancel change', cancelPlanChange({ client_id: id, client_name: c.name, ...sub }), 'ghost') : null) : null,
+      isOwner() ? lockedPrices(c, plans.data) : null,
       h('div', { class: 'row wrap' },
         sub.status === 'paused' ? btn('Resume subscription', act('resume', 'Subscription resumed and charged.'), 'secondary') : btn('Pause subscription', act('pause', 'Subscription paused. No charges and no app access until resumed.'), 'secondary'),
         btn('Cancel subscription', (e) => { if (confirm(`Cancel ${first}'s subscription now? Open invoices will be voided.`)) act('cancel', 'Subscription canceled.')(e); }, 'ghost')))
@@ -2772,7 +2774,8 @@ function setupDialog(title, fields, saveLabel, onSave, note) {
 // mid-month pays the days left in the month, then the full price on the 1st; the anniversary setting keeps a month from the start day).
 const longDay = (ymd) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 function quoteText(q) {
-  return `${quoteMoney(q)} ${q.sessions_per_month ? `Covers ${q.sessions_per_month} group classes a month; each check-in uses one.` : 'Covers unlimited group classes.'}`;
+  const lock = q.price_lock ? (q.price_lock.new ? ` ${q.price_lock.tag_name ?? 'Locked'} price: ${money(q.price_lock.price_cents)} a month locks for as long as the membership stays active.` : ` Locked price${q.plan_price_cents > q.monthly_cents ? ` (new members pay ${money(q.plan_price_cents)})` : ''}.`) : '';
+  return `${quoteMoney(q)}${lock} ${q.sessions_per_month ? `Covers ${q.sessions_per_month} group classes a month; each check-in uses one.` : 'Covers unlimited group classes.'}`;
 }
 function quoteMoney(q) {
   const fee = q.fee_cents ? ` (includes a ${money(q.fee_cents)} card fee)` : '';
@@ -2813,6 +2816,27 @@ function startMembershipDialog(clientId, clientName, plan, card) {
       return text;
     });
 }
+// Locked prices (version 97, pricelocks.js; the owner's): the member's live locks with End, and Lock a price by hand.
+function lockedPrices(c, plans) {
+  const live = (c.price_locks ?? []).filter((l) => !l.ended_at);
+  const end = (l) => (e) => { if (confirm(`End ${c.name.split(' ')[0]}'s locked price of ${money(l.price_cents)} on ${l.plan_name}? The next charge on it is at the plan's price.`)) busy(e.currentTarget, async () => { await del(`/v1/clients/${c.id}/price-locks/${l.id}`); toast('Lock ended.'); render(); }); };
+  return h('div', { class: 'stack-tight' },
+    ...live.map((l) => h('div', { class: 'list-item small', style: 'gap:8px' },
+      h('span', { class: 'grow' }, `${l.plan_name} locked at ${money(l.price_cents)}/mo${l.tag_name ? ` (${l.tag_name})` : ''} since ${date(l.created_at)}${l.plan_price_cents > l.price_cents ? ` · now ${money(l.plan_price_cents)}` : ''}`),
+      btn('End lock', end(l), 'ghost', { 'aria-label': `End the lock on ${l.plan_name}` }))),
+    h('div', { class: 'row wrap' }, btn(live.length ? 'Lock another price' : 'Lock a price', () => lockPriceDialog(c, plans), 'ghost')));
+}
+function lockPriceDialog(c, plans) {
+  const choices = plans.filter((p) => p.active);
+  if (!choices.length) return toast('Add a plan under Billing → Plans first.', 'warn');
+  const plan = select(choices.map((p) => [p.id, `${p.name} (${money(p.price_cents)}/mo)`]), { value: c.subscription?.plan_id && choices.some((p) => p.id === c.subscription.plan_id) ? c.subscription.plan_id : choices[0].id });
+  const price = dollarsIn(choices.find((p) => p.id === plan.value)?.price_cents, { min: '0', required: true });
+  plan.addEventListener('change', () => { price.value = ((choices.find((p) => p.id === plan.value)?.price_cents ?? 0) / 100).toFixed(2); });
+  setupDialog(`Lock a price for ${c.name.split(' ')[0]}`, [field('Plan', plan), field('Locked monthly price', price, 'Charged on this plan for as long as the membership stays active, unless the plan costs less. Replaces a lock already on it.')], 'Lock price', async () => {
+    await post(`/v1/clients/${c.id}/price-locks`, { plan_id: plan.value, price_cents: Math.round(Number(price.value) * 100) });
+    return `Price locked at ${money(Math.round(Number(price.value) * 100))}/mo.`;
+  });
+}
 function changePlanDialog(m, plans) {
   const first = m.client_name.split(' ')[0];
   const choices = plans.filter((p) => p.active && p.id !== m.plan_id);
@@ -2831,9 +2855,13 @@ function changePlanDialog(m, plans) {
       : `${p.name} costs the same or less, so nothing is charged now. ${first} moves today; the renewal charges ${money(p.price_cents)}.`;
   };
   plan.addEventListener('change', explain); when.addEventListener('change', explain); explain();
-  setupDialog(`Change ${first}'s plan`, [field('New plan', plan), field('When', when), note,
+  // A member with a locked price (version 97): the lock ends with the move unless kept for their return (the in-season drop).
+  const keep = h('input', { type: 'checkbox' });
+  const keepRow = m.locked_price_cents != null ? h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, keep,
+    h('span', null, `Keep the locked ${money(m.locked_price_cents)} on ${cur?.name ?? 'this plan'} for when ${first} comes back `, h('span', { class: 'muted' }, '(the in-season drop). Otherwise the lock ends with the move.'))) : null;
+  setupDialog(`Change ${first}'s plan`, [field('New plan', plan), field('When', when), note, keepRow,
     m.pending_plan_name ? h('p', { class: 'small', style: 'margin:0' }, `Waiting now: moves to ${m.pending_plan_name} at the renewal. Any change here replaces it.`) : null], 'Change plan', async () => {
-    const out = await post(`/v1/clients/${m.client_id}/subscription/plan`, { plan_id: plan.value, when: when.value });
+    const out = await post(`/v1/clients/${m.client_id}/subscription/plan`, { plan_id: plan.value, when: when.value, keep_lock: keep.checked });
     const name = choices.find((p) => p.id === plan.value)?.name;
     const c = out.change?.charged;
     if (when.value === 'renewal') return `${first} moves to ${name} at the renewal.`;

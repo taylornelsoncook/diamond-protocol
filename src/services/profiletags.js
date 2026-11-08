@@ -20,7 +20,8 @@ const MAX_TAGS = 30;
 const zone = (ctx) => getSetting(ctx, 'timezone');
 
 const shapeTag = (t) => ({ id: t.id, name: t.name, icon: t.icon, symbol: ICONS[t.icon] ?? ICONS.star, color: t.color, hex: COLORS[t.color] ?? COLORS.gold,
-  starts_on: t.starts_on, ends_on: t.ends_on ?? null, team_only: !!t.team_only, note: t.note ?? null, created_by: t.created_by ?? null, created_at: t.created_at });
+  starts_on: t.starts_on, ends_on: t.ends_on ?? null, team_only: !!t.team_only, note: t.note ?? null, created_by: t.created_by ?? null, created_at: t.created_at,
+  locks_price: !!t.locks_price, lock_limit: t.lock_limit ?? null });   // version 97: the tag locks package prices (pricelocks.js), for up to lock_limit members
 
 // The tags with the UTC bounds of their dates, read once per list.
 function rules(ctx) {
@@ -68,6 +69,8 @@ function fields(ctx, body, old = null) {
   if (end && start > end) throw badRequest('The end date is before the start date. Swap them.');
   if (body.team_only !== undefined) { if (typeof body.team_only !== 'boolean') throw badRequest('team_only must be true or false.'); out.team_only = body.team_only ? 1 : 0; }
   if (body.note !== undefined) out.note = v.str(body.note, 'note', { max: 300, optional: true }) ?? null;
+  if (body.locks_price !== undefined) { if (typeof body.locks_price !== 'boolean') throw badRequest('locks_price must be true or false.'); out.locks_price = body.locks_price ? 1 : 0; }
+  if (body.lock_limit !== undefined) out.lock_limit = body.lock_limit === null || body.lock_limit === '' ? null : v.int(body.lock_limit, 'lock_limit', { min: 1, max: 100000 });
   return out;
 }
 
@@ -76,7 +79,8 @@ export function listTags(ctx, clients) {
   const tagsOf = tagger(ctx);
   const counts = new Map();
   for (const c of clients.filter((x) => !x.archived_at)) for (const t of tagsOf(c)) counts.set(t.id, (counts.get(t.id) ?? 0) + 1);
-  return { data: rules(ctx).map(({ from, to, ...t }) => ({ ...t, clients: counts.get(t.id) ?? 0 })), icons: ICONS, colors: COLORS };
+  const locked = new Map(ctx.db.all('SELECT tag_id, COUNT(DISTINCT client_id) AS n FROM price_locks WHERE tag_id IS NOT NULL GROUP BY tag_id').map((r) => [r.tag_id, r.n]));
+  return { data: rules(ctx).map(({ from, to, ...t }) => ({ ...t, clients: counts.get(t.id) ?? 0, ...(t.locks_price ? { locks_used: locked.get(t.id) ?? 0 } : {}) })), icons: ICONS, colors: COLORS };
 }
 export function getTag(ctx, id) {
   const t = ctx.db.get('SELECT * FROM profile_tags WHERE id = ?', id);
@@ -87,8 +91,8 @@ export function createTag(ctx, body = {}, actor) {
   if (ctx.db.get('SELECT COUNT(*) AS n FROM profile_tags').n >= MAX_TAGS) throw conflict(`You can have up to ${MAX_TAGS} tags. Delete one you no longer use.`);
   const f = fields(ctx, body);
   const id = newId('tag');
-  ctx.db.run(`INSERT INTO profile_tags (id, name, icon, color, starts_on, ends_on, team_only, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    id, f.name, f.icon, f.color, f.starts_on, f.ends_on ?? null, f.team_only ?? 0, f.note ?? null, actor?.name ?? null, ctx.now());
+  ctx.db.run(`INSERT INTO profile_tags (id, name, icon, color, starts_on, ends_on, team_only, note, created_by, created_at, locks_price, lock_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, f.name, f.icon, f.color, f.starts_on, f.ends_on ?? null, f.team_only ?? 0, f.note ?? null, actor?.name ?? null, ctx.now(), f.locks_price ?? 0, f.lock_limit ?? null);
   return shapeTag(getTag(ctx, id));
 }
 export function updateTag(ctx, id, body = {}) {
@@ -116,13 +120,15 @@ export function setClientTag(ctx, client, body = {}, actor) {
   return { client_id: client.id, tag_id: t.id, on: body.on };
 }
 
-// The family export (a data request): the tags this athlete has, by name, and how.
-export function forExport(ctx, clientId) {
+// One profile's tags, read from the database (no shaped client to hand): the family export and the price lock use it.
+export function tagsOfClient(ctx, clientId) {
   const r = ctx.db.get(`SELECT c.id, c.created_at,
       (SELECT status FROM subscriptions WHERE client_id = c.id ORDER BY (status = 'canceled'), created_at DESC LIMIT 1) AS status,
       (SELECT COUNT(*) FROM team_roster t JOIN team_contracts tc ON tc.id = t.contract_id WHERE t.client_id = c.id AND t.active = 1 AND tc.status = 'active') AS teams
     FROM clients c WHERE c.id = ?`, clientId);
   if (!r) return [];
-  return tagger(ctx)({ id: r.id, created_at: r.created_at, status: r.status ?? 'none', teams: Array(r.teams).fill(null) })
-    .map((t) => ({ tag: t.name, how: t.how === 'hand' ? 'added by the owner' : 'joined in its dates' }));
+  return tagger(ctx)({ id: r.id, created_at: r.created_at, status: r.status ?? 'none', teams: Array(r.teams).fill(null) });
 }
+// The family export (a data request): the tags this athlete has, by name, and how.
+export const forExport = (ctx, clientId) => tagsOfClient(ctx, clientId)
+  .map((t) => ({ tag: t.name, how: t.how === 'hand' ? 'added by the owner' : 'joined in its dates' }));

@@ -46,12 +46,40 @@
 .c-rx-cell--empty{display:none}   /* a metric with no number is left out, open or collapsed (owner's ask) */
 .c-rx--compact{grid-template-columns:repeat(auto-fill,minmax(72px,1fr))}
 .c-sets{display:flex;flex-direction:column;gap:6px;padding:10px 12px 12px}
-.c-set{display:flex;align-items:center;gap:8px;min-height:52px}
-.c-set--done .c-set-no{color:var(--green-bright)}
-.c-set-no{width:44px;flex-shrink:0;font:600 13px/1 var(--font-sans);color:var(--steel-muted)}
-.c-set-field{display:flex;align-items:center;gap:4px;flex:1;min-width:0}
-.c-num{min-height:44px;width:100%;min-width:0;padding:8px;font-size:17px;text-align:center}
-.c-tick{min-width:64px;flex-shrink:0}
+/* A set: its number, − weight +, − reps +, Log. One tap when the numbers are right, no keyboard when they aren't. */
+.c-set-wrap{display:flex;flex-direction:column;gap:2px;padding:4px 0;border-top:1px solid var(--line-subtle)}
+.c-set-wrap:first-child{border-top:0}
+.c-set{display:flex;align-items:center;gap:6px;min-height:48px}
+.c-set--done .c-set-no{background:var(--green);color:var(--on-green);border-color:var(--green-mid)}
+.c-set--done .c-num{color:var(--green-bright)}
+.c-set-no{width:24px;height:24px;flex-shrink:0;border:1px solid var(--control-border);border-radius:50%;display:flex;align-items:center;justify-content:center;font:600 12px/1 var(--font-sans);color:var(--steel-muted)}
+.c-stepper{display:flex;align-items:center;gap:2px;flex:1.25;min-width:0;position:relative}
+.c-stepper--reps{flex:1}
+.c-step{width:30px;height:44px;flex-shrink:0;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel);font:600 18px/1 var(--font-sans);cursor:pointer;padding:0;touch-action:manipulation}
+.c-step:active{background:var(--surface-raised)}
+.c-step:focus-visible{outline:2px solid var(--green-bright);outline-offset:-2px}
+.c-num{min-height:44px;width:100%;min-width:0;padding:8px 2px 14px;font-size:17px;font-weight:600;text-align:center;-moz-appearance:textfield;appearance:textfield}
+.c-num::-webkit-outer-spin-button,.c-num::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.c-unit{position:absolute;left:0;right:0;bottom:3px;text-align:center;font:500 10px/1 var(--font-sans);letter-spacing:.04em;color:var(--steel-muted);pointer-events:none}
+.c-tick{min-width:56px;flex-shrink:0;touch-action:manipulation}
+.c-set-was{padding-left:30px}
+.c-set-extras{padding:4px 0 6px 30px}
+.c-set-more{align-self:flex-start;margin-left:30px;min-height:32px;padding:0;background:none;border:0;text-align:left;cursor:pointer;font:inherit;text-decoration:underline;text-underline-offset:3px}
+.c-effort--set .c-effort-n{min-height:38px;font-size:14px}
+.c-last .dp-btn{flex-shrink:0}
+/* The session bar: once the workout is started, the page is the workout, with the clock, sets and pounds on top. */
+.c-sess{position:sticky;top:0;z-index:20;margin:calc(-24px - env(safe-area-inset-top,0px)) -20px 0;padding:calc(10px + env(safe-area-inset-top,0px)) 20px 10px;background:var(--ground);border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.c-sess-title{display:flex;align-items:baseline;gap:12px}
+.c-sess-name{flex:1;min-width:0;font:700 18px/1.15 var(--font-display);letter-spacing:.02em;text-transform:uppercase;color:var(--steel);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-sess-link{flex-shrink:0;min-height:32px;padding:0;background:none;border:0;color:var(--steel-muted);font:500 13px/1 var(--font-sans);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.c-sess-cells{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.c-sess-cell{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm)}
+.c-sess-n{font:700 22px/1 var(--font-display);color:var(--steel);font-variant-numeric:tabular-nums}
+.c-sess-l{font:600 10px/1 var(--font-sans);letter-spacing:.06em;text-transform:uppercase;color:var(--steel-muted)}
+/* The History sheet's bars: one per session, oldest first. */
+.c-hbars{display:flex;align-items:flex-end;gap:4px;height:72px;padding:4px 0}
+.c-hbar{flex:1;min-width:6px;max-width:32px;background:var(--green-mid);border-radius:2px 2px 0 0}
+.c-hbar:last-child{background:var(--green-bright)}
 .c-effort{display:grid;grid-template-columns:repeat(10,1fr);gap:4px}
 .c-effort-n{min-height:44px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel);font:600 15px/1 var(--font-sans);cursor:pointer;padding:0}
 .c-effort-n[aria-checked="true"]{background:var(--green);color:var(--on-green);border-color:var(--green-mid)}

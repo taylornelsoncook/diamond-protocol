@@ -314,7 +314,7 @@ function drawPending() {
 }
 
 // ---------- Rest timer ----------
-const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true }, store.get('dp_wo_prefs') ?? {});
+const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true, track_rpe: false, track_note: false }, store.get('dp_wo_prefs') ?? {});
 const savePrefs = () => store.set('dp_wo_prefs', prefs);
 // An athlete who trains both places says where they are today; at home, the gear swaps apply (startup.js).
 const atQ = () => (prefs.at_home && state.home?.startup?.gear?.trains_at === 'both' ? '?at=home' : '');
@@ -513,6 +513,9 @@ function readinessCard(r) {
 // ---------- Workout tab ----------
 const lb = (w) => (w == null ? '' : `${Number.isInteger(w) ? w : w.toFixed(1)} lb`);
 const setText = (s) => [s.weight != null ? lb(s.weight) : null, s.reps != null ? `${s.reps} reps` : null].filter(Boolean).join(' × ') || 'done';
+// What an athlete chose to record on a set beyond weight and reps (version 99): how hard it was, and a note.
+const setExtras = (s) => [s.rpe != null && s.rpe !== '' ? `RPE ${s.rpe}` : null, s.note ? `“${s.note}”` : null].filter(Boolean).join(' · ');
+const setFull = (s) => [setText(s), setExtras(s)].filter(Boolean).join(' · ');
 const shortDate = (iso) => new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 const RPE_WORDS = ['', 'Very easy', 'Easy', 'Moderate', 'Somewhat hard', 'Hard', 'Hard', 'Very hard', 'Very hard', 'Near max', 'Max effort'];
 // The top of the Workout tab: the mark (the portal's own header stands in when embedded) and the notifications bell
@@ -736,7 +739,7 @@ function strayPanel() {
 function rowsFor(x) {
   const rows = draft.sets[x.id] ?? [];
   const n = Math.max(x.target_sets || 1, rows.length);
-  return Array.from({ length: Math.min(n, 12) }, (_, i) => rows[i] ?? { weight: '', reps: '', done: false });
+  return Array.from({ length: Math.min(n, 99) }, (_, i) => rows[i] ?? { weight: '', reps: '', done: false });
 }
 // Blank weight uses the weight of the set before it today, else today's weight from a tested max, else last time's
 // weight for that set; blank reps use the target.
@@ -785,12 +788,45 @@ function routineBlock(r, label) {
     r.note ? h('p', { class: 'c-cue', style: 'margin:0 0 6px' }, r.note) : null, rows);
 }
 
+let sessionTick = null;   // the session bar's clock
+// One exercise over time (GET /app/api/exercises/:id/history): the bests, a bar per session for its best estimated max
+// (or its heaviest set), then every session set by set with whatever the athlete recorded on each.
+async function openHistory(x) {
+  const hist = await api('GET', `/app/api/exercises/${x.exercise_id}/history`);
+  const tile = (n, label) => h('div', { class: 'c-sum-tile' }, h('span', { class: 'c-sum-n' }, n), h('span', { class: 'c-sum-l' }, label));
+  const b = hist.best;
+  const points = [...hist.sessions].reverse().map((s) => ({ v: s.e1rm ?? s.top_weight, date: s.date })).filter((p) => p.v);
+  const hi = Math.max(1, ...points.map((p) => p.v)), lo = Math.min(...points.map((p) => p.v));
+  const est = points.length && hist.sessions.some((s) => s.e1rm);
+  const chart = points.length > 1 ? h('div', { class: 'stack-tight' },
+    h('div', { class: 'c-hbars', role: 'img', 'aria-label': `${est ? 'Estimated max' : 'Heaviest set'} by session, oldest first: ${points.map((p) => `${shortDate(p.date)} ${p.v} lb`).join(', ')}` },
+      points.map((p) => h('span', { class: 'c-hbar', style: `height:${Math.round(28 + 72 * (hi === lo ? 1 : (p.v - lo) / (hi - lo)))}%`, title: `${shortDate(p.date)}: ${p.v} lb` }))),
+    h('div', { class: 'row small muted', style: 'justify-content:space-between' }, h('span', null, shortDate(points[0].date)), h('span', null, est ? 'Estimated max by session' : 'Heaviest set by session'), h('span', null, shortDate(points.at(-1).date)))) : null;
+  const d = h('dialog', { class: 'c-notices-dlg', 'aria-label': `${hist.name} history` },
+    h('div', { class: 'stack' },
+      h('div', { class: 'row', style: 'align-items:center;justify-content:space-between' }, h('h2', { class: 'dp-panel-title', style: 'margin:0' }, hist.name), btn('Close', () => d.close(), 'ghost')),
+      hist.sessions.length ? [
+        h('div', { class: 'c-sum-tiles', role: 'list' }, b.weight ? tile(lb(b.weight.value), 'heaviest') : null, b.e1rm ? tile(`${b.e1rm.value} lb`, 'est. max') : null, tile(String(hist.times), hist.times === 1 ? 'time' : 'times')),
+        chart,
+        hist.sessions.map((s) => h('div', { class: 'c-sum-ex' },
+          h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong grow' }, shortDate(s.date)), h('span', { class: 'small muted' }, [s.workout, s.volume_lb ? `${s.volume_lb.toLocaleString()} lb moved` : null].filter(Boolean).join(' · '))),
+          h('div', { class: 'small c-sum-sets' }, s.sets.map((r) => h('span', { class: 'c-sum-set' }, `${r.set_no}`, h('span', { class: 'muted' }, ' · '), setFull(r))))))
+      ] : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing logged for this one yet. Your sets show here after your first workout with it.')));
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  d.showModal();
+}
+
 function renderLogger(w) {
   const home = state.home;
   const reopened = !!draft.log_id;
   // Opening a workout shows what to do (every exercise with its sets, reps, distance, weight, percent of max and tempo);
   // Start workout turns the set rows on. A draft with sets already logged is in the middle of it.
   const logging = reopened || !!draft.started || hasSets(draft);
+  // The session view (owner's ask: "as efficient as possible for the user"): once the workout is started the page is
+  // only the workout. The calendar, prompts and cards step aside and a bar at the top keeps the clock, the sets logged
+  // and the pounds moved in sight; "Show everything" brings the rest of the page back.
+  const session = logging && !reopened && !state.fullView;
   const startBtn = () => btn('Start workout', () => { draft.started = true; draft.started_at ??= new Date().toISOString(); saveDraft(); state.open = (w.exercises.find((x) => !exDone(x)) ?? w.exercises[0])?.id ?? null; render(); window.scrollTo(0, 0); say('Workout started. Log each set as you go.'); }, 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' });
   if (!state.open || !w.exercises.some((x) => x.id === state.open)) state.open = (w.exercises.find((x) => !exDone(x)) ?? w.exercises[0])?.id ?? null;
   const pct = home.progress?.total ? Math.round((home.progress.completed / home.progress.total) * 100) : 0;
@@ -826,13 +862,17 @@ function renderLogger(w) {
         x.cue?.audio ? h('label', { class: 'row muted', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.voice, onChange: (e) => { prefs.voice = e.target.checked; savePrefs(); if (!prefs.voice) stopCue(); } }), 'Play the cue when a card opens') : null) : null;
       if (logging && x.cue?.audio && !draft?.log_id && !exStarted(x)) playCue(x, { auto: true }).catch(() => {});
       box.append(h('div', { class: 'stack c-ex-media' },
-        x.video_url !== undefined ? demoVideo(x) : null,
+        x.video_url !== undefined && (x.video_url || !logging) ? demoVideo(x) : null,   // while logging, an exercise with no demo yet shows no empty box
         cueRow, clipHolder,
         formCheckSend(x),
         x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
         x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
-        x.last?.sets?.length ? h('p', { class: 'small muted' }, `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : null,
-        x.best_weight ? h('p', { class: 'small muted' }, `Your best: ${lb(x.best_weight)}`) : null,
+        x.last?.sets?.length || x.best_weight || (logging && x.exercise_id) ? h('div', { class: 'row c-last', style: 'gap:8px;align-items:center' },
+          h('div', { class: 'grow stack-tight small muted' },
+            // While logging, each set row says what that set was last time, so this line is only the day and the best.
+            x.last?.sets?.length ? h('span', null, logging && x.target_reps != null ? `Last done ${shortDate(x.last.date)}` : `Last time (${shortDate(x.last.date)}): ${x.last.sets.map(setText).join(', ')}`) : h('span', null, 'Your first time logging this one.'),
+            x.best_weight ? h('span', null, `Your best: ${lb(x.best_weight)}`) : null),
+          x.exercise_id && (x.last?.sets?.length || x.best_weight) ? btn('History', (e) => busy(e.currentTarget, () => openHistory(x)), 'ghost', { 'aria-label': `${x.name} history` }) : null) : null,
         altBlock(x)));
       if (logging) {
         const setsBox = h('div', { class: 'c-sets' });
@@ -842,26 +882,61 @@ function renderLogger(w) {
     }
     return box;
   }
+  // One line per set: − weight + · − reps + · Log, so a set is one tap when the numbers are right and never needs the
+  // keyboard when they aren't (the steps are 5 lb and 1 rep; the boxes still take typing). Under it, what that set was
+  // last time. A logged set opens its extras where the athlete tracks them: how hard it was, and a note.
   function drawSets(x, setsBox, focus) {
     const rows = rowsFor(x);
     const counted = x.target_reps != null;
+    const lastDone = rows.reduce((at, r, i) => (r.done ? i : at), -1);
     fill(setsBox, rows.map((r, i) => {
-      const wIn = h('input', { class: 'dp-input c-num', type: 'number', inputmode: 'decimal', min: '0', max: '2000', step: '0.5', value: r.weight === '' || r.weight == null ? '' : String(r.weight), placeholder: defaultWeight(x, i) != null ? String(defaultWeight(x, i)) : 'lb', 'aria-label': `${x.name} set ${i + 1} weight in pounds` });
+      const dw = defaultWeight(x, i);
+      const wIn = h('input', { class: 'dp-input c-num', type: 'number', inputmode: 'decimal', min: '0', max: '2000', step: '0.5', value: r.weight === '' || r.weight == null ? '' : String(r.weight), placeholder: dw != null ? String(dw) : '0', 'aria-label': `${x.name} set ${i + 1} weight in pounds` });
       const rIn = h('input', { class: 'dp-input c-num', type: 'number', inputmode: 'numeric', min: '0', max: '500', step: '1', value: r.reps === '' || r.reps == null ? '' : String(r.reps), placeholder: x.target_reps != null ? String(x.target_reps) : 'reps', 'aria-label': `${x.name} set ${i + 1} reps` });
-      const keep = () => { const all = rowsFor(x); all[i] = { ...all[i], weight: wIn.value, reps: rIn.value }; draft.sets[x.id] = all; saveDraft(); };
+      const patch = (more) => { const all = rowsFor(x); all[i] = { ...all[i], ...more }; draft.sets[x.id] = all; saveDraft(); };
+      const keep = () => patch({ weight: wIn.value, reps: rIn.value });
       wIn.addEventListener('input', keep); rIn.addEventListener('input', keep);
+      // A step starts from what the box shows: the typed number, else the suggested one.
+      const step = (el, by, start, max, what) => h('button', { type: 'button', class: 'c-step', 'aria-label': `${by > 0 ? 'More' : 'Less'} ${what}, ${x.name} set ${i + 1}`, onClick: () => {
+        const cur = el.value !== '' ? Number(el.value) : start;
+        const next = Math.min(max, Math.max(0, (Number.isFinite(cur) ? cur : 0) + by));
+        el.value = String(Number.isInteger(next) ? next : Math.round(next * 10) / 10);
+        keep();
+      } }, by > 0 ? '+' : '−');
       const tick = h('button', { type: 'button', class: 'dp-ex-log c-tick', 'aria-pressed': String(!!r.done), 'data-set': String(i), 'aria-label': `${r.done ? 'Logged' : 'Log'} ${x.name} set ${i + 1}`, onClick: () => toggleSet(x, i, setsBox, wIn.value, rIn.value) }, r.done ? '✓' : 'Log');
-      return h('div', { class: `c-set${r.done ? ' c-set--done' : ''}` }, h('span', { class: 'c-set-no' }, `Set ${i + 1}`),
-        counted ? [h('label', { class: 'c-set-field' }, wIn, h('span', { class: 'small muted' }, 'lb')), h('label', { class: 'c-set-field' }, rIn, h('span', { class: 'small muted' }, 'reps'))] : h('span', { class: 'grow small muted' }, i === 0 ? x.prescription : ''),
-        tick);
+      const was = x.last?.sets?.[i];
+      // The extras: open on the set just logged, a line to tap on the earlier ones.
+      const tracking = prefs.track_rpe || prefs.track_note;
+      let extras = null;
+      if (tracking && r.done) {
+        const openNow = i === lastDone || state.extrasOpen === `${x.id}:${i}`;
+        if (openNow) {
+          const chips = prefs.track_rpe ? h('div', { class: 'c-effort c-effort--set', role: 'radiogroup', 'aria-label': `How hard was set ${i + 1}? 1 is very easy, 10 is all out` },
+            Array.from({ length: 10 }, (_, k) => k + 1).map((n) => h('button', { type: 'button', role: 'radio', class: 'c-effort-n', 'aria-checked': String(Number(r.rpe) === n), 'aria-label': `${n}: ${RPE_WORDS[n]}`,
+              onClick: () => { patch({ rpe: Number(r.rpe) === n ? null : n }); say(Number(r.rpe) === n ? 'Effort cleared.' : `Set ${i + 1} effort ${n}.`); drawSets(x, setsBox); } }, String(n)))) : null;
+          const noteIn = prefs.track_note ? h('input', { class: 'dp-input', maxlength: '200', value: r.note ?? '', placeholder: 'A note on this set', 'aria-label': `Note on ${x.name} set ${i + 1}`, onInput: (e) => patch({ note: e.target.value }) }) : null;
+          extras = h('div', { class: 'c-set-extras stack-tight' }, chips ? h('span', { class: 'small muted' }, 'How hard was that set?') : null, chips, noteIn);
+        } else {
+          extras = h('button', { type: 'button', class: 'c-set-more small muted', onClick: () => { state.extrasOpen = `${x.id}:${i}`; drawSets(x, setsBox); } }, setExtras(r) || 'Add effort or a note');
+        }
+      }
+      return h('div', { class: `c-set-wrap${r.done ? ' c-set--done' : ''}` },
+        h('div', { class: 'c-set' }, h('span', { class: 'c-set-no', 'aria-hidden': 'true' }, String(i + 1)),
+          counted ? [h('span', { class: 'c-stepper' }, step(wIn, -5, dw ?? 0, 2000, 'weight'), wIn, step(wIn, 5, dw ?? 0, 2000, 'weight'), h('span', { class: 'c-unit' }, 'lb')),
+            h('span', { class: 'c-stepper c-stepper--reps' }, step(rIn, -1, x.target_reps ?? 0, 500, 'reps'), rIn, step(rIn, 1, x.target_reps ?? 0, 500, 'reps'), h('span', { class: 'c-unit' }, 'reps'))]
+            : h('span', { class: 'grow small muted' }, i === 0 ? x.prescription : ''),
+          tick),
+        counted && was && !r.done ? h('div', { class: 'c-set-was small muted' }, `Last time: ${setText(was)}`) : null,
+        extras);
     }), h('div', { class: 'row' }, rows.length < 99 ? btn('Add a set', () => { const all = rowsFor(x); all.push({ weight: '', reps: '', done: false }); draft.sets[x.id] = all; saveDraft(); drawSets(x, setsBox, rows.length); }, 'ghost') : null));
     if (focus != null) setsBox.querySelector(`[data-set="${focus}"]`)?.focus();
+    drawSession();
   }
   function toggleSet(x, i, setsBox, weight, reps) {
     const all = rowsFor(x);
     const r = all[i];
     if (r.done) {                                   // untick: the set is cleared
-      all[i] = { weight: r.weight, reps: r.reps, done: false };
+      all[i] = { ...r, done: false };
       draft.sets[x.id] = all; saveDraft();
       say(`Set ${i + 1} of ${x.name} cleared.`);
       drawSets(x, setsBox, i); redrawHead(x); drawCount();
@@ -872,7 +947,8 @@ function renderLogger(w) {
     if (wv != null && (!Number.isFinite(wv) || wv < 0 || wv > 2000)) return toast('Enter a weight from 0 to 2000 lb, or leave it blank.', 'warn');
     if (rv != null && (!Number.isInteger(rv) || rv < 0 || rv > 500)) return toast('Enter reps as a whole number from 0 to 500, or leave it blank.', 'warn');
     const counted = x.target_reps != null;
-    all[i] = { weight: counted ? wv : null, reps: counted ? rv : null, done: true };
+    all[i] = { ...r, weight: counted ? wv : null, reps: counted ? rv : null, done: true };
+    state.extrasOpen = null;
     draft.sets[x.id] = all;
     if (!draft.started_at) draft.started_at = new Date().toISOString();
     saveDraft();
@@ -924,8 +1000,27 @@ function renderLogger(w) {
   const restOfGroup = (g) => { const secs = g.map((e) => e.rest_seconds).filter((s) => s != null); return secs.length ? { rest_seconds: Math.max(...secs) } : null; };
   const groupHeading = (x) => h('div', { class: 'sf-group' }, groupTitle(x),
     flowOf(x) ? h('span', { style: 'text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)' }, ` · one set of each${x.group_kind === 'circuit' ? ' in turn' : ''}, then rest`) : null);
+  // The session bar: the clock since Start workout, sets logged of the sets planned, and the pounds moved so far.
+  const sClock = h('span', { class: 'c-sess-n' }), sSets = h('span', { class: 'c-sess-n' }), sLb = h('span', { class: 'c-sess-n' });
+  const num = (v) => (v === '' || v == null ? null : Number(v));
+  function drawSession() {
+    if (!session) return;
+    const done = Object.values(draft.sets).flat().filter((r) => r.done);
+    sSets.textContent = `${done.length}/${w.exercises.reduce((n, x) => n + rowsFor(x).length, 0)}`;
+    sLb.textContent = Math.round(done.reduce((n, r) => n + (num(r.weight) != null && num(r.reps) != null ? num(r.weight) * num(r.reps) : 0), 0)).toLocaleString();
+  }
+  const drawClock = () => { const s = draft?.started_at ? Math.max(0, Math.floor((Date.now() - Date.parse(draft.started_at)) / 1000)) : 0; sClock.textContent = s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : clock(s); };
+  clearInterval(sessionTick);
+  if (session) { drawClock(); sessionTick = setInterval(() => { if (!sClock.isConnected) return clearInterval(sessionTick); drawClock(); }, 1000); }
+  const cell = (n, label) => h('div', { class: 'c-sess-cell' }, n, h('span', { class: 'c-sess-l' }, label));
+  const sessionBar = session ? h('div', { class: 'c-sess', role: 'group', 'aria-label': 'This workout so far' },
+    h('div', { class: 'c-sess-title' }, h('span', { class: 'c-sess-name' }, w.title), h('button', { type: 'button', class: 'c-sess-link', onClick: () => { state.fullView = true; render(); } }, 'Show everything')),
+    h('div', { class: 'c-sess-cells' }, cell(sClock, 'time'), cell(sSets, 'sets'), cell(sLb, 'lb moved'))) : null;
+  // What the athlete tracks on a set beyond weight and reps (owner's ask: record what they want to). Off by default, so
+  // logging stays one tap; the choice is kept on the phone.
+  const trackTick = (key, label) => h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs[key], onChange: (e) => { prefs[key] = e.target.checked; savePrefs(); redrawCards(); } }), label);
   const list = h('div', { class: `stack${logging ? '' : ' c-plan'}`, style: logging ? 'gap:8px' : 'gap:6px' });   // before Start workout the plan reads as a compact list (owner's ask)
-  const redrawCards = () => { stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); };
+  const redrawCards = () => { stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); drawSession(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
   const redrawHead = (x) => { const box = cards.get(x.id); if (!box) return; box.querySelector('.c-ex-head').replaceWith(headOf(x)); box.classList.toggle('c-ex--done', exDone(x)); };
 
@@ -954,10 +1049,12 @@ function renderLogger(w) {
 
   redrawCards();
   const blocked = reopened ? null : strayPanel();
-  fill(view, top(),
-    reopened ? null : calendarStrip(home),
-    reopened ? null : gameCard(home),
-    h('div', { class: 'stack-tight' },
+  const chrome = !reopened && !session;   // the calendar, the prompts and the cards around the workout
+  fill(view, session ? null : top(),
+    sessionBar,
+    chrome ? calendarStrip(home) : null,
+    chrome ? gameCard(home) : null,
+    session ? null : h('div', { class: 'stack-tight' },
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title),
       !reopened && whenText(w) ? h('div', { class: `small strong${w.status === 'missed' ? ' warn-text' : ''}` }, whenText(w)) : null),
@@ -968,26 +1065,29 @@ function renderLogger(w) {
     !reopened && state.pickWorkout && home.workout ? h('div', { class: 'c-note row', style: 'align-items:center' }, h('span', { class: 'grow' }, `You opened this one from your calendar. ${home.workout.title} is what's up ${home.workout.status === 'today' ? 'today' : 'next'}.`),
       btn(`Back to ${home.workout.title}`, () => openPick(home.workout.id), 'ghost')) : null,
     reopened ? h('div', { class: 'c-note row' }, h('span', { class: 'grow' }, 'Fix what you logged, then save. Your coach sees the changes.'), btn('Cancel', () => { store.set(DRAFT_KEY(), null); draft = null; render(); }, 'ghost')) : null,
-    reopened ? null : h('div', { class: 'stack-tight' }, h('div', { class: 'c-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': 'Program progress' }, h('div', { style: `width:${pct}%` })),
-      h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)),
+    chrome ? h('div', { class: 'stack-tight' }, h('div', { class: 'c-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct), 'aria-label': 'Program progress' }, h('div', { style: `width:${pct}%` })),
+      h('div', { class: 'small muted' }, `${home.progress.completed} of ${home.progress.total} workouts done`)) : null,
     blocked,
-    reopened ? null : readinessCard(home.readiness),
+    chrome ? readinessCard(home.readiness) : null,
     logging ? null : h('div', { class: 'stack-tight' }, startBtn(), h('p', { class: 'small muted', style: 'margin:0;text-align:center' }, `${w.exercises.length} ${w.exercises.length === 1 ? 'exercise' : 'exercises'} · tap one to see the demo and your last numbers`)),
     reopened ? null : routineBlock(w.warmup, 'Warm-up'),
-    logging ? count : null, list,
+    logging && !session ? count : null, list,
     reopened ? null : routineBlock(w.cooldown, 'Cool-down'),
     logging ? h('div', { class: 'dp-panel stack' },
       h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
       h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
       h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen,
-        w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null)) : null,
+        w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null),
+      h('div', { class: 'stack-tight small' }, h('div', { class: 'dp-label' }, 'Also track on each set'),
+        h('div', { class: 'row wrap', style: 'gap:4px 16px' }, trackTick('track_rpe', 'How hard it was (1 to 10)'), trackTick('track_note', 'A note')))) : null,
     logging ? finishBtn : startBtn(),
-    reopened ? null : weeklyNoteCard(home),
-    reopened ? null : adjustmentsCard(home),
-    reopened ? null : gearCard(home),
-    reopened ? null : installCard(home),
-    reopened ? null : feedCard(),
-    reopened ? null : historyPanel(home),
+    state.fullView && !reopened && logging ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Back to just the workout', () => { state.fullView = false; render(); window.scrollTo(0, 0); }, 'ghost')) : null,
+    chrome ? weeklyNoteCard(home) : null,
+    chrome ? adjustmentsCard(home) : null,
+    chrome ? gearCard(home) : null,
+    chrome ? installCard(home) : null,
+    chrome ? feedCard() : null,
+    chrome ? historyPanel(home) : null,
     restBar);
 }
 
@@ -997,12 +1097,12 @@ async function finish(d, w) {
   if (w) d = { ...d, sets: Object.fromEntries(Object.entries(d.sets).filter(([id]) => w.exercises.some((x) => x.id === id))) };
   const body = { request_id: d.request_id, notes: d.notes || undefined, rpe: d.rpe ?? undefined, started_at: d.started_at ?? undefined, finished_at: new Date().toISOString(),
     exercise_ids: Object.entries(d.sets).filter(([, rows]) => rows.some((r) => r.done)).map(([id]) => id),
-    sets: Object.entries(d.sets).flatMap(([id, rows]) => rows.map((r, i) => (r.done ? { workout_exercise_id: id, set_no: i + 1, weight: r.weight ?? null, reps: r.reps ?? null } : null)).filter(Boolean)) };
+    sets: Object.entries(d.sets).flatMap(([id, rows]) => rows.map((r, i) => (r.done ? { workout_exercise_id: id, set_no: i + 1, weight: r.weight ?? null, reps: r.reps ?? null, ...(r.rpe != null && r.rpe !== '' ? { rpe: Number(r.rpe) } : {}), ...(r.note && String(r.note).trim() ? { note: String(r.note).trim() } : {}) } : null)).filter(Boolean)) };
   if (d.log_id) delete body.finished_at;
   const entry = { token: d.token, kind: d.log_id ? 'edit' : 'finish', workout_id: d.workout_id, log_id: d.log_id, request_id: d.request_id, title: d.title, body };
   setOutbox([...outbox().filter((x) => x.request_id !== entry.request_id), entry]);
   store.set(DRAFT_KEY(), null);
-  draft = null; state.open = null; state.details.clear();
+  draft = null; state.open = null; state.details.clear(); state.fullView = false; state.extrasOpen = null;
   state.pick = null; state.pickWorkout = null; state.calDay = null;
   stopRest();
   await flush();
@@ -1015,7 +1115,7 @@ async function finish(d, w) {
     // Not sent yet: say so, with what we know on the phone.
     const sets = body.sets.length;
     // The summary from what the phone has: each exercise of the workout with the sets ticked.
-    const exercises = (w?.exercises ?? []).map((x) => { const rows = d.sets[x.id] ?? []; const logged = rows.map((r, i) => (r.done ? { set_no: i + 1, weight: r.weight === '' || r.weight == null ? null : Number(r.weight), reps: r.reps === '' || r.reps == null ? null : Number(r.reps) } : null)).filter(Boolean); return { id: x.id, name: x.name, prescription: x.prescription, done: logged.length > 0, sets: logged }; });
+    const exercises = (w?.exercises ?? []).map((x) => { const rows = d.sets[x.id] ?? []; const logged = rows.map((r, i) => (r.done ? { set_no: i + 1, weight: r.weight === '' || r.weight == null ? null : Number(r.weight), reps: r.reps === '' || r.reps == null ? null : Number(r.reps), ...(r.rpe != null && r.rpe !== '' ? { rpe: Number(r.rpe) } : {}), ...(r.note ? { note: r.note } : {}) } : null)).filter(Boolean); return { id: x.id, name: x.name, prescription: x.prescription, done: logged.length > 0, sets: logged }; });
     const all = exercises.flatMap((x) => x.sets);
     const totals = { exercises_done: exercises.filter((x) => x.done).length, exercises_total: exercises.length, sets: all.length, reps: all.reduce((t, s) => t + (s.reps || 0), 0), tonnage_lb: Math.round(all.reduce((t, s) => t + (s.weight != null && s.reps != null ? s.weight * s.reps : 0), 0)) };
     state.done = { offline: true, title: d.title, sets, rpe: body.rpe ?? null, notes: body.notes ?? null, minutes: d.started_at ? Math.round((Date.now() - Date.parse(d.started_at)) / 60000) : null, bests: [], next: null, upcoming: state.home?.upcoming ?? [], exercises, totals };
@@ -1036,7 +1136,7 @@ function renderDone(f) {
     f.minutes && f.minutes >= 1 && f.minutes <= 240 ? tile(`${f.minutes}`, 'min') : null) : null;
   const exLine = (x) => h('div', { class: `c-sum-ex${x.done ? '' : ' c-sum-ex--skipped'}` },
     h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong grow' }, x.name, x.swapped_from ? h('span', { class: 'small muted' }, ` (instead of ${x.swapped_from})`) : null, x.removed ? h('span', { class: 'small muted' }, ' (no longer in the workout)') : null), x.prescription ? h('span', { class: 'small muted' }, x.prescription) : null),
-    x.done ? h('div', { class: 'small c-sum-sets' }, x.sets.map((s) => h('span', { class: 'c-sum-set' }, `${s.set_no}`, h('span', { class: 'muted' }, ' · '), setText(s)))) : h('div', { class: 'small muted' }, 'Not logged'));
+    x.done ? h('div', { class: 'small c-sum-sets' }, x.sets.map((s) => h('span', { class: 'c-sum-set' }, `${s.set_no}`, h('span', { class: 'muted' }, ' · '), setFull(s)))) : h('div', { class: 'small muted' }, 'Not logged'));
   const nextUp = f.next ?? null;
   fill(view, top(), pendingBox,
     h('div', { class: 'dp-panel stack' }, h('h1', { class: 'c-done', tabindex: '-1' }, f.edited ? 'Changes saved' : 'Workout logged'),
@@ -1067,11 +1167,11 @@ async function reopen(logId) {
   if (!log.can_reopen) throw new Error('This workout can\'t be reopened any more. Put anything you missed in a note next time.');
   const exercises = log.exercises.filter((x) => !x.removed);
   draft = { token: tokenValue, workout_id: log.workout_id, log_id: log.id, title: log.title, request_id: `edit-${log.id}-${newId()}`, started_at: null, notes: log.notes ?? '', rpe: log.rpe ?? null,
-    sets: Object.fromEntries(exercises.map((x) => [x.id, x.sets.map((s) => ({ weight: s.weight, reps: s.reps, done: true }))])) };
+    sets: Object.fromEntries(exercises.map((x) => [x.id, x.sets.map((s) => ({ weight: s.weight, reps: s.reps, done: true, rpe: s.rpe ?? null, note: s.note ?? '' }))])) };
   saveDraft();
   draft.workout = { id: log.workout_id, title: log.title, week: log.week, day: log.day, program_name: log.program_name, exercises: exercises.map((x) => ({ id: x.id, exercise_id: x.exercise_id, name: x.name, prescription: x.prescription, details: x.details, note: x.note, rest_seconds: x.rest_seconds, group_label: x.group_label, group_kind: x.group_kind, group_tag: x.group_tag, target_sets: Math.max(x.target_sets, x.sets.at(-1)?.set_no ?? 0), target_reps: x.target_reps })) };
   // Fill gaps: a set logged as number 3 with no 1 and 2 still shows in its place.
-  for (const x of exercises) { const rows = []; for (const s of x.sets) rows[s.set_no - 1] = { weight: s.weight, reps: s.reps, done: true }; draft.sets[x.id] = Array.from(rows, (r) => r ?? { weight: '', reps: '', done: false }); }
+  for (const x of exercises) { const rows = []; for (const s of x.sets) rows[s.set_no - 1] = { weight: s.weight, reps: s.reps, done: true, rpe: s.rpe ?? null, note: s.note ?? '' }; draft.sets[x.id] = Array.from(rows, (r) => r ?? { weight: '', reps: '', done: false }); }
   saveDraft();
   state.done = null; state.open = null;
   render();

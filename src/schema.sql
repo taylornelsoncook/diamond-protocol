@@ -1476,6 +1476,8 @@ CREATE TABLE IF NOT EXISTS workout_sets (
   weight REAL,
   reps INTEGER,
   created_at TEXT NOT NULL,
+  rpe REAL,                                                   -- version 99: how hard this set was, 1 to 10 in halves (optional; the athlete turns it on)
+  note TEXT,                                                  -- version 99: the athlete's own note on this set (optional, up to 200 characters)
   UNIQUE (workout_log_id, workout_exercise_id, set_no)
 );
 CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);

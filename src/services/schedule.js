@@ -249,8 +249,9 @@ async function updateSeriesNow(ctx, id, body) {
   if (s.location_id !== cur.location_id) commerce.getLocation(ctx, s.location_id);
   const coachId = body.coach_id !== undefined ? coachInput(ctx, body.coach_id) : cur.coach_id ?? null;
   if (body.active === false) {
+    const reason = v.str(body.reason, 'reason', { max: 200, optional: true }) || 'This class is no longer on the schedule.';   // the coach's words in the families' email
     ctx.db.run('UPDATE class_series SET active = 0 WHERE id = ?', id);
-    const canceled = await cancelMany(ctx, cur, ctx.db.all(`SELECT * FROM class_sessions WHERE series_id = ? AND status = 'scheduled' AND starts_at > ? ORDER BY starts_at`, id, now), 'This class is no longer on the schedule.');
+    const canceled = await cancelMany(ctx, cur, ctx.db.all(`SELECT * FROM class_sessions WHERE series_id = ? AND status = 'scheduled' AND starts_at > ? ORDER BY starts_at`, id, now), reason);
     return { ...getSeries(ctx, id), changes: { updated: 0, moved: 0, canceled: canceled.sessions, added: 0, families_emailed: canceled.families, promoted: 0 } };
   }
   if (!cur.active && body.active !== true) throw conflict('This class is archived. Send active: true to put it back on the schedule.');

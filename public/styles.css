@@ -160,6 +160,30 @@ a.pulse-tile:hover,a.pulse-tile:focus-visible{background:var(--surface-raised)}
 @media (max-width: 760px){ .form-grid.cols-3,.form-grid.cols-4{grid-template-columns:repeat(2,minmax(0,1fr))} }
 @media (max-width: 420px){ .form-grid.cols-3,.form-grid.cols-4{grid-template-columns:1fr} }
 
+/* The Schedule page's controls: even rows that fill the width (owner: "fill the page better so it looks more even and
+   symmetrical"). Week arrows at the edges with the dates centred; search, place and coach sharing one row; the seven
+   type chips as seven equal cells; Day / Week / List and Colour as two equal halves. */
+.sc-bar{display:flex;flex-direction:column;gap:10px}
+.sc-bar-row{display:grid;gap:8px;align-items:center}
+.sc-bar-nav{grid-template-columns:auto minmax(0,1fr) auto auto}
+.sc-bar-title{text-align:center;min-width:0}
+.sc-bar-find{grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr)}
+.sc-bar-find--two{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+.sc-bar-find>input,.sc-bar-find>select{width:100%;min-width:0}
+.sc-bar-find>label{justify-content:center}
+.sc-bar-cells{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:6px}
+.sc-bar-cells .tm-view{width:100%;min-width:0;justify-content:center;padding:0 6px;white-space:normal;text-align:center}
+.sc-bar-label{text-align:center;padding:0 4px}
+.sc-bar-halves{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media (max-width: 760px){
+  .sc-bar-nav{grid-template-columns:1fr 1fr} .sc-bar-nav .sc-bar-title{grid-column:1 / -1;grid-row:1}
+  .sc-bar-find,.sc-bar-find--two,.sc-bar-halves{grid-template-columns:1fr}
+  .sc-bar-cells{grid-auto-flow:row;grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-columns:auto}
+  /* The seven type chips on a phone: four across, then three across, both rows the full width. */
+  .sc-bar-types{grid-template-columns:repeat(12,minmax(0,1fr))} .sc-bar-types .tm-view{grid-column:span 3} .sc-bar-types .tm-view:nth-child(n+5){grid-column:span 4}
+  .sc-bar-halves .sc-bar-cells{grid-template-columns:repeat(3,minmax(0,1fr))} .sc-bar-halves .sc-bar-cells:has(.sc-bar-label){grid-template-columns:auto repeat(3,minmax(0,1fr))}
+}
+
 /* Teams */
 .tm-views{gap:6px}
 .tm-view{min-height:44px;padding:0 12px;border:1px solid var(--control-border);border-radius:var(--radius-sm);background:var(--surface);color:var(--steel-muted);font:600 14px/1 var(--font-sans);cursor:pointer;display:inline-flex;align-items:center;gap:6px}

@@ -3277,7 +3277,9 @@ function editSeriesDialog(x, locs, coaches) {
     const r = saved.changes;
     const bits = [r.updated ? nplural(r.updated, 'session') + ' updated' : null, r.moved ? `${r.moved} moved` : null, r.canceled ? `${r.canceled} canceled` : null, r.added ? `${r.added} added` : null, r.promoted ? `${r.promoted} moved up from the waitlist` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed` : null].filter(Boolean);
     toast(`Saved.${bits.length ? ` ${bits.join(', ')}.` : ''}`); render();
-  } }, { label: 'Cancel', variant: 'ghost' }]);
+  } },
+  { label: 'Cancel every session', variant: 'ghost', onClick: async () => { if (!(await cancelSeriesNow(x))) return false; render(); } },
+  { label: 'Close', variant: 'ghost' }]);
 }
 
 // A coach's own calendar feed (owner: the whole schedule) for Apple, Google or Outlook: made once, shown once, reset at will.
@@ -3355,7 +3357,7 @@ async function viewSchedule(main) {
   };
 
   // Search (name, place, coach) filters as you type without redrawing, and is kept in the address too.
-  const search = input({ type: 'search', placeholder: 'Find a session, place or coach', value: q.get('q') ?? '', 'aria-label': 'Find a session', style: 'max-width:320px' });
+  const search = input({ type: 'search', placeholder: 'Find a session, place or coach', value: q.get('q') ?? '', 'aria-label': 'Find a session' });
   const list = h('div', { class: 'stack', style: 'gap:24px' });
   const totals = h('p', { class: 'small muted', style: 'margin:0', 'aria-live': 'polite' });
   let onSlot = () => {};      // set once the forms exist below: a click on an empty time
@@ -3464,10 +3466,12 @@ async function viewSchedule(main) {
   draw();
 
   const weekLabel = `${shortDate(week)} – ${shortDate(addDaysStr(week, 6))}`;
-  const viewToggle = h('div', { class: 'row wrap', style: 'gap:12px' },
-    h('div', { class: 'row tm-views', role: 'group', 'aria-label': 'How to show the schedule' },
+  // The controls sit in even rows across the whole width (owner: "fill the page better so it looks more even and
+  // symmetrical"): Day / Week / List on the left half, Colour on the right, each cell the same width (.sc-bar in styles.css).
+  const viewToggle = h('div', { class: 'sc-bar-row sc-bar-halves' },
+    h('div', { class: 'sc-bar-cells tm-views', role: 'group', 'aria-label': 'How to show the schedule' },
       [['day', 'Day'], ['week', 'Week'], ['list', 'List']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(view === k), onClick: () => go({ view: k === 'week' ? null : k, day: k === 'day' ? day : null }) }, label))),
-    view === 'list' ? null : h('div', { class: 'row tm-views', role: 'group', 'aria-label': 'Colour by' }, h('span', { class: 'small muted', style: 'padding:0 6px' }, 'Colour:'),
+    view === 'list' ? h('div') : h('div', { class: 'sc-bar-cells tm-views', role: 'group', 'aria-label': 'Colour by' }, h('span', { class: 'small muted sc-bar-label' }, 'Colour:'),
       [['class', 'Class'], ['kind', 'Type'], ['coach', 'Coach']].map(([k, label]) => h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(color === k), onClick: () => go({ color: k === 'class' ? null : k }) }, label))));
   // The month calendar (owner's ask: click a day and go there, at least a year ahead): sessions per day, projected
   // classes past the horizon in a lighter tone, the week on screen outlined, a jump menu two years wide.
@@ -3511,19 +3515,19 @@ async function viewSchedule(main) {
     h('span', { class: 'strong', style: 'min-width:170px;text-align:center' }, `${dayOf(bizIso(day, '12:00'))}${day === today ? ' · Today' : ''}`),
     btn('Next day', () => go({ day: addDaysStr(day, 1) }), 'secondary', { 'aria-label': 'Next day' }),
     day !== today ? btn('Today', () => go({ day: null }), 'ghost') : null)
-  : h('div', { class: 'row wrap', style: 'gap:8px;align-items:center' },
+  : h('div', { class: 'sc-bar-row sc-bar-nav' },
     btn('Previous week', () => go({ week: addDaysStr(week, -7) }), 'secondary', { 'aria-label': 'Previous week' }),
-    h('span', { class: 'strong', style: 'min-width:170px;text-align:center' }, weekLabel),
+    h('span', { class: 'strong sc-bar-title' }, weekLabel),
     btn('Next week', () => go({ week: addDaysStr(week, 7) }), 'secondary', { 'aria-label': 'Next week' }),
-    week !== sundayOf(today) ? btn('This week', () => go({ week: null }), 'ghost') : null);
-  const types = h('div', { class: 'row wrap tm-views', role: 'group', 'aria-label': 'Type of session' },
+    week !== sundayOf(today) ? btn('This week', () => go({ week: null }), 'ghost') : h('span'));
+  const types = h('div', { class: 'sc-bar-row sc-bar-cells sc-bar-types tm-views', role: 'group', 'aria-label': 'Type of session' },
     [['', 'All'], ['group', 'Group'], ['camp', 'Camps'], ['clinic', 'Clinics'], ['team', 'Team'], ['private', 'Privates'], ['evaluation', 'Evaluations']].map(([k, label]) =>
       h('button', { type: 'button', class: 'tm-view', 'aria-pressed': String(kind === k), onClick: () => go({ kind: k }) }, label)));
-  const placeSel = select([['', 'Every place'], ...locs.data.map((l) => [l.id, l.name])], { value: loc, 'aria-label': 'Place', style: 'width:auto' });
+  const placeSel = select([['', 'Every place'], ...locs.data.map((l) => [l.id, l.name])], { value: loc, 'aria-label': 'Place' });
   placeSel.addEventListener('change', () => go({ loc: placeSel.value }));
   let whoCtl = null;
   if (isOwner()) {
-    whoCtl = select([['', 'Every coach'], ...coaches.map((c) => [c.id, c.name])], { value: onlyCoach ?? '', 'aria-label': 'Show sessions led by', style: 'width:auto' });
+    whoCtl = select([['', 'Every coach'], ...coaches.map((c) => [c.id, c.name])], { value: onlyCoach ?? '', 'aria-label': 'Show sessions led by' });
     whoCtl.addEventListener('change', () => go({ coach: whoCtl.value, mine: null }));
   } else if (onlyCoach) {
     whoCtl = h('span', { class: 'small' }, `${coaches.find((c) => c.id === onlyCoach)?.name ?? 'This coach'}'s sessions · `, h('a', { href: '#/schedule' }, 'Show everyone'));
@@ -3532,9 +3536,10 @@ async function viewSchedule(main) {
     box.addEventListener('change', () => go({ mine: box.checked ? '1' : null }));
     whoCtl = h('label', { class: 'row small', style: 'gap:8px;min-height:44px' }, box, h('span', null, 'My sessions only'));
   }
-  const filterBar = h('div', { class: 'stack', style: 'gap:12px' },
-    h('div', { class: 'row wrap', style: 'gap:12px;justify-content:space-between' }, weekNav, h('div', { class: 'row wrap', style: 'gap:8px' }, search, placeSel, whoCtl)),
-    h('div', { class: 'row wrap', style: 'gap:12px;justify-content:space-between' }, types, viewToggle), totals);
+  const filterBar = h('div', { class: 'sc-bar' },
+    weekNav,
+    h('div', { class: `sc-bar-row sc-bar-find${whoCtl ? '' : ' sc-bar-find--two'}` }, search, placeSel, whoCtl),
+    types, viewToggle, totals);
 
   // Add a class, camp or clinic (owners and coaches).
   const f = { name: input({ maxlength: '80' }), kind: select([['group', 'Weekly group class'], ['camp', 'Camp'], ['clinic', 'Clinic'], ['team', 'Team session'], ['evaluation', 'Evaluation day']]), loc: select(locs.data.map((l) => [l.id, l.name])),
@@ -3673,7 +3678,29 @@ function editSessionDialog(x, locs, coaches, again) {
     if (!r) return false;
     toast([`Saved: ${r.changed.join(', ')}.`, r.promoted ? `${nplural(r.promoted, 'athlete')} moved up from the waitlist.` : null, r.families_emailed ? `${nplural(r.families_emailed, 'family', 'families')} emailed.` : null].filter(Boolean).join(' '));
     again();
-  } }, { label: 'Cancel', variant: 'ghost' }]);
+  } },
+  // Owner's ask: cancel from Edit, this session or the whole class, instead of hunting for the button at the foot of the page.
+  { label: 'Cancel this session', variant: 'ghost', onClick: async () => { if (!(await cancelSessionNow(x))) return false; again(); } },
+  ...(x.series_id ? [{ label: 'Cancel every session of this class', variant: 'ghost', onClick: async () => { if (!(await cancelSeriesNow({ id: x.series_id, name: x.name }))) return false; again(); } }] : []),
+  { label: 'Close', variant: 'ghost' }]);
+}
+// Cancel one session: asks why (families are emailed, credits come back, drop-ins are refunded). Resolves true when done.
+async function cancelSessionNow(x) {
+  const reason = prompt(`Cancel ${x.name} on ${dayOf(x.starts_at)}? Tell families why (they'll get an email${x.team ? ', and so will the school or club contact' : ''}). Credits come back and drop-ins are refunded.`, 'Weather');
+  if (reason === null) return false;
+  const r = await post(`/v1/sessions/${x.id}/cancel`, { reason });
+  toast(`Session canceled.${r.families_emailed ? ` ${nplural(r.families_emailed, 'family', 'families')} emailed.` : ''}${r.team_contact_emailed ? ' The team contact was emailed.' : ''}`);
+  return true;
+}
+// Cancel every upcoming session of a class: the class comes off the schedule (archived; every family booked on any of
+// them gets one email), and the Classes & camps list can put it back. Resolves true when done.
+async function cancelSeriesNow(cs) {
+  const reason = prompt(`Cancel every upcoming session of ${cs.name}? The class comes off the schedule; you can put it back later from Classes & camps. Tell families why (one email per family). Credits come back and drop-ins are refunded.`, 'The class is no longer running');
+  if (reason === null) return false;
+  const r = await patch(`/v1/class-series/${cs.id}`, { active: false, reason });
+  const c = r.changes ?? {};
+  toast(`${cs.name} canceled.${c.canceled ? ` ${nplural(c.canceled, 'session')} canceled.` : ''}${c.families_emailed ? ` ${nplural(c.families_emailed, 'family', 'families')} emailed.` : ''}`);
+  return true;
 }
 
 // Email everyone booked: "Running 10 minutes late", "Bring your cleats".
@@ -3893,11 +3920,7 @@ async function viewSession(main, id) {
       btn('Remove', (e) => busy(e.currentTarget, async () => { await post(`/v1/bookings/${r.id}/cancel`, { waive: true }); again(); }), 'ghost', { 'aria-label': `Remove ${r.name} from the waitlist` })))) : null,
     screenPanel,
     done.length ? panel('Canceled', {}, done.map((r) => h('div', { class: 'list-item small' }, h('span', { class: 'grow' }, r.name), h('span', { class: 'muted' }, r.status === 'late_canceled' ? 'Late cancel (session used)' : 'Canceled')))) : null,
-    x.status === 'scheduled' && leads() ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Cancel this session', (e) => {
-      const reason = prompt(`Tell families why (they'll get an email${x.team ? ', and so will the school or club contact' : ''}). Credits come back and drop-ins are refunded.`, 'Weather');
-      if (reason === null) return;
-      busy(e.currentTarget, async () => { const r = await post(`/v1/sessions/${id}/cancel`, { reason }); toast(`Session canceled.${r.families_emailed ? ` ${nplural(r.families_emailed, 'family', 'families')} emailed.` : ''}${r.team_contact_emailed ? ' The team contact was emailed.' : ''}`); again(); });
-    }, 'ghost')) : null);
+    x.status === 'scheduled' && leads() ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Cancel this session', (e) => busy(e.currentTarget, async () => { if (await cancelSessionNow(x)) again(); }), 'ghost')) : null);
 }
 
 // Self check-in: a QR poster for the door and check-in tablets for the front desk.

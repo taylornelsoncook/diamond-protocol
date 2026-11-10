@@ -283,3 +283,24 @@ test('a day taken off a class by mistake comes back when it is put back; days wi
   assert.equal(scheduled().length, before - 1);
   assert.equal(scheduled().filter((x) => localDate(x.starts_at, TZ) === d2).length, 0, 'the day families were told is canceled stays canceled');
 });
+
+test('cancelling every session of a class from Edit: the class comes off the schedule and the coach\'s reason is in the families\' email', async () => {
+  const d1 = day(4);
+  const s = (await coach('POST', '/v1/class-series', { name: 'Agility', kind: 'group', location_id: facility.id, weekdays: [weekdayOf(d1)], start_time: '18:00', duration_min: 60, capacity: 6, start_date: day(1), coach_id: coachId })).body;
+  const list = await sessionsOf(s.id);
+  giveCredits(mia.id, 3);
+  const had = credits(mia.id);
+  await owner('POST', `/v1/sessions/${list[0].id}/bookings`, { client_id: mia.id });
+  await owner('POST', `/v1/sessions/${list[1].id}/bookings`, { client_id: mia.id });
+  assert.equal((await coach('PATCH', `/v1/class-series/${s.id}`, { active: false, reason: 'x'.repeat(201) })).status, 400, 'a reason over 200 characters is refused');
+  const r = (await coach('PATCH', `/v1/class-series/${s.id}`, { active: false, reason: 'Coach Riley is out for the season' })).body;
+  assert.equal(r.active, false);
+  assert.equal(r.changes.canceled, list.length, 'every upcoming session is taken off the schedule');
+  assert.equal(r.changes.families_emailed, 1);
+  assert.equal(credits(mia.id), had, 'both sessions came back');
+  const sent = mail('tran@example.com', 'Canceled: Agility%');
+  assert.equal(sent.length, 1, 'one email for both sessions');
+  assert.match(sent[0].body, /Coach Riley is out for the season/);
+  assert.equal((await sessionsOf(s.id)).filter((x) => x.status === 'scheduled').length, 0);
+  assert.ok(!(await owner('GET', '/v1/class-series')).body.data.some((x) => x.id === s.id), 'off the schedule');
+});

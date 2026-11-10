@@ -148,6 +148,7 @@ function renderProfile(where) {
     maxes,
     gamesSection(),
     formChecksSection(),
+    workoutSettingsPanel(),
     reminderPanel(),
     signInPanel(),
     devicesPanel(),
@@ -316,6 +317,52 @@ function drawPending() {
 // ---------- Rest timer ----------
 const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true, track_rpe: false, track_note: false }, store.get('dp_wo_prefs') ?? {});
 const savePrefs = () => store.set('dp_wo_prefs', prefs);
+const WEIGHT_STEP = 2.5;   // pounds a tap of − or + moves a set's weight (owner's choice)
+// What the athlete records on a set beyond weight and reps: their workout settings, kept on the profile
+// (`home.log_settings`, PATCH /app/api/log-settings) so they follow the account; the phone keeps a copy for offline.
+const tracking = () => ({ effort: state.home?.log_settings?.effort ?? prefs.track_rpe, notes: state.home?.log_settings?.notes ?? prefs.track_note });
+async function setTracking(key, on) {
+  const was = tracking();
+  const next = { ...was, [key]: on };
+  if (state.home) state.home.log_settings = next;
+  prefs.track_rpe = next.effort; prefs.track_note = next.notes; savePrefs();
+  try { await api('PATCH', '/app/api/log-settings', { [key]: on }); }
+  catch (e) { if (state.home) state.home.log_settings = was; prefs.track_rpe = was.effort; prefs.track_note = was.notes; savePrefs(); throw new Error('That didn\'t save. Check your connection and try again.'); }
+}
+// Workout settings (owner's ask: "a settings feature for them to toggle the effort and notes on"): the two things an
+// athlete may record on each set, and the rest timer. On the Profile tab, and a tap away from the session bar.
+function workoutSettings(onChange = () => {}) {
+  const now = tracking();
+  const toggle = (key, title, hint) => {
+    const box = h('input', { type: 'checkbox', checked: now[key], onChange: async (e) => {
+      const el = e.target, on = el.checked;
+      el.disabled = true;
+      try { await setTracking(key, on); toast(on ? `${title}: on.` : `${title}: off.`); onChange(); }
+      catch (x) { el.checked = !on; toast(x.message, 'bad'); }
+      finally { el.disabled = false; }
+    } });
+    return h('label', { class: 'c-setting' }, box, h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, title), h('span', { class: 'small muted' }, hint)));
+  };
+  const restLen = h('select', { class: 'select', style: 'width:auto;min-width:96px', 'aria-label': 'Rest length', onChange: (e) => { prefs.rest_sec = Number(e.target.value); savePrefs(); onChange(); } },
+    [45, 60, 90, 120, 150, 180].map((s) => h('option', { value: String(s), selected: s === prefs.rest_sec }, clock(s))));
+  const restBox = h('input', { type: 'checkbox', checked: prefs.rest, onChange: (e) => { prefs.rest = e.target.checked; savePrefs(); if (!prefs.rest) stopRest(); onChange(); } });
+  return h('div', { class: 'stack-tight' },
+    toggle('effort', 'Effort on each set', 'After you log a set, rate how hard it was from 1 to 10.'),
+    toggle('notes', 'A note on each set', 'A few words on any set: how it moved, what to fix.'),
+    h('div', { class: 'c-setting' }, restBox, h('span', { class: 'stack-tight grow' }, h('span', { class: 'strong' }, 'Rest timer after each set'), h('span', { class: 'small muted' }, 'Where your coach set a rest, that one is used. This phone only.')), restLen));
+}
+function workoutSettingsPanel() {
+  return h('section', { class: 'dp-panel stack-tight', id: 'c-wo-settings' }, h('h2', { class: 'dp-panel-title' }, 'Workout settings'),
+    h('p', { class: 'small muted', style: 'margin:0' }, 'What you record on each set. Weight and reps are always there.'), workoutSettings());
+}
+function openWorkoutSettings(after) {
+  const d = h('dialog', { class: 'c-notices-dlg', 'aria-label': 'Workout settings' },
+    h('div', { class: 'stack' }, h('div', { class: 'row', style: 'align-items:center;justify-content:space-between' }, h('h2', { class: 'dp-panel-title', style: 'margin:0' }, 'Workout settings'), btn('Done', () => d.close(), 'primary')),
+      workoutSettings()));
+  d.addEventListener('close', () => { d.remove(); after?.(); });
+  document.body.append(d);
+  d.showModal();
+}
 // An athlete who trains both places says where they are today; at home, the gear swaps apply (startup.js).
 const atQ = () => (prefs.at_home && state.home?.startup?.gear?.trains_at === 'both' ? '?at=home' : '');
 const restBar = h('div', { class: 'c-rest', hidden: true, role: 'timer', 'aria-label': 'Rest timer' });
@@ -883,7 +930,7 @@ function renderLogger(w) {
     return box;
   }
   // One line per set: − weight + · − reps + · Log, so a set is one tap when the numbers are right and never needs the
-  // keyboard when they aren't (the steps are 5 lb and 1 rep; the boxes still take typing). Under it, what that set was
+  // keyboard when they aren't (the steps are 2.5 lb, the owner's choice, and 1 rep; the boxes still take typing). Under it, what that set was
   // last time. A logged set opens its extras where the athlete tracks them: how hard it was, and a note.
   function drawSets(x, setsBox, focus) {
     const rows = rowsFor(x);
@@ -906,15 +953,15 @@ function renderLogger(w) {
       const tick = h('button', { type: 'button', class: 'dp-ex-log c-tick', 'aria-pressed': String(!!r.done), 'data-set': String(i), 'aria-label': `${r.done ? 'Logged' : 'Log'} ${x.name} set ${i + 1}`, onClick: () => toggleSet(x, i, setsBox, wIn.value, rIn.value) }, r.done ? '✓' : 'Log');
       const was = x.last?.sets?.[i];
       // The extras: open on the set just logged, a line to tap on the earlier ones.
-      const tracking = prefs.track_rpe || prefs.track_note;
+      const track = tracking();
       let extras = null;
-      if (tracking && r.done) {
+      if ((track.effort || track.notes) && r.done) {
         const openNow = i === lastDone || state.extrasOpen === `${x.id}:${i}`;
         if (openNow) {
-          const chips = prefs.track_rpe ? h('div', { class: 'c-effort c-effort--set', role: 'radiogroup', 'aria-label': `How hard was set ${i + 1}? 1 is very easy, 10 is all out` },
+          const chips = track.effort ? h('div', { class: 'c-effort c-effort--set', role: 'radiogroup', 'aria-label': `How hard was set ${i + 1}? 1 is very easy, 10 is all out` },
             Array.from({ length: 10 }, (_, k) => k + 1).map((n) => h('button', { type: 'button', role: 'radio', class: 'c-effort-n', 'aria-checked': String(Number(r.rpe) === n), 'aria-label': `${n}: ${RPE_WORDS[n]}`,
               onClick: () => { patch({ rpe: Number(r.rpe) === n ? null : n }); say(Number(r.rpe) === n ? 'Effort cleared.' : `Set ${i + 1} effort ${n}.`); drawSets(x, setsBox); } }, String(n)))) : null;
-          const noteIn = prefs.track_note ? h('input', { class: 'dp-input', maxlength: '200', value: r.note ?? '', placeholder: 'A note on this set', 'aria-label': `Note on ${x.name} set ${i + 1}`, onInput: (e) => patch({ note: e.target.value }) }) : null;
+          const noteIn = track.notes ? h('input', { class: 'dp-input', maxlength: '200', value: r.note ?? '', placeholder: 'A note on this set', 'aria-label': `Note on ${x.name} set ${i + 1}`, onInput: (e) => patch({ note: e.target.value }) }) : null;
           extras = h('div', { class: 'c-set-extras stack-tight' }, chips ? h('span', { class: 'small muted' }, 'How hard was that set?') : null, chips, noteIn);
         } else {
           extras = h('button', { type: 'button', class: 'c-set-more small muted', onClick: () => { state.extrasOpen = `${x.id}:${i}`; drawSets(x, setsBox); } }, setExtras(r) || 'Add effort or a note');
@@ -922,7 +969,7 @@ function renderLogger(w) {
       }
       return h('div', { class: `c-set-wrap${r.done ? ' c-set--done' : ''}` },
         h('div', { class: 'c-set' }, h('span', { class: 'c-set-no', 'aria-hidden': 'true' }, String(i + 1)),
-          counted ? [h('span', { class: 'c-stepper' }, step(wIn, -5, dw ?? 0, 2000, 'weight'), wIn, step(wIn, 5, dw ?? 0, 2000, 'weight'), h('span', { class: 'c-unit' }, 'lb')),
+          counted ? [h('span', { class: 'c-stepper' }, step(wIn, -WEIGHT_STEP, dw ?? 0, 2000, 'weight'), wIn, step(wIn, WEIGHT_STEP, dw ?? 0, 2000, 'weight'), h('span', { class: 'c-unit' }, 'lb')),
             h('span', { class: 'c-stepper c-stepper--reps' }, step(rIn, -1, x.target_reps ?? 0, 500, 'reps'), rIn, step(rIn, 1, x.target_reps ?? 0, 500, 'reps'), h('span', { class: 'c-unit' }, 'reps'))]
             : h('span', { class: 'grow small muted' }, i === 0 ? x.prescription : ''),
           tick),
@@ -1014,11 +1061,10 @@ function renderLogger(w) {
   if (session) { drawClock(); sessionTick = setInterval(() => { if (!sClock.isConnected) return clearInterval(sessionTick); drawClock(); }, 1000); }
   const cell = (n, label) => h('div', { class: 'c-sess-cell' }, n, h('span', { class: 'c-sess-l' }, label));
   const sessionBar = session ? h('div', { class: 'c-sess', role: 'group', 'aria-label': 'This workout so far' },
-    h('div', { class: 'c-sess-title' }, h('span', { class: 'c-sess-name' }, w.title), h('button', { type: 'button', class: 'c-sess-link', onClick: () => { state.fullView = true; render(); } }, 'Show everything')),
+    h('div', { class: 'c-sess-title' }, h('span', { class: 'c-sess-name' }, w.title),
+      h('button', { type: 'button', class: 'c-sess-link', onClick: () => openWorkoutSettings(() => render()) }, 'Settings'),
+      h('button', { type: 'button', class: 'c-sess-link', onClick: () => { state.fullView = true; render(); } }, 'Show everything')),
     h('div', { class: 'c-sess-cells' }, cell(sClock, 'time'), cell(sSets, 'sets'), cell(sLb, 'lb moved'))) : null;
-  // What the athlete tracks on a set beyond weight and reps (owner's ask: record what they want to). Off by default, so
-  // logging stays one tap; the choice is kept on the phone.
-  const trackTick = (key, label) => h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs[key], onChange: (e) => { prefs[key] = e.target.checked; savePrefs(); redrawCards(); } }), label);
   const list = h('div', { class: `stack${logging ? '' : ' c-plan'}`, style: logging ? 'gap:8px' : 'gap:6px' });   // before Start workout the plan reads as a compact list (owner's ask)
   const redrawCards = () => { stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); drawSession(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
@@ -1078,8 +1124,7 @@ function renderLogger(w) {
       h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
       h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen,
         w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null),
-      h('div', { class: 'stack-tight small' }, h('div', { class: 'dp-label' }, 'Also track on each set'),
-        h('div', { class: 'row wrap', style: 'gap:4px 16px' }, trackTick('track_rpe', 'How hard it was (1 to 10)'), trackTick('track_note', 'A note')))) : null,
+      h('div', { class: 'row' }, btn('Workout settings', () => openWorkoutSettings(() => render()), 'ghost'), h('span', { class: 'small muted', style: 'align-self:center' }, 'Effort and notes on each set'))) : null,
     logging ? finishBtn : startBtn(),
     state.fullView && !reopened && logging ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Back to just the workout', () => { state.fullView = false; render(); window.scrollTo(0, 0); }, 'ghost')) : null,
     chrome ? weeklyNoteCard(home) : null,

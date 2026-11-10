@@ -1308,9 +1308,22 @@ function startupState(ctx, clientId, hasProgram) {
     gear, needed: !hasProgram && !profile, message: hasProgram ? null : NO_PROGRAM_TEXT[profile?.outcome] ?? (profile ? NO_PROGRAM_TEXT.suggested : 'Answer a few questions and your first program is ready.') };
 }
 // at: 'home' when a "both" athlete says they're training at home today (the gear swaps apply).
+// The athlete's workout settings (version 99, owner's ask: "a settings feature for them to toggle the effort and notes
+// on"): what they record on a set beyond weight and reps. Kept on the profile, so it follows them to any phone.
+export function logSettings(ctx, clientId) {
+  const r = ctx.db.get('SELECT track_set_rpe, track_set_note FROM clients WHERE id = ?', clientId);
+  return { effort: !!r?.track_set_rpe, notes: !!r?.track_set_note };
+}
+export function setLogSettings(ctx, client, body = {}) {
+  const cur = logSettings(ctx, client.id);
+  const flag = (key) => { if (body[key] === undefined) return cur[key]; if (typeof body[key] !== 'boolean') throw badRequest(`${key} must be true or false.`); return body[key]; };
+  const next = { effort: flag('effort'), notes: flag('notes') };
+  ctx.db.run('UPDATE clients SET track_set_rpe = ?, track_set_note = ? WHERE id = ?', next.effort ? 1 : 0, next.notes ? 1 : 0, client.id);
+  return next;
+}
 export function clientHome(ctx, client, { at = null } = {}) {
   const access = appAccess(ctx, client);
-  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status, notices_unseen: unseenNotices(ctx, client.id) };
+  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status, notices_unseen: unseenNotices(ctx, client.id), log_settings: logSettings(ctx, client.id) };
   if (!access.open) return { ...base, locked: true, message: access.message };
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
   const own = nextWorkoutFor(ctx, client.id);

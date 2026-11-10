@@ -67,6 +67,10 @@
 .c-set-more{align-self:flex-start;margin-left:30px;min-height:32px;padding:0;background:none;border:0;text-align:left;cursor:pointer;font:inherit;text-decoration:underline;text-underline-offset:3px}
 .c-effort--set .c-effort-n{min-height:38px;font-size:14px}
 .c-last .dp-btn{flex-shrink:0}
+/* A row of the workout settings: the switch, then what it does. */
+.c-setting{display:flex;align-items:center;gap:12px;min-height:52px;padding:6px 0;border-top:1px solid var(--line-subtle);cursor:pointer}
+.c-setting:first-child{border-top:0}
+.c-setting input[type=checkbox]{width:22px;height:22px;flex-shrink:0}
 /* The session bar: once the workout is started, the page is the workout, with the clock, sets and pounds on top. */
 .c-sess{position:sticky;top:0;z-index:20;margin:calc(-24px - env(safe-area-inset-top,0px)) -20px 0;padding:calc(10px + env(safe-area-inset-top,0px)) 20px 10px;background:var(--ground);border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
 .c-sess-title{display:flex;align-items:baseline;gap:12px}

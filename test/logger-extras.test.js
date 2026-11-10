@@ -86,6 +86,17 @@ test('a set carries its own effort and note when the athlete records them, and n
   assert.deepEqual((await me('GET', `/app/api/logs/${done.body.id}`)).body.exercises[0].sets, [{ set_no: 1, weight: 135, reps: 5, rpe: 8 }]);
 });
 
+test('workout settings: an athlete turns effort and notes on for their own profile, and they follow the account', async () => {
+  const me = athlete(cole), other = athlete(ava);
+  assert.deepEqual((await me('GET', '/app/api/home')).body.log_settings, { effort: false, notes: false }, 'off until they choose');
+  assert.deepEqual((await me('PATCH', '/app/api/log-settings', { effort: true })).body, { effort: true, notes: false });
+  assert.deepEqual((await me('PATCH', '/app/api/log-settings', { notes: true })).body, { effort: true, notes: true }, 'a field left out keeps its setting');
+  assert.deepEqual((await me('GET', '/app/api/home')).body.log_settings, { effort: true, notes: true });
+  assert.deepEqual((await other('GET', '/app/api/home')).body.log_settings, { effort: false, notes: false }, 'only their own');
+  assert.equal((await me('PATCH', '/app/api/log-settings', { effort: 'yes' })).status, 400);
+  assert.deepEqual((await me('PATCH', '/app/api/log-settings', { effort: false, notes: false })).body, { effort: false, notes: false });
+});
+
 test('one exercise over time: sessions newest first, set by set, with each session\'s top set, estimated max and pounds moved, and the bests', async () => {
   const me = athlete(cole);
   const empty = (await me('GET', `/app/api/exercises/${squat.id}/history`)).body;
@@ -112,7 +123,7 @@ test('one exercise over time: sessions newest first, set by set, with each sessi
   assert.ok(!JSON.stringify(hist).includes('Felt fast'));
 });
 
-test('a version 98 database gains the two set columns and keeps its sets, opened twice', async () => {
+test('a version 98 database gains the set columns and the workout settings and keeps its sets, opened twice', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'dp-sets98-'));
   const file = join(tmp, 'old.db');
   try {
@@ -127,6 +138,7 @@ test('a version 98 database gains the two set columns and keeps its sets, opened
       const d = openDb(file);
       assert.equal(d.get('PRAGMA user_version').user_version, 99, `round ${round}`);
       assert.deepEqual({ ...d.get('SELECT set_no, weight, reps, rpe, note FROM workout_sets') }, { set_no: 1, weight: 135, reps: 5, rpe: null, note: null });
+      assert.deepEqual({ ...d.get('SELECT track_set_rpe, track_set_note FROM clients') }, { track_set_rpe: 0, track_set_note: 0 }, 'the workout settings start off');
       d.close();
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }

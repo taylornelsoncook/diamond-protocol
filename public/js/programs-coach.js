@@ -972,24 +972,37 @@ function saveTemplateDialog(p) {
 function weeklyNotesPanel(notes) {
   const drafts = notes.data.filter((n) => n.status === 'draft'), sent = notes.data.filter((n) => n.status === 'sent');
   const week = drafts[0]?.week_label ?? notes.weeks[0]?.label ?? 'last week';
+  // Send and Skip take their own row out and leave the rest of the page as it is (owner: a full redraw after each
+  // one lost the words typed in the other rows and scrolled back to the top). The page is redrawn only by Send all
+  // and Draft last week, which change every row.
+  let left = drafts.length, sentNow = 0;
+  const list = h('div', { class: 'stack-tight' });
+  const sendAll = drafts.length > 1 ? btn('Send all', (e) => { if (!confirm(`Send ${left} notes as they read now?`)) return; busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/send-all', { week: drafts[0].week_start }); toast(`Sent ${r.sent}.`); deps.render(); }); }, 'secondary') : null;
+  const gone = (el) => {
+    el.remove(); left -= 1;
+    if (sendAll && left < 2) sendAll.hidden = true;
+    if (!left) list.append(h('p', { class: 'muted small' }, `All done for ${week}. ${plural(sent.length + sentNow, 'note')} went out.`));
+  };
   const row = (n) => {
     const text = textarea(n.body, { rows: '2', 'aria-label': `Note for ${first(n.client_name)}`, style: 'min-height:56px' });
     let saved = n.body;
     const save = async () => { const val = text.value.trim(); if (val === saved) return; saved = val; await patch(`/v1/weekly-notes/${n.id}`, { body: val }); };
     text.addEventListener('blur', () => save().catch((e) => toast(e.message, 'warn')));
     const f = n.facts ?? {};
-    return h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
+    const el = h('div', { class: 'list-item', style: 'flex-wrap:wrap;align-items:flex-start' },
       h('div', { class: 'grow stack-tight', style: 'min-width:260px' }, h('a', { href: `#/clients/${n.client_id}?tab=training`, class: 'strong', style: 'color:inherit' }, n.client_name),
         h('span', { class: 'small muted' }, [f.planned != null ? `${f.done} of ${f.planned} workouts` : null, f.sets ? plural(f.sets, 'set') : null, f.checkins ? plural(f.checkins, 'check-in') : null, f.streak ? `${f.streak} clean ${f.streak === 1 ? 'week' : 'weeks'}` : null, f.top_lift ? `${f.top_lift.name} ~${f.top_lift.e1rm} lb${f.top_lift.change ? ` (${f.top_lift.change > 0 ? '+' : ''}${f.top_lift.change})` : ''}` : null].filter(Boolean).join(' · ')),
         text),
       h('div', { class: 'row wrap', style: 'gap:6px' },
-        btn('Send', (e) => busy(e.currentTarget, async () => { await save(); await post(`/v1/weekly-notes/${n.id}/send`); toast(`Sent to ${first(n.client_name)}.`); deps.render(); }), 'primary'),
-        btn('Skip', (e) => busy(e.currentTarget, async () => { await post(`/v1/weekly-notes/${n.id}/skip`); deps.render(); }), 'ghost')));
+        btn('Send', (e) => busy(e.currentTarget, async () => { await save(); await post(`/v1/weekly-notes/${n.id}/send`); sentNow += 1; toast(`Sent to ${first(n.client_name)}.`); gone(el); }), 'primary'),
+        btn('Skip', (e) => busy(e.currentTarget, async () => { await post(`/v1/weekly-notes/${n.id}/skip`); gone(el); }), 'ghost')));
+    return el;
   };
+  list.append(...(drafts.length ? drafts.map(row) : [h('p', { class: 'muted small' }, sent.length ? `All sent for ${week}. ${plural(sent.length, 'note')} went out.` : 'No drafts right now. They\'re written on Monday morning, or press Draft last week.')]));
   return panel('Weekly notes', { subtitle: `A line for each athlete about ${week}, drafted from what they did. Change the words, then send: it shows in their app and taps their phone. ${notes.mode === 'auto' ? 'Drafts go out on their own on Monday.' : notes.mode === 'off' ? 'Off right now.' : 'Drafted every Monday.'}`,
-    action: h('div', { class: 'row wrap', style: 'gap:6px' }, drafts.length > 1 ? btn('Send all', (e) => { if (!confirm(`Send ${drafts.length} notes as they read now?`)) return; busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/send-all', { week: drafts[0].week_start }); toast(`Sent ${r.sent}.`); deps.render(); }); }, 'secondary') : null,
+    action: h('div', { class: 'row wrap', style: 'gap:6px' }, sendAll,
       btn('Draft last week', (e) => busy(e.currentTarget, async () => { const r = await post('/v1/weekly-notes/generate'); toast(r.written ? `${plural(r.written, 'note')} drafted.` : r.kept ? 'Already drafted.' : 'Nothing to say: a quiet week for everyone.'); deps.render(); }), 'ghost')) },
-    drafts.length ? drafts.map(row) : h('p', { class: 'muted small' }, sent.length ? `All sent for ${week}. ${plural(sent.length, 'note')} went out.` : 'No drafts right now. They\'re written on Monday morning, or press Draft last week.'));
+    list);
 }
 // The game-week rules (gameweek.js, docs/game-week.md): for each day from three before a game to three after, its
 // colour (green = the workout as written, yellow = one set fewer on every exercise, red = half the sets) and the

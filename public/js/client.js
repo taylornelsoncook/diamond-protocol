@@ -2,7 +2,7 @@ import { h, fill, toast, busy, videoEmbed, playIcon, btn } from './ui.js';
 import { createEngage, ENGAGE_TABS, tabIcon, engageDots } from './engage-view.js';
 import { athleteSprint } from './sprint-ui.js';
 import { athleteGroups } from './groups-ui.js';
-import { groupTag, groupTitle, withGroups, rxTable } from './set-fields.js';
+import { groupTag, groupTitle, withGroups, rxTable, timeText } from './set-fields.js';
 import { formChecksBlock, clipPicker, sendClip } from './formchecks-ui.js';
 import { startupForm, summaryText } from './startup-ui.js';
 import { timelineBlock } from './timeline-ui.js';
@@ -72,17 +72,18 @@ const state = { tab: hashTab() ?? 'workout', home: null, open: null, done: null,
 const currentWorkout = () => state.pickWorkout ?? state.home?.workout ?? null;
 const view = h('div', { class: 'c-view' });
 const engage = createEngage({ api: { get: (p) => api('GET', `/app/api/${p}`), post: (p, b) => api('POST', `/app/api/${p}`, b ?? {}), del: (p) => api('DELETE', `/app/api/${p}`) }, onData: () => drawTabs() });
-const tabs = h('nav', { class: 'eg-tabs', 'aria-label': 'Sections' });
+const tabs = h('nav', { class: 'eg-tabs c-tabs', 'aria-label': 'Sections' });
 function drawTabs() {
   const dots = engageDots(engage.data);
   fill(tabs, [['workout', 'Workout'], ['team', 'Team'], ['sprint', 'Sprint'], ...ENGAGE_TABS, ['profile', 'Profile']].map(([k, label]) => h('button', { type: 'button', class: 'eg-tab', 'aria-current': state.tab === k ? 'page' : null, onClick: () => show(k) },
-    tabIcon(k), label, dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
+    tabIcon(k), h('span', { class: 'eg-tab-l' }, label), dots[k] ? [h('span', { class: 'eg-tab-dot', 'aria-hidden': 'true' }), h('span', { class: 'sr-only' }, k === 'education' ? ' (new reading)' : ' (new message)')] : null)));
 }
 function show(tab, anchor = null) {
   state.tab = tab;
   if (anchor) setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   if ((hashTab() ?? 'workout') !== tab) history.replaceState(null, '', `${location.pathname}${location.search}${tab === 'workout' ? '' : `#${tab}`}`);
   drawTabs();
+  document.body.classList.remove('c-focus');
   window.scrollTo(0, 0);
   if (tab === 'workout') {
     if (!state.home) return load();
@@ -315,7 +316,7 @@ function drawPending() {
 }
 
 // ---------- Rest timer ----------
-const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true, track_rpe: false, track_note: false }, store.get('dp_wo_prefs') ?? {});
+const prefs = Object.assign({ rest: true, rest_sec: 90, at_home: false, voice: true, track_rpe: false, track_note: false, log_view: 'focus' }, store.get('dp_wo_prefs') ?? {});
 const savePrefs = () => store.set('dp_wo_prefs', prefs);
 const WEIGHT_STEP = 2.5;   // pounds a tap of − or + moves a set's weight (owner's choice)
 // What the athlete records on a set beyond weight and reps: their workout settings, kept on the profile
@@ -341,7 +342,7 @@ function workoutSettings(onChange = () => {}) {
       catch (x) { el.checked = !on; toast(x.message, 'bad'); }
       finally { el.disabled = false; }
     } });
-    return h('label', { class: 'c-setting' }, box, h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, title), h('span', { class: 'small muted' }, hint)));
+    return h('label', { class: 'c-setting' }, h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, title), h('span', { class: 'small muted' }, hint)), box);
   };
   const restLen = h('select', { class: 'select', style: 'width:auto;min-width:96px', 'aria-label': 'Rest length', onChange: (e) => { prefs.rest_sec = Number(e.target.value); savePrefs(); onChange(); } },
     [45, 60, 90, 120, 150, 180].map((s) => h('option', { value: String(s), selected: s === prefs.rest_sec }, clock(s))));
@@ -349,7 +350,8 @@ function workoutSettings(onChange = () => {}) {
   return h('div', { class: 'stack-tight' },
     toggle('effort', 'Effort on each set', 'After you log a set, rate how hard it was from 1 to 10.'),
     toggle('notes', 'A note on each set', 'A few words on any set: how it moved, what to fix.'),
-    h('div', { class: 'c-setting' }, restBox, h('span', { class: 'stack-tight grow' }, h('span', { class: 'strong' }, 'Rest timer after each set'), h('span', { class: 'small muted' }, 'Where your coach set a rest, that one is used. This phone only.')), restLen));
+    h('label', { class: 'c-setting' }, h('span', { class: 'stack-tight' }, h('span', { class: 'strong' }, 'Rest timer after each set'), h('span', { class: 'small muted' }, 'Where your coach set a rest, that one is used. This phone only.')), restBox),
+    h('div', { class: 'c-setting', style: 'cursor:default' }, h('span', { class: 'strong' }, 'Rest length'), restLen));
 }
 function workoutSettingsPanel() {
   return h('section', { class: 'dp-panel stack-tight', id: 'c-wo-settings' }, h('h2', { class: 'dp-panel-title' }, 'Workout settings'),
@@ -607,6 +609,7 @@ async function openNotices() {
 
 function render() {
   const home = state.home;
+  document.body.classList.remove('c-focus');   // the focus screen (renderLogger) puts it back when it's the one showing
   store.set(`dp_wo_home_${String(tokenValue).slice(0, 16)}`, { token: tokenValue, home });
   drawPending();
   if (state.done) return renderDone(state.done);
@@ -699,8 +702,8 @@ function gameCard(home) {
   // themselves live on the Profile tab.
   const soon = g.days_to_next != null && g.days_to_next <= 90;
   if (soon || prefs.games_prompt_off) return null;
-  return h('div', { class: 'c-note row', style: 'align-items:center;gap:8px;flex-wrap:wrap' },
-    h('span', { class: 'grow small' }, g.games_on_file ? 'Nothing on your calendar for the next 90 days. Add your next games, races and competitions and the calendar colours itself around them.' : 'Add your games, races and competitions and the calendar colours itself: green is the full workout, yellow one set fewer, red half the sets.'),
+  return h('div', { class: 'c-note row', style: 'align-items:center;gap:4px 8px;flex-wrap:wrap' },
+    h('span', { class: 'small', style: 'flex:1 1 220px' }, g.games_on_file ? 'Nothing on your calendar for the next 90 days. Add your next games, races and competitions and the calendar colours itself around them.' : 'Add your games, races and competitions and the calendar colours itself: green is the full workout, yellow one set fewer, red half the sets.'),
     h('div', { class: 'row', style: 'gap:6px' }, btn('Add games', () => show('profile', 'c-games'), 'ghost'), btn('Not now', () => { prefs.games_prompt_off = true; savePrefs(); render(); }, 'ghost')));
 }
 // The banner on a workout that falls on a yellow or red day: the same exercises, fewer sets.
@@ -788,12 +791,15 @@ function rowsFor(x) {
   const n = Math.max(x.target_sets || 1, rows.length);
   return Array.from({ length: Math.min(n, 99) }, (_, i) => rows[i] ?? { weight: '', reps: '', done: false });
 }
-// Blank weight uses the weight of the set before it today, else today's weight from a tested max, else last time's
-// weight for that set; blank reps use the target.
+// Blank weight uses the weight of the set before it today, else today's weight from a tested max, else the load the
+// coach typed when it is a plain number of pounds ("35 lb"), else last time's weight for that set; blank reps use the target.
+const typedLoad = (x) => { const m = /^\s*(\d{1,4}(?:\.\d+)?)\s*(?:lb|lbs|pounds|#)?\s*$/i.exec(x.load_text ?? ''); return m ? Number(m[1]) : null; };
 const defaultWeight = (x, i) => {
   const before = (draft?.sets[x.id] ?? []).slice(0, i).reverse().find((r) => r.done && r.weight != null && r.weight !== '');
   if (before) return Number(before.weight);
   if (x.load?.lb != null) return x.load.lb;                                  // a step is already in the weight from the max
+  const typed = typedLoad(x);
+  if (typed != null) return typed;
   const last = x.last?.sets?.[i]?.weight ?? x.last?.sets?.at(-1)?.weight ?? null;
   return last != null && x.progression?.weight_lb ? Math.max(0, last + x.progression.weight_lb) : last;   // last time's weight plus the coach-approved step
 };
@@ -836,28 +842,40 @@ function routineBlock(r, label) {
 }
 
 let sessionTick = null;   // the session bar's clock
+let cueFor = null;        // the exercise whose cue the focus screen last played on its own
 // One exercise over time (GET /app/api/exercises/:id/history): the bests, a bar per session for its best estimated max
 // (or its heaviest set), then every session set by set with whatever the athlete recorded on each.
 async function openHistory(x) {
   const hist = await api('GET', `/app/api/exercises/${x.exercise_id}/history`);
-  const tile = (n, label) => h('div', { class: 'c-sum-tile' }, h('span', { class: 'c-sum-n' }, n), h('span', { class: 'c-sum-l' }, label));
   const b = hist.best;
   const points = [...hist.sessions].reverse().map((s) => ({ v: s.e1rm ?? s.top_weight, date: s.date })).filter((p) => p.v);
   const hi = Math.max(1, ...points.map((p) => p.v)), lo = Math.min(...points.map((p) => p.v));
   const est = points.length && hist.sessions.some((s) => s.e1rm);
-  const chart = points.length > 1 ? h('div', { class: 'stack-tight' },
-    h('div', { class: 'c-hbars', role: 'img', 'aria-label': `${est ? 'Estimated max' : 'Heaviest set'} by session, oldest first: ${points.map((p) => `${shortDate(p.date)} ${p.v} lb`).join(', ')}` },
+  // Avg: the average weight of every set on the sheet (OVR shows Best and Avg over the graph).
+  const weights = hist.sessions.flatMap((s) => s.sets.map((r) => r.weight)).filter((v) => v > 0);
+  const avg = weights.length ? Math.round((weights.reduce((n, v) => n + v, 0) / weights.length) * 10) / 10 : null;
+  const graph = points.length >= 3 ? h('div', { class: 'c-hgraph stack-tight' },
+    h('div', { class: 'c-hbars', role: 'img', 'aria-label': `${est ? 'Estimated max' : 'Heaviest set'} by day, oldest first: ${points.map((p) => `${shortDate(p.date)} ${p.v} lb`).join(', ')}` },
       points.map((p) => h('span', { class: 'c-hbar', style: `height:${Math.round(28 + 72 * (hi === lo ? 1 : (p.v - lo) / (hi - lo)))}%`, title: `${shortDate(p.date)}: ${p.v} lb` }))),
-    h('div', { class: 'row small muted', style: 'justify-content:space-between' }, h('span', null, shortDate(points[0].date)), h('span', null, est ? 'Estimated max by session' : 'Heaviest set by session'), h('span', null, shortDate(points.at(-1).date)))) : null;
+    h('div', { class: 'row small muted', style: 'justify-content:space-between' }, h('span', null, shortDate(points[0].date)), h('span', null, est ? 'Estimated max by day' : 'Heaviest set by day'), h('span', null, shortDate(points.at(-1).date))))
+    : h('div', { class: 'c-hgraph c-hgraph-empty' }, h('span', { class: 'strong muted' }, 'More data required'), h('span', { class: 'small muted' }, 'The graph appears once you have 3 dates'));
+  const day = (s, k) => {
+    const at = new Date(s.date), top = s.sets.reduce((best, r) => (r.weight > (best?.weight ?? -1) ? r : best), null) ?? s.sets[0];
+    return h('details', { class: 'c-hday', open: k === 0 ? '' : null },
+      h('summary', null, h('span', { class: 'c-hday-date' }, h('span', { class: 'c-hday-d' }, String(at.getDate())), h('span', { class: 'c-hday-m' }, at.toLocaleDateString('en-US', { month: 'short' }))),
+        h('span', { class: 'stack-tight grow' }, h('span', { class: 'c-hday-n' }, `${s.sets.length} ${s.sets.length === 1 ? 'set' : 'sets'}`), h('span', { class: 'small muted' }, top ? setText(top) : '')),
+        h('span', { class: 'c-hday-go', 'aria-hidden': 'true' }, playIcon())),
+      h('div', { class: 'c-hday-body stack-tight small' }, s.sets.map((r) => h('span', null, h('span', { class: 'muted' }, `Set ${r.set_no}: `), setFull(r))),
+        h('span', { class: 'muted' }, [s.workout, s.volume_lb ? `${s.volume_lb.toLocaleString()} lb moved` : null, s.e1rm ? `est. max ${s.e1rm} lb` : null].filter(Boolean).join(' · '))));
+  };
   const d = h('dialog', { class: 'c-notices-dlg', 'aria-label': `${hist.name} history` },
     h('div', { class: 'stack' },
-      h('div', { class: 'row', style: 'align-items:center;justify-content:space-between' }, h('h2', { class: 'dp-panel-title', style: 'margin:0' }, hist.name), btn('Close', () => d.close(), 'ghost')),
+      h('div', { class: 'row', style: 'align-items:center;justify-content:space-between;gap:12px' }, h('h2', { class: 'dp-panel-title', style: 'margin:0' }, hist.name), btn('Close', () => d.close(), 'ghost')),
       hist.sessions.length ? [
-        h('div', { class: 'c-sum-tiles', role: 'list' }, b.weight ? tile(lb(b.weight.value), 'heaviest') : null, b.e1rm ? tile(`${b.e1rm.value} lb`, 'est. max') : null, tile(String(hist.times), hist.times === 1 ? 'time' : 'times')),
-        chart,
-        hist.sessions.map((s) => h('div', { class: 'c-sum-ex' },
-          h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong grow' }, shortDate(s.date)), h('span', { class: 'small muted' }, [s.workout, s.volume_lb ? `${s.volume_lb.toLocaleString()} lb moved` : null].filter(Boolean).join(' · '))),
-          h('div', { class: 'small c-sum-sets' }, s.sets.map((r) => h('span', { class: 'c-sum-set' }, `${r.set_no}`, h('span', { class: 'muted' }, ' · '), setFull(r))))))
+        h('div', { class: 'c-hstats' }, h('span', { class: 'c-hstat' }, 'Best: ', h('b', null, b.weight ? String(b.weight.value) : '--'), b.weight ? ' lb' : ''), h('span', { class: 'c-hstat' }, 'Avg: ', h('b', null, avg != null ? String(avg) : '--'), avg != null ? ' lb' : '')),
+        graph,
+        h('div', null, h('div', { class: 'row', style: 'align-items:baseline;justify-content:space-between' }, h('h3', { class: 'dp-panel-title', style: 'margin:0 0 4px' }, 'Data'), h('span', { class: 'small muted' }, [b.e1rm ? `est. max ${b.e1rm.value} lb` : null, `${hist.times} ${hist.times === 1 ? 'time' : 'times'}`].filter(Boolean).join(' · '))),
+          hist.sessions.map(day))
       ] : h('p', { class: 'muted', style: 'margin:0' }, 'Nothing logged for this one yet. Your sets show here after your first workout with it.')));
   d.addEventListener('close', () => d.remove());
   document.body.append(d);
@@ -874,6 +892,10 @@ function renderLogger(w) {
   // only the workout. The calendar, prompts and cards step aside and a bar at the top keeps the clock, the sets logged
   // and the pounds moved in sight; "Show everything" brings the rest of the page back.
   const session = logging && !reopened && !state.fullView;
+  // The focus screen (owner's OVR screenshots: one thing in focus, a big number in a dial, Best and Avg under it, the
+  // reps logged below, END and NEXT fixed at the foot): one exercise at a time. "List" on the bar brings every card back.
+  const focusMode = session && prefs.log_view !== 'list';
+  document.body.classList.toggle('c-focus', focusMode);
   const startBtn = () => btn('Start workout', () => { draft.started = true; draft.started_at ??= new Date().toISOString(); saveDraft(); state.open = (w.exercises.find((x) => !exDone(x)) ?? w.exercises[0])?.id ?? null; render(); window.scrollTo(0, 0); say('Workout started. Log each set as you go.'); }, 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' });
   if (!state.open || !w.exercises.some((x) => x.id === state.open)) state.open = (w.exercises.find((x) => !exDone(x)) ?? w.exercises[0])?.id ?? null;
   const pct = home.progress?.total ? Math.round((home.progress.completed / home.progress.total) * 100) : 0;
@@ -932,7 +954,21 @@ function renderLogger(w) {
   // One line per set: − weight + · − reps + · Log, so a set is one tap when the numbers are right and never needs the
   // keyboard when they aren't (the steps are 2.5 lb, the owner's choice, and 1 rep; the boxes still take typing). Under it, what that set was
   // last time. A logged set opens its extras where the athlete tracks them: how hard it was, and a note.
+  const patchSet = (x, i, more) => { const all = rowsFor(x); all[i] = { ...all[i], ...more }; draft.sets[x.id] = all; saveDraft(); };
+  // What the athlete tracks on a logged set (workout settings): effort chips and a note, open on the set just logged,
+  // a line to tap on the earlier ones.
+  function extrasFor(x, i, r, lastDone, redraw) {
+    const track = tracking();
+    if (!(track.effort || track.notes) || !r.done) return null;
+    if (i !== lastDone && state.extrasOpen !== `${x.id}:${i}`) return h('button', { type: 'button', class: 'c-set-more small muted', onClick: () => { state.extrasOpen = `${x.id}:${i}`; redraw(); } }, setExtras(r) || 'Add effort or a note');
+    const chips = track.effort ? h('div', { class: 'c-effort c-effort--set', role: 'radiogroup', 'aria-label': `How hard was set ${i + 1}? 1 is very easy, 10 is all out` },
+      Array.from({ length: 10 }, (_, k) => k + 1).map((n) => h('button', { type: 'button', role: 'radio', class: 'c-effort-n', 'aria-checked': String(Number(r.rpe) === n), 'aria-label': `${n}: ${RPE_WORDS[n]}`,
+        onClick: () => { patchSet(x, i, { rpe: Number(r.rpe) === n ? null : n }); say(Number(r.rpe) === n ? 'Effort cleared.' : `Set ${i + 1} effort ${n}.`); redraw(); } }, String(n)))) : null;
+    const noteIn = track.notes ? h('input', { class: 'dp-input', maxlength: '200', value: r.note ?? '', placeholder: 'A note on this set', 'aria-label': `Note on ${x.name} set ${i + 1}`, onInput: (e) => patchSet(x, i, { note: e.target.value }) }) : null;
+    return h('div', { class: 'c-set-extras stack-tight' }, chips ? h('span', { class: 'small muted' }, 'How hard was that set?') : null, chips, noteIn);
+  }
   function drawSets(x, setsBox, focus) {
+    if (focusMode) return redrawCards();
     const rows = rowsFor(x);
     const counted = x.target_reps != null;
     const lastDone = rows.reduce((at, r, i) => (r.done ? i : at), -1);
@@ -940,8 +976,7 @@ function renderLogger(w) {
       const dw = defaultWeight(x, i);
       const wIn = h('input', { class: 'dp-input c-num', type: 'number', inputmode: 'decimal', min: '0', max: '2000', step: '0.5', value: r.weight === '' || r.weight == null ? '' : String(r.weight), placeholder: dw != null ? String(dw) : '0', 'aria-label': `${x.name} set ${i + 1} weight in pounds` });
       const rIn = h('input', { class: 'dp-input c-num', type: 'number', inputmode: 'numeric', min: '0', max: '500', step: '1', value: r.reps === '' || r.reps == null ? '' : String(r.reps), placeholder: x.target_reps != null ? String(x.target_reps) : 'reps', 'aria-label': `${x.name} set ${i + 1} reps` });
-      const patch = (more) => { const all = rowsFor(x); all[i] = { ...all[i], ...more }; draft.sets[x.id] = all; saveDraft(); };
-      const keep = () => patch({ weight: wIn.value, reps: rIn.value });
+      const keep = () => patchSet(x, i, { weight: wIn.value, reps: rIn.value });
       wIn.addEventListener('input', keep); rIn.addEventListener('input', keep);
       // A step starts from what the box shows: the typed number, else the suggested one.
       const step = (el, by, start, max, what) => h('button', { type: 'button', class: 'c-step', 'aria-label': `${by > 0 ? 'More' : 'Less'} ${what}, ${x.name} set ${i + 1}`, onClick: () => {
@@ -952,21 +987,7 @@ function renderLogger(w) {
       } }, by > 0 ? '+' : '−');
       const tick = h('button', { type: 'button', class: 'dp-ex-log c-tick', 'aria-pressed': String(!!r.done), 'data-set': String(i), 'aria-label': `${r.done ? 'Logged' : 'Log'} ${x.name} set ${i + 1}`, onClick: () => toggleSet(x, i, setsBox, wIn.value, rIn.value) }, r.done ? '✓' : 'Log');
       const was = x.last?.sets?.[i];
-      // The extras: open on the set just logged, a line to tap on the earlier ones.
-      const track = tracking();
-      let extras = null;
-      if ((track.effort || track.notes) && r.done) {
-        const openNow = i === lastDone || state.extrasOpen === `${x.id}:${i}`;
-        if (openNow) {
-          const chips = track.effort ? h('div', { class: 'c-effort c-effort--set', role: 'radiogroup', 'aria-label': `How hard was set ${i + 1}? 1 is very easy, 10 is all out` },
-            Array.from({ length: 10 }, (_, k) => k + 1).map((n) => h('button', { type: 'button', role: 'radio', class: 'c-effort-n', 'aria-checked': String(Number(r.rpe) === n), 'aria-label': `${n}: ${RPE_WORDS[n]}`,
-              onClick: () => { patch({ rpe: Number(r.rpe) === n ? null : n }); say(Number(r.rpe) === n ? 'Effort cleared.' : `Set ${i + 1} effort ${n}.`); drawSets(x, setsBox); } }, String(n)))) : null;
-          const noteIn = track.notes ? h('input', { class: 'dp-input', maxlength: '200', value: r.note ?? '', placeholder: 'A note on this set', 'aria-label': `Note on ${x.name} set ${i + 1}`, onInput: (e) => patch({ note: e.target.value }) }) : null;
-          extras = h('div', { class: 'c-set-extras stack-tight' }, chips ? h('span', { class: 'small muted' }, 'How hard was that set?') : null, chips, noteIn);
-        } else {
-          extras = h('button', { type: 'button', class: 'c-set-more small muted', onClick: () => { state.extrasOpen = `${x.id}:${i}`; drawSets(x, setsBox); } }, setExtras(r) || 'Add effort or a note');
-        }
-      }
+      const extras = extrasFor(x, i, r, lastDone, () => drawSets(x, setsBox));
       return h('div', { class: `c-set-wrap${r.done ? ' c-set--done' : ''}` },
         h('div', { class: 'c-set' }, h('span', { class: 'c-set-no', 'aria-hidden': 'true' }, String(i + 1)),
           counted ? [h('span', { class: 'c-stepper' }, step(wIn, -WEIGHT_STEP, dw ?? 0, 2000, 'weight'), wIn, step(wIn, WEIGHT_STEP, dw ?? 0, 2000, 'weight'), h('span', { class: 'c-unit' }, 'lb')),
@@ -1047,6 +1068,151 @@ function renderLogger(w) {
   const restOfGroup = (g) => { const secs = g.map((e) => e.rest_seconds).filter((s) => s != null); return secs.length ? { rest_seconds: Math.max(...secs) } : null; };
   const groupHeading = (x) => h('div', { class: 'sf-group' }, groupTitle(x),
     flowOf(x) ? h('span', { style: 'text-transform:none;letter-spacing:0;font-weight:400;color:var(--steel-muted)' }, ` · one set of each${x.group_kind === 'circuit' ? ' in turn' : ''}, then rest`) : null);
+  // ---- The focus screen ----
+  // The exercise in focus: the one picked, else the first with a set left, else the last.
+  const inFocus = () => w.exercises.find((e) => e.id === state.open) ?? w.exercises.find((e) => !exDone(e)) ?? w.exercises.at(-1);
+  let focusNow = null;   // { x, i, wIn, rIn } for the set the foot's main button logs
+  // The set dial: a segment per set (green once logged, bright for the one up now), and in the middle what the next
+  // tap logs. With more than 16 sets the ring is one arc that fills.
+  function setDial(rows, i) {
+    const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 200 200'); svg.setAttribute('class', 'c-dial-ring'); svg.setAttribute('aria-hidden', 'true');
+    const arc = (cls, len, at) => { const c = document.createElementNS(ns, 'circle'); c.setAttribute('cx', '100'); c.setAttribute('cy', '100'); c.setAttribute('r', '88'); c.setAttribute('pathLength', '100'); c.setAttribute('class', cls);
+      c.setAttribute('stroke-dasharray', `${len} ${100 - len}`); c.setAttribute('stroke-dashoffset', String(-at)); c.setAttribute('transform', 'rotate(-90 100 100)'); svg.append(c); };
+    const n = rows.length, done = rows.filter((r) => r.done).length;
+    if (n > 16) { arc('c-dial-seg', 100, 0); if (done) arc('c-dial-seg c-dial-seg--done', (done / n) * 100, 0); }
+    else { const gap = n === 1 ? 0 : 2.4, len = 100 / n - gap; rows.forEach((r, k) => arc(`c-dial-seg${r.done ? ' c-dial-seg--done' : k === i ? ' c-dial-seg--now' : ''}`, len, k * (100 / n) + gap / 2)); }
+    return svg;
+  }
+  function focusCard(x) {
+    const rows = rowsFor(x), i = rows.findIndex((r) => !r.done), r = i >= 0 ? rows[i] : null;
+    const counted = x.target_reps != null, n = w.exercises.indexOf(x) + 1;
+    const dw = r ? defaultWeight(x, i) : null;
+    const big = h('span', { class: 'c-dial-n' }), unit = h('span', { class: 'c-dial-u' }), sub = h('span', { class: 'c-dial-sub' });
+    let steppers = null;
+    focusNow = { x, i, wIn: null, rIn: null };
+    if (r && counted) {
+      const wIn = h('input', { class: 'dp-input c-num c-num--big', type: 'number', inputmode: 'decimal', min: '0', max: '2000', step: '0.5', value: r.weight === '' || r.weight == null ? '' : String(r.weight), placeholder: dw != null ? String(dw) : '0', 'aria-label': `${x.name} set ${i + 1} weight in pounds` });
+      const rIn = h('input', { class: 'dp-input c-num c-num--big', type: 'number', inputmode: 'numeric', min: '0', max: '500', step: '1', value: r.reps === '' || r.reps == null ? '' : String(r.reps), placeholder: String(x.target_reps), 'aria-label': `${x.name} set ${i + 1} reps` });
+      focusNow.wIn = wIn; focusNow.rIn = rIn;
+      // The middle of the dial says what the main button will log: the weight, or the reps when there's no weight.
+      const show = () => {
+        const wv = wIn.value !== '' ? Number(wIn.value) : dw, rv = rIn.value !== '' ? Number(rIn.value) : x.target_reps;
+        const weighted = wv != null && Number.isFinite(wv) && wv > 0;
+        big.textContent = weighted ? String(Number.isInteger(wv) ? wv : Math.round(wv * 10) / 10) : String(rv ?? '–');
+        unit.textContent = weighted ? 'lb' : rv === 1 ? 'rep' : 'reps';
+        sub.textContent = weighted ? `× ${rv ?? '–'} ${rv === 1 ? 'rep' : 'reps'}` : 'No weight';
+      };
+      const keep = () => { patchSet(x, i, { weight: wIn.value, reps: rIn.value }); show(); };
+      wIn.addEventListener('input', keep); rIn.addEventListener('input', keep);
+      const step = (el, by, start, max, what) => h('button', { type: 'button', class: 'c-step c-step--big', 'aria-label': `${by > 0 ? 'More' : 'Less'} ${what}`, onClick: () => {
+        const cur = el.value !== '' ? Number(el.value) : start;
+        const next = Math.min(max, Math.max(0, (Number.isFinite(cur) ? cur : 0) + by));
+        el.value = String(Number.isInteger(next) ? next : Math.round(next * 10) / 10);
+        keep();
+      } }, by > 0 ? '+' : '−');
+      const line = (label, el, by, start, max, what, u) => h('div', { class: 'c-fstep' }, h('span', { class: 'c-fstep-l' }, label), step(el, -by, start, max, what), el, step(el, by, start, max, what), h('span', { class: 'c-fstep-u' }, u));
+      steppers = h('div', { class: 'c-fsteps' }, line('Weight', wIn, WEIGHT_STEP, dw ?? 0, 2000, 'weight', 'lb'), line('Reps', rIn, 1, x.target_reps ?? 0, 500, 'reps', ''));
+      show();
+    } else if (r) {                                   // a time, a distance or a max: nothing to count, the set is ticked
+      const what = x.distance || timeText(x.time_seconds) || (x.reps && !/^\d+$/.test(String(x.reps)) ? String(x.reps) : '');
+      if (what && what.length <= 10) { big.textContent = what; big.classList.add('c-dial-n--text'); sub.textContent = 'Log it when done'; }
+      else { big.textContent = String(i + 1); unit.textContent = `of ${rows.length}`; sub.textContent = what || x.prescription || ''; }
+    } else {
+      big.textContent = '✓'; unit.textContent = ''; sub.textContent = 'Every set logged';
+    }
+    if (logging && x.cue?.audio && !draft?.log_id && !exStarted(x) && cueFor !== x.id) { cueFor = x.id; playCue(x, { auto: true }).catch(() => {}); }
+    const was = r ? x.last?.sets?.[i] ?? null : null;
+    const hasHistory = !!(x.exercise_id && (x.last?.sets?.length || x.best_weight));
+    const tile = (label, value, mark) => h(hasHistory ? 'button' : 'div', { class: 'c-ftile', ...(hasHistory ? { type: 'button', 'aria-label': `${label} ${value}. Open ${x.name} history`, onClick: (e) => busy(e.currentTarget, () => openHistory(x)) } : {}) },
+      h('span', { class: 'c-ftile-l' }, mark ? h('span', { 'aria-hidden': 'true' }, `${mark} `) : null, label), h('span', { class: 'c-ftile-v' }, value));
+    const lines = [
+      x.planned_sets ? `${x.target_sets} ${x.target_sets === 1 ? 'set' : 'sets'} today (${x.planned_sets} planned)` : null,
+      x.swapped ? (x.swapped.by_kind === 'athlete' ? `Your pick instead of ${x.swapped.from}` : x.swapped.by_kind === 'equipment' ? `For your gear instead of ${x.swapped.from}` : `Swapped in by ${x.swapped.by ? `Coach ${x.swapped.by.split(' ')[0]}` : 'your coach'} instead of ${x.swapped.from}`) : null,
+      x.progression?.text ? `Your progression: ${x.progression.text} on the plan` : null,
+      x.load && !x.load.missing ? x.load.text : null].filter(Boolean);
+    const demo = !!x.video_url && !exStarted(x);
+    return h('section', { class: 'c-focus-card', 'aria-label': `${x.name}, exercise ${n} of ${w.exercises.length}` },
+      h('div', { class: 'c-focus-head' }, h('span', { class: 'c-focus-count' }, `${n} of ${w.exercises.length}`), h('h2', { class: 'c-focus-title' }, x.name)),
+      x.group_label ? (flowOf(x) ? groupHeading(x) : h('div', { class: 'sf-group' }, groupTitle(x))) : null,
+      // The demo still plays as the exercise comes up (owner's rule), then steps aside once the first set is logged.
+      demo ? demoVideo(x) : null,
+      x.note ? h('p', { class: 'c-cue strong', style: 'margin:0' }, `Coach's note: ${x.note}`) : null,
+      rxTable(x, { compact: true }),
+      lines.length ? h('div', { class: 'stack-tight small muted' }, lines.map((l) => h('span', null, l))) : null,
+      x.form_check ? h('span', { class: 'small strong', style: x.form_check_sent ? 'color:var(--green-bright)' : 'color:var(--amber)' }, x.form_check_sent ? '✓ Form check sent' : 'Form check asked: film a set from Demo & more') : null,
+      h('div', { class: `c-dial${demo ? ' c-dial--sm' : ''}`, role: 'img', 'aria-label': r ? `Set ${i + 1} of ${rows.length}` : 'Every set logged' }, setDial(rows, i),
+        h('div', { class: 'c-dial-mid' }, r ? h('span', { class: 'c-dial-set' }, `Set ${i + 1} of ${rows.length}`) : null, h('span', { class: 'c-dial-big' }, big, unit), sub)),
+      steppers,
+      h('div', { class: 'c-ftiles' }, tile('Best', x.best_weight ? lb(x.best_weight) : '--', '🏆'), tile('Last time', was ? setText(was).replace(' reps', '') : x.last?.sets?.length ? setText(x.last.sets.at(-1)).replace(' reps', '') : '--')),
+      rows.length < 99 ? h('div', { class: 'row', style: 'justify-content:center' }, btn('Add a set', () => { const all = rowsFor(x); all.push({ weight: '', reps: '', done: false }); draft.sets[x.id] = all; saveDraft(); redrawCards(); }, 'ghost')) : null);
+  }
+  // Under the card, the sets logged so far (OVR's list of reps): tap the tick to take one back; effort and a note
+  // open under the latest where the athlete tracks them.
+  function focusLog(x) {
+    const rows = rowsFor(x), lastDone = rows.reduce((at, r, i) => (r.done ? i : at), -1);
+    const done = rows.map((r, i) => (r.done ? [r, i] : null)).filter(Boolean);
+    return h('section', { class: 'c-focus-log', 'aria-label': 'Sets logged' },
+      done.length ? done.map(([r, i]) => h('div', { class: 'c-flog' },
+        h('div', { class: 'c-flog-row' }, h('span', { class: 'c-set-no c-flog-no', 'aria-hidden': 'true' }, String(i + 1)), h('span', { class: 'c-flog-v grow' }, x.target_reps != null ? setText(r) : 'Done'),
+          h('button', { type: 'button', class: 'c-flog-undo', 'aria-label': `Take back ${x.name} set ${i + 1}`, onClick: () => toggleSet(x, i, null, r.weight ?? '', r.reps ?? '') }, 'Undo')),
+        extrasFor(x, i, r, lastDone, redrawCards)))
+        : h('p', { class: 'small muted', style: 'margin:0;text-align:center' }, 'Your sets show here as you log them.'));
+  }
+  // The exercises as chips across the top (OVR's group chips): tap one to go to it; a tick once it's done.
+  const focusChips = (x) => h('div', { class: 'c-fchips', role: 'tablist', 'aria-label': 'Exercises' }, w.exercises.map((e, k) => h('button', { type: 'button', role: 'tab', class: 'c-fchip', 'aria-selected': String(!state.ending && e.id === x.id),
+    onClick: () => { state.ending = false; state.open = e.id; redrawCards(); window.scrollTo(0, 0); } }, exDone(e) ? '✓ ' : `${k + 1} · `, e.name)));
+  // Demo & more: what the cards hold beside the sets (the demo, the coach's cue, a form check, the cue text, a swap).
+  function openMore(x) {
+    const clipHolder = h('div');
+    const d = h('dialog', { class: 'c-notices-dlg', 'aria-label': `${x.name}: demo and more` },
+      h('div', { class: 'stack' }, h('div', { class: 'row', style: 'align-items:center;justify-content:space-between;gap:12px' }, h('h2', { class: 'dp-panel-title', style: 'margin:0' }, x.name), btn('Close', () => d.close(), 'ghost')),
+        x.video_url !== undefined ? demoVideo(x) : null,
+        x.cue?.audio || x.cue?.clip ? h('div', { class: 'row wrap small', style: 'gap:8px;align-items:center' },
+          x.cue?.audio ? btn('🔊 Coach\'s cue', (e) => busy(e.currentTarget, () => playCue(x)), 'ghost') : null,
+          x.cue?.clip ? btn('Why this matters', (e) => busy(e.currentTarget, () => cueClip(x, clipHolder)), 'ghost') : null,
+          x.cue?.audio ? h('label', { class: 'row muted', style: 'gap:6px;min-height:44px' }, h('input', { type: 'checkbox', checked: prefs.voice, onChange: (e) => { prefs.voice = e.target.checked; savePrefs(); if (!prefs.voice) stopCue(); } }), 'Play the cue when an exercise comes up') : null) : null,
+        clipHolder, formCheckSend(x),
+        x.note ? h('p', { class: 'c-cue strong' }, `Coach's note: ${x.note}`) : null,
+        x.instructions ? h('p', { class: 'c-cue' }, x.instructions) : null,
+        x.exercise_id && (x.last?.sets?.length || x.best_weight) ? h('div', { class: 'row' }, btn('History', (e) => busy(e.currentTarget, async () => { d.close(); await openHistory(x); }), 'secondary')) : null,
+        altBlock(x)));
+    d.addEventListener('close', () => { d.remove(); stopCue(); });
+    document.body.append(d);
+    d.showModal();
+  }
+  // The foot (OVR's END and NEXT): Demo & more, End, and the one button that logs the set up now, moves on when the
+  // exercise is done, and finishes when everything is. The button itself stays put, so the thumb never moves.
+  const mainBtn = h('button', { type: 'button', class: 'dp-btn dp-btn--primary c-fbar-main', onClick: () => {
+    const f = focusNow; if (!f) return;
+    const rows = rowsFor(f.x), i = rows.findIndex((r) => !r.done);
+    if (i >= 0) return toggleSet(f.x, i, null, f.wIn?.value ?? '', f.rIn?.value ?? '');
+    const next = w.exercises.find((e) => !exDone(e));
+    if (next) { state.open = next.id; redrawCards(); window.scrollTo(0, 0); return; }
+    state.ending = true; redrawCards(); window.scrollTo(0, 0);
+  } });
+  const focusBar = focusMode ? h('div', { class: 'c-fbar', role: 'group', 'aria-label': 'This exercise' },
+    h('button', { type: 'button', class: 'dp-btn dp-btn--secondary c-fbar-more', 'aria-label': 'Demo, cue and more for this exercise', onClick: () => { if (focusNow) openMore(focusNow.x); } }, playIcon(), h('span', null, 'Demo')),
+    h('button', { type: 'button', class: 'dp-btn dp-btn--secondary c-fbar-end', onClick: () => { state.ending = true; redrawCards(); window.scrollTo(0, 0); } }, 'End'),
+    mainBtn) : null;
+  function redrawFocus() {
+    stopCue();
+    if (!state.open && w.exercises.every(exDone)) state.ending = true;   // the last set of the last exercise: straight to the finish
+    const x = inFocus();
+    if (state.ending) {
+      fill(list, focusChips(x), h('div', { class: 'stack' }, routineBlock(w.cooldown, 'Cool-down'), finishPanel, finishBtn,
+        h('div', { class: 'row', style: 'justify-content:center' }, btn('Back to the workout', () => { state.ending = false; state.open = x.id; redrawCards(); window.scrollTo(0, 0); }, 'ghost'))));
+      focusBar.hidden = true; document.body.classList.remove('c-focus-bar');
+    } else {
+      state.open = x.id;
+      fill(list, focusChips(x), focusCard(x), focusLog(x));
+      const rows = rowsFor(x), i = rows.findIndex((r) => !r.done), next = w.exercises.find((e) => !exDone(e));
+      mainBtn.textContent = i >= 0 ? `Log set ${i + 1}` : next ? 'Next' : 'Finish';
+      focusBar.hidden = false; document.body.classList.add('c-focus-bar');
+      list.querySelector('.c-fchip[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }
+    drawCount(); drawSession();
+  }
   // The session bar: the clock since Start workout, sets logged of the sets planned, and the pounds moved so far.
   const sClock = h('span', { class: 'c-sess-n' }), sSets = h('span', { class: 'c-sess-n' }), sLb = h('span', { class: 'c-sess-n' });
   const num = (v) => (v === '' || v == null ? null : Number(v));
@@ -1062,11 +1228,12 @@ function renderLogger(w) {
   const cell = (n, label) => h('div', { class: 'c-sess-cell' }, n, h('span', { class: 'c-sess-l' }, label));
   const sessionBar = session ? h('div', { class: 'c-sess', role: 'group', 'aria-label': 'This workout so far' },
     h('div', { class: 'c-sess-title' }, h('span', { class: 'c-sess-name' }, w.title),
+      h('button', { type: 'button', class: 'c-sess-link', 'aria-label': focusMode ? 'Show every exercise as a list' : 'Show one exercise at a time', onClick: () => { prefs.log_view = focusMode ? 'list' : 'focus'; savePrefs(); state.ending = false; render(); window.scrollTo(0, 0); } }, focusMode ? 'List' : 'Focus'),
       h('button', { type: 'button', class: 'c-sess-link', onClick: () => openWorkoutSettings(() => render()) }, 'Settings'),
-      h('button', { type: 'button', class: 'c-sess-link', onClick: () => { state.fullView = true; render(); } }, 'Show everything')),
+      focusMode ? null : h('button', { type: 'button', class: 'c-sess-link', onClick: () => { state.fullView = true; render(); } }, 'Show everything')),
     h('div', { class: 'c-sess-cells' }, cell(sClock, 'time'), cell(sSets, 'sets'), cell(sLb, 'lb moved'))) : null;
   const list = h('div', { class: `stack${logging ? '' : ' c-plan'}`, style: logging ? 'gap:8px' : 'gap:6px' });   // before Start workout the plan reads as a compact list (owner's ask)
-  const redrawCards = () => { stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); drawSession(); };
+  const redrawCards = () => { if (focusMode) return redrawFocus(); stopCue(); cards.clear(); fill(list, withGroups(w.exercises, (x) => { const c = card(x); cards.set(x.id, c); return c; }, groupHeading)); drawCount(); drawSession(); };
   // Only the exercise's heading changes after a set, so a playing demo video and the focus are left alone.
   const redrawHead = (x) => { const box = cards.get(x.id); if (!box) return; box.querySelector('.c-ex-head').replaceWith(headOf(x)); box.classList.toggle('c-ex--done', exDone(x)); };
 
@@ -1081,9 +1248,6 @@ function renderLogger(w) {
   drawEffort();
   const notes = h('textarea', { class: 'dp-input', id: 'notes', placeholder: 'How did it feel? Anything your coach should know?', onInput: (e) => { draft.notes = e.target.value; saveDraft(); } });
   notes.value = draft.notes || '';
-  const restToggle = h('input', { type: 'checkbox', checked: prefs.rest, onChange: (e) => { prefs.rest = e.target.checked; savePrefs(); if (!prefs.rest) stopRest(); } });
-  const restLen = h('select', { class: 'select', style: 'width:auto;min-width:96px', 'aria-label': 'Rest length', onChange: (e) => { prefs.rest_sec = Number(e.target.value); savePrefs(); } },
-    [45, 60, 90, 120, 150, 180].map((s) => h('option', { value: String(s), selected: s === prefs.rest_sec }, clock(s))));
   const finishBtn = btn(reopened ? 'Save changes' : 'Finish workout', (e) => busy(e.currentTarget, async () => {
     const left = w.exercises.filter((x) => !exDone(x) && !exStarted(x));
     if (!reopened && left.length === w.exercises.length) throw new Error('Log at least one set before you finish.');
@@ -1093,8 +1257,13 @@ function renderLogger(w) {
     await finish(draft, w);
   }), 'primary', { class: 'dp-btn dp-btn--primary dp-btn--block', style: 'min-height:52px' });
 
+  const finishPanel = logging ? h('div', { class: 'dp-panel stack' },
+    h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
+    h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
+    h('button', { type: 'button', class: 'c-sess-link', style: 'align-self:flex-start', onClick: () => openWorkoutSettings(() => render()) }, 'Workout settings: rest timer, effort and notes on each set')) : null;
   redrawCards();
   const blocked = reopened ? null : strayPanel();
+  const early = !focusMode || !hasSets(draft);   // on the focus screen the day's notes and the warm-up step aside once a set is logged
   const chrome = !reopened && !session;   // the calendar, the prompts and the cards around the workout
   fill(view, session ? null : top(),
     sessionBar,
@@ -1104,9 +1273,9 @@ function renderLogger(w) {
       h('div', { class: 'small muted' }, reopened ? `Reopened: ${w.program_name ?? home.program?.name ?? ''}` : `Hi ${home.client.first_name}. Week ${w.week}, day ${w.day} of ${home.program.name}`),
       h('h1', { class: 'c-title' }, w.title),
       !reopened && whenText(w) ? h('div', { class: `small strong${w.status === 'missed' ? ' warn-text' : ''}` }, whenText(w)) : null),
-    reopened ? null : gameDayBanner(w),   // a yellow or red day (gameweek.js): the sets below are already cut
+    reopened || !early ? null : gameDayBanner(w),   // a yellow or red day (gameweek.js): the sets below are already cut
     // The coach's instructions for the day (version 75): read first, before anything else.
-    w.instructions ? h('div', { class: 'c-note', style: 'white-space:pre-line' }, h('div', { class: 'small strong', style: 'margin-bottom:4px' }, 'From your coach'), w.instructions) : null,
+    w.instructions && early ? h('div', { class: 'c-note', style: 'white-space:pre-line' }, h('div', { class: 'small strong', style: 'margin-bottom:4px' }, 'From your coach'), w.instructions) : null,
     pendingBox,
     !reopened && state.pickWorkout && home.workout ? h('div', { class: 'c-note row', style: 'align-items:center' }, h('span', { class: 'grow' }, `You opened this one from your calendar. ${home.workout.title} is what's up ${home.workout.status === 'today' ? 'today' : 'next'}.`),
       btn(`Back to ${home.workout.title}`, () => openPick(home.workout.id), 'ghost')) : null,
@@ -1116,16 +1285,12 @@ function renderLogger(w) {
     blocked,
     chrome ? readinessCard(home.readiness) : null,
     logging ? null : h('div', { class: 'stack-tight' }, startBtn(), h('p', { class: 'small muted', style: 'margin:0;text-align:center' }, `${w.exercises.length} ${w.exercises.length === 1 ? 'exercise' : 'exercises'} · tap one to see the demo and your last numbers`)),
-    reopened ? null : routineBlock(w.warmup, 'Warm-up'),
+    reopened || !early ? null : routineBlock(w.warmup, 'Warm-up'),
     logging && !session ? count : null, list,
-    reopened ? null : routineBlock(w.cooldown, 'Cool-down'),
-    logging ? h('div', { class: 'dp-panel stack' },
-      h('div', { class: 'stack-tight' }, h('div', { class: 'dp-label' }, 'How hard was it?'), effortBox, effortWord),
-      h('div', { class: 'dp-field' }, h('label', { class: 'dp-label', for: 'notes' }, 'Notes for your coach (optional)'), notes),
-      h('div', { class: 'row wrap small' }, h('label', { class: 'row', style: 'gap:8px;min-height:44px' }, restToggle, 'Rest timer after each set'), restLen,
-        w.exercises.some((x) => x.rest_seconds != null) ? h('span', { class: 'muted' }, 'Where your coach set a rest, that one is used.') : null),
-      h('div', { class: 'row' }, btn('Workout settings', () => openWorkoutSettings(() => render()), 'ghost'), h('span', { class: 'small muted', style: 'align-self:center' }, 'Effort and notes on each set'))) : null,
-    logging ? finishBtn : startBtn(),
+    reopened || focusMode ? null : routineBlock(w.cooldown, 'Cool-down'),
+    focusMode ? null : finishPanel,
+    focusMode ? null : logging ? finishBtn : startBtn(),
+    focusBar,
     state.fullView && !reopened && logging ? h('div', { class: 'row' }, h('span', { class: 'grow' }), btn('Back to just the workout', () => { state.fullView = false; render(); window.scrollTo(0, 0); }, 'ghost')) : null,
     chrome ? weeklyNoteCard(home) : null,
     chrome ? adjustmentsCard(home) : null,
@@ -1147,7 +1312,7 @@ async function finish(d, w) {
   const entry = { token: d.token, kind: d.log_id ? 'edit' : 'finish', workout_id: d.workout_id, log_id: d.log_id, request_id: d.request_id, title: d.title, body };
   setOutbox([...outbox().filter((x) => x.request_id !== entry.request_id), entry]);
   store.set(DRAFT_KEY(), null);
-  draft = null; state.open = null; state.details.clear(); state.fullView = false; state.extrasOpen = null;
+  draft = null; state.open = null; state.details.clear(); state.fullView = false; state.extrasOpen = null; state.ending = false; cueFor = null;
   state.pick = null; state.pickWorkout = null; state.calDay = null;
   stopRest();
   await flush();

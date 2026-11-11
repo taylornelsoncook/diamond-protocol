@@ -100,7 +100,9 @@ CREATE TABLE IF NOT EXISTS clients (
   password_hash TEXT,                    -- version 60: an athlete with their own email signs in to the portal; an optional password
   password_set_at TEXT,
   card_funding TEXT,                     -- version 88: the saved card's funding (credit, debit, prepaid, unknown): no card fee on debit or prepaid
-  reminder_hour INTEGER                  -- version 96: the athlete's own hour for the workout reminder (NULL = the business's push_reminder_hour, 0 = off)
+  reminder_hour INTEGER,                 -- version 96: the athlete's own hour for the workout reminder (NULL = the business's push_reminder_hour, 0 = off)
+  track_set_rpe INTEGER NOT NULL DEFAULT 0,    -- version 99: the athlete's workout settings: record how hard each set was
+  track_set_note INTEGER NOT NULL DEFAULT 0    -- version 99: ... and a note on a set
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -1476,6 +1478,8 @@ CREATE TABLE IF NOT EXISTS workout_sets (
   weight REAL,
   reps INTEGER,
   created_at TEXT NOT NULL,
+  rpe REAL,                                                   -- version 99: how hard this set was, 1 to 10 in halves (optional; the athlete turns it on)
+  note TEXT,                                                  -- version 99: the athlete's own note on this set (optional, up to 200 characters)
   UNIQUE (workout_log_id, workout_exercise_id, set_no)
 );
 CREATE INDEX IF NOT EXISTS workout_sets_exercise ON workout_sets(exercise_id);

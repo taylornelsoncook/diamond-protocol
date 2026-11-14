@@ -31,19 +31,26 @@ export function legalDocs(ctx) {
 }
 // The drafted wording (docs/legal/*.txt, written for the owner's lawyer to review): the owner presses "Use the drafted
 // wording" on Settings and the text lands in the box with the business's details filled in, to read, change and save.
-// Nothing is published by this: the owner still saves. {{contact_email}} is the sending address's email part.
+// Nothing is published by this: the owner still saves. {{contact_email}} is the owner's contact_email setting, or else
+// the sending address's email part.
 export const DRAFT_KINDS = ['waiver', 'terms', 'privacy', 'media-release', 'card-consent'];
 export function drafts(ctx) {
   const from = String(ctx.mail?.from ?? '');
-  const email = (from.match(/<([^>]+)>/)?.[1] ?? (from.includes('@') ? from : '')).trim() || '[your contact email]';
-  const fill = { business_name: getSetting(ctx, 'business_name'), business_address: getSetting(ctx, 'business_address') || '[your business address]', contact_email: email,
+  // The contact email is the owner's own choice (Hours & settings → Contact email) or else the sending address.
+  const email = String(getSetting(ctx, 'contact_email') ?? '').trim() || (from.match(/<([^>]+)>/)?.[1] ?? (from.includes('@') ? from : '')).trim() || '[your contact email]';
+  // No postal address on file yet (owner, November 14: "we don't have a postal yet"): the address lines are left out
+  // of the filled-in text, so nothing a family reads shows a bracket; they come back by themselves once the address is
+  // typed in Hours & settings and the box is filled again.
+  const address = String(getSetting(ctx, 'business_address') ?? '').trim();
+  const fill = { business_name: getSetting(ctx, 'business_name'), business_address: address, contact_email: email,
     late_cancel_hours: getSetting(ctx, 'late_cancel_hours'), public_url: ctx.publicUrl || '' };
   const out = {};
   for (const kind of DRAFT_KINDS) {
-    const text = readFileSync(new URL(`../../docs/legal/${kind}.txt`, import.meta.url), 'utf8');
+    let text = readFileSync(new URL(`../../docs/legal/${kind}.txt`, import.meta.url), 'utf8');
+    if (!address) text = text.replace(/^\{\{business_address\}\}\r?\n/gm, '').replace(/ Our address is \{\{business_address\}\}\./g, '');
     out[kind.replace('-', '_')] = text.replace(/\{\{(\w+)\}\}/g, (_, k) => fill[k] ?? '').trim();
   }
-  return { ...out, filled_in: fill, note: 'Drafts for a lawyer to review, not legal advice. Saving them on Settings publishes them to families.' };
+  return { ...out, filled_in: fill, address_left_out: !address, note: 'Drafts for a lawyer to review, not legal advice. Saving them on Settings publishes them to families.' };
 }
 // What this parent still needs to accept (only published documents count).
 export function consentStatus(ctx, guardianId) {

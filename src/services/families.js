@@ -12,6 +12,7 @@ const DEFAULTS = {
   business_name: 'Diamond Protocol',
   share_results: 'reviewed',
   business_address: '',
+  contact_email: '',   // the email families are told to write to in the legal documents; empty = the sending address
   payment_instructions: 'Pay online with the link on this invoice, or mail a check payable to Diamond Protocol.',
   // Placeholders start with "[" and count as not yet published; parents aren't asked to accept them.
   terms_text: '[Your terms of service go here. Have a lawyer write them: what you provide, payment terms, cancellations, refunds and closing an account.]',
@@ -82,6 +83,7 @@ export function updateSettings(ctx, body) {
   if (body.share_results !== undefined) next.share_results = v.oneOf(body.share_results, 'share_results', ['reviewed', 'all']);
   if (body.help_text !== undefined) next.help_text = v.oneOf(body.help_text, 'help_text', ['on', 'off']);
   if (body.business_address !== undefined) next.business_address = v.str(body.business_address, 'business_address', { max: 400, optional: true }) ?? '';
+  if (body.contact_email !== undefined) next.contact_email = String(body.contact_email ?? '').trim() ? v.email(body.contact_email, 'contact_email') : '';
   if (body.payment_instructions !== undefined) next.payment_instructions = v.str(body.payment_instructions, 'payment_instructions', { max: 1000, optional: true }) ?? '';
   if (body.waiver_text !== undefined) {
     const text = v.str(body.waiver_text, 'waiver_text', { max: 100000 });   // the same as the terms and privacy policy, so the combined legal document fits

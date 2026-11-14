@@ -22,6 +22,10 @@ The owner confirmed the business is run today by Ad Astra Therapy and Performanc
 
 For the lawyer: confirm both registered names exactly as filed with the Colorado Secretary of State; confirm the move is a merger or an asset assignment and that signed waivers, releases and saved-card consents pass to the new company either way (the assignment document on the owners' site should list them); and say whether families should get a short notice of the change.
 
+## No postal address yet, November 14, 2026
+
+The business has no mailing address to publish yet. While the address box in Hours & settings is empty, the filled-in drafts leave the address lines out (the "Our address is" sentence in the terms and the address line under each signature block), so nothing families read shows a bracket. They come back by themselves the next time a box is filled after the address is typed in. For the lawyer: say whether the terms and privacy policy may be published without a postal address in the meantime, and note that group marketing emails need one at the bottom under CAN-SPAM, so those wait for it.
+
 ## How to put them in the app
 
 On Settings, each of the three text boxes has a **Use the drafted wording** button. It fills the box with the draft, with the business name, address, contact email, late-cancel window and web address filled in from your settings. Read it, change what the lawyer tells you to, then **Save**. Saving the waiver asks every family to sign the new version before their next booking; saving the terms or privacy policy asks every account holder to accept the new version.

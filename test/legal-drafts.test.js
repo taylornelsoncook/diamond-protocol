@@ -52,6 +52,26 @@ test('the owner gets the four drafts with the business filled in; coaches do not
   assert.match(r.body.privacy, /never sell/);
   assert.match(r.body.privacy, /123 Main St, Parker, CO 80134/);
   assert.doesNotMatch(r.body.waiver + r.body.terms + r.body.privacy, /\{\{/, 'every placeholder filled');
+  assert.equal(r.body.address_left_out, false);
+  // With no mailing address on file, the address lines are left out: nothing a family reads shows a bracket.
+  await owner('PATCH', '/v1/settings', { business_address: '' });
+  const bare = (await owner('GET', '/v1/legal/drafts')).body;
+  assert.equal(bare.address_left_out, true);
+  for (const k of ['waiver', 'terms', 'privacy', 'media_release']) {
+    assert.doesNotMatch(bare[k], /\[your|\{\{|Our address is/, `${k} with no address`);
+    assert.doesNotMatch(bare[k], /\n\n\n\n/, `${k} leaves no gap`);
+  }
+  assert.match(bare.terms, /a Colorado limited liability company\. You can reach us at hello@example\.org\./);
+  await owner('PATCH', '/v1/settings', { business_address: '123 Main St, Parker, CO 80134' });
+  // The owner's own contact email stands in for the sending address in every document; clearing it puts that back.
+  assert.equal((await owner('PATCH', '/v1/settings', { contact_email: 'not an email' })).status, 400);
+  assert.equal((await owner('PATCH', '/v1/settings', { contact_email: ' Owner@Example.com ' })).status, 200);
+  const own = (await owner('GET', '/v1/legal/drafts')).body;
+  for (const k of ['waiver', 'terms', 'privacy']) { assert.match(own[k], /owner@example\.com/, k); assert.doesNotMatch(own[k], /hello@example\.org/, k); }
+  assert.equal(own.filled_in.contact_email, 'owner@example.com');
+  assert.equal((await owner('GET', '/v1/settings')).body.contact_email, 'owner@example.com');
+  await owner('PATCH', '/v1/settings', { contact_email: '' });
+  assert.match((await owner('GET', '/v1/legal/drafts')).body.terms, /hello@example\.org/);
   assert.equal((await coach('GET', '/v1/legal/drafts')).status, 403);
   // The drafts don't publish anything on their own.
   const docs = await (await fetch(`${base}/portal/api/public/legal`)).json();

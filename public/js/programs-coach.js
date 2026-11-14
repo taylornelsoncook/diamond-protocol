@@ -248,7 +248,25 @@ export function workoutRow(l) {
       h('span', { class: 'small muted' }, bits.join(' · ')),
       l.bests?.length ? h('span', { class: 'small good-text' }, `New best: ${l.bests.map((b) => `${b.name} ${b.weight} lb (was ${b.previous})`).join(', ')}`) : null,
       l.notes ? h('span', { class: 'small pg-note' }, `“${l.notes}”`) : null),
-    h('span', { class: 'small muted', style: 'white-space:nowrap' }, ago(l.completed_at)));
+    h('div', { class: 'stack-tight', style: 'align-items:flex-end' }, h('span', { class: 'small muted', style: 'white-space:nowrap' }, ago(l.completed_at)),
+      l.sets ? btn('See the sets', (e) => busy(e.currentTarget, () => logSetsDialog(l)), 'ghost', { 'aria-label': `See the sets ${l.client_name} logged in ${l.workout_title}` }) : null));
+}
+// A finished workout set by set (GET /v1/clients/:id/workouts/:logId): the weight and reps of every set, and the effort
+// or note the athlete chose to record on one (version 99).
+const setLine = (s) => [[s.weight != null ? `${s.weight} lb` : null, s.reps != null ? `${s.reps} reps` : null].filter(Boolean).join(' × ') || 'done', s.rpe != null ? `RPE ${s.rpe}` : null, s.note ? `“${s.note}”` : null].filter(Boolean).join(' · ');
+async function logSetsDialog(l) {
+  const d = await get(`/v1/clients/${l.client_id}/workouts/${l.id}`);
+  const dlg = h('dialog', { 'aria-label': `${l.client_name}: ${d.title ?? l.workout_title}`, style: 'width:min(560px,94vw);max-height:85vh;overflow:auto' },
+    h('div', { class: 'stack' },
+      h('div', { class: 'row', style: 'align-items:center;justify-content:space-between;gap:12px' }, h('h2', { class: 'week-title', style: 'color:var(--steel);margin:0' }, `${l.client_name} · ${d.title ?? l.workout_title}`), btn('Close', () => dlg.close(), 'ghost')),
+      h('p', { class: 'small muted', style: 'margin:0' }, [new Date(d.completed_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }), d.minutes ? `${d.minutes} min` : null, d.rpe ? `effort ${d.rpe}/10` : null].filter(Boolean).join(' · ')),
+      d.notes ? h('p', { class: 'small pg-note', style: 'margin:0' }, `“${d.notes}”`) : null,
+      d.exercises.map((x) => h('div', { class: 'stack-tight', style: 'border-top:1px solid var(--line-subtle);padding-top:8px' },
+        h('div', { class: 'row', style: 'gap:8px;align-items:baseline' }, h('span', { class: 'strong grow' }, x.name, x.swapped_from ? h('span', { class: 'small muted' }, ` (instead of ${x.swapped_from})`) : null), x.prescription ? h('span', { class: 'small muted' }, x.prescription) : null),
+        x.sets.length ? x.sets.map((s) => h('span', { class: 'small' }, h('span', { class: 'muted' }, `Set ${s.set_no}: `), setLine(s))) : h('span', { class: 'small muted' }, x.done ? 'Ticked done, no sets typed' : 'Not logged')))));
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
 }
 
 function newProgramDialog(list, templates = [], startFrom = '') {

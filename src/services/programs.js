@@ -1103,6 +1103,7 @@ export function programsActivity(ctx, { programId, days = 14 } = {}) {
 // and "max" are sets the athlete ticks without a rep count.
 const MAX_WEIGHT = 2000, MAX_REPS = 500;
 export const REOPEN_HOURS = 2;
+export const SET_NOTE_MAX = 200;   // an athlete's note on one set
 // The slots of a workout with the exercise each one logs as: the plan's, or the one a coach swapped in for this athlete.
 function workoutItems(ctx, workoutId, clientId = null) {
   const items = ctx.db.all('SELECT we.id, we.exercise_id, e.name FROM workout_exercises we JOIN exercises e ON e.id = we.exercise_id WHERE we.workout_id = ? ORDER BY we.position', workoutId);
@@ -1154,7 +1155,14 @@ export function readLog(ctx, workoutId, body = {}, clientId = null) {
       reps = Number(s.reps);
       if (!Number.isInteger(reps) || reps < 0 || reps > MAX_REPS) throw badRequest(`${item.name}, set ${n}: enter reps as a whole number from 0 to ${MAX_REPS}, or leave it blank.`);
     }
-    sets.push({ item, set_no: n, weight, reps });
+    // Version 99: the optional extras an athlete may track on a set, how hard it was and a few words of their own.
+    let setRpe = null;
+    if (!blank(s.rpe)) {
+      setRpe = Number(s.rpe);
+      if (!Number.isFinite(setRpe) || setRpe < 1 || setRpe > 10 || (setRpe * 2) % 1 !== 0) throw badRequest(`${item.name}, set ${n}: rate the set from 1 to 10 (halves are fine), or leave it blank.`);
+    }
+    const setNote = blank(s.note) ? null : v.str(s.note, `${item.name}, set ${n} note`, { max: SET_NOTE_MAX, optional: true }) || null;
+    sets.push({ item, set_no: n, weight, reps, rpe: setRpe, note: setNote });
     ids.add(item.id);
   }
   let rpe = null;
@@ -1174,11 +1182,11 @@ export function readLog(ctx, workoutId, body = {}, clientId = null) {
 export function saveSets(ctx, logId, data) {
   for (const x of data.ids) ctx.db.run('INSERT OR IGNORE INTO exercise_logs (workout_log_id, workout_exercise_id) VALUES (?, ?)', logId, x);
   for (const s of data.sets) {
-    ctx.db.run('INSERT INTO workout_sets (id, workout_log_id, workout_exercise_id, exercise_id, exercise_name, set_no, weight, reps, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      newId('set'), logId, s.item.id, s.item.exercise_id, s.item.name, s.set_no, s.weight, s.reps, ctx.now());
+    ctx.db.run('INSERT INTO workout_sets (id, workout_log_id, workout_exercise_id, exercise_id, exercise_name, set_no, weight, reps, created_at, rpe, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      newId('set'), logId, s.item.id, s.item.exercise_id, s.item.name, s.set_no, s.weight, s.reps, ctx.now(), s.rpe ?? null, s.note ?? null);
   }
 }
-const setsOf = (ctx, logId) => ctx.db.all('SELECT workout_exercise_id, set_no, weight, reps FROM workout_sets WHERE workout_log_id = ? ORDER BY workout_exercise_id, set_no', logId);
+const setsOf = (ctx, logId) => ctx.db.all('SELECT workout_exercise_id, set_no, weight, reps, rpe, note FROM workout_sets WHERE workout_log_id = ? ORDER BY workout_exercise_id, set_no', logId);
 
 // The most recent workout with sets for this exercise, and the heaviest weight ever logged for it.
 function lastTime(ctx, clientId, exerciseId) {
@@ -1186,6 +1194,33 @@ function lastTime(ctx, clientId, exerciseId) {
     WHERE l.client_id = ? AND s.exercise_id = ? ORDER BY l.completed_at DESC, l.rowid DESC LIMIT 1`, clientId, exerciseId);
   if (!l) return null;
   return { date: l.completed_at, sets: ctx.db.all('SELECT set_no, weight, reps FROM workout_sets WHERE workout_log_id = ? AND exercise_id = ? ORDER BY set_no', l.id, exerciseId) };
+}
+// One exercise over time for one athlete (the logger's History, owner's ask: track what they did): the latest sessions
+// with it, newest first, each set by set with its heaviest set, its best estimated one-rep max (Epley, sets of 1 to 12
+// reps with a weight) and the pounds moved, and the bests across everything they ever logged. Nothing is stored.
+export const HISTORY_SESSIONS = 12;
+const e1rmOf = (s) => (s.weight > 0 && s.reps >= 1 && s.reps <= 12 ? Math.round(s.weight * (1 + s.reps / 30)) : null);
+export function exerciseHistory(ctx, client, exerciseId) {
+  const ex = ctx.db.get('SELECT id, name FROM exercises WHERE id = ?', String(exerciseId ?? ''));
+  if (!ex) throw notFound('Exercise');
+  const logs = ctx.db.all(`SELECT l.id, l.completed_at, COALESCE(w.title, l.workout_title) AS workout_title, COALESCE(p.name, l.program_name) AS program_name
+    FROM workout_logs l LEFT JOIN workouts w ON w.id = l.workout_id LEFT JOIN programs p ON p.id = w.program_id
+    WHERE l.client_id = ? AND EXISTS (SELECT 1 FROM workout_sets s WHERE s.workout_log_id = l.id AND s.exercise_id = ?)
+    ORDER BY l.completed_at DESC, l.rowid DESC LIMIT ?`, client.id, ex.id, HISTORY_SESSIONS);
+  const sessions = logs.map((l) => {
+    const sets = ctx.db.all('SELECT set_no, weight, reps, rpe, note FROM workout_sets WHERE workout_log_id = ? AND exercise_id = ? ORDER BY set_no', l.id, ex.id)
+      .map(({ rpe, note, ...s }) => ({ ...s, ...(rpe != null ? { rpe } : {}), ...(note ? { note } : {}) }));
+    const weights = sets.map((s) => s.weight).filter((w) => w > 0), ests = sets.map(e1rmOf).filter((x) => x != null);
+    return { log_id: l.id, date: l.completed_at, workout: l.workout_title, program: l.program_name, sets,
+      top_weight: weights.length ? Math.max(...weights) : null, e1rm: ests.length ? Math.max(...ests) : null,
+      volume_lb: Math.round(sets.reduce((t, s) => t + (s.weight != null && s.reps != null ? s.weight * s.reps : 0), 0)) };
+  });
+  const all = ctx.db.all(`SELECT s.weight, s.reps, l.completed_at FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id
+    WHERE l.client_id = ? AND s.exercise_id = ? AND s.weight > 0`, client.id, ex.id);
+  const pick = (score) => all.reduce((best, s) => { const v = score(s); return v != null && (!best || v > best.value) ? { value: v, weight: s.weight, reps: s.reps, date: s.completed_at } : best; }, null);
+  const count = ctx.db.get(`SELECT COUNT(DISTINCT l.id) AS n FROM workout_logs l JOIN workout_sets s ON s.workout_log_id = l.id WHERE l.client_id = ? AND s.exercise_id = ?`, client.id, ex.id).n;
+  return { exercise_id: ex.id, name: ex.name, times: count, sessions,
+    best: { weight: pick((s) => s.weight), e1rm: pick(e1rmOf), volume_set: pick((s) => (s.reps != null ? Math.round(s.weight * s.reps) : null)) } };
 }
 const bestWeight = (ctx, clientId, exerciseId) => ctx.db.get(`SELECT MAX(s.weight) AS w FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id
   WHERE l.client_id = ? AND s.exercise_id = ? AND s.weight > 0`, clientId, exerciseId).w ?? null;
@@ -1273,9 +1308,22 @@ function startupState(ctx, clientId, hasProgram) {
     gear, needed: !hasProgram && !profile, message: hasProgram ? null : NO_PROGRAM_TEXT[profile?.outcome] ?? (profile ? NO_PROGRAM_TEXT.suggested : 'Answer a few questions and your first program is ready.') };
 }
 // at: 'home' when a "both" athlete says they're training at home today (the gear swaps apply).
+// The athlete's workout settings (version 99, owner's ask: "a settings feature for them to toggle the effort and notes
+// on"): what they record on a set beyond weight and reps. Kept on the profile, so it follows them to any phone.
+export function logSettings(ctx, clientId) {
+  const r = ctx.db.get('SELECT track_set_rpe, track_set_note FROM clients WHERE id = ?', clientId);
+  return { effort: !!r?.track_set_rpe, notes: !!r?.track_set_note };
+}
+export function setLogSettings(ctx, client, body = {}) {
+  const cur = logSettings(ctx, client.id);
+  const flag = (key) => { if (body[key] === undefined) return cur[key]; if (typeof body[key] !== 'boolean') throw badRequest(`${key} must be true or false.`); return body[key]; };
+  const next = { effort: flag('effort'), notes: flag('notes') };
+  ctx.db.run('UPDATE clients SET track_set_rpe = ?, track_set_note = ? WHERE id = ?', next.effort ? 1 : 0, next.notes ? 1 : 0, client.id);
+  return next;
+}
 export function clientHome(ctx, client, { at = null } = {}) {
   const access = appAccess(ctx, client);
-  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status, notices_unseen: unseenNotices(ctx, client.id) };
+  const base = { client: { id: client.id, name: client.name, first_name: client.name.split(' ')[0] }, membership: access.status, notices_unseen: unseenNotices(ctx, client.id), log_settings: logSettings(ctx, client.id) };
   if (!access.open) return { ...base, locked: true, message: access.message };
   const history = recentLogs(ctx, client.id), reopen_id = reopenId(ctx, client.id);
   const own = nextWorkoutFor(ctx, client.id);
@@ -1426,7 +1474,7 @@ export function logDetail(ctx, client, logId) {
     .map((i) => { const { swapped, ...x } = slotFor(i, swaps.get(i.id)); return swapped ? { ...x, swapped_from: swapped.from } : x; }));
   // Sets of exercises the coach has since taken out of the workout still show.
   const gone = ctx.db.all('SELECT DISTINCT workout_exercise_id AS id, exercise_name AS name FROM workout_sets WHERE workout_log_id = ?', l.id).filter((g) => !items.some((i) => i.id === g.id));
-  const strip = ({ workout_exercise_id, ...s }) => s;
+  const strip = ({ workout_exercise_id, rpe, note, ...s }) => ({ ...s, ...(rpe != null ? { rpe } : {}), ...(note ? { note } : {}) });   // a set's effort and note only where the athlete recorded one
   const rxOf = (i) => { const r = parseRx(i); return { target_sets: r.sets, target_reps: r.reps }; };
   const slot = (i) => ({ ...Object.fromEntries(SET_FIELDS.map((k) => [k, i[k] ?? null])), details: i.details ?? null, group_tag: i.group_tag ?? null });
   return {

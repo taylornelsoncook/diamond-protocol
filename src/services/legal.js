@@ -115,7 +115,7 @@ export function exportFamily(ctx, familyId) {
       test_results: per(`SELECT t.name AS test, r.metric, r.side, r.attempt, r.value, m.unit, r.timing, r.recorded_at FROM perf_results r JOIN perf_tests t ON t.id = r.test_id JOIN perf_metrics m ON m.test_id = r.test_id AND m.key = r.metric WHERE r.client_id = ? AND r.voided = 0 ORDER BY r.recorded_at`, k.id),
       workouts: per(`SELECT COALESCE(p.name, l.program_name) AS program, COALESCE(w.title, l.workout_title) AS workout, l.completed_at, l.rpe AS effort, l.notes FROM workout_logs l
         LEFT JOIN workouts w ON w.id = l.workout_id LEFT JOIN programs p ON p.id = w.program_id WHERE l.client_id = ? ORDER BY l.completed_at`, k.id),
-      workout_sets: per(`SELECT l.completed_at, s.exercise_name AS exercise, s.set_no, s.weight, s.reps FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id WHERE l.client_id = ? ORDER BY l.completed_at, s.exercise_name, s.set_no`, k.id),
+      workout_sets: per(`SELECT l.completed_at, s.exercise_name AS exercise, s.set_no, s.weight, s.reps, s.rpe AS effort, s.note FROM workout_sets s JOIN workout_logs l ON l.id = s.workout_log_id WHERE l.client_id = ? ORDER BY l.completed_at, s.exercise_name, s.set_no`, k.id),
       daily_check_ins: per(`SELECT date, sleep_hours, hydration, soreness, energy, mood, note FROM daily_checkins WHERE client_id = ? ORDER BY date`, k.id),
       // Outside data brought in from wearables and other apps (version 47).
       outside_data: per(`SELECT day, metric, value, label, unit, source FROM athlete_metrics WHERE client_id = ? ORDER BY day, metric`, k.id),

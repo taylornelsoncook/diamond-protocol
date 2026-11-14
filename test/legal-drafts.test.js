@@ -63,6 +63,15 @@ test('the owner gets the four drafts with the business filled in; coaches do not
   }
   assert.match(bare.terms, /a Colorado limited liability company\. You can reach us at hello@example\.org\./);
   await owner('PATCH', '/v1/settings', { business_address: '123 Main St, Parker, CO 80134' });
+  // The owner's own contact email stands in for the sending address in every document; clearing it puts that back.
+  assert.equal((await owner('PATCH', '/v1/settings', { contact_email: 'not an email' })).status, 400);
+  assert.equal((await owner('PATCH', '/v1/settings', { contact_email: ' Owner@Example.com ' })).status, 200);
+  const own = (await owner('GET', '/v1/legal/drafts')).body;
+  for (const k of ['waiver', 'terms', 'privacy']) { assert.match(own[k], /owner@example\.com/, k); assert.doesNotMatch(own[k], /hello@example\.org/, k); }
+  assert.equal(own.filled_in.contact_email, 'owner@example.com');
+  assert.equal((await owner('GET', '/v1/settings')).body.contact_email, 'owner@example.com');
+  await owner('PATCH', '/v1/settings', { contact_email: '' });
+  assert.match((await owner('GET', '/v1/legal/drafts')).body.terms, /hello@example\.org/);
   assert.equal((await coach('GET', '/v1/legal/drafts')).status, 403);
   // The drafts don't publish anything on their own.
   const docs = await (await fetch(`${base}/portal/api/public/legal`)).json();

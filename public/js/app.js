@@ -4063,17 +4063,18 @@ async function viewScheduleSetup(main) {
       h('div', null, btn('Add hours', null, 'primary', { type: 'submit' }))));
 
   const shareSel = select([['reviewed', 'After I share a testing day (recommended)'], ['all', 'As soon as results are saved']], { value: settings.share_results ?? 'reviewed' });
-  const st = { tz: input({ value: settings.timezone }), late: input({ type: 'number', min: '0', value: settings.late_cancel_hours }), name: input({ value: settings.business_name }), addr: textarea(settings.business_address), payInst: textarea(settings.payment_instructions) };
+  const st = { tz: input({ value: settings.timezone }), late: input({ type: 'number', min: '0', value: settings.late_cancel_hours }), name: input({ value: settings.business_name }), addr: textarea(settings.business_address), payInst: textarea(settings.payment_instructions), contact: input({ type: 'email', value: settings.contact_email ?? '', autocomplete: 'off' }) };
   const waiver = h('textarea', { class: 'dp-input', style: 'min-height:220px' }); waiver.value = settings.waiver_text;
   const setPanel = panel('Policies', {},
     h('form', { class: 'stack', onSubmit: (e) => { e.preventDefault(); busy(e.submitter, async () => {
       const changedWaiver = waiver.value !== settings.waiver_text;
       if (changedWaiver && !confirm('Changing the waiver asks every family to sign again before their next booking. Continue?')) return;
-      await patch('/v1/settings', { share_results: shareSel.value, timezone: st.tz.value, late_cancel_hours: Number(st.late.value), business_name: st.name.value, business_address: st.addr.value, payment_instructions: st.payInst.value, waiver_text: waiver.value });
+      await patch('/v1/settings', { share_results: shareSel.value, timezone: st.tz.value, late_cancel_hours: Number(st.late.value), business_name: st.name.value, business_address: st.addr.value, payment_instructions: st.payInst.value, contact_email: st.contact.value.trim(), waiver_text: waiver.value });
       toast('Settings saved.'); render();
     }); } },
       h('div', { class: 'form-grid', style: 'grid-template-columns:repeat(3,minmax(0,1fr))' }, field('Business name', st.name), field('Time zone', st.tz, 'Like America/Chicago'), field('Late-cancel window (hours)', st.late, 'Cancels inside this still use the session.')),
       h('div', { class: 'form-grid' }, field('Business address (on invoices)', st.addr), field('How schools can pay (on invoices)', st.payInst, 'For example who to make checks payable to.')),
+      h('div', { class: 'form-grid' }, field('Contact email (in your waiver, terms and privacy policy)', st.contact, 'The address families are told to write to. Leave it empty to use the address your emails are sent from. Save, then fill the boxes from the drafts again.')),
       field('Parents see test results', shareSel),
       field('Waiver (have a lawyer review it)', waiver, `Version ${settings.waiver_version}. One signature covers every athlete on the account and also records the terms and privacy policy.`),
       isOwner() ? h('div', { class: 'row wrap', style: 'gap:8px' }, btn('Use the drafted wording', (e) => useDraft(e, 'waiver', waiver), 'ghost'), h('span', { class: 'small muted' }, 'Fills the box with the draft from docs/legal (a lawyer should review it), with your business name and contact email filled in. Nothing changes until you Save.')) : null,

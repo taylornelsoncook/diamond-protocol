@@ -31,11 +31,13 @@ export function legalDocs(ctx) {
 }
 // The drafted wording (docs/legal/*.txt, written for the owner's lawyer to review): the owner presses "Use the drafted
 // wording" on Settings and the text lands in the box with the business's details filled in, to read, change and save.
-// Nothing is published by this: the owner still saves. {{contact_email}} is the sending address's email part.
+// Nothing is published by this: the owner still saves. {{contact_email}} is the owner's contact_email setting, or else
+// the sending address's email part.
 export const DRAFT_KINDS = ['waiver', 'terms', 'privacy', 'media-release', 'card-consent'];
 export function drafts(ctx) {
   const from = String(ctx.mail?.from ?? '');
-  const email = (from.match(/<([^>]+)>/)?.[1] ?? (from.includes('@') ? from : '')).trim() || '[your contact email]';
+  // The contact email is the owner's own choice (Hours & settings → Contact email) or else the sending address.
+  const email = String(getSetting(ctx, 'contact_email') ?? '').trim() || (from.match(/<([^>]+)>/)?.[1] ?? (from.includes('@') ? from : '')).trim() || '[your contact email]';
   // No postal address on file yet (owner, November 14: "we don't have a postal yet"): the address lines are left out
   // of the filled-in text, so nothing a family reads shows a bracket; they come back by themselves once the address is
   // typed in Hours & settings and the box is filled again.

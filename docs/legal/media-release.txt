@@ -2,7 +2,7 @@
 
 We film training to coach better, and we would love to celebrate our athletes. You choose what we may do with your athlete's image. Saying no never affects membership, coaching or how the athlete is treated. You can change your choices at any time by writing to {{contact_email}}; removal from future posts begins within seven days (we cannot recall printed material already distributed or copies others have made).
 
-In this release, "we", "us" and "our" mean Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, and its owners, employees, coaches, contractors, successors and assigns. "Athlete" means the athlete named below. "You" means the athlete's parent or legal guardian, or the athlete if 18 or older. "Media" means photographs, video, audio, likeness, voice, name, school, team, results, quotes and story.
+In this release, "we", "us" and "our" mean the company that operates {{business_name}}: Ad Astra Therapy and Performance LLC, a Colorado limited liability company, and, from the day it takes over the business, its successor Ad Astra Human Performance LLC, a Colorado limited liability company, and their owners, employees, coaches, contractors, successors and assigns. This release stays in force for Ad Astra Human Performance LLC without a new signature. "Athlete" means the athlete named below. "You" means the athlete's parent or legal guardian, or the athlete if 18 or older. "Media" means photographs, video, audio, likeness, voice, name, school, team, results, quotes and story.
 
 1. COACHING USE (ALWAYS ON)
 
@@ -54,6 +54,6 @@ Athlete signature (13 and older): ______________________________
 Parent or legal guardian name, relationship and signature: ______________________________
 Date: ______________
 
-Ad Astra Human Performance LLC, doing business as {{business_name}}
+Ad Astra Therapy and Performance LLC, doing business as {{business_name}}, and its successor Ad Astra Human Performance LLC
 {{business_address}}
 {{contact_email}}

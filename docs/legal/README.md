@@ -1,6 +1,6 @@
 # Legal documents: drafts for the lawyer
 
-These are **drafts** written for Diamond Protocol, the training brand of **Ad Astra Human Performance LLC** (the legal entity that owns the business, contracts with families and is named as the party in every document; the brand name is what families see), to hand to a Colorado lawyer. They are not legal advice and have not been reviewed by one. Have them reviewed before publishing them; the Settings page keeps the placeholders (which start with `[`) until the owner replaces them, so nothing is shown to families by accident.
+These are **drafts** written for Diamond Protocol, the training brand of **Ad Astra Therapy and Performance LLC** today and of **Ad Astra Human Performance LLC** once it takes over the business (both are named as the party in every document, the second as the successor; the brand name is what families see), to hand to a Colorado lawyer. They are not legal advice and have not been reviewed by one. Have them reviewed before publishing them; the Settings page keeps the placeholders (which start with `[`) until the owner replaces them, so nothing is shown to families by accident.
 
 | File | What it is | Where it goes |
 | --- | --- | --- |
@@ -15,6 +15,12 @@ These are **drafts** written for Diamond Protocol, the training brand of **Ad As
 ## Merged on November 8, 2026
 
 The owner asked for one waiver, one privacy policy and one media release across every draft written so far: these files, and the starter drafts a second set of work produced for the Ad Astra owners' site (a shorter waiver with initials boxes and a parent indemnity, a privacy policy with the Colorado breach-notice rule, security cameras, inactive-account deletion and a minors' messaging rule, and a tick-box photo and media release). Everything protective from both is now in these three files: the wider list of Released Parties (facility owners, partner PTs), the activities list, initials boxes, a covenant not to sue, negligent supervision and instruction named in the release, indemnity for claims brought on the minor's behalf including after 18, AED and CPR authorization, re-signing at 18, drop-off and pick-up, communicable disease, the athlete safety policies, a one-year claims window, a broad-construction clause, the breach-notice promise, three-year inactive deletion, retention of waivers and incident reports until the minor is 18 plus the limitation period, and the full media release with NIL and endorsement language. The owners' site carries the same text.
+
+## Two companies named, November 14, 2026
+
+The owner confirmed the business is run today by Ad Astra Therapy and Performance LLC (the name on the Stripe account) and moves to Ad Astra Human Performance LLC in about two weeks. Every document now names the current company and the new one as its successor, and the waiver and media release say they stay in force for the new company without a new signature. That way a family who signs before the move is signing with the company that exists, and nobody is asked to sign again after it. When the move is complete the wording still reads correctly; the lawyer can then shorten it to the new company alone at the next revision.
+
+For the lawyer: confirm both registered names exactly as filed with the Colorado Secretary of State; confirm the move is a merger or an asset assignment and that signed waivers, releases and saved-card consents pass to the new company either way (the assignment document on the owners' site should list them); and say whether families should get a short notice of the change.
 
 ## How to put them in the app
 

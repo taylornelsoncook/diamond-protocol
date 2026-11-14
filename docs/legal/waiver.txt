@@ -3,7 +3,7 @@ Release of liability, waiver of claims, assumption of risk, indemnification, med
 
 PLEASE READ CAREFULLY. THIS AGREEMENT AFFECTS YOUR LEGAL RIGHTS AND YOUR ATHLETE'S LEGAL RIGHTS. BY SIGNING IT YOU GIVE UP LEGAL RIGHTS, INCLUDING THE RIGHT TO SUE FOR INJURIES CAUSED BY ORDINARY NEGLIGENCE. Signing it once covers every athlete on your family account and every program, class, camp, clinic, evaluation, testing day, team session, open gym, private session, online program and event we provide, wherever it takes place, until we ask you to sign a new version or you revoke it in writing.
 
-In this agreement, "we", "us" and "our" mean Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}. "Released Parties" means us and our owners, members, managers, officers, employees, coaches, independent contractors, interns, volunteers, agents, affiliates, successors and assigns and insurers; the owners, landlords and managers of any facility we use; and the partner physical therapists and other professionals who work with us while on our premises or at our events. "Athlete" means each child you add to your account, or you yourself if you are 18 or older and train with us. "You" and "parent" mean the parent or legal guardian signing for a minor athlete, or the adult athlete signing for themselves.
+In this agreement, "we", "us" and "our" mean the company that operates {{business_name}}: Ad Astra Therapy and Performance LLC, a Colorado limited liability company, and, from the day it takes over the business, its successor Ad Astra Human Performance LLC, a Colorado limited liability company. Both companies are protected by this agreement, and it stays in force for Ad Astra Human Performance LLC without a new signature. "Released Parties" means us and our owners, members, managers, officers, employees, coaches, independent contractors, interns, volunteers, agents, affiliates, successors and assigns and insurers; the owners, landlords and managers of any facility we use; and the partner physical therapists and other professionals who work with us while on our premises or at our events. "Athlete" means each child you add to your account, or you yourself if you are 18 or older and train with us. "You" and "parent" mean the parent or legal guardian signing for a minor athlete, or the adult athlete signing for themselves.
 
 1. WHAT WE DO, AND WHO SIGNS
 
@@ -104,6 +104,6 @@ Emergency contact name and phone: ______________________________
 Physician name and phone (optional): ______________________________
 Allergies, conditions, medications and past injuries: ______________________________
 
-Ad Astra Human Performance LLC, doing business as {{business_name}}
+Ad Astra Therapy and Performance LLC, doing business as {{business_name}}, and its successor Ad Astra Human Performance LLC
 {{business_address}}
 {{contact_email}}

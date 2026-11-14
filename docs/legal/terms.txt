@@ -1,10 +1,10 @@
 {{business_name}} TERMS OF SERVICE
 
-These terms are the agreement between you and Ad Astra Human Performance LLC, doing business as {{business_name}} ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
+These terms are the agreement between you and Ad Astra Therapy and Performance LLC, doing business as {{business_name}}, and its successor Ad Astra Human Performance LLC ("we", "us", "our") for the training, programs, products and online services we provide, including our website, parent and athlete portal, athlete app and online store (together, the "Services"). By creating an account, booking, buying, or using the Services, you agree to these terms, to our Privacy Policy and to our Participation Agreement (the waiver). If you do not agree, please do not use the Services.
 
 1. WHO WE ARE AND WHO YOU ARE
 
-We are Ad Astra Human Performance LLC, a Colorado limited liability company doing business as {{business_name}}, {{business_address}}. You can reach us at {{contact_email}}.
+We are the company that operates {{business_name}}: Ad Astra Therapy and Performance LLC, a Colorado limited liability company, and, from the day it takes over the business, its successor Ad Astra Human Performance LLC, a Colorado limited liability company. Our address is {{business_address}}. You can reach us at {{contact_email}}.
 
 Most of our athletes are children. An account is held by a parent or legal guardian (the "account holder") who is responsible for every athlete on it, for everyone who uses the account, and for every booking, purchase and message made through it. An adult who trains with us may hold their own account. You must be 18 or older to hold an account. You agree that the information on your account is true and kept current, including the athlete's medical information and your emergency contact.
 
@@ -102,6 +102,6 @@ We may change these terms. When we do, we post the new version at {{public_url}}
 
 19. GENERAL
 
-These terms, the Privacy Policy and the Participation Agreement are the whole agreement between you and us about the Services. If any part is found unenforceable, the rest stays in force. Our failure to enforce a term is not a waiver of it. You may not transfer your account or these terms; we may transfer them to a successor who takes over the business, who will be bound by them. Notices to you go to the account's primary email; notices to us go to {{contact_email}}.
+These terms, the Privacy Policy and the Participation Agreement are the whole agreement between you and us about the Services. If any part is found unenforceable, the rest stays in force. Our failure to enforce a term is not a waiver of it. You may not transfer your account or these terms; we may transfer them to a successor who takes over the business, who will be bound by them (Ad Astra Human Performance LLC is that successor from the day it takes over). Notices to you go to the account's primary email; notices to us go to {{contact_email}}.
 
 Last updated: see the date shown above.

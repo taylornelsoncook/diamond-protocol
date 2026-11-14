@@ -2735,13 +2735,15 @@ async function viewInventory(main) {
 // Setup forms open in the shared dialog. onSave returns a toast message; errors stay in the dialog to fix.
 // Settings: fill a legal text box from the drafted wording (GET /v1/legal/drafts, owner). The owner reads it and saves.
 // Owner's ask: every box filled from the drafts in one click (the owner still presses Save on each panel).
+// Said after a fill while the business has no mailing address on file: the drafts leave the address lines out.
+const NO_ADDRESS = 'There is no mailing address in Hours & settings yet, so the address lines are left out. Add it and fill again when you have one.';
 async function fillAllDrafts(e, boxes) {
   const filled = Object.values(boxes).some((b) => b.value.trim() && !b.value.trim().startsWith('['));
   if (filled && !confirm('Replace the wording in every box with the drafts? Nothing is saved until you press Save on each panel.')) return;
   await busy(e.currentTarget, async () => {
     const d = await get('/v1/legal/drafts');
     for (const [kind, box] of Object.entries(boxes)) { box.value = d[kind]; box.dispatchEvent(new Event('input')); }
-    toast('All four boxes are filled. Press Save on the Policies panel and on the terms, privacy and media release panel.');
+    toast(`All four boxes are filled. Press Save on the Policies panel and on the terms, privacy and media release panel.${d.address_left_out ? ' ' + NO_ADDRESS : ''}`);
   });
 }
 async function useDraft(e, kind, box) {
@@ -2750,7 +2752,7 @@ async function useDraft(e, kind, box) {
     const d = await get('/v1/legal/drafts');
     box.value = d[kind];
     box.dispatchEvent(new Event('input'));
-    toast('Draft filled in. Read it, change what the lawyer tells you to, then Save.');
+    toast(`Draft filled in. Read it, change what the lawyer tells you to, then Save.${d.address_left_out ? ' ' + NO_ADDRESS : ''}`);
   });
 }
 // The owner adds a profile tag to one client or takes it off, whatever the tag's dates (profiletags.js setClientTag).

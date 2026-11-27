@@ -229,7 +229,7 @@ const guessKind = (title, kindText = '') => {
 export function previewSchedule(ctx, clientId, body = {}) {
   clientOf(ctx, clientId);
   const day = today(ctx);
-  const zone = getSetting(ctx, 'business_tz') || 'America/Denver';
+  const zone = getSetting(ctx, 'timezone');
   const text = String(body.text ?? body.ics ?? body.csv ?? '');
   if (!text.trim()) throw badRequest('Choose the calendar file (.ics or .csv) or paste the dates.');
   if (text.length > MAX_TEXT) throw badRequest('That file is too big. Export just this season.');

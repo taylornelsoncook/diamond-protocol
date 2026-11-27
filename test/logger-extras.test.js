@@ -136,7 +136,7 @@ test('a version 98 database gains the set columns and the workout settings and k
     old.close();
     for (const round of [1, 2]) {
       const d = openDb(file);
-      assert.equal(d.get('PRAGMA user_version').user_version, 99, `round ${round}`);
+      assert.equal(d.get('PRAGMA user_version').user_version, 100, `round ${round}`);
       assert.deepEqual({ ...d.get('SELECT set_no, weight, reps, rpe, note FROM workout_sets') }, { set_no: 1, weight: 135, reps: 5, rpe: null, note: null });
       assert.deepEqual({ ...d.get('SELECT track_set_rpe, track_set_note FROM clients') }, { track_set_rpe: 0, track_set_note: 0 }, 'the workout settings start off');
       d.close();

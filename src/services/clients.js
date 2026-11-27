@@ -15,7 +15,7 @@ import { tagger } from './profiletags.js';
 import { priceSql, lockSql, listFor as locksFor } from './pricelocks.js';
 
 const LIST_SQL = `
-  SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.training_type, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
+  SELECT c.id, c.athlete_id, c.name, c.email, c.phone, c.created_at, c.created_by_import, c.training_type, c.archived_at, c.archived_by, c.family_id, f.name AS family_name, c.birth_date, c.sport,
     c.school, c.grad_year, TRIM(COALESCE(c.medical_notes, '')) != '' AS medical, f.waiver_version,
     (SELECT GROUP_CONCAT(x, char(30)) FROM (SELECT g.name || char(31) || g.email || char(31) || COALESCE(g.phone, '') AS x FROM guardians g WHERE g.family_id = c.family_id ORDER BY g.is_primary DESC, g.created_at)) AS parent_list,
     MAX(COALESCE((SELECT MAX(k.created_at) FROM check_ins k WHERE k.client_id = c.id), ''), COALESCE((SELECT MAX(g.created_at) FROM open_gym_visits g WHERE g.client_id = c.id), '')) AS last_check_in_at,   -- desk check-ins and open gym (version 91)
@@ -62,7 +62,8 @@ const shape = (r, waiverVersion = 1, role = 'owner') => ({
   parents: r.parent_list ? r.parent_list.split('\x1e').map((x) => { const [name, email, phone] = x.split('\x1f'); return { name, email, phone: phone || null }; }) : [],
   teams: r.team_list ? r.team_list.split('\n').map((x) => { const [id, ...name] = x.split('|'); return { id, name: name.join('|') }; }) : [],
   // Flags for the list: medical notes on file, the family's waiver isn't signed (current version), no saved card.
-  flags: { medical: !!r.medical, no_waiver: !!r.family_id && Number(r.waiver_version ?? 0) !== waiverVersion, no_card: !r.has_card },
+  flags: { medical: !!r.medical, no_waiver: !!r.family_id && Number(r.waiver_version ?? 0) !== waiverVersion, no_card: !r.has_card,
+    to_finish: !!r.created_by_import && !r.family_id && !r.email },   // made from a device file (version 100), no parent or email yet
   // Pinned staff notes: front desk never counts coach-only ones.
   pinned_notes: role === 'front_desk' ? r.pinned_shared ?? 0 : r.pinned_all ?? 0,
   // Last seen: the latest check-in (desk, door, kiosk or roster) or logged workout.
@@ -95,12 +96,13 @@ export function matches(c, q) {
 
 // Views on top of the membership statuses: team (on a school or club team roster, no membership) and no_waiver
 // (the family hasn't signed the current waiver). They count current clients only; archived clients are their own view.
-export const CLIENT_VIEWS = ['current', 'active', 'trialing', 'past_due', 'paused', 'canceled', 'none', 'team', 'no_waiver'];
+export const CLIENT_VIEWS = ['current', 'active', 'trialing', 'past_due', 'paused', 'canceled', 'none', 'team', 'no_waiver', 'to_finish'];
 export function inView(c, view) {
   if (!view) return true;
   if (view === 'current') return isActiveClient(c);
   if (view === 'team') return c.teams.length > 0 && ['none', 'canceled'].includes(c.status);
   if (view === 'no_waiver') return c.flags.no_waiver;
+  if (view === 'to_finish') return c.flags.to_finish;   // profiles a device upload made: add a parent, contact details, the waiver
   return c.status === view;
 }
 // How a client trains, picked by staff and shown under the name: hybrid (at the facility and on their own with the app),
@@ -133,7 +135,7 @@ export function listClients(ctx, { q, status, archived, sort, role, training, ta
 // How many archived clients a search would have found, so the list can say where to look.
 export const archivedMatches = (ctx, q) => shapeAll(ctx, ctx.db.all(`${LIST_SQL} WHERE c.archived_at IS NOT NULL`)).filter((c) => !q || matches(c, q)).length;
 export function clientCounts(ctx) {
-  const out = { current: 0, active: 0, trialing: 0, past_due: 0, paused: 0, canceled: 0, none: 0, team: 0, no_waiver: 0, archived: 0, total: 0 };
+  const out = { current: 0, active: 0, trialing: 0, past_due: 0, paused: 0, canceled: 0, none: 0, team: 0, no_waiver: 0, to_finish: 0, archived: 0, total: 0 };
   for (const c of shapeAll(ctx, ctx.db.all(LIST_SQL))) {
     if (c.archived_at) { out.archived++; continue; }
     out.total++;
@@ -141,6 +143,7 @@ export function clientCounts(ctx) {
     if (isActiveClient(c)) out.current++;
     if (inView(c, 'team')) out.team++;
     if (c.flags.no_waiver) out.no_waiver++;
+    if (c.flags.to_finish) out.to_finish++;
   }
   return out;
 }
@@ -185,6 +188,13 @@ export function getClient(ctx, id, { withSecrets = false, role = 'owner' } = {})
       siblings: ctx.db.all('SELECT id, name FROM clients WHERE family_id = ? AND id != ? ORDER BY name', fam.id, id) };
   }
   c.workouts_completed = ctx.db.get('SELECT COUNT(*) AS n FROM workout_logs WHERE client_id = ?', id).n;
+  // Made for a new person in a device file (version 100): staff finish it (a parent, contact details, the waiver) before
+  // anyone signs in or is messaged. Done once it has a family or its own email.
+  if (extra.created_by_import) {
+    const b = ctx.db.get('SELECT provider, filename, created_at FROM import_batches WHERE id = ?', extra.created_by_import);
+    c.from_import = { batch_id: extra.created_by_import, source: b?.provider === 'ovr' ? 'OVR' : b?.provider ?? null, filename: b?.filename ?? null, at: b?.created_at ?? extra.created_at,
+      needs_finishing: !extra.family_id && !extra.email };
+  } else c.from_import = null;
   // Locked out of the parent portal, the app and self check-in over a declined membership payment (lockout.js). Staff
   // still book and check them in; amounts are the owner's (hideMoney).
   const lock = clientLock(ctx, id);
@@ -395,6 +405,20 @@ export async function quickAdd(ctx, body = {}, { staff } = {}) {
   const name = `${firstName} ${lastName}`;
   if (!email) return createClient(ctx, { name, phone, birth_date: birthDate, send_welcome: false, check_duplicates: false }, { staff, emailOptional: true });
   return createClient(ctx, { name, birth_date: birthDate, parent: { name: parentName ?? name, email, phone, relationship: parentName ? null : 'self' }, send_welcome: false, check_duplicates: false }, { staff });
+}
+
+// A profile for a new person in a device file (an OVR workbook): the name and what the file says about them (sport,
+// position), nothing else. No family, no email, no login and nothing is ever sent to it until staff finish it (a parent,
+// contact details, the waiver); created_by_import marks it so the client page and list can say so. Runs inside the
+// import's own transaction, so a refused import leaves no profile behind.
+export function createImportedProfile(ctx, { name, sport = null, position = null, batchId }) {
+  const n = v.str(name, 'name', { max: 120 });
+  const id = newId('cli');
+  ctx.db.run(`INSERT INTO clients (id, athlete_id, name, access_token, sport, position, created_at, created_by_import) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, newAthleteId(ctx, n), n, token(24), sport ? String(sport).trim().slice(0, 60) || null : null, position ? String(position).trim().slice(0, 60) || null : null, ctx.now(), batchId);
+  const aid = ctx.db.get('SELECT athlete_id FROM clients WHERE id = ?', id).athlete_id;
+  emit(ctx, 'client.created', { client_id: id, athlete_id: aid, client_name: n, email: null, family_id: null, from_import: batchId });
+  return { client_id: id, athlete_id: aid, name: n };
 }
 
 export function updateClient(ctx, id, body) {

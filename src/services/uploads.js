@@ -7,6 +7,8 @@ import { listTests, getTest, getSession, recordResults, rangeOf, outOfRange, ran
 import { parseCsv, guessMapping } from './perf-import.js';
 import { convert, normalizeUnit } from './units.js';
 import { readXlsx, writeXlsx } from './xlsx.js';
+import { undoExtras } from './ovr.js';
+import { clientRefs } from './profiles.js';
 
 // ---------- Templates ----------
 // One column per test (per side, per attempt), named so the upload reads it back exactly:
@@ -396,13 +398,20 @@ export function undoUpload(ctx, id, user = null) {
       const still = keys.filter((k) => !added.includes(k) || ctx.db.get('SELECT 1 FROM perf_results r JOIN perf_tests t ON t.id = r.test_id WHERE r.session_id = ? AND t.key = ? AND r.voided = 0 LIMIT 1', b.session_id, k));
       if (still.length && still.length !== keys.length) ctx.db.run('UPDATE perf_sessions SET test_keys = ? WHERE id = ?', JSON.stringify(still), b.session_id);
     }
+    // An OVR workbook (version 100): its bar-speed sets come out too, and the profiles it made for new people go when
+    // nothing has been added to them since; the athletes it put in groups leave them, and a group it made goes once empty.
+    const extra = b.provider === 'ovr' ? undoExtras(ctx, b, clientRefs(ctx)) : null;
     const parts = [];
     if (removed) parts.push(`${removed} removed`);
+    if (extra?.sets) parts.push(`${extra.sets} bar-speed ${extra.sets === 1 ? 'set' : 'sets'} removed`);
+    if (extra?.removedProfiles) parts.push(`${extra.removedProfiles} new ${extra.removedProfiles === 1 ? 'profile' : 'profiles'} it made removed`);
+    if (extra?.keptProfiles) parts.push(`${extra.keptProfiles} new ${extra.keptProfiles === 1 ? 'profile' : 'profiles'} kept because ${extra.keptProfiles === 1 ? 'it was' : 'they were'} filled in since`);
+    if (extra?.removedGroups) parts.push(`${extra.removedGroups} ${extra.removedGroups === 1 ? 'group' : 'groups'} it made removed`);
     if (restored) parts.push(`${restored} put back to the earlier value`);
     if (dropped) parts.push(`${dropped} waiting ${dropped === 1 ? 'result' : 'results'} dropped`);
     if (kept) parts.push(`${kept} left alone because ${kept === 1 ? 'it was' : 'they were'} changed or linked since`);
     const summary = parts.join(', ') || 'Nothing to change';
     ctx.db.run('UPDATE import_batches SET undone_at = ?, undone_by = ?, undo_summary = ? WHERE id = ?', ctx.now(), user?.id ?? null, summary, b.id);
-    return { undone: true, removed, restored, pending_removed: dropped, kept, summary };
+    return { undone: true, removed, restored, pending_removed: dropped, kept, summary, ...(extra ? { bar_speed_removed: extra.sets, profiles_removed: extra.removedProfiles, profiles_kept: extra.keptProfiles, group_places_removed: extra.leftGroups, groups_removed: extra.removedGroups } : {}) };
   });
 }

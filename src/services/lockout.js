@@ -45,8 +45,10 @@ export const OPEN_WHILE_LOCKED = new Set([
   'GET /portal/api/session', 'POST /portal/api/password', 'DELETE /portal/api/password',
   'GET /portal/api/export', 'POST /portal/api/deletion-request',
   // Safety and consent never wait on a payment: medical notes and emergency contacts, turning texts off, and adding the
-  // other parent (who may be the one to pay).
-  'PATCH /portal/api/athletes/:id', 'PATCH /portal/api/texts', 'POST /portal/api/guardians'
+  // other parent (who may be the one to pay). The photo and video release is consent too: a family can read, change or
+  // withdraw it while locked out.
+  'PATCH /portal/api/athletes/:id', 'PATCH /portal/api/texts', 'POST /portal/api/guardians',
+  'GET /portal/api/media-release', 'POST /portal/api/athletes/:id/media-release', 'DELETE /portal/api/athletes/:id/media-release'
 ]);
 export const lockMessage = (lock) => `A membership payment of $${(lock.amount_cents / 100).toFixed(2).replace(/\.00$/, '')} didn't go through. Update your card or try the payment again on the Family tab; everything opens again as soon as it's paid.`;
 export const athleteLockMessage = 'A membership payment didn\'t go through. Ask your parent to update the card in the parent portal, and you\'re back in as soon as it\'s paid.';

@@ -406,7 +406,7 @@ for (const [key, category] of [['goblet', 'Lower body'], ['rdl', 'Lower body'], 
 teams.addRoster(ctx, westlake.id, { names: 'Luke Jensen, P, 2030' });
 const lukeTeam = ctx.db.get(`SELECT id, athlete_id FROM clients WHERE name = 'Luke Jensen'`);
 const jensen = await clients.createClient(ctx, { name: 'Luke Jensen', birth_date: '2012-08-14', sex: 'M', sport: 'Baseball', emergency_name: 'Anna Jensen', emergency_phone: '(512) 555-0161', parent: { name: 'Kurt Jensen', email: 'kurt.jensen@example.com', phone: '(512) 555-0160' }, send_welcome: false });
-const lily = await clients.createClient(ctx, { name: 'Lily Jensen', birth_date: '2014-11-02', sex: 'F', sport: 'Soccer', family_id: jensen.family.id, send_welcome: false });
+const lily = await clients.createClient(ctx, { name: 'Lily Jensen', birth_date: `${new Date().getUTCFullYear() - 10}-01-15`, sex: 'F', sport: 'Soccer', family_id: jensen.family.id, send_welcome: false });
 {
   const kurt = ctx.db.get('SELECT * FROM guardians WHERE family_id = ?', jensen.family.id);
   const tried = profiles.tryClaim(ctx, { code: lukeTeam.athlete_id, name: 'Luke Jensen', birthDate: '2012-08-14', familyId: jensen.family.id, guardian: kurt });

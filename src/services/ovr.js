@@ -5,6 +5,7 @@ import { convert } from './units.js';
 import { recordSets, rowsToSets, guessMapping as guessVbtMapping } from './vbt.js';
 import { createImportedProfile } from './clients.js';
 import { getSetting } from './families.js';
+import { MAX_NAME, MAX_MEMBERS } from './groups.js';
 
 // The OVR Connect export (owner's ask: "create profiles every time a person is uploaded using the OVR file"): one Excel
 // workbook with a sheet per product (Velocity, Jump, Sprint, Force, Force Jump, Force Landing, Force Reps), one row per
@@ -26,6 +27,9 @@ const JUMPS = {
   'countermovement jump (cmj)': [['cmj', 'jump_height', 'Jump Height (in)', 'in']],
   'approach jump': [['vertical_max', 'height', 'Jump Height (in)', 'in']],
   'depth jump': DROP,
+  'regular rsi': [['regular_rsi', 'rsi', 'RSI', 'ratio'], ['regular_rsi', 'jump_height', 'Jump Height (in)', 'in'], ['regular_rsi', 'contact_time', 'GCT (s)', 's']],
+  '4 jump rsi test': [['rsi_4_jump', 'rsi', 'RSI', 'ratio'], ['rsi_4_jump', 'jump_height', 'Jump Height (in)', 'in'], ['rsi_4_jump', 'contact_time', 'GCT (s)', 's']],
+  'seated jump': [['seated_jump', 'height', 'Jump Height (in)', 'in']],
   'drop jump': DROP
 };
 const FORCE_JUMPS = {
@@ -37,6 +41,8 @@ const FORCE_JUMPS = {
 const SPRINTS = {
   '10yd sprint': (rep) => [['dash_10yd', 'time', rep.total, 's']],
   'flying 10yd': (rep) => [['flying_10yd', 'time', rep.lastSplit, 's'], ['sprint_speed', 'speed', rep.topSpeed, 'mph']],
+  '5yd lead-in + 10yd': (rep) => [['lead5_10yd', 'time', rep.lastSplit, 's'], ['lead5_10yd', 'speed', rep.topSpeed, 'mph']],
+  '10yd lead-in + 10yd': (rep) => [['lead10_10yd', 'time', rep.lastSplit, 's'], ['lead10_10yd', 'speed', rep.topSpeed, 'mph']],
   '40yd sprint': (rep) => [['dash_40yd', 'time', rep.total, 's'], ['dash_40yd', 'split_10', rep.at(10), 's'], ['dash_40yd', 'split_20', rep.at(20), 's'], ['sprint_speed', 'speed', rep.topSpeed, 'mph']]
 };
 const DEVICE = { Jump: 'OVR Jump', Sprint: 'OVR Sprint', 'Force Jump': 'OVR Force', Velocity: 'OVR Velocity' };
@@ -256,7 +262,7 @@ export function importWorkbook(ctx, body = {}, { user = null, dryRun = false } =
   let result;
   try {
     ctx.db.tx(() => {
-      result = write(ctx, { plan, items, people: people.people, owner, user, filename: body.filename });
+      result = write(ctx, { plan, items, people: people.people, owner, user, filename: body.filename, addGroups: body.add_to_groups !== false });
       if (dryRun) throw ROLLBACK;
     });
   } catch (e) { if (e !== ROLLBACK) throw e; }
@@ -267,7 +273,7 @@ export function importWorkbook(ctx, body = {}, { user = null, dryRun = false } =
     people: result.people, counts: countsOf(result.people),
     impossible: impossible.slice(0, 200).map(shapeValue), impossible_count: impossible.length,
     problems: problems.slice(0, 200), problem_count: problems.length, to_check: people.open.length,
-    left_out: plan.left_out, bar_speed_left_out: plan.sets.length && !owner ? 'Bar speed (the Velocity sheet) is brought in by the owner.' : null
+    groups: result.groups, left_out: plan.left_out, bar_speed_left_out: plan.sets.length && !owner ? 'Bar speed (the Velocity sheet) is brought in by the owner.' : null
   };
   if (dryRun) return { preview: true, ...summary, will_save: result.saved, will_wait: result.waiting, already_saved: result.duplicates, bar_speed_sets: result.bar_speed, ready: !problems.length && !people.open.length };
   return { batch_id: result.batch_id, ...summary, saved: result.saved, waiting: result.waiting, already_saved: result.duplicates, bar_speed_sets: result.bar_speed, prs: result.prs };
@@ -276,7 +282,7 @@ const shapeValue = (it) => ({ sheet: it.sheet, row: it.row, column: it.column, a
 const countsOf = (people) => ({ people: people.length, linked: people.filter((p) => p.status === 'linked').length, made: people.filter((p) => p.made).length,
   chosen: people.filter((p) => p.chosen).length, waiting: people.filter((p) => p.action === 'wait').length, to_check: people.filter((p) => p.undecided).length });
 
-function write(ctx, { plan, items, people, owner, user, filename }) {
+function write(ctx, { plan, items, people, owner, user, filename, addGroups = true }) {
   const batchId = newId('imp');
   const byKey = new Map();
   const shaped = people.map((p) => {
@@ -288,6 +294,7 @@ function write(ctx, { plan, items, people, owner, user, filename }) {
     const { look_alikes, ...rest } = p;
     return { ...rest, ...(look_alikes?.length ? { look_alikes } : {}), client, made };
   });
+  const groups = addToGroups(ctx, { shaped, batchId, on: addGroups, user });
   let saved = 0, duplicates = 0, waiting = 0, prs = 0;
   const resultIds = [], queued = [];
   for (let i = 0; i < items.length; i += 1000) {
@@ -324,7 +331,46 @@ function write(ctx, { plan, items, people, owner, user, filename }) {
     batchId, PROVIDER, filename ? String(filename).slice(0, 200) : 'OVR export', items.length, saved, duplicates, JSON.stringify(queued), ctx.now(), SOURCE, prs, user?.id ?? null, vbtImportId);
   for (const r of resultIds) ctx.db.run('INSERT INTO import_batch_items (batch_id, result_id, value) VALUES (?, ?, ?)', batchId, r.id, r.value);
   for (const q of new Set(queued)) ctx.db.run('INSERT INTO import_batch_items (batch_id, queue_id) VALUES (?, ?)', batchId, q);
-  return { batch_id: batchId, people: shaped, saved, duplicates, waiting, prs, bar_speed: barSpeed };
+  return { batch_id: batchId, people: shaped, saved, duplicates, waiting, prs, bar_speed: barSpeed, groups };
+}
+
+// The file's Group(s) column (owner decision: "Yes", OVR groups go into the app's Groups): each name is the app's group
+// of that name (ignoring case), made when there is none yet, and every person with a profile joins it. Archived
+// athletes and a full group are skipped and said; nothing is posted or sent. Undo takes out the athletes this import
+// added and a group it made that nobody has added to or written on since.
+function addToGroups(ctx, { shaped, batchId, on, user }) {
+  if (!on) return [];
+  const byName = new Map();
+  for (const p of shaped) for (const g of p.groups ?? []) {
+    const name = g.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME);
+    if (!name) continue;
+    const k = name.toLowerCase();
+    if (!byName.has(k)) byName.set(k, { name, people: [] });
+    if (p.client?.client_id) byName.get(k).people.push(p);
+  }
+  const out = [];
+  for (const { name, people } of byName.values()) {
+    let g = ctx.db.get('SELECT id, name FROM groups WHERE lower(name) = lower(?)', name), made = false;
+    if (!g) {
+      const id = newId('grp'), now = ctx.now();
+      ctx.db.run(`INSERT INTO groups (id, name, note, coach_id, created_at, updated_at, created_by_import) VALUES (?, ?, 'Made from the OVR export.', NULL, ?, ?, ?)`, id, name, now, now, batchId);
+      g = { id, name }; made = true;
+    }
+    let have = ctx.db.get('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?', g.id).n;
+    const added = [], skipped = [];
+    for (const p of people) {
+      const c = ctx.db.get('SELECT id, name, archived_at FROM clients WHERE id = ?', p.client.client_id);
+      if (!c) continue;
+      if (ctx.db.get('SELECT 1 FROM group_members WHERE group_id = ? AND client_id = ?', g.id, c.id)) continue;
+      if (c.archived_at) { skipped.push({ name: c.name, reason: 'archived' }); continue; }
+      if (have >= MAX_MEMBERS) { skipped.push({ name: c.name, reason: `the group is full (${MAX_MEMBERS})` }); continue; }
+      ctx.db.run('INSERT INTO group_members (group_id, client_id, added_at, added_by, import_batch_id) VALUES (?, ?, ?, ?, ?)', g.id, c.id, ctx.now(), `OVR import${user?.name ? ` by ${user.name}` : ''}`, batchId);
+      added.push(c.name); have++;
+    }
+    if (added.length) ctx.db.run('UPDATE groups SET updated_at = ? WHERE id = ?', ctx.now(), g.id);
+    if (made || added.length || skipped.length) out.push({ group_id: g.id, name: g.name, made, added: added.length, added_names: added, skipped });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // Undo (from uploads.undoUpload): the bar-speed sets come out with the results, and a profile the import made goes too
@@ -332,6 +378,13 @@ function write(ctx, { plan, items, people, owner, user, filename }) {
 // someone has started finishing stays.
 export function undoExtras(ctx, batch, refs) {
   let sets = 0, removedProfiles = 0, keptProfiles = 0;
+  const leftGroups = ctx.db.run('DELETE FROM group_members WHERE import_batch_id = ?', batch.id).changes;
+  let removedGroups = 0;
+  for (const g of ctx.db.all('SELECT id FROM groups WHERE created_by_import = ?', batch.id)) {
+    const used = ctx.db.get('SELECT (SELECT COUNT(*) FROM group_members WHERE group_id = ?) + (SELECT COUNT(*) FROM group_messages WHERE group_id = ?) AS n', g.id, g.id).n;
+    if (used) { ctx.db.run('UPDATE groups SET created_by_import = NULL WHERE id = ?', g.id); continue; }
+    ctx.db.run('DELETE FROM groups WHERE id = ?', g.id); removedGroups++;
+  }
   if (batch.vbt_import_id) {
     sets = ctx.db.run('DELETE FROM vbt_sets WHERE import_id = ?', batch.vbt_import_id).changes;
     ctx.db.run('UPDATE vbt_imports SET undone_at = ? WHERE id = ? AND undone_at IS NULL', ctx.now(), batch.vbt_import_id);
@@ -344,5 +397,5 @@ export function undoExtras(ctx, batch, refs) {
     ctx.db.run('DELETE FROM clients WHERE id = ?', c.id);
     removedProfiles++;
   }
-  return { sets, removedProfiles, keptProfiles };
+  return { sets, removedProfiles, keptProfiles, leftGroups, removedGroups };
 }

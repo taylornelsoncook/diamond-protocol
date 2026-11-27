@@ -10,10 +10,11 @@ export function ovrImportPanel({ post, onDone, owner }) {
   const file = h('input', { type: 'file', accept: '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', class: 'dp-input', 'aria-label': 'OVR export (.xlsx)' });
   const out = h('div', { class: 'stack' });
   const make = h('input', { type: 'checkbox', checked: true });
+  const groupsOn = h('input', { type: 'checkbox', checked: true });
   let body = null, preview = null;
   const choices = new Map();
 
-  const send = async (path) => post(path, { ...body, create_profiles: make.checked, people: Object.fromEntries(choices), leave_out_impossible: true });
+  const send = async (path) => post(path, { ...body, create_profiles: make.checked, add_to_groups: groupsOn.checked, people: Object.fromEntries(choices), leave_out_impossible: true });
   const check = (e) => busy(e.currentTarget, async () => {
     const f = file.files[0];
     if (!f) throw new Error('Choose the OVR export first.');
@@ -51,6 +52,7 @@ export function ovrImportPanel({ post, onDone, owner }) {
       const made = r.people.filter((p) => p.made);
       toast(`${plural(r.saved, 'result')} saved${r.bar_speed_sets ? `, ${plural(r.bar_speed_sets, 'bar-speed set')}` : ''}${made.length ? `, ${plural(made.length, 'new profile')}` : ''}.`);
       fill(out, panel('Imported', { subtitle: `${r.filename ?? 'OVR export'}: ${plural(r.saved, 'result')} saved, ${r.already_saved} already on file${r.waiting ? `, ${r.waiting} waiting to be linked` : ''}. Undo it under Recent uploads.` },
+        r.groups?.length ? h('p', { class: 'small' }, `Groups: ${r.groups.map((g) => `${g.name} (${g.made ? 'new, ' : ''}${g.added} added)`).join(', ')}.`) : null,
         made.length ? h('p', { class: 'small' }, `${plural(made.length, 'new profile')}, each with only the name from OVR. Add a parent, contact details and the waiver: Clients → To finish.`) : null,
         h(made.length > 8 ? 'details' : 'div', { class: 'stack-tight' }, made.length > 8 ? h('summary', { class: 'small' }, `Show all ${made.length}`) : null, made.map((p) => h('a', { class: 'list-item small', href: `#/clients/${p.client.client_id}`, style: 'text-decoration:none;color:inherit' }, h('span', { class: 'grow' }, p.name), h('span', { class: 'muted' }, p.client.athlete_id)))),
         h('div', { class: 'row wrap' }, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients?view=to_finish' }, 'Profiles to finish'), btn('Import another', () => { preview = null; body = null; file.value = ''; fill(out); }, 'ghost'))));
@@ -65,6 +67,9 @@ export function ovrImportPanel({ post, onDone, owner }) {
     const p = preview;
     const groups = { check: p.people.filter((x) => x.status === 'check'), new: p.people.filter((x) => x.status === 'new'), linked: p.people.filter((x) => x.status === 'linked') };
     make.onchange = async () => { preview = await send('/v1/imports/ovr/preview'); draw(); };
+    groupsOn.onchange = make.onchange;
+    const gs = p.groups ?? [];
+    const groupLine = (g) => h('span', { class: 'small' }, `${g.name}: ${g.made ? 'a new group, ' : ''}${plural(g.added, 'athlete')} added${g.skipped?.length ? ` (${g.skipped.map((x) => `${x.name}, ${x.reason}`).join('; ')} left out)` : ''}`);
     fill(out,
       h('p', { class: 'small' }, `${plural(p.counts.people, 'person', 'people')} in the file: ${groups.linked.length} already linked, ${groups.new.length} new, ${groups.check.length} to check. ${plural(p.will_save, 'result')} will be saved${p.already_saved ? `, ${p.already_saved} already on file` : ''}${p.bar_speed_sets ? `, ${plural(p.bar_speed_sets, 'bar-speed set')}` : ''}.`),
       p.problems.length ? h('div', { class: 'dp-panel stack-tight', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'strong warn-text' }, 'Fix these first'), p.problems.map((x) => h('span', { class: 'small' }, `${x.sheet ? `${x.sheet}, row ${x.row}: ` : ''}${x.message}`))) : null,
@@ -73,6 +78,9 @@ export function ovrImportPanel({ post, onDone, owner }) {
         h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, make, h('span', null, 'Make a profile for each new person (name only: no parent, email or login until you finish it)')),
         groups.new.length > 8 ? h('details', null, h('summary', { class: 'small' }, `Show all ${groups.new.length}`), h('div', { class: 'stack-tight' }, groups.new.map(personRow))) : groups.new.map(personRow)) : null,
       groups.linked.length ? h('details', null, h('summary', { class: 'small' }, `Already linked (${groups.linked.length})`), h('div', { class: 'stack-tight' }, groups.linked.map(personRow))) : null,
+      gs.length || !groupsOn.checked ? h('div', { class: 'stack-tight' }, h('span', { class: 'strong' }, 'Groups'),
+        h('label', { class: 'row small', style: 'gap:8px;min-height:40px' }, groupsOn, h('span', null, 'Put each athlete in the app\'s group named in the file (made if it isn\'t there yet: Teams → Groups)')),
+        groupsOn.checked ? gs.map(groupLine) : null) : null,
       p.impossible_count ? h('details', null, h('summary', { class: 'small warn-text' }, `${plural(p.impossible_count, 'value')} a device can't have recorded will be left out`),
         h('div', { class: 'stack-tight' }, p.impossible.map((x) => h('span', { class: 'small' }, `${x.sheet}, row ${x.row}: ${x.athlete}, ${x.message}`)))) : null,
       p.left_out.length ? h('p', { class: 'small muted' }, `Not brought in (no matching test yet): ${p.left_out.map((x) => `${x.what} (${x.rows} rows)`).join(', ')}.`) : null,

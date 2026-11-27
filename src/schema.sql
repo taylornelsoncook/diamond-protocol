@@ -2173,13 +2173,15 @@ CREATE TABLE IF NOT EXISTS groups (
   coach_id TEXT REFERENCES users(id) ON DELETE SET NULL,   -- the coach whose group it is (emailed about new messages)
   coach_told_at TEXT,                                      -- when the coach was last emailed about the board (at most once an hour)
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  created_by_import TEXT                                   -- version 100: the OVR import (import_batches.id) that made it from the file's Group(s) column
 );
 CREATE TABLE IF NOT EXISTS group_members (
   group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
   client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   added_at TEXT NOT NULL,
   added_by TEXT,
+  import_batch_id TEXT,                                    -- version 100: the OVR import that added this athlete (undo takes them out again)
   PRIMARY KEY (group_id, client_id)
 );
 CREATE TABLE IF NOT EXISTS group_messages (

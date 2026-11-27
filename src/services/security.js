@@ -26,7 +26,7 @@ const OWNER_ONLY = [
 const OWNER_WRITES = [/^\/v1\/profile-tags(\/|$)/, /^\/v1\/message-templates(\/|$)/, /^\/v1\/sprint\/references$/, /^\/v1\/game-rules$/, /^\/v1\/vbt\/sets(\/:id)?$/];   // bar-speed sets: the owner (or the owner's results key) sends and removes them   // sprint references (version 65): the owner sets them, coaches read them
 // Front desk: an explicit list of what it may do. Everything else is refused.
 const FRONT_DESK = [
-  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|profile-tags|open-gym|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
+  ['GET', /^\/v1\/(dashboard|events|wearables|data-imports|clients|client-counts|check-ins|families|locations|products|readers|sales|schedule|profile-tags|open-gym|agenda|class-series|sessions|bookings|availability|slots|settings|plans|programs|program-rules|workout-templates|complexes|calendar|game-rules|exercises|routines|tests|test-presets|testing-sessions|results|roster|event-types|coaches|time-off|today|activity|vbt)(\/|$)/],
   // Accountability and education: front desk can look, not change anything.
   ['GET', /^\/v1\/(teams|groups|daily-check-ins|engagement|education|lessons|courses|skill-badges|feed)(\/|$)/],   // groups (version 87): front desk looks at the roster and the board, never posts
   ['POST', /^\/v1\/clients$/], ['PATCH', /^\/v1\/clients\/:id$/],
@@ -63,6 +63,7 @@ export function can(role, method, path) {
   if (!path.startsWith('/v1/')) return true;
   if (role === 'owner') return true;
   if (method === 'GET' && /^\/v1\/plans$/.test(path)) return true;     // everyone needs plan names on client pages
+  if (method === 'GET' && /^\/v1\/plans\/:id\/quote$/.test(path)) return true;   // the counter shows what starting a plan today charges (staff may start one there)
   if (OWNER_ONLY.some((re) => re.test(path))) return false;
   if (method !== 'GET' && OWNER_WRITES.some((re) => re.test(path))) return false;
   if (role === 'coach') return !COACH_DENY.some(([m, re]) => m === method && re.test(path));

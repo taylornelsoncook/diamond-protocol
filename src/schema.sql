@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS clients (
   card_funding TEXT,                     -- version 88: the saved card's funding (credit, debit, prepaid, unknown): no card fee on debit or prepaid
   reminder_hour INTEGER,                 -- version 96: the athlete's own hour for the workout reminder (NULL = the business's push_reminder_hour, 0 = off)
   track_set_rpe INTEGER NOT NULL DEFAULT 0,    -- version 99: the athlete's workout settings: record how hard each set was
-  track_set_note INTEGER NOT NULL DEFAULT 0    -- version 99: ... and a note on a set
+  track_set_note INTEGER NOT NULL DEFAULT 0,   -- version 99: ... and a note on a set
+  created_by_import TEXT                       -- version 100: the device import (import_batches.id) that made this profile for a new person in the file; staff finish it
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
   id TEXT PRIMARY KEY,
@@ -1002,6 +1003,7 @@ CREATE TABLE IF NOT EXISTS import_batches (
   unchanged INTEGER NOT NULL DEFAULT 0,
   prs INTEGER NOT NULL DEFAULT 0,
   added_tests TEXT NOT NULL DEFAULT '[]',       -- tests the upload put on the testing day
+  vbt_import_id TEXT,                           -- version 100: the bar-speed sets an OVR workbook brought in with it (vbt_imports.id), undone together
   created_by TEXT,
   undone_at TEXT, undone_by TEXT, undo_summary TEXT
 );

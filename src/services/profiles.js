@@ -99,7 +99,7 @@ export function dismissClaim(ctx, id, actor) {
 
 // ---------- Merge two profiles (owner) ----------
 // Every table with a column pointing at clients, found from the database itself, so a table added later is moved too.
-function clientRefs(ctx) {
+export function clientRefs(ctx) {
   const tables = ctx.db.all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).map((t) => t.name);
   const out = [];
   for (const t of tables) for (const fk of ctx.db.all(`PRAGMA foreign_key_list(${t})`)) if (fk.table === 'clients' && t !== 'clients') out.push({ table: t, col: fk.from });

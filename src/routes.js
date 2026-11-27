@@ -43,6 +43,7 @@ import * as schedule from './services/schedule.js';
 import * as staffcal from './services/staffcal.js';
 import * as teams from './services/teams.js';
 import * as perf from './services/performance.js';
+import * as ovr from './services/ovr.js';
 import * as perfImport from './services/perf-import.js';
 import * as vbt from './services/vbt.js';
 import * as groups from './services/groups.js';
@@ -804,6 +805,8 @@ export const routes = [
   ['GET', '/v1/uploads', 'any', 'Performance', 'Recent uploads and file imports, newest first (?limit, up to 50): what each saved, replaced and sent to waiting, and whether it was undone.', (ctx, r) => list(uploads.recentUploads(ctx, r.query))],
   ['POST', '/v1/uploads/:id/undo', 'any', 'Performance', 'Undo an upload or file import: results it added come out, values it replaced go back, and results it sent to waiting are dropped. Anything changed or linked since is left alone.', (ctx, r) => uploads.undoUpload(ctx, r.params.id, r.user)],
   ['GET', '/v1/integrations', 'any', 'Performance', 'Timing and measurement systems: which are connected, last sync, saved file layouts.', (ctx) => list(perfImport.listIntegrations(ctx))],
+  ['POST', '/v1/imports/ovr/preview', 'session', 'Performance', 'Check an OVR Connect export (xlsx_base64: the whole workbook, every sheet) before saving: answers each person in it (linked, new: a profile will be made, or check: a name like someone on file, with look_alikes), the results and bar-speed sets found, values a device can\'t have recorded (impossible) and what is left out. Optional people { key: client_id | "new" | "wait" }, create_profiles (default true). Nothing is saved.', (ctx, r) => ovr.importWorkbook(ctx, r.body, { user: r.user, dryRun: true })],
+  ['POST', '/v1/imports/ovr', 'session', 'Performance', 'Import an OVR Connect export (the same body as the preview): all or nothing. New people get a profile (no family, no email, nothing sent; marked to finish) and their OVR name is linked to it, so later exports land there. A name like someone on file needs people { key: client_id | "new" | "wait" } (409 people_to_check); impossible values need leave_out_impossible: true (409 impossible_values). The Velocity sheet (bar speed) is saved for the owner only. Undo it from Recent uploads.', (ctx, r) => ovr.importWorkbook(ctx, r.body, { user: r.user }), 201],
   ['POST', '/v1/imports', 'any', 'Performance', 'Import a CSV export: provider (ovr, vald, swift, freelap, generic …), csv (the file\'s text), optional test (if the file holds one test), mapping, session_id. dry_run=true returns the column matches and preview without saving.', (ctx, r) => perfImport.importFile(ctx, r.body, r.user), 201],
   ['GET', '/v1/imports', 'any', 'Performance', 'Recent imports, with athletes still waiting to be matched.', (ctx) => list(perfImport.listBatches(ctx))],
   ['GET', '/v1/imports/:id', 'any', 'Performance', 'One import.', (ctx, r) => perfImport.getBatch(ctx, r.params.id)],

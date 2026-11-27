@@ -67,8 +67,8 @@ test('client list: team and no-waiver views with counts, flags, pinned notes by 
   assert.equal(counts.no_waiver, 2);
   const byId = (list) => Object.fromEntries(list.map((c) => [c.id, c]));
   const all = byId((await coach('GET', '/v1/clients')).body.data);
-  assert.deepEqual(all[med.id].flags, { medical: true, no_waiver: false, no_card: true });
-  assert.deepEqual(all[member.id].flags, { medical: false, no_waiver: true, no_card: false });
+  assert.deepEqual(all[med.id].flags, { medical: true, no_waiver: false, no_card: true, to_finish: false });
+  assert.deepEqual(all[member.id].flags, { medical: false, no_waiver: true, no_card: false, to_finish: false });
   assert.equal(all[med.id].grad_year, 2030);
   assert.equal(all[med.id].pinned_notes, 2);
   assert.ok(all[med.id].last_seen_at, 'the walk-in check-in counts as seen');

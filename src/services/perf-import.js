@@ -5,7 +5,7 @@ import { unitFromHeader, normalizeUnit } from './units.js';
 
 // Systems we know by name. Any other system works too: pick "Other" and match the columns once.
 export const PROVIDERS = {
-  ovr: { name: 'OVR Performance (Jump, Sprint, Velocity)', how: 'file', note: 'In OVR Connect, tap the profile tab and export your history, then upload the file here.' },
+  ovr: { name: 'OVR Performance (Jump, Sprint, Velocity)', how: 'file', note: 'In OVR Connect, export your history as Excel and upload the whole file under Devices & imports → Import an OVR export. New people get a profile.' },
   hawkin: { name: 'Hawkin Dynamics force plates', how: 'live', note: 'Connect once with an integration token from Hawkin (Settings → Integrations). New tests sync every 15 minutes.' },
   vald: { name: 'VALD (ForceDecks, SmartSpeed, NordBord)', how: 'file', note: 'Export results from VALD Hub and upload them here. For a live connection, VALD issues API credentials on request to support@vald.com.' },
   swift: { name: 'Swift Performance timing gates', how: 'file' },

@@ -8,6 +8,7 @@ import { scheduleFields, calendarPanel, defaultDays } from './training-days.js';
 import { startupForm, summaryText, OUTCOME_TEXT } from './startup-ui.js';
 import { maxesBlock, volumeBlock } from './maxes-ui.js';
 import { vbtBlock, vbtImportPanel, vbtWaitingPanel } from './vbt-ui.js';
+import { ovrImportPanel } from './ovr-ui.js';
 import { formChecksBlock } from './formchecks-ui.js';
 import { viewSprintCoach, clientSprintPanel } from './sprint-ui.js';
 import { viewMonthlyReports } from './monthly-coach.js';
@@ -737,7 +738,7 @@ async function viewCampaigns(main) {
 // "Active" means the same as the Today tile: not archived, paid up or on a free trial. Archived clients only show
 // under the Archived filter (or as a hint when a search only finds archived ones).
 // Views over the client list, the same as the server's ?status= (clients.js#inView). Archived clients are their own view.
-const CLIENT_VIEWS = [['', 'All'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['team', 'Team only'], ['no_waiver', 'No waiver'], ['archived', 'Archived']];
+const CLIENT_VIEWS = [['', 'All'], ['current', 'Active'], ['active', 'Paying'], ['trialing', 'Trial'], ['past_due', 'Past due'], ['paused', 'Paused'], ['canceled', 'Canceled'], ['none', 'No plan'], ['team', 'Team only'], ['no_waiver', 'No waiver'], ['to_finish', 'To finish'], ['archived', 'Archived']];
 const inClientView = (c, view) => (view === 'archived' ? !!c.archived_at : !c.archived_at && (!view || (view === 'current' ? ['active', 'trialing'].includes(c.status)
   : view === 'team' ? c.teams?.length > 0 && ['none', 'canceled'].includes(c.status) : view === 'no_waiver' ? !!c.flags?.no_waiver : c.status === view)));
 // Search: name, Athlete ID, email, family, school, parents; phone numbers on their digits too (clients.js#matches).
@@ -757,6 +758,7 @@ const trainingTag = (c) => (c.training_type ? h('span', { class: 'dp-badge dp-ba
 const clientsUi = { q: '', view: null, sort: 'name', shown: 100, training: '', tag: '' };
 const clientFlags = (c) => [
   c.flags?.medical ? h('span', { class: 'dp-badge dp-badge--warn' }, 'Medical') : null,
+  c.flags?.to_finish ? h('span', { class: 'dp-badge dp-badge--warn', title: 'Made from a device upload: add a parent, contact details and the waiver' }, 'To finish') : null,
   c.flags?.no_waiver ? h('span', { class: 'dp-badge dp-badge--neutral' }, 'No waiver') : null,
   c.flags?.no_card && c.family ? h('span', { class: 'dp-badge dp-badge--muted' }, 'No card') : null,
   c.pinned_notes ? h('span', { class: 'dp-badge dp-badge--good' }, c.pinned_notes === 1 ? 'Pinned note' : `${c.pinned_notes} pinned notes`) : null];
@@ -1307,6 +1309,7 @@ async function viewClient(main, id) {
     header(h('span', { class: 'row wrap', style: 'gap:12px;align-items:center' }, c.name, ...(c.tags ?? []).map(tagChip), idChip(c.athlete_id), trainingTag(c), c.archived_at ? h('span', { class: 'dp-badge dp-badge--muted' }, 'Archived') : null), [age != null ? `Age ${age}` : null, c.grad_year ? `Class of ${c.grad_year}` : null, c.sport, c.position, c.email, `client since ${date(c.created_at)}`].filter(Boolean).join(' · '),
       h('div', { class: 'row' }, isOwner() ? btn('Tags', () => clientTagsDialog(c), 'ghost', { title: 'Add or take off a profile tag like Legacy' }) : null, canArchive && !c.archived_at ? btn('Archive', archive, 'ghost') : null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/clients' }, 'All clients'))),
     c.archived_at ? h('div', { class: 'dp-panel row wrap', role: 'note', style: 'gap:12px;align-items:center' }, h('span', { class: 'grow' }, `Archived ${date(c.archived_at)}${c.archived_by ? ` by ${c.archived_by}` : ''}. ${first} is hidden from lists and pickers and gets no automatic emails or texts.`), canArchive ? btn(`Bring ${first} back`, restore, 'primary') : null) : null,
+    c.from_import?.needs_finishing ? h('div', { class: 'dp-panel', role: 'note', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'warn-text' }, `Made from ${c.from_import.source ? `the ${c.from_import.source} upload` : 'a device upload'} on ${new Date(c.from_import.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}, with only the name in the file. Add a parent, contact details and the waiver (Family tab). Until then nobody can sign in and nothing is sent.`)) : null,
     c.payment_locked ? h('div', { class: 'dp-panel', role: 'note', style: 'border-left:3px solid var(--amber)' }, h('span', { class: 'warn-text' }, `Locked out over a declined membership payment${c.payment_locked.amount_cents != null ? ` (${money(c.payment_locked.amount_cents)})` : ''}${c.payment_locked.athletes.length && !c.payment_locked.athletes.includes(c.name) ? ` for ${c.payment_locked.athletes.join(', ')}` : ''}. The family can only update the card and pay in the parent portal; the app, booking online and self check-in are paused. You can still book and check them in here.`)) : null,
     c.medical_notes ? h('div', { class: 'test-banner', role: 'note' }, `Medical: ${c.medical_notes}`, c.emergency_name || c.emergency_phone ? [' · Emergency: ', c.emergency_name ?? '', ' ', c.emergency_phone ? h('a', { href: telHref(c.emergency_phone), style: 'color:inherit;text-decoration:underline' }, c.emergency_phone) : null] : null) : null,
     pinned.length ? h('div', { class: 'dp-panel stack-tight', role: 'note', style: 'border-left:3px solid var(--green-bright, #7DBA70)' }, pinned.map((n) => h('div', null, h('span', { class: 'dp-label', style: 'margin:0' }, `Pinned · ${n.author_name} · ${date(n.created_at)}${n.coach_only ? ' · Coach only' : ''}`), h('div', { style: 'white-space:pre-wrap' }, n.body)))) : null,
@@ -5553,7 +5556,8 @@ async function viewConnections(main) {
     // Bar speed (version 81): a device's export, and sets waiting under a name or ID we don't know.
     !owner ? null : vbtImportPanel({ post, systems: vbtSystems.data, everyone, athletePicker, onDone: render, preselect: new URLSearchParams(location.hash.split('?')[1] ?? '').get('athlete') }),
     vbtWaiting.data.length || vbtImports.data.length ? vbtWaitingPanel({ waiting: vbtWaiting.data, imports: vbtImports.data, everyone, athletePicker, post, onDone: render }) : null,
-    panel('Import a file', { subtitle: 'OVR, VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('p', { class: 'small muted' }, integ.data.find((i) => i.provider === 'ovr').note), h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
+    ovrImportPanel({ post, owner, onDone: () => {} }),
+    panel('Import a file', { subtitle: 'VALD, Swift, Freelap, Brower, Dashr, Rapsodo, radar guns, our template or any spreadsheet.' }, h('div', null, h('a', { class: 'dp-btn dp-btn--secondary', href: '#/testing/upload' }, 'Upload results'))),
     apiPanel);
 }
 
